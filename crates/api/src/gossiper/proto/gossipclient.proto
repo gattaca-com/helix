@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package gossip;
+
+import "google/protobuf/empty.proto";
+
+service GossipService {
+  rpc BroadcastBlock (SubmitBlockParams) returns (google.protobuf.Empty);
+}
+
+message SubmitBlockParams {
+  bytes body = 1;
+  bool is_cancellations_enabled = 2;
+  bool is_gzip = 3;
+  bool is_ssz = 4;
+}

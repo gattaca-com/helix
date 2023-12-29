@@ -1,0 +1,54 @@
+[package]
+name = "helix-api"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+# Helix Workspace 
+helix-datastore.workspace = true
+helix-beacon-client.workspace = true
+helix-database.workspace = true
+helix-common.workspace = true
+helix-utils.workspace = true
+helix-housekeeper.workspace = true
+
+# Async and Networking 
+async-trait = { workspace = true }
+axum = { workspace = true }
+hyper = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
+tonic = "0.10"
+prost = "0.12"
+
+# Serialization and Data Format 
+flate2 = "1.0"
+serde.workspace = true
+serde_json.workspace = true
+
+# DB 
+redis.workspace = true
+
+# Ethereum Types
+reth-primitives.workspace = true
+ethereum-consensus.workspace = true
+
+# Testing and Mocking
+serial_test.workspace = true
+mockito.workspace = true
+
+# Misc
+auto_impl.workspace = true
+clap = { version = "4.3", features = ["derive"] }
+rand = "0.8"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+uuid = { version = "1.5", features = ["fast-rng"] }
+bytes = "1.5"
+
+[build-dependencies]
+tonic-build = "0.10"

@@ -1,0 +1,20 @@
+[package]
+name = "helix-utils"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+# Serialization and Data Format 
+serde.workspace = true
+serde_json.workspace = true
+
+# Ethereum Types
+ethereum-consensus.workspace = true
+reth-primitives.workspace = true
+
+# Networking
+http.workspace = true
+reqwest.workspace = true

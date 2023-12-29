@@ -1,0 +1,43 @@
+[package]
+name = "helix-database"
+version.workspace = true
+rust-version.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+
+[dependencies]
+helix-common.workspace = true
+
+# Async and Networking 
+async-trait.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+
+# Serialization and Data Format 
+serde.workspace = true
+serde_json.workspace = true
+
+# DB 
+mongodb = "2.7"
+tokio-postgres.workspace = true
+deadpool-postgres.workspace = true
+refinery.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+
+# Ethereum Types
+ethereum-consensus.workspace = true
+reth-primitives.workspace = true
+
+# Testing
+serial_test.workspace = true
+tracing-test.workspace = true
+env_logger.workspace = true
+
+# Misc 
+hex.workspace = true
+rand = "0.8"
+dashmap = { version = "5.5.3", features = [] }
+thiserror.workspace = true
+tracing.workspace = true
