@@ -18,6 +18,7 @@ mod tests {
         primitives::{BlsPublicKey, BlsSignature},
         ssz::{prelude::*, self},
     };
+    use helix_beacon_client::types::PayloadAttributes;
     use hyper::StatusCode;
     use rand::Rng;
     use reqwest::{Client, Response};
@@ -30,7 +31,6 @@ mod tests {
     use helix_datastore::MockAuctioneer;
     use helix_common::{
         api::builder_api::BuilderGetValidatorsResponseEntry, bid_submission::SignedBidSubmission,
-        PayloadAttributes,
     };
     use helix_common::api::proposer_api::ValidatorRegistrationInfo;
     use helix_common::api::proposer_api::ValidatorPreferences;

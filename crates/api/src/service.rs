@@ -1,9 +1,5 @@
 use std::{env, sync::Arc, time::Duration};
 
-use axum::{
-    routing::{get, post},
-    Extension, Router,
-};
 use ethereum_consensus::crypto::SecretKey;
 use tokio::time::sleep;
 use tracing::info;
@@ -12,7 +8,7 @@ use crate::builder::optimistic_simulator::OptimisticSimulator;
 use crate::gossiper::grpc_gossiper::GrpcGossiperClientManager;
 use crate::router::{build_router, BuilderApiProd, DataApiProd, ProposerApiProd};
 use helix_beacon_client::{
-    beacon_client::BeaconClient, bloxroute_broadcaster::BloxrouteBroadcaster,
+    beacon_client::BeaconClient,
     fiber_broadcaster::FiberBroadcaster, multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
 };
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
@@ -20,7 +16,7 @@ use helix_database::DatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
 use helix_housekeeper::{ChainEventUpdater, Housekeeper};
 use helix_common::{
-    api::proposer_api::ValidatorPreferences, fork_info::ForkInfo, signing::RelaySigningContext,
+    fork_info::ForkInfo, signing::RelaySigningContext,
     BroadcasterConfig, ForkInfoConfig, RelayConfig,
 };
 
@@ -55,7 +51,7 @@ impl ApiService {
         // Housekeeper should only be run on one instance.
         if config.run_housekeeper {
             let housekeeper =
-                Housekeeper::new(db.clone(), multi_beacon_client.clone(), auctioneer.clone());
+                Housekeeper::new(db.clone(), multi_beacon_client.clone(), auctioneer.clone(), fork_info.clone());
             tokio::task::spawn(async move {
                 loop {
                     if let Err(err) = housekeeper.start().await {
@@ -100,6 +96,9 @@ impl ApiService {
             .await
             .expect("failed to initialise gRPC gossiper"),
         );
+
+        let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
+
         let builder_api = Arc::new(BuilderApiProd::new(
             auctioneer.clone(),
             db.clone(),
@@ -108,9 +107,10 @@ impl ApiService {
             gossiper.clone(),
             relay_signing_context,
             slot_update_sender.clone(),
+            gossip_receiver,
         ));
 
-        gossiper.start_server(builder_api.clone()).await;
+        gossiper.start_server(gossip_sender).await;
 
         let proposer_api = Arc::new(ProposerApiProd::new(
             auctioneer.clone(),
@@ -140,16 +140,6 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
     let mut broadcasters = vec![];
     for cfg in &config.broadcasters {
         match cfg {
-            BroadcasterConfig::Bloxroute(cfg) => {
-                broadcasters.push(Arc::new(BlockBroadcaster::Bloxroute(
-                    BloxrouteBroadcaster::new(
-                        cfg.auth_header.clone(),
-                        &cfg.base_url,
-                        &cfg.endpoint,
-                        cfg.encoding,
-                    ),
-                )));
-            }
             BroadcasterConfig::Fiber(cfg) => {
                 broadcasters.push(Arc::new(BlockBroadcaster::Fiber(
                     FiberBroadcaster::new(cfg.url.clone(), cfg.api_key.clone(), cfg.encoding).await,

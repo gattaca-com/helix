@@ -14,8 +14,8 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         time::{SystemTime, UNIX_EPOCH},
     };
     use helix_common::{
-        bid_submission::{BidTrace, SignedBidSubmission},
-        GetPayloadTrace, SubmissionTrace, bellatrix::{ByteVector, ByteList, List},
+        bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission},
+        GetPayloadTrace, SubmissionTrace, bellatrix::{ByteVector, ByteList, List}, HeaderSubmissionTrace,
     };
 
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
@@ -455,6 +455,69 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         let reg = get_randomized_signed_validator_registration().registration;
 
         let result = db_service.save_too_late_get_payload(1, &reg.message.public_key, &Default::default(),0,0).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_header() -> Result<(), Box<dyn std::error::Error>> {
+        env_logger::builder().is_test(true).try_init()?;
+        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+
+        let reg = get_randomized_signed_validator_registration().registration;
+
+        let result = db_service.save_get_header_call(1, Default::default(), reg.message.public_key, Default::default(), Default::default()).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_failed_payloads() -> Result<(), Box<dyn std::error::Error>> {
+        env_logger::builder().is_test(true).try_init()?;
+        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+
+        let reg = get_randomized_signed_validator_registration().registration;
+
+        let result = db_service.save_failed_get_payload(Default::default(), "error".to_string(), Default::default()).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_store_header_submission() -> Result<(), Box<dyn std::error::Error>> {
+        env_logger::builder().is_test(true).try_init()?;
+        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+
+        let mut signed_bid_submission = SignedHeaderSubmission::default();
+        signed_bid_submission.message.bid_trace = BidTrace {
+            slot: 1234,
+            parent_hash: Default::default(),
+            block_hash: Default::default(),
+            builder_public_key: Default::default(),
+            proposer_public_key: Default::default(),
+            proposer_fee_recipient: Default::default(),
+            gas_limit: 0,
+            gas_used: 0,
+            value: U256::from(1234),
+        };
+        db_service.store_header_submission(Arc::new(signed_bid_submission), Arc::new(HeaderSubmissionTrace::default())).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_gossiped_header() -> Result<(), Box<dyn std::error::Error>> {
+        env_logger::builder().is_test(true).try_init()?;
+        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+        let result = db_service.save_gossiped_header_trace(Default::default(), Default::default()).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_gossiped_payload() -> Result<(), Box<dyn std::error::Error>> {
+        env_logger::builder().is_test(true).try_init()?;
+        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+        let result = db_service.save_gossiped_payload_trace(Default::default(), Default::default()).await?;
 
         Ok(())
     }

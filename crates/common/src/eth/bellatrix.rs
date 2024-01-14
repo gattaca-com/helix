@@ -1,4 +1,4 @@
-use ethereum_consensus::primitives::{BlsPublicKey, BlsSignature, U256};
+use ethereum_consensus::primitives::{BlsPublicKey, BlsSignature};
 pub use ethereum_consensus::{bellatrix::mainnet as spec, builder::SignedValidatorRegistration, ssz::prelude::*, serde::as_str};
 
 pub type ExecutionPayload = spec::ExecutionPayload;

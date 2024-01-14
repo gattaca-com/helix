@@ -11,6 +11,7 @@ use ethereum_consensus::{phase0::Fork, primitives::Root, types::mainnet::SignedB
 use futures::future::join_all;
 use helix_common::{ProposerDuty, ValidatorSummary};
 use tokio::{sync::mpsc::Sender, task::JoinError};
+use tracing::error;
 
 use crate::{
     error::BeaconClientError,
@@ -197,55 +198,46 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
     /// It will instantly return after the first successful response.
     ///
     /// Follows the spec: [Ethereum 2.0 Beacon APIs documentation](https://ethereum.github.io/beacon-APIs/#/ValidatorRequiredApi/publishBlock).
-    async fn publish_block<
-        SignedBeaconBlock: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static,
-    >(
+    async fn publish_block<T: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static>(
         &self,
-        block: Arc<SignedBeaconBlock>,
+        block: Arc<T>,
         broadcast_validation: Option<BroadcastValidation>,
         fork: ethereum_consensus::Fork,
     ) -> Result<(), BeaconClientError> {
         let clients = self.beacon_clients_by_last_response();
+        let num_clients = clients.len();
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(num_clients);
 
-        let handles = clients
-            .into_iter()
-            .enumerate()
-            .map(|(i, client)| {
-                let block = block.clone();
-                let broadcast_validation = broadcast_validation.clone();
-                let fork = fork.clone();
+        clients.into_iter().enumerate().for_each(|(i, client)| {
+            let block = block.clone();
+            let broadcast_validation = broadcast_validation.clone();
+            let sender = sender.clone();
 
-                tokio::spawn(async move {
-                    let res = client.publish_block(block, broadcast_validation, fork).await;
-                    (i, res)
-                })
-            })
-            .collect::<Vec<_>>();
+            tokio::spawn(async move {
+                let res = client.publish_block(block, broadcast_validation, fork).await;
+                sender.send((i, res)).await.unwrap();
+            });
+        });
 
-        let results = join_all(handles).await;
         let mut last_error: Option<BeaconClientError> = None;
-
-        for result in results {
-            match result {
-                Ok((i, res)) => {
-                    match res {
-                        // Should the block fail full validation, a separate success response code (202) is used to indicate that the block was successfully broadcast but failed integration.
-                        // https://ethereum.github.io/beacon-APIs/?urls.primaryName=dev#/Beacon/publishBlock  // TODO: other codes can be block validation failed!
-                        Ok(202) => {
-                            return Err(BeaconClientError::BlockValidationFailed);
-                        }
-                        Ok(_) => {
-                            self.best_beacon_instance.store(i, Ordering::Relaxed);
-                            return Ok(());
-                        }
-                        Err(err) => {
-                            last_error = Some(err);
-                        }
+        for _ in 0..num_clients {
+            if let Some((i, res)) = receiver.recv().await {
+                match res {
+                    // Should the block fail full validation, a separate success response code (202) 
+                    // is used to indicate that the block was successfully broadcast but failed integration.
+                    Ok(202) => {
+                        last_error = Some(BeaconClientError::BlockIntegrationFailed);
+                    }
+                    Ok(_) => {
+                        self.best_beacon_instance.store(i, Ordering::Relaxed);
+                        return Ok(());
+                    }
+                    Err(err) => {
+                        last_error = Some(err);
                     }
                 }
-                Err(join_err) => {
-                    tracing::error!("Tokio join error for publish_block: {join_err:?}")
-                }
+            } else {
+                error!("Tokio channel closed for publish_block");
             }
         }
 

@@ -179,7 +179,7 @@ impl BeaconClientTrait for BeaconClient {
     }
 
     /// `publish_block` publishes the signed beacon block via
-    /// https://ethereum.github.io/beacon-APIs/#/ValidatorRequiredApi/publishBlock
+    /// https://ethereum.github.io/beacon-APIs/#/ValidatorRequiredApi/publishBlockV2
     async fn publish_block<SB: serde::Serialize + serde::de::DeserializeOwned + Send + Sync>(
         &self,
         block: Arc<SB>,

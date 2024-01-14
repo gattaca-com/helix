@@ -4,7 +4,7 @@ pub struct RegisterValidatorsTrace {
     pub registrations_complete: u64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct GetHeaderTrace {
     pub receive: u64,
     pub validation_complete: u64,

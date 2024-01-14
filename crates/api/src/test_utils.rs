@@ -4,7 +4,7 @@ use axum::{
     routing::{get, post},
     Extension, Router,
 };
-use helix_common::{SignedBuilderBid, fork_info::ForkInfo};
+use helix_common::fork_info::ForkInfo;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use helix_beacon_client::{BlockBroadcaster, mock_block_broadcaster::MockBlockBroadcaster, mock_multi_beacon_client::MockMultiBeaconClient};
@@ -109,6 +109,7 @@ pub fn builder_api_app() -> (
     Receiver<Sender<ChainUpdate>>,
 ) {
     let (slot_update_sender, slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
+    let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10);
 
     let builder_api_service =
         Arc::new(BuilderApi::<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>::new(
@@ -119,6 +120,7 @@ pub fn builder_api_app() -> (
             Arc::new(MockGossiper::new().unwrap()),
             Arc::new(RelaySigningContext::default()),
             slot_update_sender.clone(),
+            gossip_receiver,
         ));
 
     let router = Router::new()

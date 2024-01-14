@@ -116,7 +116,7 @@ impl ForkInfo {
                 .unwrap(),
             context: Context::for_holesky(),
             clock: for_holesky(),
-            genesis_time_in_secs: 1695902400,
+            genesis_time_in_secs: HOLESKY_GENESIS_TIME,
             seconds_per_slot: configs::holesky::SECONDS_PER_SLOT,
         }
     }

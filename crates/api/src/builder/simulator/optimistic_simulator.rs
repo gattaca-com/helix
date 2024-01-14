@@ -12,7 +12,7 @@ use helix_datastore::Auctioneer;
 use helix_common::{simulator::BlockSimError, BuilderInfo};
 
 use crate::builder::{
-    api::DbInfo, rpc_simulator::RpcSimulator, traits::BlockSimulator, BlockSimRequest,
+    DbInfo, rpc_simulator::RpcSimulator, traits::BlockSimulator, BlockSimRequest,
 };
 
 /// OptimisticSimulator is responsible for running simulations optimistically or synchronously based on the builder's status.

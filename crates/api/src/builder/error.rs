@@ -89,6 +89,20 @@ pub enum BuilderApiError {
 
     #[error("block already received: {block_hash:?}")]
     DuplicateBlockHash { block_hash: Hash32 },
+
+    #[error(
+        "not enough optimistic collateral. builder_pub_key: {builder_pub_key:?}. 
+        collateral: {collateral:?}, collateral required: {collateral_required:?}"
+    )]
+    NotEnoughOptimisticCollateral { 
+        builder_pub_key: BlsPublicKey,
+        collateral: U256,
+        collateral_required: U256,
+        is_optimistic: bool,
+    },
+
+    #[error("builder has been demoted. builder_pub_key: {builder_pub_key:?}")]
+    BuilderDemoted{builder_pub_key: BlsPublicKey},
 }
 
 impl IntoResponse for BuilderApiError {
@@ -184,6 +198,20 @@ impl IntoResponse for BuilderApiError {
             },
             BuilderApiError::DuplicateBlockHash { block_hash } => {
                 (StatusCode::BAD_REQUEST, format!("block already received: {block_hash:?}")).into_response()
+            },
+            BuilderApiError::NotEnoughOptimisticCollateral { 
+                builder_pub_key, 
+                collateral, 
+                collateral_required,
+                is_optimistic,
+             } => {
+                (StatusCode::BAD_REQUEST, format!(
+                    "not enough optimistic collateral. builder_pub_key: {builder_pub_key:?}. 
+                    collateral: {collateral:?}, collateral required: {collateral_required:?}. is_optimistic: {is_optimistic}"
+                )).into_response()
+            },
+            BuilderApiError::BuilderDemoted { builder_pub_key } => {
+                (StatusCode::BAD_REQUEST, format!("builder has been demoted. builder_pub_key: {builder_pub_key:?}")).into_response()
             },
         }
     }

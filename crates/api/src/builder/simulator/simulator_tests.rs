@@ -2,7 +2,7 @@
 mod simulator_tests {
     // ++++ IMPORTS ++++
     use crate::{
-        builder::api::DbInfo,
+        builder::DbInfo,
         builder::{
             rpc_simulator::{BlockSimRpcResponse, JsonRpcError, RpcSimulator},
             traits::BlockSimulator,

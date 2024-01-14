@@ -2515,6 +2515,7 @@ dependencies = [
 name = "helix-common"
 version = "0.0.1"
 dependencies = [
+ "auto_impl",
  "axum",
  "clap",
  "deadpool-redis",

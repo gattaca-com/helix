@@ -13,10 +13,10 @@ use helix_common::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
-    bid_submission::{BidTrace, SignedBidSubmission},
+    bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission},
     builder_info::BuilderInfo,
     simulator::BlockSimError,
-    GetPayloadTrace, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorSummary,
+    GetPayloadTrace, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorSummary, GetHeaderTrace, HeaderSubmissionTrace, GossipedHeaderTrace, GossipedPayloadTrace, pending_block::PendingBlock,
 };
 
 use crate::{
@@ -120,4 +120,38 @@ pub trait DatabaseService: Send + Sync + Clone {
         &self,
         filters: &BidFilters,
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError>;
+    async fn save_get_header_call(
+        &self,
+        slot: u64,
+        parent_hash: ByteVector<32>,
+        public_key: BlsPublicKey,
+        best_block_hash: ByteVector<32>,
+        trace: GetHeaderTrace,
+    ) -> Result<(), DatabaseError>;
+    async fn save_failed_get_payload(
+        &self,
+        block_hash: ByteVector<32>,
+        error: String,
+        trace: GetPayloadTrace,
+    ) -> Result<(), DatabaseError>;
+    async fn store_header_submission(
+        &self,
+        submission: Arc<SignedHeaderSubmission>,
+        trace: Arc<HeaderSubmissionTrace>,
+    ) -> Result<(), DatabaseError>;
+
+    async fn save_gossiped_header_trace(
+        &self,
+        block_hash: ByteVector<32>,
+        trace: Arc<GossipedHeaderTrace>,
+    ) -> Result<(), DatabaseError>;
+
+    async fn save_gossiped_payload_trace(
+        &self,
+        block_hash: ByteVector<32>,
+        trace: Arc<GossipedPayloadTrace>,
+    ) -> Result<(), DatabaseError>;
+
+    async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, DatabaseError>;
+    async fn remove_old_pending_blocks(&self) -> Result<(), DatabaseError>;
 }

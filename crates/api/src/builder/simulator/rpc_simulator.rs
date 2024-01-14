@@ -9,7 +9,7 @@ use tracing::{debug, error};
 use helix_common::simulator::BlockSimError;
 use uuid::Uuid;
 
-use crate::builder::{api::DbInfo, traits::BlockSimulator, BlockSimRequest};
+use crate::builder::{DbInfo, traits::BlockSimulator, BlockSimRequest};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct JsonRpcError {

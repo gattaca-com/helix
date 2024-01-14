@@ -10,7 +10,7 @@ use helix_common::{
     api::proposer_api::{ValidatorPreferences, ValidatorRegistrationInfo},
     bellatrix::{ByteList, ByteVector, List},
     bid_submission::BidTrace,
-    BuilderInfo, GetPayloadTrace, SignedValidatorRegistrationEntry,
+    BuilderInfo, GetPayloadTrace, SignedValidatorRegistrationEntry, pending_block::PendingBlock,
 };
 
 use crate::{
@@ -207,6 +207,20 @@ impl FromRow for BuilderInfo {
     }
 }
 
+impl FromRow for PendingBlock {
+    fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError>
+    where
+        Self: Sized,
+    {
+        Ok(PendingBlock {
+            block_hash: parse_bytes_to_hash::<32>(row.get::<&str, &[u8]>("block_hash"))?,
+            builder_pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("builder_pubkey"))?,
+            slot: parse_i32_to_u64(row.get::<&str, i32>("slot"))?,
+            timestamp: parse_timestamptz_to_u64(row.get::<&str, std::time::SystemTime>("created_at"))?,
+        })
+    }
+}
+
 impl FromRow for SignedValidatorRegistration {
     fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError>
     where
@@ -287,7 +301,7 @@ pub fn parse_rows<T: FromRow>(rows: Vec<tokio_postgres::Row>) -> Result<Vec<T>, 
 }
 
 pub fn parse_row<T: FromRow>(row: &tokio_postgres::Row) -> Result<T, DatabaseError> {
-    T::from_row(&row)
+    T::from_row(row)
 }
 
 pub fn parse_bytes_to_bytelist<const N: usize>(bytes: &[u8]) -> Result<ByteList<N>, DatabaseError> {
@@ -305,12 +319,4 @@ pub fn parse_vec_bytes_to_list_bytelist<const N: usize, const M: usize>(
         })
         .collect();
     tmp.and_then(|list| List::try_from(list).map_err(|_| DatabaseError::GeneralError))
-}
-
-pub fn empty_list_bytelist<const N: usize, const M: usize>(
-) -> Result<List<ByteList<N>, M>, DatabaseError> {
-    match List::try_from(Vec::new()) {
-        Ok(list) => Ok(list),
-        Err(_) => Err(DatabaseError::GeneralError),
-    }
 }

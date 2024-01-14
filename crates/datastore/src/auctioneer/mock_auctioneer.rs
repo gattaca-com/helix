@@ -7,7 +7,7 @@ use ethereum_consensus::{
 };
 
 use helix_database::types::BuilderInfoDocument;
-use helix_common::signing::RelaySigningContext;
+use helix_common::{signing::RelaySigningContext, bid_submission::v2::header_submission::SignedHeaderSubmission};
 use helix_common::{
     bid_submission::{BidTrace, SignedBidSubmission},
     eth::SignedBuilderBid,
@@ -110,21 +110,21 @@ impl Auctioneer for MockAuctioneer {
         _proposer_pub_key: &BlsPublicKey,
         _builder_pub_key: &BlsPublicKey,
         _received_at: u128,
-        _builder_bid: SignedBuilderBid,
+        _builder_bid: &SignedBuilderBid,
     ) -> Result<(), AuctioneerError> {
         Ok(())
     }
 
     async fn save_bid_and_update_top_bid(
         &self,
-        _submission: Arc<SignedBidSubmission>,
+        _submission: &SignedBidSubmission,
         _received_at: u128,
         _cancellations_enabled: bool,
         _floor_value: U256,
         _state: &mut SaveBidAndUpdateTopBidResponse,
         _signing_context: &RelaySigningContext,
-    ) -> Result<(), AuctioneerError> {
-        Ok(())
+    ) -> Result<Option<(SignedBuilderBid, ExecutionPayload)>, AuctioneerError> {
+        Ok(None)
     }
 
     async fn get_top_bid_value(
@@ -180,5 +180,39 @@ impl Auctioneer for MockAuctioneer {
         _builder_infos: Vec<BuilderInfoDocument>,
     ) -> Result<(), AuctioneerError> {
         Ok(())
+    }
+
+    async fn seen_or_insert_block_hash(
+        &self,
+        _block_hash: &Hash32,
+        _slot: u64,
+        _parent_hash: &Hash32,
+        _proposer_pub_key: &BlsPublicKey,
+    ) -> Result<bool, AuctioneerError> {
+        Ok(false)
+    }
+
+    async fn save_signed_builder_bid_and_update_top_bid(
+        &self,
+        _builder_bid: &SignedBuilderBid,
+        _bid_trace: &BidTrace,
+        _received_at: u128,
+        __cancellations_enabled: bool,
+        _floor_value: U256,
+        _state: &mut SaveBidAndUpdateTopBidResponse,
+    ) -> Result<(), AuctioneerError> {
+        Ok(())
+    }
+
+    async fn save_header_submission_and_update_top_bid(
+        &self,
+        _submission: &SignedHeaderSubmission,
+        _received_at: u128,
+        _cancellations_enabled: bool,
+        _floor_value: U256,
+        _state: &mut SaveBidAndUpdateTopBidResponse,
+        _signing_context: &RelaySigningContext,
+    ) -> Result<Option<SignedBuilderBid>, AuctioneerError> {
+        Ok(None)
     }
 }

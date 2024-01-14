@@ -10,8 +10,9 @@ use helix_common::{Route, RouterConfig};
 use crate::gossiper::grpc_gossiper::GrpcGossiperClientManager;
 use crate::{
     builder::{
-        api::BuilderApi, mock_simulator::MockSimulator, optimistic_simulator::OptimisticSimulator,
+        api::BuilderApi, optimistic_simulator::OptimisticSimulator,
         PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK,
+        PATH_SUBMIT_BLOCK_OPTIMISTIC, PATH_SUBMIT_HEADER,
     },
     proposer::{
         api::ProposerApi, PATH_GET_HEADER, PATH_GET_PAYLOAD, PATH_PROPOSER_API,
@@ -57,6 +58,18 @@ pub fn build_router(
                 router = router.route(
                     &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK}"),
                     post(BuilderApiProd::submit_block),
+                );
+            }
+            Route::SubmitBlockOptimistic => {
+                router = router.route(
+                    &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC}"),
+                    post(BuilderApiProd::submit_block_v2),
+                );
+            }
+            Route::SubmitHeader => {
+                router = router.route(
+                    &format!("{PATH_BUILDER_API}{PATH_SUBMIT_HEADER}"),
+                    post(BuilderApiProd::submit_header),
                 );
             }
             Route::Status => {

@@ -39,7 +39,7 @@ mod proposer_api_tests {
     use helix_datastore::MockAuctioneer;
     use helix_common::{
         api::builder_api::BuilderGetValidatorsResponseEntry, bid_submission::SignedBidSubmission,
-        PayloadAttributes, fork_info::ForkInfo, SignedBuilderBid, capella::{self}, deneb,
+        fork_info::ForkInfo, SignedBuilderBid, capella::{self}, deneb,
     };
     use helix_utils::request_encoding::Encoding;
     use tokio::sync::{
@@ -48,7 +48,6 @@ mod proposer_api_tests {
     };
     use tokio::sync::mpsc::channel;
     use tokio::time::{Instant, sleep};
-    use helix_database::mongodb::mongo_db_service::MongoDatabaseService;
     use crate::proposer::PATH_REGISTER_VALIDATORS;
     use crate::proposer::tests::gen_signed_vr;
     use helix_common::api::proposer_api::ValidatorPreferences;

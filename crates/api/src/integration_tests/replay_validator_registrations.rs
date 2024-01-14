@@ -2,16 +2,19 @@ use std::collections::HashMap;
 
 use ethereum_consensus::{
     builder::SignedValidatorRegistration, 
-    primitives::BlsPublicKey,
+    primitives::{BlsPublicKey, Slot},
+    serde::as_str,
 };
+use helix_beacon_client::BeaconClientTrait;
 use reqwest::Error;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::channel;
 
-use helix_beacon_client::BeaconClientTrait;
-use helix_common::api::builder_api::BuilderGetValidatorsResponseEntry;
-use helix_common::api::proposer_api::ValidatorRegistrationInfo;
-use serde::{Deserialize, Serialize};
-use ethereum_consensus::{primitives::Slot, serde::as_str,};
+use helix_common::api::{
+    builder_api::BuilderGetValidatorsResponseEntry,
+    proposer_api::ValidatorRegistrationInfo,
+};
+
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct BuilderGetValidatorsResponseEntryExternal {
@@ -126,7 +129,7 @@ async fn run() {
     let beacon_client = helix_beacon_client::beacon_client::BeaconClient::from_endpoint_str("http://localhost:5052");
 
     let (head_event_sender, mut head_event_receiver) =
-        channel::<helix_common::HeadEventData>(100);
+        channel::<helix_beacon_client::types::HeadEventData>(100);
 
     tokio::spawn(async move {
         if let Err(err) = beacon_client.subscribe_to_head_events(head_event_sender).await {
