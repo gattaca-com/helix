@@ -8,135 +8,133 @@ use ethereum_consensus::{
     Fork,
 };
 use helix_utils::signing::compute_builder_signing_root;
-use crate::{capella, bid_submission::{BidTrace, BidSubmission}};
+use crate::{bid_submission::{BidTrace, BidSubmission}, deneb::{BlobsBundle}, capella, versioned_payload::PayloadAndBlobs};
 
 
 #[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
-pub struct SignedBidSubmission {
-    pub message: BidTrace,
-    pub execution_payload: ExecutionPayload,
-    pub signature: BlsSignature,
+#[ssz(transparent)]
+#[serde(untagged)]
+pub enum SignedBidSubmission {
+    Deneb(SignedBidSubmissionDeneb),
+    Capella(SignedBidSubmissionCapella),
 }
 
 impl BidSubmission for SignedBidSubmission {
     fn bid_trace(&self) -> &BidTrace {
-        &self.message
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.message,
+            SignedBidSubmission::Capella(signed_bid_submission) => &signed_bid_submission.message,
+        }
     }
 
     fn signature(&self) -> &BlsSignature {
-        &self.signature
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.signature,
+            SignedBidSubmission::Capella(signed_bid_submission) => &signed_bid_submission.signature,
+        }
     }
 
     fn slot(&self) -> Slot {
-        self.message.slot
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => signed_bid_submission.message.slot,
+            SignedBidSubmission::Capella(signed_bid_submission) => signed_bid_submission.message.slot,
+        }
     }
 
     fn parent_hash(&self) -> &Hash32 {
-        &self.message.parent_hash
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.message.parent_hash,
+            SignedBidSubmission::Capella(signed_bid_submission) => &signed_bid_submission.message.parent_hash,
+        }
     }
 
     fn block_hash(&self) -> &Hash32 {
-        &self.message.block_hash
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.message.block_hash,
+            SignedBidSubmission::Capella(signed_bid_submission) => &signed_bid_submission.message.block_hash,
+        }
     }
 
     fn builder_public_key(&self) -> &BlsPublicKey {
-        &self.message.builder_public_key
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.message.builder_public_key,
+            SignedBidSubmission::Capella(signed_bid_submission) => &signed_bid_submission.message.builder_public_key,
+        }
     }
 
     fn proposer_public_key(&self) -> &BlsPublicKey {
-        &self.message.proposer_public_key
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.message.proposer_public_key,
+            SignedBidSubmission::Capella(signed_bid_submission) => &signed_bid_submission.message.proposer_public_key,
+        }
     }
 
     fn proposer_fee_recipient(&self) -> &ExecutionAddress {
-        &self.message.proposer_fee_recipient
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.message.proposer_fee_recipient,
+            SignedBidSubmission::Capella(signed_bid_submission) => &signed_bid_submission.message.proposer_fee_recipient,
+        }
     }
 
     fn gas_limit(&self) -> u64 {
-        self.message.gas_limit
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => signed_bid_submission.message.gas_limit,
+            SignedBidSubmission::Capella(signed_bid_submission) => signed_bid_submission.message.gas_limit,
+        }
     }
 
     fn gas_used(&self) -> u64 {
-        self.message.gas_used
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => signed_bid_submission.message.gas_used,
+            SignedBidSubmission::Capella(signed_bid_submission) => signed_bid_submission.message.gas_used,
+        }
     }
 
     fn value(&self) -> U256 {
-        self.message.value
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => signed_bid_submission.message.value,
+            SignedBidSubmission::Capella(signed_bid_submission) => signed_bid_submission.message.value,
+        }
     }
 
     fn fee_recipient(&self) -> &ExecutionAddress {
-        match &self.execution_payload {
-            ExecutionPayload::Bellatrix(payload) => &payload.fee_recipient,
-            ExecutionPayload::Capella(payload) => &payload.fee_recipient,
-            ExecutionPayload::Deneb(payload) => &payload.fee_recipient,
-        }
+        self.execution_payload().fee_recipient()
     }
 
     fn state_root(&self) -> &Bytes32 {
-        match &self.execution_payload {
-            ExecutionPayload::Bellatrix(payload) => &payload.state_root,
-            ExecutionPayload::Capella(payload) => &payload.state_root,
-            ExecutionPayload::Deneb(payload) => &payload.state_root,
-        }
+        self.execution_payload().state_root()
     }
 
     fn receipts_root(&self) -> &Bytes32 {
-        match &self.execution_payload {
-            ExecutionPayload::Bellatrix(payload) => &payload.receipts_root,
-            ExecutionPayload::Capella(payload) => &payload.receipts_root,
-            ExecutionPayload::Deneb(payload) => &payload.receipts_root,
-        }
+        self.execution_payload().receipts_root()
     }
 
     fn logs_bloom(&self) -> &ByteVector<BYTES_PER_LOGS_BLOOM> {
-        match &self.execution_payload {
-            ExecutionPayload::Bellatrix(payload) => &payload.logs_bloom,
-            ExecutionPayload::Capella(payload) => &payload.logs_bloom,
-            ExecutionPayload::Deneb(payload) => &payload.logs_bloom,
-        }
+        self.execution_payload().logs_bloom()
     }
 
     fn prev_randao(&self) -> &Bytes32 {
-        match &self.execution_payload {
-            ExecutionPayload::Bellatrix(payload) => &payload.prev_randao,
-            ExecutionPayload::Capella(payload) => &payload.prev_randao,
-            ExecutionPayload::Deneb(payload) => &payload.prev_randao,
-        }
+        self.execution_payload().prev_randao()
     }
 
     fn block_number(&self) -> u64 {
-        match &self.execution_payload {
-            ExecutionPayload::Bellatrix(payload) => payload.block_number,
-            ExecutionPayload::Capella(payload) => payload.block_number,
-            ExecutionPayload::Deneb(payload) => payload.block_number,
-        }
+        self.execution_payload().block_number()
     }
 
     fn timestamp(&self) -> u64 {
-        match &self.execution_payload {
-            ExecutionPayload::Bellatrix(payload) => payload.timestamp,
-            ExecutionPayload::Capella(payload) => payload.timestamp,
-            ExecutionPayload::Deneb(payload) => payload.timestamp,
-        }
+        self.execution_payload().timestamp()
     }
 
     fn extra_data(&self) -> &ByteList<MAX_EXTRA_DATA_BYTES> {
-        match &self.execution_payload {
-            ExecutionPayload::Bellatrix(payload) => &payload.extra_data,
-            ExecutionPayload::Capella(payload) => &payload.extra_data,
-            ExecutionPayload::Deneb(payload) => &payload.extra_data,
-        }
+        self.execution_payload().extra_data()
     }
 
     fn base_fee_per_gas(&self) -> &U256 {
-        match &self.execution_payload {
-            ExecutionPayload::Bellatrix(payload) => &payload.base_fee_per_gas,
-            ExecutionPayload::Capella(payload) => &payload.base_fee_per_gas,
-            ExecutionPayload::Deneb(payload) => &payload.base_fee_per_gas,
-        }
+        self.execution_payload().base_fee_per_gas()
     }
 
     fn withdrawals(&self) -> Option<&[Withdrawal]> {
-        match &self.execution_payload {
+        match &self.execution_payload() {
             ExecutionPayload::Bellatrix(_) => None,
             ExecutionPayload::Capella(payload) => Some(&payload.withdrawals),
             ExecutionPayload::Deneb(payload) => Some(&payload.withdrawals),
@@ -144,10 +142,9 @@ impl BidSubmission for SignedBidSubmission {
     }
 
     fn consensus_version(&self) -> Fork {
-        match &self.execution_payload {
-            ExecutionPayload::Bellatrix(_) => Fork::Bellatrix,
-            ExecutionPayload::Capella(_) => Fork::Capella,
-            ExecutionPayload::Deneb(_) => Fork::Deneb,
+        match self {
+            SignedBidSubmission::Deneb(_) => Fork::Deneb,
+            SignedBidSubmission::Capella(_) => Fork::Capella,
         }
     }
 
@@ -158,32 +155,104 @@ impl BidSubmission for SignedBidSubmission {
 
 impl SignedBidSubmission {
     pub fn verify_signature(&mut self, context: &ethereum_consensus::state_transition::Context) -> Result<(), ethereum_consensus::Error> {
-        let signing_root = compute_builder_signing_root(&mut self.message, context)?;
-        let public_key = &self.message.builder_public_key;
-        verify_signature(public_key, signing_root.as_ref(), &self.signature)
-    }
-
-    pub fn execution_payload(&self) -> &ExecutionPayload {
-        &self.execution_payload
+        let signing_root = compute_builder_signing_root(self.message_mut(), context)?;
+        let public_key = self.builder_public_key();
+        verify_signature(public_key, signing_root.as_ref(), self.signature())
     }
 
     pub fn transactions(
         &self,
     ) -> &List<ByteList<MAX_BYTES_PER_TRANSACTION>, MAX_TRANSACTIONS_PER_PAYLOAD> {
-        match &self.execution_payload {
-            ExecutionPayload::Bellatrix(payload) => &payload.transactions,
-            ExecutionPayload::Capella(payload) => &payload.transactions,
-            ExecutionPayload::Deneb(payload) => &payload.transactions,
+        match &self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.execution_payload.transactions(),
+            SignedBidSubmission::Capella(signed_bid_submission) => &signed_bid_submission.execution_payload.transactions(),
+        }
+    }
+
+    pub fn blobs_bundle(&self) -> Option<&BlobsBundle> {
+        match &self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => Some(&signed_bid_submission.blobs_bundle),
+            SignedBidSubmission::Capella(_) => None,
+        }
+    }
+
+    pub fn message(&self) -> &BidTrace {
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.message,
+            SignedBidSubmission::Capella(signed_bid_submission) => &signed_bid_submission.message,
+        }
+    }
+
+    pub fn message_mut(&mut self) -> &mut BidTrace {
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => &mut signed_bid_submission.message,
+            SignedBidSubmission::Capella(signed_bid_submission) => &mut signed_bid_submission.message,
+        }
+    }
+
+    pub fn execution_payload(&self) -> &ExecutionPayload {
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.execution_payload,
+            SignedBidSubmission::Capella(signed_bid_submission) => &signed_bid_submission.execution_payload,
+        }
+    }
+
+    pub fn execution_payload_mut(&mut self) -> &mut ExecutionPayload {
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => &mut signed_bid_submission.execution_payload,
+            SignedBidSubmission::Capella(signed_bid_submission) => &mut signed_bid_submission.execution_payload,
+        }
+    }
+
+    pub fn execution_payload_moved(self) -> ExecutionPayload {
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => signed_bid_submission.execution_payload,
+            SignedBidSubmission::Capella(signed_bid_submission) => signed_bid_submission.execution_payload,
+        }
+    }
+
+    pub fn payload_and_blobs(&self) -> PayloadAndBlobs {
+        match self {
+            SignedBidSubmission::Deneb(_) => {
+                PayloadAndBlobs {
+                    execution_payload: self.execution_payload().clone(),
+                    blobs_bundle: self.blobs_bundle().cloned(),
+                }
+            }
+            SignedBidSubmission::Capella(_) => {
+                PayloadAndBlobs {
+                    execution_payload: self.execution_payload().clone(),
+                    blobs_bundle: None,
+                }
+            }
         }
     }
 }
 
 impl Default for SignedBidSubmission {
     fn default() -> Self {
-        Self {
-            message: BidTrace::default(),
-            execution_payload: ExecutionPayload::Capella(capella::ExecutionPayload::default()),
-            signature: BlsSignature::default(),
-        }
+        Self::Capella(
+            SignedBidSubmissionCapella {
+                message: BidTrace::default(),
+                execution_payload: ExecutionPayload::Capella(capella::ExecutionPayload::default()),
+                signature: BlsSignature::default(),
+            }
+        )
     }
+}
+
+
+#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+pub struct SignedBidSubmissionCapella {
+    pub message: BidTrace,
+    pub execution_payload: ExecutionPayload,
+    pub signature: BlsSignature,
+}
+
+#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+pub struct SignedBidSubmissionDeneb {
+    pub message: BidTrace,
+    pub execution_payload: ExecutionPayload,
+    pub blobs_bundle: BlobsBundle,
+    pub signature: BlsSignature,
 }

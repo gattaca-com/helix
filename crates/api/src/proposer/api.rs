@@ -20,7 +20,7 @@ use ethereum_consensus::{
     primitives::BlsPublicKey,
     ssz::prelude::*,
     types::mainnet::{
-        ExecutionPayload, ExecutionPayloadHeader, ExecutionPayloadHeaderRef, SignedBeaconBlock,
+        ExecutionPayloadHeader, ExecutionPayloadHeaderRef, SignedBeaconBlock,
         SignedBlindedBeaconBlock,
     },
 };
@@ -49,7 +49,7 @@ use helix_common::{
     },
     fork_info::{ForkInfo, Network},
     try_execution_header_from_payload, BidRequest, GetHeaderTrace, GetPayloadTrace,
-    RegisterValidatorsTrace,
+    RegisterValidatorsTrace, signed_proposal::VersionedSignedProposal, versioned_payload::PayloadAndBlobs,
 };
 use helix_utils::signing::{verify_signed_builder_message, verify_signed_consensus_message};
 
@@ -463,7 +463,7 @@ where
             )
             .await;
 
-        let mut payload = match payload_result {
+        let mut versioned_payload = match payload_result {
             Ok(p) => p,
             Err(err) => {
                 error!(
@@ -533,7 +533,7 @@ where
         let message = signed_blinded_block.message();
         let body = message.body();
         let provided_header = body.execution_payload_header();
-        let local_header = match try_execution_header_from_payload(&mut payload) {
+        let local_header = match try_execution_header_from_payload(&mut versioned_payload.execution_payload) {
             Ok(header) => header,
             Err(err) => {
                 error!(
@@ -554,14 +554,14 @@ where
         }
         trace.validation_complete = get_nanos_timestamp()?;
 
-        let payload = Arc::new(payload);
-        let unblinded_payload = match unblind_beacon_block(&signed_blinded_block, &payload) {
+        let unblinded_payload = match unblind_beacon_block(&signed_blinded_block, &versioned_payload) {
             Ok(unblinded_payload) => Arc::new(unblinded_payload),
             Err(err) => {
                 warn!(request_id = %request_id, error = %err, "payload type mismatch");
                 return Err(ProposerApiError::PayloadTypeMismatch);
             }
         };
+        let payload = Arc::new(versioned_payload);
 
         // Publish and validate payload with multi-beacon-client
         let fork = unblinded_payload.version();
@@ -814,7 +814,7 @@ where
     /// `broadcast_signed_block` sends the provided signed block to all registered broadcasters (e.g., BloXroute, Fiber).
     fn broadcast_signed_block(
         &self,
-        signed_block: Arc<SignedBeaconBlock>,
+        signed_block: Arc<VersionedSignedProposal>,
         broadcast_validation: Option<BroadcastValidation>,
         request_id: &Uuid,
     ) {
@@ -829,7 +829,7 @@ where
             let broadcaster = broadcaster.clone();
             let block = signed_block.clone();
             let broadcast_validation = broadcast_validation.clone();
-            let consensus_version = get_consensus_version(&block);
+            let consensus_version = get_consensus_version(block.beacon_block());
             let request_id = *request_id;
             tokio::spawn(async move {
                 info!(request_id = %request_id, broadcaster = %broadcaster.identifier(), "broadcast_signed_block");
@@ -858,7 +858,7 @@ where
         pub_key: &BlsPublicKey,
         block_hash: &ByteVector<32>,
         request_id: &Uuid,
-    ) -> Result<ExecutionPayload, ProposerApiError> {
+    ) -> Result<PayloadAndBlobs, ProposerApiError> {
         const RETRY_DELAY: Duration = Duration::from_millis(20);
 
         let slot_time = self.fork_info.genesis_time_in_secs + (slot * self.fork_info.seconds_per_slot);
@@ -868,7 +868,7 @@ where
 
         while get_millis_timestamp()? < slot_cutoff_millis {
             match self.auctioneer.get_execution_payload(slot, pub_key, block_hash).await {
-                Ok(Some(payload)) => return Ok(payload),
+                Ok(Some(versioned_payload)) => return Ok(versioned_payload),
                 Ok(None) => {
                     warn!(request_id = %request_id, "execution payload not found");
                 }
@@ -911,7 +911,7 @@ where
 
     async fn save_delivered_payload_info(
         &self,
-        payload: Arc<ExecutionPayload>,
+        payload: Arc<PayloadAndBlobs>,
         signed_blinded_block: &SignedBlindedBeaconBlock,
         proposer_public_key: &BlsPublicKey,
         trace: &GetPayloadTrace,
@@ -922,7 +922,7 @@ where
             .get_bid_trace(
                 signed_blinded_block.message().slot(),
                 proposer_public_key,
-                payload.block_hash(),
+                payload.execution_payload.block_hash(),
             )
             .await
         {

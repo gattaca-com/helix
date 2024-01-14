@@ -37,9 +37,9 @@ pub trait BeaconClientTrait: Send + Sync + Clone {
         &self,
         epoch: u64,
     ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError>;
-    async fn publish_block<SignedBeaconBlock: Serialize + DeserializeOwned + Send + Sync>(
+    async fn publish_block<VersionedSignedProposal: Serialize + DeserializeOwned + Send + Sync>(
         &self,
-        block: Arc<SignedBeaconBlock>,
+        block: Arc<VersionedSignedProposal>,
         broadcast_validation: Option<BroadcastValidation>,
         fork: ethereum_consensus::Fork,
     ) -> Result<u16, BeaconClientError>;
@@ -69,10 +69,10 @@ pub trait MultiBeaconClientTrait: Send + Sync + Clone {
         epoch: u64,
     ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError>;
     async fn publish_block<
-        SignedBeaconBlock: Serialize + DeserializeOwned + Send + Sync + 'static,
+        VersionedSignedProposal: Serialize + DeserializeOwned + Send + Sync + 'static,
     >(
         &self,
-        block: Arc<SignedBeaconBlock>,
+        block: Arc<VersionedSignedProposal>,
         broadcast_validation: Option<BroadcastValidation>,
         fork: ethereum_consensus::Fork,
     ) -> Result<(), BeaconClientError>;

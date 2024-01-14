@@ -4,7 +4,7 @@ use ethereum_consensus::{
     deneb::{mainnet::{MAX_BLOBS_PER_BLOCK, MAX_BLOB_COMMITMENTS_PER_BLOCK}, polynomial_commitments::{KzgCommitment, KzgProof}},
     primitives::{BlsPublicKey, BlsSignature, Root, U256},
     ssz::prelude::*,
-    serde::as_str,
+    serde::as_str, types::mainnet::SignedBeaconBlock,
 };
 
 pub type ExecutionPayload = spec::ExecutionPayload;
@@ -16,7 +16,7 @@ pub type Blob = spec::Blob;
 #[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
 pub struct BuilderBid {
     pub header: spec::ExecutionPayloadHeader,
-    pub blinded_blobs_bundle: BlindedBlobsBundle,
+    pub blob_kzg_commitments: List<KzgCommitment, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
     #[serde(with = "as_str")]
     pub value: U256,
     #[serde(rename = "pubkey")]
@@ -49,8 +49,9 @@ pub struct BlobsBundle {
     pub blobs: List<Blob, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
 }
 
-#[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
-pub struct ExecutionPayloadAndBlobsBundle {
-    pub execution_payload: ExecutionPayload,
-    pub blobs_bundle: BlobsBundle,
+#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SignedBlockContents {
+	pub signed_block: SignedBeaconBlock,
+	pub kzgp_proofs: List<KzgProof, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
+	pub blobs: List<Blob, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
 }

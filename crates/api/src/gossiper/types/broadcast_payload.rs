@@ -1,10 +1,11 @@
-use ethereum_consensus::{primitives::BlsPublicKey, types::mainnet::ExecutionPayload, ssz};
+use ethereum_consensus::{primitives::BlsPublicKey, ssz};
+use helix_common::versioned_payload::PayloadAndBlobs;
 
 use crate::grpc;
 
 #[derive(Clone, Debug)]
 pub struct BroadcastPayloadParams {
-    pub execution_payload: ExecutionPayload,
+    pub execution_payload: PayloadAndBlobs,
     pub slot: u64,
     pub proposer_pub_key: BlsPublicKey,
 }

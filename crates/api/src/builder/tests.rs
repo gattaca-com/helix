@@ -5,7 +5,7 @@ mod tests {
     use crate::{
         builder::mock_simulator::MockSimulator,
         builder::{
-            api::{BuilderApi, MAX_PAYLOAD_LENGTH},
+            api::{BuilderApi, MAX_PAYLOAD_LENGTH, decode_payload, decode_header_submission},
             PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK,
         },
         test_utils::builder_api_app,
@@ -16,21 +16,21 @@ mod tests {
         configs::mainnet::CAPELLA_FORK_EPOCH,
         phase0::mainnet::SLOTS_PER_EPOCH,
         primitives::{BlsPublicKey, BlsSignature},
-        ssz::{prelude::*, self},
+        ssz::{prelude::*, self}, Fork, types::mainnet::ExecutionPayloadHeader, deneb,
     };
     use helix_beacon_client::types::PayloadAttributes;
-    use hyper::StatusCode;
+    use hyper::{StatusCode, Request, Body, Uri, Method, header};
     use rand::Rng;
     use reqwest::{Client, Response};
     use reth_primitives::hex;
     use serde_json::json;
     use serial_test::serial;
-    use std::{io::Write, sync::Arc, time::Duration};
+    use std::{io::Write, sync::Arc, time::Duration, str::FromStr};
     use ethereum_consensus::types::mainnet::ExecutionPayload;
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_common::{
-        api::builder_api::BuilderGetValidatorsResponseEntry, bid_submission::SignedBidSubmission,
+        api::builder_api::BuilderGetValidatorsResponseEntry, bid_submission::{SignedBidSubmission, BidTrace, v2::header_submission::{HeaderSubmission, SignedHeaderSubmission}}, SubmissionTrace, deneb::BlobsBundle, HeaderSubmissionTrace,
     };
     use helix_common::api::proposer_api::ValidatorRegistrationInfo;
     use helix_common::api::proposer_api::ValidatorPreferences;
@@ -205,8 +205,8 @@ mod tests {
             serde_json::from_slice(&req_payload_bytes).unwrap();
 
         // set the slot and timestamp
-        signed_bid_submission.message.slot = SUBMISSION_SLOT;
-        match &mut signed_bid_submission.execution_payload {
+        signed_bid_submission.message_mut().slot = SUBMISSION_SLOT;
+        match &mut signed_bid_submission.execution_payload_mut() {
             ExecutionPayload::Capella(ref mut payload) => {
                 payload.timestamp = SUBMISSION_TIMESTAMP;
             }
@@ -236,8 +236,8 @@ mod tests {
             serde_json::from_slice(&req_payload_bytes).unwrap();
 
         // set the slot and timestamp
-        signed_bid_submission.message.slot = submission_slot.unwrap_or(SUBMISSION_SLOT);
-        match &mut signed_bid_submission.execution_payload {
+        signed_bid_submission.message_mut().slot = submission_slot.unwrap_or(SUBMISSION_SLOT);
+        match &mut signed_bid_submission.execution_payload_mut() {
             ExecutionPayload::Capella(ref mut payload) => {
                 payload.timestamp = submission_timestamp.unwrap_or(SUBMISSION_TIMESTAMP);
             }
@@ -346,7 +346,157 @@ mod tests {
         })
     }
 
+    pub fn generate_request(
+        cancellations_enabled: bool,
+        gzip_encoding: bool,
+        ssz_content_type: bool,
+        payload: &[u8],
+    ) -> Request<Body> {
+        // Construct the URI with cancellations query parameter
+        let uri_str = if cancellations_enabled {
+            "http://example.com?cancellations=1"
+        } else {
+            "http://example.com"
+        };
+        let uri = Uri::from_str(uri_str).unwrap();
+    
+        // Construct the request method and body
+        let method = Method::POST;
+        let body = Body::from(payload.to_vec());
+    
+        // Create the request builder
+        let mut request_builder = Request::builder()
+        .method(method)
+        .uri(uri);
+
+        // Add headers based on flags
+        if gzip_encoding {
+            request_builder = request_builder.header(header::CONTENT_ENCODING, "gzip");
+        }
+        if ssz_content_type {
+            request_builder = request_builder.header(header::CONTENT_TYPE, "application/octet-stream");
+        } else {
+            request_builder = request_builder.header(header::CONTENT_TYPE, "application/json");
+        }
+
+        // Build the request
+        request_builder
+            .body(body)
+            .unwrap()
+    }
+
+    
     // +++ TESTS +++
+
+    #[tokio::test]
+    async fn test_header_submission_decoding_capella() {
+        let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
+        if !current_dir.ends_with("api") {
+            current_dir.push("crates/api/");
+        }
+        current_dir.push("test_data/submitBlockPayloadHeaderCapella.json");
+        let req_payload_bytes =
+            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+
+        let mut header_submission_trace = HeaderSubmissionTrace::default();
+        let uuid = uuid::Uuid::new_v4();
+        let request = generate_request(false, false, false, &req_payload_bytes);
+        let decoded_submission = decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
+
+        assert_eq!(decoded_submission.0.message.bid_trace.slot, 5552306);
+        assert!(matches!(decoded_submission.0.message.versioned_execution_payload.execution_payload_header, ExecutionPayloadHeader::Capella(_)));
+        assert!(decoded_submission.0.message.versioned_execution_payload.blobs_bundle.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_header_submission_decoding_deneb() {
+        let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
+        if !current_dir.ends_with("api") {
+            current_dir.push("crates/api/");
+        }
+        current_dir.push("test_data/submitBlockPayloadHeaderDeneb.json");
+        let req_payload_bytes =
+            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+
+        let mut header_submission_trace = HeaderSubmissionTrace::default();
+        let uuid = uuid::Uuid::new_v4();
+        let request = generate_request(false, false, false, &req_payload_bytes);
+        let decoded_submission = decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
+
+        assert_eq!(decoded_submission.0.message.bid_trace.slot, 5552306);
+        assert!(matches!(decoded_submission.0.message.versioned_execution_payload.execution_payload_header, ExecutionPayloadHeader::Deneb(_)));
+        assert!(decoded_submission.0.message.versioned_execution_payload.blobs_bundle.is_some());
+        let deneb_payload = decoded_submission.0.message.versioned_execution_payload.execution_payload_header.deneb().unwrap();
+        assert_eq!(deneb_payload.blob_gas_used, 100);
+        assert_eq!(deneb_payload.excess_blob_gas, 50);
+    }
+
+    #[tokio::test]
+    async fn test_signed_bid_submission_decoding_capella() {
+        let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
+        if !current_dir.ends_with("api") {
+            current_dir.push("crates/api/");
+        }
+        current_dir.push("test_data/submitBlockPayloadCapella_Goerli.json");
+        let req_payload_bytes =
+            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+
+        let mut submission_trace = SubmissionTrace::default();
+        let uuid = uuid::Uuid::new_v4();
+        let request = generate_request(false, false, false, &req_payload_bytes);
+        let decoded_submission = decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
+
+        assert_eq!(decoded_submission.0.message().slot, 5552306);
+        assert!(matches!(decoded_submission.0.execution_payload(),ExecutionPayload::Capella(_)));
+        assert!(matches!(decoded_submission.0.execution_payload().version(),Fork::Capella));
+        assert!(decoded_submission.0.blobs_bundle().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_signed_bid_submission_decoding_capella_gzip() {
+        let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
+        if !current_dir.ends_with("api") {
+            current_dir.push("crates/api/");
+        }
+        current_dir.push("test_data/submitBlockPayloadCapella_Goerli.json.gz");
+        let req_payload_bytes =
+            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+
+        let mut submission_trace = SubmissionTrace::default();
+        let uuid = uuid::Uuid::new_v4();
+        let request = generate_request(false, true, false, &req_payload_bytes);
+        let decoded_submission = decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
+
+        assert_eq!(decoded_submission.0.message().slot, 5552306);
+        assert!(matches!(decoded_submission.0.execution_payload(),ExecutionPayload::Capella(_)));
+        assert!(matches!(decoded_submission.0.execution_payload().version(),Fork::Capella));
+        assert!(decoded_submission.0.blobs_bundle().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_signed_bid_submission_decoding_deneb() {
+        let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
+        if !current_dir.ends_with("api") {
+            current_dir.push("crates/api/");
+        }
+        current_dir.push("test_data/submitBlockPayloadDeneb.json");
+        let req_payload_bytes =
+            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+
+        let mut submission_trace = SubmissionTrace::default();
+        let uuid = uuid::Uuid::new_v4();
+        let request = generate_request(false, false, false, &req_payload_bytes);
+        let decoded_submission = decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
+
+        assert_eq!(decoded_submission.0.message().slot, 5552306);
+        assert!(matches!(decoded_submission.0.execution_payload(),ExecutionPayload::Deneb(_)));
+        assert!(matches!(decoded_submission.0.execution_payload().version(),Fork::Deneb));
+        let deneb_payload = decoded_submission.0.execution_payload().deneb().unwrap();
+        assert_eq!(deneb_payload.blob_gas_used, 100);
+        assert_eq!(deneb_payload.excess_blob_gas, 50);
+        assert!(decoded_submission.0.blobs_bundle().is_some());
+    }
+
 
     #[tokio::test]
     #[serial]
@@ -483,7 +633,7 @@ mod tests {
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
 
         // Set incorrect fee recipient
-        signed_bid_submission.message.proposer_fee_recipient =
+        signed_bid_submission.message_mut().proposer_fee_recipient =
             get_byte_vector_20_for_hex("0x1230dde14e7256340cc820415a6022a7d1c93a35");
 
         // Send JSON encoded request
@@ -556,7 +706,7 @@ mod tests {
             format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
-        signed_bid_submission.message.slot = 1;
+        signed_bid_submission.message_mut().slot = 1;
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
@@ -591,7 +741,7 @@ mod tests {
             format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
-        match signed_bid_submission.execution_payload {
+        match signed_bid_submission.execution_payload_mut() {
             ExecutionPayload::Capella(ref mut payload) => {
                 payload.timestamp = 1;
             }
@@ -668,7 +818,7 @@ mod tests {
             format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
-        match signed_bid_submission.execution_payload {
+        match signed_bid_submission.execution_payload_mut() {
             ExecutionPayload::Capella(ref mut payload) => {
                 payload.prev_randao = get_byte_vector_32_for_hex(
                     "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
@@ -962,7 +1112,7 @@ mod tests {
         let req_url =
             format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
-        match signed_bid_submission.execution_payload {
+        match signed_bid_submission.execution_payload_mut() {
             ExecutionPayload::Capella(ref mut payload) => {
                 payload.prev_randao = get_byte_vector_32_for_hex(
                     "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",

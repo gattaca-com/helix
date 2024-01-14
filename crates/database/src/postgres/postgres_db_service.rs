@@ -10,7 +10,6 @@ use dashmap::{DashMap, DashSet};
 use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
 use ethereum_consensus::{
     altair::Hash32, primitives::BlsPublicKey, ssz::prelude::ByteVector,
-    types::mainnet::ExecutionPayload,
 };
 
 use helix_common::{
@@ -18,10 +17,10 @@ use helix_common::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
-    bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission},
+    bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission, BidSubmission},
     simulator::BlockSimError,
     BuilderInfo, GetPayloadTrace, RelayConfig, SignedValidatorRegistrationEntry,
-    SubmissionTrace, ValidatorSummary, GetHeaderTrace, HeaderSubmissionTrace, GossipedPayloadTrace, GossipedHeaderTrace, pending_block::PendingBlock,
+    SubmissionTrace, ValidatorSummary, GetHeaderTrace, HeaderSubmissionTrace, GossipedPayloadTrace, GossipedHeaderTrace, pending_block::PendingBlock, versioned_payload::PayloadAndBlobs,
 };
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{error, info};
@@ -659,7 +658,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn save_delivered_payload(
         &self,
         bid_trace: &BidTrace,
-        payload: Arc<ExecutionPayload>,
+        payload: Arc<PayloadAndBlobs>,
         latency_trace: &GetPayloadTrace,
     ) -> Result<(), DatabaseError> {
         let region_id = self.region;
@@ -676,18 +675,18 @@ impl DatabaseService for PostgresDatabaseService {
             ",
             &[
                 &(bid_trace.block_hash.as_ref()),
-                &(payload.parent_hash().as_ref()),
-                &(payload.fee_recipient().as_ref()),
-                &(payload.state_root().as_ref()),
-                &(payload.receipts_root().as_ref()),
-                &(payload.logs_bloom().as_ref()),
-                &(payload.prev_randao().as_ref()),
-                &(payload.timestamp() as i64),
-                &(payload.block_number() as i32),
-                &(payload.gas_limit() as i32),
-                &(payload.gas_used() as i32),
-                &(payload.extra_data().as_ref()),
-                &(PostgresNumeric::from(*payload.base_fee_per_gas())),
+                &(payload.execution_payload.parent_hash().as_ref()),
+                &(payload.execution_payload.fee_recipient().as_ref()),
+                &(payload.execution_payload.state_root().as_ref()),
+                &(payload.execution_payload.receipts_root().as_ref()),
+                &(payload.execution_payload.logs_bloom().as_ref()),
+                &(payload.execution_payload.prev_randao().as_ref()),
+                &(payload.execution_payload.timestamp() as i64),
+                &(payload.execution_payload.block_number() as i32),
+                &(payload.execution_payload.gas_limit() as i32),
+                &(payload.execution_payload.gas_used() as i32),
+                &(payload.execution_payload.extra_data().as_ref()),
+                &(PostgresNumeric::from(*payload.execution_payload.base_fee_per_gas())),
             ],
             ).await?;
 
@@ -712,11 +711,11 @@ impl DatabaseService for PostgresDatabaseService {
             ],
         ).await?;
 
-        if !payload.transactions().is_empty() {
+        if !payload.execution_payload.transactions().is_empty() {
             // Save the transactions
             let mut structured_params: Vec<(&[u8], &[u8])> = Vec::new();
-            for entry in payload.transactions().iter() {
-                structured_params.push((payload.block_hash().as_ref(), entry.as_ref()));
+            for entry in payload.execution_payload.transactions().iter() {
+                structured_params.push((payload.execution_payload.block_hash().as_ref(), entry.as_ref()));
             }
 
             // Prepare the params vector from the structured parameters
@@ -748,13 +747,13 @@ impl DatabaseService for PostgresDatabaseService {
             transaction.execute(&sql, &params[..]).await?;
         }
 
-        if payload.withdrawals().is_some() && !payload.withdrawals().unwrap().is_empty() {
+        if payload.execution_payload.withdrawals().is_some() && !payload.execution_payload.withdrawals().unwrap().is_empty() {
             // Save the withdrawals
             let mut structured_params: Vec<(i32, &[u8], i32, &[u8], i64)> = Vec::new();
-            for entry in payload.withdrawals().unwrap().iter() {
+            for entry in payload.execution_payload.withdrawals().unwrap().iter() {
                 structured_params.push((
                     entry.index as i32,
-                    payload.block_hash().as_ref(),
+                    payload.execution_payload.block_hash().as_ref(),
                     entry.validator_index as i32,
                     entry.address.as_ref(),
                     entry.amount as i64,
@@ -827,18 +826,18 @@ impl DatabaseService for PostgresDatabaseService {
                 DO NOTHING
                 ",
             &[
-                &(submission.execution_payload().block_number() as i32),
-                &(submission.message.slot as i32),
-                &(submission.execution_payload().parent_hash().as_ref()),
-                &(submission.execution_payload().block_hash().as_ref()),
-                &(submission.message.builder_public_key.as_ref()),
-                &(submission.message.proposer_public_key.as_ref()),
-                &(submission.message.proposer_fee_recipient.as_ref()),
-                &(submission.message.gas_limit as i32),
-                &(submission.message.gas_used as i32),
-                &(PostgresNumeric::from(submission.message.value)),
-                &(submission.execution_payload().transactions().len() as i32),
-                &(submission.execution_payload().timestamp() as i64),
+                &(submission.block_number() as i32),
+                &(submission.slot() as i32),
+                &(submission.parent_hash().as_ref()),
+                &(submission.block_hash().as_ref()),
+                &(submission.builder_public_key().as_ref()),
+                &(submission.proposer_public_key().as_ref()),
+                &(submission.proposer_fee_recipient().as_ref()),
+                &(submission.gas_limit() as i32),
+                &(submission.gas_used() as i32),
+                &(PostgresNumeric::from(submission.value())),
+                &(submission.transactions().len() as i32),
+                &(submission.timestamp() as i64),
             ],
         ).await?;
 
@@ -853,9 +852,9 @@ impl DatabaseService for PostgresDatabaseService {
                     pending = false
             ",
             &[
-                &(submission.execution_payload().block_hash().as_ref()),
-                &(submission.message.builder_public_key.as_ref()),
-                &(submission.message.slot as i32),
+                &(submission.block_hash().as_ref()),
+                &(submission.builder_public_key().as_ref()),
+                &(submission.slot() as i32),
                 &(false),
             ],
         ).await?;
@@ -1275,7 +1274,7 @@ impl DatabaseService for PostgresDatabaseService {
                 DO NOTHING
                 ",
             &[
-                &(submission.message.execution_payload_header.block_number() as i32),
+                &(submission.execution_payload_header().block_number() as i32),
                 &(submission.message.bid_trace.slot as i32),
                 &(submission.message.bid_trace.parent_hash.as_ref()),
                 &(submission.message.bid_trace.block_hash.as_ref()),
@@ -1285,7 +1284,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(submission.message.bid_trace.gas_limit as i32),
                 &(submission.message.bid_trace.gas_used as i32),
                 &(PostgresNumeric::from(submission.message.bid_trace.value)),
-                &(submission.message.execution_payload_header.timestamp() as i64),
+                &(submission.execution_payload_header().timestamp() as i64),
             ],
         ).await?;
 

@@ -15,7 +15,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
     };
     use helix_common::{
         bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission},
-        GetPayloadTrace, SubmissionTrace, bellatrix::{ByteVector, ByteList, List}, HeaderSubmissionTrace,
+        GetPayloadTrace, SubmissionTrace, bellatrix::{ByteVector, ByteList, List}, HeaderSubmissionTrace, versioned_payload::PayloadAndBlobs,
     };
 
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
@@ -340,8 +340,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
 
-        let mut signed_bid_submission = SignedBidSubmission::default();
-        signed_bid_submission.message = BidTrace {
+        let bid_trace = BidTrace {
             slot: 1234,
             parent_hash: Default::default(),
             block_hash: Default::default(),
@@ -352,6 +351,16 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
             gas_used: 0,
             value: U256::from(1234),
         };
+        let mut signed_bid_submission = SignedBidSubmission::default();
+        match &mut signed_bid_submission {
+            SignedBidSubmission::Deneb(submission) => {
+                submission.message = bid_trace.clone();
+            },
+            SignedBidSubmission::Capella(submission) => {
+                submission.message = bid_trace.clone();
+            },
+        }
+
         db_service.store_block_submission(Arc::new(signed_bid_submission)).await?;
         Ok(())
     }
@@ -424,7 +433,12 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         bid_trace.slot = 1234;
         let latency_trace = GetPayloadTrace::default();
 
-        db_service.save_delivered_payload(&bid_trace, Arc::new(execution_payload), &latency_trace).await?;
+        let payload_and_blobs = PayloadAndBlobs {
+            execution_payload: execution_payload.clone(),
+            blobs_bundle: None,
+        };
+
+        db_service.save_delivered_payload(&bid_trace, Arc::new(payload_and_blobs), &latency_trace).await?;
         Ok(())
     }
 

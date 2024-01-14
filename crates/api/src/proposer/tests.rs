@@ -39,7 +39,7 @@ mod proposer_api_tests {
     use helix_datastore::MockAuctioneer;
     use helix_common::{
         api::builder_api::BuilderGetValidatorsResponseEntry, bid_submission::SignedBidSubmission,
-        fork_info::ForkInfo, SignedBuilderBid, capella::{self}, deneb,
+        fork_info::ForkInfo, SignedBuilderBid, capella::{self}, deneb, versioned_payload::PayloadAndBlobs,
     };
     use helix_utils::request_encoding::Encoding;
     use tokio::sync::{
@@ -683,7 +683,7 @@ mod proposer_api_tests {
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(10));
         let _ = auctioneer.best_bid.lock().unwrap().insert(builder_bid.clone());
-        let _ = auctioneer.execution_payload.lock().unwrap().insert(ExecutionPayload::Capella(capella::ExecutionPayload::default()));
+        let _ = auctioneer.versioned_execution_payload.lock().unwrap().insert(PayloadAndBlobs::default());
 
         let current_slot = calculate_current_slot();
 
@@ -726,8 +726,8 @@ mod proposer_api_tests {
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(10));
         let _ = auctioneer.best_bid.lock().unwrap().insert(builder_bid.clone());
-        let execution_payload = ExecutionPayload::Capella(capella::ExecutionPayload::default());
-        let _ = auctioneer.execution_payload.lock().unwrap().insert(execution_payload.clone());
+        let versioned_execution_payload = PayloadAndBlobs::default();
+        let _ = auctioneer.versioned_execution_payload.lock().unwrap().insert(versioned_execution_payload.clone());
 
         // Send slot & payload attributes updates
         let slot_update_sender = slot_update_receiver.recv().await.unwrap();
@@ -767,8 +767,8 @@ mod proposer_api_tests {
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(10));
         let _ = auctioneer.best_bid.lock().unwrap().insert(builder_bid.clone());
-        let execution_payload = ExecutionPayload::Capella(capella::ExecutionPayload::default());
-        let _ = auctioneer.execution_payload.lock().unwrap().insert(execution_payload.clone());
+        let versioned_execution_payload = PayloadAndBlobs::default();
+        let _ = auctioneer.versioned_execution_payload.lock().unwrap().insert(versioned_execution_payload.clone());
 
         // Send slot & payload attributes updates
         let slot_update_sender = slot_update_receiver.recv().await.unwrap();
@@ -795,7 +795,7 @@ mod proposer_api_tests {
         // Now we can assert the body and assert it can be deserialized into a ExecutionPayload
         let body = resp.text().await.unwrap();
         let payload: ExecutionPayload = serde_json::from_str(&body).unwrap();
-        assert_eq!(payload.block_hash(), execution_payload.block_hash());
+        assert_eq!(payload.block_hash(), versioned_execution_payload.execution_payload.block_hash());
 
         // Shut down the server
         let _ = tx.send(());

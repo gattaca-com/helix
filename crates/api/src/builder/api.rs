@@ -17,7 +17,7 @@ use ethereum_consensus::{
     configs::{mainnet::CAPELLA_FORK_EPOCH, mainnet::SECONDS_PER_SLOT},
     phase0::mainnet::SLOTS_PER_EPOCH,
     primitives::{Bytes32, Hash32, BlsPublicKey},
-    ssz::{self, prelude::*}, types::mainnet::ExecutionPayload,
+    ssz::{self, prelude::*},
 };
 use flate2::read::GzDecoder;
 use hyper::{Body, Request};
@@ -41,10 +41,10 @@ use helix_common::{
         proposer_api::ValidatorRegistrationInfo,
     },
     bid_submission::{
-        v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission
+        v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission,
     },
     HeaderSubmissionTrace, fork_info::ForkInfo, signing::RelaySigningContext, 
-    simulator::BlockSimError, SubmissionTrace, SignedBuilderBid, GossipedHeaderTrace, GossipedPayloadTrace,
+    simulator::BlockSimError, SubmissionTrace, SignedBuilderBid, GossipedHeaderTrace, GossipedPayloadTrace, versioned_payload::PayloadAndBlobs,
 };
 use helix_utils::{calculate_withdrawals_root, has_reached_fork};
 
@@ -184,7 +184,7 @@ where
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) =
             decode_payload(req, &mut trace, &request_id).await?;
-        let block_hash = payload.message.block_hash.clone();
+        let block_hash = payload.message().block_hash.clone();
 
         debug!(
             request_id = %request_id,
@@ -528,16 +528,16 @@ where
         // Save bid to auctioneer
         if let Err(err) = api.auctioneer.save_execution_payload(
             payload.slot(), 
-            &payload.message.proposer_public_key, 
+            &payload.message().proposer_public_key, 
             payload.block_hash(), 
-            payload.execution_payload(),
+            &payload.payload_and_blobs(),
         ).await {
             error!(request_id = %request_id, error = %err, "failed to save execution payload");
             return Err(BuilderApiError::AuctioneerError(err));
         }
 
         // Gossip payload
-        api.gossip_payload(&payload, payload.execution_payload.clone(), &request_id).await;
+        api.gossip_payload(&payload, payload.payload_and_blobs(), &request_id).await;
 
         // Save submission to db.
         api.db_sender
@@ -650,14 +650,14 @@ where
         let request_id = Uuid::new_v4();
         info!(
             request_id = %request_id, 
-            block_hash = ?req.execution_payload.block_hash(), 
+            block_hash = ?req.execution_payload.execution_payload.block_hash(), 
             "received gossiped payload",
         );
 
         let mut trace = GossipedPayloadTrace { receive: get_nanos_timestamp().unwrap_or_default(), ..Default::default() };
 
         // Check that this request is for a known payload attribute for the current slot.
-        if let Err(err) = self.fetch_proposer_and_attributes(req.slot, &req.execution_payload.parent_hash(), &request_id).await {
+        if let Err(err) = self.fetch_proposer_and_attributes(req.slot, &req.execution_payload.execution_payload.parent_hash(), &request_id).await {
             warn!(request_id = %request_id, error = %err, "out of date request");
             return;
         }
@@ -682,7 +682,7 @@ where
         if let Err(err) = self.auctioneer.save_execution_payload(
             req.slot, 
             &req.proposer_pub_key, 
-            req.execution_payload.block_hash(), 
+            req.execution_payload.execution_payload.block_hash(), 
             &req.execution_payload,
         ).await {
             error!(request_id = %request_id, error = %err, "failed to save execution payload");
@@ -695,7 +695,7 @@ where
 
         // Save latency trace to db
         if let Err(err) = self.db_sender.send(DbInfo::GossipedPayload {
-            block_hash: req.execution_payload.block_hash().clone(),
+            block_hash: req.execution_payload.execution_payload.block_hash().clone(),
             trace: Arc::new(trace)
         }).await {
             error!(request_id = %request_id, error = %err, "failed to send latency trace to db");
@@ -726,7 +726,7 @@ where
     async fn gossip_new_submission(
         &self, 
         payload: &SignedBidSubmission,
-        execution_payload: ExecutionPayload, 
+        execution_payload: PayloadAndBlobs, 
         builder_bid: SignedBuilderBid, 
         is_cancellations_enabled: bool,
         on_receive: u64,
@@ -762,7 +762,7 @@ where
     async fn gossip_payload(
         &self, 
         payload: &SignedBidSubmission,
-        execution_payload: ExecutionPayload, 
+        execution_payload: PayloadAndBlobs, 
         request_id: &Uuid,
     ) {
         let params = BroadcastPayloadParams {
@@ -986,7 +986,7 @@ where
         is_cancellations_enabled: bool,
         floor_bid_value: U256,
         request_id: &Uuid,
-    ) -> Result<Option<(SignedBuilderBid, ExecutionPayload)>, BuilderApiError> {
+    ) -> Result<Option<(SignedBuilderBid, PayloadAndBlobs)>, BuilderApiError> {
         let mut update_bid_result = SaveBidAndUpdateTopBidResponse::default();
 
         match self
@@ -1295,7 +1295,7 @@ where
 /// - Handles GZIP-compressed payloads.
 ///
 /// It returns a tuple of the decoded payload and if cancellations are enabled.
-async fn decode_payload(
+pub async fn decode_payload(
     req: Request<Body>,
     trace: &mut SubmissionTrace,
     request_id: &Uuid,
@@ -1375,7 +1375,7 @@ async fn decode_payload(
         proposer_pubkey = ?payload.proposer_public_key(),
         parent_hash = ?payload.parent_hash(),
         value = ?payload.value(),
-        num_tx = payload.execution_payload.transactions().len(),
+        num_tx = payload.execution_payload().transactions().len(),
     );
 
     Ok((payload, is_cancellations_enabled))
@@ -1388,7 +1388,7 @@ async fn decode_payload(
 /// - Does *not* handle GZIP-compressed headers.
 ///
 /// It returns a tuple of the decoded header and if cancellations are enabled.
-async fn decode_header_submission(
+pub async fn decode_header_submission(
     req: Request<Body>,
     trace: &mut HeaderSubmissionTrace,
     request_id: &Uuid,

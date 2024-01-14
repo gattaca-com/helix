@@ -17,7 +17,7 @@ mod simulator_tests {
     use std::sync::Arc;
     use ethereum_consensus::types::mainnet::ExecutionPayload;
     use helix_common::{
-        bid_submission::{BidTrace, SignedBidSubmission},
+        bid_submission::{BidTrace, SignedBidSubmission, SignedBidSubmissionCapella},
         simulator::BlockSimError,
     };
     use helix_common::api::proposer_api::ValidatorPreferences;
@@ -43,11 +43,13 @@ mod simulator_tests {
         bid_trace.block_hash = get_byte_vector_32_for_hex(
             "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
         );
-        let signed_bid_submission = SignedBidSubmission {
-            message: bid_trace,
-            execution_payload,
-            signature: BlsSignature::default(),
-        };
+        let signed_bid_submission = SignedBidSubmission::Capella(
+            SignedBidSubmissionCapella {
+                message: bid_trace,
+                signature: BlsSignature::default(),
+                execution_payload,
+            }
+        );
         let sim_req =
             BlockSimRequest::new(0, Arc::new(signed_bid_submission), ValidatorPreferences::default());
 
