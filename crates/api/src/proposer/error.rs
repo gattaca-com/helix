@@ -145,6 +145,9 @@ pub enum ProposerApiError {
 
     #[error("internal server error")]
     InternalServerError,
+
+    #[error("number of blinded blobs does not match blobs bundle length")]
+    BlindedBlobsBundleLengthMismatch,
 }
 
 impl IntoResponse for ProposerApiError {
@@ -278,6 +281,9 @@ impl IntoResponse for ProposerApiError {
             },
             ProposerApiError::InternalServerError => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
+            },
+            ProposerApiError::BlindedBlobsBundleLengthMismatch => {
+                (StatusCode::BAD_REQUEST, "number of blinded blobs does not match blobs bundle length").into_response()
             },
         }
     }

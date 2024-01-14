@@ -8,7 +8,7 @@ use ethereum_consensus::{
 };
 use serde::{Deserialize, Serialize};
 
-use helix_common::api::data_api::ReceivedBlocksResponse;
+use helix_common::{api::data_api::ReceivedBlocksResponse, bid_submission::BidSubmission};
 use helix_common::{
     api::{builder_api::BuilderGetValidatorsResponseEntry, data_api::DeliveredPayloadsResponse},
     bid_submission::{BidTrace, SignedBidSubmission},
@@ -116,9 +116,9 @@ impl BidSubmissionDocument {
     pub fn from_signed_submission(value: &SignedBidSubmission) -> Self {
         Self {
             timestamp: get_current_unix_time_in_nanos() as u64,
-            bid_trace: value.message.clone(),
-            block_number: value.execution_payload.block_number(),
-            num_txs: value.execution_payload.transactions().len(),
+            bid_trace: value.bid_trace().clone(),
+            block_number: value.block_number(),
+            num_txs: value.transactions().len(),
         }
     }
 }

@@ -4,10 +4,9 @@ use async_trait::async_trait;
 use deadpool_redis::{Config, CreatePoolError, Pool, Runtime};
 use ethereum_consensus::{
     primitives::{BlsPublicKey, Hash32},
-    ssz::prelude::*,
-    types::mainnet::ExecutionPayload,
+    ssz::prelude::*, types::mainnet::ExecutionPayload,
 };
-use helix_common::bid_submission::BidSubmission;
+use helix_common::{bid_submission::BidSubmission, versioned_payload::PayloadAndBlobs};
 use helix_common::bid_submission::v2::header_submission::SignedHeaderSubmission;
 use redis::AsyncCommands;
 use serde::{de::DeserializeOwned, Serialize};
@@ -352,7 +351,7 @@ impl Auctioneer for RedisCache {
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &Hash32,
-        execution_payload: &ExecutionPayload,
+        execution_payload: &PayloadAndBlobs,
     ) -> Result<(), AuctioneerError> {
         let key = get_execution_payload_key(slot, proposer_pub_key, block_hash);
         Ok(self.set(&key, &execution_payload, Some(BID_CACHE_EXPIRY_S)).await?)
@@ -363,7 +362,7 @@ impl Auctioneer for RedisCache {
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &Hash32,
-    ) -> Result<Option<ExecutionPayload>, AuctioneerError> {
+    ) -> Result<Option<PayloadAndBlobs>, AuctioneerError> {
         let key = get_execution_payload_key(slot, proposer_pub_key, block_hash);
         Ok(self.get(&key).await?)
     }
@@ -462,20 +461,21 @@ impl Auctioneer for RedisCache {
         floor_value: U256,
         state: &mut SaveBidAndUpdateTopBidResponse,
         signing_context: &RelaySigningContext,
-    ) -> Result<Option<(SignedBuilderBid, ExecutionPayload)>, AuctioneerError> {
+    ) -> Result<Option<(SignedBuilderBid, PayloadAndBlobs)>, AuctioneerError> {
         // Exit early if cancellations aren't enabled and the bid is below the floor.
-        let is_bid_above_floor = submission.message.value > floor_value;
+        let is_bid_above_floor = submission.bid_trace().value > floor_value;
         if !cancellations_enabled && !is_bid_above_floor {
             return Ok(None);
         }
 
-        // Save the execution payload.
+        // Save the execution payload
         self.save_execution_payload(
-            submission.message.slot,
-            &submission.message.proposer_public_key,
-            submission.execution_payload.block_hash(),
-            &submission.execution_payload,
-        ).await?;
+            submission.slot(),
+            &submission.proposer_public_key(),
+            submission.block_hash(),
+            &submission.payload_and_blobs(),
+        )
+        .await?;
         state.set_latency_save_payload();
 
         // Sign builder bid with relay pubkey.
@@ -490,14 +490,14 @@ impl Auctioneer for RedisCache {
         // Save builder bid and update top bid/ floor keys if possible.
         self.save_signed_builder_bid_and_update_top_bid(
             &builder_bid, 
-            &submission.message,
+            &submission.message(),
             received_at, 
             cancellations_enabled, 
             floor_value, 
             state, 
         ).await?;
 
-        Ok(Some((builder_bid, cloned_submission.execution_payload)))
+        Ok(Some((builder_bid, cloned_submission.payload_and_blobs())))
     }
 
     async fn get_top_bid_value(
@@ -1162,22 +1162,22 @@ mod tests {
 
         let mut capella_payload = capella::ExecutionPayload::default();
         capella_payload.gas_limit = 999;
-        let execution_payload = ExecutionPayload::Capella(capella_payload);
+        let versioned_execution_payload = PayloadAndBlobs { execution_payload: ExecutionPayload::Capella(capella_payload), blobs_bundle: None };
 
         // Save the execution payload
         let save_result = cache
-            .save_execution_payload(slot, &proposer_pub_key, &block_hash, &execution_payload)
+            .save_execution_payload(slot, &proposer_pub_key, &block_hash, &versioned_execution_payload)
             .await;
         assert!(save_result.is_ok(), "Failed to save the execution payload");
 
         // Test: Get the execution payload
-        let get_result: Result<Option<ExecutionPayload>, _> =
+        let get_result: Result<Option<PayloadAndBlobs>, _> =
             cache.get_execution_payload(slot, &proposer_pub_key, &block_hash).await;
         assert!(get_result.is_ok(), "Failed to get the execution payload");
         assert!(get_result.as_ref().unwrap().is_some(), "Execution payload is None");
 
         let fetched_execution_payload = get_result.unwrap().unwrap();
-        assert_eq!(fetched_execution_payload.gas_limit(), 999, "Execution payload mismatch");
+        assert_eq!(fetched_execution_payload.execution_payload.gas_limit(), 999, "Execution payload mismatch");
     }
 
     #[tokio::test]
@@ -1490,7 +1490,7 @@ mod tests {
         let (cache, mut submission, floor_value, received_at) = setup_save_and_update_test().await;
         let mut state = SaveBidAndUpdateTopBidResponse::default();
 
-        submission.message.value = floor_value + U256::from(1);
+        submission.message_mut().value = floor_value + U256::from(1);
         let result = cache
             .save_bid_and_update_top_bid(
                 &submission,
@@ -1508,9 +1508,9 @@ mod tests {
         // Validate bid is new floor
         let new_floor_value = cache
             .get_floor_bid_value(
-                submission.message.slot,
-                &submission.message.parent_hash,
-                &submission.message.proposer_public_key,
+                submission.message().slot,
+                &submission.message().parent_hash,
+                &submission.message().proposer_public_key,
             )
             .await
             .unwrap()
@@ -1523,7 +1523,7 @@ mod tests {
         let (cache, mut submission, floor_value, received_at) = setup_save_and_update_test().await;
         let mut state = SaveBidAndUpdateTopBidResponse::default();
 
-        submission.message.value = floor_value - U256::from(1);
+        submission.message_mut().value = floor_value - U256::from(1);
         let result = cache
             .save_bid_and_update_top_bid(
                 &submission,
@@ -1541,9 +1541,9 @@ mod tests {
         // Validate floor is the same
         let new_floor_value = cache
             .get_floor_bid_value(
-                submission.message.slot,
-                &submission.message.parent_hash,
-                &submission.message.proposer_public_key,
+                submission.message().slot,
+                &submission.message().parent_hash,
+                &submission.message().proposer_public_key,
             )
             .await
             .unwrap()
@@ -1556,7 +1556,7 @@ mod tests {
         let (cache, mut submission, floor_value, received_at) = setup_save_and_update_test().await;
         let mut state = SaveBidAndUpdateTopBidResponse::default();
 
-        submission.message.value = floor_value + U256::from(1);
+        submission.message_mut().value = floor_value + U256::from(1);
         let result = cache
             .save_bid_and_update_top_bid(
                 &submission,
@@ -1574,14 +1574,14 @@ mod tests {
         // Validate bid is not new floor as this is a cancellable bid
         let new_floor_value = cache
             .get_floor_bid_value(
-                submission.message.slot,
-                &submission.message.parent_hash,
-                &submission.message.proposer_public_key,
+                submission.message().slot,
+                &submission.message().parent_hash,
+                &submission.message().proposer_public_key,
             )
             .await
             .unwrap()
             .unwrap_or(U256::ZERO);
-        assert!(new_floor_value != submission.message.value, "Floor value should not change");
+        assert!(new_floor_value != submission.message().value, "Floor value should not change");
     }
 
     #[tokio::test]
@@ -1589,9 +1589,9 @@ mod tests {
         let (cache, mut submission, floor_value, received_at) = setup_save_and_update_test().await;
 
         // Save top bid from different builder. Cancellations enabled so won't set new floor.
-        submission.message.builder_public_key =
+        submission.message_mut().builder_public_key =
             BlsPublicKey::try_from([53u8; 48].as_ref()).unwrap();
-        submission.message.value = floor_value + U256::from(2);
+        submission.message_mut().value = floor_value + U256::from(2);
         let mut state = SaveBidAndUpdateTopBidResponse::default();
         let result = cache
             .save_bid_and_update_top_bid(
@@ -1606,8 +1606,8 @@ mod tests {
         assert!(result.is_ok(), "Failed to save top bid");
 
         // Save bid below top bid but above floor.
-        submission.message.value = floor_value + U256::from(1);
-        submission.message.builder_public_key = BlsPublicKey::default();
+        submission.message_mut().value = floor_value + U256::from(1);
+        submission.message_mut().builder_public_key = BlsPublicKey::default();
         let mut state = SaveBidAndUpdateTopBidResponse::default();
 
         let result = cache
@@ -1634,12 +1634,12 @@ mod tests {
 
         let mut state = SaveBidAndUpdateTopBidResponse::default();
         let mut submission = SignedBidSubmission::default();
-        submission.message.slot = 1;
+        submission.message_mut().slot = 1;
 
         // Save floor value
-        submission.message.builder_public_key =
+        submission.message_mut().builder_public_key =
             BlsPublicKey::try_from([12u8; 48].as_ref()).unwrap();
-        submission.message.value = floor_value.clone();
+        submission.message_mut().value = floor_value.clone();
         cache
             .save_bid_and_update_top_bid(
                 &submission,
@@ -1653,8 +1653,8 @@ mod tests {
             .unwrap();
 
         // Reset submission values
-        submission.message.builder_public_key = BlsPublicKey::default();
-        submission.message.value = U256::from(10);
+        submission.message_mut().builder_public_key = BlsPublicKey::default();
+        submission.message_mut().value = U256::from(10);
 
         (cache, submission, floor_value, received_at)
     }

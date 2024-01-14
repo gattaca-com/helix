@@ -1,14 +1,14 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use ethereum_consensus::{phase0::Fork, primitives::Root, types::mainnet::SignedBeaconBlock};
+use ethereum_consensus::{phase0::Fork, primitives::Root};
 use futures::StreamExt;
 use reqwest_eventsource::EventSource;
 use tokio::{sync::mpsc::Sender, time::sleep};
 use tracing::{error, warn};
 use url::Url;
 
-use helix_common::{ProposerDuty, ValidatorSummary};
+use helix_common::{ProposerDuty, ValidatorSummary, signed_proposal::VersionedSignedProposal};
 
 use crate::{
     error::{ApiError, BeaconClientError},
@@ -115,11 +115,11 @@ impl BeaconClient {
 
     pub async fn broadcast_block(
         &self,
-        block: Arc<SignedBeaconBlock>,
+        block: Arc<VersionedSignedProposal>,
         broadcast_validation: Option<BroadcastValidation>,
         consensus_version: ethereum_consensus::Fork,
     ) -> Result<(), BeaconClientError> {
-        self.publish_block(block, broadcast_validation, consensus_version).await?;
+        self.publish_block(block, broadcast_validation, consensus_version).await?;       
         Ok(())
     }
 

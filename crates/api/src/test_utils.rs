@@ -109,7 +109,7 @@ pub fn builder_api_app() -> (
     Receiver<Sender<ChainUpdate>>,
 ) {
     let (slot_update_sender, slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
-    let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10);
+    let (_gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10);
 
     let builder_api_service =
         Arc::new(BuilderApi::<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>::new(

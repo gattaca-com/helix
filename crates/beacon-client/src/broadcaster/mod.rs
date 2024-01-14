@@ -1,7 +1,7 @@
 pub mod fiber_broadcaster;
 pub mod mock_block_broadcaster;
 
-use ethereum_consensus::types::mainnet::SignedBeaconBlock;
+use helix_common::signed_proposal::VersionedSignedProposal;
 use std::sync::Arc;
 
 use crate::{
@@ -19,7 +19,7 @@ pub enum BlockBroadcaster {
 impl BlockBroadcaster {
     pub async fn broadcast_block(
         &self,
-        block: Arc<SignedBeaconBlock>,
+        block: Arc<VersionedSignedProposal>,
         broadcast_validation: Option<BroadcastValidation>,
         consensus_version: ethereum_consensus::Fork,
     ) -> Result<(), BeaconClientError> {

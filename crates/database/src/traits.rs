@@ -16,7 +16,7 @@ use helix_common::{
     bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission},
     builder_info::BuilderInfo,
     simulator::BlockSimError,
-    GetPayloadTrace, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorSummary, GetHeaderTrace, HeaderSubmissionTrace, GossipedHeaderTrace, GossipedPayloadTrace, pending_block::PendingBlock,
+    GetPayloadTrace, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorSummary, GetHeaderTrace, HeaderSubmissionTrace, GossipedHeaderTrace, GossipedPayloadTrace, pending_block::PendingBlock, versioned_payload::PayloadAndBlobs,
 };
 
 use crate::{
@@ -79,7 +79,7 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn save_delivered_payload(
         &self,
         bid_trace: &BidTrace,
-        payload: Arc<ExecutionPayload>,
+        payload: Arc<PayloadAndBlobs>,
         latency_trace: &GetPayloadTrace,
     ) -> Result<(), DatabaseError>;
 

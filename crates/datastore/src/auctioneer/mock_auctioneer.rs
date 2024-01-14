@@ -1,11 +1,9 @@
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use async_trait::async_trait;
-use ethereum_consensus::{
-    primitives::{BlsPublicKey, Hash32, U256},
-    types::mainnet::ExecutionPayload,
-};
+use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 
+use helix_common::versioned_payload::PayloadAndBlobs;
 use helix_database::types::BuilderInfoDocument;
 use helix_common::{signing::RelaySigningContext, bid_submission::v2::header_submission::SignedHeaderSubmission};
 use helix_common::{
@@ -21,7 +19,7 @@ pub struct MockAuctioneer {
     pub builder_info: Option<BuilderInfo>,
     pub builder_demoted: Arc<AtomicBool>,
     pub best_bid: Arc<Mutex<Option<SignedBuilderBid>>>,
-    pub execution_payload: Arc<Mutex<Option<ExecutionPayload>>>,
+    pub versioned_execution_payload: Arc<Mutex<Option<PayloadAndBlobs>>>,
 }
 
 impl MockAuctioneer {
@@ -30,7 +28,7 @@ impl MockAuctioneer {
             builder_info: None,
             builder_demoted: Arc::new(AtomicBool::new(false)),
             best_bid: Arc::new(Mutex::new(None)),
-            execution_payload: Arc::new(Mutex::new(None)),
+            versioned_execution_payload: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -68,7 +66,7 @@ impl Auctioneer for MockAuctioneer {
         _slot: u64,
         _proposer_pub_key: &BlsPublicKey,
         _block_hash: &Hash32,
-        _execution_payload: &ExecutionPayload,
+        _execution_payload: &PayloadAndBlobs,
     ) -> Result<(), AuctioneerError> {
         Ok(())
     }
@@ -77,8 +75,8 @@ impl Auctioneer for MockAuctioneer {
         _slot: u64,
         _proposer_pub_key: &BlsPublicKey,
         _block_hash: &Hash32,
-    ) -> Result<Option<ExecutionPayload>, AuctioneerError> {
-        Ok(self.execution_payload.lock().unwrap().clone())
+    ) -> Result<Option<PayloadAndBlobs>, AuctioneerError> {
+        Ok(self.versioned_execution_payload.lock().unwrap().clone())
     }
 
     async fn get_bid_trace(
@@ -123,7 +121,7 @@ impl Auctioneer for MockAuctioneer {
         _floor_value: U256,
         _state: &mut SaveBidAndUpdateTopBidResponse,
         _signing_context: &RelaySigningContext,
-    ) -> Result<Option<(SignedBuilderBid, ExecutionPayload)>, AuctioneerError> {
+    ) -> Result<Option<(SignedBuilderBid, PayloadAndBlobs)>, AuctioneerError> {
         Ok(None)
     }
 

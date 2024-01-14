@@ -21,7 +21,8 @@ pub fn verify_signed_consensus_message<T: Merkleized>(
     let fork_version = slot_hint.map(|slot| match context.fork_for(slot) {
         Fork::Bellatrix => context.bellatrix_fork_version,
         Fork::Capella => context.capella_fork_version,
-        _ => unimplemented!(),
+        Fork::Deneb => context.deneb_fork_version,
+        _ => unimplemented!("Fork {:?} is not supported", context.fork_for(slot)),
     });
     let domain =
         compute_domain(DomainType::BeaconProposer, fork_version, root_hint, context).unwrap();

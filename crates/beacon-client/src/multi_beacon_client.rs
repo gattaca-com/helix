@@ -7,9 +7,9 @@ use std::{
 };
 
 use async_trait::async_trait;
-use ethereum_consensus::{phase0::Fork, primitives::Root, types::mainnet::SignedBeaconBlock};
+use ethereum_consensus::{phase0::Fork, primitives::Root};
 use futures::future::join_all;
-use helix_common::{ProposerDuty, ValidatorSummary};
+use helix_common::{ProposerDuty, ValidatorSummary, signed_proposal::VersionedSignedProposal};
 use tokio::{sync::mpsc::Sender, task::JoinError};
 use tracing::error;
 
@@ -63,7 +63,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClient<BeaconClient> {
 
     pub async fn broadcast_block(
         &self,
-        block: Arc<SignedBeaconBlock>,
+        block: Arc<VersionedSignedProposal>,
         broadcast_validation: Option<BroadcastValidation>,
         consensus_version: ethereum_consensus::Fork,
     ) -> Result<(), BeaconClientError> {
@@ -347,7 +347,6 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
 mod multi_beacon_client_tests {
     use super::*;
     use crate::mock_beacon_client::MockBeaconClient;
-    use helix_common::fork_info::ForkInfo;
 
     #[tokio::test]
     async fn test_beacon_clients_by_last_response() {

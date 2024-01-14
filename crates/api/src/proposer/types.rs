@@ -1,8 +1,9 @@
 use ethereum_consensus::{
     bellatrix, capella, deneb,
     primitives::{BlsPublicKey, Hash32},
-    types::mainnet::{ExecutionPayload, SignedBeaconBlock, SignedBlindedBeaconBlock},
+    types::mainnet::{SignedBeaconBlock, SignedBlindedBeaconBlock},
 };
+use helix_common::{signed_proposal::VersionedSignedProposal, deneb::SignedBlockContents, versioned_payload::PayloadAndBlobs};
 use serde::Deserialize;
 
 use crate::proposer::error::ProposerApiError;
@@ -26,15 +27,15 @@ pub struct GetHeaderParams {
 
 pub fn unblind_beacon_block(
     signed_blinded_beacon_block: &SignedBlindedBeaconBlock,
-    execution_payload: &ExecutionPayload,
-) -> Result<SignedBeaconBlock, ProposerApiError> {
+    versioned_execution_payload: &PayloadAndBlobs,
+) -> Result<VersionedSignedProposal, ProposerApiError> {
     match signed_blinded_beacon_block {
         SignedBlindedBeaconBlock::Bellatrix(blinded_block) => {
             let signature = blinded_block.signature.clone();
             let block = &blinded_block.message;
             let body = &block.body;
             let execution_payload =
-                execution_payload.bellatrix().ok_or(ProposerApiError::PayloadTypeMismatch)?;
+            versioned_execution_payload.execution_payload.bellatrix().ok_or(ProposerApiError::PayloadTypeMismatch)?;
 
             let inner = bellatrix::SignedBeaconBlock {
                 message: bellatrix::BeaconBlock {
@@ -57,14 +58,14 @@ pub fn unblind_beacon_block(
                 },
                 signature,
             };
-            Ok(SignedBeaconBlock::Bellatrix(inner))
+            Ok(VersionedSignedProposal::Bellatrix(SignedBeaconBlock::Bellatrix(inner)))
         }
         SignedBlindedBeaconBlock::Capella(blinded_block) => {
             let signature = blinded_block.signature.clone();
             let block = &blinded_block.message;
             let body = &block.body;
             let execution_payload =
-                execution_payload.capella().ok_or(ProposerApiError::PayloadTypeMismatch)?;
+            versioned_execution_payload.execution_payload.capella().ok_or(ProposerApiError::PayloadTypeMismatch)?;
 
             let inner = capella::SignedBeaconBlock {
                 message: capella::BeaconBlock {
@@ -88,14 +89,19 @@ pub fn unblind_beacon_block(
                 },
                 signature,
             };
-            Ok(SignedBeaconBlock::Capella(inner))
+            Ok(VersionedSignedProposal::Capella(SignedBeaconBlock::Capella(inner)))
         }
         SignedBlindedBeaconBlock::Deneb(blinded_block) => {
             let signature = blinded_block.signature.clone();
             let block = &blinded_block.message;
             let body = &block.body;
             let execution_payload =
-                execution_payload.deneb().ok_or(ProposerApiError::PayloadTypeMismatch)?;
+            versioned_execution_payload.execution_payload.deneb().ok_or(ProposerApiError::PayloadTypeMismatch)?;
+            let blobs_bundle = versioned_execution_payload.blobs_bundle.clone().ok_or(ProposerApiError::PayloadTypeMismatch)?;
+
+            if body.blob_kzg_commitments.len() != blobs_bundle.blobs.len() {
+                return Err(ProposerApiError::BlindedBlobsBundleLengthMismatch);
+            }
 
             let inner = deneb::SignedBeaconBlock {
                 message: deneb::BeaconBlock {
@@ -120,7 +126,13 @@ pub fn unblind_beacon_block(
                 },
                 signature,
             };
-            Ok(SignedBeaconBlock::Deneb(inner))
+            Ok(VersionedSignedProposal::Deneb(
+                SignedBlockContents {
+                    signed_block: SignedBeaconBlock::Deneb(inner),
+                    kzgp_proofs: blobs_bundle.proofs.clone(),
+                    blobs: blobs_bundle.blobs.clone(),
+                }
+                ))
         }
     }
 }

@@ -1,6 +1,9 @@
 pub mod bellatrix;
 pub mod capella;
 pub mod deneb;
+pub mod signed_proposal;
+pub mod versioned_payload_header;
+pub mod versioned_payload;
 
 use ethereum_consensus::{
     types::mainnet::ExecutionPayload,
@@ -14,6 +17,7 @@ use ethereum_consensus::types::mainnet::ExecutionPayloadHeader;
 use helix_utils::signing::sign_builder_message;
 
 use crate::bid_submission::{SignedBidSubmission, BidSubmission, v2::header_submission::SignedHeaderSubmission};
+
 
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -54,7 +58,7 @@ impl std::fmt::Display for SignedBuilderBid {
 
 impl SignedBuilderBid {
     pub fn from_submission(submission: &mut SignedBidSubmission, public_key: BlsPublicKey, signing_key: &SecretKey, context: &Context) -> Result<Self, Error> {
-        match &mut submission.execution_payload {
+        match &mut submission.execution_payload_mut() {
             ExecutionPayload::Bellatrix(payload) => {
                 let header = bellatrix::ExecutionPayloadHeader::try_from(payload)?;
                 let mut message = bellatrix::BuilderBid {
@@ -77,14 +81,30 @@ impl SignedBuilderBid {
 
                 Ok(Self::Capella(capella::SignedBuilderBid {message, signature}))
             }
-            ExecutionPayload::Deneb(_) => {
-                unimplemented!()
+            ExecutionPayload::Deneb(payload) => {
+                let header = deneb::ExecutionPayloadHeader::try_from(payload)?;
+                match submission.blobs_bundle() {
+                    Some(blobs_bundle) => {
+                        let mut message = deneb::BuilderBid {
+                            header,
+                            blob_kzg_commitments: blobs_bundle.commitments.clone(),
+                            value: submission.value(),
+                            public_key,
+                        };
+                        let signature = sign_builder_message(&mut message, signing_key, context)?;
+        
+                        Ok(Self::Deneb(deneb::SignedBuilderBid {message, signature}))
+                    }
+                    None => {
+                        Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Missing blobs bundle").into())
+                    }
+                }
             }
         }
     }
 
     pub fn from_header_submission(submission: &SignedHeaderSubmission, public_key: BlsPublicKey, signing_key: &SecretKey, context: &Context) -> Result<Self, Error> {
-        match &submission.message.execution_payload_header {
+        match &submission.execution_payload_header() {
             ExecutionPayloadHeader::Bellatrix(header) => {
                 let mut message = bellatrix::BuilderBid {
                     header: header.clone(),
@@ -105,8 +125,23 @@ impl SignedBuilderBid {
 
                 Ok(Self::Capella(capella::SignedBuilderBid {message, signature}))
             }
-            ExecutionPayloadHeader::Deneb(_) => {
-                unimplemented!()
+            ExecutionPayloadHeader::Deneb(header) => {
+                match submission.blobs_bundle() {
+                    Some(blobs_bundle) => {
+                        let mut message = deneb::BuilderBid {
+                            header: header.clone(),
+                            blob_kzg_commitments: blobs_bundle.commitments.clone(),
+                            value: submission.value(),
+                            public_key,
+                        };
+                        let signature = sign_builder_message(&mut message, signing_key, context)?;
+        
+                        Ok(Self::Deneb(deneb::SignedBuilderBid {message, signature}))
+                    }
+                    None => {
+                        Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Missing blobs bundle").into())
+                    }
+                }
             }
         }
     }

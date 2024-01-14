@@ -3,6 +3,8 @@ use ethereum_consensus::{
     Fork, builder::SignedValidatorRegistration,
 };
 
+use crate::versioned_payload::PayloadAndBlobs;
+
 
 #[derive(Debug, serde::Serialize)]
 #[serde(tag = "version", content = "data")]
@@ -11,22 +13,22 @@ pub enum GetPayloadResponse {
     Bellatrix(ExecutionPayload),
     #[serde(rename = "capella")]
     Capella(ExecutionPayload),
-    // TODO: this needs to contain the blobs bundle as well
     #[serde(rename = "deneb")]
-    Deneb(ExecutionPayload),
+    Deneb(PayloadAndBlobs),
 }
 
 impl GetPayloadResponse {
-    pub fn try_from_execution_payload(exec_payload: &ExecutionPayload) -> Option<Self> {
-        match exec_payload.version() {
+    pub fn try_from_execution_payload(exec_payload: &PayloadAndBlobs) -> Option<Self> {
+        match exec_payload.execution_payload.version() {
             Fork::Capella => {
-                Some(GetPayloadResponse::Capella(exec_payload.clone()))
+                Some(GetPayloadResponse::Capella(exec_payload.execution_payload.clone()))
             }
             Fork::Bellatrix => {
-                Some(GetPayloadResponse::Bellatrix(exec_payload.clone()))
+                Some(GetPayloadResponse::Bellatrix(exec_payload.execution_payload.clone()))
             }
-            // TODO: impl deneb
-            Fork::Deneb => None,
+            Fork::Deneb => {
+                Some(GetPayloadResponse::Deneb(exec_payload.clone()))
+            }
             _ => None,
         }
     }

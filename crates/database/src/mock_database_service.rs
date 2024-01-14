@@ -10,7 +10,7 @@ use ethereum_consensus::{
     ssz::prelude::*,
     types::mainnet::ExecutionPayload,
 };
-use helix_common::{api::proposer_api::ValidatorRegistrationInfo, GetHeaderTrace, bid_submission::v2::header_submission::SignedHeaderSubmission, HeaderSubmissionTrace, GossipedHeaderTrace, GossipedPayloadTrace, pending_block::PendingBlock};
+use helix_common::{api::proposer_api::ValidatorRegistrationInfo, GetHeaderTrace, bid_submission::v2::header_submission::SignedHeaderSubmission, HeaderSubmissionTrace, GossipedHeaderTrace, GossipedPayloadTrace, pending_block::PendingBlock, versioned_payload::PayloadAndBlobs};
 use helix_common::{
     api::{builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters},
     bid_submission::{BidTrace, SignedBidSubmission},
@@ -125,7 +125,7 @@ impl DatabaseService for MockDatabaseService {
     async fn save_delivered_payload(
         &self,
         _bid_trace: &BidTrace,
-        _payload: Arc<ExecutionPayload>,
+        _payload: Arc<PayloadAndBlobs>,
         _latency_trace: &GetPayloadTrace,
     ) -> Result<(), DatabaseError> {
         Ok(())

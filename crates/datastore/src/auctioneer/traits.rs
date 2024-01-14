@@ -1,14 +1,11 @@
 use async_trait::async_trait;
-use ethereum_consensus::{
-    primitives::{BlsPublicKey, Hash32, U256},
-    types::mainnet::ExecutionPayload,
-};
+use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 use helix_database::BuilderInfoDocument;
 use helix_common::{
     bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission},
     builder_info::BuilderInfo,
     eth::SignedBuilderBid,
-    signing::RelaySigningContext,
+    signing::RelaySigningContext, versioned_payload::PayloadAndBlobs,
 };
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse};
@@ -35,14 +32,14 @@ pub trait Auctioneer: Send + Sync + Clone {
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &Hash32,
-        execution_payload: &ExecutionPayload,
+        versioned_execution_payload: &PayloadAndBlobs,
     ) -> Result<(), AuctioneerError>;
     async fn get_execution_payload(
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &Hash32,
-    ) -> Result<Option<ExecutionPayload>, AuctioneerError>;
+    ) -> Result<Option<PayloadAndBlobs>, AuctioneerError>;
 
     async fn get_bid_trace(
         &self,
@@ -78,7 +75,7 @@ pub trait Auctioneer: Send + Sync + Clone {
         floor_value: U256,
         state: &mut SaveBidAndUpdateTopBidResponse,
         signing_context: &RelaySigningContext,
-    ) -> Result<Option<(SignedBuilderBid, ExecutionPayload)>, AuctioneerError>;
+    ) -> Result<Option<(SignedBuilderBid, PayloadAndBlobs)>, AuctioneerError>;
 
     async fn get_top_bid_value(
         &self,

@@ -106,10 +106,10 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
         ))
     }
     async fn publish_block<
-        SignedBeaconBlock: Serialize + DeserializeOwned + Send + Sync + 'static,
+    VersionedSignedProposal: Serialize + DeserializeOwned + Send + Sync + 'static,
     >(
         &self,
-        _block: Arc<SignedBeaconBlock>,
+        _block: Arc<VersionedSignedProposal>,
         _broadcast_validation: Option<BroadcastValidation>,
         _fork: ethereum_consensus::Fork,
     ) -> Result<(), BeaconClientError> {

@@ -8,20 +8,21 @@ use ethereum_consensus::{
     Fork,
 };
 use helix_utils::signing::compute_builder_signing_root;
-use crate::{capella, bid_submission::{BidTrace, BidSubmission}};
+use crate::{bid_submission::{BidTrace, BidSubmission}, versioned_payload_header::VersionedExecutionPayloadHeader, deneb::BlobsBundle};
 
 
 #[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
 pub struct HeaderSubmission {
     pub bid_trace: BidTrace,
-    pub execution_payload_header: ExecutionPayloadHeader,
+    #[serde(flatten)]
+    pub versioned_execution_payload: VersionedExecutionPayloadHeader,
 }
 
 impl Default for HeaderSubmission {
     fn default() -> Self {
         Self {
             bid_trace: BidTrace::default(),
-            execution_payload_header: ExecutionPayloadHeader::Capella(capella::ExecutionPayloadHeader::default()),
+            versioned_execution_payload: VersionedExecutionPayloadHeader::default(),
         }
     }
 }
@@ -78,7 +79,7 @@ impl BidSubmission for SignedHeaderSubmission {
     }
 
     fn fee_recipient(&self) -> &ExecutionAddress {
-        match &self.message.execution_payload_header {
+        match &self.execution_payload_header() {
             ExecutionPayloadHeader::Bellatrix(payload) => &payload.fee_recipient,
             ExecutionPayloadHeader::Capella(payload) => &payload.fee_recipient,
             ExecutionPayloadHeader::Deneb(payload) => &payload.fee_recipient,
@@ -86,7 +87,7 @@ impl BidSubmission for SignedHeaderSubmission {
     }
 
     fn state_root(&self) -> &Bytes32 {
-        match &self.message.execution_payload_header {
+        match &self.execution_payload_header() {
             ExecutionPayloadHeader::Bellatrix(payload) => &payload.state_root,
             ExecutionPayloadHeader::Capella(payload) => &payload.state_root,
             ExecutionPayloadHeader::Deneb(payload) => &payload.state_root,
@@ -94,7 +95,7 @@ impl BidSubmission for SignedHeaderSubmission {
     }
 
     fn receipts_root(&self) -> &Bytes32 {
-        match &self.message.execution_payload_header {
+        match &self.execution_payload_header() {
             ExecutionPayloadHeader::Bellatrix(payload) => &payload.receipts_root,
             ExecutionPayloadHeader::Capella(payload) => &payload.receipts_root,
             ExecutionPayloadHeader::Deneb(payload) => &payload.receipts_root,
@@ -102,7 +103,7 @@ impl BidSubmission for SignedHeaderSubmission {
     }
 
     fn logs_bloom(&self) -> &ByteVector<BYTES_PER_LOGS_BLOOM> {
-        match &self.message.execution_payload_header {
+        match &self.execution_payload_header() {
             ExecutionPayloadHeader::Bellatrix(payload) => &payload.logs_bloom,
             ExecutionPayloadHeader::Capella(payload) => &payload.logs_bloom,
             ExecutionPayloadHeader::Deneb(payload) => &payload.logs_bloom,
@@ -110,7 +111,7 @@ impl BidSubmission for SignedHeaderSubmission {
     }
 
     fn prev_randao(&self) -> &Bytes32 {
-        match &self.message.execution_payload_header {
+        match &self.execution_payload_header() {
             ExecutionPayloadHeader::Bellatrix(payload) => &payload.prev_randao,
             ExecutionPayloadHeader::Capella(payload) => &payload.prev_randao,
             ExecutionPayloadHeader::Deneb(payload) => &payload.prev_randao,
@@ -118,7 +119,7 @@ impl BidSubmission for SignedHeaderSubmission {
     }
 
     fn block_number(&self) -> u64 {
-        match &self.message.execution_payload_header {
+        match &self.execution_payload_header() {
             ExecutionPayloadHeader::Bellatrix(payload) => payload.block_number,
             ExecutionPayloadHeader::Capella(payload) => payload.block_number,
             ExecutionPayloadHeader::Deneb(payload) => payload.block_number,
@@ -126,7 +127,7 @@ impl BidSubmission for SignedHeaderSubmission {
     }
 
     fn timestamp(&self) -> u64 {
-        match &self.message.execution_payload_header {
+        match &self.execution_payload_header() {
             ExecutionPayloadHeader::Bellatrix(payload) => payload.timestamp,
             ExecutionPayloadHeader::Capella(payload) => payload.timestamp,
             ExecutionPayloadHeader::Deneb(payload) => payload.timestamp,
@@ -134,7 +135,7 @@ impl BidSubmission for SignedHeaderSubmission {
     }
 
     fn extra_data(&self) -> &ByteList<MAX_EXTRA_DATA_BYTES> {
-        match &self.message.execution_payload_header {
+        match &self.execution_payload_header() {
             ExecutionPayloadHeader::Bellatrix(payload) => &payload.extra_data,
             ExecutionPayloadHeader::Capella(payload) => &payload.extra_data,
             ExecutionPayloadHeader::Deneb(payload) => &payload.extra_data,
@@ -142,7 +143,7 @@ impl BidSubmission for SignedHeaderSubmission {
     }
 
     fn base_fee_per_gas(&self) -> &U256 {
-        match &self.message.execution_payload_header {
+        match &self.execution_payload_header() {
             ExecutionPayloadHeader::Bellatrix(payload) => &payload.base_fee_per_gas,
             ExecutionPayloadHeader::Capella(payload) => &payload.base_fee_per_gas,
             ExecutionPayloadHeader::Deneb(payload) => &payload.base_fee_per_gas,
@@ -154,7 +155,7 @@ impl BidSubmission for SignedHeaderSubmission {
     }
 
     fn consensus_version(&self) -> Fork {
-        match &self.message.execution_payload_header {
+        match &self.execution_payload_header() {
             ExecutionPayloadHeader::Bellatrix(_) => Fork::Bellatrix,
             ExecutionPayloadHeader::Capella(_) => Fork::Capella,
             ExecutionPayloadHeader::Deneb(_) => Fork::Deneb,
@@ -174,6 +175,10 @@ impl SignedHeaderSubmission {
     }
 
     pub fn execution_payload_header(&self) -> &ExecutionPayloadHeader {
-        &self.message.execution_payload_header
+        &self.message.versioned_execution_payload.execution_payload_header
+    }
+
+    pub fn blobs_bundle(&self) -> Option<&BlobsBundle> {
+        self.message.versioned_execution_payload.blobs_bundle.as_ref()
     }
 }
