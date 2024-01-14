@@ -14,9 +14,9 @@ impl From<U256> for PostgresNumeric {
     }
 }
 
-impl Into<U256> for PostgresNumeric {
-    fn into(self) -> U256 {
-        self.0
+impl From<PostgresNumeric> for U256 {
+    fn from(value: PostgresNumeric) -> Self {
+        value.0
     }
 }
 

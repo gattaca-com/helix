@@ -1,7 +1,7 @@
 use ethereum_consensus::{
     builder::SignedValidatorRegistration,
-    primitives::{BlsPublicKey, Root, Slot, ValidatorIndex, Version},
-    serde::{as_hex, as_str},
+    primitives::{BlsPublicKey, Slot, ValidatorIndex},
+    serde::as_str,
 };
 use serde::{Deserialize, Serialize};
 

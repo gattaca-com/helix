@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use ethereum_consensus::{
     primitives::{BlsPublicKey, Hash32, U256},
@@ -7,7 +5,7 @@ use ethereum_consensus::{
 };
 use helix_database::BuilderInfoDocument;
 use helix_common::{
-    bid_submission::{BidTrace, SignedBidSubmission},
+    bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission},
     builder_info::BuilderInfo,
     eth::SignedBuilderBid,
     signing::RelaySigningContext,
@@ -69,18 +67,18 @@ pub trait Auctioneer: Send + Sync + Clone {
         proposer_pub_key: &BlsPublicKey,
         builder_pub_key: &BlsPublicKey,
         received_at: u128,
-        builder_bid: SignedBuilderBid,
+        builder_bid: &SignedBuilderBid,
     ) -> Result<(), AuctioneerError>;
 
     async fn save_bid_and_update_top_bid(
         &self,
-        submission: Arc<SignedBidSubmission>,
+        submission: &SignedBidSubmission,
         received_at: u128,
         cancellations_enabled: bool,
         floor_value: U256,
         state: &mut SaveBidAndUpdateTopBidResponse,
         signing_context: &RelaySigningContext,
-    ) -> Result<(), AuctioneerError>;
+    ) -> Result<Option<(SignedBuilderBid, ExecutionPayload)>, AuctioneerError>;
 
     async fn get_top_bid_value(
         &self,
@@ -120,4 +118,32 @@ pub trait Auctioneer: Send + Sync + Clone {
         &self,
         builder_infos: Vec<BuilderInfoDocument>,
     ) -> Result<(), AuctioneerError>;
+
+    async fn seen_or_insert_block_hash(
+        &self,
+        block_hash: &Hash32,
+        slot: u64,
+        parent_hash: &Hash32,
+        proposer_pub_key: &BlsPublicKey,
+    ) -> Result<bool, AuctioneerError>;
+
+    async fn save_signed_builder_bid_and_update_top_bid(
+        &self,
+        builder_bid: &SignedBuilderBid,
+        bid_trace: &BidTrace,
+        received_at: u128,
+        cancellations_enabled: bool,
+        floor_value: U256,
+        state: &mut SaveBidAndUpdateTopBidResponse,
+    ) -> Result<(), AuctioneerError>;
+
+    async fn save_header_submission_and_update_top_bid(
+        &self,
+        submission: &SignedHeaderSubmission,
+        received_at: u128,
+        cancellations_enabled: bool,
+        floor_value: U256,
+        state: &mut SaveBidAndUpdateTopBidResponse,
+        signing_context: &RelaySigningContext,
+    ) -> Result<Option<SignedBuilderBid>, AuctioneerError>;
 }

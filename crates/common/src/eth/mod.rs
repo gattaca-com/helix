@@ -13,7 +13,7 @@ use ethereum_consensus::types::mainnet::ExecutionPayloadHeader;
 
 use helix_utils::signing::sign_builder_message;
 
-use crate::bid_submission::SignedBidSubmission;
+use crate::bid_submission::{SignedBidSubmission, BidSubmission, v2::header_submission::SignedHeaderSubmission};
 
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -59,7 +59,7 @@ impl SignedBuilderBid {
                 let header = bellatrix::ExecutionPayloadHeader::try_from(payload)?;
                 let mut message = bellatrix::BuilderBid {
                     header,
-                    value: submission.value().clone(),
+                    value: submission.value(),
                     public_key,
                 };
                 let signature = sign_builder_message(&mut message, signing_key, context)?;
@@ -70,7 +70,7 @@ impl SignedBuilderBid {
                 let header = capella::ExecutionPayloadHeader::try_from(payload)?;
                 let mut message = capella::BuilderBid {
                     header,
-                    value: submission.value().clone(),
+                    value: submission.value(),
                     public_key,
                 };
                 let signature = sign_builder_message(&mut message, signing_key, context)?;
@@ -78,6 +78,34 @@ impl SignedBuilderBid {
                 Ok(Self::Capella(capella::SignedBuilderBid {message, signature}))
             }
             ExecutionPayload::Deneb(_) => {
+                unimplemented!()
+            }
+        }
+    }
+
+    pub fn from_header_submission(submission: &SignedHeaderSubmission, public_key: BlsPublicKey, signing_key: &SecretKey, context: &Context) -> Result<Self, Error> {
+        match &submission.message.execution_payload_header {
+            ExecutionPayloadHeader::Bellatrix(header) => {
+                let mut message = bellatrix::BuilderBid {
+                    header: header.clone(),
+                    value: submission.value(),
+                    public_key,
+                };
+                let signature = sign_builder_message(&mut message, signing_key, context)?;
+
+                Ok(Self::Bellatrix(bellatrix::SignedBuilderBid {message, signature}))
+            }
+            ExecutionPayloadHeader::Capella(header) => {
+                let mut message = capella::BuilderBid {
+                    header: header.clone(),
+                    value: submission.value(),
+                    public_key,
+                };
+                let signature = sign_builder_message(&mut message, signing_key, context)?;
+
+                Ok(Self::Capella(capella::SignedBuilderBid {message, signature}))
+            }
+            ExecutionPayloadHeader::Deneb(_) => {
                 unimplemented!()
             }
         }
@@ -142,6 +170,8 @@ pub fn try_execution_header_from_payload(execution_payload: &mut ExecutionPayloa
     }
 }
 
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

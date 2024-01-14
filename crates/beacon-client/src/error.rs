@@ -31,6 +31,9 @@ pub enum BeaconClientError {
     #[error("block validation failed")]
     BlockValidationFailed,
 
+    #[error("block integration failed")]
+    BlockIntegrationFailed,
+
     #[error("beacon node syncing")]
     BeaconNodeSyncing,
 

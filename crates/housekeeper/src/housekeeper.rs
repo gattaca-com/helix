@@ -1,7 +1,7 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::{Duration, SystemTime}};
 
 use ethereum_consensus::primitives::BlsPublicKey;
-use reth_primitives::constants::EPOCH_SLOTS;
+use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
 use tokio::{
     sync::{mpsc::channel, Mutex},
     time::{sleep, Instant},
@@ -17,14 +17,14 @@ use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, ProposerDuty,
-    SignedValidatorRegistrationEntry,
+    SignedValidatorRegistrationEntry, fork_info::ForkInfo, pending_block,
 };
 
 use crate::error::HousekeeperError;
 
 pub const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 8;
-const BUILDER_INFO_UPDATE_FREQ: u64 = 16;
+const BUILDER_INFO_UPDATE_FREQ: u64 = 1;
 
 // Constants for known validators refresh logic.
 const MIN_SLOTS_BETWEEN_UPDATES: u64 = 6;
@@ -49,6 +49,8 @@ pub struct Housekeeper<
     beacon_client: BeaconClient,
     auctioneer: A,
 
+    fork_info: Arc<ForkInfo>,
+
     head_slot: Mutex<u64>,
 
     proposer_duties_slot: Mutex<u64>,
@@ -64,11 +66,12 @@ pub struct Housekeeper<
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     Housekeeper<DB, BeaconClient, A>
 {
-    pub fn new(db: Arc<DB>, beacon_client: BeaconClient, auctioneer: A) -> Arc<Self> {
+    pub fn new(db: Arc<DB>, beacon_client: BeaconClient, auctioneer: A, fork_info: Arc<ForkInfo>) -> Arc<Self> {
         Arc::new(Self {
             db,
             beacon_client,
             auctioneer,
+            fork_info,
             head_slot: Mutex::new(0),
             proposer_duties_slot: Mutex::new(0),
             proposer_duties_lock: Mutex::new(()),
@@ -106,6 +109,14 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         if !is_new_block {
             return;
         }
+
+        // Demote builders with expired pending blocks
+        let cloned_self = self.clone();
+        tokio::spawn(async move {
+            if let Err(err) = cloned_self.demote_builders_with_expired_pending_blocks().await {
+                error!(err = %err, "failed to demote builders with expired pending blocks");
+            }
+        });
 
         // Spawn a task to asynchronously update proposer duties.
         if self.should_update_duties(head_slot).await {
@@ -254,6 +265,33 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         *self.re_sync_builder_info_slot.lock().await = head_slot;
 
         info!(head_slot = head_slot, update_latency_ms = start_fetching_ts.elapsed().as_millis());
+        Ok(())
+    }
+
+
+    async fn demote_builders_with_expired_pending_blocks(&self)-> Result<(), HousekeeperError> {
+
+        let pending_blocks= self.db.get_pending_blocks().await?;
+
+        let mut demoted_builders = HashSet::new();
+
+        for pending_block in pending_blocks {
+            if !demoted_builders.contains(&pending_block.builder_pubkey) {
+
+
+                let slot_time = self.fork_info.genesis_time_in_secs + (pending_block.slot * self.fork_info.seconds_per_slot);
+                let current_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+
+                if current_time > (pending_block.timestamp + 1) && pending_block.timestamp < (slot_time - 1) {
+                    self.auctioneer.demote_builder(&pending_block.builder_pubkey).await?;
+                    self.db.db_demote_builder(&pending_block.builder_pubkey).await?;
+                    demoted_builders.insert(pending_block.builder_pubkey);
+                }
+            }
+        }
+
+        self.db.remove_old_pending_blocks().await?;
+
         Ok(())
     }
 

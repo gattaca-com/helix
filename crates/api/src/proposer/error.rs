@@ -1,14 +1,16 @@
-use axum::http;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use std::{error::Error, fmt};
+
+use axum::{
+    http::{self, StatusCode},
+    response::{IntoResponse, Response},
+};
 use ethereum_consensus::{
     primitives::{BlsPublicKey, ExecutionAddress, Hash32, Slot},
-    ssz,
+    ssz::prelude::MerkleizationError,
 };
 use serde::{Deserialize, Serialize};
-use std::{error::Error, fmt};
-use ethereum_consensus::ssz::prelude::MerkleizationError;
 use thiserror::Error;
+
 use helix_beacon_client::error::BeaconClientError;
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;

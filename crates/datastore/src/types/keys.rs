@@ -13,6 +13,7 @@ pub const BID_FLOOR_KEY: &str = "bid-floor";
 pub const BID_FLOOR_VALUE_KEY: &str = "bid-floor-value";
 pub const EXEC_PAYLOAD_KEY: &str = "cache-exec-payload";
 pub const BUILDER_INFO_KEY: &str = "builder-info";
+pub const SEEN_BLOCK_HASHES_KEY: &str = "seen-block-hashes";
 
 // Database
 pub const VALIDATOR_REGISTRATIONS_KEY: &str = "validator-registrations";

@@ -10,7 +10,7 @@ use ethereum_consensus::{
     ssz::prelude::*,
     types::mainnet::ExecutionPayload,
 };
-use helix_common::api::proposer_api::ValidatorRegistrationInfo;
+use helix_common::{api::proposer_api::ValidatorRegistrationInfo, GetHeaderTrace, bid_submission::v2::header_submission::SignedHeaderSubmission, HeaderSubmissionTrace, GossipedHeaderTrace, GossipedPayloadTrace, pending_block::PendingBlock};
 use helix_common::{
     api::{builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters},
     bid_submission::{BidTrace, SignedBidSubmission},
@@ -49,7 +49,7 @@ impl DatabaseService for MockDatabaseService {
     }
     async fn save_validator_registrations(
         &self,
-        entries: Vec<ValidatorRegistrationInfo>,
+        _entries: Vec<ValidatorRegistrationInfo>,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -198,5 +198,57 @@ impl DatabaseService for MockDatabaseService {
         };
 
         Ok(vec![doc])
+    }
+
+    async fn save_get_header_call(
+        &self,
+        _slot: u64,
+        _parent_hash: ByteVector<32>,
+        _public_key: BlsPublicKey,
+        _best_block_hash: ByteVector<32>,
+        _trace: GetHeaderTrace,
+    ) -> Result<(), DatabaseError> {
+        Ok(())
+    }
+
+    async fn save_failed_get_payload(
+        &self,
+        _block_hash: ByteVector<32>,
+        _error: String,
+        _trace: GetPayloadTrace,
+    ) -> Result<(), DatabaseError> {
+        Ok(())
+    }
+    async fn store_header_submission(
+        &self,
+        _submission: Arc<SignedHeaderSubmission>,
+        _trace: Arc<HeaderSubmissionTrace>,
+    ) -> Result<(), DatabaseError> {
+        Ok(())
+    }
+
+    async fn save_gossiped_header_trace(
+        &self,
+        _block_hash: ByteVector<32>,
+        _trace: Arc<GossipedHeaderTrace>,
+    ) -> Result<(), DatabaseError> {
+        Ok(())
+    }
+
+    async fn save_gossiped_payload_trace(
+        &self,
+        _block_hash: ByteVector<32>,
+        _trace: Arc<GossipedPayloadTrace>,
+    ) -> Result<(), DatabaseError> {
+        Ok(())
+    }
+
+    async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, DatabaseError> {
+        let expired_blocks: Vec<PendingBlock> = vec![];
+        Ok(expired_blocks)
+    }
+
+    async fn remove_old_pending_blocks(&self) -> Result<(), DatabaseError> {
+        Ok(())
     }
 }

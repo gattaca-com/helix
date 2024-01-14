@@ -1,14 +1,17 @@
-use std::convert::TryFrom;
-
 use async_trait::async_trait;
 use tonic::{Response, Status, Request};
-use crate::{gossiper::{
-    error::GossipError,
-    traits::GossipClientTrait,
-}, grpc::{
-    gossip_service_server::GossipService,
-}, grpc};
-use crate::builder::SubmitBlockParams;
+
+use crate::{
+    gossiper::{
+        error::GossipError,
+        traits::GossipClientTrait,
+        types::{BroadcastHeaderParams, BroadcastPayloadParams},
+    }, 
+    grpc::{
+        self,
+        gossip_service_server::GossipService,
+    }, 
+};
 
 
 #[derive(Clone)]
@@ -28,7 +31,10 @@ impl MockGossiper {
 
 #[async_trait]
 impl GossipClientTrait for MockGossiper {
-    async fn broadcast_block(&self, _req: &SubmitBlockParams) -> Result<(), GossipError> {
+    async fn broadcast_header(&self, _request: BroadcastHeaderParams) -> Result<(), GossipError> {
+        Ok(())
+    }
+    async fn broadcast_payload(&self, _request: BroadcastPayloadParams) -> Result<(), GossipError> {
         Ok(())
     }
 }
@@ -37,9 +43,16 @@ pub struct MockGossiperService{ }
 
 #[tonic::async_trait]
 impl GossipService for MockGossiperService {
-    async fn broadcast_block(
+    async fn broadcast_header(
         &self,
-        _request: Request<grpc::SubmitBlockParams>,
+        _request: Request<grpc::BroadcastHeaderParams>,
+    ) -> Result<Response<()>, Status> {
+        Ok(tonic::Response::new(()))
+    }
+
+    async fn broadcast_payload(
+        &self,
+        _request: Request<grpc::BroadcastPayloadParams>,
     ) -> Result<Response<()>, Status> {
         Ok(tonic::Response::new(()))
     }

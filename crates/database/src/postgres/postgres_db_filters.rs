@@ -1,4 +1,3 @@
-use ethereum_consensus::{builder::{SignedValidatorRegistration, ValidatorRegistration}, primitives::BlsSignature};
 use helix_common::api::data_api::BidFilters;
 
 

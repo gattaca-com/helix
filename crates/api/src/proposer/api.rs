@@ -6,10 +6,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use axum::http::Request;
 use axum::{
     extract::{Json, Path},
-    http::StatusCode,
+    http::{StatusCode, Request},
     response::IntoResponse,
     Extension,
 };
@@ -27,22 +26,27 @@ use ethereum_consensus::{
 };
 use hyper::Body;
 use tokio::{
-    sync::{mpsc, mpsc::error::SendError, mpsc::Sender, Mutex, RwLock},
+    sync::{mpsc, mpsc::error::SendError, mpsc::Sender, RwLock},
     time::{sleep, Instant},
 };
 use tracing::{debug, error, info, trace, warn};
 use uuid::Uuid;
 
 use helix_beacon_client::{
-    error::BeaconClientError, types::BroadcastValidation, BlockBroadcaster, MultiBeaconClientTrait,
+    types::BroadcastValidation, BlockBroadcaster, MultiBeaconClientTrait,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
 use helix_housekeeper::{ChainUpdate, SlotUpdate};
-use helix_common::api::proposer_api::ValidatorRegistrationInfo;
-use helix_common::api::proposer_api::{GetPayloadResponse, ValidatorPreferences};
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry,
+    api::{
+        builder_api::BuilderGetValidatorsResponseEntry,
+        proposer_api::{
+            ValidatorRegistrationInfo,
+            GetPayloadResponse, 
+            ValidatorPreferences,
+        },
+    },
     fork_info::{ForkInfo, Network},
     try_execution_header_from_payload, BidRequest, GetHeaderTrace, GetPayloadTrace,
     RegisterValidatorsTrace,
@@ -52,6 +56,7 @@ use helix_utils::signing::{verify_signed_builder_message, verify_signed_consensu
 use crate::proposer::{
     error::ProposerApiError, unblind_beacon_block, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS,
 };
+
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
 const TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS: u64 = 1000;
@@ -329,6 +334,17 @@ where
                     "delivering bid",
                 );
 
+                // Save trace to DB
+                proposer_api.save_get_header_call(
+                    slot,
+                    bid_request.parent_hash,
+                    bid_request.public_key,
+                    bid.block_hash().clone(),
+                    trace,
+                    request_id
+                ).await;
+
+                // Return header
                 Ok(axum::Json(bid))
             }
             Ok(None) => {
@@ -357,26 +373,49 @@ where
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M>>>,
         req: Request<Body>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
-        let request_id = Uuid::new_v4();
         let mut trace = GetPayloadTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let request_id = Uuid::new_v4();
 
-        let mut signed_blinded_block: SignedBlindedBeaconBlock =
-            match deserialize_get_payload_bytes(req).await {
-                Ok(signed_block) => signed_block,
-                Err(err) => {
-                    warn!(
-                        request_id = %request_id,
-                        event = "get_payload",
-                        error = %err,
-                        "failed to deserialize signed block",
-                    );
-                    return Err(err);
+        let signed_blinded_block: SignedBlindedBeaconBlock = match deserialize_get_payload_bytes(req).await {
+            Ok(signed_block) => signed_block,
+            Err(err) => {
+                warn!(
+                    request_id = %request_id,
+                    event = "get_payload",
+                    error = %err,
+                    "failed to deserialize signed block",
+                );
+                return Err(err);
+            }
+        };
+        let block_hash = signed_blinded_block.message().body().execution_payload_header().block_hash().clone();
+
+        match proposer_api._get_payload(signed_blinded_block, &mut trace, &request_id).await {
+            Ok(get_payload_response) => {
+                Ok(axum::Json(get_payload_response))
+            },
+            Err(err) => {
+                // Save error to DB
+                if let Err(err) = proposer_api.db.save_failed_get_payload(block_hash, err.to_string(), trace).await {
+                    error!(err = ?err, "error saving failed get payload");
                 }
-            };
+
+                Err(err)
+            }
+        }
+    }
+    
+    pub async fn _get_payload(
+        &self,
+        mut signed_blinded_block: SignedBlindedBeaconBlock,
+        trace: &mut GetPayloadTrace,
+        request_id: &Uuid,
+    ) -> Result<GetPayloadResponse, ProposerApiError> {
+
         let block_hash =
             signed_blinded_block.message().body().execution_payload_header().block_hash().clone();
 
-        let head_slot = proposer_api.curr_slot.load(atomic::Ordering::Relaxed);
+        let head_slot = self.curr_slot.load(atomic::Ordering::Relaxed);
 
         info!(
             request_id = %request_id,
@@ -386,7 +425,7 @@ where
             block_hash = ?block_hash,
         );
 
-        let slot_duty = match proposer_api.get_next_proposer_duty().await {
+        let slot_duty = match self.get_next_proposer_duty().await {
             Ok(slot_duty) => slot_duty,
             Err(err) => {
                 warn!(request_id = %request_id, error = %err, "could not get next proposer duty!");
@@ -395,7 +434,7 @@ where
         };
 
         if let Err(err) =
-            proposer_api.validate_proposer_index(&signed_blinded_block, &slot_duty).await
+        self.validate_proposer_index(&signed_blinded_block, &slot_duty).await
         {
             warn!(request_id = %request_id, error = %err, "invalid proposer index");
             return Err(err);
@@ -403,11 +442,11 @@ where
         trace.proposer_index_validated = get_nanos_timestamp()?;
 
         let proposer_public_key = slot_duty.entry.registration.message.public_key;
-        if let Err(err) = proposer_api.verify_signed_blinded_block_signature(
+        if let Err(err) = self.verify_signed_blinded_block_signature(
             &mut signed_blinded_block,
             &proposer_public_key,
-            proposer_api.fork_info.genesis_validators_root,
-            &proposer_api.fork_info.context,
+            self.fork_info.genesis_validators_root,
+            &self.fork_info.context,
         ) {
             warn!(request_id = %request_id, error = %err, "invalid signature");
             return Err(ProposerApiError::InvalidSignature(err));
@@ -415,12 +454,12 @@ where
         trace.signature_validated = get_nanos_timestamp()?;
 
         // Get execution payload from auctioneer
-        let payload_result = proposer_api
+        let payload_result = self
             .get_execution_payload(
                 signed_blinded_block.message().slot(),
                 &proposer_public_key,
                 &block_hash,
-                &request_id,
+                request_id,
             )
             .await;
 
@@ -442,7 +481,7 @@ where
         trace.payload_fetched = get_nanos_timestamp()?;
 
         // Check if get_payload has already been called
-        if let Err(err) = proposer_api
+        if let Err(err) = self
             .auctioneer
             .check_and_set_last_slot_and_hash_delivered(
                 signed_blinded_block.message().slot(),
@@ -467,14 +506,14 @@ where
         }
 
         // Handle early/late requests
-        if let Err(err) = proposer_api
-            .await_and_validate_slot_start_time(&signed_blinded_block, trace.receive, &request_id)
+        if let Err(err) = self
+            .await_and_validate_slot_start_time(&signed_blinded_block, trace.receive, request_id)
             .await
         {
             warn!(request_id = %request_id, error = %err, "get_payload was sent too late");
 
             // Save too late request to db for debugging
-            if let Err(db_err) = proposer_api
+            if let Err(db_err) = self
                 .db
                 .save_too_late_get_payload(
                     signed_blinded_block.message().slot(),
@@ -505,7 +544,7 @@ where
                 return Err(err.into());
             }
         };
-        if let Err(err) = proposer_api.validate_header_equality(&local_header, provided_header) {
+        if let Err(err) = self.validate_header_equality(&local_header, provided_header) {
             error!(
                 request_id = %request_id,
                 error = %err,
@@ -526,7 +565,7 @@ where
 
         // Publish and validate payload with multi-beacon-client
         let fork = unblinded_payload.version();
-        if let Err(err) = proposer_api
+        if let Err(err) = self
             .multi_beacon_client
             .publish_block(
                 unblinded_payload.clone(),
@@ -535,62 +574,63 @@ where
             )
             .await
         {
-            match err {
-                BeaconClientError::BlockValidationFailed => {
-                    error!(request_id = %request_id, error = %err, "block validation failed");
-                    return Err(err.into());
-                }
-                _ => {
-                    error!(request_id = %request_id, error = %err, "error publishing block");
-                }
-            }
+            error!(request_id = %request_id, error = %err, "error publishing block");
+            return Err(err.into());
         }
         trace.beacon_client_broadcast = get_nanos_timestamp()?;
 
         // Broadcast payload to all broadcasters
-        proposer_api.broadcast_signed_block(
+        self.broadcast_signed_block(
             unblinded_payload.clone(),
             Some(BroadcastValidation::Gossip),
-            &request_id,
+            request_id,
         );
         trace.broadcaster_block_broadcast = get_nanos_timestamp()?;
 
         // While we wait for the block to propagate, we also store the payload information
-        let save_start_time = Instant::now();
-        proposer_api
+        trace.on_deliver_payload = get_nanos_timestamp()?;
+        self
             .save_delivered_payload_info(
                 payload.clone(),
                 &signed_blinded_block,
                 &proposer_public_key,
-                &trace,
-                &request_id,
+                trace,
+                request_id,
             )
             .await;
 
+        let get_payload_response = match GetPayloadResponse::try_from_execution_payload(&payload) {
+            Some(get_payload_response) => get_payload_response,
+            None => {
+                error!(
+                    request_id = %request_id, 
+                    "payload type mismatch getting payload response from execution payload. 
+                    All previous validation steps have passed, this should not happen",
+                );
+                return Err(ProposerApiError::PayloadTypeMismatch);
+            },
+        };
+
         // Calculate the remaining time needed to reach the target propagation duration.
-        // This ensures that the total time spent in both saving and sleeping is close to the target duration.
-        // Conditionally pause the execution to allow the block to propagate through the network.
-        let save_duration_ms = save_start_time.elapsed().as_millis() as u64;
-        let remaining_sleep_ms =
-            TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS.saturating_sub(save_duration_ms);
-        if remaining_sleep_ms > 0 && matches!(proposer_api.fork_info.network, Network::Mainnet) {
+        // Conditionally pause the execution until we hit `TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS` 
+        // to allow the block to propagate through the network.
+        let elapsed_since_propagate_start_ms = (get_nanos_timestamp()? - trace.beacon_client_broadcast) / 1_000_000;
+        let remaining_sleep_ms = TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS.saturating_sub(elapsed_since_propagate_start_ms);
+        if remaining_sleep_ms > 0 && matches!(self.fork_info.network, Network::Mainnet) {
             sleep(Duration::from_millis(remaining_sleep_ms)).await;
         }
 
         // Return response
-        trace.on_deliver_payload = get_nanos_timestamp()?;
-        info!(request_id = %request_id, trace = ?trace, "delivering payload");
-        let get_payload_response = GetPayloadResponse::try_from_execution_payload(&payload)
-            .ok_or(ProposerApiError::PayloadTypeMismatch)?;
-        Ok(axum::Json(get_payload_response))
+        info!(request_id = %request_id, trace = ?trace, timestamp = get_nanos_timestamp()?, "delivering payload");
+        Ok(get_payload_response)
     }
 }
 
 // HELPERS
-impl<D, DB, M> ProposerApi<D, DB, M>
+impl<A, DB, M> ProposerApi<A, DB, M>
 where
-    D: Auctioneer,
-    DB: DatabaseService,
+    A: Auctioneer,
+    DB: DatabaseService + 'static,
     M: MultiBeaconClientTrait,
 {
     /// Validate a single registration.
@@ -599,7 +639,7 @@ where
         registration: &mut SignedValidatorRegistration,
     ) -> Result<(), ProposerApiError> {
         // Validate registration time
-        self.validate_registration_time(&registration)?;
+        self.validate_registration_time(registration)?;
 
         // Verify the signature
         let message = &mut registration.message;
@@ -652,7 +692,7 @@ where
             + (bid_request.slot * self.fork_info.seconds_per_slot);
         let ms_into_slot = curr_timestamp_ms - (slot_start_timestamp * 1000) as i64;
 
-        if ms_into_slot > 0 && ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {
+        if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {
             warn!(curr_timestamp_ms = curr_timestamp_ms, slot = bid_request.slot, "get_request",);
 
             return Err(ProposerApiError::GetHeaderRequestTooLate {
@@ -811,36 +851,38 @@ where
 
     /// Fetches the execution payload associated with a given slot, public key, and block hash.
     ///
-    /// The function will retry fetching the payload up to 3 times,
-    /// sleeping for 100ms between each attempt.
+    /// The function will retry until the slot cutoff is reached.
     async fn get_execution_payload(
         &self,
         slot: u64,
         pub_key: &BlsPublicKey,
         block_hash: &ByteVector<32>,
         request_id: &Uuid,
-    ) -> Result<ExecutionPayload, AuctioneerError> {
-        const MAX_RETRIES: usize = 3;
-        const RETRY_DELAY: Duration = Duration::from_millis(100);
+    ) -> Result<ExecutionPayload, ProposerApiError> {
+        const RETRY_DELAY: Duration = Duration::from_millis(20);
 
-        let mut last_error: Option<AuctioneerError> = None;
+        let slot_time = self.fork_info.genesis_time_in_secs + (slot * self.fork_info.seconds_per_slot);
+        let slot_cutoff_millis = (slot_time * 1000) + GET_PAYLOAD_REQUEST_CUTOFF_MS as u64;
 
-        for _ in 0..MAX_RETRIES {
+        let mut last_error: Option<ProposerApiError> = None;
+
+        while get_millis_timestamp()? < slot_cutoff_millis {
             match self.auctioneer.get_execution_payload(slot, pub_key, block_hash).await {
                 Ok(Some(payload)) => return Ok(payload),
                 Ok(None) => {
-                    error!(request_id = %request_id, "execution payload not found");
+                    warn!(request_id = %request_id, "execution payload not found");
                 }
                 Err(err) => {
                     error!(request_id = %request_id, error = %err, "error fetching execution payload");
-                    last_error = Some(err);
+                    last_error = Some(ProposerApiError::AuctioneerError(err));
                 }
             }
 
             sleep(RETRY_DELAY).await;
         }
 
-        Err(last_error.unwrap_or_else(|| AuctioneerError::ExecutionPayloadNotFound))
+        error!(request_id = %request_id, "max retries reached trying to fetch execution payload");
+        Err(last_error.unwrap_or_else(|| ProposerApiError::NoExecutionPayloadFound))
     }
 
     async fn await_and_validate_slot_start_time(
@@ -895,9 +937,38 @@ where
             }
         };
 
-        if let Err(err) = self.db.save_delivered_payload(&bid_trace, payload, trace).await {
-            error!(request_id = %request_id, error = %err, "error saving payload to database");
-        }
+        let db = self.db.clone();
+        let trace = trace.clone();
+        let request_id = *request_id;
+        tokio::spawn(async move {
+            if let Err(err) = db.save_delivered_payload(&bid_trace, payload, &trace).await {
+                error!(request_id = %request_id, error = %err, "error saving payload to database");
+            }
+        });
+    }
+
+    async fn save_get_header_call(
+        &self,
+        slot: u64,
+        parent_hash: ByteVector<32>,
+        public_key: BlsPublicKey,
+        best_block_hash: ByteVector<32>,
+        trace: GetHeaderTrace,
+        request_id: Uuid,
+    ) {
+        let db = self.db.clone();
+
+        tokio::spawn(async move {
+            if let Err(err) = db.save_get_header_call(
+                slot,
+                parent_hash,
+                public_key,
+                best_block_hash,
+                trace,
+            ).await {
+                error!(request_id = %request_id, error = %err, "error saving get header call to database");
+            }
+        });
     }
 }
 

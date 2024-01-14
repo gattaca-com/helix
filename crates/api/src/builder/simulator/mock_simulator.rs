@@ -4,7 +4,7 @@ use tokio::sync::mpsc::Sender;
 use helix_common::simulator::BlockSimError;
 use uuid::Uuid;
 
-use crate::builder::{api::DbInfo, traits::BlockSimulator, BlockSimRequest};
+use crate::builder::{DbInfo, traits::BlockSimulator, BlockSimRequest};
 
 #[derive(Clone, Default)]
 pub struct MockSimulator {}

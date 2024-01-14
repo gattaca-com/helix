@@ -3,7 +3,7 @@ use helix_common::simulator::BlockSimError;
 use tokio::sync::mpsc::Sender;
 use uuid::Uuid;
 
-use crate::builder::{api::DbInfo, BlockSimRequest};
+use crate::builder::{DbInfo, BlockSimRequest};
 
 // Probably need access to db to store demotions + builder registry to track prios
 #[async_trait]

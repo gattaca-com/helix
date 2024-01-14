@@ -1,31 +1,24 @@
-use std::{convert::TryFrom, sync::Arc};
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc::Sender};
 use tokio::time::sleep;
 use tonic::{Response, Status, transport::Channel, Request};
 use tracing::error;
-
-use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 
 use crate::{
     gossiper::{
         error::GossipError,
         traits::GossipClientTrait,
+        types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
     },
     grpc::{
         gossip_service_client::GossipServiceClient,
         gossip_service_server::{GossipServiceServer, GossipService},
         self,
     },
-    builder::{
-        api::BuilderApi,
-        traits::BlockSimulator,
-        SubmitBlockParams,
-    },
 };
+
 
 #[derive(Clone)]
 pub struct GrpcGossiperClient {
@@ -66,15 +59,41 @@ impl GrpcGossiperClient {
         });
     }
 
-    pub async fn broadcast_block(
+    pub async fn broadcast_header(
         &mut self,
-        request: grpc::SubmitBlockParams,
+        request: grpc::BroadcastHeaderParams,
     ) -> Result<(), GossipError> {
         let request = Request::new(request);
         let mut client_guard = self.client.lock().await;
 
         if let Some(client) = client_guard.as_mut() {
-            if let Err(err) = client.broadcast_block(request).await {
+            if let Err(err) = client.broadcast_header(request).await {
+                return match err.code() {
+                    tonic::Code::Unavailable => {
+                        error!(err = %err, "failed to broadcast block");
+                        drop(client_guard);
+                        // Reconnect
+                        self.connect().await;
+                        Err(GossipError::BroadcastError(err))
+                    },
+                    _ => Err(GossipError::BroadcastError(err)),
+                }
+            }
+        } else {
+            return Err(GossipError::ClientNotConnected);
+        }
+        Ok(())
+    }
+
+    pub async fn broadcast_payload(
+        &mut self,
+        request: grpc::BroadcastPayloadParams,
+    ) -> Result<(), GossipError> {
+        let request = Request::new(request);
+        let mut client_guard = self.client.lock().await;
+
+        if let Some(client) = client_guard.as_mut() {
+            if let Err(err) = client.broadcast_payload(request).await {
                 return match err.code() {
                     tonic::Code::Unavailable => {
                         error!(err = %err, "failed to broadcast block");
@@ -115,17 +134,11 @@ impl GrpcGossiperClientManager {
 
     /// Starts the gRPC server to listen for gossip requests on the 50051 port.
     /// Will panic if the server can't be started.
-    pub async fn start_server<A, DB, S, G>(
+    pub async fn start_server(
         &self,
-        builder_api: Arc<BuilderApi<A, DB, S, G>>,
-    )
-        where
-            A: Auctioneer + 'static,
-            DB: DatabaseService + 'static,
-            S: BlockSimulator + 'static,
-            G: GossipClientTrait + 'static,
-    {
-        let service = GrpcGossiperService { builder_api };
+        builder_api_sender: Sender<GossipedMessage>,
+    ) {
+        let service = GrpcGossiperService { builder_api_sender };
 
         let addr = "0.0.0.0:50051".parse().unwrap();
         tokio::spawn(async move {
@@ -139,13 +152,36 @@ impl GrpcGossiperClientManager {
 
 #[async_trait]
 impl GossipClientTrait for GrpcGossiperClientManager {
-    async fn broadcast_block(&self, request: &SubmitBlockParams) -> Result<(), GossipError> {
+    async fn broadcast_header(
+        &self, 
+        request: BroadcastHeaderParams,
+    ) -> Result<(), GossipError> {
+        let request = request.to_proto();
+    
         for client in self.clients.iter() {
             let mut client = client.clone();
-            let request = request.to_proto_submit_block_params();
+            let request = request.clone();
             tokio::spawn(async move {
-                if let Err(err) = client.broadcast_block(request).await {
-                    error!(err = %err, "failed to gossip block");
+                if let Err(err) = client.broadcast_header(request).await {
+                    error!(err = %err, "failed to broadcast header");
+                }
+            });
+        }
+        Ok(())
+    }
+
+    async fn broadcast_payload(
+        &self, 
+        request: BroadcastPayloadParams,
+    ) -> Result<(), GossipError> {
+        let request = request.to_proto();
+    
+        for client in self.clients.iter() {
+            let mut client = client.clone();
+            let request = request.clone();
+            tokio::spawn(async move {
+                if let Err(err) = client.broadcast_payload(request).await {
+                    error!(err = %err, "failed to broadcast payload");
                 }
             });
         }
@@ -155,31 +191,31 @@ impl GossipClientTrait for GrpcGossiperClientManager {
 
 /// `GrpcGossiperService` listens to incoming requests from the other geo-distributed instances
 /// and processes them.
-pub struct GrpcGossiperService<A, DB, S, G>
-    where
-        A: Auctioneer + 'static,
-        DB: DatabaseService + 'static,
-        S: BlockSimulator + 'static,
-        G: GossipClientTrait + 'static,
-{
-    builder_api: Arc<BuilderApi<A, DB, S, G>>,
+pub struct GrpcGossiperService{
+    builder_api_sender: Sender<GossipedMessage>,
 }
 
 #[tonic::async_trait]
-impl<A, DB, S, G> GossipService for GrpcGossiperService<A, DB, S, G>
-    where
-        A: Auctioneer + 'static,
-        DB: DatabaseService + 'static,
-        S: BlockSimulator + 'static,
-        G: GossipClientTrait + 'static,
-{
-    async fn broadcast_block(
+impl GossipService for GrpcGossiperService {
+    async fn broadcast_header(
         &self,
-        request: Request<grpc::SubmitBlockParams>,
+        request: Request<grpc::BroadcastHeaderParams>,
     ) -> Result<Response<()>, Status> {
-        let request = SubmitBlockParams::from_proto_submit_block_params(request.into_inner());
-        let _ = BuilderApi::process_gossiped_submit_block(self.builder_api.clone(), request).await;
+        let request = BroadcastHeaderParams::from_proto(request.into_inner());
+        if let Err(err) = self.builder_api_sender.send(GossipedMessage::Header(request)).await {
+            error!(err = %err, "failed to send header to builder");
+        }
+        Ok(Response::new(()))
+    }
 
+    async fn broadcast_payload(
+        &self,
+        request: Request<grpc::BroadcastPayloadParams>,
+    ) -> Result<Response<()>, Status> {
+        let request = BroadcastPayloadParams::from_proto(request.into_inner());
+        if let Err(err) = self.builder_api_sender.send(GossipedMessage::Payload(request)).await {
+            error!(err = %err, "failed to send payload to builder");
+        }
         Ok(Response::new(()))
     }
 }

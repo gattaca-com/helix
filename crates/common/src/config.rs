@@ -6,7 +6,6 @@ use crate::api::proposer_api::ValidatorPreferences;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RelayConfig {
-    pub mongo: MongoConfig,
     pub postgres: PostgresConfig,
     pub redis: RedisConfig,
     #[serde(default)]
@@ -36,12 +35,6 @@ impl RelayConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
-pub struct MongoConfig {
-    pub url: String,
-    pub db_name: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct PostgresConfig {
     pub hostname: String,
     pub db_name: String,
@@ -59,7 +52,6 @@ pub struct RedisConfig {
 #[derive(Serialize, Deserialize, Clone)]
 pub enum BroadcasterConfig {
     Fiber(FiberConfig),
-    Bloxroute(BloxrouteConfig),
     BeaconClient(BeaconClientConfig),
 }
 
@@ -67,14 +59,6 @@ pub enum BroadcasterConfig {
 pub struct FiberConfig {
     pub url: String,
     pub api_key: String,
-    pub encoding: Encoding,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct BloxrouteConfig {
-    pub base_url: String,
-    pub endpoint: String,
-    pub auth_header: String,
     pub encoding: Encoding,
 }
 
@@ -141,6 +125,8 @@ impl RouterConfig {
         self.replace_condensed_with_real(Route::BuilderApi, &[
             Route::GetValidators,
             Route::SubmitBlock,
+            Route::SubmitBlockOptimistic,
+            Route::SubmitHeader,
         ]);
 
         self.replace_condensed_with_real(Route::ProposerApi, &[
@@ -173,6 +159,8 @@ pub enum Route {
     DataApi,
     GetValidators,
     SubmitBlock,
+    SubmitBlockOptimistic,
+    SubmitHeader,
     Status,
     RegisterValidators,
     GetHeader,
@@ -188,8 +176,6 @@ fn test_config() {
     use crate::api::proposer_api::ValidatorPreferences;
 
     let mut config = RelayConfig::default();
-    config.mongo.url = "mongodb://localhost:27017".to_string();
-    config.mongo.db_name = "test".to_string();
     config.redis.url = "redis://localhost:6379".to_string();
     config.simulator.url = "http://localhost:8080".to_string();
     config.beacon_clients.push(BeaconClientConfig { url: "http://localhost:8080".to_string() });

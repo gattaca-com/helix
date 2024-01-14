@@ -8,10 +8,10 @@ pub mod traits;
 use std::sync::Arc;
 use ethereum_consensus::types::mainnet::ExecutionPayload;
 
-use helix_common::bid_submission::{BidTrace, SignedBidSubmission};
+use helix_common::bid_submission::{BidTrace, SignedBidSubmission, BidSubmission};
 use helix_common::api::proposer_api::ValidatorPreferences;
 use ethereum_consensus::serde::as_str;
-use ethereum_consensus::primitives::{BlsSignature};
+use ethereum_consensus::primitives::BlsSignature;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockSimRequest {
@@ -31,7 +31,7 @@ impl BlockSimRequest {
     ) -> Self {
         Self {
             registered_gas_limit,
-            message: block.message().clone(),
+            message: block.bid_trace().clone(),
             execution_payload: block.execution_payload().clone(),
             signature: block.signature().clone(),
             proposer_preferences,

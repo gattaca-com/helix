@@ -18,10 +18,10 @@ use helix_common::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
-    bid_submission::{BidTrace, SignedBidSubmission},
+    bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission},
     simulator::BlockSimError,
-    BuilderInfo, GetPayloadTrace, PostgresConfig, RelayConfig, SignedValidatorRegistrationEntry,
-    SubmissionTrace, ValidatorSummary,
+    BuilderInfo, GetPayloadTrace, RelayConfig, SignedValidatorRegistrationEntry,
+    SubmissionTrace, ValidatorSummary, GetHeaderTrace, HeaderSubmissionTrace, GossipedPayloadTrace, GossipedHeaderTrace, pending_block::PendingBlock,
 };
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{error, info};
@@ -37,6 +37,7 @@ use crate::{
     types::{BidSubmissionDocument, BuilderInfoDocument, DeliveredPayloadDocument},
     DatabaseService,
 };
+
 
 #[derive(Clone)]
 pub struct PostgresDatabaseService {
@@ -85,7 +86,7 @@ impl PostgresDatabaseService {
         match run_migrations_async(client).await {
             Ok(report) => {
                 info!("Applied migrations: {}", report.applied_migrations().len());
-                info!("Migrations: {:?}", report);
+                info!("Migrations report: {:?}", report);
             }
             Err(e) => {
                 panic!("Error applying migrations: {}", e);
@@ -149,7 +150,7 @@ impl PostgresDatabaseService {
 
     async fn _save_validator_registrations(
         &self,
-        mut entries: Vec<ValidatorRegistrationInfo>,
+        entries: Vec<ValidatorRegistrationInfo>,
     ) -> Result<(), DatabaseError> {
         let mut client = self.pool.get().await?;
 
@@ -279,7 +280,7 @@ impl Default for PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
             known_validators_cache: Arc::new(DashSet::new()),
-            region: 0,
+            region: 1,
             pool: Arc::new(pool),
         }
     }
@@ -412,7 +413,7 @@ impl DatabaseService for PostgresDatabaseService {
             .await?
         {
             rows if rows.is_empty() => Err(DatabaseError::ValidatorRegistrationNotFound),
-            rows => parse_row(rows.get(0).unwrap()),
+            rows => parse_row(rows.first().unwrap()),
         }
     }
 
@@ -686,7 +687,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(payload.gas_limit() as i32),
                 &(payload.gas_used() as i32),
                 &(payload.extra_data().as_ref()),
-                &(PostgresNumeric::from(payload.base_fee_per_gas().clone())),
+                &(PostgresNumeric::from(*payload.base_fee_per_gas())),
             ],
             ).await?;
 
@@ -813,7 +814,10 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         submission: Arc<SignedBidSubmission>,
     ) -> Result<(), DatabaseError> {
-        self.pool.get().await?.execute(
+        let mut client = self.pool.get().await?;
+        let transaction = client.transaction().await?;
+
+        transaction.execute(
             "
                 INSERT INTO
                     block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp)
@@ -837,6 +841,26 @@ impl DatabaseService for PostgresDatabaseService {
                 &(submission.execution_payload().timestamp() as i64),
             ],
         ).await?;
+
+        transaction.execute(
+            "
+                INSERT INTO
+                    pending_blocks (block_hash, builder_pubkey, slot, pending)
+                VALUES
+                    ($1, $2, $3, $4)
+                ON CONFLICT (block_hash)
+                DO UPDATE SET
+                    pending = false
+            ",
+            &[
+                &(submission.execution_payload().block_hash().as_ref()),
+                &(submission.message.builder_public_key.as_ref()),
+                &(submission.message.slot as i32),
+                &(false),
+            ],
+        ).await?;
+
+        transaction.commit().await?;
 
         Ok(())
     }
@@ -919,7 +943,7 @@ impl DatabaseService for PostgresDatabaseService {
             rows if rows.is_empty() => {
                 Err(DatabaseError::BuilderInfoNotFound { public_key: builder_pub_key.clone() })
             }
-            rows => parse_row(rows.get(0).unwrap()),
+            rows => parse_row(rows.first().unwrap()),
         }
     }
 
@@ -1124,5 +1148,265 @@ impl DatabaseService for PostgresDatabaseService {
                 )
                 .await?,
         )
+    }
+
+    async fn save_get_header_call(
+        &self,
+        slot: u64,
+        parent_hash: ByteVector<32>,
+        public_key: BlsPublicKey,
+        best_block_hash: ByteVector<32>,
+        trace: GetHeaderTrace,
+    ) -> Result<(), DatabaseError> {
+        let region_id = self.region;
+
+        let mut client = self.pool.get().await?;
+        let transaction = client.transaction().await?;
+
+        transaction
+            .execute(
+                "
+                    INSERT INTO get_header
+                        (slot_number, region_id, parent_hash, proposer_pubkey, block_hash)
+                    VALUES
+                        ($1, $2, $3, $4, $5)
+                ",
+                &[
+                    &(slot as i32),
+                    &(region_id),
+                    &(parent_hash.as_ref()),
+                    &(public_key.as_ref()),
+                    &(best_block_hash.as_ref()),
+                ],
+            )
+            .await?;
+
+        transaction.execute(
+            "
+                INSERT INTO get_header_trace
+                    (block_hash, region_id, receive, validation_complete, best_bid_fetched)
+                VALUES
+                    ($1, $2, $3, $4, $5)
+            ",
+            &[
+                &(best_block_hash.as_ref()),
+                &(region_id),
+                &(trace.receive as i64),
+                &(trace.validation_complete as i64),
+                &(trace.best_bid_fetched as i64),
+            ],
+        ).await?;
+
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
+    async fn save_failed_get_payload(
+        &self,
+        block_hash: ByteVector<32>,
+        error: String,
+        trace: GetPayloadTrace,
+    ) -> Result<(), DatabaseError> {
+        let region_id = self.region;
+
+        let mut client = self.pool.get().await?;
+        let transaction = client.transaction().await?;
+
+        transaction
+            .execute(
+                "
+                    INSERT INTO failed_payload
+                        (region_id, block_hash, error)
+                    VALUES
+                        ($1, $2, $3)
+                ",
+                &[
+                    &(region_id),
+                    &(block_hash.as_ref()),
+                    &(error),
+                ],
+            )
+            .await?;
+
+        transaction.execute(
+            "
+                INSERT INTO payload_trace
+                    (block_hash, region_id, receive, proposer_index_validated, signature_validated, payload_fetched, validation_complete, beacon_client_broadcast, broadcaster_block_broadcast, on_deliver_payload)
+                VALUES
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            ",
+            &[
+                &(block_hash.as_ref()),
+                &(region_id),
+                &(trace.receive as i64),
+                &(trace.proposer_index_validated as i64),
+                &(trace.signature_validated as i64),
+                &(trace.payload_fetched as i64),
+                &(trace.validation_complete as i64),
+                &(trace.beacon_client_broadcast as i64),
+                &(trace.broadcaster_block_broadcast as i64),
+                &(trace.on_deliver_payload as i64),
+            ],
+        ).await?;
+
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
+    async fn store_header_submission(
+        &self,
+        submission: Arc<SignedHeaderSubmission>,
+        trace: Arc<HeaderSubmissionTrace>,
+    ) -> Result<(), DatabaseError> {
+
+        let region_id = self.region;
+        let mut client = self.pool.get().await?;
+        let transaction = client.transaction().await?;
+
+        transaction.execute(
+            "
+                INSERT INTO
+                    header_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, timestamp)
+                VALUES
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                ON CONFLICT (block_hash)
+                DO NOTHING
+                ",
+            &[
+                &(submission.message.execution_payload_header.block_number() as i32),
+                &(submission.message.bid_trace.slot as i32),
+                &(submission.message.bid_trace.parent_hash.as_ref()),
+                &(submission.message.bid_trace.block_hash.as_ref()),
+                &(submission.message.bid_trace.builder_public_key.as_ref()),
+                &(submission.message.bid_trace.proposer_public_key.as_ref()),
+                &(submission.message.bid_trace.proposer_fee_recipient.as_ref()),
+                &(submission.message.bid_trace.gas_limit as i32),
+                &(submission.message.bid_trace.gas_used as i32),
+                &(PostgresNumeric::from(submission.message.bid_trace.value)),
+                &(submission.message.execution_payload_header.timestamp() as i64),
+            ],
+        ).await?;
+
+        transaction.execute(
+            "
+                INSERT INTO
+                    header_submission_trace (block_hash, region_id, receive, decode, pre_checks, signature, floor_bid_checks, auctioneer_update, request_finish)
+                VALUES
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ",
+            &[
+                &(submission.message.bid_trace.block_hash.as_ref()),
+                &(region_id),
+                &(trace.receive as i64),
+                &(trace.decode as i64),
+                &(trace.pre_checks as i64),
+                &(trace.signature as i64),
+                &(trace.floor_bid_checks as i64),
+                &(trace.auctioneer_update as i64),
+                &(trace.request_finish as i64),
+            ],
+        ).await?;
+
+        transaction.execute(
+            "
+                INSERT INTO
+                    pending_blocks (block_hash, builder_pubkey, slot, pending)
+                VALUES
+                    ($1, $2, $3, $4)
+                ON CONFLICT (block_hash)
+                DO NOTHING
+            ",
+            &[
+                &(submission.message.bid_trace.block_hash.as_ref()),
+                &(submission.message.bid_trace.builder_public_key.as_ref()),
+                &(submission.message.bid_trace.slot as i32),
+                &(true),
+            ],
+        ).await?;
+
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
+    async fn save_gossiped_header_trace(
+        &self,
+        block_hash: ByteVector<32>,
+        trace: Arc<GossipedHeaderTrace>,
+    ) -> Result<(), DatabaseError> {
+        let region_id = self.region;
+
+        self.pool.get().await?.execute(
+            "
+                INSERT INTO
+                    gossiped_header_trace (block_hash, region_id, on_receive, on_gossip_receive, pre_checks, auctioneer_update)
+                VALUES
+                    ($1, $2, $3, $4, $5, $6)
+            ",
+            &[
+                &(block_hash.as_ref()),
+                &(region_id),
+                &(trace.on_receive as i64),
+                &(trace.on_gossip_receive as i64),
+                &(trace.pre_checks as i64),
+                &(trace.auctioneer_update as i64),
+            ],
+        ).await?;
+        Ok(())
+    }
+
+    async fn save_gossiped_payload_trace(
+        &self,
+        block_hash: ByteVector<32>,
+        trace: Arc<GossipedPayloadTrace>,
+    ) -> Result<(), DatabaseError> {
+        let region_id = self.region;
+
+        self.pool.get().await?.execute(
+            "
+                INSERT INTO
+                    gossiped_payload_trace (block_hash, region_id, receive, pre_checks, auctioneer_update)
+                VALUES
+                    ($1, $2, $3, $4, $5)
+            ",
+            &[
+                &(block_hash.as_ref()),
+                &(region_id),
+                &(trace.receive as i64),
+                &(trace.pre_checks as i64),
+                &(trace.auctioneer_update as i64),
+            ],
+        ).await?;
+        Ok(())
+    }
+
+    async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, DatabaseError> {
+        parse_rows(self.pool
+            .get()
+            .await?
+            .query(
+                "
+                    SELECT * FROM pending_blocks 
+                    WHERE pending = true
+                ",
+                &[],
+            )
+            .await?
+        )
+    }
+
+    async fn remove_old_pending_blocks(&self) -> Result<(), DatabaseError> {
+        self.pool.get().await?.execute(
+                "
+                    DELETE FROM pending_blocks 
+                    WHERE created_at < (NOW() - INTERVAL '1 minute')
+                ",
+                &[],
+            )
+            .await?;
+
+        Ok(())
     }
 }
