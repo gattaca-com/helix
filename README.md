@@ -1,8 +1,8 @@
-# Helix 🧬 - A Rust based high performance MEV-boost Relay 
+# Helix 🧬 - A Rust based high performance MEV-Boost Relay 
 
 ## About Helix
 
-Helix is a Rust-based MEV-boost Relay implementation, developed as an entirely new code base from the ground up. It has been designed with key foundational principles at its core, such as modularity and extensibility, low-latency performance, robustness and fault tolerance, geo-distribution, and a focus on reducing operational costs.
+Helix is a Rust-based MEV-Boost Relay implementation, developed as an entirely new code base from the ground up. It has been designed with key foundational principles at its core, such as modularity and extensibility, low-latency performance, robustness and fault tolerance, geo-distribution, and a focus on reducing operational costs.
 
 Our goal is to provide a code base that is not only technologically advanced but also aligns with the evolving needs of proposers, builders, and the broader Ethereum community.
 
@@ -16,7 +16,7 @@ The PBS relay operates using two distinct flows, each with its own unique key re
 - **Get_header -> Get_payload Flow (Redundancy):** Promptly delivering the payload following a `get_header` request is essential. A delay in this process risks the proposer missing their slot, making high redundancy in this flow extremely important.
 
 ### Geo-Distribution and Global Accessibility: 
-The current Flashbots MEV-boost relay [implementation](https://github.com/flashbots/mev-boost-relay) is limited to operating as a single cluster. As a result, relays tend to aggregate in areas with a high density of proposers, particularly AWS data centers in North Virginia and Europe. This situation poses a significant disadvantage for proposers in locations with high network latency to these areas. To prevent missed slots, proposers in such locations are compelled to adjust their MEV-Boost configuration to call `get_header` earlier, which leads to reduced MEV rewards. In response, we have designed our relay to support geo-distribution. This allows multiple clusters to be operated in different geographical locations simultaneously, whilst collectively serving the relay API as one unified relay endpoint.
+The current Flashbots MEV-Boost relay [implementation](https://github.com/flashbots/mev-boost-relay) is limited to operating as a single cluster. As a result, relays tend to aggregate in areas with a high density of proposers, particularly AWS data centers in North Virginia and Europe. This situation poses a significant disadvantage for proposers in locations with high network latency to these areas. To prevent missed slots, proposers in such locations are compelled to adjust their MEV-Boost configuration to call `get_header` earlier, which leads to reduced MEV rewards. In response, we have designed our relay to support geo-distribution. This allows multiple clusters to be operated in different geographical locations simultaneously, whilst collectively serving the relay API as one unified relay endpoint.
 
 - Our design supports multiple geo-distributed clusters under a single relay URL.
 - Automatic call routing via DNS resolution ensures low latency communication to relays.
@@ -37,7 +37,7 @@ Operating censoring and non-censoring relays independently results in doubling t
 
 ### Optimised Block Propergation
 - To ensure efficient block propagation, without the need for sophisticated Beacon client peering, we've integrated a `Broadcaster` Trait, allowing integration with network services like [Fiber](https://fiber.chainbound.io) and [BloXroute](https://bloxroute.com) for effective payload distribution.
-- Similar to the current mev-boost-relay implementation, we include a one-second delay before returning unblinded payloads to the proposer. This delay is required to mitigate attack vectors such as the recent [low-carb-crusader](https://collective.flashbots.net/t/disclosure-mitigation-of-block-equivocation-strategy-with-early-getpayload-calls-for-proposers/1705) attack. Consequently, the relay takes on the critical role of beacon-chain block propagation.
+- Similar to the current MEV-Boost-relay implementation, we include a one-second delay before returning unblinded payloads to the proposer. This delay is required to mitigate attack vectors such as the recent [low-carb-crusader](https://collective.flashbots.net/t/disclosure-mitigation-of-block-equivocation-strategy-with-early-getpayload-calls-for-proposers/1705) attack. Consequently, the relay takes on the critical role of beacon-chain block propagation.
 - In the future we will be adding a custom module that will handle optimised peering
 
 ## Latency Analysis
@@ -83,7 +83,7 @@ In line with the design principles of Protocol Enforced Proposer Commitments (PE
 
 
 ## Compatability
-- For proposers, Helix is fully compatible with the current MEV-boost relay spec.
+- For proposers, Helix is fully compatible with the current MEV-Boost relay spec.
 - For builders, there's a requirement to adapt to these changes as the [proposers](https://flashbots.github.io/relay-specs/#/Builder/getproposers) API response will now contain an extra `preferences` field. Minor changes are also required to the internal logic, as censoring moves from a per-relay basis to a per-validator basis.
 
 ## Credit to:
