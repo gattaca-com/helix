@@ -1,4 +1,4 @@
-use std::{alloc::System, sync::Arc, time::SystemTime};
+use std::{sync::Arc, time::SystemTime};
 
 use ethereum_consensus::primitives::BlsPublicKey;
 use helix_common::{bellatrix::ByteVector, bid_submission::{SignedBidSubmission, v2::header_submission::SignedHeaderSubmission}, simulator::BlockSimError, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, SubmissionTrace};

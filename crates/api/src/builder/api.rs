@@ -44,7 +44,7 @@ use helix_common::{
         v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb}, BidSubmission, BidTrace, SignedBidSubmission,
     },
     HeaderSubmissionTrace, fork_info::ForkInfo, signing::RelaySigningContext, 
-    simulator::BlockSimError, SubmissionTrace, SignedBuilderBid, GossipedHeaderTrace, GossipedPayloadTrace, versioned_payload::PayloadAndBlobs, capella,
+    simulator::BlockSimError, SubmissionTrace, SignedBuilderBid, GossipedHeaderTrace, GossipedPayloadTrace, versioned_payload::PayloadAndBlobs,
 };
 use helix_utils::{calculate_withdrawals_root, has_reached_fork, try_decode_into};
 
@@ -184,42 +184,9 @@ where
 
         // TODO TEMPORARY, remove again!
         // Decode the incoming request body into a payload
-        let (mut payload, is_cancellations_enabled) =
+        let (payload, is_cancellations_enabled) =
             decode_payload(req, &mut trace, &request_id).await?;
         let block_hash = payload.message().block_hash.clone();
-        let bid_trace = payload.bid_trace().clone();
-        let signature = payload.signature().clone();
-
-        match payload.execution_payload_mut() {
-            ethereum_consensus::types::ExecutionPayload::Capella(payload) => {
-                match capella::ExecutionPayloadHeader::try_from(payload) {
-                    Ok(header) => {
-                        info!(
-                            request_id = %request_id,
-                            event = "submit_block",
-                            head_slot = head_slot,
-                            timestamp_request_start = trace.receive,
-                            bid_trace = ?bid_trace,
-                            signature = ?signature,
-                            header = ?header,
-                            "payload decoded - detailed",
-                        );
-                    },
-                    Err(err) => {
-                        info!(
-                            request_id = %request_id,
-                            event = "submit_block",
-                            head_slot = head_slot,
-                            timestamp_request_start = trace.receive,
-                            error = %err,
-                            "payload decoded - detailed",
-                        );
-                    }
-                }
-            },
-            _ => {}
-        }
-        
 
         debug!(
             request_id = %request_id,
@@ -361,14 +328,6 @@ where
         let (mut payload, is_cancellations_enabled) =
             decode_header_submission(req, &mut trace, &request_id).await?;
         let block_hash = payload.block_hash().clone();
-                
-        // TODO TEMPORARY, remove again!
-        info!(
-            request_id = %request_id,
-            event = "header submission decoded - detailed",
-            head_slot = head_slot,
-            payload = ?payload,
-        );
 
         debug!(
             request_id = %request_id,
