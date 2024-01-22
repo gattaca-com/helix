@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     ops::DerefMut,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -812,7 +812,10 @@ impl DatabaseService for PostgresDatabaseService {
     async fn store_block_submission(
         &self,
         submission: Arc<SignedBidSubmission>,
+        trace: Arc<SubmissionTrace>,
+        optimistic_version: i16,
     ) -> Result<(), DatabaseError> {
+        let region_id = self.region;
         let mut client = self.pool.get().await?;
         let transaction = client.transaction().await?;
 
@@ -844,43 +847,14 @@ impl DatabaseService for PostgresDatabaseService {
         transaction.execute(
             "
                 INSERT INTO
-                    pending_blocks (block_hash, builder_pubkey, slot, pending)
+                    submission_trace (block_hash, region_id, optimistic_version, receive, decode, pre_checks, signature, floor_bid_checks, simulation, auctioneer_update, request_finish)
                 VALUES
-                    ($1, $2, $3, $4)
-                ON CONFLICT (block_hash)
-                DO UPDATE SET
-                    pending = false
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ",
             &[
                 &(submission.block_hash().as_ref()),
-                &(submission.builder_public_key().as_ref()),
-                &(submission.slot() as i32),
-                &(false),
-            ],
-        ).await?;
-
-        transaction.commit().await?;
-
-        Ok(())
-    }
-
-    async fn save_block_submission_trace(
-        &self,
-        block_hash: Hash32,
-        trace: SubmissionTrace,
-    ) -> Result<(), DatabaseError> {
-        let region_id = self.region;
-
-        self.pool.get().await?.execute(
-            "
-                INSERT INTO
-                    submission_trace (block_hash, region_id, receive, decode, pre_checks, signature, floor_bid_checks, simulation, auctioneer_update, request_finish)
-                VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ",
-            &[
-                &(block_hash.as_ref()),
                 &(region_id),
+                &(optimistic_version),
                 &(trace.receive as i64),
                 &(trace.decode as i64),
                 &(trace.pre_checks as i64),
@@ -891,6 +865,39 @@ impl DatabaseService for PostgresDatabaseService {
                 &(trace.request_finish as i64),
             ],
         ).await?;
+
+        transaction.commit().await?;
+
+        Ok(())
+    }
+
+    async fn save_pending_block(
+        &self,
+        block_hash: &Hash32,
+        builder_pub_key: &BlsPublicKey,
+        slot: u64,
+        time: SystemTime,
+    ) -> Result<(), DatabaseError> {
+        self.pool
+            .get()
+            .await?.execute(
+            "
+                INSERT INTO
+                    pending_blocks (block_hash, builder_pubkey, slot, header_receive, payload_receive)
+                VALUES
+                    ($1, $2, $3, $4, $5)
+                ON CONFLICT (block_hash)
+                DO UPDATE SET payload_receive = EXCLUDED.payload_receive;
+            ",
+            &[
+                &(block_hash.as_ref()),
+                &(builder_pub_key.as_ref()),
+                &(slot as i32),
+                &(Option::<SystemTime>::None),
+                &(time),
+            ],
+        ).await?;
+
         Ok(())
     }
 
@@ -950,7 +957,12 @@ impl DatabaseService for PostgresDatabaseService {
         parse_rows(self.pool.get().await?.query("SELECT * FROM builder_info", &[]).await?)
     }
 
-    async fn db_demote_builder(&self, builder_pub_key: &BlsPublicKey) -> Result<(), DatabaseError> {
+    async fn db_demote_builder(
+        &self,
+        builder_pub_key: &BlsPublicKey,
+        block_hash: &Hash32,
+        reason: String,
+    ) -> Result<(), DatabaseError> {
         let mut client = self.pool.get().await?;
         let transaction = client.transaction().await?;
         transaction
@@ -968,10 +980,15 @@ impl DatabaseService for PostgresDatabaseService {
         transaction
             .execute(
                 "
-                    INSERT INTO demotions (public_key, demotion_time)
-                    VALUES ($1, $2)
+                    INSERT INTO demotions (public_key, block_hash, demotion_time, reason)
+                    VALUES ($1, $2, $3, $4)
                 ",
-                &[&(builder_pub_key.as_ref()), &(timestamp as i64)],
+                &[
+                    &(builder_pub_key.as_ref()),
+                    &(block_hash.as_ref()),
+                    &(timestamp as i64),
+                    &(reason),
+                ],
             )
             .await?;
 
@@ -1275,16 +1292,16 @@ impl DatabaseService for PostgresDatabaseService {
                 ",
             &[
                 &(submission.execution_payload_header().block_number() as i32),
-                &(submission.message.bid_trace.slot as i32),
-                &(submission.message.bid_trace.parent_hash.as_ref()),
-                &(submission.message.bid_trace.block_hash.as_ref()),
-                &(submission.message.bid_trace.builder_public_key.as_ref()),
-                &(submission.message.bid_trace.proposer_public_key.as_ref()),
-                &(submission.message.bid_trace.proposer_fee_recipient.as_ref()),
-                &(submission.message.bid_trace.gas_limit as i32),
-                &(submission.message.bid_trace.gas_used as i32),
-                &(PostgresNumeric::from(submission.message.bid_trace.value)),
-                &(submission.execution_payload_header().timestamp() as i64),
+                &(submission.slot() as i32),
+                &(submission.parent_hash().as_ref()),
+                &(submission.block_hash().as_ref()),
+                &(submission.builder_public_key().as_ref()),
+                &(submission.proposer_public_key().as_ref()),
+                &(submission.proposer_fee_recipient().as_ref()),
+                &(submission.gas_limit() as i32),
+                &(submission.gas_used() as i32),
+                &(PostgresNumeric::from(submission.value())),
+                &(submission.timestamp() as i64),
             ],
         ).await?;
 
@@ -1296,7 +1313,7 @@ impl DatabaseService for PostgresDatabaseService {
                     ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ",
             &[
-                &(submission.message.bid_trace.block_hash.as_ref()),
+                &(submission.block_hash().as_ref()),
                 &(region_id),
                 &(trace.receive as i64),
                 &(trace.decode as i64),
@@ -1311,17 +1328,18 @@ impl DatabaseService for PostgresDatabaseService {
         transaction.execute(
             "
                 INSERT INTO
-                    pending_blocks (block_hash, builder_pubkey, slot, pending)
+                    pending_blocks (block_hash, builder_pubkey, slot, header_receive, payload_receive)
                 VALUES
-                    ($1, $2, $3, $4)
+                    ($1, $2, $3, $4, $5)
                 ON CONFLICT (block_hash)
-                DO NOTHING
+                DO UPDATE SET header_receive = EXCLUDED.header_receive;
             ",
             &[
-                &(submission.message.bid_trace.block_hash.as_ref()),
-                &(submission.message.bid_trace.builder_public_key.as_ref()),
-                &(submission.message.bid_trace.slot as i32),
-                &(true),
+                &(submission.block_hash().as_ref()),
+                &(submission.builder_public_key().as_ref()),
+                &(submission.slot() as i32),
+                &(UNIX_EPOCH + Duration::from_nanos(trace.receive)),
+                &(Option::<SystemTime>::None),
             ],
         ).await?;
 
@@ -1388,7 +1406,6 @@ impl DatabaseService for PostgresDatabaseService {
             .query(
                 "
                     SELECT * FROM pending_blocks 
-                    WHERE pending = true
                 ",
                 &[],
             )

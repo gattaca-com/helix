@@ -32,3 +32,4 @@ tokio-postgres.workspace = true
 auto_impl.workspace = true
 clap = {version = "4.3", features = ["derive"]}
 thiserror.workspace = true
+tracing.workspace = true

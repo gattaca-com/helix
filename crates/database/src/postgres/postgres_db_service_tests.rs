@@ -14,7 +14,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         time::{SystemTime, UNIX_EPOCH},
     };
     use helix_common::{
-        bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission},
+        bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission, BidSubmission},
         GetPayloadTrace, SubmissionTrace, bellatrix::{ByteVector, ByteList, List}, HeaderSubmissionTrace, versioned_payload::PayloadAndBlobs,
     };
 
@@ -320,7 +320,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         let result = db_service.store_builder_info(&public_key, builder_info).await;
         assert!(result.is_ok());
 
-        let result = db_service.db_demote_builder(&public_key).await;
+        let result = db_service.db_demote_builder(&public_key, &Default::default(), "".to_string()).await;
         assert!(result.is_ok());
     }
 
@@ -338,7 +338,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
     #[tokio::test]
     async fn test_store_block_submission() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
-        let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
+        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
         let bid_trace = BidTrace {
             slot: 1234,
@@ -361,7 +361,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
             },
         }
 
-        db_service.store_block_submission(Arc::new(signed_bid_submission)).await?;
+        db_service.store_block_submission(Arc::new(signed_bid_submission), Arc::new(Default::default()), 0).await?;
         Ok(())
     }
 
@@ -381,17 +381,6 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         };
         let bids = db_service.get_bids(&filter).await?;
         println!("Bids: {:?}", bids);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_save_block_submission_trace() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
-        let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
-        let submission_trace = SubmissionTrace::default();
-
-        let block_hash = Default::default();
-        db_service.save_block_submission_trace(block_hash, submission_trace).await?;
         Ok(())
     }
 
@@ -503,7 +492,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
         let mut signed_bid_submission = SignedHeaderSubmission::default();
-        signed_bid_submission.message.bid_trace = BidTrace {
+        *signed_bid_submission.bid_trace_mut() = BidTrace {
             slot: 1234,
             parent_hash: Default::default(),
             block_hash: Default::default(),
@@ -532,6 +521,15 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
         let result = db_service.save_gossiped_payload_trace(Default::default(), Default::default()).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_save_pending_block() -> Result<(), Box<dyn std::error::Error>> {
+        env_logger::builder().is_test(true).try_init()?;
+        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+        let result = db_service.save_pending_block(&Default::default(), &Default::default(), 359023, SystemTime::now()).await?;
 
         Ok(())
     }

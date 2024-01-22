@@ -23,7 +23,7 @@ impl BlockSimulator for MockSimulator {
         _is_top_bid: bool,
         _sim_result_saver_sender: Sender<DbInfo>,
         _request_id: Uuid,
-    ) -> Result<(), BlockSimError> {
-        Ok(())
+    ) -> Result<bool, BlockSimError> {
+        Ok(true)
     }
 }

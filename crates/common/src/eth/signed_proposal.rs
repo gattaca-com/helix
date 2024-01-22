@@ -14,6 +14,12 @@ pub enum VersionedSignedProposal {
     Deneb(SignedBlockContents),
 }
 
+impl Default for VersionedSignedProposal {
+    fn default() -> Self {
+        Self::Capella(SignedBeaconBlock::Capella(Default::default()))
+    }
+}
+
 impl VersionedSignedProposal {
     pub fn version(&self) -> Fork {
         match self {

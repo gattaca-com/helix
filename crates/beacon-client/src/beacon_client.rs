@@ -1,14 +1,15 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use ethereum_consensus::{phase0::Fork, primitives::Root};
+use ethereum_consensus::{phase0::Fork, primitives::Root, ssz};
 use futures::StreamExt;
+use http::header::CONTENT_TYPE;
 use reqwest_eventsource::EventSource;
 use tokio::{sync::mpsc::Sender, time::sleep};
 use tracing::{error, warn};
 use url::Url;
 
-use helix_common::{ProposerDuty, ValidatorSummary, signed_proposal::VersionedSignedProposal};
+use helix_common::{ProposerDuty, ValidatorSummary, signed_proposal::VersionedSignedProposal, bellatrix::SimpleSerialize};
 
 use crate::{
     error::{ApiError, BeaconClientError},
@@ -178,17 +179,22 @@ impl BeaconClientTrait for BeaconClient {
         Ok((dependent_root, result.data))
     }
 
-    /// `publish_block` publishes the signed beacon block via
+    /// `publish_block` publishes the signed beacon block ssz-encoded via
     /// https://ethereum.github.io/beacon-APIs/#/ValidatorRequiredApi/publishBlockV2
-    async fn publish_block<SB: serde::Serialize + serde::de::DeserializeOwned + Send + Sync>(
+    async fn publish_block<SB: Send + Sync + SimpleSerialize>(
         &self,
         block: Arc<SB>,
         broadcast_validation: Option<BroadcastValidation>,
         fork: ethereum_consensus::Fork,
     ) -> Result<u16, BeaconClientError> {
         let target = self.endpoint.join("eth/v2/beacon/blocks")?;
+        let body_bytes = ssz::prelude::serialize(block.as_ref())?;
         let mut request =
-            self.http.post(target).json(&*block).header(CONSENSUS_VERSION_HEADER, fork.to_string());
+            self.http
+            .post(target)
+            .body(body_bytes)
+            .header(CONSENSUS_VERSION_HEADER, fork.to_string())
+            .header(CONTENT_TYPE, "application/octet-stream");
         if let Some(validation) = broadcast_validation {
             request = request.query(&[("broadcast_validation", validation.to_string())]);
         }

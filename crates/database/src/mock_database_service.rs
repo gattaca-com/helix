@@ -1,6 +1,5 @@
 use std::{
-    collections::HashSet,
-    sync::{Arc, Mutex},
+    collections::HashSet, sync::{Arc, Mutex}, time::SystemTime
 };
 
 use async_trait::async_trait;
@@ -134,14 +133,18 @@ impl DatabaseService for MockDatabaseService {
     async fn store_block_submission(
         &self,
         _submission: Arc<SignedBidSubmission>,
+        _trace: Arc<SubmissionTrace>,
+        _optimistic_version: i16,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
 
-    async fn save_block_submission_trace(
+    async fn save_pending_block(
         &self,
-        _block_hash: Hash32,
-        _trace: SubmissionTrace,
+        _block_hash: &Hash32,
+        _builder_pub_key: &BlsPublicKey,
+        _slot: u64,
+        _time: SystemTime,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -168,6 +171,8 @@ impl DatabaseService for MockDatabaseService {
     async fn db_demote_builder(
         &self,
         _builder_pub_key: &BlsPublicKey,
+        _block_hash:&Hash32,
+        _reason: String,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }

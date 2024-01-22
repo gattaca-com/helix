@@ -52,6 +52,6 @@ pub struct BlobsBundle {
 #[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct SignedBlockContents {
 	pub signed_block: SignedBeaconBlock,
-	pub kzgp_proofs: List<KzgProof, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
+	pub kzg_proofs: List<KzgProof, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
 	pub blobs: List<Blob, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
 }

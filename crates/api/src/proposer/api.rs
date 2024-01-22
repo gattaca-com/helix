@@ -285,7 +285,7 @@ where
         let mut trace = GetHeaderTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
         let head_slot = proposer_api.curr_slot.load(atomic::Ordering::Relaxed);
-        debug!(
+        info!(
             request_id = %request_id,
             event = "get_header",
             head_slot = head_slot,
@@ -318,7 +318,7 @@ where
             .get_best_bid(bid_request.slot, &bid_request.parent_hash, &bid_request.public_key)
             .await;
         trace.best_bid_fetched = get_nanos_timestamp()?;
-        debug!(request_id = %request_id, trace = ?trace, "best bid fetched");
+        info!(request_id = %request_id, trace = ?trace, "best bid fetched");
 
         match get_best_bid_res {
             Ok(Some(bid)) => {

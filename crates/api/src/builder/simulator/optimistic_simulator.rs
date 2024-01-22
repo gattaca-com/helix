@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use ethereum_consensus::primitives::{BlsPublicKey, U256};
+use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 use reqwest::Client;
 use tokio::sync::{mpsc::Sender, RwLock};
 use tracing::{debug, info, error, warn};
@@ -71,7 +71,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
                         err=%err,
                         "Block simulation resulted in an error. Demoting builder...",
                     );
-                    self.demote_builder_due_to_error(&request.message.builder_public_key).await;
+                    self.demote_builder_due_to_error(&request.message.builder_public_key, request.execution_payload.block_hash(), err.to_string()).await;
                 }
             }
             return Err(err);
@@ -83,7 +83,11 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
     /// Demotes a builder in the `auctioneer` and `db`.
     ///
     /// If demotion fails, the failsafe is triggered to halt all optimistic simulations.
-    async fn demote_builder_due_to_error(&self, builder_public_key: &BlsPublicKey) {
+    async fn demote_builder_due_to_error(&self,
+        builder_public_key: &BlsPublicKey,
+        block_hash: &Hash32,
+        reason: String,
+    ) {
         if let Err(err) = self.auctioneer.demote_builder(builder_public_key).await {
             *self.failsafe_triggered.write().await = true;
             error!(
@@ -93,7 +97,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             );
         }
 
-        if let Err(err) = self.db.db_demote_builder(builder_public_key).await {
+        if let Err(err) = self.db.db_demote_builder(builder_public_key, block_hash, reason).await {
             *self.failsafe_triggered.write().await = true;
             error!(
                 builder=%builder_public_key,
@@ -155,7 +159,7 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
         is_top_bid: bool,
         sim_result_saver_sender: Sender<DbInfo>,
         request_id: Uuid,
-    ) -> Result<(), BlockSimError> {
+    ) -> Result<bool, BlockSimError> {
         let builder_info = self.fetch_builder_info(&request).await;
 
         if self.should_process_optimistically(&request, &builder_info).await {
@@ -172,7 +176,7 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
                     .await
             });
 
-            Ok(())
+            Ok(true)
         } else {
             info!(
                 request_id=%request_id,
@@ -182,7 +186,9 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
                 request=?request.message,
                 "processing simulation request"
             );
-            self.handle_simulation(request, is_top_bid, sim_result_saver_sender, builder_info, request_id).await
+            self.handle_simulation(request, is_top_bid, sim_result_saver_sender, builder_info, request_id)
+            .await
+            .map(|_| false)
         }
     }
 }

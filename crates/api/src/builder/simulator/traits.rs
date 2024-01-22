@@ -14,5 +14,5 @@ pub trait BlockSimulator: Send + Sync + Clone {
         is_top_bid: bool,
         sim_result_saver_sender: Sender<DbInfo>,
         request_id: Uuid,
-    ) -> Result<(), BlockSimError>;
+    ) -> Result<bool, BlockSimError>;
 }

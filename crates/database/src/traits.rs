@@ -1,11 +1,11 @@
-use std::collections::HashSet;
+use std::time::SystemTime;
+use std::{alloc::System, collections::HashSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use ethereum_consensus::{
     primitives::{BlsPublicKey, Hash32},
     ssz::prelude::*,
-    types::mainnet::ExecutionPayload,
 };
 
 use helix_common::{
@@ -26,22 +26,27 @@ use crate::{
 
 #[async_trait]
 pub trait DatabaseService: Send + Sync + Clone {
+
     async fn save_validator_registration(
         &self,
         entry: ValidatorRegistrationInfo,
     ) -> Result<(), DatabaseError>;
+
     async fn save_validator_registrations(
         &self,
         entries: Vec<ValidatorRegistrationInfo>,
     ) -> Result<(), DatabaseError>;
+
     async fn get_validator_registration(
         &self,
         pub_key: BlsPublicKey,
     ) -> Result<SignedValidatorRegistrationEntry, DatabaseError>;
+
     async fn get_validator_registrations_for_pub_keys(
         &self,
         pub_keys: Vec<BlsPublicKey>,
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError>;
+
     async fn get_validator_registration_timestamp(
         &self,
         pub_key: BlsPublicKey,
@@ -51,6 +56,7 @@ pub trait DatabaseService: Send + Sync + Clone {
         &self,
         proposer_duties: Vec<BuilderGetValidatorsResponseEntry>,
     ) -> Result<(), DatabaseError>;
+
     async fn get_proposer_duties(
         &self,
     ) -> Result<Vec<BuilderGetValidatorsResponseEntry>, DatabaseError>;
@@ -86,12 +92,16 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn store_block_submission(
         &self,
         submission: Arc<SignedBidSubmission>,
+        trace: Arc<SubmissionTrace>,
+        optimistic_version: i16,
     ) -> Result<(), DatabaseError>;
 
-    async fn save_block_submission_trace(
+    async fn save_pending_block(
         &self,
-        block_hash: Hash32,
-        trace: SubmissionTrace,
+        block_hash: &Hash32,
+        builder_pub_key: &BlsPublicKey,
+        slot: u64,
+        time: SystemTime,
     ) -> Result<(), DatabaseError>;
 
     async fn store_builder_info(
@@ -99,12 +109,20 @@ pub trait DatabaseService: Send + Sync + Clone {
         builder_pub_key: &BlsPublicKey,
         builder_info: BuilderInfo,
     ) -> Result<(), DatabaseError>;
+
     async fn db_get_builder_info(
         &self,
         builder_pub_key: &BlsPublicKey,
     ) -> Result<BuilderInfo, DatabaseError>;
+
     async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError>;
-    async fn db_demote_builder(&self, builder_pub_key: &BlsPublicKey) -> Result<(), DatabaseError>;
+
+    async fn db_demote_builder(
+        &self,
+        builder_pub_key: &BlsPublicKey,
+        block_hash: &Hash32,
+        reason: String,
+    ) -> Result<(), DatabaseError>;
 
     async fn save_simulation_result(
         &self,
@@ -116,10 +134,12 @@ pub trait DatabaseService: Send + Sync + Clone {
         &self,
         filters: &BidFilters,
     ) -> Result<Vec<BidSubmissionDocument>, DatabaseError>;
+
     async fn get_delivered_payloads(
         &self,
         filters: &BidFilters,
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError>;
+
     async fn save_get_header_call(
         &self,
         slot: u64,
@@ -128,12 +148,14 @@ pub trait DatabaseService: Send + Sync + Clone {
         best_block_hash: ByteVector<32>,
         trace: GetHeaderTrace,
     ) -> Result<(), DatabaseError>;
+
     async fn save_failed_get_payload(
         &self,
         block_hash: ByteVector<32>,
         error: String,
         trace: GetPayloadTrace,
     ) -> Result<(), DatabaseError>;
+
     async fn store_header_submission(
         &self,
         submission: Arc<SignedHeaderSubmission>,
@@ -153,5 +175,6 @@ pub trait DatabaseService: Send + Sync + Clone {
     ) -> Result<(), DatabaseError>;
 
     async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, DatabaseError>;
+
     async fn remove_old_pending_blocks(&self) -> Result<(), DatabaseError>;
 }

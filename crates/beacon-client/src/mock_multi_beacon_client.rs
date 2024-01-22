@@ -12,7 +12,7 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Bytes32, Root},
 };
 use serde::{de::DeserializeOwned, Serialize};
-use helix_common::{ProposerDuty, ValidatorStatus, ValidatorSummary};
+use helix_common::{ProposerDuty, ValidatorStatus, ValidatorSummary, bellatrix::SimpleSerialize};
 use tokio::sync::mpsc::Sender;
 
 use crate::{
@@ -106,7 +106,7 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
         ))
     }
     async fn publish_block<
-    VersionedSignedProposal: Serialize + DeserializeOwned + Send + Sync + 'static,
+    VersionedSignedProposal: SimpleSerialize + Send + Sync + 'static,
     >(
         &self,
         _block: Arc<VersionedSignedProposal>,
