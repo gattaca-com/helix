@@ -9,7 +9,7 @@ use std::{
 use async_trait::async_trait;
 use ethereum_consensus::{phase0::Fork, primitives::Root};
 use futures::future::join_all;
-use helix_common::{ProposerDuty, ValidatorSummary, signed_proposal::VersionedSignedProposal};
+use helix_common::{ProposerDuty, ValidatorSummary, signed_proposal::VersionedSignedProposal, bellatrix::SimpleSerialize};
 use tokio::{sync::mpsc::Sender, task::JoinError};
 use tracing::error;
 
@@ -198,7 +198,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
     /// It will instantly return after the first successful response.
     ///
     /// Follows the spec: [Ethereum 2.0 Beacon APIs documentation](https://ethereum.github.io/beacon-APIs/#/ValidatorRequiredApi/publishBlock).
-    async fn publish_block<T: serde::Serialize + serde::de::DeserializeOwned + Send + Sync + 'static>(
+    async fn publish_block<T: Send + Sync + 'static + SimpleSerialize>(
         &self,
         block: Arc<T>,
         broadcast_validation: Option<BroadcastValidation>,
@@ -409,7 +409,7 @@ mod multi_beacon_client_tests {
         let multi_client = MultiBeaconClient::new(vec![client1, client2]);
         let result = multi_client
             .publish_block(
-                Arc::new(()),
+                Arc::new(VersionedSignedProposal::default()),
                 Some(BroadcastValidation::default()),
                 ethereum_consensus::Fork::Capella,
             )
@@ -426,7 +426,7 @@ mod multi_beacon_client_tests {
         let multi_client = MultiBeaconClient::new(vec![client1, client2]);
         let result = multi_client
             .publish_block(
-                Arc::new(()),
+                Arc::new(VersionedSignedProposal::default()),
                 Some(BroadcastValidation::default()),
                 ethereum_consensus::Fork::Capella,
             )

@@ -125,7 +125,7 @@ impl BeaconClientTrait for MockBeaconClient {
     }
 
     async fn publish_block<
-        SignedBeaconBlock: serde::Serialize + serde::de::DeserializeOwned + Send + Sync,
+        SignedBeaconBlock: Send + Sync + SimpleSerialize,
     >(
         &self,
         _block: Arc<SignedBeaconBlock>,

@@ -17,7 +17,7 @@ use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, ProposerDuty,
-    SignedValidatorRegistrationEntry, fork_info::ForkInfo, pending_block,
+    SignedValidatorRegistrationEntry, fork_info::ForkInfo, pending_block::PendingBlock,
 };
 
 use crate::error::HousekeeperError;
@@ -30,6 +30,9 @@ const BUILDER_INFO_UPDATE_FREQ: u64 = 1;
 const MIN_SLOTS_BETWEEN_UPDATES: u64 = 6;
 const MAX_SLOTS_BEFORE_FORCED_UPDATE: u64 = 32;
 pub const SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS: Duration = Duration::from_secs(6);
+
+// Max time between header and payload for OptimsiticV2 submissions
+const MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS: u64 = 2_000;
 
 /// Arc wrapped Housekeeper type for convenience
 type SharedHousekeeper<Database, BeaconClient, Auctioneer> =
@@ -49,7 +52,7 @@ pub struct Housekeeper<
     beacon_client: BeaconClient,
     auctioneer: A,
 
-    fork_info: Arc<ForkInfo>,
+    _fork_info: Arc<ForkInfo>,
 
     head_slot: Mutex<u64>,
 
@@ -71,7 +74,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             db,
             beacon_client,
             auctioneer,
-            fork_info,
+            _fork_info: fork_info,
             head_slot: Mutex::new(0),
             proposer_duties_slot: Mutex::new(0),
             proposer_duties_lock: Mutex::new(()),
@@ -269,27 +272,38 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     }
 
 
+    /// Handle valid payload Optimistic V2 demotions.
+    /// 
+    /// There are two cases where we might demote a builder here.
+    /// 1) They sent a header but we received no accompanying payload.
+    /// 2) The payload was received > 2 seconds after we received the header. 
+    /// 
+    /// DB entries are also removed if they have been waiting for over 45 seconds.
     async fn demote_builders_with_expired_pending_blocks(&self)-> Result<(), HousekeeperError> {
-
-        let pending_blocks= self.db.get_pending_blocks().await?;
+        let current_time = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64;
 
         let mut demoted_builders = HashSet::new();
 
-        for pending_block in pending_blocks {
-            if !demoted_builders.contains(&pending_block.builder_pubkey) {
-
-
-                let slot_time = self.fork_info.genesis_time_in_secs + (pending_block.slot * self.fork_info.seconds_per_slot);
-                let current_time = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
-
-                if current_time > (pending_block.timestamp + 1) && pending_block.timestamp < (slot_time - 1) {
-                    self.auctioneer.demote_builder(&pending_block.builder_pubkey).await?;
-                    self.db.db_demote_builder(&pending_block.builder_pubkey).await?;
-                    demoted_builders.insert(pending_block.builder_pubkey);
-                }
+        for pending_block in self.db.get_pending_blocks().await? {
+            if demoted_builders.contains(&pending_block.builder_pubkey) {
+                continue;
             }
+
+            let v2_submission_delay_ms = calculate_v2_submission_delay(&pending_block, current_time);
+            if v2_submission_delay_ms > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS  {
+                let reason = "builder demoted due to missing payload submission";
+                info!(builder_pub_key = ?pending_block.builder_pubkey, reason);
+                self.auctioneer.demote_builder(&pending_block.builder_pubkey).await?;
+                self.db.db_demote_builder(&pending_block.builder_pubkey, &pending_block.block_hash, reason.to_string()).await?;
+                demoted_builders.insert(pending_block.builder_pubkey);
+            }
+
         }
 
+        // Remove expired entries (entries that have been in the db for > 45s).
         self.db.remove_old_pending_blocks().await?;
 
         Ok(())
@@ -479,5 +493,22 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         let registrations: Vec<SignedValidatorRegistrationEntry> =
             self.db.get_validator_registrations_for_pub_keys(pub_keys).await?;
         Ok(registrations.into_iter().map(|entry| (entry.public_key().clone(), entry)).collect())
+    }
+}
+
+/// Calculates the delay in submission of the payload after a header.
+/// 
+/// Returns 0 if the payload was received before or at the same time as the header.
+/// Otherwise, returns the difference in milliseconds between
+/// payload receive and header receive. If no payload is received, the current
+/// time is used to calculate the delay.
+fn calculate_v2_submission_delay(pending_block: &PendingBlock, current_time: u64) -> u64 {
+    match (pending_block.header_receive_ms, pending_block.payload_receive_ms) {
+        (None, None) => 0,
+        (None, Some(_)) => 0,
+        (Some(header_receive_ms), None) => current_time - header_receive_ms,
+        (Some(header_receive_ms), Some(payload_receive_ms)) => {
+            payload_receive_ms.saturating_sub(header_receive_ms)
+        },
     }
 }

@@ -129,7 +129,7 @@ pub fn unblind_beacon_block(
             Ok(VersionedSignedProposal::Deneb(
                 SignedBlockContents {
                     signed_block: SignedBeaconBlock::Deneb(inner),
-                    kzgp_proofs: blobs_bundle.proofs.clone(),
+                    kzg_proofs: blobs_bundle.proofs.clone(),
                     blobs: blobs_bundle.blobs.clone(),
                 }
                 ))

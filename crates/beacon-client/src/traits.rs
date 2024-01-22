@@ -5,7 +5,7 @@ use ethereum_consensus::{phase0::Fork, primitives::Root};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::mpsc::Sender;
 
-use helix_common::{ProposerDuty, ValidatorSummary};
+use helix_common::{ProposerDuty, ValidatorSummary, bellatrix::SimpleSerialize};
 
 use crate::{
     error::BeaconClientError,
@@ -37,7 +37,7 @@ pub trait BeaconClientTrait: Send + Sync + Clone {
         &self,
         epoch: u64,
     ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError>;
-    async fn publish_block<VersionedSignedProposal: Serialize + DeserializeOwned + Send + Sync>(
+    async fn publish_block<VersionedSignedProposal: Send + Sync + SimpleSerialize>(
         &self,
         block: Arc<VersionedSignedProposal>,
         broadcast_validation: Option<BroadcastValidation>,
@@ -69,7 +69,7 @@ pub trait MultiBeaconClientTrait: Send + Sync + Clone {
         epoch: u64,
     ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError>;
     async fn publish_block<
-        VersionedSignedProposal: Serialize + DeserializeOwned + Send + Sync + 'static,
+        VersionedSignedProposal: Serialize + DeserializeOwned + Send + Sync + 'static + SimpleSerialize,
     >(
         &self,
         block: Arc<VersionedSignedProposal>,

@@ -41,15 +41,15 @@ use helix_common::{
         proposer_api::ValidatorRegistrationInfo,
     },
     bid_submission::{
-        v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission,
+        v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb}, BidSubmission, BidTrace, SignedBidSubmission,
     },
     HeaderSubmissionTrace, fork_info::ForkInfo, signing::RelaySigningContext, 
-    simulator::BlockSimError, SubmissionTrace, SignedBuilderBid, GossipedHeaderTrace, GossipedPayloadTrace, versioned_payload::PayloadAndBlobs,
+    simulator::BlockSimError, SubmissionTrace, SignedBuilderBid, GossipedHeaderTrace, GossipedPayloadTrace, versioned_payload::PayloadAndBlobs, capella,
 };
-use helix_utils::{calculate_withdrawals_root, has_reached_fork};
+use helix_utils::{calculate_withdrawals_root, has_reached_fork, try_decode_into};
 
 use crate::{
-    builder::{error::BuilderApiError, traits::BlockSimulator, BlockSimRequest, DbInfo},
+    builder::{error::BuilderApiError, traits::BlockSimulator, BlockSimRequest, DbInfo, OptimisticVersion},
     gossiper::{traits::GossipClientTrait, types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage}},
 };
 
@@ -181,10 +181,45 @@ where
             timestamp_request_start = trace.receive,
         );
 
+
+        // TODO TEMPORARY, remove again!
         // Decode the incoming request body into a payload
-        let (payload, is_cancellations_enabled) =
+        let (mut payload, is_cancellations_enabled) =
             decode_payload(req, &mut trace, &request_id).await?;
         let block_hash = payload.message().block_hash.clone();
+        let bid_trace = payload.bid_trace().clone();
+        let signature = payload.signature().clone();
+
+        match payload.execution_payload_mut() {
+            ethereum_consensus::types::ExecutionPayload::Capella(payload) => {
+                match capella::ExecutionPayloadHeader::try_from(payload) {
+                    Ok(header) => {
+                        info!(
+                            request_id = %request_id,
+                            event = "submit_block",
+                            head_slot = head_slot,
+                            timestamp_request_start = trace.receive,
+                            bid_trace = ?bid_trace,
+                            signature = ?signature,
+                            header = ?header,
+                            "payload decoded - detailed",
+                        );
+                    },
+                    Err(err) => {
+                        info!(
+                            request_id = %request_id,
+                            event = "submit_block",
+                            head_slot = head_slot,
+                            timestamp_request_start = trace.receive,
+                            error = %err,
+                            "payload decoded - detailed",
+                        );
+                    }
+                }
+            },
+            _ => {}
+        }
+        
 
         debug!(
             request_id = %request_id,
@@ -234,7 +269,7 @@ where
             }
         }
 
-        let payload = api.verify_submitted_block(
+        let (payload, was_simulated_optimistically) = api.verify_submitted_block(
             payload, 
             next_duty,
             &payload_attributes,
@@ -282,19 +317,17 @@ where
             "request finished"
         );
 
+        let optimistic_version = if was_simulated_optimistically {
+            OptimisticVersion::V1
+        } else {
+            OptimisticVersion::NotOptimistic
+        };
+
         // Save submission to db.
-        // TODO: combine both db saves in 1 db sender
         api.db_sender
-            .send(DbInfo::NewSubmission(payload.clone()))
+            .send(DbInfo::NewSubmission(payload.clone(), Arc::new(trace), optimistic_version))
             .await
             .map_err(|_| BuilderApiError::InternalError)?;
-
-        // Save latency trace to db
-        tokio::spawn(async move {
-            if let Err(err) = api.db.save_block_submission_trace(block_hash, trace).await {
-                error!(request_id = %request_id, error = %err, "failed to save submission trace");
-            }
-        });
 
         Ok(StatusCode::OK)
     }
@@ -329,6 +362,14 @@ where
             decode_header_submission(req, &mut trace, &request_id).await?;
         let block_hash = payload.block_hash().clone();
                 
+        // TODO TEMPORARY, remove again!
+        info!(
+            request_id = %request_id,
+            event = "header submission decoded - detailed",
+            head_slot = head_slot,
+            payload = ?payload,
+        );
+
         debug!(
             request_id = %request_id,
             builder_pub_key = ?payload.builder_public_key(),
@@ -476,6 +517,7 @@ where
             decode_payload(req, &mut trace, &request_id).await?;
 
         let builder_pub_key = payload.builder_public_key().clone();
+        let block_hash = payload.message().block_hash.clone();
         debug!(
             request_id = %request_id,
             builder_pub_key = ?builder_pub_key,
@@ -483,6 +525,11 @@ where
             block_hash = ?payload.block_hash(),
             "payload decoded",
         );
+
+        api.db_sender
+            .send(DbInfo::PayloadReceived{ block_hash: payload.block_hash().clone(), proposer_pubkey: payload.proposer_public_key().clone(), slot: payload.slot(), time: SystemTime::now() })
+            .await
+            .map_err(|_| BuilderApiError::InternalError)?;
 
         // submit_block_v2 can only be processed optimistically. 
         // Make sure that the builder has enough collateral to cover the submission.
@@ -509,7 +556,7 @@ where
             }
         }
 
-        let payload = match api.verify_submitted_block(
+        let (payload, _) = match api.verify_submitted_block(
             payload, 
             next_duty,
             &payload_attributes,
@@ -520,7 +567,7 @@ where
             Ok(val) => val,
             Err(err) => {
                 // Any invalid submission for optimistic v2 results in a demotion.
-                api.demote_builder(&builder_pub_key, &err, &request_id).await;
+                api.demote_builder(&builder_pub_key, &block_hash, &err, &request_id).await;
                 return Err(err);
             },
         };
@@ -536,12 +583,12 @@ where
             return Err(BuilderApiError::AuctioneerError(err));
         }
 
-        // Gossip payload
+        // Gossip to other relays
         api.gossip_payload(&payload, payload.payload_and_blobs(), &request_id).await;
-
-        // Save submission to db.
+        
+        // Gossip payload
         api.db_sender
-            .send(DbInfo::NewSubmission(payload.clone()))
+            .send(DbInfo::NewSubmission(payload.clone(), Arc::new(trace), OptimisticVersion::V2))
             .await
             .map_err(|_| BuilderApiError::InternalError)?;
 
@@ -798,7 +845,7 @@ where
         head_slot: u64,
         trace: &mut SubmissionTrace,
         request_id: &Uuid,
-    ) -> Result<Arc<SignedBidSubmission>, BuilderApiError> {
+    ) -> Result<(Arc<SignedBidSubmission>, bool), BuilderApiError> {
 
         if let Err(err) = sanity_check_block_submission(
             &payload,
@@ -822,9 +869,9 @@ where
 
         // Simulate the submission
         let payload = Arc::new(payload);
-        self.simulate_submission(payload.clone(), trace, next_duty.entry, &request_id).await?;
+        let was_simulated_optimistically = self.simulate_submission(payload.clone(), trace, next_duty.entry, &request_id).await?;
 
-        Ok(payload)
+        Ok((payload, was_simulated_optimistically))
     }
 
 
@@ -930,7 +977,7 @@ where
         trace: &mut SubmissionTrace,
         registration_info: ValidatorRegistrationInfo,
         request_id: &Uuid,
-    ) -> Result<(), BuilderApiError> {
+    ) -> Result<bool, BuilderApiError> {
         let mut is_top_bid = false;
         match self
             .auctioneer
@@ -958,25 +1005,35 @@ where
             .simulator
             .process_request(sim_request, is_top_bid, self.db_sender.clone(), *request_id)
             .await;
-        if let Err(err) = result {
-            return match &err {
-                BlockSimError::BlockValidationFailed(reason) => {
-                    warn!(request_id = %request_id, error = %reason, "block validation failed");
-                    Err(BuilderApiError::BlockValidationError(err))
-                }
-                _ => {
-                    error!(request_id = %request_id, error = %err, "error simulating block");
-                    Err(BuilderApiError::InternalError)
-                }
-            };
-        } else {
-            info!(request_id = %request_id, "block simulation successful");
+
+        match result {
+
+            Ok(sim_optimistic) => {
+
+                info!(request_id = %request_id, "block simulation successful");
+
+                trace.simulation = get_nanos_timestamp()?;
+                debug!(request_id = %request_id, sim_latency = trace.simulation - trace.signature);
+
+                Ok(sim_optimistic)
+
+            },
+
+            Err(err) => {
+
+                return match &err {
+                    BlockSimError::BlockValidationFailed(reason) => {
+                        warn!(request_id = %request_id, error = %reason, "block validation failed");
+                        Err(BuilderApiError::BlockValidationError(err))
+                    }
+                    _ => {
+                        error!(request_id = %request_id, error = %err, "error simulating block");
+                        Err(BuilderApiError::InternalError)
+                    }
+                };
+            }
+            
         }
-
-        trace.simulation = get_nanos_timestamp()?;
-        debug!(request_id = %request_id, sim_latency = trace.simulation - trace.signature);
-
-        Ok(())
     }
 
     async fn save_bid_to_auctioneer(
@@ -1184,7 +1241,13 @@ where
         Ok(())
     }
 
-    async fn demote_builder(&self, builder_pub_key: &BlsPublicKey, err: &BuilderApiError, request_id: &Uuid) {
+    async fn demote_builder(
+        &self,
+        builder_pub_key: &BlsPublicKey,
+        block_hash: &Hash32,
+        err: &BuilderApiError,
+        request_id: &Uuid,
+    ) {
         error!(
             request_id = %request_id, 
             error = %err, 
@@ -1201,7 +1264,7 @@ where
             );
         }
 
-        if let Err(err) = self.db.db_demote_builder(builder_pub_key).await {
+        if let Err(err) = self.db.db_demote_builder(builder_pub_key, block_hash, err.to_string()).await {
             error!(
                 builder=%builder_pub_key,
                 err=%err,
@@ -1425,20 +1488,36 @@ pub async fn decode_header_submission(
         });
     }
 
-    // Decode header
-    let header: SignedHeaderSubmission = if is_ssz {
-        match ssz::prelude::deserialize(&body_bytes) {
-            Ok(header) => header,
-            Err(err) => {
-                // Fallback to JSON
-                warn!(request_id = %request_id, error = %err, "Failed to decode header using SSZ; falling back to JSON");
-                serde_json::from_slice(&body_bytes)?
-            }
-        }
-    } else {
-        serde_json::from_slice(&body_bytes)?
-    };
+    let header: Option<SignedHeaderSubmission>;
 
+    // Decode header (SSZ or JSON)
+    //TODO - this first tries to decode into a capella header, then a deneb header.
+    //TODO - once Deneb is live, we can remove the capella header decoding.
+    let capella_header: Option<SignedHeaderSubmissionCapella>;
+    let mut deneb_header: Option<SignedHeaderSubmissionDeneb> = None;
+
+    capella_header = try_decode_into(is_ssz, &body_bytes, true);
+    if capella_header.is_none() {
+        deneb_header = try_decode_into(is_ssz, &body_bytes, true);
+    }
+
+    if let Some(capella_header) = capella_header {
+        header = Some(SignedHeaderSubmission::Capella(capella_header));
+    } else if let Some(deneb_header) = deneb_header {
+        header = Some(SignedHeaderSubmission::Deneb(deneb_header));
+    } else {
+        let err = BuilderApiError::FailedToDecodeHeaderSubmission;
+        warn!(request_id = %request_id, error = %err, "Failed to decode header");
+        return Err(err);
+    }
+
+    if header.is_none() {
+        let err = BuilderApiError::FailedToDecodeHeaderSubmission;
+        warn!(request_id = %request_id, error = %err, "Failed to decode header");
+        return Err(err);
+    }
+
+    let header = header.unwrap();    
     trace.decode = get_nanos_timestamp()?;
     info!(
         request_id = %request_id,
@@ -1451,7 +1530,7 @@ pub async fn decode_header_submission(
         value = ?header.value(),
     );
 
-    Ok((header, is_cancellations_enabled))
+    Ok((header, is_cancellations_enabled))    
 }
 
 /// - Validates the slot timing against the current head slot.
@@ -1581,8 +1660,8 @@ async fn process_db_additions<DB: DatabaseService + 'static>(
 ) {
     while let Some(db_info) = db_receiver.recv().await {
         match db_info {
-            DbInfo::NewSubmission(submission) => {
-                if let Err(err) = db.store_block_submission(submission).await {
+            DbInfo::NewSubmission(submission, trace, version) => {
+                if let Err(err) = db.store_block_submission(submission, trace, version as i16).await {
                     error!(
                         error = %err,
                         "failed to store block submission",
@@ -1594,6 +1673,14 @@ async fn process_db_additions<DB: DatabaseService + 'static>(
                     error!(
                         error = %err,
                         "failed to store header submission",
+                    )
+                }
+            },
+            DbInfo::PayloadReceived{ block_hash, proposer_pubkey, slot, time } => {
+                if let Err(err) = db.save_pending_block(&block_hash, &proposer_pubkey, slot, time).await {
+                    error!(
+                        error = %err,
+                        "failed to store payload received",
                     )
                 }
             },
@@ -1921,21 +2008,6 @@ mod tests {
                 println!("THIS IS THE ERR: {:?}", err);
             }
         }
-    }
-
-    #[tokio::test]
-    async fn test_decode_ssz_payload_gzip() {
-        let ssz_payload = vec![];
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(&ssz_payload).unwrap();
-        let compressed_payload = encoder.finish().unwrap();
-
-        let req = build_test_request(compressed_payload, true, true).await;
-        let mut trace = create_test_submission_trace().await;
-        let request_id = create_test_uuid().await;
-
-        let result = decode_payload(req, &mut trace, &request_id).await.unwrap();
-        assert!(!result.1); // Assert that cancellations are enabled
     }
 
     #[tokio::test]

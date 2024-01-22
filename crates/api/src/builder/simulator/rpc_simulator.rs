@@ -83,7 +83,7 @@ impl BlockSimulator for RpcSimulator {
         is_top_bid: bool,
         sim_result_saver_sender: Sender<DbInfo>,
         request_id: Uuid,
-    ) -> Result<(), BlockSimError> {
+    ) -> Result<bool, BlockSimError> {
         let block_hash = request.execution_payload.block_hash().clone();
         debug!(
             request_id = %request_id,
@@ -104,7 +104,7 @@ impl BlockSimulator for RpcSimulator {
                     .await
                     .map_err(|_| BlockSimError::SendError)?;
 
-                result
+                result.map(|_| false)
             }
             Err(err) => {
                 error!(request_id = %request_id, err = ?err, "Error sending RPC request");

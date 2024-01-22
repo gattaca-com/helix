@@ -21,6 +21,9 @@ pub enum BuilderApiError {
     #[error("ssz deserialize error: {0}")]
     SszDeserializeError(#[from] ssz::prelude::DeserializeError),
 
+    #[error("failed to decode header-submission")]
+    FailedToDecodeHeaderSubmission,
+
     #[error("payload too large. max size: {max_size}, size: {size}")]
     PayloadTooLarge { max_size: usize, size: usize },
 
@@ -116,6 +119,9 @@ impl IntoResponse for BuilderApiError {
             },
             BuilderApiError::SszDeserializeError(err) => {
                 (StatusCode::BAD_REQUEST, format!("SSZ deserialize error: {err}")).into_response()
+            },
+            BuilderApiError::FailedToDecodeHeaderSubmission => {
+                (StatusCode::BAD_REQUEST, "Failed to decode header submission").into_response()
             },
             BuilderApiError::HyperError(err) => {
                 (StatusCode::BAD_REQUEST, format!("Hyper error: {err}")).into_response()

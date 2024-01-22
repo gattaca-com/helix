@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use deadpool_redis::{Config, CreatePoolError, Pool, Runtime};
 use ethereum_consensus::{
     primitives::{BlsPublicKey, Hash32},
-    ssz::prelude::*, types::mainnet::ExecutionPayload,
+    ssz::prelude::*,
 };
 use helix_common::{bid_submission::BidSubmission, versioned_payload::PayloadAndBlobs};
 use helix_common::bid_submission::v2::header_submission::SignedHeaderSubmission;
@@ -110,6 +110,7 @@ impl RedisCache {
         Ok(Some(deserialized_entries))
     }
 
+    #[allow(dead_code)]
     async fn lrange<T: DeserializeOwned>(
         &self,
         key: &str,
@@ -154,6 +155,7 @@ impl RedisCache {
         Ok(conn.hset(key, field, str_val).await?)
     }
 
+    #[allow(dead_code)]
     async fn rpush(&self, key: &str, value: &impl Serialize) -> Result<(), RedisCacheError> {
         let mut conn = self.pool.get().await?;
         let str_val = serde_json::to_string(value)?;
@@ -165,6 +167,7 @@ impl RedisCache {
         Ok(conn.hdel(key, field).await?)
     }
 
+    #[allow(dead_code)]
     async fn clear_key(&self, key: &str) -> Result<(), RedisCacheError> {
         let mut conn = self.pool.get().await?;
         Ok(conn.del(key).await?)
@@ -736,7 +739,7 @@ impl Auctioneer for RedisCache {
         // Save builder bid and update top bid/ floor keys if possible.
         self.save_signed_builder_bid_and_update_top_bid(
             &builder_bid, 
-            &submission.message.bid_trace,
+            submission.bid_trace(),
             received_at, 
             cancellations_enabled, 
             floor_value, 
@@ -1010,8 +1013,8 @@ mod tests {
         assert!(state.was_top_bid_updated, "Top bid should be updated");
 
         // Test the Redis cache
-        let key_top_bid = get_top_bid_value_key(slot, &parent_hash, &proposer_pub_key);
-        let mut conn = cache.pool.get().await.unwrap();
+        let _key_top_bid = get_top_bid_value_key(slot, &parent_hash, &proposer_pub_key);
+        let mut _conn = cache.pool.get().await.unwrap();
 
         let cache_value =
             cache.get_top_bid_value(slot, &parent_hash, &proposer_pub_key).await.unwrap();
@@ -1162,7 +1165,7 @@ mod tests {
 
         let mut capella_payload = capella::ExecutionPayload::default();
         capella_payload.gas_limit = 999;
-        let versioned_execution_payload = PayloadAndBlobs { execution_payload: ExecutionPayload::Capella(capella_payload), blobs_bundle: None };
+        let versioned_execution_payload = PayloadAndBlobs { execution_payload: ethereum_consensus::types::mainnet::ExecutionPayload::Capella(capella_payload), blobs_bundle: None };
 
         // Save the execution payload
         let save_result = cache
