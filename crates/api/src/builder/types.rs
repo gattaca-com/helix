@@ -15,7 +15,7 @@ pub const PATH_SUBMIT_HEADER: &str = "/headers";
 pub enum DbInfo {
     NewSubmission(Arc<SignedBidSubmission>, Arc<SubmissionTrace>, OptimisticVersion),
     NewHeaderSubmission(Arc<SignedHeaderSubmission>, Arc<HeaderSubmissionTrace>),
-    PayloadReceived{ block_hash: ByteVector<32>, proposer_pubkey: BlsPublicKey, slot: u64, time: SystemTime },
+    PayloadReceived{ block_hash: ByteVector<32>, builder_pubkey: BlsPublicKey, slot: u64, time: SystemTime },
     GossipedHeader { block_hash: ByteVector<32>, trace: Arc<GossipedHeaderTrace> },
     GossipedPayload { block_hash: ByteVector<32>, trace: Arc<GossipedPayloadTrace> },
     SimulationResult { block_hash: ByteVector<32>, block_sim_result: Result<(), BlockSimError> },
