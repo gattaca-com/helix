@@ -46,7 +46,7 @@ auto_impl.workspace = true
 rand = "0.8"
 thiserror = { workspace = true }
 tracing = { workspace = true }
-uuid = { version = "1.5", features = ["fast-rng"] }
+uuid = { version = "1.5", features = ["fast-rng", "v4"] }
 bytes = "1.5"
 
 [build-dependencies]
