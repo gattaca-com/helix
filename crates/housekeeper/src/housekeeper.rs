@@ -34,6 +34,9 @@ pub const SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS: Duration = Duration::from
 // Max time between header and payload for OptimsiticV2 submissions
 const MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS: u64 = 2_000;
 
+// Max time to wait for payload after header is received for OptimsiticV2 submissions
+const MAX_DELAY_WITH_NO_V2_PAYLOAD_MS: u64 = 20_000;
+
 /// Arc wrapped Housekeeper type for convenience
 type SharedHousekeeper<Database, BeaconClient, Auctioneer> =
     Arc<Housekeeper<Database, BeaconClient, Auctioneer>>;
@@ -292,8 +295,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
                 continue;
             }
 
-            let v2_submission_delay_ms = calculate_v2_submission_delay(&pending_block, current_time);
-            if v2_submission_delay_ms > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS  {
+            if v2_submission_late(&pending_block, current_time)  {
                 let reason = "builder demoted due to missing payload submission";
                 info!(builder_pub_key = ?pending_block.builder_pubkey, reason);
                 self.auctioneer.demote_builder(&pending_block.builder_pubkey).await?;
@@ -498,17 +500,15 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
 /// Calculates the delay in submission of the payload after a header.
 /// 
-/// Returns 0 if the payload was received before or at the same time as the header.
-/// Otherwise, returns the difference in milliseconds between
-/// payload receive and header receive. If no payload is received, the current
-/// time is used to calculate the delay.
-fn calculate_v2_submission_delay(pending_block: &PendingBlock, current_time: u64) -> u64 {
+/// Returns true if the payload was received over 2 seconds after the header or if the payload was never received.
+/// Otherwise, returns false.
+fn v2_submission_late(pending_block: &PendingBlock, current_time: u64) -> bool {
     match (pending_block.header_receive_ms, pending_block.payload_receive_ms) {
-        (None, None) => 0,
-        (None, Some(_)) => 0,
-        (Some(header_receive_ms), None) => current_time - header_receive_ms,
+        (None, None) => false,
+        (None, Some(_)) => false,
+        (Some(header_receive_ms), None) => (current_time - header_receive_ms) > MAX_DELAY_WITH_NO_V2_PAYLOAD_MS,
         (Some(header_receive_ms), Some(payload_receive_ms)) => {
-            payload_receive_ms.saturating_sub(header_receive_ms)
+            payload_receive_ms.saturating_sub(header_receive_ms) > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
         },
     }
 }
