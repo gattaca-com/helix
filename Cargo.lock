@@ -2444,7 +2444,6 @@ dependencies = [
  "auto_impl",
  "axum",
  "bytes",
- "clap",
  "ethereum-consensus",
  "flate2",
  "helix-beacon-client",

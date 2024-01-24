@@ -43,7 +43,6 @@ mockito.workspace = true
 
 # Misc
 auto_impl.workspace = true
-clap = { version = "4.3", features = ["derive"] }
 rand = "0.8"
 thiserror = { workspace = true }
 tracing = { workspace = true }
