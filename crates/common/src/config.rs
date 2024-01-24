@@ -1,6 +1,6 @@
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use std::{fs, collections::HashSet};
+use std::{fs::File, collections::HashSet};
 use helix_utils::request_encoding::Encoding;
 use crate::api::proposer_api::ValidatorPreferences;
 
@@ -28,8 +28,8 @@ pub struct RelayConfig {
 impl RelayConfig {
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
         let start_config = StartConfig::parse();
-        let config_str = fs::read_to_string(start_config.config)?;
-        let config: RelayConfig = serde_yaml::from_str(&config_str)?;
+        let file = File::open(start_config.config)?;
+        let config: RelayConfig = serde_yaml::from_reader(file)?;
         Ok(config)
     }
 }
