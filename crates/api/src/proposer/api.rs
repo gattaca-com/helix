@@ -75,7 +75,7 @@ where
 
     curr_slot: Arc<AtomicU64>,
 
-    fork_info: Arc<ChainInfo>,
+    chain_info: Arc<ChainInfo>,
     next_proposer_duty: Arc<RwLock<Option<BuilderGetValidatorsResponseEntry>>>,
     validator_preferences: Arc<ValidatorPreferences>,
 }
@@ -91,7 +91,7 @@ where
         db: Arc<DB>,
         broadcasters: Vec<Arc<BlockBroadcaster>>,
         multi_beacon_client: Arc<M>,
-        fork_info: Arc<ChainInfo>,
+        chain_info: Arc<ChainInfo>,
         slot_update_subscription: Sender<Sender<ChainUpdate>>,
         validator_preferences: Arc<ValidatorPreferences>,
     ) -> Self {
@@ -101,7 +101,7 @@ where
             broadcasters,
             multi_beacon_client,
             curr_slot: Arc::new(AtomicU64::new(0)),
-            fork_info,
+            chain_info,
             next_proposer_duty: Arc::new(RwLock::new(None)),
             validator_preferences,
         };
@@ -445,8 +445,8 @@ where
         if let Err(err) = self.verify_signed_blinded_block_signature(
             &mut signed_blinded_block,
             &proposer_public_key,
-            self.fork_info.genesis_validators_root,
-            &self.fork_info.context,
+            self.chain_info.genesis_validators_root,
+            &self.chain_info.context,
         ) {
             warn!(request_id = %request_id, error = %err, "invalid signature");
             return Err(ProposerApiError::InvalidSignature(err));
@@ -616,7 +616,7 @@ where
         // to allow the block to propagate through the network.
         let elapsed_since_propagate_start_ms = (get_nanos_timestamp()? - trace.beacon_client_broadcast) / 1_000_000;
         let remaining_sleep_ms = TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS.saturating_sub(elapsed_since_propagate_start_ms);
-        if remaining_sleep_ms > 0 && matches!(self.fork_info.network, Network::Mainnet) {
+        if remaining_sleep_ms > 0 && matches!(self.chain_info.network, Network::Mainnet) {
             sleep(Duration::from_millis(remaining_sleep_ms)).await;
         }
 
@@ -648,7 +648,7 @@ where
             message,
             &registration.signature,
             public_key,
-            &self.fork_info.context,
+            &self.chain_info.context,
         ) {
             return Err(ProposerApiError::InvalidSignature(err));
         }
@@ -668,10 +668,10 @@ where
         let registration_timestamp_upper_bound =
             (get_current_unix_time_in_nanos() / 1_000_000_000) as i64 + 10;
 
-        if registration_timestamp < self.fork_info.genesis_time_in_secs as i64 {
+        if registration_timestamp < self.chain_info.genesis_time_in_secs as i64 {
             return Err(ProposerApiError::TimestampTooEarly {
                 timestamp: registration_timestamp as u64,
-                min_timestamp: self.fork_info.genesis_time_in_secs,
+                min_timestamp: self.chain_info.genesis_time_in_secs,
             });
         } else if registration_timestamp > registration_timestamp_upper_bound {
             return Err(ProposerApiError::TimestampTooFarInTheFuture {
@@ -688,8 +688,8 @@ where
     /// - Only allows requests for the current slot until a certain cutoff time.
     fn validate_bid_request_time(&self, bid_request: &BidRequest) -> Result<(), ProposerApiError> {
         let curr_timestamp_ms = get_millis_timestamp()? as i64;
-        let slot_start_timestamp = self.fork_info.genesis_time_in_secs
-            + (bid_request.slot * self.fork_info.seconds_per_slot);
+        let slot_start_timestamp = self.chain_info.genesis_time_in_secs
+            + (bid_request.slot * self.chain_info.seconds_per_slot);
         let ms_into_slot = curr_timestamp_ms - (slot_start_timestamp * 1000) as i64;
 
         if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {
@@ -861,7 +861,7 @@ where
     ) -> Result<PayloadAndBlobs, ProposerApiError> {
         const RETRY_DELAY: Duration = Duration::from_millis(20);
 
-        let slot_time = self.fork_info.genesis_time_in_secs + (slot * self.fork_info.seconds_per_slot);
+        let slot_time = self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot);
         let slot_cutoff_millis = (slot_time * 1000) + GET_PAYLOAD_REQUEST_CUTOFF_MS as u64;
 
         let mut last_error: Option<ProposerApiError> = None;
@@ -892,7 +892,7 @@ where
         request_id: &Uuid,
     ) -> Result<(), ProposerApiError> {
         let (ms_into_slot, duration_until_slot_start) = calculate_slot_time_info(
-            &self.fork_info,
+            &self.chain_info,
             signed_blinded_block.message().slot(),
             request_time,
         );
@@ -1028,12 +1028,12 @@ where
 /// Calculates the time information for a given slot.
 ///
 /// Returns a tuple containing the milliseconds into the slot and the duration until the slot starts.
-fn calculate_slot_time_info(fork_info: &ChainInfo, slot: u64, request_time: u64) -> (i64, Duration) {
+fn calculate_slot_time_info(chain_info: &ChainInfo, slot: u64, request_time: u64) -> (i64, Duration) {
     let slot_start_timestamp_in_secs =
-        fork_info.genesis_time_in_secs + (slot * fork_info.seconds_per_slot);
+        chain_info.genesis_time_in_secs + (slot * chain_info.seconds_per_slot);
     let ms_into_slot =
         (request_time / 1_000_000) as i64 - (slot_start_timestamp_in_secs * 1000) as i64;
-    let duration_until_slot_start = fork_info.clock.duration_until_slot(slot);
+    let duration_until_slot_start = chain_info.clock.duration_until_slot(slot);
 
     (ms_into_slot, duration_until_slot_start)
 }

@@ -41,7 +41,7 @@ impl ApiService {
         }
         let multi_beacon_client = Arc::new(MultiBeaconClient::<BeaconClient>::new(beacon_clients));
 
-        let fork_info = Arc::new(match config.fork_info {
+        let chain_info = Arc::new(match config.network_config {
             NetworkConfig::Mainnet => ChainInfo::for_mainnet(),
             NetworkConfig::Goerli => ChainInfo::for_goerli(),
             NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
@@ -51,7 +51,7 @@ impl ApiService {
         // Housekeeper should only be run on one instance.
         if config.run_housekeeper {
             let housekeeper =
-                Housekeeper::new(db.clone(), multi_beacon_client.clone(), auctioneer.clone(), fork_info.clone());
+                Housekeeper::new(db.clone(), multi_beacon_client.clone(), auctioneer.clone(), chain_info.clone());
             tokio::task::spawn(async move {
                 loop {
                     if let Err(err) = housekeeper.start().await {
@@ -71,7 +71,7 @@ impl ApiService {
         let relay_signing_context = Arc::new(RelaySigningContext {
             signing_key,
             public_key,
-            context: fork_info.context.clone(),
+            context: chain_info.context.clone(),
         });
 
         let simulator = OptimisticSimulator::<RedisCache, PostgresDatabaseService>::new(
@@ -102,7 +102,7 @@ impl ApiService {
         let builder_api = Arc::new(BuilderApiProd::new(
             auctioneer.clone(),
             db.clone(),
-            fork_info.clone(),
+            chain_info.clone(),
             simulator,
             gossiper.clone(),
             relay_signing_context,
@@ -117,7 +117,7 @@ impl ApiService {
             db.clone(),
             broadcasters,
             multi_beacon_client.clone(),
-            fork_info.clone(),
+            chain_info.clone(),
             slot_update_sender,
             Arc::new(config.validator_preferences.clone()),
         ));

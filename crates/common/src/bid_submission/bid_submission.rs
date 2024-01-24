@@ -129,8 +129,8 @@ impl BidSubmission for SignedBidSubmission {
         self.execution_payload().extra_data()
     }
 
-    fn base_fee_per_gas(&self) -> &U256 {
-        self.execution_payload().base_fee_per_gas()
+    fn base_fee_per_gas(&self) -> U256 {
+        *self.execution_payload().base_fee_per_gas()
     }
 
     fn withdrawals(&self) -> Option<&[Withdrawal]> {

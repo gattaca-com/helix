@@ -16,7 +16,7 @@ pub struct RelayConfig {
     #[serde(default)]
     pub relays: Vec<RelayGossipConfig>,
     #[serde(default)]
-    pub fork_info: NetworkConfig,
+    pub network_config: NetworkConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
@@ -180,7 +180,7 @@ fn test_config() {
     config.simulator.url = "http://localhost:8080".to_string();
     config.beacon_clients.push(BeaconClientConfig { url: "http://localhost:8080".to_string() });
     config.broadcasters.push(BroadcasterConfig::BeaconClient(BeaconClientConfig { url: "http://localhost:8080".to_string() }));
-    config.fork_info = NetworkConfig::Mainnet;
+    config.network_config = NetworkConfig::Mainnet;
     config.logging =
         LoggingConfig::File { dir_path: "hello".to_string(), file_name: "test".to_string() };
     config.validator_preferences = ValidatorPreferences { censoring: true };

@@ -65,7 +65,7 @@ where
 {
     auctioneer: Arc<A>,
     db: Arc<DB>,
-    fork_info: Arc<ChainInfo>,
+    chain_info: Arc<ChainInfo>,
     simulator: S,
     gossiper: Arc<G>,
     signing_context: Arc<RelaySigningContext>,
@@ -88,7 +88,7 @@ where
     pub fn new(
         auctioneer: Arc<A>,
         db: Arc<DB>,
-        fork_info: Arc<ChainInfo>,
+        chain_info: Arc<ChainInfo>,
         simulator: S,
         gossiper: Arc<G>,
         signing_context: Arc<RelaySigningContext>,
@@ -106,7 +106,7 @@ where
         let api = Self {
             auctioneer,
             db,
-            fork_info,
+            chain_info,
             simulator,
             gossiper,
             signing_context,
@@ -362,7 +362,7 @@ where
             &next_duty,
             head_slot,
             &payload_attributes,
-            &api.fork_info,
+            &api.chain_info,
         ) {
             warn!(request_id = %request_id, error = %err, "failed sanity check");
             return Err(err);
@@ -370,7 +370,7 @@ where
         trace.pre_checks = get_nanos_timestamp()?;
 
         // Verify the payload signature
-        if let Err(err) = payload.verify_signature(&api.fork_info.context) {
+        if let Err(err) = payload.verify_signature(&api.chain_info.context) {
             warn!(request_id = %request_id, error = %err, "failed to verify signature");
             return Err(BuilderApiError::SignatureVerificationFailed);
         }
@@ -812,7 +812,7 @@ where
             &next_duty,
             head_slot,
             payload_attributes,
-            &self.fork_info,
+            &self.chain_info,
         ) {
             warn!(request_id = %request_id, error = %err, "failed sanity check");
             return Err(err);
@@ -820,7 +820,7 @@ where
         trace.pre_checks = get_nanos_timestamp()?;
 
         // Verify the payload signature
-        if let Err(err) = payload.verify_signature(&self.fork_info.context) {
+        if let Err(err) = payload.verify_signature(&self.chain_info.context) {
             warn!(request_id = %request_id, error = %err, "failed to verify signature");
             return Err(BuilderApiError::SignatureVerificationFailed);
         }
@@ -1504,7 +1504,7 @@ fn sanity_check_block_submission(
     next_duty: &BuilderGetValidatorsResponseEntry,
     head_slot: u64,
     payload_attributes: &PayloadAttributesUpdate,
-    fork_info: &ChainInfo,
+    chain_info: &ChainInfo,
 ) -> Result<(), BuilderApiError> {
     if payload.slot() <= head_slot {
         return Err(BuilderApiError::SubmissionForPastSlot {
@@ -1514,7 +1514,7 @@ fn sanity_check_block_submission(
     }
 
     let expected_timestamp =
-        fork_info.genesis_time_in_secs + (bid_trace.slot * SECONDS_PER_SLOT);
+        chain_info.genesis_time_in_secs + (bid_trace.slot * SECONDS_PER_SLOT);
     if payload.timestamp() != expected_timestamp {
         return Err(BuilderApiError::IncorrectTimestamp {
             got: payload.timestamp(),
