@@ -80,10 +80,9 @@ mod simulator_tests {
                 signature: BlsSignature::default(),
             }
         );
-        let sim_req =
-            BlockSimRequest::new( 0, Arc::new(signed_bid_submission), ValidatorPreferences::default());
+        
 
-        sim_req
+        BlockSimRequest::new( 0, Arc::new(signed_bid_submission), ValidatorPreferences::default())
     }
 
     // ++++ TESTS ++++

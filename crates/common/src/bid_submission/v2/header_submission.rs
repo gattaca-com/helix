@@ -11,55 +11,25 @@ use helix_utils::signing::compute_builder_signing_root;
 use crate::{bid_submission::{BidTrace, BidSubmission}, versioned_payload_header::VersionedExecutionPayloadHeader, deneb::{BlobsBundle, self}, capella};
 
 
-#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
 pub struct HeaderSubmission {
     pub bid_trace: BidTrace,
     #[serde(flatten)]
     pub versioned_execution_payload: VersionedExecutionPayloadHeader,
 }
 
-#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
 pub struct HeaderSubmissionCapella {
     pub bid_trace: BidTrace,
     pub execution_payload_header: capella::ExecutionPayloadHeader,
 }
 
-impl Default for HeaderSubmissionCapella {
-    fn default() -> Self {
-        Self {
-            bid_trace: BidTrace::default(),
-            execution_payload_header: capella::ExecutionPayloadHeader::default(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
 pub struct HeaderSubmissionDeneb {
     pub bid_trace: BidTrace,
     pub execution_payload_header: deneb::ExecutionPayloadHeader,
     pub blobs_bundle: BlobsBundle,
 }
-
-impl Default for HeaderSubmissionDeneb {
-    fn default() -> Self {
-        Self {
-            bid_trace: BidTrace::default(),
-            execution_payload_header: deneb::ExecutionPayloadHeader::default(),
-            blobs_bundle: BlobsBundle::default(),
-        }
-    }
-}
-
-impl Default for HeaderSubmission {
-    fn default() -> Self {
-        Self {
-            bid_trace: BidTrace::default(),
-            versioned_execution_payload: VersionedExecutionPayloadHeader::default(),
-        }
-    }
-}
-
-
 
 #[derive(Clone, Debug, SimpleSerialize, serde::Serialize, serde::Deserialize)]
 pub enum SignedHeaderSubmission {
@@ -219,7 +189,7 @@ impl SignedHeaderSubmission {
     pub fn verify_signature(&mut self, context: &ethereum_consensus::state_transition::Context) -> Result<(), ethereum_consensus::Error> {
         let signing_root = compute_builder_signing_root(self.bid_trace_mut(), context)?;
         let public_key = &self.bid_trace().builder_public_key;
-        verify_signature(public_key, signing_root.as_ref(), &self.signature())
+        verify_signature(public_key, signing_root.as_ref(), self.signature())
     }
 
     pub fn execution_payload_header(&self) -> ExecutionPayloadHeader {

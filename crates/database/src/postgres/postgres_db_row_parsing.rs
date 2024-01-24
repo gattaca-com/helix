@@ -274,7 +274,7 @@ pub fn parse_timestamptz_to_u64_ms(timestamp: std::time::SystemTime) -> Result<u
 
 pub fn parse_optional_timestamptz_to_u64_ms(timestamp: Option<std::time::SystemTime>) -> Result<Option<u64>, DatabaseError> {
     match timestamp {
-        Some(timestamp) => parse_timestamptz_to_u64_ms(timestamp).map(|timestamp| Some(timestamp)),
+        Some(timestamp) => parse_timestamptz_to_u64_ms(timestamp).map(Some),
         None => Ok(None),
     }
 }

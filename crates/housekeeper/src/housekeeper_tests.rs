@@ -55,7 +55,7 @@ mod housekeeper_tests {
         housekeeper: Arc<Housekeeper<MockDatabaseService, MockMultiBeaconClient, MockAuctioneer>>,
     ) {
         task::spawn(async move {
-            let _ = housekeeper.start().await.unwrap();
+            housekeeper.start().await.unwrap();
         });
     }
 

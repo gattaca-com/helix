@@ -4,42 +4,36 @@ use ethereum_consensus::crypto::SecretKey;
 use ethereum_consensus::signing::compute_signing_root;
 use rand::thread_rng;
 use helix_common::chain_info::ChainInfo;
-use crate::proposer::PATH_REGISTER_VALIDATORS;
+
 
 #[cfg(test)]
 mod proposer_api_tests {
     // +++ IMPORTS +++
     use crate::{
-        builder::mock_simulator::MockSimulator,
-        builder::{
-            api::{BuilderApi, MAX_PAYLOAD_LENGTH},
-            PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK,
-        },
-        test_utils::{builder_api_app, proposer_api_app}, proposer::{api::{ProposerApi, get_nanos_timestamp}, PATH_PROPOSER_API, PATH_GET_HEADER, GetHeaderParams, PATH_GET_PAYLOAD},
+        test_utils::{proposer_api_app}, proposer::{api::{ProposerApi, get_nanos_timestamp}, PATH_PROPOSER_API, PATH_GET_PAYLOAD},
     };
-    use core::panic;
+    
     use ethereum_consensus::{
         builder::{SignedValidatorRegistration, ValidatorRegistration},
-        configs::mainnet::CAPELLA_FORK_EPOCH,
-        phase0::{mainnet::SLOTS_PER_EPOCH, Eth1Data},
+        phase0::{Eth1Data},
         primitives::{BlsPublicKey, BlsSignature},
-        ssz::{prelude::*, self}, capella::{genesis, mainnet::{BlindedBeaconBlockBody, ExecutionPayloadHeader}}, types::BlindedBeaconBlock, deneb::SyncAggregate, bellatrix,
+        ssz::{prelude::*}, capella::{mainnet::{BlindedBeaconBlockBody, ExecutionPayloadHeader}}, deneb::SyncAggregate, bellatrix,
     };
     use hyper::StatusCode;
-    use rand::{Rng, thread_rng};
+    use rand::{Rng};
     use reqwest::{Client, Response};
     use reth_primitives::hex;
-    use serde_json::json;
+    
     use serial_test::serial;
-    use helix_beacon_client::{mock_block_broadcaster::MockBlockBroadcaster, mock_multi_beacon_client::MockMultiBeaconClient};
-    use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-    use std::{io::Write, sync::Arc, time::Duration};
+    use helix_beacon_client::{mock_multi_beacon_client::MockMultiBeaconClient};
+    use helix_housekeeper::{ChainUpdate, SlotUpdate};
+    use std::{sync::Arc, time::Duration};
     use ethereum_consensus::types::mainnet::{ExecutionPayload, SignedBlindedBeaconBlock};
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_common::{
-        api::builder_api::BuilderGetValidatorsResponseEntry, bid_submission::SignedBidSubmission,
-        chain_info::ChainInfo, SignedBuilderBid, capella::{self}, deneb, versioned_payload::PayloadAndBlobs,
+        api::builder_api::BuilderGetValidatorsResponseEntry,
+        chain_info::ChainInfo, SignedBuilderBid, capella::{self}, versioned_payload::PayloadAndBlobs,
     };
     use helix_utils::request_encoding::Encoding;
     use tokio::sync::{
@@ -47,7 +41,7 @@ mod proposer_api_tests {
         oneshot,
     };
     use tokio::sync::mpsc::channel;
-    use tokio::time::{Instant, sleep};
+    use tokio::time::{sleep};
     use crate::proposer::PATH_REGISTER_VALIDATORS;
     use crate::proposer::tests::gen_signed_vr;
     use helix_common::api::proposer_api::ValidatorPreferences;
@@ -88,8 +82,8 @@ mod proposer_api_tests {
         let client = Client::new();
         let request = client.post(req_url).header("accept", "*/*");
         let request = encoding.to_headers(request);
-        let resp = request.body(req_payload).send().await.unwrap();
-        resp
+        
+        request.body(req_payload).send().await.unwrap()
     }
 
     fn get_test_pub_key_bytes(random: bool) -> [u8; 48] {
@@ -201,8 +195,8 @@ mod proposer_api_tests {
         let request_time_in_ns = get_nanos_timestamp().unwrap();
         let current_time_in_secs = request_time_in_ns / 1_000_000_000;
         let time_since_genesis = current_time_in_secs - genesis_time_in_secs;
-        let current_slot = time_since_genesis / seconds_per_slot;
-        current_slot
+        
+        time_since_genesis / seconds_per_slot
     }
 
     fn get_signed_builder_bid(value: U256) -> SignedBuilderBid {
@@ -238,7 +232,7 @@ mod proposer_api_tests {
     fn get_blinded_beacon_block(slot: u64, proposer_index: usize) -> ethereum_consensus::capella::BlindedBeaconBlock<16, 2048, 2, 128, 16, 16, 512, 256, 32, 16> {
             ethereum_consensus::capella::BlindedBeaconBlock {
                 slot,
-                proposer_index: proposer_index,
+                proposer_index,
                 parent_root: Node::default(),
                 state_root: Node::default(),
                 body: get_blinded_beacon_block_body(),
@@ -280,7 +274,7 @@ mod proposer_api_tests {
         current_dir.push(filename);
         let req_payload_bytes =
             load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
-        let mut signed_blinded_block: capella::SignedBlindedBeaconBlock =
+        let signed_blinded_block: capella::SignedBlindedBeaconBlock =
             serde_json::from_slice(&req_payload_bytes).unwrap();
 
         signed_blinded_block
@@ -528,7 +522,7 @@ mod proposer_api_tests {
     #[serial]
     async fn test_get_payload_no_proposer_duty() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) = start_api_server().await;
+        let (tx, http_config, _api, _slot_update_receiver, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(10));
@@ -804,7 +798,7 @@ mod proposer_api_tests {
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn test_register_validators() {
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) = start_api_server().await;
+        let (tx, http_config, _api, _slot_update_receiver, _auctioneer) = start_api_server().await;
         let req_url = format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_REGISTER_VALIDATORS);
 
         let mut signed_validator_registrations = vec![];
@@ -833,7 +827,7 @@ mod proposer_api_tests {
     #[serial]
     async fn test_validate_registration() {
 
-        let (slot_update_sender, slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
+        let (slot_update_sender, _slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
         let auctioneer = Arc::new(MockAuctioneer::default());
 
         let prop_api = ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient>::new(

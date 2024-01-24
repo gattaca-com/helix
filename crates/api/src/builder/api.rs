@@ -420,7 +420,7 @@ where
                     builder_bid,
                     payload.bid_trace(),
                     is_cancellations_enabled,
-                    trace.receive.into(),
+                    trace.receive,
                     &request_id,
                 ).await;
             },
@@ -582,7 +582,7 @@ where
 
         // Handle duplicates.
         if self.check_for_duplicate_block_hash(
-            &req.signed_builder_bid.block_hash(), 
+            req.signed_builder_bid.block_hash(), 
             req.slot, 
             &req.parent_hash, 
             &req.proposer_pub_key,
@@ -663,7 +663,7 @@ where
         let mut trace = GossipedPayloadTrace { receive: get_nanos_timestamp().unwrap_or_default(), ..Default::default() };
 
         // Check that this request is for a known payload attribute for the current slot.
-        if let Err(err) = self.fetch_proposer_and_attributes(req.slot, &req.execution_payload.execution_payload.parent_hash(), &request_id).await {
+        if let Err(err) = self.fetch_proposer_and_attributes(req.slot, req.execution_payload.execution_payload.parent_hash(), &request_id).await {
             warn!(request_id = %request_id, error = %err, "out of date request");
             return;
         }
@@ -738,7 +738,7 @@ where
         on_receive: u64,
         request_id: &Uuid,
     ) {
-        self.gossip_header(builder_bid, &payload.bid_trace(), is_cancellations_enabled, on_receive, request_id).await;
+        self.gossip_header(builder_bid, payload.bid_trace(), is_cancellations_enabled, on_receive, request_id).await;
         self.gossip_payload(payload, execution_payload, request_id).await;
     }
 
@@ -808,7 +808,7 @@ where
 
         if let Err(err) = sanity_check_block_submission(
             &payload,
-            &payload.bid_trace(),
+            payload.bid_trace(),
             &next_duty,
             head_slot,
             payload_attributes,
@@ -828,7 +828,7 @@ where
 
         // Simulate the submission
         let payload = Arc::new(payload);
-        let was_simulated_optimistically = self.simulate_submission(payload.clone(), trace, next_duty.entry, &request_id).await?;
+        let was_simulated_optimistically = self.simulate_submission(payload.clone(), trace, next_duty.entry, request_id).await?;
 
         Ok((payload, was_simulated_optimistically))
     }
@@ -847,7 +847,7 @@ where
         request_id: &Uuid,
     ) -> Result<(), BuilderApiError> {
         match self.auctioneer.seen_or_insert_block_hash(
-            &block_hash, 
+            block_hash, 
             slot, 
             parent_hash, 
             proposer_public_key,
@@ -980,7 +980,7 @@ where
 
             Err(err) => {
 
-                return match &err {
+                match &err {
                     BlockSimError::BlockValidationFailed(reason) => {
                         warn!(request_id = %request_id, error = %reason, "block validation failed");
                         Err(BuilderApiError::BlockValidationError(err))
@@ -989,7 +989,7 @@ where
                         error!(request_id = %request_id, error = %err, "error simulating block");
                         Err(BuilderApiError::InternalError)
                     }
-                };
+                }
             }
             
         }
@@ -1452,10 +1452,10 @@ pub async fn decode_header_submission(
     // Decode header (SSZ or JSON)
     //TODO - this first tries to decode into a capella header, then a deneb header.
     //TODO - once Deneb is live, we can remove the capella header decoding.
-    let capella_header: Option<SignedHeaderSubmissionCapella>;
+    
     let mut deneb_header: Option<SignedHeaderSubmissionDeneb> = None;
 
-    capella_header = try_decode_into(is_ssz, &body_bytes, true);
+    let capella_header: Option<SignedHeaderSubmissionCapella> = try_decode_into(is_ssz, &body_bytes, true);
     if capella_header.is_none() {
         deneb_header = try_decode_into(is_ssz, &body_bytes, true);
     }
@@ -1681,11 +1681,11 @@ fn get_nanos_timestamp() -> Result<u64, BuilderApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::write::GzEncoder;
-    use flate2::Compression;
+    
+    
     use hyper::http::header::{HeaderValue, CONTENT_ENCODING, CONTENT_TYPE};
     use hyper::http::uri::Uri;
-    use std::io::Write;
+    
     use uuid::Uuid;
 
     async fn build_test_request(payload: Vec<u8>, is_gzip: bool, is_ssz: bool) -> Request<Body> {
