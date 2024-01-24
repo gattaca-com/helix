@@ -39,6 +39,3 @@ db-tools/
 
 # Coverage report
 lcov.info
-
-# Config files
-*.yml
