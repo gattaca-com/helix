@@ -23,6 +23,8 @@ pub struct RelayConfig {
     pub run_housekeeper: bool,
     pub validator_preferences: ValidatorPreferences,
     pub router_config: RouterConfig,
+    #[serde(default = "default_duration")]
+    pub target_get_payload_propagation_duration_ms: u64,
 }
 
 impl RelayConfig {
@@ -168,6 +170,10 @@ pub enum Route {
     ProposerPayloadDelivered,
     BuilderBidsReceived,
     ValidatorRegistration,
+}
+
+fn default_duration() -> u64 {
+    1000
 }
 
 #[cfg(test)]
