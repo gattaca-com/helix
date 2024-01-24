@@ -2,10 +2,7 @@ use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 use helix_database::BuilderInfoDocument;
 use helix_common::{
-    bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission},
-    builder_info::BuilderInfo,
-    eth::SignedBuilderBid,
-    signing::RelaySigningContext, versioned_payload::PayloadAndBlobs,
+    bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission}, builder_info::BuilderInfo, eth::SignedBuilderBid, signing::RelaySigningContext, versioned_payload::PayloadAndBlobs, ProposerInfo, ProposerInfoMap
 };
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse};
@@ -143,4 +140,11 @@ pub trait Auctioneer: Send + Sync + Clone {
         state: &mut SaveBidAndUpdateTopBidResponse,
         signing_context: &RelaySigningContext,
     ) -> Result<Option<SignedBuilderBid>, AuctioneerError>;
+
+    async fn update_proposer_whitelist(
+        &self,
+        proposer_whitelist: Vec<ProposerInfo>,
+    ) -> Result<(), AuctioneerError>;
+
+    async fn get_proposer_whitelist(&self) -> Result<Option<ProposerInfoMap>, AuctioneerError>;
 }

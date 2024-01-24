@@ -16,11 +16,7 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
-    },
-    bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission, BidSubmission},
-    simulator::BlockSimError,
-    BuilderInfo, GetPayloadTrace, RelayConfig, SignedValidatorRegistrationEntry,
-    SubmissionTrace, ValidatorSummary, GetHeaderTrace, HeaderSubmissionTrace, GossipedPayloadTrace, GossipedHeaderTrace, pending_block::PendingBlock, versioned_payload::PayloadAndBlobs,
+    }, bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission, BidSubmission}, pending_block::PendingBlock, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorSummary
 };
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{error, info};
@@ -1424,5 +1420,21 @@ impl DatabaseService for PostgresDatabaseService {
             .await?;
 
         Ok(())
+    }
+
+    async fn get_proposer_whitelist(
+        &self,
+    ) -> Result<Vec<ProposerInfo>, DatabaseError> {
+        parse_rows(self.pool
+            .get()
+            .await?
+            .query(
+                "
+                    SELECT * FROM proposer_whitelist 
+                ",
+                &[],
+            )
+            .await?
+        )
     }
 }

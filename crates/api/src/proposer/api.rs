@@ -611,14 +611,19 @@ where
             },
         };
 
-        // Calculate the remaining time needed to reach the target propagation duration.
-        // Conditionally pause the execution until we hit `TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS` 
-        // to allow the block to propagate through the network.
-        let elapsed_since_propagate_start_ms = (get_nanos_timestamp()? - trace.beacon_client_broadcast) / 1_000_000;
-        let remaining_sleep_ms = self.target_get_payload_propagation_duration_ms.saturating_sub(elapsed_since_propagate_start_ms);
-        if remaining_sleep_ms > 0 && matches!(self.fork_info.network, Network::Mainnet) {
-            sleep(Duration::from_millis(remaining_sleep_ms)).await;
+        // Pause execution if the proposer is not whitelisted
+        if !self.is_known_proposer(&proposer_public_key).await? {
+            // Calculate the remaining time needed to reach the target propagation duration.
+            // Conditionally pause the execution until we hit `TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS` 
+            // to allow the block to propagate through the network.
+            let elapsed_since_propagate_start_ms = (get_nanos_timestamp()? - trace.beacon_client_broadcast) / 1_000_000;
+            let remaining_sleep_ms = self.target_get_payload_propagation_duration_ms.saturating_sub(elapsed_since_propagate_start_ms);
+            if remaining_sleep_ms > 0 && matches!(self.fork_info.network, Network::Mainnet) {
+                sleep(Duration::from_millis(remaining_sleep_ms)).await;
+            }
         }
+
+        
 
         // Return response
         info!(request_id = %request_id, trace = ?trace, timestamp = get_nanos_timestamp()?, "delivering payload");
@@ -969,6 +974,18 @@ where
                 error!(request_id = %request_id, error = %err, "error saving get header call to database");
             }
         });
+    }
+
+    async fn is_known_proposer(
+        &self,
+        public_key: &BlsPublicKey,
+    ) -> Result<bool, ProposerApiError> {
+        Ok(self
+            .auctioneer
+            .get_proposer_whitelist()
+            .await?
+            .map(|whitelist| whitelist.contains(public_key))
+            .unwrap_or(false))
     }
 }
 
