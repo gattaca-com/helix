@@ -16,7 +16,7 @@ mod housekeeper_tests {
     use helix_beacon_client::mock_multi_beacon_client::MockMultiBeaconClient;
     use helix_database::MockDatabaseService;
     use helix_common::{
-        api::builder_api::BuilderGetValidatorsResponseEntry, ValidatorSummary, fork_info::ForkInfo,
+        api::builder_api::BuilderGetValidatorsResponseEntry, ValidatorSummary, chain_info::ChainInfo,
     };
     use helix_datastore::MockAuctioneer;
     use tokio::task;
@@ -38,7 +38,7 @@ mod housekeeper_tests {
             proposer_duties_has_been_read.clone(),
         );
         let auctioneer = MockAuctioneer::new();
-        let housekeeper = Housekeeper::new(Arc::new(db), beacon_client, auctioneer, Arc::new(ForkInfo::for_mainnet()));
+        let housekeeper = Housekeeper::new(Arc::new(db), beacon_client, auctioneer, Arc::new(ChainInfo::for_mainnet()));
 
         HelperVars {
             housekeeper,

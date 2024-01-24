@@ -3,7 +3,7 @@ use ethereum_consensus::builder::{compute_builder_domain, SignedValidatorRegistr
 use ethereum_consensus::crypto::SecretKey;
 use ethereum_consensus::signing::compute_signing_root;
 use rand::thread_rng;
-use helix_common::fork_info::ForkInfo;
+use helix_common::chain_info::ChainInfo;
 use crate::proposer::PATH_REGISTER_VALIDATORS;
 
 #[cfg(test)]
@@ -39,7 +39,7 @@ mod proposer_api_tests {
     use helix_datastore::MockAuctioneer;
     use helix_common::{
         api::builder_api::BuilderGetValidatorsResponseEntry, bid_submission::SignedBidSubmission,
-        fork_info::ForkInfo, SignedBuilderBid, capella::{self}, deneb, versioned_payload::PayloadAndBlobs,
+        chain_info::ChainInfo, SignedBuilderBid, capella::{self}, deneb, versioned_payload::PayloadAndBlobs,
     };
     use helix_utils::request_encoding::Encoding;
     use tokio::sync::{
@@ -196,8 +196,8 @@ mod proposer_api_tests {
     }
 
     fn calculate_current_slot() -> u64 {
-        let genesis_time_in_secs: u64 = ForkInfo::for_mainnet().genesis_time_in_secs;
-        let seconds_per_slot: u64 = ForkInfo::for_mainnet().seconds_per_slot;
+        let genesis_time_in_secs: u64 = ChainInfo::for_mainnet().genesis_time_in_secs;
+        let seconds_per_slot: u64 = ChainInfo::for_mainnet().seconds_per_slot;
         let request_time_in_ns = get_nanos_timestamp().unwrap();
         let current_time_in_secs = request_time_in_ns / 1_000_000_000;
         let time_since_genesis = current_time_in_secs - genesis_time_in_secs;
@@ -841,7 +841,7 @@ mod proposer_api_tests {
             Arc::new(MockDatabaseService::default()),
             vec![],
             Arc::new(MockMultiBeaconClient::default()),
-            Arc::new(ForkInfo::for_holesky()),
+            Arc::new(ChainInfo::for_holesky()),
             slot_update_sender.clone(),
             Arc::new(ValidatorPreferences::default()),
         );
@@ -864,7 +864,7 @@ pub fn gen_signed_vr() -> SignedValidatorRegistration {
         public_key: pk,
     };
 
-    let fk = ForkInfo::for_holesky();
+    let fk = ChainInfo::for_holesky();
     let domain = compute_builder_domain(&fk.context).unwrap();
     let csr = compute_signing_root(&mut vr, domain).unwrap();
 

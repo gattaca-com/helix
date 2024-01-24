@@ -3,7 +3,7 @@ pub mod bid_submission;
 pub mod builder_info;
 pub mod config;
 pub mod eth;
-pub mod fork_info;
+pub mod chain_info;
 pub mod proposer;
 pub mod signing;
 pub mod simulator;

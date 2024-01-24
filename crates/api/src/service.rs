@@ -16,8 +16,8 @@ use helix_database::DatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
 use helix_housekeeper::{ChainEventUpdater, Housekeeper};
 use helix_common::{
-    fork_info::ForkInfo, signing::RelaySigningContext,
-    BroadcasterConfig, ForkInfoConfig, RelayConfig,
+    chain_info::ChainInfo, signing::RelaySigningContext,
+    BroadcasterConfig, NetworkConfig, RelayConfig,
 };
 
 pub struct ApiService {}
@@ -42,10 +42,10 @@ impl ApiService {
         let multi_beacon_client = Arc::new(MultiBeaconClient::<BeaconClient>::new(beacon_clients));
 
         let fork_info = Arc::new(match config.fork_info {
-            ForkInfoConfig::Mainnet => ForkInfo::for_mainnet(),
-            ForkInfoConfig::Goerli => ForkInfo::for_goerli(),
-            ForkInfoConfig::Sepolia => ForkInfo::for_sepolia(),
-            ForkInfoConfig::Holesky => ForkInfo::for_holesky(),
+            NetworkConfig::Mainnet => ChainInfo::for_mainnet(),
+            NetworkConfig::Goerli => ChainInfo::for_goerli(),
+            NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
+            NetworkConfig::Holesky => ChainInfo::for_holesky(),
         });
 
         // Housekeeper should only be run on one instance.

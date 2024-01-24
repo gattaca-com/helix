@@ -47,7 +47,7 @@ use helix_common::{
             ValidatorPreferences,
         },
     },
-    fork_info::{ForkInfo, Network},
+    chain_info::{ChainInfo, Network},
     try_execution_header_from_payload, BidRequest, GetHeaderTrace, GetPayloadTrace,
     RegisterValidatorsTrace, signed_proposal::VersionedSignedProposal, versioned_payload::PayloadAndBlobs,
 };
@@ -75,7 +75,7 @@ where
 
     curr_slot: Arc<AtomicU64>,
 
-    fork_info: Arc<ForkInfo>,
+    fork_info: Arc<ChainInfo>,
     next_proposer_duty: Arc<RwLock<Option<BuilderGetValidatorsResponseEntry>>>,
     validator_preferences: Arc<ValidatorPreferences>,
 }
@@ -91,7 +91,7 @@ where
         db: Arc<DB>,
         broadcasters: Vec<Arc<BlockBroadcaster>>,
         multi_beacon_client: Arc<M>,
-        fork_info: Arc<ForkInfo>,
+        fork_info: Arc<ChainInfo>,
         slot_update_subscription: Sender<Sender<ChainUpdate>>,
         validator_preferences: Arc<ValidatorPreferences>,
     ) -> Self {
@@ -1028,7 +1028,7 @@ where
 /// Calculates the time information for a given slot.
 ///
 /// Returns a tuple containing the milliseconds into the slot and the duration until the slot starts.
-fn calculate_slot_time_info(fork_info: &ForkInfo, slot: u64, request_time: u64) -> (i64, Duration) {
+fn calculate_slot_time_info(fork_info: &ChainInfo, slot: u64, request_time: u64) -> (i64, Duration) {
     let slot_start_timestamp_in_secs =
         fork_info.genesis_time_in_secs + (slot * fork_info.seconds_per_slot);
     let ms_into_slot =

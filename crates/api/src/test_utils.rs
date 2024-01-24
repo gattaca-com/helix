@@ -4,7 +4,7 @@ use axum::{
     routing::{get, post},
     Extension, Router,
 };
-use helix_common::fork_info::ForkInfo;
+use helix_common::chain_info::ChainInfo;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use helix_beacon_client::{BlockBroadcaster, mock_block_broadcaster::MockBlockBroadcaster, mock_multi_beacon_client::MockMultiBeaconClient};
@@ -42,7 +42,7 @@ pub fn app() -> Router {
         Arc::new(MockDatabaseService::default()),
         vec![Arc::new(BlockBroadcaster::Mock(MockBlockBroadcaster::default()))],
         Arc::new(MockMultiBeaconClient::default()),
-        Arc::new(ForkInfo::for_mainnet()),
+        Arc::new(ChainInfo::for_mainnet()),
         slot_update_sender,
         Arc::new(ValidatorPreferences::default()),
     ));
@@ -115,7 +115,7 @@ pub fn builder_api_app() -> (
         Arc::new(BuilderApi::<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>::new(
             Arc::new(MockAuctioneer::default()),
             Arc::new(MockDatabaseService::default()),
-            Arc::new(ForkInfo::for_mainnet()),
+            Arc::new(ChainInfo::for_mainnet()),
             MockSimulator::default(),
             Arc::new(MockGossiper::new().unwrap()),
             Arc::new(RelaySigningContext::default()),
@@ -151,7 +151,7 @@ pub fn proposer_api_app() -> (
             Arc::new(MockDatabaseService::default()),
             vec![Arc::new(BlockBroadcaster::Mock(MockBlockBroadcaster::default()))],
             Arc::new(MockMultiBeaconClient::default()),
-            Arc::new(ForkInfo::for_mainnet()),
+            Arc::new(ChainInfo::for_mainnet()),
             slot_update_sender.clone(),
             Arc::new(ValidatorPreferences::default())
         )

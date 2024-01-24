@@ -17,7 +17,7 @@ use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, ProposerDuty,
-    SignedValidatorRegistrationEntry, fork_info::ForkInfo, pending_block::PendingBlock,
+    SignedValidatorRegistrationEntry, chain_info::ChainInfo, pending_block::PendingBlock,
 };
 
 use crate::error::HousekeeperError;
@@ -54,7 +54,7 @@ pub struct Housekeeper<
     beacon_client: BeaconClient,
     auctioneer: A,
 
-    _fork_info: Arc<ForkInfo>,
+    _fork_info: Arc<ChainInfo>,
 
     head_slot: Mutex<u64>,
 
@@ -71,7 +71,7 @@ pub struct Housekeeper<
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     Housekeeper<DB, BeaconClient, A>
 {
-    pub fn new(db: Arc<DB>, beacon_client: BeaconClient, auctioneer: A, fork_info: Arc<ForkInfo>) -> Arc<Self> {
+    pub fn new(db: Arc<DB>, beacon_client: BeaconClient, auctioneer: A, fork_info: Arc<ChainInfo>) -> Arc<Self> {
         Arc::new(Self {
             db,
             beacon_client,

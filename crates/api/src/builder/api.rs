@@ -43,7 +43,7 @@ use helix_common::{
     bid_submission::{
         v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb}, BidSubmission, BidTrace, SignedBidSubmission,
     },
-    HeaderSubmissionTrace, fork_info::ForkInfo, signing::RelaySigningContext, 
+    HeaderSubmissionTrace, chain_info::ChainInfo, signing::RelaySigningContext, 
     simulator::BlockSimError, SubmissionTrace, SignedBuilderBid, GossipedHeaderTrace, GossipedPayloadTrace, versioned_payload::PayloadAndBlobs,
 };
 use helix_utils::{calculate_withdrawals_root, has_reached_fork, try_decode_into};
@@ -65,7 +65,7 @@ where
 {
     auctioneer: Arc<A>,
     db: Arc<DB>,
-    fork_info: Arc<ForkInfo>,
+    fork_info: Arc<ChainInfo>,
     simulator: S,
     gossiper: Arc<G>,
     signing_context: Arc<RelaySigningContext>,
@@ -88,7 +88,7 @@ where
     pub fn new(
         auctioneer: Arc<A>,
         db: Arc<DB>,
-        fork_info: Arc<ForkInfo>,
+        fork_info: Arc<ChainInfo>,
         simulator: S,
         gossiper: Arc<G>,
         signing_context: Arc<RelaySigningContext>,
@@ -1504,7 +1504,7 @@ fn sanity_check_block_submission(
     next_duty: &BuilderGetValidatorsResponseEntry,
     head_slot: u64,
     payload_attributes: &PayloadAttributesUpdate,
-    fork_info: &ForkInfo,
+    fork_info: &ChainInfo,
 ) -> Result<(), BuilderApiError> {
     if payload.slot() <= head_slot {
         return Err(BuilderApiError::SubmissionForPastSlot {
