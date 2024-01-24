@@ -162,7 +162,8 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
     ) -> Result<bool, BlockSimError> {
         let builder_info = self.fetch_builder_info(&request).await;
 
-        if self.should_process_optimistically(&request, &builder_info).await {
+        // if self.should_process_optimistically(&request, &builder_info).await {
+        if true {
             debug!(
                 request_id=%request_id,
                 block_hash=%request.execution_payload.block_hash(),
