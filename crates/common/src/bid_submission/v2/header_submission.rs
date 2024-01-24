@@ -162,10 +162,10 @@ impl BidSubmission for SignedHeaderSubmission {
         }
     }
 
-    fn base_fee_per_gas(&self) -> &U256 {
+    fn base_fee_per_gas(&self) -> U256 {
         match self {
-            Self::Capella(signed_header_submission) => &signed_header_submission.message.execution_payload_header.base_fee_per_gas,
-            Self::Deneb(signed_header_submission) => &signed_header_submission.message.execution_payload_header.base_fee_per_gas,
+            Self::Capella(signed_header_submission) => signed_header_submission.message.execution_payload_header.base_fee_per_gas,
+            Self::Deneb(signed_header_submission) => signed_header_submission.message.execution_payload_header.base_fee_per_gas,
         }
     }
 

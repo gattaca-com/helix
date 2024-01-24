@@ -285,7 +285,7 @@ impl RedisCache {
     /// 2) Update floor bid value.
     async fn set_new_floor(
         &self,
-        new_floor_value: &U256,
+        new_floor_value: U256,
         slot: u64,
         parent_hash: &Hash32,
         proposer_pub_key: &BlsPublicKey,
@@ -701,7 +701,7 @@ impl Auctioneer for RedisCache {
             return Ok(());
         }
         self.set_new_floor(
-            &builder_bid.value(),
+            builder_bid.value(),
             bid_trace.slot,
             &bid_trace.parent_hash,
             &bid_trace.proposer_public_key,
