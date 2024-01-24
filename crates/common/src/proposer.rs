@@ -3,7 +3,7 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Slot, ValidatorIndex},
     serde::as_str,
 };
-use reth_primitives::revm_primitives::HashMap;
+use reth_primitives::revm_primitives::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -32,17 +32,17 @@ pub struct ProposerInfo {
     pub pub_key: BlsPublicKey,
 }
 
-impl From<Vec<ProposerInfo>> for ProposerInfoMap {
+impl From<Vec<ProposerInfo>> for ProposerInfoSet {
     fn from(proposer_infos: Vec<ProposerInfo>) -> Self {
-        ProposerInfoMap(proposer_infos.into_iter().map(|info| (info.pub_key.clone(), info)).collect())
+        ProposerInfoSet(proposer_infos.into_iter().map(|info| info.pub_key).collect())
     }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ProposerInfoMap(HashMap<BlsPublicKey, ProposerInfo>);
+pub struct ProposerInfoSet(HashSet<BlsPublicKey>);
 
-impl ProposerInfoMap {
+impl ProposerInfoSet {
     pub fn contains(&self, public_key: &BlsPublicKey) -> bool {
-        self.0.contains_key(public_key)
+        self.0.contains(public_key)
     }
 }

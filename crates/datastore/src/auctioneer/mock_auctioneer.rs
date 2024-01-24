@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 
 use helix_common::versioned_payload::PayloadAndBlobs;
-use helix_common::{ProposerInfo, ProposerInfoMap};
+use helix_common::{ProposerInfo, ProposerInfoSet};
 use helix_database::types::BuilderInfoDocument;
 use helix_common::{signing::RelaySigningContext, bid_submission::v2::header_submission::SignedHeaderSubmission};
 use helix_common::{
@@ -224,7 +224,7 @@ impl Auctioneer for MockAuctioneer {
 
     async fn get_proposer_whitelist(
         &self,
-    ) -> Result<Option<ProposerInfoMap>, AuctioneerError> {
-        Ok(Some(ProposerInfoMap::from(vec![])))
+    ) -> Result<Option<ProposerInfoSet>, AuctioneerError> {
+        Ok(Some(ProposerInfoSet::from(vec![])))
     }
 }

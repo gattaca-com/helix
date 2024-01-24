@@ -6,7 +6,7 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Hash32},
     ssz::prelude::*,
 };
-use helix_common::{bid_submission::BidSubmission, versioned_payload::PayloadAndBlobs, ProposerInfo, ProposerInfoMap};
+use helix_common::{bid_submission::BidSubmission, versioned_payload::PayloadAndBlobs, ProposerInfo, ProposerInfoSet};
 use helix_common::bid_submission::v2::header_submission::SignedHeaderSubmission;
 use redis::AsyncCommands;
 use serde::{de::DeserializeOwned, Serialize};
@@ -753,14 +753,14 @@ impl Auctioneer for RedisCache {
         &self,
         proposer_whitelist: Vec<ProposerInfo>,
     ) -> Result<(), AuctioneerError> {
-        let proposer_whitelist_map: ProposerInfoMap = proposer_whitelist.into();
+        let proposer_whitelist_map: ProposerInfoSet = proposer_whitelist.into();
         self.set(PROPOSER_WHITELIST_KEY, &proposer_whitelist_map, None)
             .await?;
 
         Ok(())
     }
 
-    async fn get_proposer_whitelist(&self) -> Result<Option<ProposerInfoMap>, AuctioneerError> {
+    async fn get_proposer_whitelist(&self) -> Result<Option<ProposerInfoSet>, AuctioneerError> {
         let proposer_whitelist_map = self.get(PROPOSER_WHITELIST_KEY).await?;
         Ok(proposer_whitelist_map)
     }
