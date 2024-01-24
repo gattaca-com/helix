@@ -216,8 +216,8 @@ impl FromRow for PendingBlock {
             block_hash: parse_bytes_to_hash::<32>(row.get::<&str, &[u8]>("block_hash"))?,
             builder_pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("builder_pubkey"))?,
             slot: parse_i32_to_u64(row.get::<&str, i32>("slot"))?,
-            header_receive_ms: parse_optional_timestamptz_to_u64(row.get::<&str, Option<std::time::SystemTime>>("header_receive"))?,
-            payload_receive_ms: parse_optional_timestamptz_to_u64(row.get::<&str, Option<std::time::SystemTime>>("payload_receive"))?,
+            header_receive_ms: parse_optional_timestamptz_to_u64_ms(row.get::<&str, Option<std::time::SystemTime>>("header_receive"))?,
+            payload_receive_ms: parse_optional_timestamptz_to_u64_ms(row.get::<&str, Option<std::time::SystemTime>>("payload_receive"))?,
         })
     }
 }
@@ -265,9 +265,16 @@ pub fn parse_timestamptz_to_u64(timestamp: std::time::SystemTime) -> Result<u64,
         .map(|duration| duration.as_secs())
 }
 
-pub fn parse_optional_timestamptz_to_u64(timestamp: Option<std::time::SystemTime>) -> Result<Option<u64>, DatabaseError> {
+pub fn parse_timestamptz_to_u64_ms(timestamp: std::time::SystemTime) -> Result<u64, DatabaseError> {
+    timestamp
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| DatabaseError::RowParsingError(Box::new(e)))
+        .map(|duration| duration.as_millis() as u64)
+}
+
+pub fn parse_optional_timestamptz_to_u64_ms(timestamp: Option<std::time::SystemTime>) -> Result<Option<u64>, DatabaseError> {
     match timestamp {
-        Some(timestamp) => parse_timestamptz_to_u64(timestamp).map(|timestamp| Some(timestamp)),
+        Some(timestamp) => parse_timestamptz_to_u64_ms(timestamp).map(|timestamp| Some(timestamp)),
         None => Ok(None),
     }
 }

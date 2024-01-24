@@ -486,7 +486,7 @@ where
         );
 
         api.db_sender
-            .send(DbInfo::PayloadReceived{ block_hash: payload.block_hash().clone(), proposer_pubkey: payload.proposer_public_key().clone(), slot: payload.slot(), time: SystemTime::now() })
+            .send(DbInfo::PayloadReceived{ block_hash: payload.block_hash().clone(), builder_pubkey: payload.builder_public_key().clone(), slot: payload.slot(), time: SystemTime::now() })
             .await
             .map_err(|_| BuilderApiError::InternalError)?;
 
@@ -1635,8 +1635,8 @@ async fn process_db_additions<DB: DatabaseService + 'static>(
                     )
                 }
             },
-            DbInfo::PayloadReceived{ block_hash, proposer_pubkey, slot, time } => {
-                if let Err(err) = db.save_pending_block(&block_hash, &proposer_pubkey, slot, time).await {
+            DbInfo::PayloadReceived{ block_hash, builder_pubkey, slot, time } => {
+                if let Err(err) = db.save_pending_block(&block_hash, &builder_pubkey, slot, time).await {
                     error!(
                         error = %err,
                         "failed to store payload received",

@@ -1417,7 +1417,7 @@ impl DatabaseService for PostgresDatabaseService {
         self.pool.get().await?.execute(
                 "
                     DELETE FROM pending_blocks 
-                    WHERE created_at < (NOW() - INTERVAL '1 minute')
+                    WHERE created_at < (NOW() - INTERVAL '45 seconds')
                 ",
                 &[],
             )
