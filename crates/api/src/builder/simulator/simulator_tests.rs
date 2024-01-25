@@ -20,7 +20,7 @@ mod simulator_tests {
         bid_submission::{BidTrace, SignedBidSubmission, SignedBidSubmissionCapella},
         simulator::BlockSimError,
     };
-    use helix_common::api::proposer_api::ValidatorPreferences;
+    use helix_common::ValidatorPreferences;
 
     // ++++ HELPERS ++++
     fn get_simulator(endpoint: &str) -> RpcSimulator {

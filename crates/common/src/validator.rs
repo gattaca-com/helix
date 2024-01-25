@@ -16,7 +16,7 @@ use reth_primitives::hex;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::Row;
 
-use crate::api::proposer_api::{ValidatorPreferences, ValidatorRegistrationInfo};
+use crate::{ValidatorPreferences, api::proposer_api::ValidatorRegistrationInfo};
 
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

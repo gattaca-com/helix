@@ -6,7 +6,16 @@ use ethereum_consensus::{
 };
 use thiserror::Error;
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, api::proposer_api::{ValidatorPreferences, ValidatorRegistrationInfo}, bellatrix::{ByteList, ByteVector, List}, bid_submission::BidTrace, pending_block::PendingBlock, BuilderInfo, GetPayloadTrace, ProposerInfo, SignedValidatorRegistrationEntry
+    api::builder_api::BuilderGetValidatorsResponseEntry, 
+    api::proposer_api::ValidatorRegistrationInfo, 
+    bellatrix::{ByteList, ByteVector, List}, 
+    bid_submission::BidTrace, 
+    pending_block::PendingBlock, 
+    BuilderInfo, 
+    GetPayloadTrace, 
+    ProposerInfo, 
+    SignedValidatorRegistrationEntry,
+    ValidatorPreferences,
 };
 
 use crate::{
@@ -173,6 +182,7 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                 },
                 preferences: ValidatorPreferences {
                     censoring: parse_bool_to_bool(row.get::<&str, bool>("censoring"))?,
+                    trusted_builders: todo!(),
                 },
             },
         })
@@ -245,6 +255,7 @@ impl FromRow for SignedValidatorRegistrationEntry {
                 registration: SignedValidatorRegistration::from_row(row)?,
                 preferences: ValidatorPreferences {
                     censoring: parse_bool_to_bool(row.get::<&str, bool>("censoring"))?,
+                    trusted_builders: todo!(),
                 },
             },
             inserted_at: parse_timestamptz_to_u64(

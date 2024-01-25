@@ -3,7 +3,7 @@ use ethereum_consensus::{
     Fork, builder::SignedValidatorRegistration,
 };
 
-use crate::versioned_payload::PayloadAndBlobs;
+use crate::{validator_preferences::ValidatorPreferences, versioned_payload::PayloadAndBlobs};
 
 
 #[derive(Debug, serde::Serialize)]
@@ -54,10 +54,6 @@ impl<'de> serde::Deserialize<'de> for GetPayloadResponse {
     }
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct ValidatorPreferences {
-    pub censoring: bool,
-}
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ValidatorRegistrationInfo {

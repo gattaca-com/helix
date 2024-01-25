@@ -25,7 +25,7 @@ mod simulator_tests {
         simulator::BlockSimError,
         BuilderInfo,
     };
-    use helix_common::api::proposer_api::ValidatorPreferences;
+    use helix_common::ValidatorPreferences;
 
     // ++++ HELPERS ++++
     fn get_optimistic_simulator(

@@ -44,9 +44,9 @@ use helix_common::{
         proposer_api::{
             ValidatorRegistrationInfo,
             GetPayloadResponse, 
-            ValidatorPreferences,
         },
     },
+    ValidatorPreferences,
     chain_info::{ChainInfo, Network},
     try_execution_header_from_payload, BidRequest, GetHeaderTrace, GetPayloadTrace,
     RegisterValidatorsTrace, signed_proposal::VersionedSignedProposal, versioned_payload::PayloadAndBlobs,
