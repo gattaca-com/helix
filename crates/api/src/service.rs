@@ -51,7 +51,7 @@ impl ApiService {
         // Housekeeper should only be run on one instance.
         if config.run_housekeeper {
             let housekeeper =
-                Housekeeper::new(db.clone(), multi_beacon_client.clone(), auctioneer.clone(), chain_info.clone());
+                Housekeeper::new(db.clone(), multi_beacon_client.clone(), auctioneer.clone());
             tokio::task::spawn(async move {
                 loop {
                     if let Err(err) = housekeeper.start().await {

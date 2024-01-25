@@ -54,8 +54,6 @@ pub struct Housekeeper<
     beacon_client: BeaconClient,
     auctioneer: A,
 
-    _chain_info: Arc<ChainInfo>,
-
     head_slot: Mutex<u64>,
 
     proposer_duties_slot: Mutex<u64>,
@@ -71,12 +69,11 @@ pub struct Housekeeper<
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     Housekeeper<DB, BeaconClient, A>
 {
-    pub fn new(db: Arc<DB>, beacon_client: BeaconClient, auctioneer: A, chain_info: Arc<ChainInfo>) -> Arc<Self> {
+    pub fn new(db: Arc<DB>, beacon_client: BeaconClient, auctioneer: A) -> Arc<Self> {
         Arc::new(Self {
             db,
             beacon_client,
             auctioneer,
-            _chain_info: chain_info,
             head_slot: Mutex::new(0),
             proposer_duties_slot: Mutex::new(0),
             proposer_duties_lock: Mutex::new(()),

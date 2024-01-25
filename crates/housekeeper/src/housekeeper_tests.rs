@@ -38,7 +38,7 @@ mod housekeeper_tests {
             proposer_duties_has_been_read.clone(),
         );
         let auctioneer = MockAuctioneer::new();
-        let housekeeper = Housekeeper::new(Arc::new(db), beacon_client, auctioneer, Arc::new(ChainInfo::for_mainnet()));
+        let housekeeper = Housekeeper::new(Arc::new(db), beacon_client, auctioneer);
 
         HelperVars {
             housekeeper,
