@@ -17,14 +17,13 @@ use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, ProposerDuty,
-    SignedValidatorRegistrationEntry, fork_info::ForkInfo, pending_block::PendingBlock,
+    SignedValidatorRegistrationEntry, chain_info::ChainInfo, pending_block::PendingBlock,
 };
 
 use crate::error::HousekeeperError;
 
 pub const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 8;
-const BUILDER_INFO_UPDATE_FREQ: u64 = 1;
 
 // Constants for known validators refresh logic.
 const MIN_SLOTS_BETWEEN_UPDATES: u64 = 6;
@@ -55,8 +54,6 @@ pub struct Housekeeper<
     beacon_client: BeaconClient,
     auctioneer: A,
 
-    _fork_info: Arc<ForkInfo>,
-
     head_slot: Mutex<u64>,
 
     proposer_duties_slot: Mutex<u64>,
@@ -72,12 +69,11 @@ pub struct Housekeeper<
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     Housekeeper<DB, BeaconClient, A>
 {
-    pub fn new(db: Arc<DB>, beacon_client: BeaconClient, auctioneer: A, fork_info: Arc<ForkInfo>) -> Arc<Self> {
+    pub fn new(db: Arc<DB>, beacon_client: BeaconClient, auctioneer: A) -> Arc<Self> {
         Arc::new(Self {
             db,
             beacon_client,
             auctioneer,
-            _fork_info: fork_info,
             head_slot: Mutex::new(0),
             proposer_duties_slot: Mutex::new(0),
             proposer_duties_lock: Mutex::new(()),
@@ -141,12 +137,10 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         }
 
         // Spawn a task to asynchronously re sync builder info.
-        if self.should_re_sync_builder_info(head_slot).await {
-            let cloned_self = self.clone();
-            tokio::spawn(async move {
-                let _ = cloned_self.sync_builder_info_changes(head_slot).await;
-            });
-        }
+        let cloned_self = self.clone();
+        tokio::spawn(async move {
+            let _ = cloned_self.sync_builder_info_changes(head_slot).await;
+        });
 
         debug!(
             head_slot = head_slot,
@@ -446,25 +440,6 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         let last_proposer_duty_distance = head_slot - proposer_duties_slot;
         head_slot % PROPOSER_DUTIES_UPDATE_FREQ == 0
             || last_proposer_duty_distance >= PROPOSER_DUTIES_UPDATE_FREQ
-    }
-
-    /// Determine if builder info should be synced for the given slot.
-    ///
-    /// This function checks two conditions:
-    /// 1. If the `head_slot` is exactly divisible by `BUILDER_INFO_UPDATE_FREQ`,
-    ///    it will return `true` to trigger a proposer duties update.
-    /// 2. If the distance between the current `head_slot` and the last slot for which
-    ///    builder info was synced (`head_slot`) is greater than or equal to
-    ///    `BUILDER_INFO_UPDATE_FREQ`, it will also return `true`.
-    async fn should_re_sync_builder_info(
-        self: &SharedHousekeeper<DB, BeaconClient, A>,
-        head_slot: u64,
-    ) -> bool {
-        let re_sync_slot = *self.re_sync_builder_info_slot.lock().await;
-        let last_re_sync_distance = head_slot - re_sync_slot;
-
-        head_slot % BUILDER_INFO_UPDATE_FREQ == 0
-            || last_re_sync_distance >= BUILDER_INFO_UPDATE_FREQ
     }
 
     /// Fetch proposer duties for the given epoch and epoch + 1.

@@ -3,7 +3,6 @@ mod tests {
     use std::default::Default;
 use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
     use ethereum_consensus::{
-        bellatrix::ExecutionPayload,
         builder::{SignedValidatorRegistration, ValidatorRegistration},
         crypto::SecretKey,
         primitives::U256,
@@ -15,13 +14,13 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
     };
     use helix_common::{
         bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission, BidSubmission},
-        GetPayloadTrace, SubmissionTrace, bellatrix::{ByteVector, ByteList, List}, HeaderSubmissionTrace, versioned_payload::PayloadAndBlobs,
+        GetPayloadTrace, bellatrix::{ByteVector, ByteList, List}, HeaderSubmissionTrace, versioned_payload::PayloadAndBlobs,
     };
 
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
     use ethereum_consensus::phase0::Validator;
     use helix_common::{
-        api::builder_api::BuilderGetValidatorsResponseEntry, simulator::BlockSimError, ProposerDuty,
+        api::builder_api::BuilderGetValidatorsResponseEntry, simulator::BlockSimError,
     };
     use tokio_postgres::NoTls;
     use helix_common::api::proposer_api::ValidatorRegistrationInfo;
@@ -457,7 +456,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
 
         let reg = get_randomized_signed_validator_registration().registration;
 
-        let result = db_service.save_too_late_get_payload(1, &reg.message.public_key, &Default::default(),0,0).await?;
+        db_service.save_too_late_get_payload(1, &reg.message.public_key, &Default::default(),0,0).await?;
 
         Ok(())
     }
@@ -469,7 +468,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
 
         let reg = get_randomized_signed_validator_registration().registration;
 
-        let result = db_service.save_get_header_call(1, Default::default(), reg.message.public_key, Default::default(), Default::default()).await?;
+        db_service.save_get_header_call(1, Default::default(), reg.message.public_key, Default::default(), Default::default()).await?;
 
         Ok(())
     }
@@ -479,9 +478,9 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
-        let reg = get_randomized_signed_validator_registration().registration;
+        let _reg = get_randomized_signed_validator_registration().registration;
 
-        let result = db_service.save_failed_get_payload(Default::default(), "error".to_string(), Default::default()).await?;
+        db_service.save_failed_get_payload(Default::default(), "error".to_string(), Default::default()).await?;
 
         Ok(())
     }
@@ -511,7 +510,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
     async fn test_gossiped_header() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
-        let result = db_service.save_gossiped_header_trace(Default::default(), Default::default()).await?;
+        db_service.save_gossiped_header_trace(Default::default(), Default::default()).await?;
 
         Ok(())
     }
@@ -520,7 +519,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
     async fn test_gossiped_payload() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
-        let result = db_service.save_gossiped_payload_trace(Default::default(), Default::default()).await?;
+        db_service.save_gossiped_payload_trace(Default::default(), Default::default()).await?;
 
         Ok(())
     }
@@ -529,7 +528,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
     async fn test_save_pending_block() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
-        let result = db_service.save_pending_block(&Default::default(), &Default::default(), 359023, SystemTime::now()).await?;
+        db_service.save_pending_block(&Default::default(), &Default::default(), 359023, SystemTime::now()).await?;
 
         Ok(())
     }

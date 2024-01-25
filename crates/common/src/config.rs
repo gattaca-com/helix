@@ -1,6 +1,6 @@
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use std::{fs, collections::HashSet};
+use std::{fs::File, collections::HashSet};
 use helix_utils::request_encoding::Encoding;
 use crate::api::proposer_api::ValidatorPreferences;
 
@@ -16,7 +16,7 @@ pub struct RelayConfig {
     #[serde(default)]
     pub relays: Vec<RelayGossipConfig>,
     #[serde(default)]
-    pub fork_info: ForkInfoConfig,
+    pub network_config: NetworkConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
@@ -30,8 +30,8 @@ pub struct RelayConfig {
 impl RelayConfig {
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
         let start_config = StartConfig::parse();
-        let config_str = fs::read_to_string(start_config.config)?;
-        let config: RelayConfig = serde_yaml::from_str(&config_str)?;
+        let file = File::open(start_config.config)?;
+        let config: RelayConfig = serde_yaml::from_reader(file)?;
         Ok(config)
     }
 }
@@ -80,7 +80,7 @@ pub struct RelayGossipConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
-pub enum ForkInfoConfig {
+pub enum NetworkConfig {
     #[default]
     Mainnet,
     Goerli,
@@ -186,7 +186,7 @@ fn test_config() {
     config.simulator.url = "http://localhost:8080".to_string();
     config.beacon_clients.push(BeaconClientConfig { url: "http://localhost:8080".to_string() });
     config.broadcasters.push(BroadcasterConfig::BeaconClient(BeaconClientConfig { url: "http://localhost:8080".to_string() }));
-    config.fork_info = ForkInfoConfig::Mainnet;
+    config.network_config = NetworkConfig::Mainnet;
     config.logging =
         LoggingConfig::File { dir_path: "hello".to_string(), file_name: "test".to_string() };
     config.validator_preferences = ValidatorPreferences { censoring: true };

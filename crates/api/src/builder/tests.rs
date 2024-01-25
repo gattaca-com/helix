@@ -16,7 +16,7 @@ mod tests {
         configs::mainnet::CAPELLA_FORK_EPOCH,
         phase0::mainnet::SLOTS_PER_EPOCH,
         primitives::{BlsPublicKey, BlsSignature},
-        ssz::{prelude::*, self}, Fork, types::mainnet::ExecutionPayloadHeader, deneb,
+        ssz::{prelude::*, self}, Fork, types::mainnet::ExecutionPayloadHeader,
     };
     use helix_beacon_client::types::PayloadAttributes;
     use hyper::{StatusCode, Request, Body, Uri, Method, header};
@@ -30,7 +30,7 @@ mod tests {
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_common::{
-        api::builder_api::{BuilderGetValidatorsResponseEntry, BuilderGetValidatorsResponse}, bid_submission::{SignedBidSubmission, BidTrace, v2::header_submission::{HeaderSubmission, SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb}, BidSubmission}, SubmissionTrace, deneb::BlobsBundle, HeaderSubmissionTrace,
+        api::builder_api::{BuilderGetValidatorsResponseEntry, BuilderGetValidatorsResponse}, bid_submission::{SignedBidSubmission, v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb}, BidSubmission}, SubmissionTrace, HeaderSubmissionTrace,
     };
     use helix_common::api::proposer_api::ValidatorRegistrationInfo;
     use helix_common::api::proposer_api::ValidatorPreferences;
@@ -76,8 +76,8 @@ mod tests {
         let client = Client::new();
         let request = client.post(req_url).header("accept", "*/*");
         let request = encoding.to_headers(request);
-        let resp = request.body(req_payload).send().await.unwrap();
-        resp
+        
+        request.body(req_payload).send().await.unwrap()
     }
 
     fn get_test_pub_key_bytes(random: bool) -> [u8; 48] {
