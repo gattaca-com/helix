@@ -612,7 +612,7 @@ where
         };
 
         // Pause execution if the proposer is not whitelisted
-        if matches!(self.fork_info.network, Network::Mainnet) && !self.is_known_proposer(&proposer_public_key).await? {
+        if matches!(self.fork_info.network, Network::Mainnet) && !self.is_trusted_proposer(&proposer_public_key).await? {
             // Calculate the remaining time needed to reach the target propagation duration.
             // Conditionally pause the execution until we hit `TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS` 
             // to allow the block to propagate through the network.
@@ -621,6 +621,8 @@ where
             if remaining_sleep_ms > 0 {
                 sleep(Duration::from_millis(remaining_sleep_ms)).await;
             }
+        } else {
+            info!(request_id = %request_id, "proposer is trusted, not pausing execution");
         }
 
         
@@ -976,7 +978,7 @@ where
         });
     }
 
-    async fn is_known_proposer(
+    async fn is_trusted_proposer(
         &self,
         public_key: &BlsPublicKey,
     ) -> Result<bool, ProposerApiError> {
