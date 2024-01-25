@@ -50,7 +50,6 @@ use helix_common::{
     chain_info::{ChainInfo, Network},
     try_execution_header_from_payload, BidRequest, GetHeaderTrace, GetPayloadTrace,
     RegisterValidatorsTrace, signed_proposal::VersionedSignedProposal, versioned_payload::PayloadAndBlobs,
-    }
 };
 use helix_utils::signing::{verify_signed_builder_message, verify_signed_consensus_message};
 
@@ -615,14 +614,24 @@ where
             },
         };
 
-        // Calculate the remaining time needed to reach the target propagation duration.
-        // Conditionally pause the execution until we hit `TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS` 
-        // to allow the block to propagate through the network.
-        let elapsed_since_propagate_start_ms = (get_nanos_timestamp()? - trace.beacon_client_broadcast) / 1_000_000;
-        let remaining_sleep_ms = self.target_get_payload_propagation_duration_ms.saturating_sub(elapsed_since_propagate_start_ms);
-        if remaining_sleep_ms > 0 && matches!(self.chain_info.network, Network::Mainnet) {
-            sleep(Duration::from_millis(remaining_sleep_ms)).await;
+        // Pause execution if the proposer is not whitelisted
+        let is_mainnet = matches!(self.chain_info.network, Network::Mainnet);
+        if is_mainnet && !self.is_trusted_proposer(&proposer_public_key).await? {
+            // Calculate the remaining time needed to reach the target propagation duration.
+            // Conditionally pause the execution until we hit `TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS` 
+            // to allow the block to propagate through the network.
+            let elapsed_since_propagate_start_ms = (get_nanos_timestamp()? - trace.beacon_client_broadcast) / 1_000_000;
+            let remaining_sleep_ms = self.target_get_payload_propagation_duration_ms.saturating_sub(elapsed_since_propagate_start_ms);
+            if remaining_sleep_ms > 0 {
+                sleep(Duration::from_millis(remaining_sleep_ms)).await;
+            }
+        } else if !is_mainnet {
+            info!(request_id = %request_id, "not on mainnet, not pausing execution");
+        } else {
+            info!(request_id = %request_id, "proposer is not trusted, not pausing execution");
         }
+
+        
 
         // Return response
         info!(request_id = %request_id, trace = ?trace, timestamp = get_nanos_timestamp()?, "delivering payload");
@@ -973,6 +982,17 @@ where
                 error!(request_id = %request_id, error = %err, "error saving get header call to database");
             }
         });
+    }
+
+    async fn is_trusted_proposer(
+        &self,
+        public_key: &BlsPublicKey,
+    ) -> Result<bool, ProposerApiError> {
+        Ok(self
+            .auctioneer
+            .get_trusted_proposers()
+            .await?
+            .map_or(false, |whitelist| whitelist.contains(public_key)))
     }
 }
 
