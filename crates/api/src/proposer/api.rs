@@ -50,6 +50,7 @@ use helix_common::{
     chain_info::{ChainInfo, Network},
     try_execution_header_from_payload, BidRequest, GetHeaderTrace, GetPayloadTrace,
     RegisterValidatorsTrace, signed_proposal::VersionedSignedProposal, versioned_payload::PayloadAndBlobs,
+    }
 };
 use helix_utils::signing::{verify_signed_builder_message, verify_signed_consensus_message};
 
@@ -59,7 +60,6 @@ use crate::proposer::{
 
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
-const TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS: u64 = 1000;
 
 #[derive(Clone)]
 pub struct ProposerApi<A, DB, M>
@@ -78,6 +78,8 @@ where
     chain_info: Arc<ChainInfo>,
     next_proposer_duty: Arc<RwLock<Option<BuilderGetValidatorsResponseEntry>>>,
     validator_preferences: Arc<ValidatorPreferences>,
+
+    target_get_payload_propagation_duration_ms: u64,
 }
 
 impl<A, DB, M> ProposerApi<A, DB, M>
@@ -94,6 +96,7 @@ where
         chain_info: Arc<ChainInfo>,
         slot_update_subscription: Sender<Sender<ChainUpdate>>,
         validator_preferences: Arc<ValidatorPreferences>,
+        target_get_payload_propagation_duration_ms: u64,
     ) -> Self {
         let api = Self {
             auctioneer,
@@ -104,6 +107,7 @@ where
             chain_info,
             next_proposer_duty: Arc::new(RwLock::new(None)),
             validator_preferences,
+            target_get_payload_propagation_duration_ms,
         };
 
         // Spin up the housekeep task
@@ -615,7 +619,7 @@ where
         // Conditionally pause the execution until we hit `TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS` 
         // to allow the block to propagate through the network.
         let elapsed_since_propagate_start_ms = (get_nanos_timestamp()? - trace.beacon_client_broadcast) / 1_000_000;
-        let remaining_sleep_ms = TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS.saturating_sub(elapsed_since_propagate_start_ms);
+        let remaining_sleep_ms = self.target_get_payload_propagation_duration_ms.saturating_sub(elapsed_since_propagate_start_ms);
         if remaining_sleep_ms > 0 && matches!(self.chain_info.network, Network::Mainnet) {
             sleep(Duration::from_millis(remaining_sleep_ms)).await;
         }

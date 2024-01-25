@@ -45,6 +45,7 @@ pub fn app() -> Router {
         Arc::new(ChainInfo::for_mainnet()),
         slot_update_sender,
         Arc::new(ValidatorPreferences::default()),
+        0
     ));
 
     let data_api =
@@ -153,7 +154,8 @@ pub fn proposer_api_app() -> (
             Arc::new(MockMultiBeaconClient::default()),
             Arc::new(ChainInfo::for_mainnet()),
             slot_update_sender.clone(),
-            Arc::new(ValidatorPreferences::default())
+            Arc::new(ValidatorPreferences::default()),
+            0
         )
     );
 
