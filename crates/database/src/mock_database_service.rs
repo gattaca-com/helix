@@ -9,7 +9,7 @@ use ethereum_consensus::{
     ssz::prelude::*,
     types::mainnet::ExecutionPayload,
 };
-use helix_common::{api::proposer_api::ValidatorRegistrationInfo, GetHeaderTrace, bid_submission::v2::header_submission::SignedHeaderSubmission, HeaderSubmissionTrace, GossipedHeaderTrace, GossipedPayloadTrace, pending_block::PendingBlock, versioned_payload::PayloadAndBlobs};
+use helix_common::{api::proposer_api::ValidatorRegistrationInfo, bid_submission::v2::header_submission::SignedHeaderSubmission, pending_block::PendingBlock, versioned_payload::PayloadAndBlobs, GetHeaderTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo};
 use helix_common::{
     api::{builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters},
     bid_submission::{BidTrace, SignedBidSubmission},
@@ -255,5 +255,9 @@ impl DatabaseService for MockDatabaseService {
 
     async fn remove_old_pending_blocks(&self) -> Result<(), DatabaseError> {
         Ok(())
+    }
+
+    async fn get_trusted_proposers(&self) -> Result<Vec<ProposerInfo>, DatabaseError> {
+        Ok(vec![])
     }
 }

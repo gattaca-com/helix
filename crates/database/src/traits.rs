@@ -12,11 +12,7 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
-    },
-    bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission},
-    builder_info::BuilderInfo,
-    simulator::BlockSimError,
-    GetPayloadTrace, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorSummary, GetHeaderTrace, HeaderSubmissionTrace, GossipedHeaderTrace, GossipedPayloadTrace, pending_block::PendingBlock, versioned_payload::PayloadAndBlobs,
+    }, bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission}, builder_info::BuilderInfo, pending_block::PendingBlock, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorSummary
 };
 
 use crate::{
@@ -177,4 +173,6 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, DatabaseError>;
 
     async fn remove_old_pending_blocks(&self) -> Result<(), DatabaseError>;
+
+    async fn get_trusted_proposers(&self) -> Result<Vec<ProposerInfo>, DatabaseError>;
 }
