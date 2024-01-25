@@ -3,6 +3,7 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 
+use helix_common::BuilderID;
 use helix_common::versioned_payload::PayloadAndBlobs;
 use helix_common::{ProposerInfo, ProposerInfoSet};
 use helix_database::types::BuilderInfoDocument;

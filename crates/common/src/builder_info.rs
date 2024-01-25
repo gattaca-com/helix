@@ -9,4 +9,18 @@ pub struct BuilderInfo {
     #[serde(with = "as_str")]
     pub collateral: U256,
     pub is_optimistic: bool,
+    pub builder_id: BuilderID,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub enum BuilderID {
+    Titan,
+    TitanS,
+    Unknown,
+}
+
+impl Default for BuilderID {
+    fn default() -> Self {
+        BuilderID::Unknown
+    }
 }

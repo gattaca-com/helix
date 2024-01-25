@@ -209,6 +209,7 @@ impl FromRow for BuilderInfo {
         Ok(BuilderInfo {
             collateral: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("collateral"))?,
             is_optimistic: parse_bool_to_bool(row.get::<&str, bool>("is_optimistic"))?,
+            builder_id: todo!(),
         })
     }
 }

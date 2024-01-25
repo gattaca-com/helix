@@ -1,6 +1,5 @@
-use self::trusted_builders::BuilderID;
+use crate::BuilderID;
 
-pub mod trusted_builders;
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ValidatorPreferences {

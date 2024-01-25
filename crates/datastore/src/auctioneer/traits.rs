@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 use helix_database::BuilderInfoDocument;
 use helix_common::{
-    bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission}, builder_info::BuilderInfo, eth::SignedBuilderBid, signing::RelaySigningContext, versioned_payload::PayloadAndBlobs, ProposerInfo, ProposerInfoSet
+    bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission}, builder_info::BuilderInfo, eth::SignedBuilderBid, signing::RelaySigningContext, BuilderID, versioned_payload::PayloadAndBlobs, ProposerInfo, ProposerInfoSet
 };
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse};

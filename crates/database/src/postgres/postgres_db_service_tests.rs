@@ -13,8 +13,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         time::{SystemTime, UNIX_EPOCH},
     };
     use helix_common::{
-        bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission, BidSubmission},
-        GetPayloadTrace, bellatrix::{ByteVector, ByteList, List}, HeaderSubmissionTrace, versioned_payload::PayloadAndBlobs,
+        bellatrix::{ByteVector, ByteList, List}, bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission, BidSubmission}, versioned_payload::PayloadAndBlobs, BuilderID, GetPayloadTrace, HeaderSubmissionTrace
     };
 
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
@@ -293,7 +292,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         let key = SecretKey::random(&mut rng).unwrap();
         let public_key = key.public_key();
         let builder_info =
-            helix_common::BuilderInfo { collateral: Default::default(), is_optimistic: false };
+            helix_common::BuilderInfo { collateral: Default::default(), is_optimistic: false, builder_id: BuilderID::Titan };
 
         let result = db_service.store_builder_info(&public_key, builder_info).await;
         assert!(result.is_ok());
@@ -314,7 +313,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         let public_key = key.public_key();
 
         let builder_info =
-            helix_common::BuilderInfo { collateral: Default::default(), is_optimistic: false };
+            helix_common::BuilderInfo { collateral: Default::default(), is_optimistic: false, builder_id: BuilderID::Titan };
 
         let result = db_service.store_builder_info(&public_key, builder_info).await;
         assert!(result.is_ok());
