@@ -6,7 +6,7 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Hash32},
     ssz::prelude::*,
 };
-use helix_common::{bid_submission::BidSubmission, versioned_payload::PayloadAndBlobs};
+use helix_common::{bid_submission::BidSubmission, versioned_payload::PayloadAndBlobs, ProposerInfo, ProposerInfoSet};
 use helix_common::bid_submission::v2::header_submission::SignedHeaderSubmission;
 use redis::AsyncCommands;
 use serde::{de::DeserializeOwned, Serialize};
@@ -30,7 +30,7 @@ use crate::{
     },
     types::{
         keys::{
-            BUILDER_INFO_KEY, LAST_HASH_DELIVERED_KEY, LAST_SLOT_DELIVERED_KEY,
+            BUILDER_INFO_KEY, LAST_HASH_DELIVERED_KEY, LAST_SLOT_DELIVERED_KEY, PROPOSER_WHITELIST_KEY
         },
         SaveBidAndUpdateTopBidResponse,
     },
@@ -747,6 +747,22 @@ impl Auctioneer for RedisCache {
         ).await?;
 
         Ok(Some(builder_bid))
+    }
+
+    async fn update_trusted_proposers(
+        &self,
+        proposer_whitelist: Vec<ProposerInfo>,
+    ) -> Result<(), AuctioneerError> {
+        let proposer_whitelist_map: ProposerInfoSet = proposer_whitelist.into();
+        self.set(PROPOSER_WHITELIST_KEY, &proposer_whitelist_map, None)
+            .await?;
+
+        Ok(())
+    }
+
+    async fn get_trusted_proposers(&self) -> Result<Option<ProposerInfoSet>, AuctioneerError> {
+        let proposer_whitelist_map = self.get(PROPOSER_WHITELIST_KEY).await?;
+        Ok(proposer_whitelist_map)
     }
 }
 
