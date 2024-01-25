@@ -25,7 +25,7 @@ use crate::error::HousekeeperError;
 pub const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 8;
 const BUILDER_INFO_UPDATE_FREQ: u64 = 1;
-const PROPOSER_WHITELIST_UPDATE_FREQ: u64 = 5;
+const TRUSTED_PROPOSERS_UPDATE_FREQ: u64 = 5;
 
 // Constants for known validators refresh logic.
 const MIN_SLOTS_BETWEEN_UPDATES: u64 = 6;
@@ -69,8 +69,8 @@ pub struct Housekeeper<
     re_sync_builder_info_slot: Mutex<u64>,
     re_sync_builder_info_lock: Mutex<()>,
 
-    refreshed_proposer_whitelist_slot: Mutex<u64>,
-    refresh_proposer_whitelist_lock: Mutex<()>,
+    refreshed_trusted_proposers_slot: Mutex<u64>,
+    refresh_trusted_proposers_lock: Mutex<()>,
 }
 
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
@@ -89,8 +89,8 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             refresh_validators_lock: Mutex::new(()),
             re_sync_builder_info_slot: Mutex::new(0),
             re_sync_builder_info_lock: Mutex::new(()),
-            refreshed_proposer_whitelist_slot: Mutex::new(0),
-            refresh_proposer_whitelist_lock: Mutex::new(()),
+            refreshed_trusted_proposers_slot: Mutex::new(0),
+            refresh_trusted_proposers_lock: Mutex::new(()),
         })
     }
 
@@ -154,11 +154,11 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             });
         }
 
-        // Spawn a task to asynchronously update proposer whitelist.
-        if self.should_update_proposer_whitelist(head_slot).await {
+        // Spawn a task to asynchronously update the trusted proposers.
+        if self.should_update_trusted_proposers(head_slot).await {
             let cloned_self = self.clone();
             tokio::spawn(async move {
-                let _ = cloned_self.update_proposer_whitelist(head_slot).await;
+                let _ = cloned_self.update_trusted_proposers(head_slot).await;
             });
         }
 
@@ -481,57 +481,57 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             || last_re_sync_distance >= BUILDER_INFO_UPDATE_FREQ
     }
 
-    /// Determine if the proposer whitelist should be refreshed for the given slot.
+    /// Determine if the trusted proposers should be refreshed for the given slot.
     ///     
     /// This function checks two conditions:
-    /// 1. If the `head_slot` is exactly divisible by `PROPOSER_WHITELIST_UPDATE_FREQ`,
-    ///   it will return `true` to trigger a proposer whitelist update.
+    /// 1. If the `head_slot` is exactly divisible by `TRUSTED_PROPOSERS_UPDATE_FREQ`,
+    ///   it will return `true` to trigger a trusted proposer update.
     /// 2. If the distance between the current `head_slot` and the last slot for which
-    ///  the proposer whitelist was refreshed (`refreshed_proposer_whitelist_slot`) is greater than or equal to
-    /// `PROPOSER_WHITELIST_UPDATE_FREQ`, it will also return `true`.
-    async fn should_update_proposer_whitelist(
+    ///  the trusted proposers was refreshed (`refreshed_trusted_proposers_slot`) is greater than or equal to
+    /// `TRUSTED_PROPOSERS_UPDATE_FREQ`, it will also return `true`.
+    async fn should_update_trusted_proposers(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
         head_slot: u64,
     ) -> bool {
-        let proposer_whitelist_slot = *self.refreshed_proposer_whitelist_slot.lock().await;
-        let last_proposer_whitelist_distance = head_slot - proposer_whitelist_slot;
-        head_slot % PROPOSER_WHITELIST_UPDATE_FREQ == 0
-            || last_proposer_whitelist_distance >= PROPOSER_WHITELIST_UPDATE_FREQ
+        let trusted_proposers_slot = *self.refreshed_trusted_proposers_slot.lock().await;
+        let last_trusted_proposers_distance = head_slot - trusted_proposers_slot;
+        head_slot % TRUSTED_PROPOSERS_UPDATE_FREQ == 0
+            || last_trusted_proposers_distance >= TRUSTED_PROPOSERS_UPDATE_FREQ
     }
 
     /// Update the proposer whitelist.
     /// 
     /// This function will fetch the proposer whitelist from the database and update the auctioneer.
-    /// It will also update the `refreshed_proposer_whitelist_slot` to the current `head_slot`.
+    /// It will also update the `refreshed_trusted_proposers_slot` to the current `head_slot`.
     /// 
     /// This function will error if it cannot fetch the proposer whitelist from the database.
     /// It will continue if it cannot update the auctioneer.
     /// 
-    /// This function will also error if it cannot update the `refreshed_proposer_whitelist_slot`.
+    /// This function will also error if it cannot update the `refreshed_trusted_proposers_slot`.
     /// 
     /// This function will return `Ok(())` if it completes successfully.
-    async fn update_proposer_whitelist(
+    async fn update_trusted_proposers(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
         head_slot: u64,
     ) -> Result<(), HousekeeperError> {
-        let _guard = self.refresh_proposer_whitelist_lock.try_lock()?;
+        let _guard = self.refresh_trusted_proposers_lock.try_lock()?;
 
         debug!(
             head_slot = head_slot,
-            "Housekeeper::update_proposer_whitelist",
+            "Housekeeper::update_trusted_proposers",
         );
         
-        let proposer_whitelist = self.db.get_proposer_whitelist().await?;
+        let proposer_whitelist = self.db.get_trusted_proposers().await?;
         if proposer_whitelist.is_empty() {
-            warn!("The proposer whitelist is empty.");
+            warn!("The trusted proposers list is empty.");
         }
 
-        self.auctioneer.update_proposer_whitelist(proposer_whitelist).await?;
-        *self.refreshed_proposer_whitelist_slot.lock().await = head_slot;
+        self.auctioneer.update_trusted_proposers(proposer_whitelist).await?;
+        *self.refreshed_trusted_proposers_slot.lock().await = head_slot;
 
         debug!(
             head_slot = head_slot, 
-            "updated proposer whitelist"
+            "updated trusted proposers"
         );
 
         Ok(())

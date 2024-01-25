@@ -1422,7 +1422,7 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(())
     }
 
-    async fn get_proposer_whitelist(
+    async fn get_trusted_proposers(
         &self,
     ) -> Result<Vec<ProposerInfo>, DatabaseError> {
         parse_rows(self.pool
@@ -1430,7 +1430,7 @@ impl DatabaseService for PostgresDatabaseService {
             .await?
             .query(
                 "
-                    SELECT * FROM proposer_whitelist 
+                    SELECT * FROM trusted_proposers 
                 ",
                 &[],
             )

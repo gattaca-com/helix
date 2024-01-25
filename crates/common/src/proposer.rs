@@ -3,7 +3,7 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Slot, ValidatorIndex},
     serde::as_str,
 };
-use reth_primitives::revm_primitives::{HashMap, HashSet};
+use reth_primitives::revm_primitives::HashSet;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

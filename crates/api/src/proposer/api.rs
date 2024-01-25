@@ -612,7 +612,8 @@ where
         };
 
         // Pause execution if the proposer is not whitelisted
-        if matches!(self.fork_info.network, Network::Mainnet) && !self.is_trusted_proposer(&proposer_public_key).await? {
+        let is_mainnet = matches!(self.fork_info.network, Network::Mainnet);
+        if is_mainnet && !self.is_trusted_proposer(&proposer_public_key).await? {
             // Calculate the remaining time needed to reach the target propagation duration.
             // Conditionally pause the execution until we hit `TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS` 
             // to allow the block to propagate through the network.
@@ -621,8 +622,10 @@ where
             if remaining_sleep_ms > 0 {
                 sleep(Duration::from_millis(remaining_sleep_ms)).await;
             }
+        } else if !is_mainnet {
+            info!(request_id = %request_id, "not on mainnet, not pausing execution");
         } else {
-            info!(request_id = %request_id, "proposer is trusted, not pausing execution");
+            info!(request_id = %request_id, "proposer is not trusted, not pausing execution");
         }
 
         
@@ -984,7 +987,7 @@ where
     ) -> Result<bool, ProposerApiError> {
         Ok(self
             .auctioneer
-            .get_proposer_whitelist()
+            .get_trusted_proposers()
             .await?
             .map_or(false, |whitelist| whitelist.contains(public_key)))
     }

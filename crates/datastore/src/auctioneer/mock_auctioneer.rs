@@ -215,14 +215,14 @@ impl Auctioneer for MockAuctioneer {
         Ok(None)
     }
 
-    async fn update_proposer_whitelist(
+    async fn update_trusted_proposers(
         &self,
         _proposer_whitelist: Vec<ProposerInfo>,
     ) -> Result<(), AuctioneerError> {
         Ok(())
     }
 
-    async fn get_proposer_whitelist(
+    async fn get_trusted_proposers(
         &self,
     ) -> Result<Option<ProposerInfoSet>, AuctioneerError> {
         Ok(Some(ProposerInfoSet::from(vec![])))

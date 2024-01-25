@@ -14,7 +14,6 @@ use helix_common::{
         proposer_api::ValidatorRegistrationInfo,
     }, bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission}, builder_info::BuilderInfo, pending_block::PendingBlock, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorSummary
 };
-use reth_primitives::revm_primitives::HashMap;
 
 use crate::{
     error::DatabaseError,
@@ -175,5 +174,5 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn remove_old_pending_blocks(&self) -> Result<(), DatabaseError>;
 
-    async fn get_proposer_whitelist(&self) -> Result<Vec<ProposerInfo>, DatabaseError>;
+    async fn get_trusted_proposers(&self) -> Result<Vec<ProposerInfo>, DatabaseError>;
 }

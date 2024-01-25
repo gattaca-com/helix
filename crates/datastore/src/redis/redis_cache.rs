@@ -749,7 +749,7 @@ impl Auctioneer for RedisCache {
         Ok(Some(builder_bid))
     }
 
-    async fn update_proposer_whitelist(
+    async fn update_trusted_proposers(
         &self,
         proposer_whitelist: Vec<ProposerInfo>,
     ) -> Result<(), AuctioneerError> {
@@ -760,7 +760,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
-    async fn get_proposer_whitelist(&self) -> Result<Option<ProposerInfoSet>, AuctioneerError> {
+    async fn get_trusted_proposers(&self) -> Result<Option<ProposerInfoSet>, AuctioneerError> {
         let proposer_whitelist_map = self.get(PROPOSER_WHITELIST_KEY).await?;
         Ok(proposer_whitelist_map)
     }

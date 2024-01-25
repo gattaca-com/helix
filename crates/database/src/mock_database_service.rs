@@ -257,7 +257,7 @@ impl DatabaseService for MockDatabaseService {
         Ok(())
     }
 
-    async fn get_proposer_whitelist(&self) -> Result<Vec<ProposerInfo>, DatabaseError> {
+    async fn get_trusted_proposers(&self) -> Result<Vec<ProposerInfo>, DatabaseError> {
         Ok(vec![])
     }
 }

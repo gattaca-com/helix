@@ -141,10 +141,10 @@ pub trait Auctioneer: Send + Sync + Clone {
         signing_context: &RelaySigningContext,
     ) -> Result<Option<SignedBuilderBid>, AuctioneerError>;
 
-    async fn update_proposer_whitelist(
+    async fn update_trusted_proposers(
         &self,
         proposer_whitelist: Vec<ProposerInfo>,
     ) -> Result<(), AuctioneerError>;
 
-    async fn get_proposer_whitelist(&self) -> Result<Option<ProposerInfoSet>, AuctioneerError>;
+    async fn get_trusted_proposers(&self) -> Result<Option<ProposerInfoSet>, AuctioneerError>;
 }
