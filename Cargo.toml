@@ -12,7 +12,6 @@ members = [
 resolver = "2"
 
 [workspace.package]
-name = "helix"
 version = "0.0.1"
 rust-version = "1.72.0"
 edition = "2021"

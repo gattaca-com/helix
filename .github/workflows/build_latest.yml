@@ -29,7 +29,7 @@ jobs:
         REPO_NAME: ${{ secrets.REPO_NAME }}        
       run: |
         IMAGE_NAME=latest
-        DOCKER_BUILDKIT=1 docker build -t helix:$IMAGE_NAME --build-arg AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID --build-arg AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY -f ./repos/$REPO_NAME/Dockerfile .
+        DOCKER_BUILDKIT=1 docker build -t helix:$IMAGE_NAME --build-arg AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID --build-arg AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY --build-arg REPO_NAME=$REPO_NAME -f ./repos/$REPO_NAME/Dockerfile .
         DOCKER_BUILDKIT=1 docker tag helix:$IMAGE_NAME $REGISTRY_URL/helix:$IMAGE_NAME
         DOCKER_BUILDKIT=1 docker login https://$REGISTRY_URL/ -u "$DOCKER_REG_USR" -p "$DOCKER_REG_PW"
         DOCKER_BUILDKIT=1 docker push $REGISTRY_URL/helix:$IMAGE_NAME

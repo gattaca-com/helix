@@ -19,7 +19,6 @@ serde.workspace = true
 serde_json.workspace = true
 
 # DB 
-mongodb = "2.7"
 tokio-postgres.workspace = true
 deadpool-postgres.workspace = true
 refinery.workspace = true

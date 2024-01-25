@@ -285,7 +285,7 @@ impl RedisCache {
     /// 2) Update floor bid value.
     async fn set_new_floor(
         &self,
-        new_floor_value: &U256,
+        new_floor_value: U256,
         slot: u64,
         parent_hash: &Hash32,
         proposer_pub_key: &BlsPublicKey,
@@ -474,7 +474,7 @@ impl Auctioneer for RedisCache {
         // Save the execution payload
         self.save_execution_payload(
             submission.slot(),
-            &submission.proposer_public_key(),
+            submission.proposer_public_key(),
             submission.block_hash(),
             &submission.payload_and_blobs(),
         )
@@ -493,7 +493,7 @@ impl Auctioneer for RedisCache {
         // Save builder bid and update top bid/ floor keys if possible.
         self.save_signed_builder_bid_and_update_top_bid(
             &builder_bid, 
-            &submission.message(),
+            submission.message(),
             received_at, 
             cancellations_enabled, 
             floor_value, 
@@ -701,7 +701,7 @@ impl Auctioneer for RedisCache {
             return Ok(());
         }
         self.set_new_floor(
-            &builder_bid.value(),
+            builder_bid.value(),
             bid_trace.slot,
             &bid_trace.parent_hash,
             &bid_trace.proposer_public_key,
@@ -730,7 +730,7 @@ impl Auctioneer for RedisCache {
 
         // Sign builder bid with relay pubkey.
         let builder_bid = SignedBuilderBid::from_header_submission(
-            &submission,
+            submission,
             signing_context.public_key.clone(),
             &signing_context.signing_key,
             &signing_context.context,
@@ -923,7 +923,7 @@ mod tests {
         cache.clear_cache().await.unwrap();
 
         // Current slot key
-        let slot = 5 as u64;
+        let slot = 5_u64;
         let parent_hash = Hash32::default();
         let proposer_pub_key = BlsPublicKey::default();
         let key = get_builder_latest_bid_value_key(slot, &parent_hash, &proposer_pub_key);
@@ -1001,7 +1001,7 @@ mod tests {
                 slot,
                 &parent_hash,
                 &proposer_pub_key,
-                floor_value.clone(),
+                floor_value,
             )
             .await;
         assert!(res.is_ok(), "Function should handle empty bids");
@@ -1038,7 +1038,7 @@ mod tests {
 
         // Test with floor_value greater than top_bid_value
         let higher_floor_value = U256::from(70);
-        capella_builder_bid.value = higher_floor_value.clone();
+        capella_builder_bid.value = higher_floor_value;
         let floor_bid = SignedBuilderBid::Capella(capella::SignedBuilderBid {
             message: capella_builder_bid.clone(),
             ..Default::default()
@@ -1500,8 +1500,8 @@ mod tests {
             )
             .await;
         assert!(result.is_ok(), "Save failed");
-        assert_eq!(state.was_bid_saved, false);
-        assert_eq!(state.is_new_top_bid, false);
+        assert!(!state.was_bid_saved);
+        assert!(!state.is_new_top_bid);
     }
 
     #[tokio::test]
@@ -1521,8 +1521,8 @@ mod tests {
             )
             .await;
         assert!(result.is_ok(), "Save failed");
-        assert_eq!(state.was_bid_saved, true, "Bid should be saved");
-        assert_eq!(state.is_new_top_bid, true, "Bid should be new top bid");
+        assert!(state.was_bid_saved, "Bid should be saved");
+        assert!(state.is_new_top_bid, "Bid should be new top bid");
 
         // Validate bid is new floor
         let new_floor_value = cache
@@ -1554,8 +1554,8 @@ mod tests {
             )
             .await;
         assert!(result.is_ok(), "Save failed");
-        assert_eq!(state.was_bid_saved, true, "Bid should be saved");
-        assert_eq!(state.is_new_top_bid, false, "Bid should not be new top bid");
+        assert!(state.was_bid_saved, "Bid should be saved");
+        assert!(!state.is_new_top_bid, "Bid should not be new top bid");
 
         // Validate floor is the same
         let new_floor_value = cache
@@ -1587,8 +1587,8 @@ mod tests {
             )
             .await;
         assert!(result.is_ok(), "Failed to save bid");
-        assert_eq!(state.was_bid_saved, true, "Bid should be saved");
-        assert_eq!(state.is_new_top_bid, true, "Bid should be new top bid");
+        assert!(state.was_bid_saved, "Bid should be saved");
+        assert!(state.is_new_top_bid, "Bid should be new top bid");
 
         // Validate bid is not new floor as this is a cancellable bid
         let new_floor_value = cache
@@ -1617,7 +1617,7 @@ mod tests {
                 &submission,
                 received_at,
                 true,
-                floor_value.clone(),
+                floor_value,
                 &mut state,
                 &RelaySigningContext::default(),
             )
@@ -1640,8 +1640,8 @@ mod tests {
             )
             .await;
         assert!(result.is_ok(), "Failed to save bid");
-        assert_eq!(state.was_bid_saved, true, "Bid should be saved");
-        assert_eq!(state.is_new_top_bid, false, "Bid should not be the new top bid");
+        assert!(state.was_bid_saved, "Bid should be saved");
+        assert!(!state.is_new_top_bid, "Bid should not be the new top bid");
     }
 
     async fn setup_save_and_update_test() -> (RedisCache, SignedBidSubmission, U256, u128) {
@@ -1658,7 +1658,7 @@ mod tests {
         // Save floor value
         submission.message_mut().builder_public_key =
             BlsPublicKey::try_from([12u8; 48].as_ref()).unwrap();
-        submission.message_mut().value = floor_value.clone();
+        submission.message_mut().value = floor_value;
         cache
             .save_bid_and_update_top_bid(
                 &submission,

@@ -39,8 +39,8 @@ pub struct DeliveredPayloadDocument {
 }
 
 impl DeliveredPayloadDocument {
-    pub fn value(&self) -> &U256 {
-        &self.bid_trace.value
+    pub fn value(&self) -> U256 {
+        self.bid_trace.value
     }
 }
 

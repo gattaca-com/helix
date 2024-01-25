@@ -129,8 +129,8 @@ impl BidSubmission for SignedBidSubmission {
         self.execution_payload().extra_data()
     }
 
-    fn base_fee_per_gas(&self) -> &U256 {
-        self.execution_payload().base_fee_per_gas()
+    fn base_fee_per_gas(&self) -> U256 {
+        *self.execution_payload().base_fee_per_gas()
     }
 
     fn withdrawals(&self) -> Option<&[Withdrawal]> {
@@ -164,8 +164,8 @@ impl SignedBidSubmission {
         &self,
     ) -> &List<ByteList<MAX_BYTES_PER_TRANSACTION>, MAX_TRANSACTIONS_PER_PAYLOAD> {
         match &self {
-            SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.execution_payload.transactions(),
-            SignedBidSubmission::Capella(signed_bid_submission) => &signed_bid_submission.execution_payload.transactions(),
+            SignedBidSubmission::Deneb(signed_bid_submission) => signed_bid_submission.execution_payload.transactions(),
+            SignedBidSubmission::Capella(signed_bid_submission) => signed_bid_submission.execution_payload.transactions(),
         }
     }
 

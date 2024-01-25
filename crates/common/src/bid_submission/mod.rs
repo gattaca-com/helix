@@ -54,7 +54,7 @@ pub trait BidSubmission {
 
     fn extra_data(&self) -> &ByteList<MAX_EXTRA_DATA_BYTES>;
 
-    fn base_fee_per_gas(&self) -> &U256;
+    fn base_fee_per_gas(&self) -> U256;
 
     fn withdrawals(&self) -> Option<&[Withdrawal]>;
 

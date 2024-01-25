@@ -359,10 +359,10 @@ mod multi_beacon_client_tests {
         multi_client.best_beacon_instance.store(2, Ordering::Relaxed);
         let clients = multi_client.beacon_clients_by_last_response();
 
-        assert_eq!(Arc::ptr_eq(&clients[0], &multi_client.beacon_clients[2]), true);
-        assert_eq!(Arc::ptr_eq(&clients[1], &multi_client.beacon_clients[1]), true);
-        assert_eq!(Arc::ptr_eq(&clients[2], &multi_client.beacon_clients[0]), true);
-        assert_eq!(Arc::ptr_eq(&clients[3], &multi_client.beacon_clients[3]), true);
+        assert!(Arc::ptr_eq(&clients[0], &multi_client.beacon_clients[2]));
+        assert!(Arc::ptr_eq(&clients[1], &multi_client.beacon_clients[1]));
+        assert!(Arc::ptr_eq(&clients[2], &multi_client.beacon_clients[0]));
+        assert!(Arc::ptr_eq(&clients[3], &multi_client.beacon_clients[3]));
     }
 
     #[tokio::test]
@@ -376,10 +376,10 @@ mod multi_beacon_client_tests {
         multi_client.best_beacon_instance.store(2, Ordering::Relaxed);
         let clients = multi_client.beacon_clients_by_least_used();
 
-        assert_eq!(Arc::ptr_eq(&clients[0], &multi_client.beacon_clients[3]), true);
-        assert_eq!(Arc::ptr_eq(&clients[1], &multi_client.beacon_clients[0]), true);
-        assert_eq!(Arc::ptr_eq(&clients[2], &multi_client.beacon_clients[1]), true);
-        assert_eq!(Arc::ptr_eq(&clients[3], &multi_client.beacon_clients[2]), true);
+        assert!(Arc::ptr_eq(&clients[0], &multi_client.beacon_clients[3]));
+        assert!(Arc::ptr_eq(&clients[1], &multi_client.beacon_clients[0]));
+        assert!(Arc::ptr_eq(&clients[2], &multi_client.beacon_clients[1]));
+        assert!(Arc::ptr_eq(&clients[3], &multi_client.beacon_clients[2]));
     }
 
     #[tokio::test]

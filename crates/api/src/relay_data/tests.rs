@@ -55,8 +55,8 @@ mod data_api_tests {
         let client = Client::new();
         let request = client.post(req_url).header("accept", "*/*");
         let request = encoding.to_headers(request);
-        let resp = request.body(req_payload).send().await.unwrap();
-        resp
+        
+        request.body(req_payload).send().await.unwrap()
     }
 
     async fn start_api_server() -> (

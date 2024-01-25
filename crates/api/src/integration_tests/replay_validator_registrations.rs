@@ -54,15 +54,15 @@ async fn fetch_and_aggregate_validators(
                     let entries = entries
                         .into_iter()
                         .map(|entry| {
-                            let entry = BuilderGetValidatorsResponseEntry {
+                            
+                            BuilderGetValidatorsResponseEntry {
                                 slot: entry.slot,
                                 validator_index: entry.validator_index,
                                 entry: ValidatorRegistrationInfo {
                                     registration: entry.entry,
                                     preferences: Default::default(),
                                 },
-                            };
-                            entry
+                            }
                         })
                         .collect();
                     Ok(entries)
@@ -134,7 +134,6 @@ async fn run() {
     tokio::spawn(async move {
         if let Err(err) = beacon_client.subscribe_to_head_events(head_event_sender).await {
             println!("Error subscribing to head events: {err}");
-            return;
         }
     });
 
