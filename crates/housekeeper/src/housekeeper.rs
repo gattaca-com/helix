@@ -25,7 +25,6 @@ use crate::error::HousekeeperError;
 pub const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 8;
 
-const BUILDER_INFO_UPDATE_FREQ: u64 = 1;
 const TRUSTED_PROPOSERS_UPDATE_FREQ: u64 = 5;
 
 // Constants for known validators refresh logic.

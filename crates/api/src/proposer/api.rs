@@ -50,7 +50,6 @@ use helix_common::{
     chain_info::{ChainInfo, Network},
     try_execution_header_from_payload, BidRequest, GetHeaderTrace, GetPayloadTrace,
     RegisterValidatorsTrace, signed_proposal::VersionedSignedProposal, versioned_payload::PayloadAndBlobs,
-    }
 };
 use helix_utils::signing::{verify_signed_builder_message, verify_signed_consensus_message};
 
@@ -616,7 +615,7 @@ where
         };
 
         // Pause execution if the proposer is not whitelisted
-        let is_mainnet = matches!(self.fork_info.network, Network::Mainnet);
+        let is_mainnet = matches!(self.chain_info.network, Network::Mainnet);
         if is_mainnet && !self.is_trusted_proposer(&proposer_public_key).await? {
             // Calculate the remaining time needed to reach the target propagation duration.
             // Conditionally pause the execution until we hit `TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS` 
