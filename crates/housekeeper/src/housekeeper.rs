@@ -116,6 +116,11 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             return;
         }
 
+        // Only allow one housekeeper task to run at a time.
+        if !self.auctioneer.try_become_housekeeper().await {
+            return;
+        }
+
         // Demote builders with expired pending blocks
         let cloned_self = self.clone();
         tokio::spawn(async move {

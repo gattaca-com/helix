@@ -213,4 +213,8 @@ impl Auctioneer for MockAuctioneer {
     ) -> Result<Option<SignedBuilderBid>, AuctioneerError> {
         Ok(None)
     }
+
+    async fn try_become_housekeeper(&self) -> bool {
+        true
+    }
 }

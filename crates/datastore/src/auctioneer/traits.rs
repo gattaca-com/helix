@@ -143,4 +143,6 @@ pub trait Auctioneer: Send + Sync + Clone {
         state: &mut SaveBidAndUpdateTopBidResponse,
         signing_context: &RelaySigningContext,
     ) -> Result<Option<SignedBuilderBid>, AuctioneerError>;
+
+    async fn try_become_housekeeper(&self) -> bool;
 }

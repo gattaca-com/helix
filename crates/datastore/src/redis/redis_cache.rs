@@ -8,7 +8,7 @@ use ethereum_consensus::{
 };
 use helix_common::{bid_submission::BidSubmission, versioned_payload::PayloadAndBlobs};
 use helix_common::bid_submission::v2::header_submission::SignedHeaderSubmission;
-use redis::AsyncCommands;
+use redis::{AsyncCommands, RedisResult, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::error;
 
@@ -38,6 +38,7 @@ use crate::{
 };
 
 const BID_CACHE_EXPIRY_S: usize = 45;
+const HOUSEKEEPER_LOCK_EXPIRY_S: usize = 2;
 
 #[derive(Clone)]
 pub struct RedisCache {
@@ -141,6 +142,31 @@ impl RedisCache {
         match expiry {
             Some(expiry) => Ok(conn.set_ex(key, str_val, expiry).await?),
             None => Ok(conn.set(key, str_val).await?),
+        }
+    }
+
+    async fn set_lock(
+        &self,
+        key: &str,
+        expiry: usize,
+    ) -> bool {
+        let mut conn = match self.pool.get().await {
+            Ok(conn) => conn,
+            Err(_) => return false,
+        };
+
+        let result: RedisResult<Value> = redis::cmd("SET")
+            .arg(key)
+            .arg(1)
+            .arg("NX")
+            .arg("PX")
+            .arg(expiry)
+            .query_async(&mut conn)
+            .await;
+
+        match result {
+            Ok(Value::Okay) => true,
+            Ok(_) | Err(_) => false,
         }
     }
 
@@ -747,6 +773,16 @@ impl Auctioneer for RedisCache {
         ).await?;
 
         Ok(Some(builder_bid))
+    }
+
+    // Sets the housekeeper lock if it's not already set.
+    // Returns true if the lock was set, false otherwise.
+    // This function is used to ensure that only one housekeeper is running at a time.
+    // The lock is set to expire after HOUSEKEEPER_LOCK_EXPIRY_S seconds.
+    // This will ensure that if a housekeeper crashes, the lock will eventually expire.
+    // Expiry is set to 2 seconds to ensure it will expire before the next slot.
+    async fn try_become_housekeeper(&self) -> bool {
+        self.set_lock("housekeeper_lock", HOUSEKEEPER_LOCK_EXPIRY_S).await
     }
 }
 
