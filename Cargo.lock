@@ -2027,7 +2027,7 @@ dependencies = [
 [[package]]
 name = "fiber"
 version = "0.5.1"
-source = "git+https://github.com/chainbound/fiber-rs.git?rev=87729040183ccae0098b1b0a30fdc631e548cc9f#87729040183ccae0098b1b0a30fdc631e548cc9f"
+source = "git+https://github.com/chainbound/fiber-rs.git?tag=v0.5.1#87729040183ccae0098b1b0a30fdc631e548cc9f"
 dependencies = [
  "alloy-rlp",
  "async-stream",
