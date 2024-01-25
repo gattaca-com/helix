@@ -271,7 +271,7 @@ mod beacon_client_tests {
 
         assert_eq!(sync_status.head_slot, 7222736);
         assert_eq!(sync_status.sync_distance, 1);
-        assert_eq!(sync_status.is_syncing, false);
+        assert!(!sync_status.is_syncing);
     }
 
     #[tokio::test]

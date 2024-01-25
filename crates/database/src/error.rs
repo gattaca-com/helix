@@ -1,13 +1,9 @@
 use deadpool_postgres::PoolError;
 use ethereum_consensus::primitives::BlsPublicKey;
-use mongodb::error::Error as MongoError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum DatabaseError {
-    #[error("MongoDB error: {0}")]
-    Mongo(#[from] MongoError),
-
     #[error("Postgres Pool error: {0}")]
     PostgresPool(#[from] PoolError),
 
