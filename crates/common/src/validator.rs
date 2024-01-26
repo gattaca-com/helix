@@ -53,13 +53,6 @@ pub struct SignedValidatorRegistrationEntry {
     pub inserted_at: u64,
 }
 
-// Needed to run migration from mongodb to postgres. Can be removed after migration is complete.
-#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
-pub struct LegacySignedValidatorRegistrationEntry {
-    pub registration: SignedValidatorRegistration,
-    pub inserted_at: u64,
-}
-
 impl SignedValidatorRegistrationEntry {
     pub fn new(registration_info: ValidatorRegistrationInfo) -> Self {
         Self {

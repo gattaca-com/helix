@@ -36,7 +36,7 @@ impl GrpcGossiperClient {
         let client = self.client.clone();
         tokio::spawn(async move {
 
-            let mut attempt = 0;
+            let mut attempt = 1;
             let base_delay = Duration::from_secs(1);
             let max_delay = Duration::from_secs(60);
 

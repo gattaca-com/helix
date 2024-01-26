@@ -6,11 +6,7 @@ use ethereum_consensus::{
 };
 use thiserror::Error;
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry,
-    api::proposer_api::{ValidatorPreferences, ValidatorRegistrationInfo},
-    bellatrix::{ByteList, ByteVector, List},
-    bid_submission::BidTrace,
-    BuilderInfo, GetPayloadTrace, SignedValidatorRegistrationEntry, pending_block::PendingBlock,
+    api::builder_api::BuilderGetValidatorsResponseEntry, api::proposer_api::{ValidatorPreferences, ValidatorRegistrationInfo}, bellatrix::{ByteList, ByteVector, List}, bid_submission::BidTrace, pending_block::PendingBlock, BuilderInfo, GetPayloadTrace, ProposerInfo, SignedValidatorRegistrationEntry
 };
 
 use crate::{
@@ -258,6 +254,18 @@ impl FromRow for SignedValidatorRegistrationEntry {
     }
 }
 
+impl FromRow for ProposerInfo {
+    fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError>
+    where
+        Self: Sized,
+    {
+        Ok(ProposerInfo {
+            name: row.get::<&str, &str>("name").to_string(),
+            pub_key: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("pub_key"))?,
+        })
+    }
+}
+
 pub fn parse_timestamptz_to_u64(timestamp: std::time::SystemTime) -> Result<u64, DatabaseError> {
     timestamp
         .duration_since(std::time::UNIX_EPOCH)
@@ -274,7 +282,7 @@ pub fn parse_timestamptz_to_u64_ms(timestamp: std::time::SystemTime) -> Result<u
 
 pub fn parse_optional_timestamptz_to_u64_ms(timestamp: Option<std::time::SystemTime>) -> Result<Option<u64>, DatabaseError> {
     match timestamp {
-        Some(timestamp) => parse_timestamptz_to_u64_ms(timestamp).map(|timestamp| Some(timestamp)),
+        Some(timestamp) => parse_timestamptz_to_u64_ms(timestamp).map(Some),
         None => Ok(None),
     }
 }

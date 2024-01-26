@@ -17,14 +17,15 @@ use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, ProposerDuty,
-    SignedValidatorRegistrationEntry, fork_info::ForkInfo, pending_block::PendingBlock,
+    SignedValidatorRegistrationEntry, chain_info::ChainInfo, pending_block::PendingBlock,
 };
 
 use crate::error::HousekeeperError;
 
 pub const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 8;
-const BUILDER_INFO_UPDATE_FREQ: u64 = 1;
+
+const TRUSTED_PROPOSERS_UPDATE_FREQ: u64 = 5;
 
 // Constants for known validators refresh logic.
 const MIN_SLOTS_BETWEEN_UPDATES: u64 = 6;
@@ -55,8 +56,6 @@ pub struct Housekeeper<
     beacon_client: BeaconClient,
     auctioneer: A,
 
-    _fork_info: Arc<ForkInfo>,
-
     head_slot: Mutex<u64>,
 
     proposer_duties_slot: Mutex<u64>,
@@ -67,17 +66,19 @@ pub struct Housekeeper<
 
     re_sync_builder_info_slot: Mutex<u64>,
     re_sync_builder_info_lock: Mutex<()>,
+
+    refreshed_trusted_proposers_slot: Mutex<u64>,
+    refresh_trusted_proposers_lock: Mutex<()>,
 }
 
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     Housekeeper<DB, BeaconClient, A>
 {
-    pub fn new(db: Arc<DB>, beacon_client: BeaconClient, auctioneer: A, fork_info: Arc<ForkInfo>) -> Arc<Self> {
+    pub fn new(db: Arc<DB>, beacon_client: BeaconClient, auctioneer: A) -> Arc<Self> {
         Arc::new(Self {
             db,
             beacon_client,
             auctioneer,
-            _fork_info: fork_info,
             head_slot: Mutex::new(0),
             proposer_duties_slot: Mutex::new(0),
             proposer_duties_lock: Mutex::new(()),
@@ -85,6 +86,8 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             refresh_validators_lock: Mutex::new(()),
             re_sync_builder_info_slot: Mutex::new(0),
             re_sync_builder_info_lock: Mutex::new(()),
+            refreshed_trusted_proposers_slot: Mutex::new(0),
+            refresh_trusted_proposers_lock: Mutex::new(()),
         })
     }
 
@@ -141,10 +144,16 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         }
 
         // Spawn a task to asynchronously re sync builder info.
-        if self.should_re_sync_builder_info(head_slot).await {
+        let cloned_self = self.clone();
+        tokio::spawn(async move {
+            let _ = cloned_self.sync_builder_info_changes(head_slot).await;
+        });
+
+        // Spawn a task to asynchronously update the trusted proposers.
+        if self.should_update_trusted_proposers(head_slot).await {
             let cloned_self = self.clone();
             tokio::spawn(async move {
-                let _ = cloned_self.sync_builder_info_changes(head_slot).await;
+                let _ = cloned_self.update_trusted_proposers(head_slot).await;
             });
         }
 
@@ -448,23 +457,60 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             || last_proposer_duty_distance >= PROPOSER_DUTIES_UPDATE_FREQ
     }
 
-    /// Determine if builder info should be synced for the given slot.
-    ///
+    /// Determine if the trusted proposers should be refreshed for the given slot.
+    ///     
     /// This function checks two conditions:
-    /// 1. If the `head_slot` is exactly divisible by `BUILDER_INFO_UPDATE_FREQ`,
-    ///    it will return `true` to trigger a proposer duties update.
+    /// 1. If the `head_slot` is exactly divisible by `TRUSTED_PROPOSERS_UPDATE_FREQ`,
+    ///   it will return `true` to trigger a trusted proposer update.
     /// 2. If the distance between the current `head_slot` and the last slot for which
-    ///    builder info was synced (`head_slot`) is greater than or equal to
-    ///    `BUILDER_INFO_UPDATE_FREQ`, it will also return `true`.
-    async fn should_re_sync_builder_info(
+    ///  the trusted proposers was refreshed (`refreshed_trusted_proposers_slot`) is greater than or equal to
+    /// `TRUSTED_PROPOSERS_UPDATE_FREQ`, it will also return `true`.
+    async fn should_update_trusted_proposers(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
         head_slot: u64,
     ) -> bool {
-        let re_sync_slot = *self.re_sync_builder_info_slot.lock().await;
-        let last_re_sync_distance = head_slot - re_sync_slot;
+        let trusted_proposers_slot = *self.refreshed_trusted_proposers_slot.lock().await;
+        let last_trusted_proposers_distance = head_slot - trusted_proposers_slot;
+        head_slot % TRUSTED_PROPOSERS_UPDATE_FREQ == 0
+            || last_trusted_proposers_distance >= TRUSTED_PROPOSERS_UPDATE_FREQ
+    }
 
-        head_slot % BUILDER_INFO_UPDATE_FREQ == 0
-            || last_re_sync_distance >= BUILDER_INFO_UPDATE_FREQ
+    /// Update the proposer whitelist.
+    /// 
+    /// This function will fetch the proposer whitelist from the database and update the auctioneer.
+    /// It will also update the `refreshed_trusted_proposers_slot` to the current `head_slot`.
+    /// 
+    /// This function will error if it cannot fetch the proposer whitelist from the database.
+    /// It will continue if it cannot update the auctioneer.
+    /// 
+    /// This function will also error if it cannot update the `refreshed_trusted_proposers_slot`.
+    /// 
+    /// This function will return `Ok(())` if it completes successfully.
+    async fn update_trusted_proposers(
+        self: &SharedHousekeeper<DB, BeaconClient, A>,
+        head_slot: u64,
+    ) -> Result<(), HousekeeperError> {
+        let _guard = self.refresh_trusted_proposers_lock.try_lock()?;
+
+        debug!(
+            head_slot = head_slot,
+            "Housekeeper::update_trusted_proposers",
+        );
+        
+        let proposer_whitelist = self.db.get_trusted_proposers().await?;
+        if proposer_whitelist.is_empty() {
+            warn!("The trusted proposers list is empty.");
+        }
+
+        self.auctioneer.update_trusted_proposers(proposer_whitelist).await?;
+        *self.refreshed_trusted_proposers_slot.lock().await = head_slot;
+
+        debug!(
+            head_slot = head_slot, 
+            "updated trusted proposers"
+        );
+
+        Ok(())
     }
 
     /// Fetch proposer duties for the given epoch and epoch + 1.

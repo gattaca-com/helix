@@ -63,7 +63,7 @@ impl TryFrom<&Network> for Context {
 }
 
 #[derive(Clone)]
-pub struct ForkInfo {
+pub struct ChainInfo {
     pub network: Network,
     pub genesis_validators_root: Root,
     pub context: Context,
@@ -72,7 +72,7 @@ pub struct ForkInfo {
     pub seconds_per_slot: u64,
 }
 
-impl ForkInfo {
+impl ChainInfo {
     pub fn for_mainnet() -> Self {
         Self {
             network: Network::Mainnet,
