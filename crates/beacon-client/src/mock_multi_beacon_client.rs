@@ -1,25 +1,21 @@
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicBool, AtomicUsize},
-        Arc,
-    },
+use std::sync::{
+    atomic::{AtomicBool, AtomicUsize},
+    Arc,
 };
 
 use async_trait::async_trait;
 use ethereum_consensus::{
-    phase0::{Fork, Validator},
-    primitives::{BlsPublicKey, Bytes32, Root},
+    phase0::Validator,
+    primitives::{BlsPublicKey, Root},
 };
-use serde::{de::DeserializeOwned, Serialize};
 use helix_common::{ProposerDuty, ValidatorStatus, ValidatorSummary, bellatrix::SimpleSerialize};
 use tokio::sync::mpsc::Sender;
 
 use crate::{
     error::BeaconClientError,
     types::{
-        BlockId, BroadcastValidation, GenesisDetails, HeadEventData, PayloadAttributesEvent,
-        RandaoResponse, StateId, SyncStatus,
+        BroadcastValidation, HeadEventData, PayloadAttributesEvent,
+        StateId, SyncStatus,
     },
     MultiBeaconClientTrait,
 };
@@ -114,23 +110,5 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
         _fork: ethereum_consensus::Fork,
     ) -> Result<(), BeaconClientError> {
         Ok(())
-    }
-    async fn get_genesis(&self) -> Result<GenesisDetails, BeaconClientError> {
-        Ok(GenesisDetails::default())
-    }
-    async fn get_spec(&self) -> Result<HashMap<String, String>, BeaconClientError> {
-        Ok(HashMap::default())
-    }
-    async fn get_fork_schedule(&self) -> Result<Vec<Fork>, BeaconClientError> {
-        Ok(vec![])
-    }
-    async fn get_block<SignedBeaconBlock: Serialize + DeserializeOwned>(
-        &self,
-        _block_id: BlockId,
-    ) -> Result<SignedBeaconBlock, BeaconClientError> {
-        Err(BeaconClientError::ChannelError)
-    }
-    async fn get_randao(&self, _id: StateId) -> Result<RandaoResponse, BeaconClientError> {
-        Ok(RandaoResponse { randao: Bytes32::default() })
     }
 }
