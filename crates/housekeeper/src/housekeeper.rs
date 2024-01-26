@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::{Duration, SystemTime}};
+use std::{collections::HashMap, sync::{atomic::AtomicBool, Arc}, time::{Duration, SystemTime}};
 
 use ethereum_consensus::primitives::BlsPublicKey;
 use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
@@ -67,6 +67,8 @@ pub struct Housekeeper<
 
     re_sync_builder_info_slot: Mutex<u64>,
     re_sync_builder_info_lock: Mutex<()>,
+
+    leader: Arc<AtomicBool>
 }
 
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
