@@ -5,7 +5,7 @@ use ethereum_consensus::{
 };
 use hyper::StatusCode;
 use helix_datastore::error::AuctioneerError;
-use helix_common::{simulator::BlockSimError, BuilderID};
+use helix_common::simulator::BlockSimError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuilderApiError {
@@ -108,7 +108,7 @@ pub enum BuilderApiError {
     BuilderDemoted{builder_pub_key: BlsPublicKey},
 
     #[error("builder not in proposer's trusted list: {proposer_trusted_builders:?}")]
-    BuilderNotInProposersTrustedList{proposer_trusted_builders: Vec<BuilderID>},
+    BuilderNotInProposersTrustedList{proposer_trusted_builders: Vec<String>},
 }
 
 impl IntoResponse for BuilderApiError {

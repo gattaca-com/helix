@@ -1,11 +1,8 @@
 use std::{
-    collections::HashMap,
-    io::Read,
-    sync::{
+    collections::HashMap, f64::consts::E, io::Read, sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
-    },
-    time::{SystemTime, UNIX_EPOCH},
+    }, time::{SystemTime, UNIX_EPOCH}
 };
 
 use axum::{
@@ -41,7 +38,7 @@ use helix_common::{
         proposer_api::ValidatorRegistrationInfo,
     }, bid_submission::{
         v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb}, BidSubmission, BidTrace, SignedBidSubmission,
-    }, chain_info::ChainInfo, signing::RelaySigningContext, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderID, BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, SignedBuilderBid, SubmissionTrace
+    }, chain_info::ChainInfo, signing::RelaySigningContext, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, SignedBuilderBid, SubmissionTrace
 };
 use helix_utils::{calculate_withdrawals_root, has_reached_fork, try_decode_into};
 
@@ -990,11 +987,11 @@ where
         builder_info: &BuilderInfo,
     ) -> Result<bool, BuilderApiError> {
         if let Some(trusted_builders) = &next_duty.entry.preferences.trusted_builders {
-            // Cannot trust Unknown ID
-            if let BuilderID::Unknown = builder_info.builder_id {
+            if let Some(builder_id) = &builder_info.builder_id {
+                return Ok(trusted_builders.contains(builder_id));
+            } else {
                 return Ok(false);
             }
-            return Ok(trusted_builders.contains(&builder_info.builder_id));
         } else {
             Ok(true)
         }
@@ -1312,7 +1309,7 @@ where
                     err=%err,
                     "Failed to retrieve builder info"
                 );
-                BuilderInfo { collateral: U256::ZERO, is_optimistic: false, builder_id: BuilderID::Unknown }
+                BuilderInfo { collateral: U256::ZERO, is_optimistic: false, builder_id: None }
             }
         }
     }

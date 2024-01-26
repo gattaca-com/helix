@@ -21,7 +21,7 @@ mod simulator_tests {
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_common::{
-        bid_submission::{BidTrace, SignedBidSubmission, SignedBidSubmissionCapella}, simulator::BlockSimError, BuilderID, BuilderInfo
+        bid_submission::{BidTrace, SignedBidSubmission, SignedBidSubmissionCapella}, simulator::BlockSimError, BuilderInfo
     };
     use helix_common::ValidatorPreferences;
 
@@ -95,7 +95,7 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info = BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: BuilderID::Titan };
+        let builder_info = BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None };
         let simulator =
             get_optimistic_simulator(&server.url(), Some(builder_info.clone()), builder_demoted.clone());
 
@@ -120,7 +120,7 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info = BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: BuilderID::Titan };
+        let builder_info = BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None };
         let simulator =
             get_optimistic_simulator(&server.url(), Some(builder_info.clone()), builder_demoted.clone());
 
@@ -145,7 +145,7 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info = BuilderInfo { collateral: U256::from(100), is_optimistic: false, builder_id: BuilderID::Titan };
+        let builder_info = BuilderInfo { collateral: U256::from(100), is_optimistic: false, builder_id: None };
         let simulator =
             get_optimistic_simulator(&server.url(), Some(builder_info.clone()), builder_demoted.clone());
 
@@ -170,7 +170,7 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info = BuilderInfo { collateral: U256::from(100), is_optimistic: false, builder_id: BuilderID::Titan };
+        let builder_info = BuilderInfo { collateral: U256::from(100), is_optimistic: false, builder_id: None };
         let simulator =
             get_optimistic_simulator(&server.url(), Some(builder_info.clone()), builder_demoted.clone());
 
