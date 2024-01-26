@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::{atomic::{AtomicBool, Ordering}, Arc}};
 
 use async_trait::async_trait;
 use deadpool_redis::{Config, CreatePoolError, Pool, Runtime};
@@ -38,7 +38,7 @@ use crate::{
 };
 
 const BID_CACHE_EXPIRY_S: usize = 45;
-const HOUSEKEEPER_LOCK_EXPIRY_S: usize = 2;
+const HOUSEKEEPER_LOCK_EXPIRY_S: usize = 17;
 
 #[derive(Clone)]
 pub struct RedisCache {
@@ -159,6 +159,31 @@ impl RedisCache {
             .arg(key)
             .arg(1)
             .arg("NX")
+            .arg("PX")
+            .arg(expiry)
+            .query_async(&mut conn)
+            .await;
+
+        match result {
+            Ok(Value::Okay) => true,
+            Ok(_) | Err(_) => false,
+        }
+    }
+
+    async fn renew_lock(
+        &self,
+        key: &str,
+        expiry: usize,
+    ) -> bool {
+        let mut conn = match self.pool.get().await {
+            Ok(conn) => conn,
+            Err(_) => return false,
+        };
+
+        let result: RedisResult<Value> = redis::cmd("SET")
+            .arg(key)
+            .arg(1)
+            .arg("XX")
             .arg("PX")
             .arg(expiry)
             .query_async(&mut conn)
@@ -775,14 +800,40 @@ impl Auctioneer for RedisCache {
         Ok(Some(builder_bid))
     }
 
-    // Sets the housekeeper lock if it's not already set.
-    // Returns true if the lock was set, false otherwise.
-    // This function is used to ensure that only one housekeeper is running at a time.
-    // The lock is set to expire after HOUSEKEEPER_LOCK_EXPIRY_S seconds.
-    // This will ensure that if a housekeeper crashes, the lock will eventually expire.
-    // Expiry is set to 2 seconds to ensure it will expire before the next slot.
-    async fn try_become_housekeeper(&self) -> bool {
-        self.set_lock("housekeeper_lock", HOUSEKEEPER_LOCK_EXPIRY_S).await
+    /// Attempts to acquire or renew leadership for a distributed task.
+    /// 
+    /// This function checks if the current instance is already the leader based on the shared `leader` flag.
+    /// If not the leader, it attempts to acquire the leadership by setting a lock in Redis.
+    /// If already the leader, it attempts to renew the lock to maintain leadership.
+    /// The `leader` flag is updated based on the success of these operations.
+    /// 
+    /// Expiry is set to `HOUSEKEEPER_LOCK_EXPIRY_S` seconds to ensure that the lock is released if the instance crashes.
+    /// HOUSEKEEPER_LOCK_EXPIRY_S should be long enought to allow the leader to renew the lock before it expires.
+    ///
+    /// Arguments:
+    /// - `leader`: An `Arc<AtomicBool>` shared among threads, indicating the current leadership status.
+    ///
+    /// Returns:
+    /// - `true` if the instance successfully acquires or renews the leadership.
+    /// - `false` if it fails to acquire or renew the leadership, or if the leadership is lost.
+    ///
+    /// Note: This function uses stronger atomic ordering (`Ordering::SeqCst`) for consistency across threads.
+    async fn try_acquire_or_renew_leadership(&self, leader: Arc<AtomicBool>) -> bool {
+        if !leader.load(Ordering::SeqCst) {
+            let now_leader = self.set_lock("housekeeper_lock", HOUSEKEEPER_LOCK_EXPIRY_S).await;
+            if now_leader {
+                leader.store(true, Ordering::SeqCst);
+                return true;
+            }
+            return false;
+        } else {
+            let still_leader = self.renew_lock("housekeeper_lock", HOUSEKEEPER_LOCK_EXPIRY_S).await;
+            if !still_leader {
+                leader.store(false, Ordering::SeqCst);
+                return false;
+            }
+            return true;
+        }
     }
 }
 

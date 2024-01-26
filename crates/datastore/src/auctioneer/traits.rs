@@ -1,3 +1,5 @@
+use std::sync::{atomic::AtomicBool, Arc};
+
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 use helix_database::BuilderInfoDocument;
@@ -144,5 +146,5 @@ pub trait Auctioneer: Send + Sync + Clone {
         signing_context: &RelaySigningContext,
     ) -> Result<Option<SignedBuilderBid>, AuctioneerError>;
 
-    async fn try_become_housekeeper(&self) -> bool;
+    async fn try_acquire_or_renew_leadership(&self, leader: Arc<AtomicBool>) -> bool;
 }

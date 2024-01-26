@@ -87,6 +87,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             refresh_validators_lock: Mutex::new(()),
             re_sync_builder_info_slot: Mutex::new(0),
             re_sync_builder_info_lock: Mutex::new(()),
+            leader: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -119,7 +120,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         }
 
         // Only allow one housekeeper task to run at a time.
-        if !self.auctioneer.try_become_housekeeper().await {
+        if !self.auctioneer.try_acquire_or_renew_leadership(self.leader.clone()).await {
             return;
         }
 
