@@ -1,7 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use ethereum_consensus::{phase0::Fork, primitives::Root};
+use ethereum_consensus::primitives::Root;
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::mpsc::Sender;
 
@@ -10,8 +10,8 @@ use helix_common::{ProposerDuty, ValidatorSummary, bellatrix::SimpleSerialize};
 use crate::{
     error::BeaconClientError,
     types::{
-        BlockId, BroadcastValidation, GenesisDetails, HeadEventData, PayloadAttributesEvent,
-        RandaoResponse, StateId, SyncStatus,
+        BroadcastValidation, HeadEventData, PayloadAttributesEvent,
+        StateId, SyncStatus,
     },
 };
 
@@ -43,14 +43,6 @@ pub trait BeaconClientTrait: Send + Sync + Clone {
         broadcast_validation: Option<BroadcastValidation>,
         fork: ethereum_consensus::Fork,
     ) -> Result<u16, BeaconClientError>;
-    async fn get_genesis(&self) -> Result<GenesisDetails, BeaconClientError>;
-    async fn get_spec(&self) -> Result<HashMap<String, String>, BeaconClientError>;
-    async fn get_fork_schedule(&self) -> Result<Vec<Fork>, BeaconClientError>;
-    async fn get_block<SignedBeaconBlock: Serialize + DeserializeOwned>(
-        &self,
-        block_id: BlockId,
-    ) -> Result<SignedBeaconBlock, BeaconClientError>;
-    async fn get_randao(&self, id: StateId) -> Result<RandaoResponse, BeaconClientError>;
     fn get_uri(&self) -> String;
 }
 
@@ -76,12 +68,4 @@ pub trait MultiBeaconClientTrait: Send + Sync + Clone {
         broadcast_validation: Option<BroadcastValidation>,
         fork: ethereum_consensus::Fork,
     ) -> Result<(), BeaconClientError>;
-    async fn get_genesis(&self) -> Result<GenesisDetails, BeaconClientError>;
-    async fn get_spec(&self) -> Result<HashMap<String, String>, BeaconClientError>;
-    async fn get_fork_schedule(&self) -> Result<Vec<Fork>, BeaconClientError>;
-    async fn get_block<SignedBeaconBlock: Serialize + DeserializeOwned>(
-        &self,
-        block_id: BlockId,
-    ) -> Result<SignedBeaconBlock, BeaconClientError>;
-    async fn get_randao(&self, id: StateId) -> Result<RandaoResponse, BeaconClientError>;
 }

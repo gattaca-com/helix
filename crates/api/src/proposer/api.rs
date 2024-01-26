@@ -112,7 +112,7 @@ where
         // Spin up the housekeep task
         let api_clone = api.clone();
         tokio::spawn(async move {
-            if let Err(err) = api_clone.housekeep(slot_update_subscription.clone()).await {
+            if let Err(err) = api_clone.housekeep(slot_update_subscription).await {
                 error!(
                     error = %err,
                     "ProposerApi. housekeep task encountered an error",

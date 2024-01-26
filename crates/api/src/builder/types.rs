@@ -3,12 +3,12 @@ use std::{sync::Arc, time::SystemTime};
 use ethereum_consensus::primitives::BlsPublicKey;
 use helix_common::{bellatrix::ByteVector, bid_submission::{SignedBidSubmission, v2::header_submission::SignedHeaderSubmission}, simulator::BlockSimError, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, SubmissionTrace};
 
-pub const PATH_BUILDER_API: &str = "/relay/v1/builder";
+pub(crate) const PATH_BUILDER_API: &str = "/relay/v1/builder";
 
-pub const PATH_GET_VALIDATORS: &str = "/validators";
-pub const PATH_SUBMIT_BLOCK: &str = "/blocks";
-pub const PATH_SUBMIT_BLOCK_OPTIMISTIC: &str = "/blocks_optimistic";
-pub const PATH_SUBMIT_HEADER: &str = "/headers";
+pub(crate) const PATH_GET_VALIDATORS: &str = "/validators";
+pub(crate) const PATH_SUBMIT_BLOCK: &str = "/blocks";
+pub(crate) const PATH_SUBMIT_BLOCK_OPTIMISTIC: &str = "/blocks_optimistic";
+pub(crate) const PATH_SUBMIT_HEADER: &str = "/headers";
 
 
 #[derive(Clone)]

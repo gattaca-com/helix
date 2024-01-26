@@ -53,7 +53,7 @@ use crate::{
     gossiper::{traits::GossipClientTrait, types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage}},
 };
 
-pub const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 4;
+pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 4;
 
 #[derive(Clone)]
 pub struct BuilderApi<A, DB, S, G>

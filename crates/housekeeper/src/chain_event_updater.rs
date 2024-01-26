@@ -49,7 +49,7 @@ pub struct ChainEventUpdater<D: DatabaseService> {
 }
 
 impl<D: DatabaseService> ChainEventUpdater<D> {
-    pub fn new(
+    pub fn new_with_channel(
         database: Arc<D>,
         subscription_channel: mpsc::Receiver<mpsc::Sender<ChainUpdate>>,
     ) -> Self {
@@ -63,9 +63,9 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         }
     }
 
-    pub fn new_with_channel(database: Arc<D>) -> (Self, mpsc::Sender<mpsc::Sender<ChainUpdate>>) {
+    pub fn new(database: Arc<D>) -> (Self, mpsc::Sender<mpsc::Sender<ChainUpdate>>) {
         let (tx, rx) = mpsc::channel(200);
-        let updater = Self::new(database, rx);
+        let updater = Self::new_with_channel(database, rx);
         (updater, tx)
     }
 
