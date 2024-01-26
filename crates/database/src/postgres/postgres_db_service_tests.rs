@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use std::default::Default;
+    use std::{default::Default, str::FromStr};
 use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
     use ethereum_consensus::{
         builder::{SignedValidatorRegistration, ValidatorRegistration},
@@ -29,7 +29,8 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
 
     /// These tests depend on a local instance of postgres running on port 5433
     /// e.g. to start a local postgres instance in docker:
-    /// docker run -d --name postgres -e POSTGRES_PASSWORD=password -p 5433:5432 timescale/timescaledb
+    /// docker run -d --name postgres -e POSTGRES_PASSWORD=password -p 5433:5432 timescale/timescaledb-ha:pg16
+    /// https://docs.timescale.com/self-hosted/latest/install/installation-docker/
 
     fn test_config() -> Config {
         let mut cfg = Config::new();
@@ -293,7 +294,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         let key = SecretKey::random(&mut rng).unwrap();
         let public_key = key.public_key();
         let builder_info =
-            helix_common::BuilderInfo { collateral: Default::default(), is_optimistic: false };
+            helix_common::BuilderInfo { collateral: U256::from_str("1000000000000000000000000000").unwrap(), is_optimistic: false };
 
         let result = db_service.store_builder_info(&public_key, builder_info).await;
         assert!(result.is_ok());

@@ -51,11 +51,8 @@ impl<'a> FromSql<'a> for PostgresNumeric {
         offset += 6;
 
         let mut value = U256::from(0);
-        let mut scalar = U256::from(1);
         for _ in 0..num_groups {
-            let group = read_two_bytes(raw, &mut offset)?;
-            value += scalar * U256::from(group);
-            scalar *= U256::from(10000_u64);
+            value = value * U256::from(10000_u64) + U256::from(read_two_bytes(raw, &mut offset)?);
         }
 
         Ok(PostgresNumeric(value))
@@ -113,9 +110,8 @@ impl ToSql for PostgresNumeric {
         // DScale (assuming scale of 0)
         out.put_u16(0);
 
-        // Process the number
-        for i in 0..num_digits {
-            out.put_i16(digits[i]);
+        for digit in digits.iter().take(num_digits).rev() {
+            out.put_i16(*digit);
         }
 
         Ok(tokio_postgres::types::IsNull::No)
@@ -165,8 +161,9 @@ mod tests {
 
             let reconstructed_value = digits
                 .iter()
-                .rev()
-                .fold(U256::from(0), |acc, digit| acc * U256::from(10000_u64) + U256::from(*digit));
+                .fold(U256::from(0), |acc, digit| {
+                    acc * U256::from(10000_u64) + U256::from(*digit)
+                });
 
             assert_eq!(value, reconstructed_value);
         }
@@ -186,5 +183,6 @@ mod tests {
             assert_eq!(value, reconstructed_value.0);
         }
     }
+
 }
 
