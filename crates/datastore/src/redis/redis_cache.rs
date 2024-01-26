@@ -800,40 +800,34 @@ impl Auctioneer for RedisCache {
         Ok(Some(builder_bid))
     }
 
-    /// Attempts to acquire or renew leadership for a distributed task.
-    /// 
-    /// This function checks if the current instance is already the leader based on the shared `leader` flag.
-    /// If not the leader, it attempts to acquire the leadership by setting a lock in Redis.
-    /// If already the leader, it attempts to renew the lock to maintain leadership.
-    /// The `leader` flag is updated based on the success of these operations.
+
+    /// Attempts to acquire or renew leadership for a distributed task based on the current leadership status.
+    ///
+    /// If the instance is already a leader (indicated by the `leader` argument), it attempts to renew the lock.
+    /// If the lock renewal is successful, it returns `true`.
+    ///
+    /// If the instance is not currently a leader or fails to renew the lock, it attempts to acquire the lock.
+    /// The function returns `true` if the lock acquisition is successful, indicating leadership has been obtained.
     /// 
     /// Expiry is set to `HOUSEKEEPER_LOCK_EXPIRY_S` seconds to ensure that the lock is released if the instance crashes.
     /// HOUSEKEEPER_LOCK_EXPIRY_S should be long enought to allow the leader to renew the lock before it expires.
     ///
     /// Arguments:
-    /// - `leader`: An `Arc<AtomicBool>` shared among threads, indicating the current leadership status.
+    /// - `leader`: A `bool` indicating whether the current instance believes it is the leader.
     ///
     /// Returns:
-    /// - `true` if the instance successfully acquires or renews the leadership.
-    /// - `false` if it fails to acquire or renew the leadership, or if the leadership is lost.
+    /// - `true` if the instance is the leader and successfully renews the lock, or if it successfully acquires the lock.
+    /// - `false` if it fails to renew or acquire the lock.
     ///
-    /// Note: This function uses stronger atomic ordering (`Ordering::SeqCst`) for consistency across threads.
-    async fn try_acquire_or_renew_leadership(&self, leader: Arc<AtomicBool>) -> bool {
-        if !leader.load(Ordering::SeqCst) {
-            let now_leader = self.set_lock("housekeeper_lock", HOUSEKEEPER_LOCK_EXPIRY_S).await;
-            if now_leader {
-                leader.store(true, Ordering::SeqCst);
+    /// Note: This function assumes that the caller manages and passes the current leadership status.
+    async fn try_acquire_or_renew_leadership(&self, leader: bool) -> bool {
+        if leader {
+            if self.renew_lock("housekeeper_lock", HOUSEKEEPER_LOCK_EXPIRY_S).await {
                 return true;
             }
-            return false;
-        } else {
-            let still_leader = self.renew_lock("housekeeper_lock", HOUSEKEEPER_LOCK_EXPIRY_S).await;
-            if !still_leader {
-                leader.store(false, Ordering::SeqCst);
-                return false;
-            }
-            return true;
         }
+
+        return self.set_lock("housekeeper_lock", HOUSEKEEPER_LOCK_EXPIRY_S).await;
     }
 }
 

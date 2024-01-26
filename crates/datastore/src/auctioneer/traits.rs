@@ -146,5 +146,5 @@ pub trait Auctioneer: Send + Sync + Clone {
         signing_context: &RelaySigningContext,
     ) -> Result<Option<SignedBuilderBid>, AuctioneerError>;
 
-    async fn try_acquire_or_renew_leadership(&self, leader: Arc<AtomicBool>) -> bool;
+    async fn try_acquire_or_renew_leadership(&self, leader: bool) -> bool;
 }

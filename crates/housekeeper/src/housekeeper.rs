@@ -68,7 +68,7 @@ pub struct Housekeeper<
     re_sync_builder_info_slot: Mutex<u64>,
     re_sync_builder_info_lock: Mutex<()>,
 
-    leader: Arc<AtomicBool>
+    leader: AtomicBool
 }
 
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
@@ -87,7 +87,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             refresh_validators_lock: Mutex::new(()),
             re_sync_builder_info_slot: Mutex::new(0),
             re_sync_builder_info_lock: Mutex::new(()),
-            leader: Arc::new(AtomicBool::new(false)),
+            leader: AtomicBool::new(false),
         })
     }
 
@@ -119,8 +119,15 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             return;
         }
 
+        let current_leadership_status = self.leader.load(std::sync::atomic::Ordering::SeqCst);
+        let updated_leadership_status = self.auctioneer.try_acquire_or_renew_leadership(current_leadership_status).await;
+        
+        if updated_leadership_status != current_leadership_status {
+            self.leader.store(updated_leadership_status, std::sync::atomic::Ordering::SeqCst);
+        }
+
         // Only allow one housekeeper task to run at a time.
-        if !self.auctioneer.try_acquire_or_renew_leadership(self.leader.clone()).await {
+        if !updated_leadership_status {
             return;
         }
 

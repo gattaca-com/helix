@@ -214,7 +214,7 @@ impl Auctioneer for MockAuctioneer {
         Ok(None)
     }
 
-    async fn try_acquire_or_renew_leadership(&self, leader: Arc<AtomicBool>) -> bool {
+    async fn try_acquire_or_renew_leadership(&self, leader: bool) -> bool {
         true
     }
 }
