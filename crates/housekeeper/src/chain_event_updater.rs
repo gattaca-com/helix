@@ -65,7 +65,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
 
     pub fn new(database: Arc<D>) -> (Self, mpsc::Sender<mpsc::Sender<ChainUpdate>>) {
         let (tx, rx) = mpsc::channel(200);
-        let updater = Self::new(database, rx);
+        let updater = Self::new_with_channel(database, rx);
         (updater, tx)
     }
 
