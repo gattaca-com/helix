@@ -988,11 +988,8 @@ where
         &self,
         public_key: &BlsPublicKey,
     ) -> Result<bool, ProposerApiError> {
-        Ok(self
-            .auctioneer
-            .get_trusted_proposers()
-            .await?
-            .map_or(false, |whitelist| whitelist.contains(public_key)))
+        let is_trusted_proposer = self.auctioneer.is_trusted_proposer(public_key).await?;
+        Ok(is_trusted_proposer)
     }
 }
 
