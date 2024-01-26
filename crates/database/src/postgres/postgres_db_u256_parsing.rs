@@ -18,17 +18,23 @@ impl From<PostgresNumeric> for U256 {
     }
 }
 
+const NBASE: u64 = 10000;
+
 /// Implements the `FromSql` trait for `PostgresNumeric`.
-/// Some things to note about this implementation:
-/// - Assumes positive numbers
-/// - Assumes scale of 0
-/// - Assumes weight of 0
-/// As such not generalized, but good enough for our purposes
+/// We need a slightly generalized implementation since postgres
+/// optimizes some stuff when storing so that the bytes we provide are not stored
+/// in the exact way we provide them.
+/// E.g. some tests have shown that 1000_000_000_000_000_000_000_000_000 is stored as
+/// [0, 1, 0, 6, 0, 0, 0, 0, 3, 232]
+/// sign and dscale are still not used
+
 impl<'a> FromSql<'a> for PostgresNumeric {
     fn from_sql(
         _: &tokio_postgres::types::Type,
         raw: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        let n_base = U256::from(NBASE);
+        println!("from sql raw: {:?}", raw);
         let mut offset = 0;
 
         // Function to read two bytes and advance the offset
@@ -46,14 +52,16 @@ impl<'a> FromSql<'a> for PostgresNumeric {
             };
 
         let num_groups = read_two_bytes(raw, &mut offset)?;
-
-        // Skip the next 6 bytes (_weight, _sign, _scale)
-        offset += 6;
+        let weight = read_two_bytes(raw, &mut offset)?;
+        let _sign = read_two_bytes(raw, &mut offset)?;
+        let _dscale = read_two_bytes(raw, &mut offset)?;
 
         let mut value = U256::from(0);
         for _ in 0..num_groups {
-            value = value * U256::from(10000_u64) + U256::from(read_two_bytes(raw, &mut offset)?);
+            value = value * n_base + U256::from(read_two_bytes(raw, &mut offset)?);
         }
+
+        value = value * n_base.pow(U256::from(weight));
 
         Ok(PostgresNumeric(value))
     }
@@ -70,7 +78,7 @@ impl<'a> FromSql<'a> for PostgresNumeric {
 /// - Assumes weight of 0
 /// As such not generalized, but good enough for our purposes
 /// Allows for MAX_GROUP_COUNT digit groups, each group is a value between 0 and 9999
-/// so the maximum value is 10000^MAX_GROUP_COUNT - 1
+/// so the maximum value is NBASE^MAX_GROUP_COUNT - 1
 /// with MAX_GROUP_COUNT = 32 this should be plenty to store any U256
 /// Obviously not sufficient for arbitrary precision.
 impl ToSql for PostgresNumeric {
@@ -81,7 +89,7 @@ impl ToSql for PostgresNumeric {
     ) -> std::result::Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>>
     {
         const MAX_GROUP_COUNT: usize = 32;
-        let divisor = U256::from(10000_u64);
+        let divisor = U256::from(NBASE);
         let mut temp = self.0;
         let mut digits = [0i16; MAX_GROUP_COUNT];
         let mut num_digits = 0;
@@ -113,6 +121,8 @@ impl ToSql for PostgresNumeric {
         for digit in digits.iter().take(num_digits).rev() {
             out.put_i16(*digit);
         }
+
+        println!("to sql out: {:?}", out.to_vec());
 
         Ok(tokio_postgres::types::IsNull::No)
     }
@@ -162,7 +172,7 @@ mod tests {
             let reconstructed_value = digits
                 .iter()
                 .fold(U256::from(0), |acc, digit| {
-                    acc * U256::from(10000_u64) + U256::from(*digit)
+                    acc * U256::from(NBASE) + U256::from(*digit)
                 });
 
             assert_eq!(value, reconstructed_value);
