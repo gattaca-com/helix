@@ -218,7 +218,7 @@ where
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
 
         // Handle trusted builders check
-        if !api.check_if_trusted_builder(&next_duty, &builder_info).await? {
+        if !api.check_if_trusted_builder(&next_duty, &builder_info).await {
             let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
             warn!(
                 request_id = %request_id, 
@@ -380,7 +380,7 @@ where
         }
 
         // Handle trusted builders check
-        if !api.check_if_trusted_builder(&next_duty, &builder_info).await? {
+        if !api.check_if_trusted_builder(&next_duty, &builder_info).await {
             let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
             warn!(
                 request_id = %request_id, 
@@ -529,7 +529,7 @@ where
         api.fetch_proposer_and_attributes(payload.slot(), payload.parent_hash(), &request_id).await?;
 
         // Handle trusted builders check
-        if !api.check_if_trusted_builder(&next_duty, &builder_info).await? {
+        if !api.check_if_trusted_builder(&next_duty, &builder_info).await {
             let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
             warn!(
                 request_id = %request_id, 
@@ -985,15 +985,20 @@ where
         &self,
         next_duty: &BuilderGetValidatorsResponseEntry,
         builder_info: &BuilderInfo,
-    ) -> Result<bool, BuilderApiError> {
+    ) -> bool {
         if let Some(trusted_builders) = &next_duty.entry.preferences.trusted_builders {
+            // Handle case where proposer specifies an empty list.
+            if trusted_builders.is_empty() {
+                return true;
+            }
+
             if let Some(builder_id) = &builder_info.builder_id {
-                return Ok(trusted_builders.contains(builder_id));
+                return trusted_builders.contains(builder_id);
             } else {
-                return Ok(false);
+                return false;
             }
         } else {
-            Ok(true)
+            true
         }
     }
 
@@ -1248,52 +1253,6 @@ where
                 is_optimistic: builder_info.is_optimistic,
             });
         }
-
-
-        // match self.auctioneer.get_builder_info(payload.builder_public_key()).await {
-        //     Ok(info) => {
-        //         if !info.is_optimistic {
-        //             warn!(
-        //                 request_id = %request_id,
-        //                 builder=%payload.builder_public_key(),
-        //                 "builder is not optimistic"
-        //             );
-        //             return Err(BuilderApiError::BuilderDemoted { 
-        //                 builder_pub_key: payload.builder_public_key().clone(),
-        //             });
-        //         } else if info.collateral < payload.value() {
-        //             warn!(
-        //                 request_id = %request_id,
-        //                 builder=%payload.builder_public_key(),
-        //                 collateral=%info.collateral,
-        //                 collateral_required=%payload.value(),
-        //                 "builder does not have enough collateral"
-        //             );
-        //             return Err(BuilderApiError::NotEnoughOptimisticCollateral { 
-        //                 builder_pub_key: payload.builder_public_key().clone(), 
-        //                 collateral: info.collateral, 
-        //                 collateral_required: payload.value(),
-        //                 is_optimistic: info.is_optimistic,
-        //             });
-        //         }
-        //     },
-        //     Err(err) => {
-        //         // No builder info stored for this pubkey
-        //         debug!(
-        //             request_id = %request_id,
-        //             error=%err,
-        //             builder=%payload.builder_public_key(),
-        //             block_hash=%payload.block_hash(),
-        //             "failed to retrieve builder info"
-        //         );
-        //         return Err(BuilderApiError::NotEnoughOptimisticCollateral { 
-        //             builder_pub_key: payload.builder_public_key().clone(), 
-        //             collateral: U256::ZERO, 
-        //             collateral_required: payload.value(),
-        //             is_optimistic: false,
-        //         });
-        //     }
-        // };
 
         // Builder has enough collateral
         Ok(())
