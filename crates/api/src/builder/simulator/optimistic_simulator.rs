@@ -71,7 +71,9 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
                         err=%err,
                         "Block simulation resulted in an error. Demoting builder...",
                     );
-                    //self.demote_builder_due_to_error(&request.message.builder_public_key, request.execution_payload.block_hash(), err.to_string()).await;
+                    if err.is_severe() {
+                        self.demote_builder_due_to_error(&request.message.builder_public_key, request.execution_payload.block_hash(), err.to_string()).await;
+                    }
                 }
             }
             return Err(err);
@@ -162,8 +164,7 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
     ) -> Result<bool, BlockSimError> {
         let builder_info = self.fetch_builder_info(&request).await;
 
-        // if self.should_process_optimistically(&request, &builder_info).await {
-        if true {
+        if self.should_process_optimistically(&request, &builder_info).await {
             debug!(
                 request_id=%request_id,
                 block_hash=%request.execution_payload.block_hash(),
