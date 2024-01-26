@@ -34,7 +34,6 @@ impl<'a> FromSql<'a> for PostgresNumeric {
         raw: &[u8],
     ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         let n_base = U256::from(NBASE);
-        println!("from sql raw: {:?}", raw);
         let mut offset = 0;
 
         // Function to read two bytes and advance the offset
@@ -122,7 +121,6 @@ impl ToSql for PostgresNumeric {
             out.put_i16(*digit);
         }
 
-        println!("to sql out: {:?}", out.to_vec());
 
         Ok(tokio_postgres::types::IsNull::No)
     }
