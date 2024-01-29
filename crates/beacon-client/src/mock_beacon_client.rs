@@ -10,8 +10,8 @@ use crate::{
     error::BeaconClientError,
     traits::BeaconClientTrait,
     types::{
-        BlockId, BroadcastValidation, GenesisDetails, HeadEventData, PayloadAttributesEvent,
-        RandaoResponse, StateId, SyncStatus,
+        BroadcastValidation, HeadEventData, PayloadAttributesEvent,
+        StateId, SyncStatus,
     },
 };
 
@@ -20,11 +20,7 @@ pub struct MockBeaconClient {
     sync_status: SyncStatus,
     state_validators: Vec<ValidatorSummary>,
     proposer_duties: (Root, Vec<ProposerDuty>),
-    genesis: GenesisDetails,
-    spec: HashMap<String, String>,
-    fork_schedule: Vec<Fork>,
     publish_block_response_code: u16,
-    randao: RandaoResponse,
 }
 
 impl MockBeaconClient {
@@ -33,11 +29,7 @@ impl MockBeaconClient {
             sync_status: SyncStatus { head_slot: 10, sync_distance: 0, is_syncing: false },
             state_validators: Vec::new(),
             proposer_duties: (Root::default(), Vec::new()),
-            genesis: GenesisDetails::default(),
-            spec: HashMap::new(),
-            fork_schedule: Vec::new(),
             publish_block_response_code: 200,
-            randao: RandaoResponse { randao: ByteVector::<32>::default() },
         }
     }
 
@@ -56,28 +48,9 @@ impl MockBeaconClient {
         self
     }
 
-    pub fn with_genesis(mut self, genesis: GenesisDetails) -> Self {
-        self.genesis = genesis;
-        self
-    }
-
-    pub fn with_spec(mut self, spec: HashMap<String, String>) -> Self {
-        self.spec = spec;
-        self
-    }
-
-    pub fn with_fork_schedule(mut self, fork_schedule: Vec<Fork>) -> Self {
-        self.fork_schedule = fork_schedule;
-        self
-    }
 
     pub fn with_publish_block_response_code(mut self, publish_block_response_code: u16) -> Self {
         self.publish_block_response_code = publish_block_response_code;
-        self
-    }
-
-    pub fn with_randao(mut self, randao: RandaoResponse) -> Self {
-        self.randao = randao;
         self
     }
 }
@@ -133,28 +106,5 @@ impl BeaconClientTrait for MockBeaconClient {
         _fork: ethereum_consensus::Fork,
     ) -> Result<u16, BeaconClientError> {
         Ok(self.publish_block_response_code)
-    }
-
-    async fn get_genesis(&self) -> Result<GenesisDetails, BeaconClientError> {
-        Ok(self.genesis.clone())
-    }
-
-    async fn get_spec(&self) -> Result<HashMap<String, String>, BeaconClientError> {
-        Ok(self.spec.clone())
-    }
-
-    async fn get_fork_schedule(&self) -> Result<Vec<Fork>, BeaconClientError> {
-        Ok(self.fork_schedule.clone())
-    }
-
-    async fn get_block<SignedBeaconBlock: serde::Serialize + serde::de::DeserializeOwned>(
-        &self,
-        _block_id: BlockId,
-    ) -> Result<SignedBeaconBlock, BeaconClientError> {
-        Err(BeaconClientError::BeaconNodeSyncing)
-    }
-
-    async fn get_randao(&self, _id: StateId) -> Result<RandaoResponse, BeaconClientError> {
-        Ok(self.randao.clone())
     }
 }

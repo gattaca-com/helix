@@ -64,14 +64,24 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         {
             if let BlockSimError::BlockValidationFailed(_) = err {
                 if builder_info.is_optimistic {
-                    warn!(
-                        request_id=%request_id,
-                        builder=%request.message.builder_public_key,
-                        block_hash=%request.execution_payload.block_hash(),
-                        err=%err,
-                        "Block simulation resulted in an error. Demoting builder...",
-                    );
-                    //self.demote_builder_due_to_error(&request.message.builder_public_key, request.execution_payload.block_hash(), err.to_string()).await;
+                    if err.is_severe() {
+                        warn!(
+                            request_id=%request_id,
+                            builder=%request.message.builder_public_key,
+                            block_hash=%request.execution_payload.block_hash(),
+                            err=%err,
+                            "Block simulation resulted in an error. Demoting builder...",
+                        );
+                        self.demote_builder_due_to_error(&request.message.builder_public_key, request.execution_payload.block_hash(), err.to_string()).await;
+                    } else {
+                        warn!(
+                            request_id=%request_id,
+                            builder=%request.message.builder_public_key,
+                            block_hash=%request.execution_payload.block_hash(),
+                            err=%err,
+                            "Block simulation resulted in a non-severe error. NOT demoting builder...",
+                        );
+                    }
                 }
             }
             return Err(err);
@@ -146,8 +156,7 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
         request_id: Uuid,
     ) -> Result<bool, BlockSimError> {
 
-        // if self.should_process_optimistically(&request, &builder_info).await {
-        if true {
+        if self.should_process_optimistically(&request, &builder_info).await {
             debug!(
                 request_id=%request_id,
                 block_hash=%request.execution_payload.block_hash(),

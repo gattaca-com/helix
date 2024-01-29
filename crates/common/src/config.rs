@@ -19,8 +19,6 @@ pub struct RelayConfig {
     pub network_config: NetworkConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
-    #[serde(default)]
-    pub run_housekeeper: bool,
     pub validator_preferences: ValidatorPreferences,
     pub router_config: RouterConfig,
     #[serde(default = "default_duration")]

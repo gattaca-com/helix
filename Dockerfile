@@ -13,6 +13,8 @@ ARG AWS_ACCESS_KEY_ID
 ARG AWS_SECRET_ACCESS_KEY
 ARG REPO_NAME
 
+RUN echo "REPO_NAME: $REPO_NAME"
+
 # Test to make sure that aws access is set correctly
 RUN test -n "$AWS_ACCESS_KEY_ID" || (echo "AWS_ACCESS_KEY_ID  not set" && false)
 RUN test -n "$AWS_SECRET_ACCESS_KEY" || (echo "AWS_SECRET_ACCESS_KEY  not set" && false)
@@ -23,6 +25,9 @@ ENV SCCACHE_S3_USE_SSL=true
 
 # Copy necessary contents into the container at /app
 ADD ./repos /app/
+
+RUN ls -lah /app
+RUN ls -lah /app/${REPO_NAME}
 
 # Set the working directory to /app
 WORKDIR /app/${REPO_NAME}

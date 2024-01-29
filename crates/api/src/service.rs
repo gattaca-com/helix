@@ -48,19 +48,16 @@ impl ApiService {
             NetworkConfig::Holesky => ChainInfo::for_holesky(),
         });
 
-        // Housekeeper should only be run on one instance.
-        if config.run_housekeeper {
-            let housekeeper =
-                Housekeeper::new(db.clone(), multi_beacon_client.clone(), auctioneer.clone());
-            tokio::task::spawn(async move {
-                loop {
-                    if let Err(err) = housekeeper.start().await {
-                        tracing::error!("Housekeeper error: {}", err);
-                        sleep(Duration::from_secs(5)).await;
-                    }
+        let housekeeper =
+            Housekeeper::new(db.clone(), multi_beacon_client.clone(), auctioneer.clone());
+        tokio::spawn(async move {
+            loop {
+                if let Err(err) = housekeeper.start().await {
+                    tracing::error!("Housekeeper error: {}", err);
+                    sleep(Duration::from_secs(5)).await;
                 }
-            });
-        }
+            }
+        });
 
         // Initialise relay signing context
         let signing_key_str = env::var("RELAY_KEY").expect("could not find RELAY_KEY in env");
@@ -82,7 +79,7 @@ impl ApiService {
         );
 
         let (mut chain_event_updater, slot_update_sender) =
-            ChainEventUpdater::new_with_channel(db.clone());
+            ChainEventUpdater::new(db.clone());
 
         let mbc_clone = multi_beacon_client.clone();
         tokio::spawn(async move {

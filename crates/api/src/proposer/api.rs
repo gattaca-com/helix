@@ -112,7 +112,7 @@ where
         // Spin up the housekeep task
         let api_clone = api.clone();
         tokio::spawn(async move {
-            if let Err(err) = api_clone.housekeep(slot_update_subscription.clone()).await {
+            if let Err(err) = api_clone.housekeep(slot_update_subscription).await {
                 error!(
                     error = %err,
                     "ProposerApi. housekeep task encountered an error",
@@ -986,11 +986,8 @@ where
         &self,
         public_key: &BlsPublicKey,
     ) -> Result<bool, ProposerApiError> {
-        Ok(self
-            .auctioneer
-            .get_trusted_proposers()
-            .await?
-            .map_or(false, |whitelist| whitelist.contains(public_key)))
+        let is_trusted_proposer = self.auctioneer.is_trusted_proposer(public_key).await?;
+        Ok(is_trusted_proposer)
     }
 }
 
