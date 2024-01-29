@@ -281,7 +281,7 @@ where
             request_id = %request_id,
             trace = ?trace,
             request_duration_ns = trace.receive - trace.request_finish,
-            "request finished"
+            "submit_block request finished"
         );
 
         let optimistic_version = if was_simulated_optimistically {
@@ -433,7 +433,7 @@ where
             request_id = %request_id,
             trace = ?trace,
             request_duration_ns = trace.receive - trace.request_finish,
-            "request finished"
+            "submit_header request finished"
         );
 
         // Save submission to db.
@@ -541,10 +541,20 @@ where
             error!(request_id = %request_id, error = %err, "failed to save execution payload");
             return Err(BuilderApiError::AuctioneerError(err));
         }
+        trace.auctioneer_update = get_nanos_timestamp()?;
 
         // Gossip to other relays
         api.gossip_payload(&payload, payload.payload_and_blobs(), &request_id).await;
         
+        // Log some final info
+        trace.request_finish = get_nanos_timestamp()?;
+        info!(
+            request_id = %request_id,
+            trace = ?trace,
+            request_duration_ns = trace.receive - trace.request_finish,
+            "sumbit_block_v2 request finished"
+        );
+
         // Gossip payload
         api.db_sender
             .send(DbInfo::NewSubmission(payload.clone(), Arc::new(trace), OptimisticVersion::V2))
