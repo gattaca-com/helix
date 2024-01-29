@@ -30,7 +30,7 @@ use crate::{
     },
     types::{
         keys::{
-            BUILDER_INFO_KEY, LAST_HASH_DELIVERED_KEY, LAST_SLOT_DELIVERED_KEY, PROPOSER_WHITELIST_KEY
+            BUILDER_INFO_KEY, HOUSEKEEPER_LOCK_KEY, LAST_HASH_DELIVERED_KEY, LAST_SLOT_DELIVERED_KEY, PROPOSER_WHITELIST_KEY
         },
         SaveBidAndUpdateTopBidResponse,
     },
@@ -38,7 +38,6 @@ use crate::{
 };
 
 const BID_CACHE_EXPIRY_S: usize = 45;
-const HOUSEKEEPER_LOCK_EXPIRY_S: usize = 17;
 
 #[derive(Clone)]
 pub struct RedisCache {
@@ -145,11 +144,23 @@ impl RedisCache {
         }
     }
 
+    /// Attempts to set a lock in Redis with a specified key and expiry.
+    ///
+    /// This method uses an asynchronous Redis connection from a pool to execute the SET command.
+    /// It employs a locking pattern where the lock is set only if the key doesn't already exist
+    /// (`NX` option) and sets the lock to expire after a given duration (`expiry` in milliseconds).
+    ///
+    /// # Arguments
+    /// * `key` - A reference to a string slice that holds the key for the lock.
+    /// * `expiry` - The duration in milliseconds for which the lock should be valid.
+    ///
+    /// # Returns
+    /// Returns `true` if the lock was successfully acquired, or `false` if the lock was not set
     async fn set_lock(
         &self,
         key: &str,
         expiry: usize,
-    ) -> bool {
+    ) -> bool {    
         let mut conn = match self.pool.get().await {
             Ok(conn) => conn,
             Err(_) => return false,
@@ -170,6 +181,14 @@ impl RedisCache {
         }
     }
 
+    /// Attempts to renew an existing lock in Redis with a specified key and new expiry time.
+    ///
+    /// This method uses an asynchronous Redis connection from a pool to execute the SET command with
+    /// the 'XX' option, ensuring that the lock is only renewed if it already exists.
+    ///
+    /// # Arguments
+    /// * `key` - A reference to a string slice that holds the key of the lock to renew.
+    /// * `expiry` - The new duration in milliseconds for which the lock should be valid.
     async fn renew_lock(
         &self,
         key: &str,
@@ -849,8 +868,8 @@ impl Auctioneer for RedisCache {
     /// If the instance is not currently a leader or fails to renew the lock, it attempts to acquire the lock.
     /// The function returns `true` if the lock acquisition is successful, indicating leadership has been obtained.
     /// 
-    /// Expiry is set to `HOUSEKEEPER_LOCK_EXPIRY_S` seconds to ensure that the lock is released if the instance crashes.
-    /// HOUSEKEEPER_LOCK_EXPIRY_S should be long enought to allow the leader to renew the lock before it expires.
+    /// Expiry is set to `BID_CACHE_EXPIRY_S` seconds to ensure that the lock is released if the instance crashes.
+    /// BID_CACHE_EXPIRY_S should be long enought to allow the leader to renew the lock before it expires.
     ///
     /// Arguments:
     /// - `leader`: A `bool` indicating whether the current instance believes it is the leader.
@@ -862,12 +881,12 @@ impl Auctioneer for RedisCache {
     /// Note: This function assumes that the caller manages and passes the current leadership status.
     async fn try_acquire_or_renew_leadership(&self, leader: bool) -> bool {
         if leader {
-            if self.renew_lock("housekeeper_lock", HOUSEKEEPER_LOCK_EXPIRY_S).await {
+            if self.renew_lock(HOUSEKEEPER_LOCK_KEY, BID_CACHE_EXPIRY_S).await {
                 return true;
             }
         }
 
-        return self.set_lock("housekeeper_lock", HOUSEKEEPER_LOCK_EXPIRY_S).await;
+        return self.set_lock(HOUSEKEEPER_LOCK_KEY, BID_CACHE_EXPIRY_S).await;
     }
 }
 

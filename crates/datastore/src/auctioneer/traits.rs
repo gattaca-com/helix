@@ -153,5 +153,7 @@ pub trait Auctioneer: Send + Sync + Clone {
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<bool, AuctioneerError>;
     
+    /// Try to acquire or renew leadership for the housekeeper.
+    /// Returns: true if the housekeeper is the leader, false if it isn't.
     async fn try_acquire_or_renew_leadership(&self, leader: bool) -> bool;
 }

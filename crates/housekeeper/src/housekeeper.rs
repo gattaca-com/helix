@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::{atomic::AtomicBool, Arc}, time::{Duration, SystemTime}};
+use std::{collections::HashMap, sync::{atomic::{AtomicBool, Ordering}, Arc}, time::{Duration, SystemTime}};
 
 use ethereum_consensus::primitives::BlsPublicKey;
 use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
@@ -70,7 +70,7 @@ pub struct Housekeeper<
     refreshed_trusted_proposers_slot: Mutex<u64>,
     refresh_trusted_proposers_lock: Mutex<()>,
 
-    leader: AtomicBool
+    is_leader: AtomicBool
 }
 
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
@@ -90,7 +90,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             re_sync_builder_info_lock: Mutex::new(()),
             refreshed_trusted_proposers_slot: Mutex::new(0),
             refresh_trusted_proposers_lock: Mutex::new(()),
-            leader: AtomicBool::new(false),
+            is_leader: AtomicBool::new(false),
         })
     }
 
@@ -122,15 +122,16 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             return;
         }
 
-        let current_leadership_status = self.leader.load(std::sync::atomic::Ordering::SeqCst);
-        let updated_leadership_status = self.auctioneer.try_acquire_or_renew_leadership(current_leadership_status).await;
+        let original_leadership_status = self.is_leader.load(Ordering::SeqCst);
+        let is_leader = self.auctioneer.try_acquire_or_renew_leadership(original_leadership_status).await;
         
-        if updated_leadership_status != current_leadership_status {
-            self.leader.store(updated_leadership_status, std::sync::atomic::Ordering::SeqCst);
+        // If the leadership status has changed, update the is_leader flag.
+        if is_leader != original_leadership_status {
+            self.is_leader.store(is_leader, Ordering::SeqCst);
         }
 
         // Only allow one housekeeper task to run at a time.
-        if !updated_leadership_status {
+        if !is_leader {
             return;
         }
 
@@ -514,7 +515,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         
         let proposer_whitelist = self.db.get_trusted_proposers().await?;
         let num_trusted_proposers = proposer_whitelist.len();
-        
+
         self.auctioneer.update_trusted_proposers(proposer_whitelist).await?;
         *self.refreshed_trusted_proposers_slot.lock().await = head_slot;
 
