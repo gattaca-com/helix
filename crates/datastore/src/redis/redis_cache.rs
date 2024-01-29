@@ -1448,7 +1448,7 @@ mod tests {
         let builder_pub_key = BlsPublicKey::default();
         let unknown_builder_pub_key = BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap();
 
-        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: true };
+        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: true, builder_id: None };
 
         // Test case 1: Builder exists
         let set_result =
@@ -1525,7 +1525,7 @@ mod tests {
         cache.clear_cache().await.unwrap();
 
         let builder_pub_key = BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap();
-        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: false };
+        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: false, builder_id: None };
 
         // Set builder info in the cache
         let set_result =
@@ -1543,7 +1543,7 @@ mod tests {
         cache.clear_cache().await.unwrap();
 
         let builder_pub_key_optimistic = BlsPublicKey::try_from([11u8; 48].as_ref()).unwrap();
-        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: true };
+        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: true, builder_id: None };
 
         // Set builder info in the cache
         let set_result = cache

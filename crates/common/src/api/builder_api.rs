@@ -3,7 +3,7 @@ use ethereum_consensus::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::proposer_api::{ValidatorPreferences, ValidatorRegistrationInfo};
+use crate::{ValidatorPreferences, api::proposer_api::ValidatorRegistrationInfo};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct BuilderGetValidatorsResponseEntry {

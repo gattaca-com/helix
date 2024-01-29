@@ -9,4 +9,5 @@ pub struct BuilderInfo {
     #[serde(with = "as_str")]
     pub collateral: U256,
     pub is_optimistic: bool,
+    pub builder_id: Option<String>,
 }

@@ -13,8 +13,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         time::{SystemTime, UNIX_EPOCH},
     };
     use helix_common::{
-        bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission, BidSubmission},
-        GetPayloadTrace, bellatrix::{ByteVector, ByteList, List}, HeaderSubmissionTrace, versioned_payload::PayloadAndBlobs,
+        bellatrix::{ByteVector, ByteList, List}, bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission}, versioned_payload::PayloadAndBlobs, GetPayloadTrace, HeaderSubmissionTrace
     };
 
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
@@ -24,6 +23,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
     };
     use tokio_postgres::NoTls;
     use helix_common::api::proposer_api::ValidatorRegistrationInfo;
+    use helix_common::validator_preferences::ValidatorPreferences;
 
     use crate::postgres::postgres_db_init::run_migrations_async;
 
@@ -93,7 +93,10 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
                 },
                 signature,
             },
-            preferences: Default::default(),
+            preferences: ValidatorPreferences {
+                censoring: false,
+                trusted_builders: Some(vec!["test".to_string(), "test2".to_string()]),
+            },
         }
     }
 
@@ -294,7 +297,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         let key = SecretKey::random(&mut rng).unwrap();
         let public_key = key.public_key();
         let builder_info =
-            helix_common::BuilderInfo { collateral: U256::from_str("1000000000000000000000000000").unwrap(), is_optimistic: false };
+            helix_common::BuilderInfo { collateral: U256::from_str("1000000000000000000000000000").unwrap(), is_optimistic: false, builder_id: None };
 
         let result = db_service.store_builder_info(&public_key, builder_info).await;
         assert!(result.is_ok());
@@ -315,7 +318,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         let public_key = key.public_key();
 
         let builder_info =
-            helix_common::BuilderInfo { collateral: Default::default(), is_optimistic: false };
+            helix_common::BuilderInfo { collateral: Default::default(), is_optimistic: false, builder_id: None };
 
         let result = db_service.store_builder_info(&public_key, builder_info).await;
         assert!(result.is_ok());

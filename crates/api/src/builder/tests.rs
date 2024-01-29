@@ -33,7 +33,7 @@ mod tests {
         api::builder_api::{BuilderGetValidatorsResponseEntry, BuilderGetValidatorsResponse}, bid_submission::{SignedBidSubmission, v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb}, BidSubmission}, SubmissionTrace, HeaderSubmissionTrace,
     };
     use helix_common::api::proposer_api::ValidatorRegistrationInfo;
-    use helix_common::api::proposer_api::ValidatorPreferences;
+    use helix_common::ValidatorPreferences;
     use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
     use helix_utils::request_encoding::Encoding;
     use tokio::sync::{

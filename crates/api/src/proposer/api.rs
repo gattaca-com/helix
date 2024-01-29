@@ -44,9 +44,9 @@ use helix_common::{
         proposer_api::{
             ValidatorRegistrationInfo,
             GetPayloadResponse, 
-            ValidatorPreferences,
         },
     },
+    ValidatorPreferences,
     chain_info::{ChainInfo, Network},
     try_execution_header_from_payload, BidRequest, GetHeaderTrace, GetPayloadTrace,
     RegisterValidatorsTrace, signed_proposal::VersionedSignedProposal, versioned_payload::PayloadAndBlobs,
@@ -626,12 +626,10 @@ where
                 sleep(Duration::from_millis(remaining_sleep_ms)).await;
             }
         } else if !is_mainnet {
-            info!(request_id = %request_id, "not on mainnet, not pausing execution");
+            info!(request_id = %request_id, "not on mainnet, skipping sleep before returning payload");
         } else {
-            info!(request_id = %request_id, "proposer is not trusted, not pausing execution");
+            info!(request_id = %request_id, "proposer is trusted, skipping sleep before returning payload");
         }
-
-        
 
         // Return response
         info!(request_id = %request_id, trace = ?trace, timestamp = get_nanos_timestamp()?, "delivering payload");
