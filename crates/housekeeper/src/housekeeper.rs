@@ -513,15 +513,14 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         );
         
         let proposer_whitelist = self.db.get_trusted_proposers().await?;
-        if proposer_whitelist.is_empty() {
-            warn!("The trusted proposers list is empty.");
-        }
-
+        let num_trusted_proposers = proposer_whitelist.len();
+        
         self.auctioneer.update_trusted_proposers(proposer_whitelist).await?;
         *self.refreshed_trusted_proposers_slot.lock().await = head_slot;
 
         debug!(
             head_slot = head_slot, 
+            num_trusted_proposers = num_trusted_proposers,
             "updated trusted proposers"
         );
 
