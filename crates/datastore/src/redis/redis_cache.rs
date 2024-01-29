@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::{atomic::{AtomicBool, Ordering}, Arc}};
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use deadpool_redis::{Config, CreatePoolError, Pool, Runtime};
@@ -38,6 +38,7 @@ use crate::{
 };
 
 const BID_CACHE_EXPIRY_S: usize = 45;
+const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 17_000;
 
 #[derive(Clone)]
 pub struct RedisCache {
@@ -868,8 +869,8 @@ impl Auctioneer for RedisCache {
     /// If the instance is not currently a leader or fails to renew the lock, it attempts to acquire the lock.
     /// The function returns `true` if the lock acquisition is successful, indicating leadership has been obtained.
     /// 
-    /// Expiry is set to `BID_CACHE_EXPIRY_S` seconds to ensure that the lock is released if the instance crashes.
-    /// BID_CACHE_EXPIRY_S should be long enought to allow the leader to renew the lock before it expires.
+    /// Expiry is set to `HOUSEKEEPER_LOCK_EXPIRY_MS` milliseconds to ensure that the lock is released if the instance crashes.
+    /// `HOUSEKEEPER_LOCK_EXPIRY_MS`` should be long enought to allow the leader to renew the lock before it expires.
     ///
     /// Arguments:
     /// - `leader`: A `bool` indicating whether the current instance believes it is the leader.
@@ -881,12 +882,12 @@ impl Auctioneer for RedisCache {
     /// Note: This function assumes that the caller manages and passes the current leadership status.
     async fn try_acquire_or_renew_leadership(&self, leader: bool) -> bool {
         if leader {
-            if self.renew_lock(HOUSEKEEPER_LOCK_KEY, BID_CACHE_EXPIRY_S).await {
+            if self.renew_lock(HOUSEKEEPER_LOCK_KEY, HOUSEKEEPER_LOCK_EXPIRY_MS).await {
                 return true;
             }
         }
 
-        return self.set_lock(HOUSEKEEPER_LOCK_KEY, BID_CACHE_EXPIRY_S).await;
+        return self.set_lock(HOUSEKEEPER_LOCK_KEY, HOUSEKEEPER_LOCK_EXPIRY_MS).await;
     }
 }
 
