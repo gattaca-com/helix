@@ -7,10 +7,7 @@ use std::{
 };
 
 use axum::{
-    extract::{Json, Path},
-    http::{StatusCode, Request},
-    response::IntoResponse,
-    Extension,
+    body::{to_bytes, Body}, extract::{Json, Path}, http::{StatusCode, Request}, response::IntoResponse, Extension
 };
 use ethereum_consensus::{
     builder::SignedValidatorRegistration,
@@ -24,7 +21,6 @@ use ethereum_consensus::{
         SignedBlindedBeaconBlock,
     },
 };
-use hyper::Body;
 use tokio::{
     sync::{mpsc, mpsc::error::SendError, mpsc::Sender, RwLock},
     time::{sleep, Instant},
@@ -59,6 +55,8 @@ use crate::proposer::{
 
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
+pub(crate) const MAX_BLINDED_BLOCK_LENGTH: usize = 1024 * 1024 * 1;
+pub(crate) const MAX_VAL_REGISTRATIONS_LENGTH: usize = 1024 * 1024 * 1;
 
 #[derive(Clone)]
 pub struct ProposerApi<A, DB, M>
@@ -995,7 +993,7 @@ async fn deserialize_get_payload_bytes(
     req: Request<Body>,
 ) -> Result<SignedBlindedBeaconBlock, ProposerApiError> {
     let body = req.into_body();
-    let body_bytes = hyper::body::to_bytes(body).await?;
+    let body_bytes = to_bytes(body, MAX_BLINDED_BLOCK_LENGTH).await?;
     Ok(serde_json::from_slice(&body_bytes)?)
 }
 

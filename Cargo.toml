@@ -29,7 +29,8 @@ helix-utils = { path = "./crates/utils" }
 
 # Async and Networking 
 async-trait = "0.1"
-axum = "0.6.20"
+axum = "0.7.4"
+tower-http = { version = "0.5.1", features = ["limit"] }
 futures = "0.3"
 hyper = "0.14.27"
 http = "0.2.9"

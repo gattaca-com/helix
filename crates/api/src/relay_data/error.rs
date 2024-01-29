@@ -1,5 +1,4 @@
-use axum::response::{IntoResponse, Response};
-use hyper::StatusCode;
+use axum::{http::StatusCode, response::{IntoResponse, Response}};
 
 #[derive(Debug, thiserror::Error)]
 pub enum DataApiError {

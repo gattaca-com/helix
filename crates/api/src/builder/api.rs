@@ -6,9 +6,7 @@ use std::{
 };
 
 use axum::{
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Extension,
+    body::{to_bytes, Body}, http::{Request, StatusCode}, response::{IntoResponse, Response}, Extension
 };
 use ethereum_consensus::{
     configs::{mainnet::CAPELLA_FORK_EPOCH, mainnet::SECONDS_PER_SLOT},
@@ -17,7 +15,6 @@ use ethereum_consensus::{
     ssz::{self, prelude::*},
 };
 use flate2::read::GzDecoder;
-use hyper::{Body, Request};
 use tokio::{
     sync::{
         mpsc::{self, error::SendError, Sender, Receiver},
@@ -48,6 +45,7 @@ use crate::{
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 4;
+pub(crate) const MAX_HEADER_LENGTH: usize = 1024 * 1024 * 1;
 
 #[derive(Clone)]
 pub struct BuilderApi<A, DB, S, G>
@@ -142,7 +140,7 @@ where
         match &*duty_bytes {
             Some(bytes) => Response::builder()
                 .status(StatusCode::OK)
-                .body(hyper::Body::from(bytes.clone()))
+                .body(axum::body::Body::from(bytes.clone()))
                 .unwrap()
                 .into_response(),
             None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -1436,7 +1434,7 @@ pub async fn decode_payload(
 
     // Read the body
     let body = req.into_body();
-    let mut body_bytes = hyper::body::to_bytes(body).await?;
+    let mut body_bytes = to_bytes(body, MAX_PAYLOAD_LENGTH).await?;
     if body_bytes.len() > MAX_PAYLOAD_LENGTH {
         return Err(BuilderApiError::PayloadTooLarge {
             max_size: MAX_PAYLOAD_LENGTH,
@@ -1522,7 +1520,7 @@ pub async fn decode_header_submission(
 
     // Read the body
     let body = req.into_body();
-    let body_bytes = hyper::body::to_bytes(body).await?;
+    let body_bytes = to_bytes(body, MAX_PAYLOAD_LENGTH).await?;
     if body_bytes.len() > MAX_PAYLOAD_LENGTH {
         return Err(BuilderApiError::PayloadTooLarge {
             max_size: MAX_PAYLOAD_LENGTH,
@@ -1766,8 +1764,7 @@ mod tests {
     use super::*;
     
     
-    use hyper::http::header::{HeaderValue, CONTENT_ENCODING, CONTENT_TYPE};
-    use hyper::http::uri::Uri;
+    use axum::http::{header::{CONTENT_ENCODING, CONTENT_TYPE}, HeaderValue, Uri};
     
     use uuid::Uuid;
 
@@ -2060,6 +2057,16 @@ mod tests {
         let request_id = create_test_uuid().await;
 
         let result = decode_payload(req, &mut trace, &request_id).await;
-        assert!(matches!(result, Err(BuilderApiError::PayloadTooLarge { .. })));
+        match result {
+            Ok(_) => panic!("Should have failed"),
+            Err(err) => {
+                match err {
+                    BuilderApiError::AxumError(err) => {
+                        assert_eq!(err.to_string(), "length limit exceeded");
+                    }
+                    _ => panic!("Should have failed with AxumError"),
+                }
+            }
+        }
     }
 }

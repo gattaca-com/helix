@@ -1,9 +1,8 @@
-use axum::response::{IntoResponse, Response};
+use axum::{http::StatusCode, response::{IntoResponse, Response}};
 use ethereum_consensus::{
     primitives::{BlsPublicKey, Bytes32, Hash32},
     ssz::{prelude::*, self},
 };
-use hyper::StatusCode;
 use helix_datastore::error::AuctioneerError;
 use helix_common::simulator::BlockSimError;
 
@@ -11,6 +10,9 @@ use helix_common::simulator::BlockSimError;
 pub enum BuilderApiError {
     #[error("hyper error: {0}")]
     HyperError(#[from] hyper::Error),
+
+    #[error("axum error: {0}")]
+    AxumError(#[from] axum::Error),
 
     #[error("serde decode error: {0}")]
     SerdeDecodeError(#[from] serde_json::Error),
@@ -128,6 +130,9 @@ impl IntoResponse for BuilderApiError {
             },
             BuilderApiError::HyperError(err) => {
                 (StatusCode::BAD_REQUEST, format!("Hyper error: {err}")).into_response()
+            },
+            BuilderApiError::AxumError(err) => {
+                (StatusCode::BAD_REQUEST, format!("Axum error: {err}")).into_response()
             },
             BuilderApiError::PayloadTooLarge{ max_size, size } => {
                 (StatusCode::BAD_REQUEST, format!("Payload too large. max size: {max_size}, size: {size}")).into_response()
