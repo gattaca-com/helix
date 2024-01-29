@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap, f64::consts::E, io::Read, sync::{
+    collections::HashMap, io::Read, sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     }, time::{SystemTime, UNIX_EPOCH}
@@ -364,9 +364,17 @@ where
             &request_id,
         ).await?;
 
-        // Fetch the next proposer duty/ payload attributes and validate basic information about the payload
+        // Fetch the next proposer duty/ payload attributes
         let (next_duty, payload_attributes) =
             api.fetch_proposer_and_attributes(payload.slot(), payload.parent_hash(), &request_id).await?;
+
+        // Discard any OptimisticV2 submissions if the proposer has censoring enabled
+        if next_duty.entry.preferences.censoring {
+            warn!(request_id = %request_id, "proposer has censoring enabled, discarding optimistic v2 submission");
+            return Err(BuilderApiError::V2SubmissionsInvalidIfProposerCensors);
+        }
+
+        // Validate basic information about the payload
         if let Err(err) = sanity_check_block_submission(
             &payload,
             payload.bid_trace(),
@@ -527,6 +535,12 @@ where
         // Fetch the next proposer duty/ payload attributes and validate basic information about the payload
         let (next_duty, payload_attributes) =
         api.fetch_proposer_and_attributes(payload.slot(), payload.parent_hash(), &request_id).await?;
+
+        // Discard any OptimisticV2 submissions if the proposer has censoring enabled
+        if next_duty.entry.preferences.censoring {
+            warn!(request_id = %request_id, "proposer has censoring enabled, discarding optimistic v2 submission");
+            return Err(BuilderApiError::V2SubmissionsInvalidIfProposerCensors);
+        }
 
         // Handle trusted builders check
         if !api.check_if_trusted_builder(&next_duty, &builder_info).await {

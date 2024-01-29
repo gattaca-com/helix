@@ -109,6 +109,9 @@ pub enum BuilderApiError {
 
     #[error("builder not in proposer's trusted list: {proposer_trusted_builders:?}")]
     BuilderNotInProposersTrustedList{proposer_trusted_builders: Vec<String>},
+
+    #[error("V2 submissions invalid if proposer censors")]
+    V2SubmissionsInvalidIfProposerCensors,
 }
 
 impl IntoResponse for BuilderApiError {
@@ -224,6 +227,9 @@ impl IntoResponse for BuilderApiError {
             },
             BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders } => {
                 (StatusCode::BAD_REQUEST, format!("builder not in proposer's trusted list: {proposer_trusted_builders:?}")).into_response()
+            },
+            BuilderApiError::V2SubmissionsInvalidIfProposerCensors => {
+                (StatusCode::BAD_REQUEST, "V2 submissions invalid if proposer censors").into_response()
             }
         }
     }
