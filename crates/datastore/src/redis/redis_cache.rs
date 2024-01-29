@@ -6,7 +6,7 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Hash32},
     ssz::prelude::*,
 };
-use helix_common::{bid_submission::BidSubmission, versioned_payload::PayloadAndBlobs, ProposerInfo, ProposerInfoSet};
+use helix_common::{bid_submission::BidSubmission, versioned_payload::PayloadAndBlobs, ProposerInfo};
 use helix_common::bid_submission::v2::header_submission::SignedHeaderSubmission;
 use redis::{AsyncCommands, RedisResult, Value};
 use serde::{de::DeserializeOwned, Serialize};
@@ -1450,6 +1450,53 @@ mod tests {
             matches!(result.unwrap_err(), AuctioneerError::BuilderNotFound { .. }),
             "Incorrect get builder info error"
         );
+    }
+
+    #[tokio::test]
+    async fn test_get_trusted_proposers_and_update_trusted_proposers() {
+
+        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        cache.clear_cache().await.unwrap();
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
+        assert!(!is_trusted, "Failed to check trusted proposer");
+
+        cache.update_trusted_proposers(
+            vec![
+                ProposerInfo { 
+                    name: "test".to_string(),
+                    pub_key: BlsPublicKey::default(),
+                },
+                ProposerInfo { 
+                    name: "test2".to_string(),
+                    pub_key: BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap(),
+                },
+            ]
+        ).await.unwrap();
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
+        assert!(is_trusted, "Failed to check trusted proposer");
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap()).await.unwrap();
+        assert!(is_trusted, "Failed to check trusted proposer");
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::try_from([24u8; 48].as_ref()).unwrap()).await.unwrap();
+        assert!(!is_trusted, "Failed to check trusted proposer");
+
+        cache.update_trusted_proposers(
+            vec![
+                ProposerInfo { 
+                    name: "test2".to_string(),
+                    pub_key: BlsPublicKey::try_from([25u8; 48].as_ref()).unwrap(),
+                },
+            ]
+        ).await.unwrap();
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
+        assert!(!is_trusted, "Failed to check trusted proposer");
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::try_from([25u8; 48].as_ref()).unwrap()).await.unwrap();
+        assert!(is_trusted, "Failed to check trusted proposer");
     }
 
     #[tokio::test]
