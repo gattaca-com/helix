@@ -78,9 +78,6 @@ impl SignedBuilderBid {
                     public_key,
                 };
                 let signature = sign_builder_message(&mut message, signing_key, context)?;
-
-                tracing::info!(builder_bid = ?message, "V2-DEBUG .THIS IS A V1 SUBMISSION");
-
                 Ok(Self::Capella(capella::SignedBuilderBid {message, signature}))
             }
             ExecutionPayload::Deneb(payload) => {
@@ -124,9 +121,6 @@ impl SignedBuilderBid {
                     public_key,
                 };
                 let signature = sign_builder_message(&mut message, signing_key, context)?;
-
-                tracing::info!(builder_bid = ?message, "V2-DEBUG .THIS IS A V2 SUBMISSION");
-
                 Ok(Self::Capella(capella::SignedBuilderBid {message, signature}))
             }
             ExecutionPayloadHeader::Deneb(header) => {
