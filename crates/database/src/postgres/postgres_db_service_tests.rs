@@ -23,6 +23,7 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
     };
     use tokio_postgres::NoTls;
     use helix_common::api::proposer_api::ValidatorRegistrationInfo;
+    use helix_common::validator_preferences::ValidatorPreferences;
 
     use crate::postgres::postgres_db_init::run_migrations_async;
 
@@ -92,7 +93,10 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
                 },
                 signature,
             },
-            preferences: Default::default(),
+            preferences: ValidatorPreferences {
+                censoring: false,
+                trusted_builders: Some(vec!["test".to_string(), "test2".to_string()]),
+            },
         }
     }
 

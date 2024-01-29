@@ -182,7 +182,13 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                 },
                 preferences: ValidatorPreferences {
                     censoring: parse_bool_to_bool(row.get::<&str, bool>("censoring"))?,
-                    trusted_builders: todo!(),
+                    trusted_builders: row.get::<&str, Option<Vec<&str>>>("trusted_builders")
+                    .map(|trusted_builders| {
+                        trusted_builders
+                            .into_iter()
+                            .map(|builder| builder.to_string())
+                            .collect()
+                    }),
                 },
             },
         })
@@ -209,7 +215,7 @@ impl FromRow for BuilderInfo {
         Ok(BuilderInfo {
             collateral: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("collateral"))?,
             is_optimistic: parse_bool_to_bool(row.get::<&str, bool>("is_optimistic"))?,
-            builder_id: todo!(),
+            builder_id: row.get::<&str, Option<&str>>("builder_id").map(|s| s.to_string()),
         })
     }
 }
@@ -256,7 +262,13 @@ impl FromRow for SignedValidatorRegistrationEntry {
                 registration: SignedValidatorRegistration::from_row(row)?,
                 preferences: ValidatorPreferences {
                     censoring: parse_bool_to_bool(row.get::<&str, bool>("censoring"))?,
-                    trusted_builders: todo!(),
+                    trusted_builders: row.get::<&str, Option<Vec<&str>>>("trusted_builders")
+                    .map(|trusted_builders| {
+                        trusted_builders
+                            .into_iter()
+                            .map(|builder| builder.to_string())
+                            .collect()
+                    }),
                 },
             },
             inserted_at: parse_timestamptz_to_u64(
