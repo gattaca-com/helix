@@ -1,3 +1,5 @@
+use std::sync::{atomic::AtomicBool, Arc};
+
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 use helix_database::BuilderInfoDocument;
@@ -146,5 +148,10 @@ pub trait Auctioneer: Send + Sync + Clone {
         proposer_whitelist: Vec<ProposerInfo>,
     ) -> Result<(), AuctioneerError>;
 
-    async fn get_trusted_proposers(&self) -> Result<Option<ProposerInfoSet>, AuctioneerError>;
+    async fn is_trusted_proposer(
+        &self,
+        proposer_pub_key: &BlsPublicKey,
+    ) -> Result<bool, AuctioneerError>;
+
+    async fn try_acquire_or_renew_leadership(&self, leader: bool) -> bool;
 }

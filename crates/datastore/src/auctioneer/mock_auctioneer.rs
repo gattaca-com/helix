@@ -222,9 +222,14 @@ impl Auctioneer for MockAuctioneer {
         Ok(())
     }
 
-    async fn get_trusted_proposers(
+    async fn is_trusted_proposer(
         &self,
-    ) -> Result<Option<ProposerInfoSet>, AuctioneerError> {
-        Ok(Some(ProposerInfoSet::from(vec![])))
+        _proposer_pub_key: &BlsPublicKey,
+    ) -> Result<bool, AuctioneerError> {
+        Ok(true)
+    }
+
+    async fn try_acquire_or_renew_leadership(&self, leader: bool) -> bool {
+        true
     }
 }

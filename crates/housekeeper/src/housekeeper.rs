@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::{Duration, SystemTime}};
+use std::{collections::HashMap, sync::{atomic::AtomicBool, Arc}, time::{Duration, SystemTime}};
 
 use ethereum_consensus::primitives::BlsPublicKey;
 use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
@@ -17,7 +17,7 @@ use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, ProposerDuty,
-    SignedValidatorRegistrationEntry, chain_info::ChainInfo, pending_block::PendingBlock,
+    SignedValidatorRegistrationEntry, pending_block::PendingBlock,
 };
 
 use crate::error::HousekeeperError;
@@ -69,6 +69,8 @@ pub struct Housekeeper<
 
     refreshed_trusted_proposers_slot: Mutex<u64>,
     refresh_trusted_proposers_lock: Mutex<()>,
+
+    leader: AtomicBool
 }
 
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
@@ -88,6 +90,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             re_sync_builder_info_lock: Mutex::new(()),
             refreshed_trusted_proposers_slot: Mutex::new(0),
             refresh_trusted_proposers_lock: Mutex::new(()),
+            leader: AtomicBool::new(false),
         })
     }
 
@@ -116,6 +119,18 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     async fn process_new_slot(self: &SharedHousekeeper<DB, BeaconClient, A>, head_slot: u64) {
         let (is_new_block, prev_head_slot) = self.update_head_slot(head_slot).await;
         if !is_new_block {
+            return;
+        }
+
+        let current_leadership_status = self.leader.load(std::sync::atomic::Ordering::SeqCst);
+        let updated_leadership_status = self.auctioneer.try_acquire_or_renew_leadership(current_leadership_status).await;
+        
+        if updated_leadership_status != current_leadership_status {
+            self.leader.store(updated_leadership_status, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        // Only allow one housekeeper task to run at a time.
+        if !updated_leadership_status {
             return;
         }
 
