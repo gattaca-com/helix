@@ -1,4 +1,4 @@
-FROM rust:1.72.0 as helix
+FROM rust:1.75.0 as helix
 
 RUN apt update -y
 RUN apt install -y clang
@@ -45,7 +45,7 @@ RUN --mount=type=cache,target=/root/.cargo \
 RUN mv /app/$REPO_NAME/target/release/helix-cmd /app/helix-cmd
 
 # our final base
-FROM debian:stable-slim
+FROM debian:bullseye-slim
 
 RUN mkdir /root/logs
 
