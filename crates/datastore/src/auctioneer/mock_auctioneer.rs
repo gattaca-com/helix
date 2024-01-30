@@ -229,7 +229,7 @@ impl Auctioneer for MockAuctioneer {
         Ok(true)
     }
 
-    async fn try_acquire_or_renew_leadership(&self, leader: bool) -> bool {
+    async fn try_acquire_or_renew_leadership(&self, _leader_id: &str) -> bool {
         true
     }
 }
