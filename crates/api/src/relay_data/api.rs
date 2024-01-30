@@ -15,11 +15,11 @@ use helix_common::api::data_api::{
 
 use crate::relay_data::error::DataApiError;
 
-pub const PATH_DATA_API: &str = "/relay/v1/data";
+pub(crate) const PATH_DATA_API: &str = "/relay/v1/data";
 
-pub const PATH_PROPOSER_PAYLOAD_DELIVERED: &str = "/bidtraces/proposer_payload_delivered";
-pub const PATH_BUILDER_BIDS_RECEIVED: &str = "/bidtraces/builder_blocks_received";
-pub const PATH_VALIDATOR_REGISTRATION: &str = "/validator_registration";
+pub(crate) const PATH_PROPOSER_PAYLOAD_DELIVERED: &str = "/bidtraces/proposer_payload_delivered";
+pub(crate) const PATH_BUILDER_BIDS_RECEIVED: &str = "/bidtraces/builder_blocks_received";
+pub(crate) const PATH_VALIDATOR_REGISTRATION: &str = "/validator_registration";
 
 #[derive(Clone)]
 pub struct DataApi<DB: DatabaseService> {
@@ -31,7 +31,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         Self { db }
     }
 
-    /// Implements this API: https://flashbots.github.io/relay-specs/#/Data/getDeliveredPayloads
+    /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getDeliveredPayloads>
     pub async fn proposer_payload_delivered(
         Extension(data_api): Extension<Arc<DataApi<DB>>>,
         Query(params): Query<ProposerPayloadDeliveredParams>,
@@ -56,7 +56,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         }
     }
 
-    /// Implements this API: https://flashbots.github.io/relay-specs/#/Data/getReceivedBids
+    /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getReceivedBids>
     pub async fn builder_bids_received(
         Extension(data_api): Extension<Arc<DataApi<DB>>>,
         Query(params): Query<BuilderBlocksReceivedParams>,
@@ -87,7 +87,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         }
     }
 
-    /// Implements this API: https://flashbots.github.io/relay-specs/#/Data/getValidatorRegistration
+    /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getValidatorRegistration>
     pub async fn validator_registration(
         Extension(data_api): Extension<Arc<DataApi<DB>>>,
         Query(params): Query<ValidatorRegistrationParams>,

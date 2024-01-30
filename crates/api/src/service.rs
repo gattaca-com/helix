@@ -82,7 +82,7 @@ impl ApiService {
         );
 
         let (mut chain_event_updater, slot_update_sender) =
-            ChainEventUpdater::new_with_channel(db.clone());
+            ChainEventUpdater::new(db.clone());
 
         let mbc_clone = multi_beacon_client.clone();
         tokio::spawn(async move {

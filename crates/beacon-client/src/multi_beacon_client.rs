@@ -1,13 +1,10 @@
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
 };
 
 use async_trait::async_trait;
-use ethereum_consensus::{phase0::Fork, primitives::Root};
+use ethereum_consensus::primitives::Root;
 use futures::future::join_all;
 use helix_common::{ProposerDuty, ValidatorSummary, signed_proposal::VersionedSignedProposal, bellatrix::SimpleSerialize};
 use tokio::{sync::mpsc::Sender, task::JoinError};
@@ -17,8 +14,8 @@ use crate::{
     error::BeaconClientError,
     traits::{BeaconClientTrait, MultiBeaconClientTrait},
     types::{
-        BlockId, BroadcastValidation, GenesisDetails, HeadEventData, PayloadAttributesEvent,
-        RandaoResponse, StateId, SyncStatus,
+        BroadcastValidation, HeadEventData, PayloadAttributesEvent,
+        StateId, SyncStatus,
     },
 };
 
@@ -238,104 +235,6 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
                 }
             } else {
                 error!("Tokio channel closed for publish_block");
-            }
-        }
-
-        Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
-    }
-
-    async fn get_genesis(&self) -> Result<GenesisDetails, BeaconClientError> {
-        let clients = self.beacon_clients_by_last_response();
-        let mut last_error = None;
-
-        for (i, client) in clients.into_iter().enumerate() {
-            match client.get_genesis().await {
-                Ok(genesis_info) => {
-                    self.best_beacon_instance.store(i, Ordering::Relaxed);
-                    return Ok(genesis_info);
-                }
-                Err(err) => {
-                    last_error = Some(err);
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
-    }
-
-    async fn get_spec(&self) -> Result<HashMap<String, String>, BeaconClientError> {
-        let clients = self.beacon_clients_by_last_response();
-        let mut last_error = None;
-
-        for (i, client) in clients.into_iter().enumerate() {
-            match client.get_spec().await {
-                Ok(spec) => {
-                    self.best_beacon_instance.store(i, Ordering::Relaxed);
-                    return Ok(spec);
-                }
-                Err(err) => {
-                    last_error = Some(err);
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
-    }
-
-    async fn get_fork_schedule(&self) -> Result<Vec<Fork>, BeaconClientError> {
-        let clients = self.beacon_clients_by_last_response();
-        let mut last_error = None;
-
-        for (i, client) in clients.into_iter().enumerate() {
-            match client.get_fork_schedule().await {
-                Ok(fork_schedule) => {
-                    self.best_beacon_instance.store(i, Ordering::Relaxed);
-                    return Ok(fork_schedule);
-                }
-                Err(err) => {
-                    last_error = Some(err);
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
-    }
-
-    async fn get_block<SignedBeaconBlock: serde::Serialize + serde::de::DeserializeOwned>(
-        &self,
-        block_id: BlockId,
-    ) -> Result<SignedBeaconBlock, BeaconClientError> {
-        let clients = self.beacon_clients_by_last_response();
-        let mut last_error = None;
-
-        for (i, client) in clients.into_iter().enumerate() {
-            match client.get_block(block_id.clone()).await {
-                Ok(block) => {
-                    self.best_beacon_instance.store(i, Ordering::Relaxed);
-                    return Ok(block);
-                }
-                Err(err) => {
-                    last_error = Some(err);
-                }
-            }
-        }
-
-        Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
-    }
-
-    async fn get_randao(&self, id: StateId) -> Result<RandaoResponse, BeaconClientError> {
-        let clients = self.beacon_clients_by_last_response();
-        let mut last_error = None;
-
-        for (i, client) in clients.into_iter().enumerate() {
-            match client.get_randao(id.clone()).await {
-                Ok(randao) => {
-                    self.best_beacon_instance.store(i, Ordering::Relaxed);
-                    return Ok(randao);
-                }
-                Err(err) => {
-                    last_error = Some(err);
-                }
             }
         }
 

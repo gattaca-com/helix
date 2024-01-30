@@ -20,8 +20,3 @@ pub struct BeaconResponse<T: Serialize + DeserializeOwned> {
     #[serde(flatten)]
     pub meta: HashMap<String, serde_json::Value>,
 }
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct RandaoResponse {
-    pub randao: Bytes32,
-}

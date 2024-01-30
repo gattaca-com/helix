@@ -8,19 +8,19 @@ use ethereum_consensus::{
     Error, ssz::prelude::*,
 };
 
-pub const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
+pub(crate) const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
     75, 54, 61, 185, 78, 40, 97, 32, 215, 110, 185, 5, 52, 15, 221, 78, 84, 191, 233, 240, 107,
     243, 63, 246, 207, 90, 210, 127, 81, 27, 254, 149,
 ];
-pub const SEPOLIA_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
+pub(crate) const SEPOLIA_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
     216, 234, 23, 31, 60, 148, 174, 162, 30, 188, 66, 161, 237, 97, 5, 42, 207, 63, 146, 9, 192,
     14, 78, 251, 170, 221, 172, 9, 237, 155, 128, 120,
 ];
-pub const GOERLI_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
+pub(crate) const GOERLI_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
     4, 61, 176, 217, 168, 56, 19, 85, 30, 226, 243, 52, 80, 210, 55, 151, 117, 125, 67, 9, 17, 169,
     50, 5, 48, 173, 138, 14, 171, 196, 62, 251,
 ];
-pub const HOLESKY_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
+pub(crate) const HOLESKY_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
     145, 67, 170, 124, 97, 90, 127, 113, 21, 226, 182, 170, 195, 25, 192, 53, 41, 223, 130, 66, 174,
     112, 95, 186, 157, 243, 155, 121, 197, 159, 168, 177,
 ];
