@@ -30,6 +30,7 @@ helix-utils = { path = "./crates/utils" }
 # Async and Networking 
 async-trait = "0.1"
 axum = "0.6.20"
+dashmap = { version = "5.5.3", features = [] }
 futures = "0.3"
 hyper = "0.14.27"
 http = "0.2.9"

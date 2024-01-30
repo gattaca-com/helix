@@ -37,6 +37,6 @@ env_logger.workspace = true
 # Misc 
 hex.workspace = true
 rand = "0.8"
-dashmap = { version = "5.5.3", features = [] }
+dashmap.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

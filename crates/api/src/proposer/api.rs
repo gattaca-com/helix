@@ -11,6 +11,7 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
+use dashmap::DashMap;
 use ethereum_consensus::{
     builder::SignedValidatorRegistration,
     clock::get_current_unix_time_in_nanos,
@@ -72,7 +73,7 @@ where
     multi_beacon_client: Arc<M>,
 
     curr_slot: Arc<AtomicU64>,
-    parent_hash_map: Arc<RwLock<HashMap<u64, Hash32>>>,
+    parent_hash_map: Arc<DashMap<u64, Hash32>>,
 
     chain_info: Arc<ChainInfo>,
     next_proposer_duty: Arc<RwLock<Option<BuilderGetValidatorsResponseEntry>>>,
@@ -103,7 +104,7 @@ where
             broadcasters,
             multi_beacon_client,
             curr_slot: Arc::new(AtomicU64::new(0)),
-            parent_hash_map: Arc::new(RwLock::new(HashMap::new())),
+            parent_hash_map: Arc::new(DashMap::with_capacity(10)),
             chain_info,
             next_proposer_duty: Arc::new(RwLock::new(None)),
             validator_preferences,
@@ -752,9 +753,9 @@ where
             });
         }
 
-        if let Some(expected_parent_hash) = self.parent_hash_map.read().await.get(&head_slot) {
+        if let Some(expected_parent_hash) = self.parent_hash_map.get(&head_slot) {
             let blinded_block_parent_hash = signed_blinded_block.message().body().execution_payload_header().parent_hash().clone();
-            if expected_parent_hash != &blinded_block_parent_hash {
+            if expected_parent_hash.value() != &blinded_block_parent_hash {
                 return Err(ProposerApiError::InvalidBlindedBlockParentHash {
                     expected_parent_hash: expected_parent_hash.clone(),
                     blinded_block_parent_hash,
@@ -1086,11 +1087,10 @@ where
         );
 
         // Clean up hashes more than 2 slots old
-        let mut parent_hash_map = self.parent_hash_map.write().await;
-        parent_hash_map.retain(|key, _| *key >= head_slot.saturating_sub(2));
+        self.parent_hash_map.retain(|key, _| *key >= head_slot.saturating_sub(2));
 
         // Save new one
-        parent_hash_map.insert(head_slot, payload_attributes.parent_hash);
+        self.parent_hash_map.insert(head_slot, payload_attributes.parent_hash);
     }
 }
 
