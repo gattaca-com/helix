@@ -1714,7 +1714,7 @@ mod tests {
         let (cache, mut submission, floor_value, received_at) = setup_save_and_update_test().await;
         let mut state = SaveBidAndUpdateTopBidResponse::default();
 
-        submission.message_mut().value = floor_value - U256::from(1);
+        submission.message_mut().value = floor_value.saturating_sub(U256::from(1));
         let result = cache
             .save_bid_and_update_top_bid(
                 &submission,

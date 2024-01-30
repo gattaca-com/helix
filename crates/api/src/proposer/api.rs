@@ -618,7 +618,7 @@ where
             // Calculate the remaining time needed to reach the target propagation duration.
             // Conditionally pause the execution until we hit `TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS` 
             // to allow the block to propagate through the network.
-            let elapsed_since_propagate_start_ms = (get_nanos_timestamp()? - trace.beacon_client_broadcast) / 1_000_000;
+            let elapsed_since_propagate_start_ms = (get_nanos_timestamp()?.saturating_sub(trace.beacon_client_broadcast)) / 1_000_000;
             let remaining_sleep_ms = self.target_get_payload_propagation_duration_ms.saturating_sub(elapsed_since_propagate_start_ms);
             if remaining_sleep_ms > 0 {
                 sleep(Duration::from_millis(remaining_sleep_ms)).await;
@@ -699,7 +699,7 @@ where
         let curr_timestamp_ms = get_millis_timestamp()? as i64;
         let slot_start_timestamp = self.chain_info.genesis_time_in_secs
             + (bid_request.slot * self.chain_info.seconds_per_slot);
-        let ms_into_slot = curr_timestamp_ms - (slot_start_timestamp * 1000) as i64;
+        let ms_into_slot = curr_timestamp_ms.saturating_sub((slot_start_timestamp * 1000) as i64);
 
         if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {
             warn!(curr_timestamp_ms = curr_timestamp_ms, slot = bid_request.slot, "get_request",);
