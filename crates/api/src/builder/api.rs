@@ -138,8 +138,8 @@ where
     pub async fn get_validators(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
     ) -> impl IntoResponse {
-        let duty_bytes = api.proposer_duties_response.read().await;
-        match &*duty_bytes {
+        let duty_bytes = api.proposer_duties_response.read().await.clone();
+        match duty_bytes {
             Some(bytes) => Response::builder()
                 .status(StatusCode::OK)
                 .body(hyper::Body::from(bytes.clone()))
