@@ -150,6 +150,18 @@ pub enum ProposerApiError {
 
     #[error("number of blinded blobs does not match blobs bundle length")]
     BlindedBlobsBundleLengthMismatch,
+
+    #[error("internal slot: {internal_slot} does not match slot duty slot: {slot_duty_slot}")]
+    InternalSlotMismatchesWithSlotDuty {internal_slot: u64, slot_duty_slot: u64},
+
+    #[error("internal slot: {internal_slot} does not match blinded block slot: {blinded_block_slot}")]
+    InvalidBlindedBlockSlot {internal_slot: u64, blinded_block_slot: u64},
+
+    #[error("expected parent hash: {expected_parent_hash} does not match blinded block parent hash: {blinded_block_parent_hash}")]
+    InvalidBlindedBlockParentHash {expected_parent_hash: Hash32, blinded_block_parent_hash: Hash32},
+
+    #[error("parent hash unknown for slot: {slot}")]
+    ParentHashUnknownForSlot {slot: u64},
 }
 
 impl IntoResponse for ProposerApiError {
@@ -289,6 +301,27 @@ impl IntoResponse for ProposerApiError {
             },
             ProposerApiError::BlindedBlobsBundleLengthMismatch => {
                 (StatusCode::BAD_REQUEST, "number of blinded blobs does not match blobs bundle length").into_response()
+            },
+            ProposerApiError::InternalSlotMismatchesWithSlotDuty {internal_slot, slot_duty_slot} => {
+                (
+                    StatusCode::BAD_REQUEST, 
+                    format!("internal slot: {internal_slot} does not match slot duty slot: {slot_duty_slot}"),
+                ).into_response()
+            },
+            ProposerApiError::InvalidBlindedBlockSlot {internal_slot, blinded_block_slot} => {
+                (
+                    StatusCode::BAD_REQUEST, 
+                    format!("internal slot: {internal_slot} does not match blinded block slot: {blinded_block_slot}"),
+                ).into_response()
+            },
+            ProposerApiError::InvalidBlindedBlockParentHash {expected_parent_hash, blinded_block_parent_hash} => {
+                (
+                    StatusCode::BAD_REQUEST, 
+                    format!("expected parent hash: {expected_parent_hash} does not match blinded block parent hash: {blinded_block_parent_hash}"),
+                ).into_response()
+            },
+            ProposerApiError::ParentHashUnknownForSlot {slot} => {
+                (StatusCode::BAD_REQUEST, format!("parent hash unknown for slot: {slot}")).into_response()
             },
         }
     }
