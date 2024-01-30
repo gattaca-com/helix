@@ -194,7 +194,7 @@ mod proposer_api_tests {
         let seconds_per_slot: u64 = ChainInfo::for_mainnet().seconds_per_slot;
         let request_time_in_ns = get_nanos_timestamp().unwrap();
         let current_time_in_secs = request_time_in_ns / 1_000_000_000;
-        let time_since_genesis = current_time_in_secs - genesis_time_in_secs;
+        let time_since_genesis = current_time_in_secs.saturating_sub(genesis_time_in_secs);
         
         time_since_genesis / seconds_per_slot
     }

@@ -288,7 +288,7 @@ where
         info!(
             request_id = %request_id,
             trace = ?trace,
-            request_duration_ns = trace.request_finish - trace.receive,
+            request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
             "submit_block request finished"
         );
 
@@ -464,7 +464,7 @@ where
         info!(
             request_id = %request_id,
             trace = ?trace,
-            request_duration_ns = trace.request_finish - trace.receive,
+            request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
             "submit_header request finished"
         );
 
@@ -605,7 +605,7 @@ where
         info!(
             request_id = %request_id,
             trace = ?trace,
-            request_duration_ns = trace.request_finish - trace.receive,
+            request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
             "sumbit_block_v2 request finished"
         );
 
@@ -1076,7 +1076,7 @@ where
                 info!(request_id = %request_id, "block simulation successful");
 
                 trace.simulation = get_nanos_timestamp()?;
-                debug!(request_id = %request_id, sim_latency = trace.simulation - trace.signature);
+                debug!(request_id = %request_id, sim_latency = trace.simulation.saturating_sub(trace.signature));
 
                 Ok(sim_optimistic)
             },
@@ -1488,7 +1488,7 @@ pub async fn decode_payload(
     info!(
         request_id = %request_id,
         timestamp_after_decoding = trace.decode,
-        decode_latency_ns = trace.decode - trace.receive,
+        decode_latency_ns = trace.decode.saturating_sub(trace.receive),
         builder_pub_key = ?payload.builder_public_key(),
         block_hash = ?payload.block_hash(),
         proposer_pubkey = ?payload.proposer_public_key(),
@@ -1578,7 +1578,7 @@ pub async fn decode_header_submission(
     info!(
         request_id = %request_id,
         timestamp_after_decoding = Instant::now().elapsed().as_nanos(),
-        decode_latency_ns = trace.decode - trace.receive,
+        decode_latency_ns = trace.decode.saturating_sub(trace.receive),
         builder_pub_key = ?header.builder_public_key(),
         block_hash = ?header.block_hash(),
         proposer_pubkey = ?header.proposer_public_key(),
@@ -1693,7 +1693,7 @@ fn log_save_bid_info(
 ) {
     info!(
         request_id = %request_id,
-        bid_update_latency = bid_update_finish - bid_update_start,
+        bid_update_latency = bid_update_finish.saturating_sub(bid_update_start),
         was_bid_saved_in = update_bid_result.was_bid_saved,
         was_top_bid_updated = update_bid_result.was_top_bid_updated,
         top_bid_value = ?update_bid_result.top_bid_value,
