@@ -1400,7 +1400,7 @@ where
 
         // Clean up old payload attributes
         let mut all_payload_attributes = self.payload_attributes.write().await;
-        all_payload_attributes.retain(|_, value| value.slot < head_slot);
+        all_payload_attributes.retain(|_, value| value.slot >= head_slot);
 
         // Save new one
         all_payload_attributes.insert(payload_attributes.parent_hash.clone(), payload_attributes);
