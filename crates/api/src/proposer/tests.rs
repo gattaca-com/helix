@@ -19,9 +19,8 @@ mod proposer_api_tests {
         primitives::{BlsPublicKey, BlsSignature},
         ssz::{prelude::*}, capella::{mainnet::{BlindedBeaconBlockBody, ExecutionPayloadHeader}}, deneb::SyncAggregate, bellatrix,
     };
-    use hyper::StatusCode;
     use rand::{Rng};
-    use reqwest::{Client, Response};
+    use reqwest::{Client, Response, StatusCode};
     use reth_primitives::hex;
     
     use serial_test::serial;

@@ -1,7 +1,12 @@
+use axum::error_handling::HandleErrorLayer;
+use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Extension, Router};
+use tower::timeout::TimeoutLayer;
+use tower::{BoxError, ServiceBuilder};
 use tower_http::limit::RequestBodyLimitLayer;
 use std::sync::Arc;
+use std::time::Duration;
 use helix_beacon_client::beacon_client::BeaconClient;
 use helix_beacon_client::multi_beacon_client::MultiBeaconClient;
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
@@ -128,7 +133,17 @@ pub fn build_router(
         }
     }
 
-    // Add layers
+    // Add Timeout-Layer
+    // Add Error-handling layer
+    router = router.layer(
+        ServiceBuilder::new()
+            .layer(HandleErrorLayer::new(|_: BoxError| async {
+                StatusCode::REQUEST_TIMEOUT
+            }))
+            .layer(TimeoutLayer::new(Duration::from_secs(5)))
+    );
+
+    // Add Extension layers
     router = router
         .layer(Extension(builder_api))
         .layer(Extension(proposer_api))

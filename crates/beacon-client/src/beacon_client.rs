@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use ethereum_consensus::{primitives::Root, ssz};
 use futures::StreamExt;
-use http::header::CONTENT_TYPE;
+use reqwest::header::CONTENT_TYPE;
 use reqwest_eventsource::EventSource;
 use tokio::{sync::mpsc::Sender, time::sleep};
 use tracing::{error, warn};
@@ -35,7 +35,10 @@ impl BeaconClient {
 
     pub fn from_endpoint_str(endpoint: &str) -> Self {
         let endpoint = Url::parse(endpoint).unwrap();
-        let client = reqwest::Client::new();
+        let client = reqwest::ClientBuilder::new()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
         Self::new(client, endpoint)
     }
 

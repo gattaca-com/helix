@@ -1,8 +1,7 @@
 use async_trait::async_trait;
 use helix_common::BuilderInfo;
-use hyper::StatusCode;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
-use reqwest::{Client, Response};
+use reqwest::{Client, Response, StatusCode};
 use serde_json::json;
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, error};

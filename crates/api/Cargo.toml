@@ -19,6 +19,7 @@ helix-housekeeper.workspace = true
 async-trait = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
+tower = { workspace = true }
 futures = { workspace = true }
 hyper = { workspace = true }
 tokio = { workspace = true }

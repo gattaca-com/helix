@@ -71,10 +71,15 @@ impl ApiService {
             context: chain_info.context.clone(),
         });
 
+        let client = reqwest::ClientBuilder::new()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+
         let simulator = OptimisticSimulator::<RedisCache, PostgresDatabaseService>::new(
             auctioneer.clone(),
             db.clone(),
-            reqwest::Client::new(),
+            client,
             config.simulator.url,
         );
 
