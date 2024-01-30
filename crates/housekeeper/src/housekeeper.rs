@@ -386,7 +386,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
         let epoch = head_slot / EPOCH_SLOTS;
 
-        debug!(epoch_from = epoch, epoch_to = epoch + 1, "Housekeeper::update_proposer_duties",);
+        info!(epoch_from = epoch, epoch_to = epoch + 1, "Housekeeper::update_proposer_duties",);
 
         let proposer_duties = match self.fetch_duties(epoch).await {
             Ok(proposer_duties) => proposer_duties,
@@ -416,7 +416,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
                 .await
             {
                 Ok(num_duties) => {
-                    debug!(epoch_from = epoch, num_duties = num_duties, "updated proposer duties")
+                    info!(epoch_from = epoch, num_duties = num_duties, "updated proposer duties")
                 }
                 Err(err) => error!(err = %err, "failed to update proposer duties"),
             }
