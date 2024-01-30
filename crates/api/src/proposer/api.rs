@@ -50,7 +50,6 @@ use helix_common::{
     chain_info::{ChainInfo, Network},
     try_execution_header_from_payload, BidRequest, GetHeaderTrace, GetPayloadTrace,
     RegisterValidatorsTrace, signed_proposal::VersionedSignedProposal, versioned_payload::PayloadAndBlobs,
-    }
 };
 use helix_utils::signing::{verify_signed_builder_message, verify_signed_consensus_message};
 
