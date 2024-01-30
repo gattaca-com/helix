@@ -124,10 +124,8 @@ impl ApiService {
 
         let router = build_router(&mut config.router_config, builder_api, proposer_api, data_api);
 
-        match axum::Server::bind(&"0.0.0.0:4040".parse().unwrap())
-            .serve(router.into_make_service())
-            .await
-        {
+        let listener = tokio::net::TcpListener::bind("0.0.0.0:4040").await.unwrap();
+        match axum::serve(listener, router).await {
             Ok(_) => println!("Server exited successfully"),
             Err(e) => println!("Server exited with error: {e}"),
         }

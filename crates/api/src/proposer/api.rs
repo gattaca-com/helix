@@ -1,30 +1,26 @@
 use std::{
-    sync::{
+    collections::HashMap, sync::{
         atomic::{self, AtomicU64},
         Arc,
-    },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    }, time::{Duration, SystemTime, UNIX_EPOCH}
 };
 
 use axum::{
-    extract::{Json, Path},
-    http::{StatusCode, Request},
-    response::IntoResponse,
-    Extension,
+    body::{to_bytes, Body}, extract::{Json, Path}, http::{StatusCode, Request}, response::IntoResponse, Extension
 };
+use dashmap::DashMap;
 use ethereum_consensus::{
     builder::SignedValidatorRegistration,
     clock::get_current_unix_time_in_nanos,
     deneb::{Context, Root},
     phase0::mainnet::SLOTS_PER_EPOCH,
-    primitives::BlsPublicKey,
+    primitives::{BlsPublicKey, Hash32},
     ssz::prelude::*,
     types::mainnet::{
         ExecutionPayloadHeader, ExecutionPayloadHeaderRef, SignedBeaconBlock,
         SignedBlindedBeaconBlock,
     },
 };
-use hyper::Body;
 use tokio::{
     sync::{mpsc, mpsc::error::SendError, mpsc::Sender, RwLock},
     time::{sleep, Instant},
@@ -37,7 +33,7 @@ use helix_beacon_client::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
-use helix_housekeeper::{ChainUpdate, SlotUpdate};
+use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry,
@@ -60,6 +56,8 @@ use crate::proposer::{
 
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
+pub(crate) const MAX_BLINDED_BLOCK_LENGTH: usize = 1024 * 1024 * 1;
+pub(crate) const MAX_VAL_REGISTRATIONS_LENGTH: usize = 1024 * 1024 * 1;
 
 #[derive(Clone)]
 pub struct ProposerApi<A, DB, M>
@@ -74,6 +72,7 @@ where
     multi_beacon_client: Arc<M>,
 
     curr_slot: Arc<AtomicU64>,
+    parent_hash_map: Arc<DashMap<u64, Hash32>>,
 
     chain_info: Arc<ChainInfo>,
     next_proposer_duty: Arc<RwLock<Option<BuilderGetValidatorsResponseEntry>>>,
@@ -104,6 +103,7 @@ where
             broadcasters,
             multi_beacon_client,
             curr_slot: Arc::new(AtomicU64::new(0)),
+            parent_hash_map: Arc::new(DashMap::with_capacity(10)),
             chain_info,
             next_proposer_duty: Arc::new(RwLock::new(None)),
             validator_preferences,
@@ -438,9 +438,9 @@ where
         };
 
         if let Err(err) =
-        self.validate_proposer_index(&signed_blinded_block, &slot_duty).await
+        self.validate_proposal_coordinate(&signed_blinded_block, &slot_duty, head_slot).await
         {
-            warn!(request_id = %request_id, error = %err, "invalid proposer index");
+            warn!(request_id = %request_id, error = %err, "invalid proposal coordinate");
             return Err(err);
         }
         trace.proposer_index_validated = get_nanos_timestamp()?;
@@ -621,7 +621,7 @@ where
             // Calculate the remaining time needed to reach the target propagation duration.
             // Conditionally pause the execution until we hit `TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS` 
             // to allow the block to propagate through the network.
-            let elapsed_since_propagate_start_ms = (get_nanos_timestamp()? - trace.beacon_client_broadcast) / 1_000_000;
+            let elapsed_since_propagate_start_ms = (get_nanos_timestamp()?.saturating_sub(trace.beacon_client_broadcast)) / 1_000_000;
             let remaining_sleep_ms = self.target_get_payload_propagation_duration_ms.saturating_sub(elapsed_since_propagate_start_ms);
             if remaining_sleep_ms > 0 {
                 sleep(Duration::from_millis(remaining_sleep_ms)).await;
@@ -702,7 +702,7 @@ where
         let curr_timestamp_ms = get_millis_timestamp()? as i64;
         let slot_start_timestamp = self.chain_info.genesis_time_in_secs
             + (bid_request.slot * self.chain_info.seconds_per_slot);
-        let ms_into_slot = curr_timestamp_ms - (slot_start_timestamp * 1000) as i64;
+        let ms_into_slot = curr_timestamp_ms.saturating_sub((slot_start_timestamp * 1000) as i64);
 
         if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {
             warn!(curr_timestamp_ms = curr_timestamp_ms, slot = bid_request.slot, "get_request",);
@@ -716,13 +716,17 @@ where
         Ok(())
     }
 
-    /// Validates the proposer index of a given `SignedBlindedBeaconBlock`.
+    /// Validates the proposal coordinate of a given `SignedBlindedBeaconBlock`.
     ///
     /// - Compares the proposer index of the block with the expected index for the current slot.
-    async fn validate_proposer_index(
+    /// - Compares the api `head_slot` with the `slot_duty` slot.
+    /// - Compares the `head_slot` with the signed blinded block slot.
+    /// - Compares the blinded block parent hash with our internal parent hash.
+    async fn validate_proposal_coordinate(
         &self,
         signed_blinded_block: &SignedBlindedBeaconBlock,
         slot_duty: &BuilderGetValidatorsResponseEntry,
+        head_slot: u64,
     ) -> Result<(), ProposerApiError> {
         let actual_index = signed_blinded_block.message().proposer_index();
         let expected_index = slot_duty.validator_index;
@@ -733,6 +737,33 @@ where
                 actual: actual_index,
             });
         }
+
+        if head_slot != slot_duty.slot {
+            return Err(ProposerApiError::InternalSlotMismatchesWithSlotDuty { 
+                internal_slot: head_slot, 
+                slot_duty_slot: slot_duty.slot,
+             });
+        }
+
+        if head_slot != signed_blinded_block.message().slot() {
+            return Err(ProposerApiError::InvalidBlindedBlockSlot {
+                internal_slot: head_slot,
+                blinded_block_slot: signed_blinded_block.message().slot(),
+            });
+        }
+
+        if let Some(expected_parent_hash) = self.parent_hash_map.get(&head_slot) {
+            let blinded_block_parent_hash = signed_blinded_block.message().body().execution_payload_header().parent_hash().clone();
+            if expected_parent_hash.value() != &blinded_block_parent_hash {
+                return Err(ProposerApiError::InvalidBlindedBlockParentHash {
+                    expected_parent_hash: expected_parent_hash.clone(),
+                    blinded_block_parent_hash,
+                });
+            }
+        } else {
+            return Err(ProposerApiError::ParentHashUnknownForSlot { slot: head_slot });
+        }
+
         Ok(())
     }
 
@@ -996,7 +1027,7 @@ async fn deserialize_get_payload_bytes(
     req: Request<Body>,
 ) -> Result<SignedBlindedBeaconBlock, ProposerApiError> {
     let body = req.into_body();
-    let body_bytes = hyper::body::to_bytes(body).await?;
+    let body_bytes = to_bytes(body, MAX_BLINDED_BLOCK_LENGTH).await?;
     Ok(serde_json::from_slice(&body_bytes)?)
 }
 
@@ -1021,7 +1052,9 @@ where
                 ChainUpdate::SlotUpdate(slot_update) => {
                     self.handle_new_slot(slot_update).await;
                 }
-                ChainUpdate::PayloadAttributesUpdate(_) => {}
+                ChainUpdate::PayloadAttributesUpdate(payload_attributes) => {
+                    self.handle_new_payload_attributes(payload_attributes).await;
+                }
             }
         }
 
@@ -1042,6 +1075,21 @@ where
 
         self.curr_slot.store(slot_update.slot, atomic::Ordering::Relaxed);
         *self.next_proposer_duty.write().await = slot_update.next_duty;
+    }
+
+    async fn handle_new_payload_attributes(&self, payload_attributes: PayloadAttributesUpdate) {
+        let head_slot = self.curr_slot.load(atomic::Ordering::Relaxed);
+
+        debug!(
+            randao = ?payload_attributes.payload_attributes.prev_randao,
+            timestamp = payload_attributes.payload_attributes.timestamp,
+        );
+
+        // Clean up hashes more than 2 slots old
+        self.parent_hash_map.retain(|key, _| *key >= head_slot.saturating_sub(2));
+
+        // Save new one
+        self.parent_hash_map.insert(head_slot, payload_attributes.parent_hash);
     }
 }
 

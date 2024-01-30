@@ -103,7 +103,7 @@ impl ToSql for PostgresNumeric {
         if num_digits == 0 {
             num_digits = 1; // Ensure at least one digit
         }
-        let weight = num_digits as i16 - 1;
+        let weight = (num_digits as i16).saturating_sub(1);
 
         // Reserve bytes
         out.reserve(8 + num_digits * 2);

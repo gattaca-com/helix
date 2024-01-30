@@ -1,6 +1,5 @@
-use axum::response::{IntoResponse, Response};
+use axum::{http::StatusCode, response::{IntoResponse, Response}};
 use ethereum_consensus::{primitives::BlsPublicKey, ssz};
-use hyper::StatusCode;
 
 use crate::redis::error::RedisCacheError;
 

@@ -1,11 +1,9 @@
 use std::{error::Error, fmt};
 
 use axum::{
-    response::{IntoResponse, Response},
-    Json,
+    http::{status::InvalidStatusCode, StatusCode}, response::{IntoResponse, Response}, Json
 };
 use ethereum_consensus::ssz;
-use http::StatusCode;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
@@ -61,13 +59,13 @@ impl IntoResponse for BeaconClientError {
 #[serde(untagged)]
 pub enum ApiError {
     IndexedError {
-        #[serde(with = "helix_utils::serde::as_u16")]
+        #[serde(with = "helix_utils::serde::axum_as_u16")]
         code: StatusCode,
         message: String,
         failures: Vec<IndexedError>,
     },
     ErrorMessage {
-        #[serde(with = "helix_utils::serde::as_u16")]
+        #[serde(with = "helix_utils::serde::axum_as_u16")]
         code: StatusCode,
         message: String,
     },
@@ -99,7 +97,7 @@ impl fmt::Display for ApiError {
 impl Error for ApiError {}
 
 impl<'a> TryFrom<(u16, &'a str)> for ApiError {
-    type Error = http::status::InvalidStatusCode;
+    type Error = InvalidStatusCode;
 
     fn try_from((code, message): (u16, &'a str)) -> Result<Self, Self::Error> {
         let code = StatusCode::from_u16(code)?;

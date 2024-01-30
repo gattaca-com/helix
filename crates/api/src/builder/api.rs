@@ -6,9 +6,7 @@ use std::{
 };
 
 use axum::{
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Extension,
+    body::{to_bytes, Body}, http::{Request, StatusCode}, response::{IntoResponse, Response}, Extension
 };
 use ethereum_consensus::{
     configs::{mainnet::CAPELLA_FORK_EPOCH, mainnet::SECONDS_PER_SLOT},
@@ -17,7 +15,6 @@ use ethereum_consensus::{
     ssz::{self, prelude::*},
 };
 use flate2::read::GzDecoder;
-use hyper::{Body, Request};
 use tokio::{
     sync::{
         mpsc::{self, error::SendError, Sender, Receiver},
@@ -48,6 +45,7 @@ use crate::{
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 4;
+pub(crate) const MAX_HEADER_LENGTH: usize = 1024 * 1024 * 1;
 
 #[derive(Clone)]
 pub struct BuilderApi<A, DB, S, G>
@@ -138,11 +136,11 @@ where
     pub async fn get_validators(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
     ) -> impl IntoResponse {
-        let duty_bytes = api.proposer_duties_response.read().await;
-        match &*duty_bytes {
+        let duty_bytes = api.proposer_duties_response.read().await.clone();
+        match duty_bytes {
             Some(bytes) => Response::builder()
                 .status(StatusCode::OK)
-                .body(hyper::Body::from(bytes.clone()))
+                .body(axum::body::Body::from(bytes.clone()))
                 .unwrap()
                 .into_response(),
             None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
@@ -288,7 +286,7 @@ where
         info!(
             request_id = %request_id,
             trace = ?trace,
-            request_duration_ns = trace.receive - trace.request_finish,
+            request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
             "submit_block request finished"
         );
 
@@ -464,7 +462,7 @@ where
         info!(
             request_id = %request_id,
             trace = ?trace,
-            request_duration_ns = trace.receive - trace.request_finish,
+            request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
             "submit_header request finished"
         );
 
@@ -605,7 +603,7 @@ where
         info!(
             request_id = %request_id,
             trace = ?trace,
-            request_duration_ns = trace.receive - trace.request_finish,
+            request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
             "sumbit_block_v2 request finished"
         );
 
@@ -1076,7 +1074,7 @@ where
                 info!(request_id = %request_id, "block simulation successful");
 
                 trace.simulation = get_nanos_timestamp()?;
-                debug!(request_id = %request_id, sim_latency = trace.simulation - trace.signature);
+                debug!(request_id = %request_id, sim_latency = trace.simulation.saturating_sub(trace.signature));
 
                 Ok(sim_optimistic)
             },
@@ -1450,7 +1448,7 @@ pub async fn decode_payload(
 
     // Read the body
     let body = req.into_body();
-    let mut body_bytes = hyper::body::to_bytes(body).await?;
+    let mut body_bytes = to_bytes(body, MAX_PAYLOAD_LENGTH).await?;
     if body_bytes.len() > MAX_PAYLOAD_LENGTH {
         return Err(BuilderApiError::PayloadTooLarge {
             max_size: MAX_PAYLOAD_LENGTH,
@@ -1487,8 +1485,8 @@ pub async fn decode_payload(
     trace.decode = get_nanos_timestamp()?;
     info!(
         request_id = %request_id,
-        timestamp_after_decoding = Instant::now().elapsed().as_nanos(),
-        decode_latency_ns = trace.decode - trace.receive,
+        timestamp_after_decoding = trace.decode,
+        decode_latency_ns = trace.decode.saturating_sub(trace.receive),
         builder_pub_key = ?payload.builder_public_key(),
         block_hash = ?payload.block_hash(),
         proposer_pubkey = ?payload.proposer_public_key(),
@@ -1536,7 +1534,7 @@ pub async fn decode_header_submission(
 
     // Read the body
     let body = req.into_body();
-    let body_bytes = hyper::body::to_bytes(body).await?;
+    let body_bytes = to_bytes(body, MAX_PAYLOAD_LENGTH).await?;
     if body_bytes.len() > MAX_PAYLOAD_LENGTH {
         return Err(BuilderApiError::PayloadTooLarge {
             max_size: MAX_PAYLOAD_LENGTH,
@@ -1578,7 +1576,7 @@ pub async fn decode_header_submission(
     info!(
         request_id = %request_id,
         timestamp_after_decoding = Instant::now().elapsed().as_nanos(),
-        decode_latency_ns = trace.decode - trace.receive,
+        decode_latency_ns = trace.decode.saturating_sub(trace.receive),
         builder_pub_key = ?header.builder_public_key(),
         block_hash = ?header.block_hash(),
         proposer_pubkey = ?header.proposer_public_key(),
@@ -1693,7 +1691,7 @@ fn log_save_bid_info(
 ) {
     info!(
         request_id = %request_id,
-        bid_update_latency = bid_update_finish - bid_update_start,
+        bid_update_latency = bid_update_finish.saturating_sub(bid_update_start),
         was_bid_saved_in = update_bid_result.was_bid_saved,
         was_top_bid_updated = update_bid_result.was_top_bid_updated,
         top_bid_value = ?update_bid_result.top_bid_value,
@@ -1780,8 +1778,7 @@ mod tests {
     use super::*;
     
     
-    use hyper::http::header::{HeaderValue, CONTENT_ENCODING, CONTENT_TYPE};
-    use hyper::http::uri::Uri;
+    use axum::http::{header::{CONTENT_ENCODING, CONTENT_TYPE}, HeaderValue, Uri};
     
     use uuid::Uuid;
 
@@ -2074,6 +2071,16 @@ mod tests {
         let request_id = create_test_uuid().await;
 
         let result = decode_payload(req, &mut trace, &request_id).await;
-        assert!(matches!(result, Err(BuilderApiError::PayloadTooLarge { .. })));
+        match result {
+            Ok(_) => panic!("Should have failed"),
+            Err(err) => {
+                match err {
+                    BuilderApiError::AxumError(err) => {
+                        assert_eq!(err.to_string(), "length limit exceeded");
+                    }
+                    _ => panic!("Should have failed with AxumError"),
+                }
+            }
+        }
     }
 }

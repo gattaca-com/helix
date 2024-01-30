@@ -175,13 +175,12 @@ mod proposer_api_tests {
         // Run the app in a background task
         tokio::spawn(async move {
             // run it with hyper on localhost:3000
-            axum::Server::bind(&bind_address.parse().unwrap())
-                .serve(router.into_make_service())
-                .with_graceful_shutdown(async {
-                    rx.await.ok();
-                })
-                .await
-                .unwrap();
+            let listener = tokio::net::TcpListener::bind(bind_address).await.unwrap();
+            axum::serve(listener, router)
+            .with_graceful_shutdown(async {
+                rx.await.ok();
+            })
+            .await.unwrap();
         });
 
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -194,7 +193,7 @@ mod proposer_api_tests {
         let seconds_per_slot: u64 = ChainInfo::for_mainnet().seconds_per_slot;
         let request_time_in_ns = get_nanos_timestamp().unwrap();
         let current_time_in_secs = request_time_in_ns / 1_000_000_000;
-        let time_since_genesis = current_time_in_secs - genesis_time_in_secs;
+        let time_since_genesis = current_time_in_secs.saturating_sub(genesis_time_in_secs);
         
         time_since_genesis / seconds_per_slot
     }

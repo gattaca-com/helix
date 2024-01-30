@@ -38,7 +38,7 @@ use crate::{
 };
 
 const BID_CACHE_EXPIRY_S: usize = 45;
-const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 17_000;
+const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 24_000;
 
 #[derive(Clone)]
 pub struct RedisCache {
@@ -1714,7 +1714,7 @@ mod tests {
         let (cache, mut submission, floor_value, received_at) = setup_save_and_update_test().await;
         let mut state = SaveBidAndUpdateTopBidResponse::default();
 
-        submission.message_mut().value = floor_value - U256::from(1);
+        submission.message_mut().value = floor_value.saturating_sub(U256::from(1));
         let result = cache
             .save_bid_and_update_top_bid(
                 &submission,
