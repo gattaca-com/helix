@@ -1,5 +1,6 @@
 use axum::routing::{get, post};
 use axum::{Extension, Router};
+use tower_http::limit::RequestBodyLimitLayer;
 use std::sync::Arc;
 use helix_beacon_client::beacon_client::BeaconClient;
 use helix_beacon_client::multi_beacon_client::MultiBeaconClient;
@@ -7,7 +8,9 @@ use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
 use helix_common::{Route, RouterConfig};
 
+use crate::builder::api::{MAX_HEADER_LENGTH, MAX_PAYLOAD_LENGTH};
 use crate::gossiper::grpc_gossiper::GrpcGossiperClientManager;
+use crate::proposer::api::{MAX_BLINDED_BLOCK_LENGTH, MAX_VAL_REGISTRATIONS_LENGTH};
 use crate::{
     builder::{
         api::BuilderApi, optimistic_simulator::OptimisticSimulator,
@@ -58,19 +61,22 @@ pub fn build_router(
                 router = router.route(
                     &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK}"),
                     post(BuilderApiProd::submit_block),
-                );
+                )
+                .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));
             }
             Route::SubmitBlockOptimistic => {
                 router = router.route(
                     &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC}"),
                     post(BuilderApiProd::submit_block_v2),
-                );
+                )
+                .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));
             }
             Route::SubmitHeader => {
                 router = router.route(
                     &format!("{PATH_BUILDER_API}{PATH_SUBMIT_HEADER}"),
                     post(BuilderApiProd::submit_header),
-                );
+                )
+                .layer(RequestBodyLimitLayer::new(MAX_HEADER_LENGTH));
             }
             Route::Status => {
                 router = router.route(
@@ -82,7 +88,8 @@ pub fn build_router(
                 router = router.route(
                     &format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
                     post(ProposerApiProd::register_validators),
-                );
+                )
+                .layer(RequestBodyLimitLayer::new(MAX_VAL_REGISTRATIONS_LENGTH));
             }
             Route::GetHeader => {
                 router = router.route(
@@ -94,7 +101,8 @@ pub fn build_router(
                 router = router.route(
                     &format!("{PATH_PROPOSER_API}{PATH_GET_PAYLOAD}"),
                     post(ProposerApiProd::get_payload),
-                );
+                )
+                .layer(RequestBodyLimitLayer::new(MAX_BLINDED_BLOCK_LENGTH));
             }
             Route::ProposerPayloadDelivered => {
                 router = router.route(

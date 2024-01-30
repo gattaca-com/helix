@@ -13,15 +13,14 @@ use helix_datastore::MockAuctioneer;
 use helix_common::signing::RelaySigningContext;
 use helix_housekeeper::ChainUpdate;
 use helix_common::ValidatorPreferences;
+use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
     builder::{
-        api::BuilderApi, mock_simulator::MockSimulator, PATH_BUILDER_API, PATH_GET_VALIDATORS,
-        PATH_SUBMIT_BLOCK,
+        api::{BuilderApi, MAX_PAYLOAD_LENGTH}, mock_simulator::MockSimulator, PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK
     },
     proposer::{
-        api::ProposerApi, PATH_GET_HEADER, PATH_GET_PAYLOAD, PATH_PROPOSER_API,
-        PATH_REGISTER_VALIDATORS, PATH_STATUS,
+        api::{ProposerApi, MAX_BLINDED_BLOCK_LENGTH, MAX_VAL_REGISTRATIONS_LENGTH}, PATH_GET_HEADER, PATH_GET_PAYLOAD, PATH_PROPOSER_API, PATH_REGISTER_VALIDATORS, PATH_STATUS
     },
     relay_data::{
         DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API, PATH_PROPOSER_PAYLOAD_DELIVERED,
@@ -133,6 +132,7 @@ pub fn builder_api_app() -> (
             &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK}"),
             post(BuilderApi::<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>::submit_block),
         )
+        .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH))
         .layer(Extension(builder_api_service.clone()));
 
     (router, builder_api_service, slot_update_receiver)
@@ -168,10 +168,12 @@ pub fn proposer_api_app() -> (
             &format!("{PATH_PROPOSER_API}{PATH_GET_PAYLOAD}"),
             post(ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient>::get_payload),
         )
+        .layer(RequestBodyLimitLayer::new(MAX_BLINDED_BLOCK_LENGTH))
         .route(
             &format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
             post(ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient>::register_validators),
         )
+        .layer(RequestBodyLimitLayer::new(MAX_VAL_REGISTRATIONS_LENGTH))
         .layer(Extension(proposer_api_service.clone()));
 
     (router, proposer_api_service, slot_update_receiver, auctioneer)
