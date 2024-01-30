@@ -6,9 +6,9 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Hash32},
     ssz::prelude::*,
 };
-use helix_common::{bid_submission::BidSubmission, versioned_payload::PayloadAndBlobs, ProposerInfo, ProposerInfoSet};
+use helix_common::{bid_submission::BidSubmission, versioned_payload::PayloadAndBlobs, ProposerInfo};
 use helix_common::bid_submission::v2::header_submission::SignedHeaderSubmission;
-use redis::AsyncCommands;
+use redis::{AsyncCommands, RedisResult, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::error;
 
@@ -30,7 +30,7 @@ use crate::{
     },
     types::{
         keys::{
-            BUILDER_INFO_KEY, LAST_HASH_DELIVERED_KEY, LAST_SLOT_DELIVERED_KEY, PROPOSER_WHITELIST_KEY
+            BUILDER_INFO_KEY, HOUSEKEEPER_LOCK_KEY, LAST_HASH_DELIVERED_KEY, LAST_SLOT_DELIVERED_KEY, PROPOSER_WHITELIST_KEY
         },
         SaveBidAndUpdateTopBidResponse,
     },
@@ -38,6 +38,7 @@ use crate::{
 };
 
 const BID_CACHE_EXPIRY_S: usize = 45;
+const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 17_000;
 
 #[derive(Clone)]
 pub struct RedisCache {
@@ -141,6 +142,76 @@ impl RedisCache {
         match expiry {
             Some(expiry) => Ok(conn.set_ex(key, str_val, expiry).await?),
             None => Ok(conn.set(key, str_val).await?),
+        }
+    }
+
+    /// Attempts to set a lock in Redis with a specified key and expiry.
+    ///
+    /// This method uses an asynchronous Redis connection from a pool to execute the SET command.
+    /// It employs a locking pattern where the lock is set only if the key doesn't already exist
+    /// (`NX` option) and sets the lock to expire after a given duration (`expiry` in milliseconds).
+    ///
+    /// # Arguments
+    /// * `key` - A reference to a string slice that holds the key for the lock.
+    /// * `expiry` - The duration in milliseconds for which the lock should be valid.
+    ///
+    /// # Returns
+    /// Returns `true` if the lock was successfully acquired, or `false` if the lock was not set
+    async fn set_lock(
+        &self,
+        key: &str,
+        expiry: usize,
+    ) -> bool {    
+        let mut conn = match self.pool.get().await {
+            Ok(conn) => conn,
+            Err(_) => return false,
+        };
+
+        let result: RedisResult<Value> = redis::cmd("SET")
+            .arg(key)
+            .arg(1)
+            .arg("NX")
+            .arg("PX")
+            .arg(expiry)
+            .query_async(&mut conn)
+            .await;
+
+        match result {
+            Ok(Value::Okay) => true,
+            Ok(_) | Err(_) => false,
+        }
+    }
+
+    /// Attempts to renew an existing lock in Redis with a specified key and new expiry time.
+    ///
+    /// This method uses an asynchronous Redis connection from a pool to execute the SET command with
+    /// the 'XX' option, ensuring that the lock is only renewed if it already exists.
+    ///
+    /// # Arguments
+    /// * `key` - A reference to a string slice that holds the key of the lock to renew.
+    /// * `expiry` - The new duration in milliseconds for which the lock should be valid.
+    async fn renew_lock(
+        &self,
+        key: &str,
+        expiry: usize,
+    ) -> bool {
+        let mut conn = match self.pool.get().await {
+            Ok(conn) => conn,
+            Err(_) => return false,
+        };
+
+        let result: RedisResult<Value> = redis::cmd("SET")
+            .arg(key)
+            .arg(1)
+            .arg("XX")
+            .arg("PX")
+            .arg(expiry)
+            .query_async(&mut conn)
+            .await;
+
+        match result {
+            Ok(Value::Okay) => true,
+            Ok(_) | Err(_) => false,
         }
     }
 
@@ -749,20 +820,74 @@ impl Auctioneer for RedisCache {
         Ok(Some(builder_bid))
     }
 
+
     async fn update_trusted_proposers(
         &self,
         proposer_whitelist: Vec<ProposerInfo>,
     ) -> Result<(), AuctioneerError> {
-        let proposer_whitelist_map: ProposerInfoSet = proposer_whitelist.into();
-        self.set(PROPOSER_WHITELIST_KEY, &proposer_whitelist_map, None)
-            .await?;
+        // get keys
+        let proposer_keys: Vec<String> = proposer_whitelist
+            .iter()
+            .map(|proposer| format!("{:?}", proposer.pub_key))
+            .collect();
 
+        // add or update proposers
+        for proposer in proposer_whitelist {
+            let key_str = format!("{:?}", proposer.pub_key);
+            self.hset(PROPOSER_WHITELIST_KEY, &key_str, &proposer).await?;
+        }
+
+        // remove any proposers that are no longer in the list
+        let proposer_info: Option<HashMap<String, ProposerInfo>> =
+            self.hgetall(PROPOSER_WHITELIST_KEY).await?;
+
+        if let Some(proposer_info) = proposer_info {
+            for key in proposer_info.keys() {
+                if !proposer_keys.contains(key) {
+                    self.hdel(PROPOSER_WHITELIST_KEY, key).await?;
+                }
+            }
+        }
+        
         Ok(())
     }
 
-    async fn get_trusted_proposers(&self) -> Result<Option<ProposerInfoSet>, AuctioneerError> {
-        let proposer_whitelist_map = self.get(PROPOSER_WHITELIST_KEY).await?;
-        Ok(proposer_whitelist_map)
+    async fn is_trusted_proposer(
+        &self,
+        proposer_pub_key: &BlsPublicKey,
+    ) -> Result<bool, AuctioneerError> {
+        let key_str = format!("{proposer_pub_key:?}");
+        let proposer_info: Option<ProposerInfo> = self.hget(PROPOSER_WHITELIST_KEY, &key_str).await?;
+        Ok(proposer_info.is_some())
+    }
+
+    /// Attempts to acquire or renew leadership for a distributed task based on the current leadership status.
+    ///
+    /// If the instance is already a leader (indicated by the `leader` argument), it attempts to renew the lock.
+    /// If the lock renewal is successful, it returns `true`.
+    ///
+    /// If the instance is not currently a leader or fails to renew the lock, it attempts to acquire the lock.
+    /// The function returns `true` if the lock acquisition is successful, indicating leadership has been obtained.
+    /// 
+    /// Expiry is set to `HOUSEKEEPER_LOCK_EXPIRY_MS` milliseconds to ensure that the lock is released if the instance crashes.
+    /// `HOUSEKEEPER_LOCK_EXPIRY_MS`` should be long enought to allow the leader to renew the lock before it expires.
+    ///
+    /// Arguments:
+    /// - `leader`: A `bool` indicating whether the current instance believes it is the leader.
+    ///
+    /// Returns:
+    /// - `true` if the instance is the leader and successfully renews the lock, or if it successfully acquires the lock.
+    /// - `false` if it fails to renew or acquire the lock.
+    ///
+    /// Note: This function assumes that the caller manages and passes the current leadership status.
+    async fn try_acquire_or_renew_leadership(&self, leader: bool) -> bool {
+        if leader {
+            if self.renew_lock(HOUSEKEEPER_LOCK_KEY, HOUSEKEEPER_LOCK_EXPIRY_MS).await {
+                return true;
+            }
+        }
+
+        return self.set_lock(HOUSEKEEPER_LOCK_KEY, HOUSEKEEPER_LOCK_EXPIRY_MS).await;
     }
 }
 
@@ -1323,7 +1448,7 @@ mod tests {
         let builder_pub_key = BlsPublicKey::default();
         let unknown_builder_pub_key = BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap();
 
-        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: true };
+        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: true, builder_id: None };
 
         // Test case 1: Builder exists
         let set_result =
@@ -1348,12 +1473,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_trusted_proposers_and_update_trusted_proposers() {
+
+        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        cache.clear_cache().await.unwrap();
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
+        assert!(!is_trusted, "Failed to check trusted proposer");
+
+        cache.update_trusted_proposers(
+            vec![
+                ProposerInfo { 
+                    name: "test".to_string(),
+                    pub_key: BlsPublicKey::default(),
+                },
+                ProposerInfo { 
+                    name: "test2".to_string(),
+                    pub_key: BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap(),
+                },
+            ]
+        ).await.unwrap();
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
+        assert!(is_trusted, "Failed to check trusted proposer");
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap()).await.unwrap();
+        assert!(is_trusted, "Failed to check trusted proposer");
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::try_from([24u8; 48].as_ref()).unwrap()).await.unwrap();
+        assert!(!is_trusted, "Failed to check trusted proposer");
+
+        cache.update_trusted_proposers(
+            vec![
+                ProposerInfo { 
+                    name: "test2".to_string(),
+                    pub_key: BlsPublicKey::try_from([25u8; 48].as_ref()).unwrap(),
+                },
+            ]
+        ).await.unwrap();
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
+        assert!(!is_trusted, "Failed to check trusted proposer");
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::try_from([25u8; 48].as_ref()).unwrap()).await.unwrap();
+        assert!(is_trusted, "Failed to check trusted proposer");
+    }
+
+    #[tokio::test]
     async fn test_demote_non_optimistic_builder() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
         let builder_pub_key = BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap();
-        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: false };
+        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: false, builder_id: None };
 
         // Set builder info in the cache
         let set_result =
@@ -1371,7 +1543,7 @@ mod tests {
         cache.clear_cache().await.unwrap();
 
         let builder_pub_key_optimistic = BlsPublicKey::try_from([11u8; 48].as_ref()).unwrap();
-        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: true };
+        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: true, builder_id: None };
 
         // Set builder info in the cache
         let set_result = cache

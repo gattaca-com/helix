@@ -17,10 +17,9 @@ mod simulator_tests {
     use std::sync::Arc;
     use ethereum_consensus::types::mainnet::ExecutionPayload;
     use helix_common::{
-        bid_submission::{BidTrace, SignedBidSubmission, SignedBidSubmissionCapella},
-        simulator::BlockSimError,
+        bid_submission::{BidTrace, SignedBidSubmission, SignedBidSubmissionCapella}, simulator::BlockSimError, BuilderInfo
     };
-    use helix_common::api::proposer_api::ValidatorPreferences;
+    use helix_common::ValidatorPreferences;
 
     // ++++ HELPERS ++++
     fn get_simulator(endpoint: &str) -> RpcSimulator {
@@ -67,7 +66,8 @@ mod simulator_tests {
 
         let (sim_res_sender, mut sim_res_receiver) = tokio::sync::mpsc::channel(100);
         let simulator = get_simulator(&server.url());
-        let result = simulator.process_request(get_sim_req(), true, sim_res_sender, Uuid::new_v4()).await;
+        let builder_info = BuilderInfo::default();
+        let result = simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4()).await;
 
         mock.assert();
         assert!(result.is_ok());
@@ -97,7 +97,8 @@ mod simulator_tests {
 
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
         let simulator = get_simulator(&server.url());
-        let result = simulator.process_request(get_sim_req(), true, sim_res_sender, Uuid::new_v4()).await;
+        let builder_info = BuilderInfo::default();
+        let result = simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4()).await;
 
         mock.assert();
         assert!(result.is_err());
@@ -126,7 +127,8 @@ mod simulator_tests {
 
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
         let simulator = get_simulator(&server.url());
-        let result = simulator.process_request(get_sim_req(), true, sim_res_sender, Uuid::new_v4()).await;
+        let builder_info = BuilderInfo::default();
+        let result = simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4()).await;
 
         mock.assert();
         assert!(result.is_err());

@@ -44,7 +44,7 @@ mod proposer_api_tests {
     use tokio::time::{sleep};
     use crate::proposer::PATH_REGISTER_VALIDATORS;
     use crate::proposer::tests::gen_signed_vr;
-    use helix_common::api::proposer_api::ValidatorPreferences;
+    use helix_common::ValidatorPreferences;
     use helix_common::api::proposer_api::ValidatorRegistrationInfo;
 
     // +++ HELPER VARIABLES +++

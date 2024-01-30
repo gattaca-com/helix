@@ -1,11 +1,8 @@
 use std::{
-    collections::HashMap,
-    io::Read,
-    sync::{
+    collections::HashMap, io::Read, sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
-    },
-    time::{SystemTime, UNIX_EPOCH},
+    }, time::{SystemTime, UNIX_EPOCH}
 };
 
 use axum::{
@@ -39,12 +36,9 @@ use helix_common::{
     api::{
         builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
         proposer_api::ValidatorRegistrationInfo,
-    },
-    bid_submission::{
+    }, bid_submission::{
         v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb}, BidSubmission, BidTrace, SignedBidSubmission,
-    },
-    HeaderSubmissionTrace, chain_info::ChainInfo, signing::RelaySigningContext, 
-    simulator::BlockSimError, SubmissionTrace, SignedBuilderBid, GossipedHeaderTrace, GossipedPayloadTrace, versioned_payload::PayloadAndBlobs,
+    }, chain_info::ChainInfo, signing::RelaySigningContext, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, SignedBuilderBid, SubmissionTrace
 };
 use helix_utils::{calculate_withdrawals_root, has_reached_fork, try_decode_into};
 
@@ -181,8 +175,6 @@ where
             timestamp_request_start = trace.receive,
         );
 
-
-        // TODO TEMPORARY, remove again!
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) =
             decode_payload(req, &mut trace, &request_id).await?;
@@ -222,6 +214,21 @@ where
         let (next_duty, payload_attributes) =
         api.fetch_proposer_and_attributes(payload.slot(), payload.parent_hash(), &request_id).await?;
 
+        // Fetch builder info
+        let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
+
+        // Handle trusted builders check
+        if !api.check_if_trusted_builder(&next_duty, &builder_info).await {
+            let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
+            warn!(
+                request_id = %request_id, 
+                builder_pub_key = ?payload.builder_public_key(),
+                proposer_trusted_builders = ?proposer_trusted_builders,
+                "builder not in proposer trusted builders list",
+            );
+            return Err(BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders });
+        }
+
         // Verify payload has not already been delivered
         match api.auctioneer.get_last_slot_delivered().await {
             Ok(Some(slot)) => {
@@ -240,6 +247,7 @@ where
             payload, 
             next_duty,
             &payload_attributes,
+            &builder_info,
             head_slot, 
             &mut trace, 
             &request_id,
@@ -281,7 +289,7 @@ where
             request_id = %request_id,
             trace = ?trace,
             request_duration_ns = trace.receive - trace.request_finish,
-            "request finished"
+            "submit_block request finished"
         );
 
         let optimistic_version = if was_simulated_optimistically {
@@ -337,9 +345,12 @@ where
             "header submission decoded",
         );
 
+        // Fetch builder info
+        let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
+
         // Submit header can only be processed optimistically. 
         // Make sure that the builder has enough collateral to cover the submission.
-        if let Err(err) = api.check_builder_collateral(&payload, &request_id).await {
+        if let Err(err) = api.check_builder_collateral(&payload, &builder_info, &request_id).await {
             warn!(request_id = %request_id, error = %err, "builder has insufficient collateral");
             return Err(err);
         }
@@ -353,9 +364,17 @@ where
             &request_id,
         ).await?;
 
-        // Fetch the next proposer duty/ payload attributes and validate basic information about the payload
+        // Fetch the next proposer duty/ payload attributes
         let (next_duty, payload_attributes) =
             api.fetch_proposer_and_attributes(payload.slot(), payload.parent_hash(), &request_id).await?;
+
+        // Discard any OptimisticV2 submissions if the proposer has censoring enabled
+        if next_duty.entry.preferences.censoring {
+            warn!(request_id = %request_id, "proposer has censoring enabled, discarding optimistic v2 submission");
+            return Err(BuilderApiError::V2SubmissionsInvalidIfProposerCensors);
+        }
+
+        // Validate basic information about the payload
         if let Err(err) = sanity_check_block_submission(
             &payload,
             payload.bid_trace(),
@@ -367,6 +386,19 @@ where
             warn!(request_id = %request_id, error = %err, "failed sanity check");
             return Err(err);
         }
+
+        // Handle trusted builders check
+        if !api.check_if_trusted_builder(&next_duty, &builder_info).await {
+            let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
+            warn!(
+                request_id = %request_id, 
+                builder_pub_key = ?payload.builder_public_key(),
+                proposer_trusted_builders = ?proposer_trusted_builders,
+                "builder not in proposer trusted builders list",
+            );
+            return Err(BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders });
+        }
+
         trace.pre_checks = get_nanos_timestamp()?;
 
         // Verify the payload signature
@@ -433,7 +465,7 @@ where
             request_id = %request_id,
             trace = ?trace,
             request_duration_ns = trace.receive - trace.request_finish,
-            "request finished"
+            "submit_header request finished"
         );
 
         // Save submission to db.
@@ -490,9 +522,12 @@ where
             .await
             .map_err(|_| BuilderApiError::InternalError)?;
 
+        // Fetch builder info
+        let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
+
         // submit_block_v2 can only be processed optimistically. 
         // Make sure that the builder has enough collateral to cover the submission.
-        if let Err(err) = api.check_builder_collateral(&payload, &request_id).await {
+        if let Err(err) = api.check_builder_collateral(&payload, &builder_info, &request_id).await {
             warn!(request_id = %request_id, error = %err, "builder has insufficient collateral");
             return Err(err);
         }
@@ -500,6 +535,24 @@ where
         // Fetch the next proposer duty/ payload attributes and validate basic information about the payload
         let (next_duty, payload_attributes) =
         api.fetch_proposer_and_attributes(payload.slot(), payload.parent_hash(), &request_id).await?;
+
+        // Discard any OptimisticV2 submissions if the proposer has censoring enabled
+        if next_duty.entry.preferences.censoring {
+            warn!(request_id = %request_id, "proposer has censoring enabled, discarding optimistic v2 submission");
+            return Err(BuilderApiError::V2SubmissionsInvalidIfProposerCensors);
+        }
+
+        // Handle trusted builders check
+        if !api.check_if_trusted_builder(&next_duty, &builder_info).await {
+            let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
+            warn!(
+                request_id = %request_id, 
+                builder_pub_key = ?payload.builder_public_key(),
+                proposer_trusted_builders = ?proposer_trusted_builders,
+                "builder not in proposer trusted builders list",
+            );
+            return Err(BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders });
+        }
 
         // Verify payload has not already been delivered
         match api.auctioneer.get_last_slot_delivered().await {
@@ -519,6 +572,7 @@ where
             payload, 
             next_duty,
             &payload_attributes,
+            &builder_info,
             head_slot, 
             &mut trace, 
             &request_id,
@@ -541,10 +595,20 @@ where
             error!(request_id = %request_id, error = %err, "failed to save execution payload");
             return Err(BuilderApiError::AuctioneerError(err));
         }
+        trace.auctioneer_update = get_nanos_timestamp()?;
 
         // Gossip to other relays
         api.gossip_payload(&payload, payload.payload_and_blobs(), &request_id).await;
         
+        // Log some final info
+        trace.request_finish = get_nanos_timestamp()?;
+        info!(
+            request_id = %request_id,
+            trace = ?trace,
+            request_duration_ns = trace.receive - trace.request_finish,
+            "sumbit_block_v2 request finished"
+        );
+
         // Gossip payload
         api.db_sender
             .send(DbInfo::NewSubmission(payload.clone(), Arc::new(trace), OptimisticVersion::V2))
@@ -801,6 +865,7 @@ where
         mut payload: SignedBidSubmission,
         next_duty: BuilderGetValidatorsResponseEntry,
         payload_attributes: &PayloadAttributesUpdate,
+        builder_info: &BuilderInfo,
         head_slot: u64,
         trace: &mut SubmissionTrace,
         request_id: &Uuid,
@@ -828,7 +893,13 @@ where
 
         // Simulate the submission
         let payload = Arc::new(payload);
-        let was_simulated_optimistically = self.simulate_submission(payload.clone(), trace, next_duty.entry, request_id).await?;
+        let was_simulated_optimistically = self.simulate_submission(
+            payload.clone(), 
+            builder_info, 
+            trace, 
+            next_duty.entry, 
+            request_id,
+        ).await?;
 
         Ok((payload, was_simulated_optimistically))
     }
@@ -926,6 +997,35 @@ where
         Ok(floor_bid_value)
     }
 
+    /// If the proposer has specified a list of trusted builders ensure
+    /// that the submitting builder pubkey is in that list.
+    /// Verifies that if the proposer has specified a list of trusted builders,
+    /// the builder submitting a request is in that list.
+    ///
+    /// The auctioneer maintains a mapping of builder public keys to corresponding IDs.
+    /// This function retrieves the ID associated with the builder's public key from the auctioneer. 
+    /// It then checks if this ID is included in the list of trusted builders specified by the proposer.
+    async fn check_if_trusted_builder(
+        &self,
+        next_duty: &BuilderGetValidatorsResponseEntry,
+        builder_info: &BuilderInfo,
+    ) -> bool {
+        if let Some(trusted_builders) = &next_duty.entry.preferences.trusted_builders {
+            // Handle case where proposer specifies an empty list.
+            if trusted_builders.is_empty() {
+                return true;
+            }
+
+            if let Some(builder_id) = &builder_info.builder_id {
+                return trusted_builders.contains(builder_id);
+            } else {
+                return false;
+            }
+        } else {
+            true
+        }
+    }
+
     /// Simulates a new block payload.
     ///
     /// 1. Checks the current top bid value from the auctioneer.
@@ -933,6 +1033,7 @@ where
     async fn simulate_submission(
         &self,
         payload: Arc<SignedBidSubmission>,
+        builder_info: &BuilderInfo,
         trace: &mut SubmissionTrace,
         registration_info: ValidatorRegistrationInfo,
         request_id: &Uuid,
@@ -962,24 +1063,24 @@ where
         );
         let result = self
             .simulator
-            .process_request(sim_request, is_top_bid, self.db_sender.clone(), *request_id)
-            .await;
+            .process_request(
+                sim_request, 
+                builder_info, 
+                is_top_bid, 
+                self.db_sender.clone(), 
+                *request_id,
+            ).await;
 
         match result {
-
             Ok(sim_optimistic) => {
-
                 info!(request_id = %request_id, "block simulation successful");
 
                 trace.simulation = get_nanos_timestamp()?;
                 debug!(request_id = %request_id, sim_latency = trace.simulation - trace.signature);
 
                 Ok(sim_optimistic)
-
             },
-
             Err(err) => {
-
                 match &err {
                     BlockSimError::BlockValidationFailed(reason) => {
                         warn!(request_id = %request_id, error = %reason, "block validation failed");
@@ -1149,55 +1250,51 @@ where
     async fn check_builder_collateral(
         &self, 
         payload: &impl BidSubmission,
+        builder_info: &BuilderInfo,
         request_id: &Uuid,
     ) -> Result<(), BuilderApiError> {
-        match self.auctioneer.get_builder_info(payload.builder_public_key()).await {
-            Ok(info) => {
-                if !info.is_optimistic {
-                    warn!(
-                        request_id = %request_id,
-                        builder=%payload.builder_public_key(),
-                        "builder is not optimistic"
-                    );
-                    return Err(BuilderApiError::BuilderDemoted { 
-                        builder_pub_key: payload.builder_public_key().clone(),
-                    });
-                } else if info.collateral < payload.value() {
-                    warn!(
-                        request_id = %request_id,
-                        builder=%payload.builder_public_key(),
-                        collateral=%info.collateral,
-                        collateral_required=%payload.value(),
-                        "builder does not have enough collateral"
-                    );
-                    return Err(BuilderApiError::NotEnoughOptimisticCollateral { 
-                        builder_pub_key: payload.builder_public_key().clone(), 
-                        collateral: info.collateral, 
-                        collateral_required: payload.value(),
-                        is_optimistic: info.is_optimistic,
-                    });
-                }
-            },
-            Err(err) => {
-                // No builder info stored for this pubkey
-                debug!(
-                    request_id = %request_id,
-                    error=%err,
-                    builder=%payload.builder_public_key(),
-                    block_hash=%payload.block_hash(),
-                    "failed to retrieve builder info"
-                );
-                return Err(BuilderApiError::NotEnoughOptimisticCollateral { 
-                    builder_pub_key: payload.builder_public_key().clone(), 
-                    collateral: U256::ZERO, 
-                    collateral_required: payload.value(),
-                    is_optimistic: false,
-                });
-            }
-        };
+        if !builder_info.is_optimistic {
+            warn!(
+                request_id = %request_id,
+                builder=%payload.builder_public_key(),
+                "builder is not optimistic"
+            );
+            return Err(BuilderApiError::BuilderDemoted { 
+                builder_pub_key: payload.builder_public_key().clone(),
+            });
+        } else if builder_info.collateral < payload.value() {
+            warn!(
+                request_id = %request_id,
+                builder=%payload.builder_public_key(),
+                collateral=%builder_info.collateral,
+                collateral_required=%payload.value(),
+                "builder does not have enough collateral"
+            );
+            return Err(BuilderApiError::NotEnoughOptimisticCollateral { 
+                builder_pub_key: payload.builder_public_key().clone(), 
+                collateral: builder_info.collateral, 
+                collateral_required: payload.value(),
+                is_optimistic: builder_info.is_optimistic,
+            });
+        }
 
         // Builder has enough collateral
         Ok(())
+    }
+
+    /// Fetch the builder's information. Default info is returned if fetching fails.
+    async fn fetch_builder_info(&self, builder_pub_key: &BlsPublicKey) -> BuilderInfo {
+        match self.auctioneer.get_builder_info(builder_pub_key).await {
+            Ok(info) => info,
+            Err(err) => {
+                warn!(
+                    builder=%builder_pub_key,
+                    err=%err,
+                    "Failed to retrieve builder info"
+                );
+                BuilderInfo { collateral: U256::ZERO, is_optimistic: false, builder_id: None }
+            }
+        }
     }
 
     async fn demote_builder(
@@ -1303,7 +1400,7 @@ where
 
         // Clean up old payload attributes
         let mut all_payload_attributes = self.payload_attributes.write().await;
-        all_payload_attributes.retain(|_, value| value.slot < head_slot);
+        all_payload_attributes.retain(|_, value| value.slot >= head_slot);
 
         // Save new one
         all_payload_attributes.insert(payload_attributes.parent_hash.clone(), payload_attributes);

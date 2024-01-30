@@ -12,7 +12,7 @@ use helix_database::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
 use helix_common::signing::RelaySigningContext;
 use helix_housekeeper::ChainUpdate;
-use helix_common::api::proposer_api::ValidatorPreferences;
+use helix_common::ValidatorPreferences;
 
 use crate::{
     builder::{

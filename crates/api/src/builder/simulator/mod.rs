@@ -9,7 +9,7 @@ use std::sync::Arc;
 use ethereum_consensus::types::mainnet::ExecutionPayload;
 
 use helix_common::bid_submission::{BidTrace, SignedBidSubmission, BidSubmission};
-use helix_common::api::proposer_api::ValidatorPreferences;
+use helix_common::ValidatorPreferences;
 use ethereum_consensus::serde::as_str;
 use ethereum_consensus::primitives::BlsSignature;
 

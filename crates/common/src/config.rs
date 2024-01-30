@@ -2,7 +2,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{fs::File, collections::HashSet};
 use helix_utils::request_encoding::Encoding;
-use crate::api::proposer_api::ValidatorPreferences;
+use crate::ValidatorPreferences;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RelayConfig {
@@ -19,8 +19,6 @@ pub struct RelayConfig {
     pub network_config: NetworkConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
-    #[serde(default)]
-    pub run_housekeeper: bool,
     pub validator_preferences: ValidatorPreferences,
     pub router_config: RouterConfig,
     #[serde(default = "default_duration")]
@@ -179,7 +177,7 @@ fn default_duration() -> u64 {
 #[cfg(test)]
 #[test]
 fn test_config() {
-    use crate::api::proposer_api::ValidatorPreferences;
+    use crate::ValidatorPreferences;
 
     let mut config = RelayConfig::default();
     config.redis.url = "redis://localhost:6379".to_string();
@@ -189,7 +187,7 @@ fn test_config() {
     config.network_config = NetworkConfig::Mainnet;
     config.logging =
         LoggingConfig::File { dir_path: "hello".to_string(), file_name: "test".to_string() };
-    config.validator_preferences = ValidatorPreferences { censoring: true };
+    config.validator_preferences = ValidatorPreferences { censoring: true, trusted_builders: None };
     config.router_config = RouterConfig {
         enabled_routes: [
             Route::GetValidators, 

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::{Duration, SystemTime}};
+use std::{collections::HashMap, sync::{atomic::{AtomicBool, Ordering}, Arc}, time::{Duration, SystemTime}};
 
 use ethereum_consensus::primitives::BlsPublicKey;
 use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
@@ -17,7 +17,7 @@ use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, ProposerDuty,
-    SignedValidatorRegistrationEntry, chain_info::ChainInfo, pending_block::PendingBlock,
+    SignedValidatorRegistrationEntry, pending_block::PendingBlock,
 };
 
 use crate::error::HousekeeperError;
@@ -69,6 +69,8 @@ pub struct Housekeeper<
 
     refreshed_trusted_proposers_slot: Mutex<u64>,
     refresh_trusted_proposers_lock: Mutex<()>,
+
+    is_leader: AtomicBool
 }
 
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
@@ -88,6 +90,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             re_sync_builder_info_lock: Mutex::new(()),
             refreshed_trusted_proposers_slot: Mutex::new(0),
             refresh_trusted_proposers_lock: Mutex::new(()),
+            is_leader: AtomicBool::new(false),
         })
     }
 
@@ -116,6 +119,19 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     async fn process_new_slot(self: &SharedHousekeeper<DB, BeaconClient, A>, head_slot: u64) {
         let (is_new_block, prev_head_slot) = self.update_head_slot(head_slot).await;
         if !is_new_block {
+            return;
+        }
+
+        let original_leadership_status = self.is_leader.load(Ordering::SeqCst);
+        let is_leader = self.auctioneer.try_acquire_or_renew_leadership(original_leadership_status).await;
+        
+        // If the leadership status has changed, update the is_leader flag.
+        if is_leader != original_leadership_status {
+            self.is_leader.store(is_leader, Ordering::SeqCst);
+        }
+
+        // Only allow one housekeeper task to run at a time.
+        if !is_leader {
             return;
         }
 
@@ -498,15 +514,14 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         );
         
         let proposer_whitelist = self.db.get_trusted_proposers().await?;
-        if proposer_whitelist.is_empty() {
-            warn!("The trusted proposers list is empty.");
-        }
+        let num_trusted_proposers = proposer_whitelist.len();
 
         self.auctioneer.update_trusted_proposers(proposer_whitelist).await?;
         *self.refreshed_trusted_proposers_slot.lock().await = head_slot;
 
         debug!(
             head_slot = head_slot, 
+            num_trusted_proposers = num_trusted_proposers,
             "updated trusted proposers"
         );
 

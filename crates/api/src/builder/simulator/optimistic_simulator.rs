@@ -59,7 +59,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
     ) -> Result<(), BlockSimError> {
         if let Err(err) = self
             .simulator
-            .process_request(request.clone(), is_top_bid, sim_result_saver_sender, request_id)
+            .process_request(request.clone(), &builder_info, is_top_bid, sim_result_saver_sender, request_id)
             .await
         {
             if let BlockSimError::BlockValidationFailed(_) = err {
@@ -143,22 +143,6 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         }
         false
     }
-
-    /// Fetch the builder's information. Default info is returned if fetching fails.
-    async fn fetch_builder_info(&self, request: &BlockSimRequest) -> BuilderInfo {
-        match self.auctioneer.get_builder_info(&request.message.builder_public_key).await {
-            Ok(info) => info,
-            Err(err) => {
-                warn!(
-                    builder=%request.message.builder_public_key,
-                    block_hash=%request.execution_payload.block_hash(),
-                    err=%err,
-                    "Failed to retrieve builder info"
-                );
-                BuilderInfo { collateral: U256::ZERO, is_optimistic: false }
-            }
-        }
-    }
 }
 
 #[async_trait]
@@ -166,11 +150,11 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
     async fn process_request(
         &self,
         request: BlockSimRequest,
+        builder_info: &BuilderInfo,
         is_top_bid: bool,
         sim_result_saver_sender: Sender<DbInfo>,
         request_id: Uuid,
     ) -> Result<bool, BlockSimError> {
-        let builder_info = self.fetch_builder_info(&request).await;
 
         if self.should_process_optimistically(&request, &builder_info).await {
             debug!(
@@ -180,6 +164,7 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
             );
 
             let cloned_self = self.clone_for_async();
+            let builder_info = builder_info.clone();
             tokio::spawn(async move {
                 cloned_self
                     .handle_simulation(request, is_top_bid, sim_result_saver_sender, builder_info, request_id)
@@ -196,7 +181,7 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
                 request=?request.message,
                 "processing simulation request"
             );
-            self.handle_simulation(request, is_top_bid, sim_result_saver_sender, builder_info, request_id)
+            self.handle_simulation(request, is_top_bid, sim_result_saver_sender, builder_info.clone(), request_id)
             .await
             .map(|_| false)
         }

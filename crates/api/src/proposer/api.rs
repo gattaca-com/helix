@@ -44,9 +44,9 @@ use helix_common::{
         proposer_api::{
             ValidatorRegistrationInfo,
             GetPayloadResponse, 
-            ValidatorPreferences,
         },
     },
+    ValidatorPreferences,
     chain_info::{ChainInfo, Network},
     try_execution_header_from_payload, BidRequest, GetHeaderTrace, GetPayloadTrace,
     RegisterValidatorsTrace, signed_proposal::VersionedSignedProposal, versioned_payload::PayloadAndBlobs,
@@ -987,11 +987,8 @@ where
         &self,
         public_key: &BlsPublicKey,
     ) -> Result<bool, ProposerApiError> {
-        Ok(self
-            .auctioneer
-            .get_trusted_proposers()
-            .await?
-            .map_or(false, |whitelist| whitelist.contains(public_key)))
+        let is_trusted_proposer = self.auctioneer.is_trusted_proposer(public_key).await?;
+        Ok(is_trusted_proposer)
     }
 }
 

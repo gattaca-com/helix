@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use helix_common::BuilderInfo;
 use hyper::StatusCode;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
 use reqwest::{Client, Response};
@@ -80,6 +81,7 @@ impl BlockSimulator for RpcSimulator {
     async fn process_request(
         &self,
         request: BlockSimRequest,
+        _builder_info: &BuilderInfo,
         is_top_bid: bool,
         sim_result_saver_sender: Sender<DbInfo>,
         request_id: Uuid,

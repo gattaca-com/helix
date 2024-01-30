@@ -155,7 +155,7 @@ impl PostgresDatabaseService {
 
             let mut structured_params_for_reg: Vec<(&[u8], i32, i64, &[u8], &[u8], SystemTime)> =
                 Vec::with_capacity(chunk.len());
-            let mut structured_params_for_pref: Vec<(&[u8], bool)> =
+            let mut structured_params_for_pref: Vec<(&[u8], bool, Option<Vec<String>>)> =
                 Vec::with_capacity(chunk.len());
 
             for entry in chunk.iter() {
@@ -176,7 +176,7 @@ impl PostgresDatabaseService {
                     inserted_at,
                 ));
 
-                structured_params_for_pref.push((public_key.as_ref(), entry.preferences.censoring));
+                structured_params_for_pref.push((public_key.as_ref(), entry.preferences.censoring, entry.preferences.trusted_builders.clone()));
             }
 
             // Prepare the params vector from the structured parameters
@@ -226,28 +226,28 @@ impl PostgresDatabaseService {
 
             let params: Vec<&(dyn ToSql + Sync)> = structured_params_for_pref
                 .iter()
-                .flat_map(|tuple| vec![&tuple.0 as &(dyn ToSql + Sync), &tuple.1])
+                .flat_map(|tuple| vec![&tuple.0 as &(dyn ToSql + Sync), &tuple.1, &tuple.2])
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql =
-                String::from("INSERT INTO validator_preferences (public_key, censoring) VALUES ");
+                String::from("INSERT INTO validator_preferences (public_key, censoring, trusted_builders) VALUES ");
             let values_clauses: Vec<String> = params
-                .chunks(2)
+                .chunks(3)
                 .enumerate()
                 .map(|(i, _)| {
                     if i == 0 {
-                        String::from("($1, $2)")
+                        String::from("($1, $2, $3)")
                     } else {
-                        let offset = i * 2;
-                        format!("(${}, ${})", offset + 1, offset + 2,)
+                        let offset = i * 3;
+                        format!("(${}, ${}, ${})", offset + 1, offset + 2, offset + 3,)
                     }
                 })
                 .collect();
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
-            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET censoring = excluded.censoring");
+            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET censoring = excluded.censoring, trusted_builders = excluded.trusted_builders");
 
             // Execute the query
             transaction.execute(&sql, &params[..]).await?;
@@ -306,13 +306,13 @@ impl DatabaseService for PostgresDatabaseService {
 
         transaction
             .execute(
-                "INSERT INTO validator_preferences (public_key, censoring)
-            VALUES ($1, $2)
+                "INSERT INTO validator_preferences (public_key, censoring, trusted_builders)
+            VALUES ($1, $2, $3)
             ON CONFLICT (public_key)
             DO UPDATE SET
-                censoring = excluded.censoring
+                censoring = excluded.censoring, trusted_builders = excluded.trusted_builders
             ",
-                &[&public_key.as_ref(), &registration_info.preferences.censoring],
+                &[&public_key.as_ref(), &registration_info.preferences.censoring, &registration_info.preferences.trusted_builders],
             )
             .await?;
 
@@ -398,6 +398,7 @@ impl DatabaseService for PostgresDatabaseService {
                     validator_registrations.public_key,
                     validator_registrations.signature,
                     validator_preferences.censoring,
+                    validator_preferences.trusted_builders,
                     validator_registrations.inserted_at
                 FROM validator_registrations
                 INNER JOIN validator_preferences ON validator_registrations.public_key = validator_preferences.public_key
@@ -907,8 +908,8 @@ impl DatabaseService for PostgresDatabaseService {
             .await?
             .execute(
                 "
-                    INSERT INTO builder_info (public_key, collateral, is_optimistic)
-                    VALUES ($1, $2, $3)
+                    INSERT INTO builder_info (public_key, collateral, is_optimistic, builder_id)
+                    VALUES ($1, $2, $3, $4)
                     ON CONFLICT (public_key)
                     DO UPDATE SET
                         collateral = excluded.collateral,
@@ -918,6 +919,7 @@ impl DatabaseService for PostgresDatabaseService {
                     &(builder_pub_key.as_ref()),
                     &(PostgresNumeric::from(builder_info.collateral)),
                     &(builder_info.is_optimistic),
+                    &(builder_info.builder_id),
                 ],
             )
             .await?;

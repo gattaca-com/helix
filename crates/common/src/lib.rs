@@ -10,6 +10,7 @@ pub mod simulator;
 pub mod traces;
 pub mod validator;
 pub mod pending_block;
+pub mod validator_preferences;
 
 pub use builder_info::*;
 pub use config::*;
@@ -17,3 +18,4 @@ pub use eth::*;
 pub use proposer::*;
 pub use traces::*;
 pub use validator::*;
+pub use validator_preferences::*;
