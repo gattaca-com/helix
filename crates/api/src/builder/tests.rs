@@ -11,6 +11,7 @@ mod tests {
         test_utils::builder_api_app,
     };
     use core::panic;
+    use axum::{body::Body, http::{header, Method, Request, StatusCode, Uri}};
     use ethereum_consensus::{
         builder::{SignedValidatorRegistration, ValidatorRegistration},
         configs::mainnet::CAPELLA_FORK_EPOCH,
@@ -19,7 +20,6 @@ mod tests {
         ssz::{prelude::*, self}, Fork, types::mainnet::ExecutionPayloadHeader,
     };
     use helix_beacon_client::types::PayloadAttributes;
-    use hyper::{StatusCode, Request, Body, Uri, Method, header};
     use rand::Rng;
     use reqwest::{Client, Response};
     use reth_primitives::hex;
@@ -290,13 +290,12 @@ mod tests {
         // Run the app in a background task
         tokio::spawn(async move {
             // run it with hyper on localhost:3000
-            axum::Server::bind(&bind_address.parse().unwrap())
-                .serve(router.into_make_service())
-                .with_graceful_shutdown(async {
-                    rx.await.ok();
-                })
-                .await
-                .unwrap();
+            let listener = tokio::net::TcpListener::bind(bind_address).await.unwrap();
+            axum::serve(listener, router)
+            .with_graceful_shutdown(async {
+                rx.await.ok();
+            })
+            .await.unwrap();
         });
 
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -545,7 +544,7 @@ mod tests {
         let resp = reqwest::Client::new().get(req_url.as_str()).send().await.unwrap();
 
         // Check the response
-        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR); // proposer duty bytes is None
+        assert_eq!(resp.status(), reqwest::StatusCode::INTERNAL_SERVER_ERROR); // proposer duty bytes is None
 
         // Shut down the server
         let _ = tx.send(());
@@ -567,7 +566,7 @@ mod tests {
         let resp = reqwest::Client::new().get(req_url.as_str()).send().await.unwrap();
 
         // Check the response
-        assert_eq!(resp.status(), StatusCode::OK); // proposer duty bytes is set
+        assert_eq!(resp.status(), reqwest::StatusCode::OK); // proposer duty bytes is set
 
         // assert the body is the bytes of the new duties
         let body = resp.bytes().await.unwrap();
@@ -617,7 +616,7 @@ mod tests {
             serde_json::to_vec(&signed_bid_submission).unwrap(),
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Signature verification failed");
 
         // Send SSZ encoded request
@@ -627,7 +626,7 @@ mod tests {
             ssz::prelude::serialize(&signed_bid_submission).unwrap(),
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Signature verification failed");
 
         // Send JSON+GZIP encoded request
@@ -636,7 +635,7 @@ mod tests {
         encoder.write_all(&req_payload_bytes).unwrap();
         req_payload_bytes = encoder.finish().unwrap();
         let resp = send_request(&req_url, Encoding::JsonGzip, req_payload_bytes.clone()).await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Signature verification failed");
 
         // Send SSZ+GZIP encoded request
@@ -645,7 +644,7 @@ mod tests {
         encoder.write_all(&req_payload_bytes).unwrap();
         let req_payload_bytes = encoder.finish().unwrap();
         let resp = send_request(&req_url, Encoding::SszGzip, req_payload_bytes).await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Signature verification failed");
 
         // Shut down the server
@@ -689,7 +688,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Fee recipient mismatch. got: 0x1230dde14e7256340cc820415a6022a7d1c93a35, expected: 0x5cc0dde14e7256340cc820415a6022a7d1c93a35");
 
         // Shut down the server
@@ -723,7 +722,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(
             resp.text().await.unwrap(),
             "Submission for past slot. current slot: 100, submission slot: 33"
@@ -764,7 +763,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Could not find proposer duty for slot");
 
         // Shut down the server
@@ -807,7 +806,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Incorrect timestamp. got: 1, expected: 1606824419");
 
         // Shut down the server
@@ -841,7 +840,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Slot mismatch. got: 33, expected: 1");
 
         // Shut down the server
@@ -888,7 +887,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Prev randao mismatch. got: 0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5, expected: 0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e4");
 
         // Shut down the server
@@ -935,7 +934,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Withdrawals root mismatch. got: [160, 60, 212, 159, 57, 156, 168, 2, 42, 163, 51, 170, 247, 148, 102, 1, 167, 81, 163, 55, 74, 66, 98, 209, 18, 232, 73, 121, 211, 68, 5, 188], expected: [177, 94, 215, 98, 152, 255, 132, 165, 134, 177, 216, 117, 223, 8, 182, 103, 108, 152, 223, 233, 199, 205, 115, 250, 184, 132, 80, 52, 141, 142, 112, 200]");
 
         // Shut down the server
@@ -952,10 +951,7 @@ mod tests {
         let req_url =
             format!("{}{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK, "");
 
-        let mut my_vec = Vec::with_capacity(MAX_PAYLOAD_LENGTH + 1);
-        for _ in 0..MAX_PAYLOAD_LENGTH + 1 {
-            my_vec.push(0);
-        }
+        let my_vec = vec![0u8; MAX_PAYLOAD_LENGTH + 1];
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
@@ -967,10 +963,10 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(
             resp.text().await.unwrap(),
-            "Payload too large. max size: 4194304, size: 4194305"
+            "length limit exceeded"
         );
 
         // Shut down the server
@@ -1011,7 +1007,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Zero value block");
 
         // Shut down the server
@@ -1052,7 +1048,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Zero value block");
 
         // Shut down the server
@@ -1093,7 +1089,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Block hash mismatch. message: 0x2bafdc454116b605005364976b134d761dd736cb4788d25c835783b46daeb121, payload: 0x1bafdc454116b605005364976b134d761dd736cb4788d25c835783b46daeb121");
 
         // Shut down the server
@@ -1134,7 +1130,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Parent hash mismatch. message: 0xbd3291854dc822b7ec585925cda0e18f06af28fa2886e15f52d52dd4b6f94ed6, payload: 0xcd3291854dc822b7ec585925cda0e18f06af28fa2886e15f52d52dd4b6f94ed6");
 
         // Shut down the server
@@ -1158,7 +1154,7 @@ mod tests {
         let resp = reqwest::Client::new().get(req_url.as_str()).send().await.unwrap();
 
         // Check the response
-        assert_eq!(resp.status(), StatusCode::OK); // proposer duty bytes is set
+        assert_eq!(resp.status(), reqwest::StatusCode::OK); // proposer duty bytes is set
 
         // assert the body is the bytes of the new duties
         let body = resp.bytes().await.unwrap();
@@ -1201,7 +1197,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Prev randao mismatch. got: 0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5, expected: 0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e4");
 
         // Shut down the server

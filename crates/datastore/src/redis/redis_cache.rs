@@ -38,7 +38,7 @@ use crate::{
 };
 
 const BID_CACHE_EXPIRY_S: usize = 45;
-const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 17_000;
+const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 24_000;
 
 #[derive(Clone)]
 pub struct RedisCache {

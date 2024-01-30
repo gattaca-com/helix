@@ -1,8 +1,7 @@
 use std::{error::Error, fmt};
 
 use axum::{
-    http::{self, StatusCode},
-    response::{IntoResponse, Response},
+    http::{self, StatusCode}, response::{IntoResponse, Response},
 };
 use ethereum_consensus::{
     primitives::{BlsPublicKey, ExecutionAddress, Hash32, Slot},
@@ -19,6 +18,9 @@ use helix_datastore::error::AuctioneerError;
 pub enum ProposerApiError {
     #[error("hyper error: {0}")]
     HyperError(#[from] hyper::Error),
+
+    #[error("axum error: {0}")]
+    AxumError(#[from] axum::Error),
 
     #[error("bid public key {bid:?} does not match relay public key {relay:?}")]
     BidPublicKeyMismatch { bid: BlsPublicKey, relay: BlsPublicKey },
@@ -167,6 +169,9 @@ impl IntoResponse for ProposerApiError {
         match self {
             ProposerApiError::HyperError(err) => {
                 (StatusCode::BAD_REQUEST, format!("Hyper error: {err}")).into_response()
+            },
+            ProposerApiError::AxumError(err) => {
+                (StatusCode::BAD_REQUEST, format!("Axum error: {err}")).into_response()
             },
             ProposerApiError::BidPublicKeyMismatch { bid, relay } => {
                 (StatusCode::BAD_REQUEST, format!("Bid public key {bid:?} does not match relay public key {relay:?}")).into_response()

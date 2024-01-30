@@ -19,9 +19,11 @@ helix-housekeeper.workspace = true
 async-trait = { workspace = true }
 axum = { workspace = true }
 dashmap = { workspace = true }
+futures = { workspace = true }
 hyper = { workspace = true }
-tokio = { workspace = true }
 reqwest = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
 url = { workspace = true }
 tonic = "0.10"
 prost = "0.12"
