@@ -1487,7 +1487,7 @@ pub async fn decode_payload(
     trace.decode = get_nanos_timestamp()?;
     info!(
         request_id = %request_id,
-        timestamp_after_decoding = Instant::now().elapsed().as_nanos(),
+        timestamp_after_decoding = trace.decode,
         decode_latency_ns = trace.decode - trace.receive,
         builder_pub_key = ?payload.builder_public_key(),
         block_hash = ?payload.block_hash(),
