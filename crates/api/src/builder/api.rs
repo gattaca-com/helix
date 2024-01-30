@@ -288,7 +288,7 @@ where
         info!(
             request_id = %request_id,
             trace = ?trace,
-            request_duration_ns = trace.receive - trace.request_finish,
+            request_duration_ns = trace.request_finish - trace.receive,
             "submit_block request finished"
         );
 
@@ -464,7 +464,7 @@ where
         info!(
             request_id = %request_id,
             trace = ?trace,
-            request_duration_ns = trace.receive - trace.request_finish,
+            request_duration_ns = trace.request_finish - trace.receive,
             "submit_header request finished"
         );
 
@@ -605,7 +605,7 @@ where
         info!(
             request_id = %request_id,
             trace = ?trace,
-            request_duration_ns = trace.receive - trace.request_finish,
+            request_duration_ns = trace.request_finish - trace.receive,
             "sumbit_block_v2 request finished"
         );
 
