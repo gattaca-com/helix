@@ -24,12 +24,14 @@ jobs:
     - name: Install Protobuf Compiler (protoc)
       run: sudo apt-get install -y protobuf-compiler
 
-    # Install rustfmt
-    - name: Install rustfmt
-      run: rustup component add rustfmt --toolchain nightly
-
     - name: Change to project directory
       run: cd ./repos/${{ secrets.REPO_NAME }}
+
+    # Install nightly toolchain and rustfmt
+    - name: Install nightly toolchain and rustfmt
+      run: |
+        rustup toolchain install nightly
+        rustup component add rustfmt --toolchain nightly
 
     # Rust Linting with Clippy
     - uses: dtolnay/rust-toolchain@clippy
