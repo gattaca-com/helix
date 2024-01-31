@@ -30,14 +30,17 @@ jobs:
       run: cargo clippy --workspace --lib --examples --tests --benches --all-features
       env:
         RUSTFLAGS: -D warnings
+      working-directory: ./repos/${{ secrets.REPO_NAME }}
 
     # Check Code Formatting
     - name: Rustfmt
       run: cargo fmt --all --check
+      working-directory: ./repos/${{ secrets.REPO_NAME }}
 
     # Check Documentation
     - name: Docs
       run: cargo docs --document-private-items
       env:
         RUSTDOCFLAGS: --cfg docsrs --show-type-layout --generate-link-to-definition --enable-index-page -Zunstable-options -D warnings
+      working-directory: ./repos/${{ secrets.REPO_NAME }}
 
