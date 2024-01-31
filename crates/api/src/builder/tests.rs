@@ -3,15 +3,13 @@ mod tests {
 
     // +++ IMPORTS +++
     use crate::{
-        builder::mock_simulator::MockSimulator,
-        builder::{
+        builder::mock_simulator::MockSimulator, builder::{
             api::{BuilderApi, MAX_PAYLOAD_LENGTH, decode_payload, decode_header_submission},
             PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK,
-        },
-        test_utils::builder_api_app,
+        }, service::API_REQUEST_TIMEOUT, test_utils::builder_api_app
     };
     use core::panic;
-    use axum::{http::{header, Method, Request, StatusCode, Uri}};
+    use axum::http::{header, Method, Request, Uri};
     use ethereum_consensus::{
         builder::{SignedValidatorRegistration, ValidatorRegistration},
         configs::mainnet::CAPELLA_FORK_EPOCH,
@@ -19,7 +17,7 @@ mod tests {
         primitives::{BlsPublicKey, BlsSignature},
         ssz::{prelude::*, self}, Fork, types::mainnet::ExecutionPayloadHeader,
     };
-    use futures::{future::{join, join_all}, stream::FuturesOrdered, Future};
+    use futures::{stream::FuturesOrdered, Future};
     use helix_beacon_client::types::PayloadAttributes;
     use rand::Rng;
     use reqwest::{Client, Response};
@@ -1238,19 +1236,29 @@ mod tests {
             Ok::<_, Infallible>(vec![])
         }));
        let body = Body::wrap_stream(body);
-        // Send request by streaming the malicious body
-        let resp = reqwest::Client::new()
-            .post(req_url.as_str())
-            .header("accept", "*/*")
-            .header("Content-Type", "application/json")
-            .body(body)
-            .send()
-            .await
-            .unwrap();
+        
+        let test_timeout = API_REQUEST_TIMEOUT + Duration::from_secs(3);
+        let timeout_result = tokio::time::timeout(test_timeout, async {
+            // Send request by streaming the malicious body
+            let resp = reqwest::Client::new()
+                .post(req_url.as_str())
+                .header("accept", "*/*")
+                .header("Content-Type", "application/json")
+                .body(body)
+                .send()
+                .await
+                .unwrap();
 
-        assert_eq!(resp.status(), reqwest::StatusCode::REQUEST_TIMEOUT);
+            assert_eq!(resp.status(), reqwest::StatusCode::REQUEST_TIMEOUT);
 
-        // Shut down the server
-        let _ = tx.send(());
+            // Shut down the server
+            let _ = tx.send(());
+        })
+        .await;
+
+        // Check if the test timed out
+        if timeout_result.is_err() {
+            panic!("Test timed out");
+        }
     }
 }

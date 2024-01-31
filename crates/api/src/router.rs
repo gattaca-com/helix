@@ -6,7 +6,6 @@ use tower::timeout::TimeoutLayer;
 use tower::{BoxError, ServiceBuilder};
 use tower_http::limit::RequestBodyLimitLayer;
 use std::sync::Arc;
-use std::time::Duration;
 use helix_beacon_client::beacon_client::BeaconClient;
 use helix_beacon_client::multi_beacon_client::MultiBeaconClient;
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
@@ -16,6 +15,7 @@ use helix_common::{Route, RouterConfig};
 use crate::builder::api::{MAX_HEADER_LENGTH, MAX_PAYLOAD_LENGTH};
 use crate::gossiper::grpc_gossiper::GrpcGossiperClientManager;
 use crate::proposer::api::{MAX_BLINDED_BLOCK_LENGTH, MAX_VAL_REGISTRATIONS_LENGTH};
+use crate::service::API_REQUEST_TIMEOUT;
 use crate::{
     builder::{
         api::BuilderApi, optimistic_simulator::OptimisticSimulator,
@@ -140,7 +140,7 @@ pub fn build_router(
             .layer(HandleErrorLayer::new(|_: BoxError| async {
                 StatusCode::REQUEST_TIMEOUT
             }))
-            .layer(TimeoutLayer::new(Duration::from_secs(5)))
+            .layer(TimeoutLayer::new(API_REQUEST_TIMEOUT))
     );
 
     // Add Extension layers

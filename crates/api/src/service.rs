@@ -20,6 +20,9 @@ use helix_common::{
     BroadcasterConfig, NetworkConfig, RelayConfig,
 };
 
+pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub struct ApiService {}
 
 impl ApiService {
@@ -72,7 +75,7 @@ impl ApiService {
         });
 
         let client = reqwest::ClientBuilder::new()
-            .timeout(Duration::from_secs(5))
+            .timeout(SIMULATOR_REQUEST_TIMEOUT)
             .build()
             .unwrap();
 
