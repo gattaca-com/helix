@@ -1196,7 +1196,7 @@ where
             )?;
 
         if payload_attributes.slot != slot {
-            warn!(request_id = %request_id, "payload attributes not yet known");
+            warn!(request_id = %request_id, "payload attributes slot mismatch with payload attributes");
             return Err(BuilderApiError::PayloadSlotMismatchWithPayloadAttributes {
                 got: slot,
                 expected: payload_attributes.slot,
@@ -1396,6 +1396,12 @@ where
             timestamp = payload_attributes.payload_attributes.timestamp,
         );
 
+        
+        // Discard payload attributes if already known
+        if self.payload_attributes.read().await.contains_key(&payload_attributes.parent_hash) {
+            return;
+        }
+        
         // Clean up old payload attributes
         let mut all_payload_attributes = self.payload_attributes.write().await;
         all_payload_attributes.retain(|_, value| value.slot >= head_slot - 2);
