@@ -333,6 +333,6 @@ mod multi_beacon_client_tests {
             )
             .await;
 
-        assert!(matches!(result, Err(BeaconClientError::BlockValidationFailed)));
+        assert!(matches!(result, Err(BeaconClientError::BlockIntegrationFailed)));
     }
 }
