@@ -253,7 +253,13 @@ impl PostgresDatabaseService {
 
             let params: Vec<&(dyn ToSql + Sync)> = structured_params_for_pref
                 .iter()
-                .flat_map(|tuple| vec![&tuple.public_key as &(dyn ToSql + Sync), &tuple.censoring, &tuple.trusted_builders])
+                .flat_map(|tuple| {
+                    vec![
+                        &tuple.public_key as &(dyn ToSql + Sync),
+                        &tuple.censoring,
+                        &tuple.trusted_builders,
+                    ]
+                })
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses

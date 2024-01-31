@@ -1,9 +1,9 @@
-pub mod submission;
 pub mod bid_trace;
+pub mod submission;
 pub mod v2;
 
-pub use submission::*;
 pub use bid_trace::*;
+pub use submission::*;
 
 use ethereum_consensus::{
     altair::Bytes32,
