@@ -3,21 +3,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ethereum_consensus::{
     builder::{SignedValidatorRegistration, ValidatorRegistration},
     crypto::Signature,
-    primitives::{
-        ExecutionAddress,
-        BlsPublicKey,
-        Gwei,
-        ValidatorIndex,
-    },
     phase0::Validator,
+    primitives::{BlsPublicKey, ExecutionAddress, Gwei, ValidatorIndex},
     serde::as_str,
 };
 use reth_primitives::hex;
 use serde::{Deserialize, Serialize};
 use tokio_postgres::Row;
 
-use crate::{ValidatorPreferences, api::proposer_api::ValidatorRegistrationInfo};
-
+use crate::{api::proposer_api::ValidatorRegistrationInfo, ValidatorPreferences};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ValidatorSummary {

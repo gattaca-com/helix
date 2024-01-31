@@ -1,0 +1,59 @@
+name: Rust Linting
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    types: [opened, synchronize, reopened]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: '0'
+        path: ./repos/${{ secrets.REPO_NAME }}
+        ref: ${{ github.ref }}
+
+    # Install Protocol Buffers Compiler
+    - name: Install Protobuf Compiler (protoc)
+      run: sudo apt-get install -y protobuf-compiler
+
+    - name: Change to project directory
+      run: cd ./repos/${{ secrets.REPO_NAME }}
+
+    # Install nightly toolchain and rustfmt
+    - name: Install nightly toolchain and rustfmt
+      run: |
+        rustup toolchain install nightly
+        rustup component add rustfmt --toolchain nightly
+
+    # Rust Linting with Clippy
+    - uses: dtolnay/rust-toolchain@clippy
+    - uses: Swatinem/rust-cache@v2
+      with:
+        cache-on-failure: true
+
+    # Run General Clippy Linting
+    - name: Clippy
+      run: cargo clippy --all-features
+      env:
+        RUSTFLAGS: -D warnings
+      working-directory: ./repos/${{ secrets.REPO_NAME }}
+
+    # Check Code Formatting
+    - name: Rustfmt
+      run: cargo fmt --all --check
+      working-directory: ./repos/${{ secrets.REPO_NAME }}
+
+    # Check Documentation
+    - name: Docs
+      run: cargo docs --document-private-items
+      env:
+        RUSTDOCFLAGS: --cfg docsrs --show-type-layout --generate-link-to-definition --enable-index-page -Zunstable-options -D warnings
+      working-directory: ./repos/${{ secrets.REPO_NAME }}

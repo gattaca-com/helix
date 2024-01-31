@@ -2,13 +2,12 @@ use ethereum_consensus::{
     crypto::SecretKey,
     domains::DomainType,
     phase0::mainnet::compute_domain,
-    primitives::{BlsPublicKey, BlsSignature, Root, Slot, Domain},
-    signing::{sign_with_domain, verify_signed_data},
-    state_transition::Context, Error, Fork,
+    primitives::{BlsPublicKey, BlsSignature, Domain, Root, Slot},
+    signing::{compute_signing_root, sign_with_domain, verify_signed_data},
     ssz::prelude::*,
-    signing::compute_signing_root,
+    state_transition::Context,
+    Error, Fork,
 };
-
 
 pub fn verify_signed_consensus_message<T: Merkleized>(
     message: &mut T,

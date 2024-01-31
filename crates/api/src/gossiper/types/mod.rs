@@ -6,6 +6,6 @@ pub use broadcast_payload::*;
 
 #[derive(Debug, Clone)]
 pub enum GossipedMessage {
-    Header(BroadcastHeaderParams),
-    Payload(BroadcastPayloadParams),
+    Header(Box<BroadcastHeaderParams>),
+    Payload(Box<BroadcastPayloadParams>),
 }

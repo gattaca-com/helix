@@ -1,6 +1,5 @@
 use helix_common::api::data_api::BidFilters;
 
-
 #[derive(Clone, Debug)]
 pub struct PgBidFilters(BidFilters);
 

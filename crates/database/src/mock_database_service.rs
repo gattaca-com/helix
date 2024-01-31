@@ -1,5 +1,7 @@
 use std::{
-    collections::HashSet, sync::{Arc, Mutex}, time::SystemTime
+    collections::HashSet,
+    sync::{Arc, Mutex},
+    time::SystemTime,
 };
 
 use async_trait::async_trait;
@@ -9,12 +11,19 @@ use ethereum_consensus::{
     ssz::prelude::*,
     types::mainnet::ExecutionPayload,
 };
-use helix_common::{api::proposer_api::ValidatorRegistrationInfo, bid_submission::v2::header_submission::SignedHeaderSubmission, pending_block::PendingBlock, versioned_payload::PayloadAndBlobs, GetHeaderTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo};
 use helix_common::{
-    api::{builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters},
-    bid_submission::{BidTrace, SignedBidSubmission},
+    api::{
+        builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
+        proposer_api::ValidatorRegistrationInfo,
+    },
+    bid_submission::{
+        v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
+    },
+    pending_block::PendingBlock,
     simulator::BlockSimError,
-    BuilderInfo, GetPayloadTrace, SignedValidatorRegistrationEntry, SubmissionTrace,
+    versioned_payload::PayloadAndBlobs,
+    BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace,
+    HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace,
     ValidatorSummary,
 };
 
@@ -171,7 +180,7 @@ impl DatabaseService for MockDatabaseService {
     async fn db_demote_builder(
         &self,
         _builder_pub_key: &BlsPublicKey,
-        _block_hash:&Hash32,
+        _block_hash: &Hash32,
         _reason: String,
     ) -> Result<(), DatabaseError> {
         Ok(())

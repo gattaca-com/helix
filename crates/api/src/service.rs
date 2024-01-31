@@ -4,21 +4,22 @@ use ethereum_consensus::crypto::SecretKey;
 use tokio::time::{sleep, timeout};
 use tracing::{error, info};
 
-use crate::builder::optimistic_simulator::OptimisticSimulator;
-use crate::gossiper::grpc_gossiper::GrpcGossiperClientManager;
-use crate::router::{build_router, BuilderApiProd, DataApiProd, ProposerApiProd};
-use helix_beacon_client::{
-    beacon_client::BeaconClient,
-    fiber_broadcaster::FiberBroadcaster, multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
+use crate::{
+    builder::optimistic_simulator::OptimisticSimulator,
+    gossiper::grpc_gossiper::GrpcGossiperClientManager,
+    router::{build_router, BuilderApiProd, DataApiProd, ProposerApiProd},
 };
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_database::DatabaseService;
+use helix_beacon_client::{
+    beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
+    multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
+};
+use helix_common::{
+    chain_info::ChainInfo, signing::RelaySigningContext, BroadcasterConfig, NetworkConfig,
+    RelayConfig,
+};
+use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
 use helix_datastore::redis::redis_cache::RedisCache;
 use helix_housekeeper::{ChainEventUpdater, Housekeeper};
-use helix_common::{
-    chain_info::ChainInfo, signing::RelaySigningContext,
-    BroadcasterConfig, NetworkConfig, RelayConfig,
-};
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -75,20 +76,18 @@ impl ApiService {
             context: chain_info.context.clone(),
         });
 
-        let client = reqwest::ClientBuilder::new()
-            .timeout(SIMULATOR_REQUEST_TIMEOUT)
-            .build()
-            .unwrap();
+        let client =
+            reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
 
-        let simulator = OptimisticSimulator::<RedisCache, PostgresDatabaseService>::new(
-            auctioneer.clone(),
-            db.clone(),
-            client,
-            config.simulator.url,
-        );
+        let simulator =
+            OptimisticSimulator::<RedisCache, PostgresDatabaseService>::new(
+                auctioneer.clone(),
+                db.clone(),
+                client,
+                config.simulator.url,
+            );
 
-        let (mut chain_event_updater, slot_update_sender) =
-            ChainEventUpdater::new(db.clone());
+        let (mut chain_event_updater, slot_update_sender) = ChainEventUpdater::new(db.clone());
 
         let mbc_clone = multi_beacon_client.clone();
         tokio::spawn(async move {
@@ -160,9 +159,9 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
                 }
             }
             BroadcasterConfig::BeaconClient(cfg) => {
-                broadcasters.push(Arc::new(BlockBroadcaster::BeaconClient(
-                    BeaconClient::from_endpoint_str(&cfg.url),
-                )));
+                broadcasters.push(Arc::new(
+                    BlockBroadcaster::BeaconClient(BeaconClient::from_endpoint_str(&cfg.url))
+                ));
             }
         }
     }

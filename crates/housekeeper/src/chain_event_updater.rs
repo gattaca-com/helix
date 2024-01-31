@@ -8,8 +8,8 @@ use helix_beacon_client::{
     types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent},
     MultiBeaconClientTrait,
 };
-use helix_database::DatabaseService;
 use helix_common::api::builder_api::BuilderGetValidatorsResponseEntry;
+use helix_database::DatabaseService;
 use helix_utils::{calculate_withdrawals_root, has_reached_fork};
 
 /// Payload for a new payload attribute event sent to subscribers.
@@ -119,17 +119,18 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         self.last_slot = event.slot;
 
         // Re-fetch proposer duties every 8 slots
-        let new_duties = if event.slot % 8 == 0 {
-            match self.database.get_proposer_duties().await {
-                Ok(new_duties) => Some(new_duties),
-                Err(err) => {
-                    error!(error = %err, "Failed to get proposer duties from db");
-                    None
+        let new_duties =
+            if event.slot % 8 == 0 {
+                match self.database.get_proposer_duties().await {
+                    Ok(new_duties) => Some(new_duties),
+                    Err(err) => {
+                        error!(error = %err, "Failed to get proposer duties from db");
+                        None
+                    }
                 }
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
 
         // Update local cache if new duties were fetched.
         if let Some(new_duties) = &new_duties {

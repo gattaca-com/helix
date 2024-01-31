@@ -1,8 +1,8 @@
-use clap::Parser;
-use serde::{Deserialize, Serialize};
-use std::{fs::File, collections::HashSet};
-use helix_utils::request_encoding::Encoding;
 use crate::ValidatorPreferences;
+use clap::Parser;
+use helix_utils::request_encoding::Encoding;
+use serde::{Deserialize, Serialize};
+use std::{collections::HashSet, fs::File};
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RelayConfig {
@@ -114,33 +114,33 @@ impl RouterConfig {
         if self.enabled_routes.contains(&Route::All) {
             // If All is present, replace it with all real routes
             self.enabled_routes.remove(&Route::All);
-            self.enabled_routes.extend([
-                Route::BuilderApi,
-                Route::ProposerApi,
-                Route::DataApi,
-            ]);
+            self.enabled_routes.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi]);
         }
 
         // Replace BuilderApi, ProposerApi, DataApi with their real routes
-        self.replace_condensed_with_real(Route::BuilderApi, &[
-            Route::GetValidators,
-            Route::SubmitBlock,
-            Route::SubmitBlockOptimistic,
-            Route::SubmitHeader,
-        ]);
+        self.replace_condensed_with_real(
+            Route::BuilderApi,
+            &[
+                Route::GetValidators,
+                Route::SubmitBlock,
+                Route::SubmitBlockOptimistic,
+                Route::SubmitHeader,
+            ],
+        );
 
-        self.replace_condensed_with_real(Route::ProposerApi, &[
-            Route::Status,
-            Route::RegisterValidators,
-            Route::GetHeader,
-            Route::GetPayload,
-        ]);
+        self.replace_condensed_with_real(
+            Route::ProposerApi,
+            &[Route::Status, Route::RegisterValidators, Route::GetHeader, Route::GetPayload],
+        );
 
-        self.replace_condensed_with_real(Route::DataApi, &[
-            Route::ProposerPayloadDelivered,
-            Route::BuilderBidsReceived,
-            Route::ValidatorRegistration,
-        ]);
+        self.replace_condensed_with_real(
+            Route::DataApi,
+            &[
+                Route::ProposerPayloadDelivered,
+                Route::BuilderBidsReceived,
+                Route::ValidatorRegistration,
+            ],
+        );
     }
 
     fn replace_condensed_with_real(&mut self, special_variant: Route, real_routes: &[Route]) {
@@ -183,14 +183,16 @@ fn test_config() {
     config.redis.url = "redis://localhost:6379".to_string();
     config.simulator.url = "http://localhost:8080".to_string();
     config.beacon_clients.push(BeaconClientConfig { url: "http://localhost:8080".to_string() });
-    config.broadcasters.push(BroadcasterConfig::BeaconClient(BeaconClientConfig { url: "http://localhost:8080".to_string() }));
+    config.broadcasters.push(BroadcasterConfig::BeaconClient(
+        BeaconClientConfig { url: "http://localhost:8080".to_string() }
+    ));
     config.network_config = NetworkConfig::Mainnet;
     config.logging =
         LoggingConfig::File { dir_path: "hello".to_string(), file_name: "test".to_string() };
     config.validator_preferences = ValidatorPreferences { censoring: true, trusted_builders: None };
     config.router_config = RouterConfig {
         enabled_routes: [
-            Route::GetValidators, 
+            Route::GetValidators,
             Route::SubmitBlock,
             Route::BuilderBidsReceived,
             Route::ValidatorRegistration,
@@ -199,7 +201,10 @@ fn test_config() {
             Route::ProposerPayloadDelivered,
             Route::RegisterValidators,
             Route::Status,
-            ].iter().cloned().collect(),
+        ]
+        .iter()
+        .cloned()
+        .collect(),
     };
     println!("{}", serde_yaml::to_string(&config).unwrap());
 }

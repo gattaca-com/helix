@@ -3,7 +3,6 @@ use ethereum_consensus::{
     deneb::{BlsPublicKey, Context},
 };
 
-
 #[derive(Clone, Default)]
 pub struct RelaySigningContext {
     pub public_key: BlsPublicKey,

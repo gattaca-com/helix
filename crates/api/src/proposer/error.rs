@@ -1,7 +1,8 @@
 use std::{error::Error, fmt};
 
 use axum::{
-    http::{self, StatusCode}, response::{IntoResponse, Response},
+    http::{self, StatusCode},
+    response::{IntoResponse, Response},
 };
 use ethereum_consensus::{
     primitives::{BlsPublicKey, ExecutionAddress, Hash32, Slot},
@@ -128,7 +129,7 @@ pub enum ProposerApiError {
     PayloadTypeMismatch,
 
     #[error("beacon-block and payload header mismatch")]
-    BlindedBlockAndPayloadHeaderMismatch ,
+    BlindedBlockAndPayloadHeaderMismatch,
 
     #[error("unsupported beacon chain version")]
     UnsupportedBeaconChainVersion,
@@ -152,16 +153,21 @@ pub enum ProposerApiError {
     BlindedBlobsBundleLengthMismatch,
 
     #[error("internal slot: {internal_slot} does not match slot duty slot: {slot_duty_slot}")]
-    InternalSlotMismatchesWithSlotDuty {internal_slot: u64, slot_duty_slot: u64},
+    InternalSlotMismatchesWithSlotDuty { internal_slot: u64, slot_duty_slot: u64 },
 
-    #[error("internal slot: {internal_slot} does not match blinded block slot: {blinded_block_slot}")]
-    InvalidBlindedBlockSlot {internal_slot: u64, blinded_block_slot: u64},
+    #[error(
+        "internal slot: {internal_slot} does not match blinded block slot: {blinded_block_slot}"
+    )]
+    InvalidBlindedBlockSlot { internal_slot: u64, blinded_block_slot: u64 },
 
     #[error("expected parent hash: {expected_parent_hash} does not match blinded block parent hash: {blinded_block_parent_hash}")]
-    InvalidBlindedBlockParentHash {expected_parent_hash: Hash32, blinded_block_parent_hash: Hash32},
+    InvalidBlindedBlockParentHash {
+        expected_parent_hash: Hash32,
+        blinded_block_parent_hash: Hash32,
+    },
 
     #[error("parent hash unknown for slot: {slot}")]
-    ParentHashUnknownForSlot {slot: u64},
+    ParentHashUnknownForSlot { slot: u64 },
 }
 
 impl IntoResponse for ProposerApiError {
@@ -304,19 +310,19 @@ impl IntoResponse for ProposerApiError {
             },
             ProposerApiError::InternalSlotMismatchesWithSlotDuty {internal_slot, slot_duty_slot} => {
                 (
-                    StatusCode::BAD_REQUEST, 
+                    StatusCode::BAD_REQUEST,
                     format!("internal slot: {internal_slot} does not match slot duty slot: {slot_duty_slot}"),
                 ).into_response()
             },
             ProposerApiError::InvalidBlindedBlockSlot {internal_slot, blinded_block_slot} => {
                 (
-                    StatusCode::BAD_REQUEST, 
+                    StatusCode::BAD_REQUEST,
                     format!("internal slot: {internal_slot} does not match blinded block slot: {blinded_block_slot}"),
                 ).into_response()
             },
             ProposerApiError::InvalidBlindedBlockParentHash {expected_parent_hash, blinded_block_parent_hash} => {
                 (
-                    StatusCode::BAD_REQUEST, 
+                    StatusCode::BAD_REQUEST,
                     format!("expected parent hash: {expected_parent_hash} does not match blinded block parent hash: {blinded_block_parent_hash}"),
                 ).into_response()
             },

@@ -25,7 +25,6 @@ impl FiberBroadcaster {
         _broadcast_validation: Option<BroadcastValidation>,
         _consensus_version: Fork,
     ) -> Result<(), BeaconClientError> {
-        
         match block.get_ssz_bytes_to_publish() {
             Ok(ssz_block) => match self.client.publish_block(ssz_block).await {
                 Ok(_) => Ok(()),
