@@ -63,7 +63,7 @@ impl FromRow for BidTrace {
             )?,
             gas_limit: parse_i32_to_u64(row.get::<&str, i32>("gas_limit"))?,
             gas_used: parse_i32_to_u64(row.get::<&str, i32>("gas_used"))?,
-            value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("submission_value"))?,
+            value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("submission_value")),
         })
     }
 }
@@ -125,7 +125,7 @@ impl<
             )?,
             base_fee_per_gas: parse_numeric_to_u256(
                 row.get::<&str, PostgresNumeric>("payload_base_fee_per_gas"),
-            )?,
+            ),
             block_hash: parse_bytes_to_hash::<32>(row.get::<&str, &[u8]>("payload_block_hash"))?,
             transactions: parse_vec_bytes_to_list_bytelist::<
                 MAX_BYTES_PER_TRANSACTION,
@@ -154,7 +154,7 @@ impl FromRow for BidSubmissionDocument {
                 )?,
                 gas_limit: parse_i32_to_u64(row.get::<&str, i32>("gas_limit"))?,
                 gas_used: parse_i32_to_u64(row.get::<&str, i32>("gas_used"))?,
-                value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("submission_value"))?,
+                value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("submission_value")),
             },
             num_txs: parse_i32_to_usize(row.get::<&str, i32>("num_txs"))?,
             timestamp: parse_i64_to_u64(row.get::<&str, i64>("submission_timestamp"))?,
@@ -213,7 +213,7 @@ impl FromRow for BuilderInfo {
         Self: Sized,
     {
         Ok(BuilderInfo {
-            collateral: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("collateral"))?,
+            collateral: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("collateral")),
             is_optimistic: parse_bool_to_bool(row.get::<&str, bool>("is_optimistic"))?,
             builder_id: row.get::<&str, Option<&str>>("builder_id").map(|s| s.to_string()),
         })
@@ -350,8 +350,8 @@ pub fn parse_bytes_to_signature(signature: &[u8]) -> Result<BlsSignature, Databa
     BlsSignature::try_from(signature).map_err(|e| DatabaseError::RowParsingError(Box::new(e)))
 }
 
-pub fn parse_numeric_to_u256(value: PostgresNumeric) -> Result<U256, DatabaseError> {
-    U256::try_from(value).map_err(|e| DatabaseError::RowParsingError(Box::new(e)))
+pub fn parse_numeric_to_u256(value: PostgresNumeric) -> U256 {
+    U256::from(value.0)
 }
 
 pub fn parse_rows<T: FromRow>(rows: Vec<tokio_postgres::Row>) -> Result<Vec<T>, DatabaseError> {

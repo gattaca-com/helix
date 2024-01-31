@@ -4,7 +4,7 @@ use ethereum_consensus::primitives::U256;
 use tokio_postgres::types::{FromSql, ToSql};
 
 #[derive(Debug, Clone)]
-pub struct PostgresNumeric(U256);
+pub struct PostgresNumeric(pub U256);
 
 impl From<U256> for PostgresNumeric {
     fn from(value: U256) -> Self {
