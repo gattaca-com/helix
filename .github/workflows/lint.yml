@@ -3,6 +3,7 @@ name: Rust Linting
 on:
   pull_request:
     branches: [ main, develop ]
+    types: [opened, synchronize, reopened]
 
 env:
   CARGO_TERM_COLOR: always
