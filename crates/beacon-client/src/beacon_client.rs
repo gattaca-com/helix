@@ -186,7 +186,7 @@ impl BeaconClientTrait for BeaconClient {
     }
 
     /// `publish_block` publishes the signed beacon block ssz-encoded via
-    /// https://ethereum.github.io/beacon-APIs/#/ValidatorRequiredApi/publishBlockV2
+    /// <https://ethereum.github.io/beacon-APIs/#/ValidatorRequiredApi/publishBlockV2>
     async fn publish_block<SB: Send + Sync + SimpleSerialize>(
         &self,
         block: Arc<SB>,

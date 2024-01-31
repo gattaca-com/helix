@@ -127,7 +127,7 @@ where
         api
     }
 
-    /// Implements this API: https://ethereum.github.io/builder-specs/#/Builder/status
+    /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/status>
     pub async fn status(
         Extension(_proposer_api): Extension<Arc<ProposerApi<A, DB, M>>>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
@@ -145,7 +145,7 @@ where
     ///
     /// If all registrations in the batch fail validation, an error is returned.
     ///
-    /// Implements this API: https://ethereum.github.io/builder-specs/#/Builder/registerValidator
+    /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/registerValidator>
     pub async fn register_validators(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M>>>,
         Json(registrations): Json<Vec<SignedValidatorRegistration>>,
@@ -284,7 +284,7 @@ where
     ///
     /// The function returns a JSON response containing the best bid if found.
     ///
-    /// Implements this API: https://ethereum.github.io/builder-specs/#/Builder/getHeader
+    /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/getHeader>
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M>>>,
         Path(GetHeaderParams { slot, parent_hash, public_key }): Path<GetHeaderParams>,
@@ -378,7 +378,7 @@ where
     /// 5. Stores the delivered payload information to database.
     /// 6. Returns the unblinded payload to proposer.
     ///
-    /// Implements this API: https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlock
+    /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlock>
     pub async fn get_payload(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M>>>,
         req: Request<Body>,

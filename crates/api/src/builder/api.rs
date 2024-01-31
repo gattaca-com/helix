@@ -152,7 +152,7 @@ where
         api
     }
 
-    /// Implements this API: https://flashbots.github.io/relay-specs/#/Builder/getValidators
+    /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/getValidators>
     pub async fn get_validators(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
     ) -> impl IntoResponse {
@@ -177,7 +177,7 @@ where
     /// 5. Simulates the block to validate the payment.
     /// 6. Saves the bid to auctioneer and db.
     ///
-    /// Implements this API: https://flashbots.github.io/relay-specs/#/Builder/submitBlock
+    /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
         req: Request<Body>,
