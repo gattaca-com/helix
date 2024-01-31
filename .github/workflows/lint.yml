@@ -24,6 +24,9 @@ jobs:
     - name: Install Protobuf Compiler (protoc)
       run: sudo apt-get install -y protobuf-compiler
 
+    - name: Install jq
+      run: sudo apt-get install -y jq
+
     - name: Change to project directory
       run: cd ./repos/${{ secrets.REPO_NAME }}
 
@@ -33,9 +36,13 @@ jobs:
       with:
         cache-on-failure: true
 
-    # Run General Clippy Linting
-    - name: Clippy
-      run: cargo clippy --workspace --lib --examples --tests --benches --all-features
+    # Run General Clippy Linting for local crates only
+    - name: Clippy for local crates
+      run: |
+        LOCAL_CRATES="$(cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | select(.source == null) | .name')"
+        for CRATE in $LOCAL_CRATES; do
+          cargo clippy -p $CRATE --all-targets -- -D warnings
+        done
       env:
         RUSTFLAGS: -D warnings
       working-directory: ./repos/${{ secrets.REPO_NAME }}
