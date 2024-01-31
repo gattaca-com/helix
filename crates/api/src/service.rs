@@ -145,14 +145,19 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
     for cfg in &config.broadcasters {
         match cfg {
             BroadcasterConfig::Fiber(cfg) => {
-                let result = timeout(INIT_BROADCASTER_TIMEOUT, FiberBroadcaster::new(cfg.url.clone(), cfg.api_key.clone(), cfg.encoding)).await;
+                let result =
+                    timeout(
+                        INIT_BROADCASTER_TIMEOUT,
+                        FiberBroadcaster::new(cfg.url.clone(), cfg.api_key.clone(), cfg.encoding),
+                    )
+                    .await;
                 match result {
                     Ok(Ok(broadcaster)) => {
                         broadcasters.push(Arc::new(BlockBroadcaster::Fiber(broadcaster)));
-                    },
+                    }
                     Ok(Err(err)) => {
                         error!(broadcaster = "Fiber", cfg = ?cfg, error = %err, "Initializing broadcaster failed");
-                    },
+                    }
                     Err(err) => {
                         error!(broadcaster = "Fiber", cfg = ?cfg, error = %err, "Initializing broadcaster timed out");
                     }
@@ -197,12 +202,11 @@ mod test {
                 api_key: "123".to_string(),
                 encoding: Encoding::Json,
             }),
-            BroadcasterConfig::BeaconClient(BeaconClientConfig {
-                url: "http://localhost:4040".to_string(),
-            }),
+            BroadcasterConfig::BeaconClient(
+                BeaconClientConfig { url: "http://localhost:4040".to_string() }
+            ),
         ];
         let broadcasters = init_broadcasters(&config).await;
         assert_eq!(broadcasters.len(), 1);
     }
-
 }

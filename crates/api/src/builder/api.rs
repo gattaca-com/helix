@@ -426,13 +426,15 @@ where
         }
 
         // Validate basic information about the payload
-        if let Err(err) = sanity_check_block_submission(
-            &payload,
-            payload.bid_trace(),
-            &next_duty,
-            &payload_attributes,
-            &api.chain_info,
-        ) {
+        if let Err(err) =
+            sanity_check_block_submission(
+                &payload,
+                payload.bid_trace(),
+                &next_duty,
+                &payload_attributes,
+                &api.chain_info,
+            )
+        {
             warn!(request_id = %request_id, error = %err, "failed sanity check");
             return Err(err);
         }
@@ -983,13 +985,15 @@ where
         trace: &mut SubmissionTrace,
         request_id: &Uuid,
     ) -> Result<(Arc<SignedBidSubmission>, bool), BuilderApiError> {
-        if let Err(err) = sanity_check_block_submission(
-            &payload,
-            payload.bid_trace(),
-            &next_duty,
-            payload_attributes,
-            &self.chain_info,
-        ) {
+        if let Err(err) =
+            sanity_check_block_submission(
+                &payload,
+                payload.bid_trace(),
+                &next_duty,
+                payload_attributes,
+                &self.chain_info,
+            )
+        {
             warn!(request_id = %request_id, error = %err, "failed sanity check");
             return Err(err);
         }
@@ -1710,7 +1714,6 @@ fn sanity_check_block_submission(
     payload_attributes: &PayloadAttributesUpdate,
     chain_info: &ChainInfo,
 ) -> Result<(), BuilderApiError> {
-
     let expected_timestamp = chain_info.genesis_time_in_secs + (bid_trace.slot * SECONDS_PER_SLOT);
     if payload.timestamp() != expected_timestamp {
         return Err(BuilderApiError::IncorrectTimestamp {
