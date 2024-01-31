@@ -156,7 +156,7 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
         request_id: Uuid,
     ) -> Result<bool, BlockSimError> {
 
-        if self.should_process_optimistically(&request, &builder_info).await {
+        if self.should_process_optimistically(&request, builder_info).await {
             debug!(
                 request_id=%request_id,
                 block_hash=%request.execution_payload.block_hash(),

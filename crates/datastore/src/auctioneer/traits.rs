@@ -1,4 +1,4 @@
-use std::sync::{atomic::AtomicBool, Arc};
+
 
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};

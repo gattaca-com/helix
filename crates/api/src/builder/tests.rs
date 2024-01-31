@@ -11,7 +11,7 @@ mod tests {
         test_utils::builder_api_app,
     };
     use core::panic;
-    use axum::{body::Body, http::{header, Method, Request, StatusCode, Uri}};
+    use axum::{body::Body, http::{header, Method, Request, Uri}};
     use ethereum_consensus::{
         builder::{SignedValidatorRegistration, ValidatorRegistration},
         configs::mainnet::CAPELLA_FORK_EPOCH,

@@ -16,7 +16,7 @@ mod housekeeper_tests {
     use helix_beacon_client::mock_multi_beacon_client::MockMultiBeaconClient;
     use helix_database::MockDatabaseService;
     use helix_common::{
-        api::builder_api::BuilderGetValidatorsResponseEntry, ValidatorSummary, chain_info::ChainInfo,
+        api::builder_api::BuilderGetValidatorsResponseEntry, ValidatorSummary,
     };
     use helix_datastore::MockAuctioneer;
     use tokio::task;
