@@ -12,11 +12,11 @@ pub struct FiberBroadcaster {
 }
 
 impl FiberBroadcaster {
-    pub async fn new(url: String, api_key: String, encoding: Encoding) -> Self {
+    pub async fn new(url: String, api_key: String, encoding: Encoding) -> Result<Self, BeaconClientError> {
+        tokio::time::sleep(tokio::time::Duration::from_secs(12)).await;
         let client = fiber::Client::connect(url, api_key)
-            .await
-            .expect("Error initializing Fibre broadcaster");
-        Self { _encoding: encoding, client }
+            .await.map_err(|err| BeaconClientError::BroadcasterInitError(format!("Fiber Err: {}", err.to_string())))?;
+        Ok(Self { _encoding: encoding, client })
     }
 
     pub async fn broadcast_block(
