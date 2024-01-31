@@ -192,7 +192,7 @@ impl GossipService for GrpcGossiperService {
         request: Request<grpc::BroadcastHeaderParams>,
     ) -> Result<Response<()>, Status> {
         let request = BroadcastHeaderParams::from_proto(request.into_inner());
-        if let Err(err) = self.builder_api_sender.send(GossipedMessage::Header(request)).await {
+        if let Err(err) = self.builder_api_sender.send(GossipedMessage::Header(Box::new(request))).await {
             error!(err = %err, "failed to send header to builder");
         }
         Ok(Response::new(()))
@@ -203,7 +203,7 @@ impl GossipService for GrpcGossiperService {
         request: Request<grpc::BroadcastPayloadParams>,
     ) -> Result<Response<()>, Status> {
         let request = BroadcastPayloadParams::from_proto(request.into_inner());
-        if let Err(err) = self.builder_api_sender.send(GossipedMessage::Payload(request)).await {
+        if let Err(err) = self.builder_api_sender.send(GossipedMessage::Payload(Box::new(request))).await {
             error!(err = %err, "failed to send payload to builder");
         }
         Ok(Response::new(()))

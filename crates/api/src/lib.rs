@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 pub mod builder;
 pub mod gossiper;
 pub mod integration_tests;

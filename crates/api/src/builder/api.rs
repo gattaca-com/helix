@@ -866,13 +866,13 @@ where
                 GossipedMessage::Header(header) => {
                     let api_clone = self.clone();
                     tokio::spawn(async move {
-                        api_clone.process_gossiped_header(header).await;
+                        api_clone.process_gossiped_header(*header).await;
                     });
                 }
                 GossipedMessage::Payload(payload) => {
                     let api_clone = self.clone();
                     tokio::spawn(async move {
-                        api_clone.process_gossiped_payload(payload).await;
+                        api_clone.process_gossiped_payload(*payload).await;
                     });
                 }
             }
