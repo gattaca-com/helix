@@ -10,8 +10,7 @@ mod data_api_tests {
         builder::SignedValidatorRegistration,
         primitives::BlsPublicKey,
     };
-    use hyper::StatusCode;
-    use reqwest::{Client, Response};
+    use reqwest::{Client, Response, StatusCode};
     use serial_test::serial;
     use std::{sync::Arc, time::Duration};
     use helix_database::MockDatabaseService;

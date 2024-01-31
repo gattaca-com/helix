@@ -1,8 +1,7 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::{
-    routing::{get, post},
-    Extension, Router,
+    error_handling::HandleErrorLayer, http::StatusCode, routing::{get, post}, BoxError, Extension, Router
 };
 use helix_common::chain_info::ChainInfo;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -13,6 +12,7 @@ use helix_datastore::MockAuctioneer;
 use helix_common::signing::RelaySigningContext;
 use helix_housekeeper::ChainUpdate;
 use helix_common::ValidatorPreferences;
+use tower::{buffer::BufferLayer, limit::RateLimitLayer, timeout::TimeoutLayer, ServiceBuilder};
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
@@ -122,8 +122,9 @@ pub fn builder_api_app() -> (
             slot_update_sender.clone(),
             gossip_receiver,
         ));
+    
 
-    let router = Router::new()
+    let mut router = Router::new()
         .route(
             &format!("{PATH_BUILDER_API}{PATH_GET_VALIDATORS}"),
             get(BuilderApi::<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>::get_validators),
@@ -134,6 +135,26 @@ pub fn builder_api_app() -> (
         )
         .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH))
         .layer(Extension(builder_api_service.clone()));
+
+    // Add Timeout-Layer
+    // Add Rate-Limit-Layer (buffered so we can clone the service)
+    // Add Error-handling layer
+    router = router
+    .layer(
+        ServiceBuilder::new()
+            .layer(HandleErrorLayer::new(|_: BoxError| async {
+                StatusCode::REQUEST_TIMEOUT
+            }))
+            .layer(TimeoutLayer::new(Duration::from_secs(5)))
+            .layer(HandleErrorLayer::new(|err: BoxError| async move {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Unhandled error: {}", err),
+                )
+            }))
+            .layer(BufferLayer::new(4096))
+            .layer(RateLimitLayer::new(100, Duration::from_secs(1)))
+    );
 
     (router, builder_api_service, slot_update_receiver)
 }

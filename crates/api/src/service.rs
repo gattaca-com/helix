@@ -20,6 +20,9 @@ use helix_common::{
     BroadcasterConfig, NetworkConfig, RelayConfig,
 };
 
+pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
 pub struct ApiService {}
 
 impl ApiService {
@@ -71,10 +74,15 @@ impl ApiService {
             context: chain_info.context.clone(),
         });
 
+        let client = reqwest::ClientBuilder::new()
+            .timeout(SIMULATOR_REQUEST_TIMEOUT)
+            .build()
+            .unwrap();
+
         let simulator = OptimisticSimulator::<RedisCache, PostgresDatabaseService>::new(
             auctioneer.clone(),
             db.clone(),
-            reqwest::Client::new(),
+            client,
             config.simulator.url,
         );
 
