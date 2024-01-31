@@ -206,6 +206,18 @@ where
             "payload decoded",
         );
 
+        // Verify the payload is for the current slot
+        if payload.slot() <= head_slot {
+            warn!(
+                request_id = %request_id,
+                "submission is for a past slot",
+            );
+            return Err(BuilderApiError::SubmissionForPastSlot {
+                current_slot: head_slot,
+                submission_slot: payload.slot(),
+            });
+        }
+
         // Handle duplicates.
         api.check_for_duplicate_block_hash(
             &block_hash,
@@ -371,6 +383,18 @@ where
             "header submission decoded",
         );
 
+        // Verify the payload is for the current slot
+        if payload.slot() <= head_slot {
+            warn!(
+                request_id = %request_id,
+                "submission is for a past slot",
+            );
+            return Err(BuilderApiError::SubmissionForPastSlot {
+                current_slot: head_slot,
+                submission_slot: payload.slot(),
+            });
+        }
+
         // Fetch builder info
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
 
@@ -407,7 +431,6 @@ where
             &payload,
             payload.bid_trace(),
             &next_duty,
-            head_slot,
             &payload_attributes,
             &api.chain_info,
         ) {
@@ -967,7 +990,6 @@ where
             &payload,
             payload.bid_trace(),
             &next_duty,
-            head_slot,
             payload_attributes,
             &self.chain_info,
         ) {
@@ -1679,7 +1701,6 @@ pub async fn decode_header_submission(
     Ok((header, is_cancellations_enabled))
 }
 
-/// - Validates the slot timing against the current head slot.
 /// - Validates the expected block.timestamp.
 /// - Ensures that the fee recipients in the payload and proposer duty match.
 /// - Ensures that the slot in the payload and payload attributes match.
@@ -1689,16 +1710,9 @@ fn sanity_check_block_submission(
     payload: &impl BidSubmission,
     bid_trace: &BidTrace,
     next_duty: &BuilderGetValidatorsResponseEntry,
-    head_slot: u64,
     payload_attributes: &PayloadAttributesUpdate,
     chain_info: &ChainInfo,
 ) -> Result<(), BuilderApiError> {
-    if payload.slot() <= head_slot {
-        return Err(BuilderApiError::SubmissionForPastSlot {
-            current_slot: head_slot,
-            submission_slot: payload.slot(),
-        });
-    }
 
     let expected_timestamp = chain_info.genesis_time_in_secs + (bid_trace.slot * SECONDS_PER_SLOT);
     if payload.timestamp() != expected_timestamp {

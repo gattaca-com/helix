@@ -49,13 +49,13 @@ pub struct RedisConfig {
     pub url: String,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum BroadcasterConfig {
     Fiber(FiberConfig),
     BeaconClient(BeaconClientConfig),
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct FiberConfig {
     pub url: String,
     pub api_key: String,
@@ -67,7 +67,7 @@ pub struct SimulatorConfig {
     pub url: String,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BeaconClientConfig {
     pub url: String,
 }
