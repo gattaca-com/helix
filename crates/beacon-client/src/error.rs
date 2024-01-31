@@ -42,7 +42,10 @@ pub enum BeaconClientError {
     SszSerializationError(#[from] ssz::prelude::SerializeError),
 
     #[error("Error publishing block: {0}")]
-    BlockPublishError(String)
+    BlockPublishError(String),
+
+    #[error("Error initializing broadcaster: {0}")]
+    BroadcasterInitError(String)
 }
 
 impl IntoResponse for BeaconClientError {

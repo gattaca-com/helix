@@ -1,8 +1,8 @@
 use std::{env, sync::Arc, time::Duration};
 
 use ethereum_consensus::crypto::SecretKey;
-use tokio::time::sleep;
-use tracing::info;
+use tokio::time::{sleep, timeout};
+use tracing::{error, info};
 
 use crate::builder::optimistic_simulator::OptimisticSimulator;
 use crate::gossiper::grpc_gossiper::GrpcGossiperClientManager;
@@ -22,6 +22,7 @@ use helix_common::{
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const INIT_BROADCASTER_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct ApiService {}
 
@@ -145,9 +146,18 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
     for cfg in &config.broadcasters {
         match cfg {
             BroadcasterConfig::Fiber(cfg) => {
-                broadcasters.push(Arc::new(BlockBroadcaster::Fiber(
-                    FiberBroadcaster::new(cfg.url.clone(), cfg.api_key.clone(), cfg.encoding).await,
-                )));
+                let result = timeout(INIT_BROADCASTER_TIMEOUT, FiberBroadcaster::new(cfg.url.clone(), cfg.api_key.clone(), cfg.encoding)).await;
+                match result {
+                    Ok(Ok(broadcaster)) => {
+                        broadcasters.push(Arc::new(BlockBroadcaster::Fiber(broadcaster)));
+                    },
+                    Ok(Err(err)) => {
+                        error!(broadcaster = "Fiber", cfg = ?cfg, error = %err, "Initializing broadcaster failed");
+                    },
+                    Err(err) => {
+                        error!(broadcaster = "Fiber", cfg = ?cfg, error = %err, "Initializing broadcaster timed out");
+                    }
+                }
             }
             BroadcasterConfig::BeaconClient(cfg) => {
                 broadcasters.push(Arc::new(BlockBroadcaster::BeaconClient(
@@ -163,6 +173,9 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
 #[cfg(test)]
 mod test {
 
+    use helix_common::{BeaconClientConfig, FiberConfig};
+    use helix_utils::request_encoding::Encoding;
+
     use super::*;
     use std::convert::TryFrom;
 
@@ -175,4 +188,22 @@ mod test {
         let public_key = signing_key.public_key();
         assert_eq!(format!("{:?}", public_key), "0x99c8b06e7626f20754156946717a3be789c10bcd1979536dbf71003c58475b489ab3982e85d7ed0b7b5ad1cbc381d65d");
     }
+
+    #[tokio::test]
+    async fn test_init_broadcasters_timeout_triggered() {
+        let mut config = RelayConfig::default();
+        config.broadcasters = vec![
+            BroadcasterConfig::Fiber(FiberConfig {
+                url: "http://localhost:4040".to_string(),
+                api_key: "123".to_string(),
+                encoding: Encoding::Json,
+            }),
+            BroadcasterConfig::BeaconClient(BeaconClientConfig {
+                url: "http://localhost:4040".to_string(),
+            }),
+        ];
+        let broadcasters = init_broadcasters(&config).await;
+        assert_eq!(broadcasters.len(), 1);
+    }
+
 }
