@@ -53,7 +53,7 @@ jobs:
 
     # Check Documentation
     - name: Docs
-      run: cargo docs --document-private-items
+      run: cargo doc --workspace --all-features --no-deps  
       env:
         RUSTDOCFLAGS: --cfg docsrs --show-type-layout --generate-link-to-definition --enable-index-page -Zunstable-options -D warnings
       working-directory: ./repos/${{ secrets.REPO_NAME }}
