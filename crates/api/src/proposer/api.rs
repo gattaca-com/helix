@@ -719,7 +719,7 @@ where
     ///
     /// - Compares the proposer index of the block with the expected index for the current slot.
     /// - Compares the api `head_slot` with the `slot_duty` slot.
-    /// - Compares the `head_slot` with the signed blinded block slot.
+    /// - Compares the `slot_duty.slot` with the signed blinded block slot.
     /// - Compares the blinded block parent hash with our internal parent hash.
     async fn validate_proposal_coordinate(
         &self,
@@ -737,21 +737,21 @@ where
             });
         }
 
-        if head_slot != slot_duty.slot {
+        if head_slot + 1 != slot_duty.slot {
             return Err(ProposerApiError::InternalSlotMismatchesWithSlotDuty { 
                 internal_slot: head_slot, 
                 slot_duty_slot: slot_duty.slot,
              });
         }
 
-        if head_slot != signed_blinded_block.message().slot() {
+        if slot_duty.slot != signed_blinded_block.message().slot() {
             return Err(ProposerApiError::InvalidBlindedBlockSlot {
-                internal_slot: head_slot,
+                internal_slot: slot_duty.slot,
                 blinded_block_slot: signed_blinded_block.message().slot(),
             });
         }
 
-        if let Some(expected_parent_hash) = self.parent_hash_map.get(&head_slot) {
+        if let Some(expected_parent_hash) = self.parent_hash_map.get(&slot_duty.slot) {
             let blinded_block_parent_hash = signed_blinded_block.message().body().execution_payload_header().parent_hash().clone();
             if expected_parent_hash.value() != &blinded_block_parent_hash {
                 return Err(ProposerApiError::InvalidBlindedBlockParentHash {
@@ -760,7 +760,7 @@ where
                 });
             }
         } else {
-            return Err(ProposerApiError::ParentHashUnknownForSlot { slot: head_slot });
+            return Err(ProposerApiError::ParentHashUnknownForSlot { slot: slot_duty.slot });
         }
 
         Ok(())
@@ -1088,7 +1088,7 @@ where
         self.parent_hash_map.retain(|key, _| *key >= head_slot.saturating_sub(2));
 
         // Save new one
-        self.parent_hash_map.insert(head_slot, payload_attributes.parent_hash);
+        self.parent_hash_map.insert(payload_attributes.slot, payload_attributes.parent_hash);
     }
 }
 
