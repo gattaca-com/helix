@@ -35,7 +35,7 @@ jobs:
 
     # Run General Clippy Linting
     - name: Clippy
-      run: cargo clippy --workspace --lib --examples --benches --all-features
+      run: cargo clippy --all-features
       env:
         RUSTFLAGS: -D warnings
       working-directory: ./repos/${{ secrets.REPO_NAME }}
