@@ -110,7 +110,7 @@ mod simulator_tests {
         let x = "helllooooo";
 
         let formatted = format!("{x:?}");
-        let formatted_2 = format!("{x}");
+        let formatted_2 = x.to_string();
 
         println!("{formatted}");
         println!("{formatted_2}");

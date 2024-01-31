@@ -60,7 +60,7 @@ impl<'a> FromSql<'a> for PostgresNumeric {
             value = value * n_base + U256::from(read_two_bytes(raw, &mut offset)?);
         }
 
-        value = value * n_base.pow(U256::from(weight));
+        value *= n_base.pow(U256::from(weight));
 
         Ok(PostgresNumeric(value))
     }

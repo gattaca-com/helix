@@ -1,5 +1,9 @@
+use axum::error_handling::HandleErrorLayer;
+use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Extension, Router};
+use tower::timeout::TimeoutLayer;
+use tower::{BoxError, ServiceBuilder};
 use tower_http::limit::RequestBodyLimitLayer;
 use std::sync::Arc;
 use helix_beacon_client::beacon_client::BeaconClient;
@@ -11,6 +15,7 @@ use helix_common::{Route, RouterConfig};
 use crate::builder::api::{MAX_HEADER_LENGTH, MAX_PAYLOAD_LENGTH};
 use crate::gossiper::grpc_gossiper::GrpcGossiperClientManager;
 use crate::proposer::api::{MAX_BLINDED_BLOCK_LENGTH, MAX_VAL_REGISTRATIONS_LENGTH};
+use crate::service::API_REQUEST_TIMEOUT;
 use crate::{
     builder::{
         api::BuilderApi, optimistic_simulator::OptimisticSimulator,
@@ -128,7 +133,17 @@ pub fn build_router(
         }
     }
 
-    // Add layers
+    // Add Timeout-Layer
+    // Add Error-handling layer
+    router = router.layer(
+        ServiceBuilder::new()
+            .layer(HandleErrorLayer::new(|_: BoxError| async {
+                StatusCode::REQUEST_TIMEOUT
+            }))
+            .layer(TimeoutLayer::new(API_REQUEST_TIMEOUT))
+    );
+
+    // Add Extension layers
     router = router
         .layer(Extension(builder_api))
         .layer(Extension(proposer_api))

@@ -1,8 +1,9 @@
 use std::{
-    collections::HashMap, sync::{
+    sync::{
         atomic::{self, AtomicU64},
         Arc,
-    }, time::{Duration, SystemTime, UNIX_EPOCH}
+    }, 
+    time::{Duration, SystemTime, UNIX_EPOCH}
 };
 
 use axum::{
@@ -56,7 +57,7 @@ use crate::proposer::{
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
 pub(crate) const MAX_BLINDED_BLOCK_LENGTH: usize = 1024 * 1024 * 1;
-pub(crate) const MAX_VAL_REGISTRATIONS_LENGTH: usize = 1024 * 1024 * 1;
+pub(crate) const MAX_VAL_REGISTRATIONS_LENGTH: usize = 425 * 10_000; // 425 bytes per registration (json) * 10,000 registrations
 
 #[derive(Clone)]
 pub struct ProposerApi<A, DB, M>

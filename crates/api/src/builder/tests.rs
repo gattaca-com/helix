@@ -3,15 +3,13 @@ mod tests {
 
     // +++ IMPORTS +++
     use crate::{
-        builder::mock_simulator::MockSimulator,
-        builder::{
+        builder::mock_simulator::MockSimulator, builder::{
             api::{BuilderApi, MAX_PAYLOAD_LENGTH, decode_payload, decode_header_submission},
             PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK,
-        },
-        test_utils::builder_api_app,
+        }, service::API_REQUEST_TIMEOUT, test_utils::builder_api_app
     };
     use core::panic;
-    use axum::{body::Body, http::{header, Method, Request, StatusCode, Uri}};
+    use axum::http::{header, Method, Request, Uri};
     use ethereum_consensus::{
         builder::{SignedValidatorRegistration, ValidatorRegistration},
         configs::mainnet::CAPELLA_FORK_EPOCH,
@@ -19,13 +17,15 @@ mod tests {
         primitives::{BlsPublicKey, BlsSignature},
         ssz::{prelude::*, self}, Fork, types::mainnet::ExecutionPayloadHeader,
     };
+    use futures::{stream::FuturesOrdered, Future};
     use helix_beacon_client::types::PayloadAttributes;
     use rand::Rng;
     use reqwest::{Client, Response};
     use reth_primitives::hex;
     use serde_json::json;
     use serial_test::serial;
-    use std::{io::Write, sync::Arc, time::Duration, str::FromStr};
+    use tonic::transport::Body;
+    use std::{convert::Infallible, future::pending, io::Write, pin::Pin, str::FromStr, sync::Arc, time::Duration};
     use ethereum_consensus::types::mainnet::ExecutionPayload;
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
@@ -350,7 +350,7 @@ mod tests {
         gzip_encoding: bool,
         ssz_content_type: bool,
         payload: &[u8],
-    ) -> Request<Body> {
+    ) -> Request<axum::body::Body> {
         // Construct the URI with cancellations query parameter
         let uri_str = if cancellations_enabled {
             "http://example.com?cancellations=1"
@@ -361,7 +361,7 @@ mod tests {
     
         // Construct the request method and body
         let method = Method::POST;
-        let body = Body::from(payload.to_vec());
+        let body = axum::body::Body::from(payload.to_vec());
     
         // Create the request builder
         let mut request_builder = Request::builder()
@@ -1202,5 +1202,63 @@ mod tests {
 
         // Shut down the server
         let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_submit_block_timeout_triggered() {
+        // Start the server
+        let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+
+        // Send slot & payload attributes updates
+        let slot_update_sender = slot_update_receiver.recv().await.unwrap();
+        send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
+        send_dummy_payload_attributes_update(slot_update_sender, None).await;
+
+        // Prepare the request
+        let cancellations_enabled = false;
+        let req_url = format!(
+            "{}{}{}{}",
+            http_config.base_url(),
+            PATH_BUILDER_API,
+            PATH_SUBMIT_BLOCK,
+            if cancellations_enabled { "?cancellations=1" } else { "" }
+        );
+
+        let mut body : FuturesOrdered<Pin<Box<dyn Future< Output = Result<Vec<u8>, Infallible>> + Send>>> = FuturesOrdered::new();
+        body.push_back(Box::pin(async move {
+            // Stream max allowed payload length bytes
+            Ok::<_, Infallible>(vec![0u8;MAX_PAYLOAD_LENGTH])
+        }));
+        body.push_back(Box::pin(async move {
+            // never complete the request
+            pending::<()>().await;
+            Ok::<_, Infallible>(vec![])
+        }));
+       let body = Body::wrap_stream(body);
+        
+        let test_timeout = API_REQUEST_TIMEOUT + Duration::from_secs(3);
+        let timeout_result = tokio::time::timeout(test_timeout, async {
+            // Send request by streaming the malicious body
+            let resp = reqwest::Client::new()
+                .post(req_url.as_str())
+                .header("accept", "*/*")
+                .header("Content-Type", "application/json")
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+
+            assert_eq!(resp.status(), reqwest::StatusCode::REQUEST_TIMEOUT);
+
+            // Shut down the server
+            let _ = tx.send(());
+        })
+        .await;
+
+        // Check if the test timed out
+        if timeout_result.is_err() {
+            panic!("Test timed out");
+        }
     }
 }

@@ -45,7 +45,7 @@ use crate::{
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 4;
-pub(crate) const MAX_HEADER_LENGTH: usize = 1024 * 1024 * 1;
+pub(crate) const MAX_HEADER_LENGTH: usize = 1024 * 1024;
 
 #[derive(Clone)]
 pub struct BuilderApi<A, DB, S, G>
@@ -1015,9 +1015,9 @@ where
             }
 
             if let Some(builder_id) = &builder_info.builder_id {
-                return trusted_builders.contains(builder_id);
+                trusted_builders.contains(builder_id)
             } else {
-                return false;
+                false
             }
         } else {
             true

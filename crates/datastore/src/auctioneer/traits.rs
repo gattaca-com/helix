@@ -1,4 +1,4 @@
-use std::sync::{atomic::AtomicBool, Arc};
+
 
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
@@ -155,5 +155,5 @@ pub trait Auctioneer: Send + Sync + Clone {
     
     /// Try to acquire or renew leadership for the housekeeper.
     /// Returns: true if the housekeeper is the leader, false if it isn't.
-    async fn try_acquire_or_renew_leadership(&self, leader: bool) -> bool;
+    async fn try_acquire_or_renew_leadership(&self, leader_id: &str) -> bool;
 }

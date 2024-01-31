@@ -5,6 +5,30 @@ use ethereum_consensus::signing::compute_signing_root;
 use rand::thread_rng;
 use helix_common::chain_info::ChainInfo;
 
+pub fn gen_signed_vr() -> SignedValidatorRegistration {
+    let mut rng = thread_rng();
+    let sk = SecretKey::random(&mut rng).unwrap();
+    let pk = sk.public_key();
+
+    let mut vr = ValidatorRegistration {
+        fee_recipient: Default::default(),
+        gas_limit: 0,
+        timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+        public_key: pk,
+    };
+
+    let fk = ChainInfo::for_holesky();
+    let domain = compute_builder_domain(&fk.context).unwrap();
+    let csr = compute_signing_root(&mut vr, domain).unwrap();
+
+    let sig = sk.sign(csr.as_ref());
+
+    SignedValidatorRegistration {
+        message: vr,
+        signature: sig,
+    }
+}
+
 
 #[cfg(test)]
 mod proposer_api_tests {
@@ -19,9 +43,8 @@ mod proposer_api_tests {
         primitives::{BlsPublicKey, BlsSignature},
         ssz::{prelude::*}, capella::{mainnet::{BlindedBeaconBlockBody, ExecutionPayloadHeader}}, deneb::SyncAggregate, bellatrix,
     };
-    use hyper::StatusCode;
     use rand::{Rng};
-    use reqwest::{Client, Response};
+    use reqwest::{Client, Response, StatusCode};
     use reth_primitives::hex;
     
     use serial_test::serial;
@@ -843,29 +866,5 @@ mod proposer_api_tests {
         let mut x = gen_signed_vr();
 
         prop_api.validate_registration(&mut x).unwrap();
-    }
-}
-
-pub fn gen_signed_vr() -> SignedValidatorRegistration {
-    let mut rng = thread_rng();
-    let sk = SecretKey::random(&mut rng).unwrap();
-    let pk = sk.public_key();
-
-    let mut vr = ValidatorRegistration {
-        fee_recipient: Default::default(),
-        gas_limit: 0,
-        timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
-        public_key: pk,
-    };
-
-    let fk = ChainInfo::for_holesky();
-    let domain = compute_builder_domain(&fk.context).unwrap();
-    let csr = compute_signing_root(&mut vr, domain).unwrap();
-
-    let sig = sk.sign(csr.as_ref());
-
-    SignedValidatorRegistration {
-        message: vr,
-        signature: sig,
     }
 }
