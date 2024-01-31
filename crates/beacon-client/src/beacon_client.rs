@@ -9,14 +9,17 @@ use tokio::{sync::mpsc::Sender, time::sleep};
 use tracing::{error, warn};
 use url::Url;
 
-use helix_common::{ProposerDuty, ValidatorSummary, signed_proposal::VersionedSignedProposal, bellatrix::SimpleSerialize};
+use helix_common::{
+    bellatrix::SimpleSerialize, signed_proposal::VersionedSignedProposal, ProposerDuty,
+    ValidatorSummary,
+};
 
 use crate::{
     error::{ApiError, BeaconClientError},
     traits::BeaconClientTrait,
     types::{
-        ApiResult, BeaconResponse, BroadcastValidation, HeadEventData,
-        PayloadAttributesEvent, StateId, SyncStatus,
+        ApiResult, BeaconResponse, BroadcastValidation, HeadEventData, PayloadAttributesEvent,
+        StateId, SyncStatus,
     },
 };
 
@@ -36,10 +39,8 @@ impl BeaconClient {
 
     pub fn from_endpoint_str(endpoint: &str) -> Self {
         let endpoint = Url::parse(endpoint).unwrap();
-        let client = reqwest::ClientBuilder::new()
-            .timeout(BEACON_CLIENT_REQUEST_TIMEOUT)
-            .build()
-            .unwrap();
+        let client =
+            reqwest::ClientBuilder::new().timeout(BEACON_CLIENT_REQUEST_TIMEOUT).build().unwrap();
         Self::new(client, endpoint)
     }
 
@@ -124,7 +125,7 @@ impl BeaconClient {
         broadcast_validation: Option<BroadcastValidation>,
         consensus_version: ethereum_consensus::Fork,
     ) -> Result<(), BeaconClientError> {
-        self.publish_block(block, broadcast_validation, consensus_version).await?;       
+        self.publish_block(block, broadcast_validation, consensus_version).await?;
         Ok(())
     }
 
@@ -194,8 +195,8 @@ impl BeaconClientTrait for BeaconClient {
     ) -> Result<u16, BeaconClientError> {
         let target = self.endpoint.join("eth/v2/beacon/blocks")?;
         let body_bytes = ssz::prelude::serialize(block.as_ref())?;
-        let mut request =
-            self.http
+        let mut request = self
+            .http
             .post(target)
             .body(body_bytes)
             .header(CONSENSUS_VERSION_HEADER, fork.to_string())

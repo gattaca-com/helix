@@ -121,7 +121,6 @@ impl ToSql for PostgresNumeric {
             out.put_i16(*digit);
         }
 
-
         Ok(tokio_postgres::types::IsNull::No)
     }
 
@@ -169,9 +168,7 @@ mod tests {
 
             let reconstructed_value = digits
                 .iter()
-                .fold(U256::from(0), |acc, digit| {
-                    acc * U256::from(NBASE) + U256::from(*digit)
-                });
+                .fold(U256::from(0), |acc, digit| acc * U256::from(NBASE) + U256::from(*digit));
 
             assert_eq!(value, reconstructed_value);
         }
@@ -191,6 +188,4 @@ mod tests {
             assert_eq!(value, reconstructed_value.0);
         }
     }
-
 }
-

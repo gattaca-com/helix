@@ -8,10 +8,12 @@ use ethereum_consensus::{
 };
 use serde::{Deserialize, Serialize};
 
-use helix_common::{api::data_api::ReceivedBlocksResponse, bid_submission::BidSubmission};
 use helix_common::{
-    api::{builder_api::BuilderGetValidatorsResponseEntry, data_api::DeliveredPayloadsResponse},
-    bid_submission::{BidTrace, SignedBidSubmission},
+    api::{
+        builder_api::BuilderGetValidatorsResponseEntry,
+        data_api::{DeliveredPayloadsResponse, ReceivedBlocksResponse},
+    },
+    bid_submission::{BidSubmission, BidTrace, SignedBidSubmission},
     builder_info::BuilderInfo,
     simulator::BlockSimError,
     GetPayloadTrace, SubmissionTrace,

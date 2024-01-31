@@ -5,14 +5,11 @@ use ethereum_consensus::primitives::Root;
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::mpsc::Sender;
 
-use helix_common::{ProposerDuty, ValidatorSummary, bellatrix::SimpleSerialize};
+use helix_common::{bellatrix::SimpleSerialize, ProposerDuty, ValidatorSummary};
 
 use crate::{
     error::BeaconClientError,
-    types::{
-        BroadcastValidation, HeadEventData, PayloadAttributesEvent,
-        StateId, SyncStatus,
-    },
+    types::{BroadcastValidation, HeadEventData, PayloadAttributesEvent, StateId, SyncStatus},
 };
 
 #[async_trait]

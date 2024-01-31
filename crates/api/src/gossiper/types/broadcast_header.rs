@@ -1,8 +1,8 @@
 use ethereum_consensus::{
-    primitives::{Hash32, BlsPublicKey},
+    primitives::{BlsPublicKey, Hash32},
     ssz,
 };
-use helix_common::{SignedBuilderBid, bid_submission::BidTrace};
+use helix_common::{bid_submission::BidTrace, SignedBuilderBid};
 
 use crate::grpc;
 
@@ -19,7 +19,6 @@ pub struct BroadcastHeaderParams {
 }
 
 impl BroadcastHeaderParams {
-
     // TODO: impl SSZ serialisation for SignedBuilderBid instead of JSON
     pub fn from_proto(proto_params: grpc::BroadcastHeaderParams) -> Self {
         Self {
@@ -27,13 +26,15 @@ impl BroadcastHeaderParams {
             bid_trace: ssz::prelude::deserialize(&proto_params.bid_trace).unwrap(),
             slot: proto_params.slot,
             parent_hash: Hash32::try_from(proto_params.parent_hash.as_slice()).unwrap(),
-            proposer_pub_key: BlsPublicKey::try_from(proto_params.proposer_pub_key.as_slice()).unwrap(),
-            builder_pub_key: BlsPublicKey::try_from(proto_params.builder_pub_key.as_slice()).unwrap(),
+            proposer_pub_key: BlsPublicKey::try_from(proto_params.proposer_pub_key.as_slice())
+                .unwrap(),
+            builder_pub_key: BlsPublicKey::try_from(proto_params.builder_pub_key.as_slice())
+                .unwrap(),
             is_cancellations_enabled: proto_params.is_cancellations_enabled,
             on_receive: proto_params.on_receive,
         }
     }
-    
+
     // TODO: impl SSZ serialisation for SignedBuilderBid instead of JSON
     pub fn to_proto(&self) -> grpc::BroadcastHeaderParams {
         grpc::BroadcastHeaderParams {

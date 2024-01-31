@@ -1,4 +1,6 @@
-pub use ethereum_consensus::{builder::SignedValidatorRegistration, capella::mainnet as spec, serde::as_str};
+pub use ethereum_consensus::{
+    builder::SignedValidatorRegistration, capella::mainnet as spec, serde::as_str,
+};
 
 use ethereum_consensus::{
     primitives::{BlsPublicKey, BlsSignature, U256},

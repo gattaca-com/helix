@@ -1,9 +1,7 @@
-use ethereum_consensus::{
-    builder::SignedValidatorRegistration, primitives::Slot, serde::as_str,
-};
+use ethereum_consensus::{builder::SignedValidatorRegistration, primitives::Slot, serde::as_str};
 use serde::{Deserialize, Serialize};
 
-use crate::{ValidatorPreferences, api::proposer_api::ValidatorRegistrationInfo};
+use crate::{api::proposer_api::ValidatorRegistrationInfo, ValidatorPreferences};
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct BuilderGetValidatorsResponseEntry {

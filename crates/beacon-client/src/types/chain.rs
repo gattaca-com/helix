@@ -1,8 +1,7 @@
 use ethereum_consensus::{
     deneb::Withdrawal,
     primitives::{Bytes32, Root, Slot},
-    serde::as_str,
-    serde::try_bytes_from_hex_str,
+    serde::{as_str, try_bytes_from_hex_str},
 };
 use serde::{Deserialize, Serialize};
 

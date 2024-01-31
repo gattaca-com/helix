@@ -8,15 +8,12 @@ use ethereum_consensus::{
     phase0::Validator,
     primitives::{BlsPublicKey, Root},
 };
-use helix_common::{ProposerDuty, ValidatorStatus, ValidatorSummary, bellatrix::SimpleSerialize};
+use helix_common::{bellatrix::SimpleSerialize, ProposerDuty, ValidatorStatus, ValidatorSummary};
 use tokio::sync::mpsc::Sender;
 
 use crate::{
     error::BeaconClientError,
-    types::{
-        BroadcastValidation, HeadEventData, PayloadAttributesEvent,
-        StateId, SyncStatus,
-    },
+    types::{BroadcastValidation, HeadEventData, PayloadAttributesEvent, StateId, SyncStatus},
     MultiBeaconClientTrait,
 };
 
@@ -94,16 +91,10 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
         self.proposer_duties_has_been_read.store(true, std::sync::atomic::Ordering::Relaxed);
         Ok((
             Root::default(),
-            vec![ProposerDuty {
-                public_key: BlsPublicKey::default(),
-                validator_index: 1,
-                slot: 19,
-            }],
+            vec![ProposerDuty { public_key: BlsPublicKey::default(), validator_index: 1, slot: 19 }],
         ))
     }
-    async fn publish_block<
-    VersionedSignedProposal: SimpleSerialize + Send + Sync + 'static,
-    >(
+    async fn publish_block<VersionedSignedProposal: SimpleSerialize + Send + Sync + 'static>(
         &self,
         _block: Arc<VersionedSignedProposal>,
         _broadcast_validation: Option<BroadcastValidation>,
