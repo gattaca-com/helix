@@ -8,7 +8,7 @@ use ethereum_consensus::{
 };
 use helix_common::{bid_submission::BidSubmission, versioned_payload::PayloadAndBlobs, ProposerInfo};
 use helix_common::bid_submission::v2::header_submission::SignedHeaderSubmission;
-use redis::{AsyncCommands, RedisResult, Value};
+use redis::{AsyncCommands, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::error;
 
@@ -39,6 +39,13 @@ use crate::{
 
 const BID_CACHE_EXPIRY_S: usize = 45;
 const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 45_000;
+
+const RENEW_SCRIPT: &str = r#"
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('set', KEYS[1], ARGV[1], 'PX', ARGV[2], 'XX')
+end
+return nil
+"#;
 
 #[derive(Clone)]
 pub struct RedisCache {
@@ -160,6 +167,7 @@ impl RedisCache {
     async fn set_lock(
         &self,
         key: &str,
+        id: &str,
         expiry: usize,
     ) -> bool {    
         let mut conn = match self.pool.get().await {
@@ -169,17 +177,17 @@ impl RedisCache {
 
         let result: RedisResult<Value> = redis::cmd("SET")
             .arg(key)
-            .arg(1)
+            .arg(id)
             .arg("NX")
             .arg("PX")
             .arg(expiry)
             .query_async(&mut conn)
             .await;
 
-        match result {
-            Ok(Value::Okay) => true,
-            Ok(_) | Err(_) => false,
-        }
+            match result {
+                Ok(Value::Okay) => true,
+                Ok(_) | Err(_) => false,
+            }
     }
 
     /// Attempts to renew an existing lock in Redis with a specified key and new expiry time.
@@ -193,6 +201,7 @@ impl RedisCache {
     async fn renew_lock(
         &self,
         key: &str,
+        id: &str,
         expiry: usize,
     ) -> bool {
         let mut conn = match self.pool.get().await {
@@ -200,14 +209,8 @@ impl RedisCache {
             Err(_) => return false,
         };
 
-        let result: RedisResult<Value> = redis::cmd("SET")
-            .arg(key)
-            .arg(1)
-            .arg("XX")
-            .arg("PX")
-            .arg(expiry)
-            .query_async(&mut conn)
-            .await;
+        let script = Script::new(RENEW_SCRIPT);
+        let result = script.key(&[key]).arg(&[id, &expiry.to_string()]).invoke_async(&mut conn).await;
 
         match result {
             Ok(Value::Okay) => true,
@@ -880,14 +883,12 @@ impl Auctioneer for RedisCache {
     /// - `false` if it fails to renew or acquire the lock.
     ///
     /// Note: This function assumes that the caller manages and passes the current leadership status.
-    async fn try_acquire_or_renew_leadership(&self, leader: bool) -> bool {
-        if leader {
-            if self.renew_lock(HOUSEKEEPER_LOCK_KEY, HOUSEKEEPER_LOCK_EXPIRY_MS).await {
-                return true;
-            }
+    async fn try_acquire_or_renew_leadership(&self, leader_id: &str) -> bool {
+        if self.renew_lock(HOUSEKEEPER_LOCK_KEY, leader_id, HOUSEKEEPER_LOCK_EXPIRY_MS).await {
+            return true;
         }
 
-        return self.set_lock(HOUSEKEEPER_LOCK_KEY, HOUSEKEEPER_LOCK_EXPIRY_MS).await;
+        return self.set_lock(HOUSEKEEPER_LOCK_KEY, leader_id, HOUSEKEEPER_LOCK_EXPIRY_MS).await;
     }
 }
 
@@ -1878,5 +1879,37 @@ mod tests {
         let seen_result_again = cache.seen_or_insert_block_hash(&block_hash, slot, &Hash32::default(), &BlsPublicKey::default()).await;
         assert!(seen_result_again.is_ok(), "Failed to check if block hash was seen after insert");
         assert!(seen_result_again.unwrap(), "Block hash was not seen after insert");
+    }
+
+    #[tokio::test]
+    async fn test_can_aquire_lock() {
+        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        cache.clear_cache().await.unwrap();
+        assert!(cache.try_acquire_or_renew_leadership("leader").await)
+    }
+
+    #[tokio::test]
+    async fn test_others_cant_aquire_lock_if_held() {
+        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        cache.clear_cache().await.unwrap();
+        assert!(cache.try_acquire_or_renew_leadership("leader").await);
+        assert!(!cache.try_acquire_or_renew_leadership("others").await);
+    }
+
+    #[tokio::test]
+    async fn test_can_renew_lock() {
+        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        cache.clear_cache().await.unwrap();
+        assert!(cache.try_acquire_or_renew_leadership("leader").await);
+        assert!(cache.try_acquire_or_renew_leadership("leader").await);
+    }
+
+    #[tokio::test]
+    async fn test_others_cannot_renew() {
+        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        cache.clear_cache().await.unwrap();
+        assert!(cache.try_acquire_or_renew_leadership("leader").await);
+        assert!(cache.try_acquire_or_renew_leadership("leader").await);
+        assert!(!cache.try_acquire_or_renew_leadership("others").await);
     }
 }

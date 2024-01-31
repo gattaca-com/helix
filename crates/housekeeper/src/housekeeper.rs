@@ -21,6 +21,7 @@ use helix_common::{
 };
 
 use crate::error::HousekeeperError;
+use uuid::Uuid;
 
 pub(crate) const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 8;
@@ -70,7 +71,7 @@ pub struct Housekeeper<
     refreshed_trusted_proposers_slot: Mutex<u64>,
     refresh_trusted_proposers_lock: Mutex<()>,
 
-    is_leader: AtomicBool
+    leader_id: String
 }
 
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
@@ -90,7 +91,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             re_sync_builder_info_lock: Mutex::new(()),
             refreshed_trusted_proposers_slot: Mutex::new(0),
             refresh_trusted_proposers_lock: Mutex::new(()),
-            is_leader: AtomicBool::new(false),
+            leader_id: Uuid::new_v4().to_string(),
         })
     }
 
@@ -122,16 +123,8 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             return;
         }
 
-        let original_leadership_status = self.is_leader.load(Ordering::SeqCst);
-        let is_leader = self.auctioneer.try_acquire_or_renew_leadership(original_leadership_status).await;
-        
-        // If the leadership status has changed, update the is_leader flag.
-        if is_leader != original_leadership_status {
-            self.is_leader.store(is_leader, Ordering::SeqCst);
-        }
-
         // Only allow one housekeeper task to run at a time.
-        if !is_leader {
+        if ! self.auctioneer.try_acquire_or_renew_leadership(&self.leader_id).await {
             return;
         }
 
