@@ -1,0 +1,45 @@
+name: Rust Linting
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        fetch-depth: '0'
+        path: ./repos/${{ secrets.REPO_NAME }}
+        ref: ${{ github.ref }}
+
+    # Rust Linting with Clippy
+    - uses: dtolnay/rust-toolchain@clippy
+    - uses: Swatinem/rust-cache@v2
+      with:
+        cache-on-failure: true
+
+    # Run General Clippy Linting
+    - name: Clippy
+      run: cargo clippy --workspace --lib --examples --tests --benches --all-features
+      env:
+        RUSTFLAGS: -D warnings
+
+    # Check Code Formatting
+    - name: Rustfmt
+      run: cargo fmt --all --check
+
+    # Check Documentation
+    - name: Docs
+      run: cargo docs --document-private-items
+      env:
+        RUSTDOCFLAGS: --cfg docsrs --show-type-layout --generate-link-to-definition --enable-index-page -Zunstable-options -D warnings
+

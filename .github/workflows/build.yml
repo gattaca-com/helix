@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: [ develop ]
+    branches: [ main, develop ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,7 +18,10 @@ jobs:
       with:
         fetch-depth: '0'
         path: ./repos/${{ secrets.REPO_NAME }}
-        ref: develop
+        ref: ${{ github.ref }}
+
+    - name: Set Image Name
+      run: echo "IMAGE_NAME=$(if [ ${{ github.ref }} == 'refs/heads/main' ]; then echo 'latest'; else echo 'develop'; fi)" >> $GITHUB_ENV
 
     - name: Run Dockerfile
       env:
@@ -29,8 +32,7 @@ jobs:
         REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
         REPO_NAME: ${{ secrets.REPO_NAME }}        
       run: |
-        IMAGE_NAME=develop
-        DOCKER_BUILDKIT=1 docker build -t helix:$IMAGE_NAME --build-arg AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID --build-arg AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY --build-arg REPO_NAME=$REPO_NAME -f ./repos/$REPO_NAME/Dockerfile .
-        DOCKER_BUILDKIT=1 docker tag helix:$IMAGE_NAME $REGISTRY_URL/helix:$IMAGE_NAME
+        DOCKER_BUILDKIT=1 docker build -t helix:${{ env.IMAGE_NAME }} --build-arg AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID --build-arg AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY --build-arg REPO_NAME=$REPO_NAME -f ./repos/$REPO_NAME/Dockerfile .
+        DOCKER_BUILDKIT=1 docker tag helix:${{ env.IMAGE_NAME }} $REGISTRY_URL/helix:${{ env.IMAGE_NAME }}
         DOCKER_BUILDKIT=1 docker login https://$REGISTRY_URL/ -u "$DOCKER_REG_USR" -p "$DOCKER_REG_PW"
-        DOCKER_BUILDKIT=1 docker push $REGISTRY_URL/helix:$IMAGE_NAME
+        DOCKER_BUILDKIT=1 docker push $REGISTRY_URL/helix:${{ env.IMAGE_NAME }}
