@@ -1257,7 +1257,7 @@ where
                 builder=%payload.builder_public_key(),
                 "builder is not optimistic"
             );
-            return Err(BuilderApiError::BuilderDemoted { 
+            return Err(BuilderApiError::BuilderNotOptimistic { 
                 builder_pub_key: payload.builder_public_key().clone(),
             });
         } else if builder_info.collateral < payload.value() {
