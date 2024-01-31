@@ -106,8 +106,8 @@ pub enum BuilderApiError {
         is_optimistic: bool,
     },
 
-    #[error("builder has been demoted. builder_pub_key: {builder_pub_key:?}")]
-    BuilderDemoted{builder_pub_key: BlsPublicKey},
+    #[error("builder is not optimistic. builder_pub_key: {builder_pub_key:?}")]
+    BuilderNotOptimistic{builder_pub_key: BlsPublicKey},
 
     #[error("builder not in proposer's trusted list: {proposer_trusted_builders:?}")]
     BuilderNotInProposersTrustedList{proposer_trusted_builders: Vec<String>},
@@ -227,8 +227,8 @@ impl IntoResponse for BuilderApiError {
                     collateral: {collateral:?}, collateral required: {collateral_required:?}. is_optimistic: {is_optimistic}"
                 )).into_response()
             },
-            BuilderApiError::BuilderDemoted { builder_pub_key } => {
-                (StatusCode::BAD_REQUEST, format!("builder has been demoted. builder_pub_key: {builder_pub_key:?}")).into_response()
+            BuilderApiError::BuilderNotOptimistic { builder_pub_key } => {
+                (StatusCode::BAD_REQUEST, format!("builder is not optimistic. builder_pub_key: {builder_pub_key:?}")).into_response()
             },
             BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders } => {
                 (StatusCode::BAD_REQUEST, format!("builder not in proposer's trusted list: {proposer_trusted_builders:?}")).into_response()

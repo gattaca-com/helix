@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ethereum_consensus::primitives::Bytes32;
+
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::error::ApiError;

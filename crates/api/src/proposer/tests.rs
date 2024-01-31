@@ -5,6 +5,30 @@ use ethereum_consensus::signing::compute_signing_root;
 use rand::thread_rng;
 use helix_common::chain_info::ChainInfo;
 
+pub fn gen_signed_vr() -> SignedValidatorRegistration {
+    let mut rng = thread_rng();
+    let sk = SecretKey::random(&mut rng).unwrap();
+    let pk = sk.public_key();
+
+    let mut vr = ValidatorRegistration {
+        fee_recipient: Default::default(),
+        gas_limit: 0,
+        timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+        public_key: pk,
+    };
+
+    let fk = ChainInfo::for_holesky();
+    let domain = compute_builder_domain(&fk.context).unwrap();
+    let csr = compute_signing_root(&mut vr, domain).unwrap();
+
+    let sig = sk.sign(csr.as_ref());
+
+    SignedValidatorRegistration {
+        message: vr,
+        signature: sig,
+    }
+}
+
 
 #[cfg(test)]
 mod proposer_api_tests {
@@ -192,7 +216,7 @@ mod proposer_api_tests {
         let seconds_per_slot: u64 = ChainInfo::for_mainnet().seconds_per_slot;
         let request_time_in_ns = get_nanos_timestamp().unwrap();
         let current_time_in_secs = request_time_in_ns / 1_000_000_000;
-        let time_since_genesis = current_time_in_secs - genesis_time_in_secs;
+        let time_since_genesis = current_time_in_secs.saturating_sub(genesis_time_in_secs);
         
         time_since_genesis / seconds_per_slot
     }
@@ -842,29 +866,5 @@ mod proposer_api_tests {
         let mut x = gen_signed_vr();
 
         prop_api.validate_registration(&mut x).unwrap();
-    }
-}
-
-pub fn gen_signed_vr() -> SignedValidatorRegistration {
-    let mut rng = thread_rng();
-    let sk = SecretKey::random(&mut rng).unwrap();
-    let pk = sk.public_key();
-
-    let mut vr = ValidatorRegistration {
-        fee_recipient: Default::default(),
-        gas_limit: 0,
-        timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
-        public_key: pk,
-    };
-
-    let fk = ChainInfo::for_holesky();
-    let domain = compute_builder_domain(&fk.context).unwrap();
-    let csr = compute_signing_root(&mut vr, domain).unwrap();
-
-    let sig = sk.sign(csr.as_ref());
-
-    SignedValidatorRegistration {
-        message: vr,
-        signature: sig,
     }
 }

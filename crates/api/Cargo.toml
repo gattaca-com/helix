@@ -20,10 +20,12 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
 tower = { workspace = true }
+dashmap = { workspace = true }
 futures = { workspace = true }
 hyper = { workspace = true }
-tokio = { workspace = true }
 reqwest = { workspace = true }
+tokio = { workspace = true }
+tower-http = { workspace = true }
 url = { workspace = true }
 tonic = "0.10"
 prost = "0.12"
@@ -49,7 +51,7 @@ auto_impl.workspace = true
 rand = "0.8"
 thiserror = { workspace = true }
 tracing = { workspace = true }
-uuid = { version = "1.5", features = ["fast-rng", "v4"] }
+uuid = { workspace = true }
 bytes = "1.5"
 
 [build-dependencies]

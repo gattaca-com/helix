@@ -159,6 +159,7 @@ impl BeaconClientTrait for BeaconClient {
         self.subscribe_to_sse("payload_attributes", chan).await
     }
 
+    /// Fetch all known validators with an `active` status.
     async fn get_state_validators(
         &self,
         state_id: StateId,

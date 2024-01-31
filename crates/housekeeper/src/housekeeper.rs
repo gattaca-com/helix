@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::{atomic::{AtomicBool, Ordering}, Arc}, time::{Duration, SystemTime}};
+use std::{collections::HashMap, sync::Arc, time::{Duration, SystemTime}};
 
 use ethereum_consensus::primitives::BlsPublicKey;
 use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
@@ -21,6 +21,7 @@ use helix_common::{
 };
 
 use crate::error::HousekeeperError;
+use uuid::Uuid;
 
 pub(crate) const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 8;
@@ -70,7 +71,7 @@ pub struct Housekeeper<
     refreshed_trusted_proposers_slot: Mutex<u64>,
     refresh_trusted_proposers_lock: Mutex<()>,
 
-    is_leader: AtomicBool
+    leader_id: String
 }
 
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
@@ -90,7 +91,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             re_sync_builder_info_lock: Mutex::new(()),
             refreshed_trusted_proposers_slot: Mutex::new(0),
             refresh_trusted_proposers_lock: Mutex::new(()),
-            is_leader: AtomicBool::new(false),
+            leader_id: Uuid::new_v4().to_string(),
         })
     }
 
@@ -122,16 +123,8 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             return;
         }
 
-        let original_leadership_status = self.is_leader.load(Ordering::SeqCst);
-        let is_leader = self.auctioneer.try_acquire_or_renew_leadership(original_leadership_status).await;
-        
-        // If the leadership status has changed, update the is_leader flag.
-        if is_leader != original_leadership_status {
-            self.is_leader.store(is_leader, Ordering::SeqCst);
-        }
-
         // Only allow one housekeeper task to run at a time.
-        if !is_leader {
+        if ! self.auctioneer.try_acquire_or_renew_leadership(&self.leader_id).await {
             return;
         }
 
@@ -386,7 +379,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
         let epoch = head_slot / EPOCH_SLOTS;
 
-        debug!(epoch_from = epoch, epoch_to = epoch + 1, "Housekeeper::update_proposer_duties",);
+        info!(epoch_from = epoch, epoch_to = epoch + 1, "Housekeeper::update_proposer_duties",);
 
         let proposer_duties = match self.fetch_duties(epoch).await {
             Ok(proposer_duties) => proposer_duties,
@@ -416,7 +409,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
                 .await
             {
                 Ok(num_duties) => {
-                    debug!(epoch_from = epoch, num_duties = num_duties, "updated proposer duties")
+                    info!(epoch_from = epoch, num_duties = num_duties, "updated proposer duties")
                 }
                 Err(err) => error!(err = %err, "failed to update proposer duties"),
             }
@@ -468,7 +461,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         head_slot: u64,
     ) -> bool {
         let proposer_duties_slot = *self.proposer_duties_slot.lock().await;
-        let last_proposer_duty_distance = head_slot - proposer_duties_slot;
+        let last_proposer_duty_distance = head_slot.saturating_sub(proposer_duties_slot);
         head_slot % PROPOSER_DUTIES_UPDATE_FREQ == 0
             || last_proposer_duty_distance >= PROPOSER_DUTIES_UPDATE_FREQ
     }
@@ -486,7 +479,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         head_slot: u64,
     ) -> bool {
         let trusted_proposers_slot = *self.refreshed_trusted_proposers_slot.lock().await;
-        let last_trusted_proposers_distance = head_slot - trusted_proposers_slot;
+        let last_trusted_proposers_distance = head_slot.saturating_sub(trusted_proposers_slot);
         head_slot % TRUSTED_PROPOSERS_UPDATE_FREQ == 0
             || last_trusted_proposers_distance >= TRUSTED_PROPOSERS_UPDATE_FREQ
     }
@@ -567,7 +560,7 @@ fn v2_submission_late(pending_block: &PendingBlock, current_time: u64) -> bool {
     match (pending_block.header_receive_ms, pending_block.payload_receive_ms) {
         (None, None) => false,
         (None, Some(_)) => false,
-        (Some(header_receive_ms), None) => (current_time - header_receive_ms) > MAX_DELAY_WITH_NO_V2_PAYLOAD_MS,
+        (Some(header_receive_ms), None) => (current_time.saturating_sub(header_receive_ms)) > MAX_DELAY_WITH_NO_V2_PAYLOAD_MS,
         (Some(header_receive_ms), Some(payload_receive_ms)) => {
             payload_receive_ms.saturating_sub(header_receive_ms) > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
         },

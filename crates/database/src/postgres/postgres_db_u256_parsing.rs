@@ -60,7 +60,7 @@ impl<'a> FromSql<'a> for PostgresNumeric {
             value = value * n_base + U256::from(read_two_bytes(raw, &mut offset)?);
         }
 
-        value = value * n_base.pow(U256::from(weight));
+        value *= n_base.pow(U256::from(weight));
 
         Ok(PostgresNumeric(value))
     }
@@ -103,7 +103,7 @@ impl ToSql for PostgresNumeric {
         if num_digits == 0 {
             num_digits = 1; // Ensure at least one digit
         }
-        let weight = num_digits as i16 - 1;
+        let weight = (num_digits as i16).saturating_sub(1);
 
         // Reserve bytes
         out.reserve(8 + num_digits * 2);
