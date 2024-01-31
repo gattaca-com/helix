@@ -40,6 +40,21 @@ use crate::{
     DatabaseService,
 };
 
+struct RegistrationParams<'a> {
+    fee_recipient: &'a [u8],
+    gas_limit: i32,
+    timestamp: i64,
+    public_key: &'a [u8],
+    signature: &'a [u8],
+    inserted_at: SystemTime,
+}
+
+struct PreferenceParams<'a> {
+    public_key: &'a [u8],
+    censoring: bool,
+    trusted_builders: Option<Vec<String>>,
+}
+
 #[derive(Clone)]
 pub struct PostgresDatabaseService {
     validator_registration_cache: Arc<DashMap<BlsPublicKey, SignedValidatorRegistrationEntry>>,
@@ -159,9 +174,10 @@ impl PostgresDatabaseService {
         for chunk in entries.chunks(batch_size) {
             let transaction = client.transaction().await?;
 
-            let mut structured_params_for_reg: Vec<(&[u8], i32, i64, &[u8], &[u8], SystemTime)> =
+            let mut structured_params_for_reg: Vec<RegistrationParams> =
                 Vec::with_capacity(chunk.len());
-            let mut structured_params_for_pref: Vec<(&[u8], bool, Option<Vec<String>>)> =
+
+            let mut structured_params_for_pref: Vec<PreferenceParams> =
                 Vec::with_capacity(chunk.len());
 
             for entry in chunk.iter() {
@@ -173,20 +189,20 @@ impl PostgresDatabaseService {
                 let inserted_at = SystemTime::now();
 
                 // Collect the parameters in a structured manner
-                structured_params_for_reg.push((
-                    fee_recipient.as_ref(),
-                    registration.gas_limit as i32,
-                    registration.timestamp as i64,
-                    public_key.as_ref(),
-                    signature.as_ref(),
+                structured_params_for_reg.push(RegistrationParams {
+                    fee_recipient: fee_recipient.as_ref(),
+                    gas_limit: registration.gas_limit as i32,
+                    timestamp: registration.timestamp as i64,
+                    public_key: public_key.as_ref(),
+                    signature: signature.as_ref(),
                     inserted_at,
-                ));
+                });
 
-                structured_params_for_pref.push((
-                    public_key.as_ref(),
-                    entry.preferences.censoring,
-                    entry.preferences.trusted_builders.clone(),
-                ));
+                structured_params_for_pref.push(PreferenceParams {
+                    public_key: public_key.as_ref(),
+                    censoring: entry.preferences.censoring,
+                    trusted_builders: entry.preferences.trusted_builders.clone(),
+                });
             }
 
             // Prepare the params vector from the structured parameters
@@ -194,12 +210,12 @@ impl PostgresDatabaseService {
                 .iter()
                 .flat_map(|tuple| {
                     vec![
-                        &tuple.0,
-                        &tuple.1 as &(dyn ToSql + Sync),
-                        &tuple.2,
-                        &tuple.3,
-                        &tuple.4,
-                        &tuple.5,
+                        &tuple.fee_recipient,
+                        &tuple.gas_limit as &(dyn ToSql + Sync),
+                        &tuple.timestamp,
+                        &tuple.public_key,
+                        &tuple.signature,
+                        &tuple.inserted_at,
                     ]
                 })
                 .collect();
@@ -237,7 +253,7 @@ impl PostgresDatabaseService {
 
             let params: Vec<&(dyn ToSql + Sync)> = structured_params_for_pref
                 .iter()
-                .flat_map(|tuple| vec![&tuple.0 as &(dyn ToSql + Sync), &tuple.1, &tuple.2])
+                .flat_map(|tuple| vec![&tuple.public_key as &(dyn ToSql + Sync), &tuple.censoring, &tuple.trusted_builders])
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
