@@ -79,13 +79,12 @@ impl ApiService {
         let client =
             reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
 
-        let simulator =
-            OptimisticSimulator::<RedisCache, PostgresDatabaseService>::new(
-                auctioneer.clone(),
-                db.clone(),
-                client,
-                config.simulator.url,
-            );
+        let simulator = OptimisticSimulator::<RedisCache, PostgresDatabaseService>::new(
+            auctioneer.clone(),
+            db.clone(),
+            client,
+            config.simulator.url,
+        );
 
         let (mut chain_event_updater, slot_update_sender) = ChainEventUpdater::new(db.clone());
 
@@ -145,12 +144,11 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
     for cfg in &config.broadcasters {
         match cfg {
             BroadcasterConfig::Fiber(cfg) => {
-                let result =
-                    timeout(
-                        INIT_BROADCASTER_TIMEOUT,
-                        FiberBroadcaster::new(cfg.url.clone(), cfg.api_key.clone(), cfg.encoding),
-                    )
-                    .await;
+                let result = timeout(
+                    INIT_BROADCASTER_TIMEOUT,
+                    FiberBroadcaster::new(cfg.url.clone(), cfg.api_key.clone(), cfg.encoding),
+                )
+                .await;
                 match result {
                     Ok(Ok(broadcaster)) => {
                         broadcasters.push(Arc::new(BlockBroadcaster::Fiber(broadcaster)));
@@ -164,9 +162,9 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
                 }
             }
             BroadcasterConfig::BeaconClient(cfg) => {
-                broadcasters.push(Arc::new(
-                    BlockBroadcaster::BeaconClient(BeaconClient::from_endpoint_str(&cfg.url))
-                ));
+                broadcasters.push(Arc::new(BlockBroadcaster::BeaconClient(
+                    BeaconClient::from_endpoint_str(&cfg.url),
+                )));
             }
         }
     }
@@ -202,9 +200,9 @@ mod test {
                 api_key: "123".to_string(),
                 encoding: Encoding::Json,
             }),
-            BroadcasterConfig::BeaconClient(
-                BeaconClientConfig { url: "http://localhost:4040".to_string() }
-            ),
+            BroadcasterConfig::BeaconClient(BeaconClientConfig {
+                url: "http://localhost:4040".to_string(),
+            }),
         ];
         let broadcasters = init_broadcasters(&config).await;
         assert_eq!(broadcasters.len(), 1);

@@ -60,16 +60,16 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         builder_info: BuilderInfo,
         request_id: Uuid,
     ) -> Result<(), BlockSimError> {
-        if let Err(err) =
-            self.simulator
-                .process_request(
-                    request.clone(),
-                    &builder_info,
-                    is_top_bid,
-                    sim_result_saver_sender,
-                    request_id,
-                )
-                .await
+        if let Err(err) = self
+            .simulator
+            .process_request(
+                request.clone(),
+                &builder_info,
+                is_top_bid,
+                sim_result_saver_sender,
+                request_id,
+            )
+            .await
         {
             if let BlockSimError::BlockValidationFailed(_) = err {
                 if builder_info.is_optimistic {

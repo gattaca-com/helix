@@ -41,12 +41,11 @@ mod simulator_tests {
         bid_trace.block_hash = get_byte_vector_32_for_hex(
             "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
         );
-        let signed_bid_submission =
-            SignedBidSubmission::Capella(SignedBidSubmissionCapella {
-                message: bid_trace,
-                signature: BlsSignature::default(),
-                execution_payload,
-            });
+        let signed_bid_submission = SignedBidSubmission::Capella(SignedBidSubmissionCapella {
+            message: bid_trace,
+            signature: BlsSignature::default(),
+            execution_payload,
+        });
 
         BlockSimRequest::new(0, Arc::new(signed_bid_submission), ValidatorPreferences::default())
     }

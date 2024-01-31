@@ -41,20 +41,17 @@ use crate::{
 pub fn app() -> Router {
     let (slot_update_sender, _slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
 
-    let api_service = Arc::new(ProposerApi::<
-        MockAuctioneer,
-        MockDatabaseService,
-        MockMultiBeaconClient,
-    >::new(
-        Arc::new(MockAuctioneer::default()),
-        Arc::new(MockDatabaseService::default()),
-        vec![Arc::new(BlockBroadcaster::Mock(MockBlockBroadcaster::default()))],
-        Arc::new(MockMultiBeaconClient::default()),
-        Arc::new(ChainInfo::for_mainnet()),
-        slot_update_sender,
-        Arc::new(ValidatorPreferences::default()),
-        0,
-    ));
+    let api_service =
+        Arc::new(ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient>::new(
+            Arc::new(MockAuctioneer::default()),
+            Arc::new(MockDatabaseService::default()),
+            vec![Arc::new(BlockBroadcaster::Mock(MockBlockBroadcaster::default()))],
+            Arc::new(MockMultiBeaconClient::default()),
+            Arc::new(ChainInfo::for_mainnet()),
+            slot_update_sender,
+            Arc::new(ValidatorPreferences::default()),
+            0,
+        ));
 
     let data_api =
         Arc::new(DataApi::<MockDatabaseService>::new(Arc::new(MockDatabaseService::default())));
@@ -120,21 +117,19 @@ pub fn builder_api_app() -> (
     let (slot_update_sender, slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
     let (_gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10);
 
-    let builder_api_service = Arc::new(BuilderApi::<
-        MockAuctioneer,
-        MockDatabaseService,
-        MockSimulator,
-        MockGossiper,
-    >::new(
-        Arc::new(MockAuctioneer::default()),
-        Arc::new(MockDatabaseService::default()),
-        Arc::new(ChainInfo::for_mainnet()),
-        MockSimulator::default(),
-        Arc::new(MockGossiper::new().unwrap()),
-        Arc::new(RelaySigningContext::default()),
-        slot_update_sender.clone(),
-        gossip_receiver,
-    ));
+    let builder_api_service =
+        Arc::new(
+            BuilderApi::<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>::new(
+                Arc::new(MockAuctioneer::default()),
+                Arc::new(MockDatabaseService::default()),
+                Arc::new(ChainInfo::for_mainnet()),
+                MockSimulator::default(),
+                Arc::new(MockGossiper::new().unwrap()),
+                Arc::new(RelaySigningContext::default()),
+                slot_update_sender.clone(),
+                gossip_receiver,
+            ),
+        );
 
     let mut router = Router::new()
         .route(
@@ -173,20 +168,17 @@ pub fn proposer_api_app() -> (
 ) {
     let (slot_update_sender, slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
     let auctioneer = Arc::new(MockAuctioneer::default());
-    let proposer_api_service = Arc::new(ProposerApi::<
-        MockAuctioneer,
-        MockDatabaseService,
-        MockMultiBeaconClient,
-    >::new(
-        auctioneer.clone(),
-        Arc::new(MockDatabaseService::default()),
-        vec![Arc::new(BlockBroadcaster::Mock(MockBlockBroadcaster::default()))],
-        Arc::new(MockMultiBeaconClient::default()),
-        Arc::new(ChainInfo::for_mainnet()),
-        slot_update_sender.clone(),
-        Arc::new(ValidatorPreferences::default()),
-        0,
-    ));
+    let proposer_api_service =
+        Arc::new(ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient>::new(
+            auctioneer.clone(),
+            Arc::new(MockDatabaseService::default()),
+            vec![Arc::new(BlockBroadcaster::Mock(MockBlockBroadcaster::default()))],
+            Arc::new(MockMultiBeaconClient::default()),
+            Arc::new(ChainInfo::for_mainnet()),
+            slot_update_sender.clone(),
+            Arc::new(ValidatorPreferences::default()),
+            0,
+        ));
 
     let router = Router::new()
         .route(

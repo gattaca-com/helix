@@ -308,14 +308,13 @@ mod multi_beacon_client_tests {
         let client2 = Arc::new(MockBeaconClient::new().with_publish_block_response_code(200));
 
         let multi_client = MultiBeaconClient::new(vec![client1, client2]);
-        let result =
-            multi_client
-                .publish_block(
-                    Arc::new(VersionedSignedProposal::default()),
-                    Some(BroadcastValidation::default()),
-                    ethereum_consensus::Fork::Capella,
-                )
-                .await;
+        let result = multi_client
+            .publish_block(
+                Arc::new(VersionedSignedProposal::default()),
+                Some(BroadcastValidation::default()),
+                ethereum_consensus::Fork::Capella,
+            )
+            .await;
 
         assert!(result.is_ok());
     }
@@ -326,14 +325,13 @@ mod multi_beacon_client_tests {
         let client2 = Arc::new(MockBeaconClient::new().with_publish_block_response_code(202));
 
         let multi_client = MultiBeaconClient::new(vec![client1, client2]);
-        let result =
-            multi_client
-                .publish_block(
-                    Arc::new(VersionedSignedProposal::default()),
-                    Some(BroadcastValidation::default()),
-                    ethereum_consensus::Fork::Capella,
-                )
-                .await;
+        let result = multi_client
+            .publish_block(
+                Arc::new(VersionedSignedProposal::default()),
+                Some(BroadcastValidation::default()),
+                ethereum_consensus::Fork::Capella,
+            )
+            .await;
 
         assert!(matches!(result, Err(BeaconClientError::BlockValidationFailed)));
     }

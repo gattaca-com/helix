@@ -183,9 +183,9 @@ fn test_config() {
     config.redis.url = "redis://localhost:6379".to_string();
     config.simulator.url = "http://localhost:8080".to_string();
     config.beacon_clients.push(BeaconClientConfig { url: "http://localhost:8080".to_string() });
-    config.broadcasters.push(BroadcasterConfig::BeaconClient(
-        BeaconClientConfig { url: "http://localhost:8080".to_string() }
-    ));
+    config.broadcasters.push(BroadcasterConfig::BeaconClient(BeaconClientConfig {
+        url: "http://localhost:8080".to_string(),
+    }));
     config.network_config = NetworkConfig::Mainnet;
     config.logging =
         LoggingConfig::File { dir_path: "hello".to_string(), file_name: "test".to_string() };

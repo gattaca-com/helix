@@ -119,18 +119,17 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         self.last_slot = event.slot;
 
         // Re-fetch proposer duties every 8 slots
-        let new_duties =
-            if event.slot % 8 == 0 {
-                match self.database.get_proposer_duties().await {
-                    Ok(new_duties) => Some(new_duties),
-                    Err(err) => {
-                        error!(error = %err, "Failed to get proposer duties from db");
-                        None
-                    }
+        let new_duties = if event.slot % 8 == 0 {
+            match self.database.get_proposer_duties().await {
+                Ok(new_duties) => Some(new_duties),
+                Err(err) => {
+                    error!(error = %err, "Failed to get proposer duties from db");
+                    None
                 }
-            } else {
-                None
-            };
+            }
+        } else {
+            None
+        };
 
         // Update local cache if new duties were fetched.
         if let Some(new_duties) = &new_duties {

@@ -48,7 +48,7 @@ jobs:
 
     # Check Code Formatting
     - name: Rustfmt
-      run: cargo fmt --all --check
+      run: cargo +nightly fmt --all --check
       working-directory: ./repos/${{ secrets.REPO_NAME }}
 
     # Check Documentation

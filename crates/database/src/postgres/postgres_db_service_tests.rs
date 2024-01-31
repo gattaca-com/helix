@@ -175,14 +175,13 @@ mod tests {
             .unwrap();
 
         for registration in registrations {
-            let result =
-                result
-                    .iter()
-                    .find(|r| {
-                        r.registration_info.registration.message.public_key ==
-                            registration.registration.message.public_key
-                    })
-                    .unwrap();
+            let result = result
+                .iter()
+                .find(|r| {
+                    r.registration_info.registration.message.public_key ==
+                        registration.registration.message.public_key
+                })
+                .unwrap();
             assert_eq!(
                 result.registration_info.registration.signature,
                 registration.registration.signature
@@ -322,12 +321,11 @@ mod tests {
         let mut rng = rand::thread_rng();
         let key = SecretKey::random(&mut rng).unwrap();
         let public_key = key.public_key();
-        let builder_info =
-            helix_common::BuilderInfo {
-                collateral: U256::from_str("1000000000000000000000000000").unwrap(),
-                is_optimistic: false,
-                builder_id: None,
-            };
+        let builder_info = helix_common::BuilderInfo {
+            collateral: U256::from_str("1000000000000000000000000000").unwrap(),
+            is_optimistic: false,
+            builder_id: None,
+        };
 
         let result = db_service.store_builder_info(&public_key, builder_info).await;
         assert!(result.is_ok());

@@ -21,13 +21,11 @@ pub enum BlockSimError {
 impl BlockSimError {
     pub fn is_severe(&self) -> bool {
         match self {
-            BlockSimError::BlockValidationFailed(reason) => {
-                match reason.to_lowercase().as_str() {
-                    UNKNOWN_ANCESTOR => false,
-                    r if r.starts_with(MISSING_TRIE_NODE) => false,
-                    _ => true,
-                }
-            }
+            BlockSimError::BlockValidationFailed(reason) => match reason.to_lowercase().as_str() {
+                UNKNOWN_ANCESTOR => false,
+                r if r.starts_with(MISSING_TRIE_NODE) => false,
+                _ => true,
+            },
             _ => true,
         }
     }
