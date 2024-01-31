@@ -2,7 +2,7 @@ use std::{env, sync::Arc, time::Duration};
 
 use ethereum_consensus::crypto::SecretKey;
 use tokio::time::{sleep, timeout};
-use tracing::info;
+use tracing::{error, info};
 
 use crate::builder::optimistic_simulator::OptimisticSimulator;
 use crate::gossiper::grpc_gossiper::GrpcGossiperClientManager;
@@ -22,6 +22,7 @@ use helix_common::{
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const INIT_BROADCASTER_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct ApiService {}
 
@@ -145,23 +146,16 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
     for cfg in &config.broadcasters {
         match cfg {
             BroadcasterConfig::Fiber(cfg) => {
-                let timeout_duration = Duration::from_secs(5);
-                let result = timeout(timeout_duration, FiberBroadcaster::new(cfg.url.clone(), cfg.api_key.clone(), cfg.encoding)).await;
+                let result = timeout(INIT_BROADCASTER_TIMEOUT, FiberBroadcaster::new(cfg.url.clone(), cfg.api_key.clone(), cfg.encoding)).await;
                 match result {
-                    Ok(broadcaster) => {
-                        match broadcaster {
-                            Ok(broadcaster) => {
-                                broadcasters.push(Arc::new(BlockBroadcaster::Fiber(broadcaster)));
-                            },
-                            Err(err) => {
-                                let err_msg = format!("FiberBroadcaster initialization failed for {:?}. Error: {:?}", cfg, err);
-                                tracing::error!("{}", err_msg);
-                            }
-                        }
+                    Ok(Ok(broadcaster)) => {
+                        broadcasters.push(Arc::new(BlockBroadcaster::Fiber(broadcaster)));
+                    },
+                    Ok(Err(err)) => {
+                        error!(broadcaster = "Fiber", cfg = ?cfg, error = %err, "Initializing broadcaster failed");
                     },
                     Err(err) => {
-                        let err_msg = format!("FiberBroadcaster initialization timed out for {:?}. Error: {:?}", cfg, err);
-                        tracing::error!("{}", err_msg);
+                        error!(broadcaster = "Fiber", cfg = ?cfg, error = %err, "Initializing broadcaster timed out");
                     }
                 }
             }
