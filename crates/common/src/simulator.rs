@@ -25,7 +25,7 @@ impl BlockSimError {
                     UNKNOWN_ANCESTOR => false,
                     _ => true,
                 }
-            },
+            }
             _ => true,
         }
     }

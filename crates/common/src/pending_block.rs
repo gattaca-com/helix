@@ -1,5 +1,4 @@
-use ethereum_consensus::primitives::{Hash32, BlsPublicKey};
-
+use ethereum_consensus::primitives::{BlsPublicKey, Hash32};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, Eq, PartialEq)]
 pub struct PendingBlock {

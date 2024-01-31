@@ -1,10 +1,14 @@
 pub use ethereum_consensus::{builder::SignedValidatorRegistration, deneb::mainnet as spec};
 
 use ethereum_consensus::{
-    deneb::{mainnet::{MAX_BLOBS_PER_BLOCK, MAX_BLOB_COMMITMENTS_PER_BLOCK}, polynomial_commitments::{KzgCommitment, KzgProof}},
+    deneb::{
+        mainnet::{MAX_BLOBS_PER_BLOCK, MAX_BLOB_COMMITMENTS_PER_BLOCK},
+        polynomial_commitments::{KzgCommitment, KzgProof},
+    },
     primitives::{BlsPublicKey, BlsSignature, Root, U256},
+    serde::as_str,
     ssz::prelude::*,
-    serde::as_str, types::mainnet::SignedBeaconBlock,
+    types::mainnet::SignedBeaconBlock,
 };
 
 pub type ExecutionPayload = spec::ExecutionPayload;
@@ -51,7 +55,7 @@ pub struct BlobsBundle {
 
 #[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct SignedBlockContents {
-	pub signed_block: SignedBeaconBlock,
-	pub kzg_proofs: List<KzgProof, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
-	pub blobs: List<Blob, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
+    pub signed_block: SignedBeaconBlock,
+    pub kzg_proofs: List<KzgProof, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
+    pub blobs: List<Blob, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
 }

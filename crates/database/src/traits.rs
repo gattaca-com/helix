@@ -1,6 +1,4 @@
-use std::time::SystemTime;
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc, time::SystemTime};
 
 use async_trait::async_trait;
 use ethereum_consensus::{
@@ -12,7 +10,17 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
-    }, bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission}, builder_info::BuilderInfo, pending_block::PendingBlock, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorSummary
+    },
+    bid_submission::{
+        v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
+    },
+    builder_info::BuilderInfo,
+    pending_block::PendingBlock,
+    simulator::BlockSimError,
+    versioned_payload::PayloadAndBlobs,
+    GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace,
+    HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace,
+    ValidatorSummary,
 };
 
 use crate::{
@@ -22,7 +30,6 @@ use crate::{
 
 #[async_trait]
 pub trait DatabaseService: Send + Sync + Clone {
-
     async fn save_validator_registration(
         &self,
         entry: ValidatorRegistrationInfo,

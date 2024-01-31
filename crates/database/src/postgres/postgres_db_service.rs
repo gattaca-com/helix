@@ -8,15 +8,22 @@ use std::{
 use async_trait::async_trait;
 use dashmap::{DashMap, DashSet};
 use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
-use ethereum_consensus::{
-    altair::Hash32, primitives::BlsPublicKey, ssz::prelude::ByteVector,
-};
+use ethereum_consensus::{altair::Hash32, primitives::BlsPublicKey, ssz::prelude::ByteVector};
 
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
-    }, bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission, BidSubmission}, pending_block::PendingBlock, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorSummary
+    },
+    bid_submission::{
+        v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission,
+    },
+    pending_block::PendingBlock,
+    simulator::BlockSimError,
+    versioned_payload::PayloadAndBlobs,
+    BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace,
+    HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry,
+    SubmissionTrace, ValidatorSummary,
 };
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{error, info};
@@ -32,7 +39,6 @@ use crate::{
     types::{BidSubmissionDocument, BuilderInfoDocument, DeliveredPayloadDocument},
     DatabaseService,
 };
-
 
 #[derive(Clone)]
 pub struct PostgresDatabaseService {
@@ -176,7 +182,11 @@ impl PostgresDatabaseService {
                     inserted_at,
                 ));
 
-                structured_params_for_pref.push((public_key.as_ref(), entry.preferences.censoring, entry.preferences.trusted_builders.clone()));
+                structured_params_for_pref.push((
+                    public_key.as_ref(),
+                    entry.preferences.censoring,
+                    entry.preferences.trusted_builders.clone(),
+                ));
             }
 
             // Prepare the params vector from the structured parameters
@@ -196,26 +206,27 @@ impl PostgresDatabaseService {
 
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql = String::from("INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at) VALUES ");
-            let values_clauses: Vec<String> = params
-                .chunks(6)
-                .enumerate()
-                .map(|(i, _)| {
-                    if i == 0 {
-                        String::from("($1, $2, $3, $4, $5, $6)")
-                    } else {
-                        let offset = i * 6;
-                        format!(
-                            "(${}, ${}, ${}, ${}, ${}, ${})",
-                            offset + 1,
-                            offset + 2,
-                            offset + 3,
-                            offset + 4,
-                            offset + 5,
-                            offset + 6,
-                        )
-                    }
-                })
-                .collect();
+            let values_clauses: Vec<String> =
+                params
+                    .chunks(6)
+                    .enumerate()
+                    .map(|(i, _)| {
+                        if i == 0 {
+                            String::from("($1, $2, $3, $4, $5, $6)")
+                        } else {
+                            let offset = i * 6;
+                            format!(
+                                "(${}, ${}, ${}, ${}, ${}, ${})",
+                                offset + 1,
+                                offset + 2,
+                                offset + 3,
+                                offset + 4,
+                                offset + 5,
+                                offset + 6,
+                            )
+                        }
+                    })
+                    .collect();
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
@@ -312,7 +323,11 @@ impl DatabaseService for PostgresDatabaseService {
             DO UPDATE SET
                 censoring = excluded.censoring, trusted_builders = excluded.trusted_builders
             ",
-                &[&public_key.as_ref(), &registration_info.preferences.censoring, &registration_info.preferences.trusted_builders],
+                &[
+                    &public_key.as_ref(),
+                    &registration_info.preferences.censoring,
+                    &registration_info.preferences.trusted_builders,
+                ],
             )
             .await?;
 
@@ -360,8 +375,8 @@ impl DatabaseService for PostgresDatabaseService {
             if let Some(existing_entry) =
                 self.validator_registration_cache.get(&entry.registration.message.public_key)
             {
-                if existing_entry.registration_info.registration.message.timestamp
-                    >= entry.registration.message.timestamp
+                if existing_entry.registration_info.registration.message.timestamp >=
+                    entry.registration.message.timestamp
                 {
                     return false;
                 }
@@ -486,18 +501,19 @@ impl DatabaseService for PostgresDatabaseService {
         let mut sql = String::from(
             "INSERT INTO proposer_duties (slot_number, validator_index, public_key) VALUES ",
         );
-        let values_clauses: Vec<String> = params
-            .chunks(3)
-            .enumerate()
-            .map(|(i, _)| {
-                if i == 0 {
-                    String::from("($1, $2, $3)")
-                } else {
-                    let offset = i * 3;
-                    format!("(${}, ${}, ${})", offset + 1, offset + 2, offset + 3)
-                }
-            })
-            .collect();
+        let values_clauses: Vec<String> =
+            params
+                .chunks(3)
+                .enumerate()
+                .map(|(i, _)| {
+                    if i == 0 {
+                        String::from("($1, $2, $3)")
+                    } else {
+                        let offset = i * 3;
+                        format!("(${}, ${}, ${})", offset + 1, offset + 2, offset + 3)
+                    }
+                })
+                .collect();
 
         // Join the values clauses and append them to the SQL statement
         sql.push_str(&values_clauses.join(", "));
@@ -712,15 +728,16 @@ impl DatabaseService for PostgresDatabaseService {
             // Save the transactions
             let mut structured_params: Vec<(&[u8], &[u8])> = Vec::new();
             for entry in payload.execution_payload.transactions().iter() {
-                structured_params.push((payload.execution_payload.block_hash().as_ref(), entry.as_ref()));
+                structured_params
+                    .push((payload.execution_payload.block_hash().as_ref(), entry.as_ref()));
             }
 
             // Prepare the params vector from the structured parameters
             let params: Vec<&(dyn ToSql + Sync)> = structured_params
                 .iter()
-                .flat_map(|tuple| {
-                    vec![&tuple.0 as &(dyn ToSql + Sync), &tuple.1 as &(dyn ToSql + Sync)]
-                })
+                .flat_map(
+                    |tuple| vec![&tuple.0 as &(dyn ToSql + Sync), &tuple.1 as &(dyn ToSql + Sync)]
+                )
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
@@ -744,7 +761,9 @@ impl DatabaseService for PostgresDatabaseService {
             transaction.execute(&sql, &params[..]).await?;
         }
 
-        if payload.execution_payload.withdrawals().is_some() && !payload.execution_payload.withdrawals().unwrap().is_empty() {
+        if payload.execution_payload.withdrawals().is_some() &&
+            !payload.execution_payload.withdrawals().unwrap().is_empty()
+        {
             // Save the withdrawals
             let mut structured_params: Vec<(i32, &[u8], i32, &[u8], i64)> = Vec::new();
             for entry in payload.execution_payload.withdrawals().unwrap().iter() {
@@ -1195,21 +1214,23 @@ impl DatabaseService for PostgresDatabaseService {
             )
             .await?;
 
-        transaction.execute(
-            "
+        transaction
+            .execute(
+                "
                 INSERT INTO get_header_trace
                     (block_hash, region_id, receive, validation_complete, best_bid_fetched)
                 VALUES
                     ($1, $2, $3, $4, $5)
             ",
-            &[
-                &(best_block_hash.as_ref()),
-                &(region_id),
-                &(trace.receive as i64),
-                &(trace.validation_complete as i64),
-                &(trace.best_bid_fetched as i64),
-            ],
-        ).await?;
+                &[
+                    &(best_block_hash.as_ref()),
+                    &(region_id),
+                    &(trace.receive as i64),
+                    &(trace.validation_complete as i64),
+                    &(trace.best_bid_fetched as i64),
+                ],
+            )
+            .await?;
 
         transaction.commit().await?;
 
@@ -1235,11 +1256,7 @@ impl DatabaseService for PostgresDatabaseService {
                     VALUES
                         ($1, $2, $3)
                 ",
-                &[
-                    &(region_id),
-                    &(block_hash.as_ref()),
-                    &(error),
-                ],
+                &[&(region_id), &(block_hash.as_ref()), &(error)],
             )
             .await?;
 
@@ -1274,7 +1291,6 @@ impl DatabaseService for PostgresDatabaseService {
         submission: Arc<SignedHeaderSubmission>,
         trace: Arc<HeaderSubmissionTrace>,
     ) -> Result<(), DatabaseError> {
-
         let region_id = self.region;
         let mut client = self.pool.get().await?;
         let transaction = client.transaction().await?;
@@ -1398,21 +1414,25 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, DatabaseError> {
-        parse_rows(self.pool
-            .get()
-            .await?
-            .query(
-                "
+        parse_rows(
+            self.pool
+                .get()
+                .await?
+                .query(
+                    "
                     SELECT * FROM pending_blocks 
                 ",
-                &[],
-            )
-            .await?
+                    &[],
+                )
+                .await?,
         )
     }
 
     async fn remove_old_pending_blocks(&self) -> Result<(), DatabaseError> {
-        self.pool.get().await?.execute(
+        self.pool
+            .get()
+            .await?
+            .execute(
                 "
                     DELETE FROM pending_blocks 
                     WHERE created_at < (NOW() - INTERVAL '45 seconds')
@@ -1424,19 +1444,18 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(())
     }
 
-    async fn get_trusted_proposers(
-        &self,
-    ) -> Result<Vec<ProposerInfo>, DatabaseError> {
-        parse_rows(self.pool
-            .get()
-            .await?
-            .query(
-                "
+    async fn get_trusted_proposers(&self) -> Result<Vec<ProposerInfo>, DatabaseError> {
+        parse_rows(
+            self.pool
+                .get()
+                .await?
+                .query(
+                    "
                     SELECT * FROM trusted_proposers 
                 ",
-                &[],
-            )
-            .await?
+                    &[],
+                )
+                .await?,
         )
     }
 }

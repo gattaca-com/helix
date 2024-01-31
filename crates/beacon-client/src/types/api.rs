@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::error::ApiError;

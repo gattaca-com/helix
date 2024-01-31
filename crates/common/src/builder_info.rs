@@ -1,8 +1,4 @@
-use ethereum_consensus::{
-    primitives::U256,
-    serde::as_str,
-};
-
+use ethereum_consensus::{primitives::U256, serde::as_str};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, Eq, PartialEq)]
 pub struct BuilderInfo {

@@ -5,13 +5,14 @@ pub mod rpc_simulator;
 mod simulator_tests;
 pub mod traits;
 
-use std::sync::Arc;
 use ethereum_consensus::types::mainnet::ExecutionPayload;
+use std::sync::Arc;
 
-use helix_common::bid_submission::{BidTrace, SignedBidSubmission, BidSubmission};
-use helix_common::ValidatorPreferences;
-use ethereum_consensus::serde::as_str;
-use ethereum_consensus::primitives::BlsSignature;
+use ethereum_consensus::{primitives::BlsSignature, serde::as_str};
+use helix_common::{
+    bid_submission::{BidSubmission, BidTrace, SignedBidSubmission},
+    ValidatorPreferences,
+};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockSimRequest {
@@ -37,5 +38,4 @@ impl BlockSimRequest {
             proposer_preferences,
         }
     }
-
 }

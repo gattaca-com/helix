@@ -1,16 +1,16 @@
-pub mod v2;
 pub mod bid_submission;
 pub mod bid_trace;
+pub mod v2;
 
 pub use bid_submission::*;
 pub use bid_trace::*;
 
 use ethereum_consensus::{
+    altair::Bytes32,
+    capella::Withdrawal,
+    deneb::mainnet::{BYTES_PER_LOGS_BLOOM, MAX_EXTRA_DATA_BYTES},
     primitives::{BlsPublicKey, BlsSignature, ExecutionAddress, Hash32, Slot, U256},
     ssz::prelude::*,
-    deneb::mainnet::{BYTES_PER_LOGS_BLOOM, MAX_EXTRA_DATA_BYTES},
-    capella::Withdrawal,
-    altair::Bytes32,
     Fork,
 };
 

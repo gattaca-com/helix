@@ -3,15 +3,16 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 
-use helix_common::versioned_payload::PayloadAndBlobs;
-use helix_common::ProposerInfo;
-use helix_database::types::BuilderInfoDocument;
-use helix_common::{signing::RelaySigningContext, bid_submission::v2::header_submission::SignedHeaderSubmission};
 use helix_common::{
-    bid_submission::{BidTrace, SignedBidSubmission},
+    bid_submission::{
+        v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
+    },
     eth::SignedBuilderBid,
-    BuilderInfo,
+    signing::RelaySigningContext,
+    versioned_payload::PayloadAndBlobs,
+    BuilderInfo, ProposerInfo,
 };
+use helix_database::types::BuilderInfoDocument;
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 

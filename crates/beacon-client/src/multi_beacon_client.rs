@@ -6,17 +6,17 @@ use std::sync::{
 use async_trait::async_trait;
 use ethereum_consensus::primitives::Root;
 use futures::future::join_all;
-use helix_common::{ProposerDuty, ValidatorSummary, signed_proposal::VersionedSignedProposal, bellatrix::SimpleSerialize};
+use helix_common::{
+    bellatrix::SimpleSerialize, signed_proposal::VersionedSignedProposal, ProposerDuty,
+    ValidatorSummary,
+};
 use tokio::{sync::mpsc::Sender, task::JoinError};
 use tracing::error;
 
 use crate::{
     error::BeaconClientError,
     traits::{BeaconClientTrait, MultiBeaconClientTrait},
-    types::{
-        BroadcastValidation, HeadEventData, PayloadAttributesEvent,
-        StateId, SyncStatus,
-    },
+    types::{BroadcastValidation, HeadEventData, PayloadAttributesEvent, StateId, SyncStatus},
 };
 
 #[derive(Clone)]
@@ -128,7 +128,8 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
         }
     }
 
-    /// `subscribe_to_payload_attributes_events` subscribes to payload attributes events from all beacon nodes.
+    /// `subscribe_to_payload_attributes_events` subscribes to payload attributes events from all
+    /// beacon nodes.
     ///
     /// This function swaps async tasks for all beacon clients. Therefore,
     /// a single payload event will be received multiple times, likely once for every beacon node.
@@ -220,8 +221,9 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
         for _ in 0..num_clients {
             if let Some((i, res)) = receiver.recv().await {
                 match res {
-                    // Should the block fail full validation, a separate success response code (202) 
-                    // is used to indicate that the block was successfully broadcast but failed integration.
+                    // Should the block fail full validation, a separate success response code (202)
+                    // is used to indicate that the block was successfully broadcast but failed
+                    // integration.
                     Ok(202) => {
                         last_error = Some(BeaconClientError::BlockIntegrationFailed);
                     }
@@ -306,13 +308,14 @@ mod multi_beacon_client_tests {
         let client2 = Arc::new(MockBeaconClient::new().with_publish_block_response_code(200));
 
         let multi_client = MultiBeaconClient::new(vec![client1, client2]);
-        let result = multi_client
-            .publish_block(
-                Arc::new(VersionedSignedProposal::default()),
-                Some(BroadcastValidation::default()),
-                ethereum_consensus::Fork::Capella,
-            )
-            .await;
+        let result =
+            multi_client
+                .publish_block(
+                    Arc::new(VersionedSignedProposal::default()),
+                    Some(BroadcastValidation::default()),
+                    ethereum_consensus::Fork::Capella,
+                )
+                .await;
 
         assert!(result.is_ok());
     }
@@ -323,13 +326,14 @@ mod multi_beacon_client_tests {
         let client2 = Arc::new(MockBeaconClient::new().with_publish_block_response_code(202));
 
         let multi_client = MultiBeaconClient::new(vec![client1, client2]);
-        let result = multi_client
-            .publish_block(
-                Arc::new(VersionedSignedProposal::default()),
-                Some(BroadcastValidation::default()),
-                ethereum_consensus::Fork::Capella,
-            )
-            .await;
+        let result =
+            multi_client
+                .publish_block(
+                    Arc::new(VersionedSignedProposal::default()),
+                    Some(BroadcastValidation::default()),
+                    ethereum_consensus::Fork::Capella,
+                )
+                .await;
 
         assert!(matches!(result, Err(BeaconClientError::BlockValidationFailed)));
     }

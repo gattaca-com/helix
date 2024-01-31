@@ -1,25 +1,24 @@
 #[cfg(test)]
 mod simulator_tests {
     // ++++ IMPORTS ++++
-    use crate::{
-        builder::DbInfo,
-        builder::{
-            rpc_simulator::{BlockSimRpcResponse, JsonRpcError, RpcSimulator},
-            traits::BlockSimulator,
-            BlockSimRequest,
-        },
+    use crate::builder::{
+        rpc_simulator::{BlockSimRpcResponse, JsonRpcError, RpcSimulator},
+        traits::BlockSimulator,
+        BlockSimRequest, DbInfo,
     };
-    use ethereum_consensus::{primitives::BlsSignature, ssz::prelude::*};
+    use ethereum_consensus::{
+        primitives::BlsSignature, ssz::prelude::*, types::mainnet::ExecutionPayload,
+    };
+    use helix_common::{
+        bid_submission::{BidTrace, SignedBidSubmission, SignedBidSubmissionCapella},
+        simulator::BlockSimError,
+        BuilderInfo, ValidatorPreferences,
+    };
     use reqwest::Client;
     use reth_primitives::hex;
     use serde_json::json;
-    use uuid::Uuid;
     use std::sync::Arc;
-    use ethereum_consensus::types::mainnet::ExecutionPayload;
-    use helix_common::{
-        bid_submission::{BidTrace, SignedBidSubmission, SignedBidSubmissionCapella}, simulator::BlockSimError, BuilderInfo
-    };
-    use helix_common::ValidatorPreferences;
+    use uuid::Uuid;
 
     // ++++ HELPERS ++++
     fn get_simulator(endpoint: &str) -> RpcSimulator {
@@ -42,14 +41,12 @@ mod simulator_tests {
         bid_trace.block_hash = get_byte_vector_32_for_hex(
             "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
         );
-        let signed_bid_submission = SignedBidSubmission::Capella(
-            SignedBidSubmissionCapella {
+        let signed_bid_submission =
+            SignedBidSubmission::Capella(SignedBidSubmissionCapella {
                 message: bid_trace,
                 signature: BlsSignature::default(),
                 execution_payload,
-            }
-        );
-        
+            });
 
         BlockSimRequest::new(0, Arc::new(signed_bid_submission), ValidatorPreferences::default())
     }
@@ -67,7 +64,9 @@ mod simulator_tests {
         let (sim_res_sender, mut sim_res_receiver) = tokio::sync::mpsc::channel(100);
         let simulator = get_simulator(&server.url());
         let builder_info = BuilderInfo::default();
-        let result = simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4()).await;
+        let result = simulator
+            .process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4())
+            .await;
 
         mock.assert();
         assert!(result.is_ok());
@@ -98,7 +97,9 @@ mod simulator_tests {
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
         let simulator = get_simulator(&server.url());
         let builder_info = BuilderInfo::default();
-        let result = simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4()).await;
+        let result = simulator
+            .process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4())
+            .await;
 
         mock.assert();
         assert!(result.is_err());
@@ -128,7 +129,9 @@ mod simulator_tests {
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
         let simulator = get_simulator(&server.url());
         let builder_info = BuilderInfo::default();
-        let result = simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4()).await;
+        let result = simulator
+            .process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4())
+            .await;
 
         mock.assert();
         assert!(result.is_err());

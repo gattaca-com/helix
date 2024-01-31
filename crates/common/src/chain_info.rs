@@ -1,11 +1,13 @@
-use ethereum_consensus::clock::{SystemTimeProvider, for_holesky, HOLESKY_GENESIS_TIME};
-use ethereum_consensus::clock::{GOERLI_GENESIS_TIME, MAINNET_GENESIS_TIME, SEPOLIA_GENESIS_TIME};
-use ethereum_consensus::configs;
 use ethereum_consensus::{
-    clock::{for_goerli, for_mainnet, for_sepolia, Clock},
+    clock::{
+        for_goerli, for_holesky, for_mainnet, for_sepolia, Clock, SystemTimeProvider,
+        GOERLI_GENESIS_TIME, HOLESKY_GENESIS_TIME, MAINNET_GENESIS_TIME, SEPOLIA_GENESIS_TIME,
+    },
+    configs,
     primitives::Root,
-    state_transition::Context, 
-    Error, ssz::prelude::*,
+    ssz::prelude::*,
+    state_transition::Context,
+    Error,
 };
 
 pub(crate) const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
@@ -21,8 +23,8 @@ pub(crate) const GOERLI_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
     50, 5, 48, 173, 138, 14, 171, 196, 62, 251,
 ];
 pub(crate) const HOLESKY_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
-    145, 67, 170, 124, 97, 90, 127, 113, 21, 226, 182, 170, 195, 25, 192, 53, 41, 223, 130, 66, 174,
-    112, 95, 186, 157, 243, 155, 121, 197, 159, 168, 177,
+    145, 67, 170, 124, 97, 90, 127, 113, 21, 226, 182, 170, 195, 25, 192, 53, 41, 223, 130, 66,
+    174, 112, 95, 186, 157, 243, 155, 121, 197, 159, 168, 177,
 ];
 
 #[derive(Default, Debug, Clone, serde::Deserialize, serde::Serialize)]

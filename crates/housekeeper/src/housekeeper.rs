@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc, time::{Duration, SystemTime}};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use ethereum_consensus::primitives::BlsPublicKey;
 use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
@@ -13,12 +17,12 @@ use helix_beacon_client::{
     types::{HeadEventData, StateId},
     MultiBeaconClientTrait,
 };
+use helix_common::{
+    api::builder_api::BuilderGetValidatorsResponseEntry, pending_block::PendingBlock, ProposerDuty,
+    SignedValidatorRegistrationEntry,
+};
 use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
-use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, ProposerDuty,
-    SignedValidatorRegistrationEntry, pending_block::PendingBlock,
-};
 
 use crate::error::HousekeeperError;
 use uuid::Uuid;
@@ -47,7 +51,8 @@ type SharedHousekeeper<Database, BeaconClient, Auctioneer> =
 ///
 /// Responsible for updating and managing known validators and proposer duties.
 /// Also responsible for keeping the Auctioneer builder info up to date after manual changes.
-/// If running multiple API instances in a single region only one housekeeper is needed as services will sync through db.
+/// If running multiple API instances in a single region only one housekeeper is needed as services
+/// will sync through db.
 pub struct Housekeeper<
     DB: DatabaseService + 'static,
     BeaconClient: MultiBeaconClientTrait + 'static,
@@ -71,7 +76,7 @@ pub struct Housekeeper<
     refreshed_trusted_proposers_slot: Mutex<u64>,
     refresh_trusted_proposers_lock: Mutex<()>,
 
-    leader_id: String
+    leader_id: String,
 }
 
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
@@ -124,7 +129,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         }
 
         // Only allow one housekeeper task to run at a time.
-        if ! self.auctioneer.try_acquire_or_renew_leadership(&self.leader_id).await {
+        if !self.auctioneer.try_acquire_or_renew_leadership(&self.leader_id).await {
             return;
         }
 
@@ -212,7 +217,8 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     /// Refresh the list of known validators by querying the beacon client.
     /// Refreshed validators are stored in the database.
     ///
-    /// This will lock `known_validators_lock` to ensure that only one task is refreshing the known validators at a time.
+    /// This will lock `known_validators_lock` to ensure that only one task is refreshing the known
+    /// validators at a time.
     async fn refresh_known_validators(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
         head_slot: u64,
@@ -230,13 +236,14 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
         let start_fetching_ts = Instant::now();
 
-        let validators = match self.beacon_client.get_state_validators(StateId::Head).await {
-            Ok(validators) => validators,
-            Err(err) => {
-                error!(err = %err, "failed to fetch validators");
-                return Err(HousekeeperError::BeaconClientError(err));
-            }
-        };
+        let validators =
+            match self.beacon_client.get_state_validators(StateId::Head).await {
+                Ok(validators) => validators,
+                Err(err) => {
+                    error!(err = %err, "failed to fetch validators");
+                    return Err(HousekeeperError::BeaconClientError(err));
+                }
+            };
 
         info!(
             head_slot = head_slot,
@@ -255,10 +262,6 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     }
 
     /// Synchronizes builder information changes.
-    ///
-    /// This method compares the builder information stored in the database with
-    /// the local auctioneer data. If any differences are found, it updates
-    /// the auctioneer data.
     async fn sync_builder_info_changes(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
         head_slot: u64,
@@ -292,19 +295,16 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         Ok(())
     }
 
-
     /// Handle valid payload Optimistic V2 demotions.
-    /// 
+    ///
     /// There are two cases where we might demote a builder here.
     /// 1) They sent a header but we received no accompanying payload.
-    /// 2) The payload was received > 2 seconds after we received the header. 
-    /// 
+    /// 2) The payload was received > 2 seconds after we received the header.
+    ///
     /// DB entries are also removed if they have been waiting for over 45 seconds.
-    async fn demote_builders_with_expired_pending_blocks(&self)-> Result<(), HousekeeperError> {
-        let current_time = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+    async fn demote_builders_with_expired_pending_blocks(&self) -> Result<(), HousekeeperError> {
+        let current_time =
+            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64;
 
         let mut demoted_builders = HashSet::new();
 
@@ -313,14 +313,19 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
                 continue;
             }
 
-            if v2_submission_late(&pending_block, current_time)  {
+            if v2_submission_late(&pending_block, current_time) {
                 let reason = "builder demoted due to missing payload submission";
                 info!(builder_pub_key = ?pending_block.builder_pubkey, reason);
                 self.auctioneer.demote_builder(&pending_block.builder_pubkey).await?;
-                self.db.db_demote_builder(&pending_block.builder_pubkey, &pending_block.block_hash, reason.to_string()).await?;
+                self.db
+                    .db_demote_builder(
+                        &pending_block.builder_pubkey,
+                        &pending_block.block_hash,
+                        reason.to_string(),
+                    )
+                    .await?;
                 demoted_builders.insert(pending_block.builder_pubkey);
             }
-
         }
 
         // Remove expired entries (entries that have been in the db for > 45s).
@@ -330,16 +335,6 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     }
 
     /// Determine if known validators should be refreshed for the given slot.
-    ///
-    /// Checks:
-    /// 1. Whether the minimum number of slots have passed since the last refresh.
-    ///    The minimum is defined by `MIN_SLOTS_BETWEEN_UPDATES` = 6.
-    /// 2. Whether the update is forced by having more than `MAX_SLOTS_BEFORE_FORCED_UPDATE` = 32
-    ///    slots since the last update.
-    /// 3. Whether the `head_slot` position within its epoch is either 4 or 20.
-    ///
-    /// If any of these conditions are met, the function will return `true`, signaling
-    /// that known validators should be refreshed.
     async fn should_refresh_known_validators(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
         head_slot: u64,
@@ -365,11 +360,6 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     }
 
     /// Update proposer duties for `head_slot` and `head_slot` + 1.
-    ///
-    /// Proposer duties are only updated if the new `head_slot` is half way through the epoch,
-    /// or we haven't updated the proposer duties in half an epoch of slots.
-    ///
-    /// This will lock `proposer_duties_lock` to ensure that only one task is updating the proposer duties at a time.
     async fn update_proposer_duties(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
         head_slot: u64,
@@ -392,14 +382,16 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         // Check if signed validator registrations exist for each proposer duty
         let pub_keys: Vec<BlsPublicKey> =
             proposer_duties.iter().map(|duty| duty.public_key.clone()).collect();
-        let signed_validator_registrations =
-            match self.fetch_signed_validator_registrations(pub_keys).await {
-                Ok(signed_validator_registrations) => signed_validator_registrations,
-                Err(err) => {
-                    error!(err = %err, "failed to fetch signed validator registrations");
-                    return Err(HousekeeperError::DatabaseError(err));
-                }
-            };
+        let signed_validator_registrations = match self
+            .fetch_signed_validator_registrations(pub_keys)
+            .await
+        {
+            Ok(signed_validator_registrations) => signed_validator_registrations,
+            Err(err) => {
+                error!(err = %err, "failed to fetch signed validator registrations");
+                return Err(HousekeeperError::DatabaseError(err));
+            }
+        };
 
         if signed_validator_registrations.is_empty() {
             warn!("No signed validator registrations found for proposer duties");
@@ -451,10 +443,10 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     /// Determine if proposer duties should be updated for the given slot.
     ///
     /// This function checks two conditions:
-    /// 1. If the `head_slot` is exactly divisible by PROPOSER_DUTIES_UPDATE_FREQ,
-    ///    it will return `true` to trigger a proposer duties update.
-    /// 2. If the distance between the current `head_slot` and the last slot for which
-    ///    proposer duties were fetched (`proposer_duties_slot`) is greater than or equal to
+    /// 1. If the `head_slot` is exactly divisible by PROPOSER_DUTIES_UPDATE_FREQ, it will return
+    ///    `true` to trigger a proposer duties update.
+    /// 2. If the distance between the current `head_slot` and the last slot for which proposer
+    ///    duties were fetched (`proposer_duties_slot`) is greater than or equal to
     ///    PROPOSER_DUTIES_UPDATE_FREQ, it will also return `true`.
     async fn should_update_duties(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
@@ -462,8 +454,8 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     ) -> bool {
         let proposer_duties_slot = *self.proposer_duties_slot.lock().await;
         let last_proposer_duty_distance = head_slot.saturating_sub(proposer_duties_slot);
-        head_slot % PROPOSER_DUTIES_UPDATE_FREQ == 0
-            || last_proposer_duty_distance >= PROPOSER_DUTIES_UPDATE_FREQ
+        head_slot % PROPOSER_DUTIES_UPDATE_FREQ == 0 ||
+            last_proposer_duty_distance >= PROPOSER_DUTIES_UPDATE_FREQ
     }
 
     /// Determine if the trusted proposers should be refreshed for the given slot.
@@ -472,28 +464,28 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     /// 1. If the `head_slot` is exactly divisible by `TRUSTED_PROPOSERS_UPDATE_FREQ`,
     ///   it will return `true` to trigger a trusted proposer update.
     /// 2. If the distance between the current `head_slot` and the last slot for which
-    ///  the trusted proposers was refreshed (`refreshed_trusted_proposers_slot`) is greater than or equal to
-    /// `TRUSTED_PROPOSERS_UPDATE_FREQ`, it will also return `true`.
+    ///  the trusted proposers was refreshed (`refreshed_trusted_proposers_slot`) is greater than or
+    /// equal to `TRUSTED_PROPOSERS_UPDATE_FREQ`, it will also return `true`.
     async fn should_update_trusted_proposers(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
         head_slot: u64,
     ) -> bool {
         let trusted_proposers_slot = *self.refreshed_trusted_proposers_slot.lock().await;
         let last_trusted_proposers_distance = head_slot.saturating_sub(trusted_proposers_slot);
-        head_slot % TRUSTED_PROPOSERS_UPDATE_FREQ == 0
-            || last_trusted_proposers_distance >= TRUSTED_PROPOSERS_UPDATE_FREQ
+        head_slot % TRUSTED_PROPOSERS_UPDATE_FREQ == 0 ||
+            last_trusted_proposers_distance >= TRUSTED_PROPOSERS_UPDATE_FREQ
     }
 
     /// Update the proposer whitelist.
-    /// 
+    ///
     /// This function will fetch the proposer whitelist from the database and update the auctioneer.
     /// It will also update the `refreshed_trusted_proposers_slot` to the current `head_slot`.
-    /// 
+    ///
     /// This function will error if it cannot fetch the proposer whitelist from the database.
     /// It will continue if it cannot update the auctioneer.
-    /// 
+    ///
     /// This function will also error if it cannot update the `refreshed_trusted_proposers_slot`.
-    /// 
+    ///
     /// This function will return `Ok(())` if it completes successfully.
     async fn update_trusted_proposers(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
@@ -501,11 +493,8 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     ) -> Result<(), HousekeeperError> {
         let _guard = self.refresh_trusted_proposers_lock.try_lock()?;
 
-        debug!(
-            head_slot = head_slot,
-            "Housekeeper::update_trusted_proposers",
-        );
-        
+        debug!(head_slot = head_slot, "Housekeeper::update_trusted_proposers",);
+
         let proposer_whitelist = self.db.get_trusted_proposers().await?;
         let num_trusted_proposers = proposer_whitelist.len();
 
@@ -513,7 +502,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         *self.refreshed_trusted_proposers_slot.lock().await = head_slot;
 
         debug!(
-            head_slot = head_slot, 
+            head_slot = head_slot,
             num_trusted_proposers = num_trusted_proposers,
             "updated trusted proposers"
         );
@@ -553,16 +542,19 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 }
 
 /// Calculates the delay in submission of the payload after a header.
-/// 
-/// Returns true if the payload was received over 2 seconds after the header or if the payload was never received.
-/// Otherwise, returns false.
+///
+/// Returns true if the payload was received over 2 seconds after the header or if the payload was
+/// never received. Otherwise, returns false.
 fn v2_submission_late(pending_block: &PendingBlock, current_time: u64) -> bool {
     match (pending_block.header_receive_ms, pending_block.payload_receive_ms) {
         (None, None) => false,
         (None, Some(_)) => false,
-        (Some(header_receive_ms), None) => (current_time.saturating_sub(header_receive_ms)) > MAX_DELAY_WITH_NO_V2_PAYLOAD_MS,
+        (Some(header_receive_ms), None) => {
+            (current_time.saturating_sub(header_receive_ms)) > MAX_DELAY_WITH_NO_V2_PAYLOAD_MS
+        }
         (Some(header_receive_ms), Some(payload_receive_ms)) => {
-            payload_receive_ms.saturating_sub(header_receive_ms) > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
-        },
+            payload_receive_ms.saturating_sub(header_receive_ms) >
+                MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
+        }
     }
 }

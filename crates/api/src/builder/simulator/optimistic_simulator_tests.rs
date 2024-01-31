@@ -8,22 +8,23 @@ mod simulator_tests {
         BlockSimRequest,
     };
     use ethereum_consensus::{
-        types::mainnet::ExecutionPayload,
         primitives::{BlsPublicKey, BlsSignature},
         ssz::prelude::*,
+        types::mainnet::ExecutionPayload,
     };
+    use helix_common::{
+        bid_submission::{BidTrace, SignedBidSubmission, SignedBidSubmissionCapella},
+        simulator::BlockSimError,
+        BuilderInfo, ValidatorPreferences,
+    };
+    use helix_database::MockDatabaseService;
+    use helix_datastore::MockAuctioneer;
     use rand::Rng;
     use reqwest::Client;
     use reth_primitives::hex;
     use serde_json::json;
-    use uuid::Uuid;
     use std::sync::{atomic::AtomicBool, Arc};
-    use helix_database::MockDatabaseService;
-    use helix_datastore::MockAuctioneer;
-    use helix_common::{
-        bid_submission::{BidTrace, SignedBidSubmission, SignedBidSubmissionCapella}, simulator::BlockSimError, BuilderInfo
-    };
-    use helix_common::ValidatorPreferences;
+    use uuid::Uuid;
 
     // ++++ HELPERS ++++
     fn get_optimistic_simulator(
@@ -71,16 +72,13 @@ mod simulator_tests {
         bid_trace.block_hash = get_byte_vector_32_for_hex(
             "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
         );
-        let signed_bid_submission = SignedBidSubmission::Capella(
-            SignedBidSubmissionCapella {
-                message: bid_trace,
-                execution_payload,
-                signature: BlsSignature::default(),
-            }
-        );
-        
+        let signed_bid_submission = SignedBidSubmission::Capella(SignedBidSubmissionCapella {
+            message: bid_trace,
+            execution_payload,
+            signature: BlsSignature::default(),
+        });
 
-        BlockSimRequest::new( 0, Arc::new(signed_bid_submission), ValidatorPreferences::default())
+        BlockSimRequest::new(0, Arc::new(signed_bid_submission), ValidatorPreferences::default())
     }
 
     // ++++ TESTS ++++
@@ -95,11 +93,17 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info = BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None };
-        let simulator =
-            get_optimistic_simulator(&server.url(), Some(builder_info.clone()), builder_demoted.clone());
+        let builder_info =
+            BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None };
+        let simulator = get_optimistic_simulator(
+            &server.url(),
+            Some(builder_info.clone()),
+            builder_demoted.clone(),
+        );
 
-        let result = simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4()).await;
+        let result = simulator
+            .process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4())
+            .await;
 
         // give the simulator time to process the request
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -120,11 +124,17 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info = BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None };
-        let simulator =
-            get_optimistic_simulator(&server.url(), Some(builder_info.clone()), builder_demoted.clone());
+        let builder_info =
+            BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None };
+        let simulator = get_optimistic_simulator(
+            &server.url(),
+            Some(builder_info.clone()),
+            builder_demoted.clone(),
+        );
 
-        let result = simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4()).await;
+        let result = simulator
+            .process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4())
+            .await;
 
         // give the simulator time to process the request
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -145,11 +155,17 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info = BuilderInfo { collateral: U256::from(100), is_optimistic: false, builder_id: None };
-        let simulator =
-            get_optimistic_simulator(&server.url(), Some(builder_info.clone()), builder_demoted.clone());
+        let builder_info =
+            BuilderInfo { collateral: U256::from(100), is_optimistic: false, builder_id: None };
+        let simulator = get_optimistic_simulator(
+            &server.url(),
+            Some(builder_info.clone()),
+            builder_demoted.clone(),
+        );
 
-        let result = simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4()).await;
+        let result = simulator
+            .process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4())
+            .await;
 
         // give the simulator time to process the request
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -170,11 +186,17 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info = BuilderInfo { collateral: U256::from(100), is_optimistic: false, builder_id: None };
-        let simulator =
-            get_optimistic_simulator(&server.url(), Some(builder_info.clone()), builder_demoted.clone());
+        let builder_info =
+            BuilderInfo { collateral: U256::from(100), is_optimistic: false, builder_id: None };
+        let simulator = get_optimistic_simulator(
+            &server.url(),
+            Some(builder_info.clone()),
+            builder_demoted.clone(),
+        );
 
-        let result = simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4()).await;
+        let result = simulator
+            .process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4())
+            .await;
 
         // give the simulator time to process the request
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
