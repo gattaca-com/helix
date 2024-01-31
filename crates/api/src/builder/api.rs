@@ -260,9 +260,9 @@ where
                 proposer_trusted_builders = ?proposer_trusted_builders,
                 "builder not in proposer trusted builders list",
             );
-            return Err(
-                BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders }
-            );
+            return Err(BuilderApiError::BuilderNotInProposersTrustedList {
+                proposer_trusted_builders,
+            });
         }
 
         // Verify payload has not already been delivered
@@ -285,7 +285,6 @@ where
                 next_duty,
                 &payload_attributes,
                 &builder_info,
-                head_slot,
                 &mut trace,
                 &request_id,
             )
@@ -447,9 +446,9 @@ where
                 proposer_trusted_builders = ?proposer_trusted_builders,
                 "builder not in proposer trusted builders list",
             );
-            return Err(
-                BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders }
-            );
+            return Err(BuilderApiError::BuilderNotInProposersTrustedList {
+                proposer_trusted_builders,
+            });
         }
 
         trace.pre_checks = get_nanos_timestamp()?;
@@ -613,9 +612,9 @@ where
                 proposer_trusted_builders = ?proposer_trusted_builders,
                 "builder not in proposer trusted builders list",
             );
-            return Err(
-                BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders }
-            );
+            return Err(BuilderApiError::BuilderNotInProposersTrustedList {
+                proposer_trusted_builders,
+            });
         }
 
         // Verify payload has not already been delivered
@@ -638,7 +637,6 @@ where
                 next_duty,
                 &payload_attributes,
                 &builder_info,
-                head_slot,
                 &mut trace,
                 &request_id,
             )
@@ -706,12 +704,11 @@ where
             "received gossiped header",
         );
 
-        let mut trace =
-            GossipedHeaderTrace {
-                on_receive: req.on_receive,
-                on_gossip_receive: get_nanos_timestamp().unwrap_or_default(),
-                ..Default::default()
-            };
+        let mut trace = GossipedHeaderTrace {
+            on_receive: req.on_receive,
+            on_gossip_receive: get_nanos_timestamp().unwrap_or_default(),
+            ..Default::default()
+        };
 
         // Check that this request is for a known payload attribute for the current slot.
         if let Err(err) =
@@ -982,7 +979,6 @@ where
         next_duty: BuilderGetValidatorsResponseEntry,
         payload_attributes: &PayloadAttributesUpdate,
         builder_info: &BuilderInfo,
-        head_slot: u64,
         trace: &mut SubmissionTrace,
         request_id: &Uuid,
     ) -> Result<(Arc<SignedBidSubmission>, bool), BuilderApiError> {
@@ -1060,17 +1056,15 @@ where
         is_cancellations_enabled: bool,
         request_id: &Uuid,
     ) -> Result<U256, BuilderApiError> {
-        let floor_bid_value = match self
-            .auctioneer
-            .get_floor_bid_value(slot, parent_hash, proposer_public_key)
-            .await
-        {
-            Ok(floor_value) => floor_value.unwrap_or(U256::ZERO),
-            Err(err) => {
-                error!(request_id = %request_id, error = %err, "Failed to get floor bid value");
-                return Err(BuilderApiError::InternalError);
-            }
-        };
+        let floor_bid_value =
+            match self.auctioneer.get_floor_bid_value(slot, parent_hash, proposer_public_key).await
+            {
+                Ok(floor_value) => floor_value.unwrap_or(U256::ZERO),
+                Err(err) => {
+                    error!(request_id = %request_id, error = %err, "Failed to get floor bid value");
+                    return Err(BuilderApiError::InternalError);
+                }
+            };
 
         let is_bid_below_floor = value < floor_bid_value;
         let is_bid_at_or_below_floor = value <= floor_bid_value;
@@ -1162,16 +1156,16 @@ where
             payload.clone(),
             registration_info.preferences,
         );
-        let result =
-            self.simulator
-                .process_request(
-                    sim_request,
-                    builder_info,
-                    is_top_bid,
-                    self.db_sender.clone(),
-                    *request_id,
-                )
-                .await;
+        let result = self
+            .simulator
+            .process_request(
+                sim_request,
+                builder_info,
+                is_top_bid,
+                self.db_sender.clone(),
+                *request_id,
+            )
+            .await;
 
         match result {
             Ok(sim_optimistic) => {
@@ -1289,13 +1283,8 @@ where
             BuilderApiError::ProposerDutyNotFound
         })?;
 
-        let payload_attributes = self
-            .payload_attributes
-            .read()
-            .await
-            .get(parent_hash)
-            .cloned()
-            .ok_or_else(|| {
+        let payload_attributes =
+            self.payload_attributes.read().await.get(parent_hash).cloned().ok_or_else(|| {
                 warn!(request_id = %request_id, "payload attributes not yet known");
                 BuilderApiError::PayloadAttributesNotYetKnown
             })?;
@@ -1713,7 +1702,6 @@ fn sanity_check_block_submission(
     payload_attributes: &PayloadAttributesUpdate,
     chain_info: &ChainInfo,
 ) -> Result<(), BuilderApiError> {
-
     let expected_timestamp = chain_info.genesis_time_in_secs + (bid_trace.slot * SECONDS_PER_SLOT);
     if payload.timestamp() != expected_timestamp {
         return Err(BuilderApiError::IncorrectTimestamp {

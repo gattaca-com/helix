@@ -93,13 +93,11 @@ impl SignedBuilderBid {
 
                         Ok(Self::Deneb(deneb::SignedBuilderBid { message, signature }))
                     }
-                    None => {
-                        Err(std::io::Error::new(
-                            std::io::ErrorKind::InvalidInput,
-                            "Missing blobs bundle",
-                        )
-                        .into())
-                    }
+                    None => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Missing blobs bundle",
+                    )
+                    .into()),
                 }
             }
         }
@@ -220,11 +218,10 @@ mod tests {
 
     #[test]
     fn build_signed_builder() {
-        let x =
-            capella::SignedBuilderBid {
-                message: Default::default(),
-                signature: Default::default(),
-            };
+        let x = capella::SignedBuilderBid {
+            message: Default::default(),
+            signature: Default::default(),
+        };
         let x = SignedBuilderBid::Capella(x);
 
         let x = serde_json::to_vec(&x).unwrap();

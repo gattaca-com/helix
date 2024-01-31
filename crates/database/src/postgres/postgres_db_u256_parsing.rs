@@ -37,18 +37,17 @@ impl<'a> FromSql<'a> for PostgresNumeric {
         let mut offset = 0;
 
         // Function to read two bytes and advance the offset
-        let read_two_bytes =
-            |raw: &[u8], offset: &mut usize| -> std::io::Result<u16> {
-                if raw.len() < *offset + 2 {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        "Not enough bytes to read",
-                    ));
-                }
-                let value = u16::from_be_bytes([raw[*offset], raw[*offset + 1]]);
-                *offset += 2;
-                Ok(value)
-            };
+        let read_two_bytes = |raw: &[u8], offset: &mut usize| -> std::io::Result<u16> {
+            if raw.len() < *offset + 2 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "Not enough bytes to read",
+                ));
+            }
+            let value = u16::from_be_bytes([raw[*offset], raw[*offset + 1]]);
+            *offset += 2;
+            Ok(value)
+        };
 
         let num_groups = read_two_bytes(raw, &mut offset)?;
         let weight = read_two_bytes(raw, &mut offset)?;

@@ -47,7 +47,7 @@ pub enum BeaconClientError {
     BlockPublishError(String),
 
     #[error("Error initializing broadcaster: {0}")]
-    BroadcasterInitError(String)
+    BroadcasterInitError(String),
 }
 
 impl IntoResponse for BeaconClientError {

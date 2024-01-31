@@ -178,15 +178,14 @@ impl RedisCache {
             Err(_) => return false,
         };
 
-        let result: RedisResult<Value> =
-            redis::cmd("SET")
-                .arg(key)
-                .arg(id)
-                .arg("NX")
-                .arg("PX")
-                .arg(expiry)
-                .query_async(&mut conn)
-                .await;
+        let result: RedisResult<Value> = redis::cmd("SET")
+            .arg(key)
+            .arg(id)
+            .arg("NX")
+            .arg("PX")
+            .arg(expiry)
+            .query_async(&mut conn)
+            .await;
 
         match result {
             Ok(Value::Okay) => true,
@@ -977,14 +976,13 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
-        let field_val_pairs: HashMap<String, String> =
-            [
-                ("field1".to_string(), "value1".to_string()),
-                ("field2".to_string(), "value2".to_string()),
-            ]
-            .iter()
-            .cloned()
-            .collect();
+        let field_val_pairs: HashMap<String, String> = [
+            ("field1".to_string(), "value1".to_string()),
+            ("field2".to_string(), "value2".to_string()),
+        ]
+        .iter()
+        .cloned()
+        .collect();
 
         // Hset all objects
         for (field, value) in &field_val_pairs {
@@ -1124,17 +1122,16 @@ mod tests {
         // Test with empty builder_bids
         let empty_bids = HashMap::new();
         let floor_value = U256::from(40);
-        let res =
-            cache
-                .update_top_bid(
-                    &mut state,
-                    &empty_bids,
-                    slot,
-                    &parent_hash,
-                    &proposer_pub_key,
-                    floor_value,
-                )
-                .await;
+        let res = cache
+            .update_top_bid(
+                &mut state,
+                &empty_bids,
+                slot,
+                &parent_hash,
+                &proposer_pub_key,
+                floor_value,
+            )
+            .await;
         assert!(res.is_ok(), "Function should handle empty bids");
 
         // Populate builder_bids
@@ -1145,17 +1142,16 @@ mod tests {
         builder_bids.insert("builder3".to_string(), U256::from(40));
 
         // Test updating the top bid
-        let res =
-            cache
-                .update_top_bid(
-                    &mut state,
-                    &builder_bids,
-                    slot,
-                    &parent_hash,
-                    &proposer_pub_key,
-                    floor_value,
-                )
-                .await;
+        let res = cache
+            .update_top_bid(
+                &mut state,
+                &builder_bids,
+                slot,
+                &parent_hash,
+                &proposer_pub_key,
+                floor_value,
+            )
+            .await;
         assert!(res.is_ok(), "Failed to update top bid");
         assert_eq!(state.top_bid_value, U256::from(60), "Top bid value mismatch");
         assert!(state.was_top_bid_updated, "Top bid should be updated");
@@ -1605,14 +1601,13 @@ mod tests {
 
         // Save 2 builder bids. builder bid 1 > builder bid 2
         let builder_pub_key_1 = BlsPublicKey::try_from([1u8; 48].as_ref()).unwrap();
-        let builder_bid_1 =
-            SignedBuilderBid::Capella(capella::SignedBuilderBid {
-                message: helix_common::eth::capella::BuilderBid {
-                    value: U256::from(100),
-                    ..Default::default()
-                },
+        let builder_bid_1 = SignedBuilderBid::Capella(capella::SignedBuilderBid {
+            message: helix_common::eth::capella::BuilderBid {
+                value: U256::from(100),
                 ..Default::default()
-            });
+            },
+            ..Default::default()
+        });
 
         let builder_pub_key_2 = BlsPublicKey::try_from([2u8; 48].as_ref()).unwrap();
         let builder_bid_2 = SignedBuilderBid::Capella(capella::SignedBuilderBid {
@@ -1658,17 +1653,16 @@ mod tests {
             .unwrap()
             .unwrap_or(U256::ZERO);
 
-        let update_res =
-            cache
-                .update_top_bid(
-                    &mut state,
-                    &builder_bids,
-                    slot,
-                    &parent_hash,
-                    &proposer_pub_key,
-                    floor_value,
-                )
-                .await;
+        let update_res = cache
+            .update_top_bid(
+                &mut state,
+                &builder_bids,
+                slot,
+                &parent_hash,
+                &proposer_pub_key,
+                floor_value,
+            )
+            .await;
         assert!(update_res.is_ok(), "Failed to update top bid");
 
         let top_bid = cache.get_best_bid(slot, &parent_hash, &proposer_pub_key).await;

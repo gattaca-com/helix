@@ -146,12 +146,11 @@ async fn run() {
         match fetch_and_aggregate_validators(&endpoints).await {
             Ok(validators) => {
                 println!("Num validators fetched: {:?}", validators.len());
-                if let Err(err) =
-                    register_validators(
-                        validators.into_iter().map(|v| v.registration).collect(),
-                        helix_register_endpoint,
-                    )
-                    .await
+                if let Err(err) = register_validators(
+                    validators.into_iter().map(|v| v.registration).collect(),
+                    helix_register_endpoint,
+                )
+                .await
                 {
                     println!("Error registering validators to our relay: {err}");
                 } else {

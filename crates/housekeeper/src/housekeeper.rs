@@ -236,14 +236,13 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
         let start_fetching_ts = Instant::now();
 
-        let validators =
-            match self.beacon_client.get_state_validators(StateId::Head).await {
-                Ok(validators) => validators,
-                Err(err) => {
-                    error!(err = %err, "failed to fetch validators");
-                    return Err(HousekeeperError::BeaconClientError(err));
-                }
-            };
+        let validators = match self.beacon_client.get_state_validators(StateId::Head).await {
+            Ok(validators) => validators,
+            Err(err) => {
+                error!(err = %err, "failed to fetch validators");
+                return Err(HousekeeperError::BeaconClientError(err));
+            }
+        };
 
         info!(
             head_slot = head_slot,
@@ -382,16 +381,14 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         // Check if signed validator registrations exist for each proposer duty
         let pub_keys: Vec<BlsPublicKey> =
             proposer_duties.iter().map(|duty| duty.public_key.clone()).collect();
-        let signed_validator_registrations = match self
-            .fetch_signed_validator_registrations(pub_keys)
-            .await
-        {
-            Ok(signed_validator_registrations) => signed_validator_registrations,
-            Err(err) => {
-                error!(err = %err, "failed to fetch signed validator registrations");
-                return Err(HousekeeperError::DatabaseError(err));
-            }
-        };
+        let signed_validator_registrations =
+            match self.fetch_signed_validator_registrations(pub_keys).await {
+                Ok(signed_validator_registrations) => signed_validator_registrations,
+                Err(err) => {
+                    error!(err = %err, "failed to fetch signed validator registrations");
+                    return Err(HousekeeperError::DatabaseError(err));
+                }
+            };
 
         if signed_validator_registrations.is_empty() {
             warn!("No signed validator registrations found for proposer duties");

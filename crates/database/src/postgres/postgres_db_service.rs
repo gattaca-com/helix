@@ -222,27 +222,26 @@ impl PostgresDatabaseService {
 
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql = String::from("INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at) VALUES ");
-            let values_clauses: Vec<String> =
-                params
-                    .chunks(6)
-                    .enumerate()
-                    .map(|(i, _)| {
-                        if i == 0 {
-                            String::from("($1, $2, $3, $4, $5, $6)")
-                        } else {
-                            let offset = i * 6;
-                            format!(
-                                "(${}, ${}, ${}, ${}, ${}, ${})",
-                                offset + 1,
-                                offset + 2,
-                                offset + 3,
-                                offset + 4,
-                                offset + 5,
-                                offset + 6,
-                            )
-                        }
-                    })
-                    .collect();
+            let values_clauses: Vec<String> = params
+                .chunks(6)
+                .enumerate()
+                .map(|(i, _)| {
+                    if i == 0 {
+                        String::from("($1, $2, $3, $4, $5, $6)")
+                    } else {
+                        let offset = i * 6;
+                        format!(
+                            "(${}, ${}, ${}, ${}, ${}, ${})",
+                            offset + 1,
+                            offset + 2,
+                            offset + 3,
+                            offset + 4,
+                            offset + 5,
+                            offset + 6,
+                        )
+                    }
+                })
+                .collect();
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
@@ -523,19 +522,18 @@ impl DatabaseService for PostgresDatabaseService {
         let mut sql = String::from(
             "INSERT INTO proposer_duties (slot_number, validator_index, public_key) VALUES ",
         );
-        let values_clauses: Vec<String> =
-            params
-                .chunks(3)
-                .enumerate()
-                .map(|(i, _)| {
-                    if i == 0 {
-                        String::from("($1, $2, $3)")
-                    } else {
-                        let offset = i * 3;
-                        format!("(${}, ${}, ${})", offset + 1, offset + 2, offset + 3)
-                    }
-                })
-                .collect();
+        let values_clauses: Vec<String> = params
+            .chunks(3)
+            .enumerate()
+            .map(|(i, _)| {
+                if i == 0 {
+                    String::from("($1, $2, $3)")
+                } else {
+                    let offset = i * 3;
+                    format!("(${}, ${}, ${})", offset + 1, offset + 2, offset + 3)
+                }
+            })
+            .collect();
 
         // Join the values clauses and append them to the SQL statement
         sql.push_str(&values_clauses.join(", "));
@@ -757,9 +755,9 @@ impl DatabaseService for PostgresDatabaseService {
             // Prepare the params vector from the structured parameters
             let params: Vec<&(dyn ToSql + Sync)> = structured_params
                 .iter()
-                .flat_map(
-                    |tuple| vec![&tuple.0 as &(dyn ToSql + Sync), &tuple.1 as &(dyn ToSql + Sync)]
-                )
+                .flat_map(|tuple| {
+                    vec![&tuple.0 as &(dyn ToSql + Sync), &tuple.1 as &(dyn ToSql + Sync)]
+                })
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses

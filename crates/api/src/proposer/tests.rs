@@ -387,15 +387,14 @@ mod proposer_api_tests {
         send_dummy_slot_update(slot_update_sender.clone(), None, None, None).await;
 
         // Prepare the request
-        let req_url =
-            format!(
-                "{}{}/header/{}/{}/{}",
-                http_config.base_url(),
-                PATH_PROPOSER_API,
-                HEAD_SLOT,
-                PARENT_HASH,
-                PUB_KEY,
-            );
+        let req_url = format!(
+            "{}{}/header/{}/{}/{}",
+            http_config.base_url(),
+            PATH_PROPOSER_API,
+            HEAD_SLOT,
+            PARENT_HASH,
+            PUB_KEY,
+        );
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()

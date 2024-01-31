@@ -698,15 +698,14 @@ mod tests {
             get_byte_vector_20_for_hex("0x1230dde14e7256340cc820415a6022a7d1c93a35");
 
         // Send JSON encoded request
-        let resp =
-            reqwest::Client::new()
-                .post(req_url.as_str())
-                .header("accept", "*/*")
-                .header("Content-Type", "application/json")
-                .json(&signed_bid_submission)
-                .send()
-                .await
-                .unwrap();
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .json(&signed_bid_submission)
+            .send()
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Fee recipient mismatch. got: 0x1230dde14e7256340cc820415a6022a7d1c93a35, expected: 0x5cc0dde14e7256340cc820415a6022a7d1c93a35");
@@ -733,15 +732,14 @@ mod tests {
         let signed_bid_submission: SignedBidSubmission = load_bid_submission();
 
         // Send JSON encoded request
-        let resp =
-            reqwest::Client::new()
-                .post(req_url.as_str())
-                .header("accept", "*/*")
-                .header("Content-Type", "application/json")
-                .json(&signed_bid_submission)
-                .send()
-                .await
-                .unwrap();
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .json(&signed_bid_submission)
+            .send()
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(
@@ -775,15 +773,14 @@ mod tests {
         signed_bid_submission.message_mut().slot = 1;
 
         // Send JSON encoded request
-        let resp =
-            reqwest::Client::new()
-                .post(req_url.as_str())
-                .header("accept", "*/*")
-                .header("Content-Type", "application/json")
-                .json(&signed_bid_submission)
-                .send()
-                .await
-                .unwrap();
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .json(&signed_bid_submission)
+            .send()
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Could not find proposer duty for slot");
@@ -819,15 +816,14 @@ mod tests {
         }
 
         // Send JSON encoded request
-        let resp =
-            reqwest::Client::new()
-                .post(req_url.as_str())
-                .header("accept", "*/*")
-                .header("Content-Type", "application/json")
-                .json(&signed_bid_submission)
-                .send()
-                .await
-                .unwrap();
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .json(&signed_bid_submission)
+            .send()
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Incorrect timestamp. got: 1, expected: 1606824419");
@@ -854,15 +850,14 @@ mod tests {
         let signed_bid_submission: SignedBidSubmission = load_bid_submission();
 
         // Send JSON encoded request
-        let resp =
-            reqwest::Client::new()
-                .post(req_url.as_str())
-                .header("accept", "*/*")
-                .header("Content-Type", "application/json")
-                .json(&signed_bid_submission)
-                .send()
-                .await
-                .unwrap();
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .json(&signed_bid_submission)
+            .send()
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Slot mismatch. got: 33, expected: 1");
@@ -902,15 +897,14 @@ mod tests {
         }
 
         // Send JSON encoded request
-        let resp =
-            reqwest::Client::new()
-                .post(req_url.as_str())
-                .header("accept", "*/*")
-                .header("Content-Type", "application/json")
-                .json(&signed_bid_submission)
-                .send()
-                .await
-                .unwrap();
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .json(&signed_bid_submission)
+            .send()
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Prev randao mismatch. got: 0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5, expected: 0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e4");
@@ -950,15 +944,14 @@ mod tests {
         );
 
         // Send JSON encoded request
-        let resp =
-            reqwest::Client::new()
-                .post(req_url.as_str())
-                .header("accept", "*/*")
-                .header("Content-Type", "application/json")
-                .json(&signed_bid_submission)
-                .send()
-                .await
-                .unwrap();
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .json(&signed_bid_submission)
+            .send()
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Withdrawals root mismatch. got: [160, 60, 212, 159, 57, 156, 168, 2, 42, 163, 51, 170, 247, 148, 102, 1, 167, 81, 163, 55, 74, 66, 98, 209, 18, 232, 73, 121, 211, 68, 5, 188], expected: [177, 94, 215, 98, 152, 255, 132, 165, 134, 177, 216, 117, 223, 8, 182, 103, 108, 152, 223, 233, 199, 205, 115, 250, 184, 132, 80, 52, 141, 142, 112, 200]");
@@ -980,15 +973,14 @@ mod tests {
         let my_vec = vec![0u8; MAX_PAYLOAD_LENGTH + 1];
 
         // Send JSON encoded request
-        let resp =
-            reqwest::Client::new()
-                .post(req_url.as_str())
-                .header("accept", "*/*")
-                .header("Content-Type", "application/json")
-                .body(my_vec)
-                .send()
-                .await
-                .unwrap();
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .body(my_vec)
+            .send()
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
         assert_eq!(resp.text().await.unwrap(), "length limit exceeded");
@@ -1022,15 +1014,14 @@ mod tests {
         );
 
         // Send JSON encoded request
-        let resp =
-            reqwest::Client::new()
-                .post(req_url.as_str())
-                .header("accept", "*/*")
-                .header("Content-Type", "application/json")
-                .json(&signed_bid_submission)
-                .send()
-                .await
-                .unwrap();
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .json(&signed_bid_submission)
+            .send()
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Zero value block");
@@ -1064,15 +1055,14 @@ mod tests {
         );
 
         // Send JSON encoded request
-        let resp =
-            reqwest::Client::new()
-                .post(req_url.as_str())
-                .header("accept", "*/*")
-                .header("Content-Type", "application/json")
-                .json(&signed_bid_submission)
-                .send()
-                .await
-                .unwrap();
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .json(&signed_bid_submission)
+            .send()
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Zero value block");
@@ -1106,15 +1096,14 @@ mod tests {
         );
 
         // Send JSON encoded request
-        let resp =
-            reqwest::Client::new()
-                .post(req_url.as_str())
-                .header("accept", "*/*")
-                .header("Content-Type", "application/json")
-                .json(&signed_bid_submission)
-                .send()
-                .await
-                .unwrap();
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .json(&signed_bid_submission)
+            .send()
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Block hash mismatch. message: 0x2bafdc454116b605005364976b134d761dd736cb4788d25c835783b46daeb121, payload: 0x1bafdc454116b605005364976b134d761dd736cb4788d25c835783b46daeb121");
@@ -1148,15 +1137,14 @@ mod tests {
         );
 
         // Send JSON encoded request
-        let resp =
-            reqwest::Client::new()
-                .post(req_url.as_str())
-                .header("accept", "*/*")
-                .header("Content-Type", "application/json")
-                .json(&signed_bid_submission)
-                .send()
-                .await
-                .unwrap();
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .json(&signed_bid_submission)
+            .send()
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Parent hash mismatch. message: 0xbd3291854dc822b7ec585925cda0e18f06af28fa2886e15f52d52dd4b6f94ed6, payload: 0xcd3291854dc822b7ec585925cda0e18f06af28fa2886e15f52d52dd4b6f94ed6");
@@ -1213,15 +1201,14 @@ mod tests {
         }
 
         // Send JSON encoded request
-        let resp =
-            reqwest::Client::new()
-                .post(req_url.as_str())
-                .header("accept", "*/*")
-                .header("Content-Type", "application/json")
-                .json(&signed_bid_submission)
-                .send()
-                .await
-                .unwrap();
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .json(&signed_bid_submission)
+            .send()
+            .await
+            .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Prev randao mismatch. got: 0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5, expected: 0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e4");

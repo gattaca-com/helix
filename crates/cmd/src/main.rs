@@ -3,14 +3,13 @@ use helix_common::{LoggingConfig, RelayConfig};
 
 #[tokio::main]
 async fn main() {
-    let config =
-        match RelayConfig::load() {
-            Ok(config) => config,
-            Err(e) => {
-                println!("Failed to load config: {:?}", e);
-                std::process::exit(1);
-            }
-        };
+    let config = match RelayConfig::load() {
+        Ok(config) => config,
+        Err(e) => {
+            println!("Failed to load config: {:?}", e);
+            std::process::exit(1);
+        }
+    };
 
     let _guard;
 
