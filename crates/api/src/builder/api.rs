@@ -285,7 +285,6 @@ where
                 next_duty,
                 &payload_attributes,
                 &builder_info,
-                head_slot,
                 &mut trace,
                 &request_id,
             )
@@ -638,7 +637,6 @@ where
                 next_duty,
                 &payload_attributes,
                 &builder_info,
-                head_slot,
                 &mut trace,
                 &request_id,
             )
@@ -982,7 +980,6 @@ where
         next_duty: BuilderGetValidatorsResponseEntry,
         payload_attributes: &PayloadAttributesUpdate,
         builder_info: &BuilderInfo,
-        head_slot: u64,
         trace: &mut SubmissionTrace,
         request_id: &Uuid,
     ) -> Result<(Arc<SignedBidSubmission>, bool), BuilderApiError> {
