@@ -1,8 +1,8 @@
-pub mod bid_submission;
+pub mod submission;
 pub mod bid_trace;
 pub mod v2;
 
-pub use bid_submission::*;
+pub use submission::*;
 pub use bid_trace::*;
 
 use ethereum_consensus::{
