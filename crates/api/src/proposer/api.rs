@@ -171,7 +171,7 @@ where
         let registration_pub_keys =
             registrations.iter().map(|r| r.message.public_key.clone()).collect();
         let known_pub_keys =
-            Arc::new(proposer_api.db.check_known_validators(registration_pub_keys).await?);
+            proposer_api.db.check_known_validators(registration_pub_keys).await?;
 
         // Check each registration
         let mut valid_registrations = Vec::with_capacity(known_pub_keys.len());
@@ -253,7 +253,7 @@ where
             .collect::<Vec<ValidatorRegistrationInfo>>();
 
         // Bulk write registrations to db
-        tokio::task::spawn(async move {
+        tokio::spawn(async move {
             if let Err(err) =
                 proposer_api.db.save_validator_registrations(valid_registrations).await
             {
