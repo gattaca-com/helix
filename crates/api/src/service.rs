@@ -1,7 +1,10 @@
 use std::{env, sync::Arc, time::Duration};
 
 use ethereum_consensus::crypto::SecretKey;
-use tokio::time::{sleep, timeout};
+use tokio::{
+    sync::broadcast,
+    time::{sleep, timeout},
+};
 use tracing::{error, info};
 
 use crate::{
@@ -11,7 +14,7 @@ use crate::{
 };
 use helix_beacon_client::{
     beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
-    multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
+    multi_beacon_client::MultiBeaconClient, BlockBroadcaster, MultiBeaconClientTrait,
 };
 use helix_common::{
     chain_info::ChainInfo, signing::RelaySigningContext, BroadcasterConfig, NetworkConfig,
@@ -24,6 +27,9 @@ use helix_housekeeper::{ChainEventUpdater, Housekeeper};
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const INIT_BROADCASTER_TIMEOUT: Duration = Duration::from_secs(5);
+
+const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
+const PAYLOAD_ATTRIBUTE_CHANNEL_SIZE: usize = 300;
 
 pub struct ApiService {}
 
@@ -46,6 +52,13 @@ impl ApiService {
         }
         let multi_beacon_client = Arc::new(MultiBeaconClient::<BeaconClient>::new(beacon_clients));
 
+        // Subscribe to head and payload attribute events
+        let (head_event_sender, head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
+        multi_beacon_client.subscribe_to_head_events(head_event_sender).await;
+        let (payload_attribute_sender, payload_attribute_receiver) =
+            broadcast::channel(PAYLOAD_ATTRIBUTE_CHANNEL_SIZE);
+        multi_beacon_client.subscribe_to_payload_attributes_events(payload_attribute_sender).await;
+
         let chain_info = Arc::new(match config.network_config {
             NetworkConfig::Mainnet => ChainInfo::for_mainnet(),
             NetworkConfig::Goerli => ChainInfo::for_goerli(),
@@ -55,9 +68,10 @@ impl ApiService {
 
         let housekeeper =
             Housekeeper::new(db.clone(), multi_beacon_client.clone(), auctioneer.clone());
+        let mut housekeeper_head_events = head_event_receiver.resubscribe();
         tokio::spawn(async move {
             loop {
-                if let Err(err) = housekeeper.start().await {
+                if let Err(err) = housekeeper.start(&mut housekeeper_head_events).await {
                     tracing::error!("Housekeeper error: {}", err);
                     sleep(Duration::from_secs(5)).await;
                 }
@@ -88,9 +102,12 @@ impl ApiService {
 
         let (mut chain_event_updater, slot_update_sender) = ChainEventUpdater::new(db.clone());
 
-        let mbc_clone = multi_beacon_client.clone();
+        let chain_updater_head_events = head_event_receiver.resubscribe();
+        let chain_updater_payload_events = payload_attribute_receiver.resubscribe();
         tokio::spawn(async move {
-            chain_event_updater.start(mbc_clone).await;
+            chain_event_updater
+                .start(chain_updater_head_events, chain_updater_payload_events)
+                .await;
         });
 
         let gossiper = Arc::new(

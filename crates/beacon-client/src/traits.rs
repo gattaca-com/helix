@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use ethereum_consensus::primitives::Root;
 use serde::{de::DeserializeOwned, Serialize};
-use tokio::sync::mpsc::Sender;
+use tokio::sync::broadcast::Sender;
 
 use helix_common::{bellatrix::SimpleSerialize, ProposerDuty, ValidatorSummary};
 

@@ -124,7 +124,7 @@ async fn run() {
     );
 
     let (head_event_sender, mut head_event_receiver) =
-        channel::<helix_beacon_client::types::HeadEventData>(100);
+        tokio::sync::broadcast::channel::<helix_beacon_client::types::HeadEventData>(100);
 
     tokio::spawn(async move {
         if let Err(err) = beacon_client.subscribe_to_head_events(head_event_sender).await {
@@ -134,7 +134,7 @@ async fn run() {
 
     let mut first_fetch_complete = false;
     // Process registrations each half epoch
-    while let Some(head_event) = head_event_receiver.recv().await {
+    while let Ok(head_event) = head_event_receiver.recv().await {
         println!("New head event: {}", head_event.slot);
         if head_event.slot % 5 != 0 && first_fetch_complete {
             continue;

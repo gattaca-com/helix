@@ -9,7 +9,7 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Root},
 };
 use helix_common::{bellatrix::SimpleSerialize, ProposerDuty, ValidatorStatus, ValidatorSummary};
-use tokio::sync::mpsc::Sender;
+use tokio::sync::broadcast::Sender;
 
 use crate::{
     error::BeaconClientError,
@@ -58,16 +58,15 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
             block: "test_block".to_string(),
             state: "test_state".to_string(),
         };
-        let _ = chan.send(head_event).await;
-        self.chan_head_events_capacity.store(chan.capacity(), std::sync::atomic::Ordering::Relaxed);
+        let _ = chan.send(head_event);
+        self.chan_head_events_capacity.store(chan.len(), std::sync::atomic::Ordering::Relaxed);
 
         // start a task that sets the number of events in the channel constantly
         let chan_head_events_capacity = self.chan_head_events_capacity.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                chan_head_events_capacity
-                    .store(chan.capacity(), std::sync::atomic::Ordering::Relaxed);
+                chan_head_events_capacity.store(chan.len(), std::sync::atomic::Ordering::Relaxed);
             }
         });
     }
