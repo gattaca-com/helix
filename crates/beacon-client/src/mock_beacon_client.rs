@@ -1,7 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use ethereum_consensus::{phase0::Fork, primitives::Root, ssz::prelude::*};
+use ethereum_consensus::{primitives::Root, ssz::prelude::*};
 use tokio::sync::mpsc::Sender;
 
 use helix_common::{ProposerDuty, ValidatorSummary};
@@ -9,10 +9,7 @@ use helix_common::{ProposerDuty, ValidatorSummary};
 use crate::{
     error::BeaconClientError,
     traits::BeaconClientTrait,
-    types::{
-        BroadcastValidation, HeadEventData, PayloadAttributesEvent,
-        StateId, SyncStatus,
-    },
+    types::{BroadcastValidation, HeadEventData, PayloadAttributesEvent, StateId, SyncStatus},
 };
 
 #[derive(Clone, Default)]
@@ -47,7 +44,6 @@ impl MockBeaconClient {
         self.proposer_duties = proposer_duties;
         self
     }
-
 
     pub fn with_publish_block_response_code(mut self, publish_block_response_code: u16) -> Self {
         self.publish_block_response_code = publish_block_response_code;
@@ -97,9 +93,7 @@ impl BeaconClientTrait for MockBeaconClient {
         "test_uri".to_string()
     }
 
-    async fn publish_block<
-        SignedBeaconBlock: Send + Sync + SimpleSerialize,
-    >(
+    async fn publish_block<SignedBeaconBlock: Send + Sync + SimpleSerialize>(
         &self,
         _block: Arc<SignedBeaconBlock>,
         _broadcast_validation: Option<BroadcastValidation>,

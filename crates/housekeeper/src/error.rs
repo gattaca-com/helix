@@ -5,7 +5,6 @@ use helix_beacon_client::error::BeaconClientError;
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
 
-
 #[derive(Debug, Error)]
 pub enum HousekeeperError {
     #[error("beacon client error. {0}")]

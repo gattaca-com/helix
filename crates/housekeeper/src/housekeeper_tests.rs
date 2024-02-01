@@ -14,10 +14,8 @@ mod housekeeper_tests {
         Housekeeper, HEAD_EVENT_CHANNEL_SIZE, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS,
     };
     use helix_beacon_client::mock_multi_beacon_client::MockMultiBeaconClient;
+    use helix_common::{api::builder_api::BuilderGetValidatorsResponseEntry, ValidatorSummary};
     use helix_database::MockDatabaseService;
-    use helix_common::{
-        api::builder_api::BuilderGetValidatorsResponseEntry, ValidatorSummary, chain_info::ChainInfo,
-    };
     use helix_datastore::MockAuctioneer;
     use tokio::task;
 
@@ -60,7 +58,8 @@ mod housekeeper_tests {
     }
 
     struct HelperVars {
-        pub housekeeper: Arc<Housekeeper<MockDatabaseService, MockMultiBeaconClient, MockAuctioneer>>,
+        pub housekeeper:
+            Arc<Housekeeper<MockDatabaseService, MockMultiBeaconClient, MockAuctioneer>>,
         pub subscribed_to_head_events: Arc<AtomicBool>,
         pub chan_head_events_capacity: Arc<AtomicUsize>,
         pub known_validators: Arc<Mutex<Vec<ValidatorSummary>>>,
@@ -86,18 +85,20 @@ mod housekeeper_tests {
         start_housekeeper(vars.housekeeper.clone());
         tokio::time::sleep(Duration::from_millis(10)).await;
 
-        // assert that the capacity of the channel is correct at HEAD_EVENT_CHANNEL_SIZE - 1 as the beacon client sends a dummy event
+        // assert that the capacity of the channel is correct at HEAD_EVENT_CHANNEL_SIZE - 1 as the
+        // beacon client sends a dummy event
         assert!(
-            vars.chan_head_events_capacity.load(std::sync::atomic::Ordering::Relaxed)
-                == HEAD_EVENT_CHANNEL_SIZE - 1
+            vars.chan_head_events_capacity.load(std::sync::atomic::Ordering::Relaxed) ==
+                HEAD_EVENT_CHANNEL_SIZE - 1
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        // assert that the capacity of the channel is correct at HEAD_EVENT_CHANNEL_SIZE as the housekeeper has processed the dummy event
+        // assert that the capacity of the channel is correct at HEAD_EVENT_CHANNEL_SIZE as the
+        // housekeeper has processed the dummy event
         assert!(vars.subscribed_to_head_events.load(std::sync::atomic::Ordering::Relaxed));
         assert!(
-            vars.chan_head_events_capacity.load(std::sync::atomic::Ordering::Relaxed)
-                == HEAD_EVENT_CHANNEL_SIZE
+            vars.chan_head_events_capacity.load(std::sync::atomic::Ordering::Relaxed) ==
+                HEAD_EVENT_CHANNEL_SIZE
         );
     }
 

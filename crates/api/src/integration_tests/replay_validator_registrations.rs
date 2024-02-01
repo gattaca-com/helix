@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use ethereum_consensus::{
-    builder::SignedValidatorRegistration, 
+    builder::SignedValidatorRegistration,
     primitives::{BlsPublicKey, Slot},
     serde::as_str,
 };
@@ -11,10 +11,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::channel;
 
 use helix_common::api::{
-    builder_api::BuilderGetValidatorsResponseEntry,
-    proposer_api::ValidatorRegistrationInfo,
+    builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
 };
-
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct BuilderGetValidatorsResponseEntryExternal {
@@ -53,16 +51,13 @@ async fn fetch_and_aggregate_validators(
                 Ok(entries) => {
                     let entries = entries
                         .into_iter()
-                        .map(|entry| {
-                            
-                            BuilderGetValidatorsResponseEntry {
-                                slot: entry.slot,
-                                validator_index: entry.validator_index,
-                                entry: ValidatorRegistrationInfo {
-                                    registration: entry.entry,
-                                    preferences: Default::default(),
-                                },
-                            }
+                        .map(|entry| BuilderGetValidatorsResponseEntry {
+                            slot: entry.slot,
+                            validator_index: entry.validator_index,
+                            entry: ValidatorRegistrationInfo {
+                                registration: entry.entry,
+                                preferences: Default::default(),
+                            },
                         })
                         .collect();
                     Ok(entries)
@@ -102,14 +97,12 @@ async fn register_validators(
     let client = reqwest::Client::new();
     let resp = client.post(endpoint).json(&validators).send().await?;
     println!("{:?}", resp);
-    
+
     Ok(())
 }
 
 #[allow(unused)]
-async fn get_status(
-    endpoint: &str,
-) -> Result<(), Error> {
+async fn get_status(endpoint: &str) -> Result<(), Error> {
     let client = reqwest::Client::new();
     let resp = client.get(endpoint).send().await?;
     println!("{:?}", resp.status());
@@ -123,10 +116,12 @@ async fn run() {
         "https://localhost/relay/v1/builder/validators",
         "https://localhost/relay/v1/builder/validators",
         "https://localhost/relay/v1/builder/validators",
-        ];
+    ];
 
     let helix_register_endpoint = "http://localhost:4040/eth/v1/builder/validators";
-    let beacon_client = helix_beacon_client::beacon_client::BeaconClient::from_endpoint_str("http://localhost:5052");
+    let beacon_client = helix_beacon_client::beacon_client::BeaconClient::from_endpoint_str(
+        "http://localhost:5052",
+    );
 
     let (head_event_sender, mut head_event_receiver) =
         channel::<helix_beacon_client::types::HeadEventData>(100);
@@ -139,7 +134,7 @@ async fn run() {
 
     let mut first_fetch_complete = false;
     // Process registrations each half epoch
-    while let Some(head_event) = head_event_receiver.recv().await {   
+    while let Some(head_event) = head_event_receiver.recv().await {
         println!("New head event: {}", head_event.slot);
         if head_event.slot % 5 != 0 && first_fetch_complete {
             continue;
@@ -151,15 +146,20 @@ async fn run() {
         match fetch_and_aggregate_validators(&endpoints).await {
             Ok(validators) => {
                 println!("Num validators fetched: {:?}", validators.len());
-                if let Err(err) = register_validators(validators.into_iter().map(|v| v.registration).collect(), helix_register_endpoint).await {
+                if let Err(err) = register_validators(
+                    validators.into_iter().map(|v| v.registration).collect(),
+                    helix_register_endpoint,
+                )
+                .await
+                {
                     println!("Error registering validators to our relay: {err}");
                 } else {
                     println!("Success!");
                 }
-            },
+            }
             Err(err) => {
                 println!("Error fetching validators: {err}");
-            },
+            }
         }
     }
 }

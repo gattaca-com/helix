@@ -8,8 +8,8 @@ use helix_beacon_client::{
     types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent},
     MultiBeaconClientTrait,
 };
-use helix_database::DatabaseService;
 use helix_common::api::builder_api::BuilderGetValidatorsResponseEntry;
+use helix_database::DatabaseService;
 use helix_utils::{calculate_withdrawals_root, has_reached_fork};
 
 /// Payload for a new payload attribute event sent to subscribers.

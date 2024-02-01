@@ -1,11 +1,16 @@
-use std::sync::{atomic::AtomicBool, Arc};
-
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
-use helix_database::BuilderInfoDocument;
 use helix_common::{
-    bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission}, builder_info::BuilderInfo, eth::SignedBuilderBid, signing::RelaySigningContext, versioned_payload::PayloadAndBlobs, ProposerInfo,
+    bid_submission::{
+        v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
+    },
+    builder_info::BuilderInfo,
+    eth::SignedBuilderBid,
+    signing::RelaySigningContext,
+    versioned_payload::PayloadAndBlobs,
+    ProposerInfo,
 };
+use helix_database::BuilderInfoDocument;
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse};
 
@@ -152,8 +157,8 @@ pub trait Auctioneer: Send + Sync + Clone {
         &self,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<bool, AuctioneerError>;
-    
+
     /// Try to acquire or renew leadership for the housekeeper.
     /// Returns: true if the housekeeper is the leader, false if it isn't.
-    async fn try_acquire_or_renew_leadership(&self, leader: bool) -> bool;
+    async fn try_acquire_or_renew_leadership(&self, leader_id: &str) -> bool;
 }

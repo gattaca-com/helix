@@ -6,31 +6,39 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Hash32},
     ssz::prelude::*,
 };
-use helix_common::{bid_submission::BidSubmission, versioned_payload::PayloadAndBlobs, ProposerInfo};
-use helix_common::bid_submission::v2::header_submission::SignedHeaderSubmission;
-use redis::{AsyncCommands, RedisResult, Value};
+use helix_common::{
+    bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
+    versioned_payload::PayloadAndBlobs,
+    ProposerInfo,
+};
+use redis::{AsyncCommands, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use tracing::error;
 
-use helix_database::types::BuilderInfoDocument;
-use helix_common::signing::RelaySigningContext;
 use helix_common::{
     bid_submission::{BidTrace, SignedBidSubmission},
-    eth::SignedBuilderBid, BuilderInfo,
+    eth::SignedBuilderBid,
+    signing::RelaySigningContext,
+    BuilderInfo,
 };
+use helix_database::types::BuilderInfoDocument;
 
 use crate::{
     error::AuctioneerError,
-    redis::error::RedisCacheError,
-    redis::utils::{
-        get_builder_latest_bid_time_key, get_builder_latest_bid_value_key, get_cache_bid_trace_key,
-        get_cache_get_header_response_key, get_execution_payload_key, get_floor_bid_key,
-        get_floor_bid_value_key, get_latest_bid_by_builder_key,
-        get_latest_bid_by_builder_key_str_builder_pub_key, get_top_bid_value_key, get_seen_block_hashes_key,
+    redis::{
+        error::RedisCacheError,
+        utils::{
+            get_builder_latest_bid_time_key, get_builder_latest_bid_value_key,
+            get_cache_bid_trace_key, get_cache_get_header_response_key, get_execution_payload_key,
+            get_floor_bid_key, get_floor_bid_value_key, get_latest_bid_by_builder_key,
+            get_latest_bid_by_builder_key_str_builder_pub_key, get_seen_block_hashes_key,
+            get_top_bid_value_key,
+        },
     },
     types::{
         keys::{
-            BUILDER_INFO_KEY, HOUSEKEEPER_LOCK_KEY, LAST_HASH_DELIVERED_KEY, LAST_SLOT_DELIVERED_KEY, PROPOSER_WHITELIST_KEY
+            BUILDER_INFO_KEY, HOUSEKEEPER_LOCK_KEY, LAST_HASH_DELIVERED_KEY,
+            LAST_SLOT_DELIVERED_KEY, PROPOSER_WHITELIST_KEY,
         },
         SaveBidAndUpdateTopBidResponse,
     },
@@ -38,7 +46,14 @@ use crate::{
 };
 
 const BID_CACHE_EXPIRY_S: usize = 45;
-const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 24_000;
+const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 45_000;
+
+const RENEW_SCRIPT: &str = r#"
+if redis.call('get', KEYS[1]) == ARGV[1] then
+    return redis.call('set', KEYS[1], ARGV[1], 'PX', ARGV[2], 'XX')
+end
+return nil
+"#;
 
 #[derive(Clone)]
 pub struct RedisCache {
@@ -157,11 +172,7 @@ impl RedisCache {
     ///
     /// # Returns
     /// Returns `true` if the lock was successfully acquired, or `false` if the lock was not set
-    async fn set_lock(
-        &self,
-        key: &str,
-        expiry: usize,
-    ) -> bool {    
+    async fn set_lock(&self, key: &str, id: &str, expiry: usize) -> bool {
         let mut conn = match self.pool.get().await {
             Ok(conn) => conn,
             Err(_) => return false,
@@ -169,7 +180,7 @@ impl RedisCache {
 
         let result: RedisResult<Value> = redis::cmd("SET")
             .arg(key)
-            .arg(1)
+            .arg(id)
             .arg("NX")
             .arg("PX")
             .arg(expiry)
@@ -184,30 +195,21 @@ impl RedisCache {
 
     /// Attempts to renew an existing lock in Redis with a specified key and new expiry time.
     ///
-    /// This method uses an asynchronous Redis connection from a pool to execute the SET command with
-    /// the 'XX' option, ensuring that the lock is only renewed if it already exists.
+    /// This method uses an asynchronous Redis connection from a pool to execute the SET command
+    /// with the 'XX' option, ensuring that the lock is only renewed if it already exists.
     ///
     /// # Arguments
     /// * `key` - A reference to a string slice that holds the key of the lock to renew.
     /// * `expiry` - The new duration in milliseconds for which the lock should be valid.
-    async fn renew_lock(
-        &self,
-        key: &str,
-        expiry: usize,
-    ) -> bool {
+    async fn renew_lock(&self, key: &str, id: &str, expiry: usize) -> bool {
         let mut conn = match self.pool.get().await {
             Ok(conn) => conn,
             Err(_) => return false,
         };
 
-        let result: RedisResult<Value> = redis::cmd("SET")
-            .arg(key)
-            .arg(1)
-            .arg("XX")
-            .arg("PX")
-            .arg(expiry)
-            .query_async(&mut conn)
-            .await;
+        let script = Script::new(RENEW_SCRIPT);
+        let result =
+            script.key(&[key]).arg(&[id, &expiry.to_string()]).invoke_async(&mut conn).await;
 
         match result {
             Ok(Value::Okay) => true,
@@ -269,7 +271,11 @@ impl RedisCache {
         Ok(())
     }
 
-    async fn seen_or_add(&self, key: &str, entry: &impl Serialize) -> Result<bool, RedisCacheError> {
+    async fn seen_or_add(
+        &self,
+        key: &str,
+        entry: &impl Serialize,
+    ) -> Result<bool, RedisCacheError> {
         let mut conn = self.pool.get().await?;
 
         let entry = serde_json::to_string(entry)?;
@@ -295,13 +301,6 @@ impl RedisCache {
     }
 
     /// Update the top bid based on the current state of builder bids.
-    ///
-    /// This function performs the following steps:
-    /// 1. Check if there are any builder bids; if not, exit early.
-    /// 2. Determine the current top bid among the builder bids.
-    /// 3. Compare the top bid with a floor value. Use the greater of the two.
-    /// 4. Update the get_header response to reflect the new top bid.
-    /// 5. Update the global top bid value.
     async fn update_top_bid(
         &self,
         state: &mut SaveBidAndUpdateTopBidResponse,
@@ -563,13 +562,14 @@ impl Auctioneer for RedisCache {
 
         // Save builder bid and update top bid/ floor keys if possible.
         self.save_signed_builder_bid_and_update_top_bid(
-            &builder_bid, 
+            &builder_bid,
             submission.message(),
-            received_at, 
-            cancellations_enabled, 
-            floor_value, 
-            state, 
-        ).await?;
+            received_at,
+            cancellations_enabled,
+            floor_value,
+            state,
+        )
+        .await?;
 
         Ok(Some((builder_bid, cloned_submission.payload_and_blobs())))
     }
@@ -716,11 +716,13 @@ impl Auctioneer for RedisCache {
         }
 
         // Load the latest bids from all builders for the current slot, parent hash, and proposer
-        let mut builder_bids = self.get_new_builder_bids(
-            bid_trace.slot, 
-            &bid_trace.parent_hash, 
-            &bid_trace.proposer_public_key,
-        ).await?;
+        let mut builder_bids = self
+            .get_new_builder_bids(
+                bid_trace.slot,
+                &bid_trace.parent_hash,
+                &bid_trace.proposer_public_key,
+            )
+            .await?;
 
         // Get the current top bid. It will be the max of all builder bids and the current floor.
         state.top_bid_value =
@@ -738,7 +740,8 @@ impl Auctioneer for RedisCache {
             &bid_trace.builder_public_key,
             received_at,
             builder_bid,
-        ).await?;
+        )
+        .await?;
         state.was_bid_saved = true;
         builder_bids.insert(format!("{:?}", bid_trace.builder_public_key), builder_bid.value());
         state.set_latency_save_bid();
@@ -756,13 +759,14 @@ impl Auctioneer for RedisCache {
 
         // Update the top bid
         self.update_top_bid(
-            state, 
-            &builder_bids, 
-            bid_trace.slot, 
-            &bid_trace.parent_hash, 
-            &bid_trace.proposer_public_key, 
+            state,
+            &builder_bids,
+            bid_trace.slot,
+            &bid_trace.parent_hash,
+            &bid_trace.proposer_public_key,
             floor_value,
-        ).await?;
+        )
+        .await?;
         state.is_new_top_bid = builder_bid.value() == state.top_bid_value;
         state.set_latency_update_top_bid();
 
@@ -783,7 +787,7 @@ impl Auctioneer for RedisCache {
 
         Ok(())
     }
-    
+
     async fn save_header_submission_and_update_top_bid(
         &self,
         submission: &SignedHeaderSubmission,
@@ -809,27 +813,25 @@ impl Auctioneer for RedisCache {
 
         // Save builder bid and update top bid/ floor keys if possible.
         self.save_signed_builder_bid_and_update_top_bid(
-            &builder_bid, 
+            &builder_bid,
             submission.bid_trace(),
-            received_at, 
-            cancellations_enabled, 
-            floor_value, 
-            state, 
-        ).await?;
+            received_at,
+            cancellations_enabled,
+            floor_value,
+            state,
+        )
+        .await?;
 
         Ok(Some(builder_bid))
     }
-
 
     async fn update_trusted_proposers(
         &self,
         proposer_whitelist: Vec<ProposerInfo>,
     ) -> Result<(), AuctioneerError> {
         // get keys
-        let proposer_keys: Vec<String> = proposer_whitelist
-            .iter()
-            .map(|proposer| format!("{:?}", proposer.pub_key))
-            .collect();
+        let proposer_keys: Vec<String> =
+            proposer_whitelist.iter().map(|proposer| format!("{:?}", proposer.pub_key)).collect();
 
         // add or update proposers
         for proposer in proposer_whitelist {
@@ -848,7 +850,7 @@ impl Auctioneer for RedisCache {
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -857,53 +859,54 @@ impl Auctioneer for RedisCache {
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<bool, AuctioneerError> {
         let key_str = format!("{proposer_pub_key:?}");
-        let proposer_info: Option<ProposerInfo> = self.hget(PROPOSER_WHITELIST_KEY, &key_str).await?;
+        let proposer_info: Option<ProposerInfo> =
+            self.hget(PROPOSER_WHITELIST_KEY, &key_str).await?;
         Ok(proposer_info.is_some())
     }
 
-    /// Attempts to acquire or renew leadership for a distributed task based on the current leadership status.
+    /// Attempts to acquire or renew leadership for a distributed task based on the current
+    /// leadership status.
     ///
-    /// If the instance is already a leader (indicated by the `leader` argument), it attempts to renew the lock.
-    /// If the lock renewal is successful, it returns `true`.
+    /// If the instance is already a leader (indicated by the `leader` argument), it attempts to
+    /// renew the lock. If the lock renewal is successful, it returns `true`.
     ///
-    /// If the instance is not currently a leader or fails to renew the lock, it attempts to acquire the lock.
-    /// The function returns `true` if the lock acquisition is successful, indicating leadership has been obtained.
-    /// 
-    /// Expiry is set to `HOUSEKEEPER_LOCK_EXPIRY_MS` milliseconds to ensure that the lock is released if the instance crashes.
-    /// `HOUSEKEEPER_LOCK_EXPIRY_MS`` should be long enought to allow the leader to renew the lock before it expires.
+    /// If the instance is not currently a leader or fails to renew the lock, it attempts to acquire
+    /// the lock. The function returns `true` if the lock acquisition is successful, indicating
+    /// leadership has been obtained.
+    ///
+    /// Expiry is set to `HOUSEKEEPER_LOCK_EXPIRY_MS` milliseconds to ensure that the lock is
+    /// released if the instance crashes. `HOUSEKEEPER_LOCK_EXPIRY_MS`` should be long enought
+    /// to allow the leader to renew the lock before it expires.
     ///
     /// Arguments:
     /// - `leader`: A `bool` indicating whether the current instance believes it is the leader.
     ///
     /// Returns:
-    /// - `true` if the instance is the leader and successfully renews the lock, or if it successfully acquires the lock.
+    /// - `true` if the instance is the leader and successfully renews the lock, or if it
+    ///   successfully acquires the lock.
     /// - `false` if it fails to renew or acquire the lock.
     ///
-    /// Note: This function assumes that the caller manages and passes the current leadership status.
-    async fn try_acquire_or_renew_leadership(&self, leader: bool) -> bool {
-        if leader {
-            if self.renew_lock(HOUSEKEEPER_LOCK_KEY, HOUSEKEEPER_LOCK_EXPIRY_MS).await {
-                return true;
-            }
+    /// Note: This function assumes that the caller manages and passes the current leadership
+    /// status.
+    async fn try_acquire_or_renew_leadership(&self, leader_id: &str) -> bool {
+        if self.renew_lock(HOUSEKEEPER_LOCK_KEY, leader_id, HOUSEKEEPER_LOCK_EXPIRY_MS).await {
+            return true;
         }
 
-        return self.set_lock(HOUSEKEEPER_LOCK_KEY, HOUSEKEEPER_LOCK_EXPIRY_MS).await;
+        return self.set_lock(HOUSEKEEPER_LOCK_KEY, leader_id, HOUSEKEEPER_LOCK_EXPIRY_MS).await;
     }
 }
 
 fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {
-    bid_values
-        .iter()
-        .max_by_key(|&(_, value)| value)
-        .map(|(key, value)| (key.clone(), *value))
+    bid_values.iter().max_by_key(|&(_, value)| value).map(|(key, value)| (key.clone(), *value))
 }
 
 #[cfg(test)]
 mod tests {
 
     use super::*;
-    use serde::{Deserialize, Serialize};
     use helix_common::capella::{self, ExecutionPayloadHeader};
+    use serde::{Deserialize, Serialize};
 
     impl RedisCache {
         async fn clear_cache(&self) -> Result<(), RedisCacheError> {
@@ -1306,11 +1309,21 @@ mod tests {
 
         let mut capella_payload = capella::ExecutionPayload::default();
         capella_payload.gas_limit = 999;
-        let versioned_execution_payload = PayloadAndBlobs { execution_payload: ethereum_consensus::types::mainnet::ExecutionPayload::Capella(capella_payload), blobs_bundle: None };
+        let versioned_execution_payload = PayloadAndBlobs {
+            execution_payload: ethereum_consensus::types::mainnet::ExecutionPayload::Capella(
+                capella_payload,
+            ),
+            blobs_bundle: None,
+        };
 
         // Save the execution payload
         let save_result = cache
-            .save_execution_payload(slot, &proposer_pub_key, &block_hash, &versioned_execution_payload)
+            .save_execution_payload(
+                slot,
+                &proposer_pub_key,
+                &block_hash,
+                &versioned_execution_payload,
+            )
             .await;
         assert!(save_result.is_ok(), "Failed to save the execution payload");
 
@@ -1321,7 +1334,11 @@ mod tests {
         assert!(get_result.as_ref().unwrap().is_some(), "Execution payload is None");
 
         let fetched_execution_payload = get_result.unwrap().unwrap();
-        assert_eq!(fetched_execution_payload.execution_payload.gas_limit(), 999, "Execution payload mismatch");
+        assert_eq!(
+            fetched_execution_payload.execution_payload.gas_limit(),
+            999,
+            "Execution payload mismatch"
+        );
     }
 
     #[tokio::test]
@@ -1448,7 +1465,8 @@ mod tests {
         let builder_pub_key = BlsPublicKey::default();
         let unknown_builder_pub_key = BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap();
 
-        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: true, builder_id: None };
+        let builder_info =
+            BuilderInfo { collateral: U256::from(12), is_optimistic: true, builder_id: None };
 
         // Test case 1: Builder exists
         let set_result =
@@ -1474,48 +1492,53 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_trusted_proposers_and_update_trusted_proposers() {
-
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
         let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
         assert!(!is_trusted, "Failed to check trusted proposer");
 
-        cache.update_trusted_proposers(
-            vec![
-                ProposerInfo { 
-                    name: "test".to_string(),
-                    pub_key: BlsPublicKey::default(),
-                },
-                ProposerInfo { 
+        cache
+            .update_trusted_proposers(vec![
+                ProposerInfo { name: "test".to_string(), pub_key: BlsPublicKey::default() },
+                ProposerInfo {
                     name: "test2".to_string(),
                     pub_key: BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap(),
                 },
-            ]
-        ).await.unwrap();
+            ])
+            .await
+            .unwrap();
 
         let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
         assert!(is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap()).await.unwrap();
+        let is_trusted = cache
+            .is_trusted_proposer(&BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap())
+            .await
+            .unwrap();
         assert!(is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::try_from([24u8; 48].as_ref()).unwrap()).await.unwrap();
+        let is_trusted = cache
+            .is_trusted_proposer(&BlsPublicKey::try_from([24u8; 48].as_ref()).unwrap())
+            .await
+            .unwrap();
         assert!(!is_trusted, "Failed to check trusted proposer");
 
-        cache.update_trusted_proposers(
-            vec![
-                ProposerInfo { 
-                    name: "test2".to_string(),
-                    pub_key: BlsPublicKey::try_from([25u8; 48].as_ref()).unwrap(),
-                },
-            ]
-        ).await.unwrap();
+        cache
+            .update_trusted_proposers(vec![ProposerInfo {
+                name: "test2".to_string(),
+                pub_key: BlsPublicKey::try_from([25u8; 48].as_ref()).unwrap(),
+            }])
+            .await
+            .unwrap();
 
         let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
         assert!(!is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::try_from([25u8; 48].as_ref()).unwrap()).await.unwrap();
+        let is_trusted = cache
+            .is_trusted_proposer(&BlsPublicKey::try_from([25u8; 48].as_ref()).unwrap())
+            .await
+            .unwrap();
         assert!(is_trusted, "Failed to check trusted proposer");
     }
 
@@ -1525,7 +1548,8 @@ mod tests {
         cache.clear_cache().await.unwrap();
 
         let builder_pub_key = BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap();
-        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: false, builder_id: None };
+        let builder_info =
+            BuilderInfo { collateral: U256::from(12), is_optimistic: false, builder_id: None };
 
         // Set builder info in the cache
         let set_result =
@@ -1543,7 +1567,8 @@ mod tests {
         cache.clear_cache().await.unwrap();
 
         let builder_pub_key_optimistic = BlsPublicKey::try_from([11u8; 48].as_ref()).unwrap();
-        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: true, builder_id: None };
+        let builder_info =
+            BuilderInfo { collateral: U256::from(12), is_optimistic: true, builder_id: None };
 
         // Set builder info in the cache
         let set_result = cache
@@ -1859,24 +1884,85 @@ mod tests {
         let block_hash = Hash32::try_from([5u8; 32].as_ref()).unwrap();
 
         // Test: Check if block hash has been seen before (should be false initially)
-        let seen_result = cache.seen_or_insert_block_hash(&block_hash, slot, &Hash32::default(), &BlsPublicKey::default()).await;
+        let seen_result = cache
+            .seen_or_insert_block_hash(
+                &block_hash,
+                slot,
+                &Hash32::default(),
+                &BlsPublicKey::default(),
+            )
+            .await;
         assert!(seen_result.is_ok(), "Failed to check if block hash was seen");
         assert!(!seen_result.unwrap(), "Block hash was incorrectly seen before");
 
         // Test: Insert the block hash and check again (should be true after insert)
-        let seen_result_again = cache.seen_or_insert_block_hash(&block_hash, slot, &Hash32::default(), &BlsPublicKey::default()).await;
+        let seen_result_again = cache
+            .seen_or_insert_block_hash(
+                &block_hash,
+                slot,
+                &Hash32::default(),
+                &BlsPublicKey::default(),
+            )
+            .await;
         assert!(seen_result_again.is_ok(), "Failed to check if block hash was seen after insert");
         assert!(seen_result_again.unwrap(), "Block hash was not seen after insert");
 
         // Test: Add a different new block hash (should be false initially)
         let block_hash_2 = Hash32::try_from([6u8; 32].as_ref()).unwrap();
-        let seen_result = cache.seen_or_insert_block_hash(&block_hash_2, slot, &Hash32::default(), &BlsPublicKey::default()).await;
+        let seen_result = cache
+            .seen_or_insert_block_hash(
+                &block_hash_2,
+                slot,
+                &Hash32::default(),
+                &BlsPublicKey::default(),
+            )
+            .await;
         assert!(seen_result.is_ok(), "Failed to check if block hash was seen");
         assert!(!seen_result.unwrap(), "Block hash was incorrectly seen before");
 
-        // Test: Insert the original block hash again, ensure it wasn't overwritten (should be true after insert)
-        let seen_result_again = cache.seen_or_insert_block_hash(&block_hash, slot, &Hash32::default(), &BlsPublicKey::default()).await;
+        // Test: Insert the original block hash again, ensure it wasn't overwritten (should be true
+        // after insert)
+        let seen_result_again = cache
+            .seen_or_insert_block_hash(
+                &block_hash,
+                slot,
+                &Hash32::default(),
+                &BlsPublicKey::default(),
+            )
+            .await;
         assert!(seen_result_again.is_ok(), "Failed to check if block hash was seen after insert");
         assert!(seen_result_again.unwrap(), "Block hash was not seen after insert");
+    }
+
+    #[tokio::test]
+    async fn test_can_aquire_lock() {
+        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        cache.clear_cache().await.unwrap();
+        assert!(cache.try_acquire_or_renew_leadership("leader").await)
+    }
+
+    #[tokio::test]
+    async fn test_others_cant_aquire_lock_if_held() {
+        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        cache.clear_cache().await.unwrap();
+        assert!(cache.try_acquire_or_renew_leadership("leader").await);
+        assert!(!cache.try_acquire_or_renew_leadership("others").await);
+    }
+
+    #[tokio::test]
+    async fn test_can_renew_lock() {
+        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        cache.clear_cache().await.unwrap();
+        assert!(cache.try_acquire_or_renew_leadership("leader").await);
+        assert!(cache.try_acquire_or_renew_leadership("leader").await);
+    }
+
+    #[tokio::test]
+    async fn test_others_cannot_renew() {
+        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        cache.clear_cache().await.unwrap();
+        assert!(cache.try_acquire_or_renew_leadership("leader").await);
+        assert!(cache.try_acquire_or_renew_leadership("leader").await);
+        assert!(!cache.try_acquire_or_renew_leadership("others").await);
     }
 }

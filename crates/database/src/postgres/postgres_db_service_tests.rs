@@ -1,36 +1,44 @@
 #[cfg(test)]
 mod tests {
-    use std::{default::Default, str::FromStr};
-use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
+    use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
     use ethereum_consensus::{
         builder::{SignedValidatorRegistration, ValidatorRegistration},
         crypto::SecretKey,
         primitives::U256,
     };
+    use helix_common::{
+        bellatrix::{ByteList, ByteVector, List},
+        bid_submission::{
+            v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
+        },
+        versioned_payload::PayloadAndBlobs,
+        GetPayloadTrace, HeaderSubmissionTrace,
+    };
     use std::{
+        default::Default,
         ops::DerefMut,
+        str::FromStr,
         sync::Arc,
         time::{SystemTime, UNIX_EPOCH},
-    };
-    use helix_common::{
-        bellatrix::{ByteVector, ByteList, List}, bid_submission::{BidTrace, SignedBidSubmission, v2::header_submission::SignedHeaderSubmission}, versioned_payload::PayloadAndBlobs, GetPayloadTrace, HeaderSubmissionTrace
     };
 
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
     use ethereum_consensus::phase0::Validator;
     use helix_common::{
-        api::builder_api::BuilderGetValidatorsResponseEntry, simulator::BlockSimError,
+        api::{
+            builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
+        },
+        simulator::BlockSimError,
+        validator_preferences::ValidatorPreferences,
     };
     use tokio_postgres::NoTls;
-    use helix_common::api::proposer_api::ValidatorRegistrationInfo;
-    use helix_common::validator_preferences::ValidatorPreferences;
 
     use crate::postgres::postgres_db_init::run_migrations_async;
 
     /// These tests depend on a local instance of postgres running on port 5433
     /// e.g. to start a local postgres instance in docker:
-    /// docker run -d --name postgres -e POSTGRES_PASSWORD=password -p 5433:5432 timescale/timescaledb-ha:pg16
-    /// https://docs.timescale.com/self-hosted/latest/install/installation-docker/
+    /// docker run -d --name postgres -e POSTGRES_PASSWORD=password -p 5433:5432
+    /// timescale/timescaledb-ha:pg16 https://docs.timescale.com/self-hosted/latest/install/installation-docker/
 
     fn test_config() -> Config {
         let mut cfg = Config::new();
@@ -109,9 +117,14 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
 
         db_service.save_validator_registration(registration.clone()).await.unwrap();
 
-        let result =
-            db_service.get_validator_registration(registration.registration.message.public_key).await.unwrap();
-        assert_eq!(result.registration_info.registration.signature, registration.registration.signature);
+        let result = db_service
+            .get_validator_registration(registration.registration.message.public_key)
+            .await
+            .unwrap();
+        assert_eq!(
+            result.registration_info.registration.signature,
+            registration.registration.signature
+        );
     }
 
     #[tokio::test]
@@ -132,7 +145,10 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
                 .get_validator_registration(registration.registration.message.public_key)
                 .await
                 .unwrap();
-            assert_eq!(result.registration_info.registration.signature, registration.registration.signature);
+            assert_eq!(
+                result.registration_info.registration.signature,
+                registration.registration.signature
+            );
         }
     }
 
@@ -150,7 +166,10 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         db_service.save_validator_registrations(registrations.clone()).await.unwrap();
         let result = db_service
             .get_validator_registrations_for_pub_keys(
-                registrations.iter().map(|r| r.registration.message.public_key.clone()).collect::<Vec<_>>(),
+                registrations
+                    .iter()
+                    .map(|r| r.registration.message.public_key.clone())
+                    .collect::<Vec<_>>(),
             )
             .await
             .unwrap();
@@ -158,9 +177,15 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         for registration in registrations {
             let result = result
                 .iter()
-                .find(|r| r.registration_info.registration.message.public_key == registration.registration.message.public_key)
+                .find(|r| {
+                    r.registration_info.registration.message.public_key ==
+                        registration.registration.message.public_key
+                })
                 .unwrap();
-            assert_eq!(result.registration_info.registration.signature, registration.registration.signature);
+            assert_eq!(
+                result.registration_info.registration.signature,
+                registration.registration.signature
+            );
         }
     }
 
@@ -171,8 +196,9 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         let registration = get_randomized_signed_validator_registration();
         db_service.save_validator_registration(registration.clone()).await.unwrap();
 
-        let result =
-            db_service.get_validator_registration_timestamp(registration.registration.message.public_key).await;
+        let result = db_service
+            .get_validator_registration_timestamp(registration.registration.message.public_key)
+            .await;
         assert!(result.is_ok());
     }
 
@@ -245,7 +271,6 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
 
         validator_summaries.push(validator_summary2);
 
-
         let result = db_service.set_known_validators(validator_summaries).await;
         assert!(result.is_ok());
 
@@ -296,8 +321,11 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         let mut rng = rand::thread_rng();
         let key = SecretKey::random(&mut rng).unwrap();
         let public_key = key.public_key();
-        let builder_info =
-            helix_common::BuilderInfo { collateral: U256::from_str("1000000000000000000000000000").unwrap(), is_optimistic: false, builder_id: None };
+        let builder_info = helix_common::BuilderInfo {
+            collateral: U256::from_str("1000000000000000000000000000").unwrap(),
+            is_optimistic: false,
+            builder_id: None,
+        };
 
         let result = db_service.store_builder_info(&public_key, builder_info).await;
         assert!(result.is_ok());
@@ -317,13 +345,17 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         let key = SecretKey::random(&mut rng).unwrap();
         let public_key = key.public_key();
 
-        let builder_info =
-            helix_common::BuilderInfo { collateral: Default::default(), is_optimistic: false, builder_id: None };
+        let builder_info = helix_common::BuilderInfo {
+            collateral: Default::default(),
+            is_optimistic: false,
+            builder_id: None,
+        };
 
         let result = db_service.store_builder_info(&public_key, builder_info).await;
         assert!(result.is_ok());
 
-        let result = db_service.db_demote_builder(&public_key, &Default::default(), "".to_string()).await;
+        let result =
+            db_service.db_demote_builder(&public_key, &Default::default(), "".to_string()).await;
         assert!(result.is_ok());
     }
 
@@ -358,13 +390,19 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         match &mut signed_bid_submission {
             SignedBidSubmission::Deneb(submission) => {
                 submission.message = bid_trace.clone();
-            },
+            }
             SignedBidSubmission::Capella(submission) => {
                 submission.message = bid_trace.clone();
-            },
+            }
         }
 
-        db_service.store_block_submission(Arc::new(signed_bid_submission), Arc::new(Default::default()), 0).await?;
+        db_service
+            .store_block_submission(
+                Arc::new(signed_bid_submission),
+                Arc::new(Default::default()),
+                0,
+            )
+            .await?;
         Ok(())
     }
 
@@ -392,45 +430,48 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
         env_logger::builder().is_test(true).try_init()?;
         let extra_data = [0u8; 32];
         let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
-        let mut execution_payload =
-            ethereum_consensus::types::ExecutionPayload::Capella(
-                ethereum_consensus::capella::ExecutionPayload {
-                    parent_hash: ByteVector::default(),
-                    fee_recipient: ByteVector::default(),
-                    state_root: ByteVector::default(),
-                    receipts_root: ByteVector::default(),
-                    logs_bloom: ByteVector::default(),
-                    prev_randao: ByteVector::default(),
-                    block_number: 1234,
-                    gas_limit: 0,
-                    gas_used: 0,
-                    timestamp: 0,
-                    extra_data: ByteList::try_from(extra_data.as_slice()).unwrap(),
-                    base_fee_per_gas: U256::from(1234),
-                    block_hash: ByteVector::default(),
-                    transactions: List::default(),
-                    withdrawals: Default::default(),
-                },
-            );
+        let mut execution_payload = ethereum_consensus::types::ExecutionPayload::Capella(
+            ethereum_consensus::capella::ExecutionPayload {
+                parent_hash: ByteVector::default(),
+                fee_recipient: ByteVector::default(),
+                state_root: ByteVector::default(),
+                receipts_root: ByteVector::default(),
+                logs_bloom: ByteVector::default(),
+                prev_randao: ByteVector::default(),
+                block_number: 1234,
+                gas_limit: 0,
+                gas_used: 0,
+                timestamp: 0,
+                extra_data: ByteList::try_from(extra_data.as_slice()).unwrap(),
+                base_fee_per_gas: U256::from(1234),
+                block_hash: ByteVector::default(),
+                transactions: List::default(),
+                withdrawals: Default::default(),
+            },
+        );
 
-        execution_payload.transactions_mut().push(ethereum_consensus::capella::Transaction::default());
-        execution_payload.withdrawals_mut().unwrap().push(ethereum_consensus::capella::Withdrawal {
-            index: 0,
-            validator_index: 0,
-            amount: 0,
-            address: Default::default(),
-        });
+        execution_payload
+            .transactions_mut()
+            .push(ethereum_consensus::capella::Transaction::default());
+        execution_payload.withdrawals_mut().unwrap().push(
+            ethereum_consensus::capella::Withdrawal {
+                index: 0,
+                validator_index: 0,
+                amount: 0,
+                address: Default::default(),
+            },
+        );
 
         let mut bid_trace = BidTrace::default();
         bid_trace.slot = 1234;
         let latency_trace = GetPayloadTrace::default();
 
-        let payload_and_blobs = PayloadAndBlobs {
-            execution_payload: execution_payload.clone(),
-            blobs_bundle: None,
-        };
+        let payload_and_blobs =
+            PayloadAndBlobs { execution_payload: execution_payload.clone(), blobs_bundle: None };
 
-        db_service.save_delivered_payload(&bid_trace, Arc::new(payload_and_blobs), &latency_trace).await?;
+        db_service
+            .save_delivered_payload(&bid_trace, Arc::new(payload_and_blobs), &latency_trace)
+            .await?;
         Ok(())
     }
 
@@ -460,7 +501,9 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
 
         let reg = get_randomized_signed_validator_registration().registration;
 
-        db_service.save_too_late_get_payload(1, &reg.message.public_key, &Default::default(),0,0).await?;
+        db_service
+            .save_too_late_get_payload(1, &reg.message.public_key, &Default::default(), 0, 0)
+            .await?;
 
         Ok(())
     }
@@ -472,7 +515,15 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
 
         let reg = get_randomized_signed_validator_registration().registration;
 
-        db_service.save_get_header_call(1, Default::default(), reg.message.public_key, Default::default(), Default::default()).await?;
+        db_service
+            .save_get_header_call(
+                1,
+                Default::default(),
+                reg.message.public_key,
+                Default::default(),
+                Default::default(),
+            )
+            .await?;
 
         Ok(())
     }
@@ -484,7 +535,9 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
 
         let _reg = get_randomized_signed_validator_registration().registration;
 
-        db_service.save_failed_get_payload(Default::default(), "error".to_string(), Default::default()).await?;
+        db_service
+            .save_failed_get_payload(Default::default(), "error".to_string(), Default::default())
+            .await?;
 
         Ok(())
     }
@@ -506,7 +559,12 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
             gas_used: 0,
             value: U256::from(1234),
         };
-        db_service.store_header_submission(Arc::new(signed_bid_submission), Arc::new(HeaderSubmissionTrace::default())).await?;
+        db_service
+            .store_header_submission(
+                Arc::new(signed_bid_submission),
+                Arc::new(HeaderSubmissionTrace::default()),
+            )
+            .await?;
         Ok(())
     }
 
@@ -532,7 +590,9 @@ use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseServ
     async fn test_save_pending_block() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
-        db_service.save_pending_block(&Default::default(), &Default::default(), 359023, SystemTime::now()).await?;
+        db_service
+            .save_pending_block(&Default::default(), &Default::default(), 359023, SystemTime::now())
+            .await?;
 
         Ok(())
     }

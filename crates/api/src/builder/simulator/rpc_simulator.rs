@@ -1,8 +1,9 @@
 use async_trait::async_trait;
 use helix_common::BuilderInfo;
-use hyper::StatusCode;
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
-use reqwest::{Client, Response};
+use reqwest::{
+    header::{HeaderMap, HeaderValue, CONTENT_TYPE},
+    Client, Response, StatusCode,
+};
 use serde_json::json;
 use tokio::sync::mpsc::Sender;
 use tracing::{debug, error};
@@ -10,7 +11,7 @@ use tracing::{debug, error};
 use helix_common::simulator::BlockSimError;
 use uuid::Uuid;
 
-use crate::builder::{DbInfo, traits::BlockSimulator, BlockSimRequest};
+use crate::builder::{traits::BlockSimulator, BlockSimRequest, DbInfo};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct JsonRpcError {

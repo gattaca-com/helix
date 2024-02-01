@@ -4,7 +4,7 @@ use ethereum_consensus::primitives::U256;
 use tokio_postgres::types::{FromSql, ToSql};
 
 #[derive(Debug, Clone)]
-pub struct PostgresNumeric(U256);
+pub struct PostgresNumeric(pub U256);
 
 impl From<U256> for PostgresNumeric {
     fn from(value: U256) -> Self {
@@ -37,18 +37,17 @@ impl<'a> FromSql<'a> for PostgresNumeric {
         let mut offset = 0;
 
         // Function to read two bytes and advance the offset
-        let read_two_bytes =
-            |raw: &[u8], offset: &mut usize| -> std::io::Result<u16> {
-                if raw.len() < *offset + 2 {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::UnexpectedEof,
-                        "Not enough bytes to read",
-                    ));
-                }
-                let value = u16::from_be_bytes([raw[*offset], raw[*offset + 1]]);
-                *offset += 2;
-                Ok(value)
-            };
+        let read_two_bytes = |raw: &[u8], offset: &mut usize| -> std::io::Result<u16> {
+            if raw.len() < *offset + 2 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "Not enough bytes to read",
+                ));
+            }
+            let value = u16::from_be_bytes([raw[*offset], raw[*offset + 1]]);
+            *offset += 2;
+            Ok(value)
+        };
 
         let num_groups = read_two_bytes(raw, &mut offset)?;
         let weight = read_two_bytes(raw, &mut offset)?;
@@ -60,7 +59,7 @@ impl<'a> FromSql<'a> for PostgresNumeric {
             value = value * n_base + U256::from(read_two_bytes(raw, &mut offset)?);
         }
 
-        value = value * n_base.pow(U256::from(weight));
+        value *= n_base.pow(U256::from(weight));
 
         Ok(PostgresNumeric(value))
     }
@@ -121,7 +120,6 @@ impl ToSql for PostgresNumeric {
             out.put_i16(*digit);
         }
 
-
         Ok(tokio_postgres::types::IsNull::No)
     }
 
@@ -169,9 +167,7 @@ mod tests {
 
             let reconstructed_value = digits
                 .iter()
-                .fold(U256::from(0), |acc, digit| {
-                    acc * U256::from(NBASE) + U256::from(*digit)
-                });
+                .fold(U256::from(0), |acc, digit| acc * U256::from(NBASE) + U256::from(*digit));
 
             assert_eq!(value, reconstructed_value);
         }
@@ -191,6 +187,4 @@ mod tests {
             assert_eq!(value, reconstructed_value.0);
         }
     }
-
 }
-

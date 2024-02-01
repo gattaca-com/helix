@@ -1,30 +1,35 @@
-use axum::routing::{get, post};
-use axum::{Extension, Router};
-use tower_http::limit::RequestBodyLimitLayer;
-use std::sync::Arc;
-use helix_beacon_client::beacon_client::BeaconClient;
-use helix_beacon_client::multi_beacon_client::MultiBeaconClient;
+use axum::{
+    error_handling::HandleErrorLayer,
+    http::StatusCode,
+    routing::{get, post},
+    Extension, Router,
+};
+use helix_beacon_client::{beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient};
+use helix_common::{Route, RouterConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
-use helix_common::{Route, RouterConfig};
+use std::sync::Arc;
+use tower::{timeout::TimeoutLayer, BoxError, ServiceBuilder};
+use tower_http::limit::RequestBodyLimitLayer;
 
-use crate::builder::api::{MAX_HEADER_LENGTH, MAX_PAYLOAD_LENGTH};
-use crate::gossiper::grpc_gossiper::GrpcGossiperClientManager;
-use crate::proposer::api::{MAX_BLINDED_BLOCK_LENGTH, MAX_VAL_REGISTRATIONS_LENGTH};
 use crate::{
     builder::{
-        api::BuilderApi, optimistic_simulator::OptimisticSimulator,
-        PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK,
-        PATH_SUBMIT_BLOCK_OPTIMISTIC, PATH_SUBMIT_HEADER,
+        api::{BuilderApi, MAX_HEADER_LENGTH, MAX_PAYLOAD_LENGTH},
+        optimistic_simulator::OptimisticSimulator,
+        PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK, PATH_SUBMIT_BLOCK_OPTIMISTIC,
+        PATH_SUBMIT_HEADER,
     },
+    gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::{
-        api::ProposerApi, PATH_GET_HEADER, PATH_GET_PAYLOAD, PATH_PROPOSER_API,
-        PATH_REGISTER_VALIDATORS, PATH_STATUS,
+        api::{ProposerApi, MAX_BLINDED_BLOCK_LENGTH, MAX_VAL_REGISTRATIONS_LENGTH},
+        PATH_GET_HEADER, PATH_GET_PAYLOAD, PATH_PROPOSER_API, PATH_REGISTER_VALIDATORS,
+        PATH_STATUS,
     },
     relay_data::{
         DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API, PATH_PROPOSER_PAYLOAD_DELIVERED,
         PATH_VALIDATOR_REGISTRATION,
     },
+    service::API_REQUEST_TIMEOUT,
 };
 
 pub type BuilderApiProd = BuilderApi<
@@ -58,25 +63,28 @@ pub fn build_router(
                 );
             }
             Route::SubmitBlock => {
-                router = router.route(
-                    &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK}"),
-                    post(BuilderApiProd::submit_block),
-                )
-                .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));
+                router = router
+                    .route(
+                        &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK}"),
+                        post(BuilderApiProd::submit_block),
+                    )
+                    .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));
             }
             Route::SubmitBlockOptimistic => {
-                router = router.route(
-                    &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC}"),
-                    post(BuilderApiProd::submit_block_v2),
-                )
-                .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));
+                router = router
+                    .route(
+                        &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC}"),
+                        post(BuilderApiProd::submit_block_v2),
+                    )
+                    .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));
             }
             Route::SubmitHeader => {
-                router = router.route(
-                    &format!("{PATH_BUILDER_API}{PATH_SUBMIT_HEADER}"),
-                    post(BuilderApiProd::submit_header),
-                )
-                .layer(RequestBodyLimitLayer::new(MAX_HEADER_LENGTH));
+                router = router
+                    .route(
+                        &format!("{PATH_BUILDER_API}{PATH_SUBMIT_HEADER}"),
+                        post(BuilderApiProd::submit_header),
+                    )
+                    .layer(RequestBodyLimitLayer::new(MAX_HEADER_LENGTH));
             }
             Route::Status => {
                 router = router.route(
@@ -85,11 +93,12 @@ pub fn build_router(
                 );
             }
             Route::RegisterValidators => {
-                router = router.route(
-                    &format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
-                    post(ProposerApiProd::register_validators),
-                )
-                .layer(RequestBodyLimitLayer::new(MAX_VAL_REGISTRATIONS_LENGTH));
+                router = router
+                    .route(
+                        &format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
+                        post(ProposerApiProd::register_validators),
+                    )
+                    .layer(RequestBodyLimitLayer::new(MAX_VAL_REGISTRATIONS_LENGTH));
             }
             Route::GetHeader => {
                 router = router.route(
@@ -98,11 +107,12 @@ pub fn build_router(
                 );
             }
             Route::GetPayload => {
-                router = router.route(
-                    &format!("{PATH_PROPOSER_API}{PATH_GET_PAYLOAD}"),
-                    post(ProposerApiProd::get_payload),
-                )
-                .layer(RequestBodyLimitLayer::new(MAX_BLINDED_BLOCK_LENGTH));
+                router = router
+                    .route(
+                        &format!("{PATH_PROPOSER_API}{PATH_GET_PAYLOAD}"),
+                        post(ProposerApiProd::get_payload),
+                    )
+                    .layer(RequestBodyLimitLayer::new(MAX_BLINDED_BLOCK_LENGTH));
             }
             Route::ProposerPayloadDelivered => {
                 router = router.route(
@@ -128,7 +138,15 @@ pub fn build_router(
         }
     }
 
-    // Add layers
+    // Add Timeout-Layer
+    // Add Error-handling layer
+    router = router.layer(
+        ServiceBuilder::new()
+            .layer(HandleErrorLayer::new(|_: BoxError| async { StatusCode::REQUEST_TIMEOUT }))
+            .layer(TimeoutLayer::new(API_REQUEST_TIMEOUT)),
+    );
+
+    // Add Extension layers
     router = router
         .layer(Extension(builder_api))
         .layer(Extension(proposer_api))

@@ -5,8 +5,7 @@ use helix_common::signed_proposal::VersionedSignedProposal;
 use std::sync::Arc;
 
 use crate::{
-    beacon_client::BeaconClient,
-    error::BeaconClientError, fiber_broadcaster::FiberBroadcaster,
+    beacon_client::BeaconClient, error::BeaconClientError, fiber_broadcaster::FiberBroadcaster,
     mock_block_broadcaster::MockBlockBroadcaster, types::BroadcastValidation,
 };
 

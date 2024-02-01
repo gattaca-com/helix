@@ -1,6 +1,3 @@
-
-
-
 #[derive(Debug, thiserror::Error)]
 pub enum GossipError {
     #[error("Client is not connected")]
@@ -11,6 +8,5 @@ pub enum GossipError {
 
     #[error("Failed to reconnect")]
     ReconnectFailed,
-
     // Add other error common as needed
 }

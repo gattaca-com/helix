@@ -1,10 +1,6 @@
-use ethereum_consensus::{
-    types::mainnet::ExecutionPayloadHeader,
-    ssz::prelude::*,
-};
+use ethereum_consensus::{ssz::prelude::*, types::mainnet::ExecutionPayloadHeader};
 
-use crate::{deneb::BlobsBundle, capella};
-
+use crate::{capella, deneb::BlobsBundle};
 
 #[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
 pub struct VersionedExecutionPayloadHeader {
@@ -15,7 +11,9 @@ pub struct VersionedExecutionPayloadHeader {
 impl Default for VersionedExecutionPayloadHeader {
     fn default() -> Self {
         Self {
-            execution_payload_header: ExecutionPayloadHeader::Capella(capella::ExecutionPayloadHeader::default()),
+            execution_payload_header: ExecutionPayloadHeader::Capella(
+                capella::ExecutionPayloadHeader::default(),
+            ),
             blobs_bundle: None,
         }
     }

@@ -7,11 +7,11 @@ use axum::{
 };
 use tracing::warn;
 
-use helix_database::DatabaseService;
 use helix_common::api::data_api::{
     BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
     ReceivedBlocksResponse, ValidatorRegistrationParams,
 };
+use helix_database::DatabaseService;
 
 use crate::relay_data::error::DataApiError;
 
@@ -61,10 +61,10 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         Extension(data_api): Extension<Arc<DataApi<DB>>>,
         Query(params): Query<BuilderBlocksReceivedParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
-        if params.slot.is_none()
-            && params.block_hash.is_none()
-            && params.block_number.is_none()
-            && params.builder_pubkey.is_none()
+        if params.slot.is_none() &&
+            params.block_hash.is_none() &&
+            params.block_number.is_none() &&
+            params.builder_pubkey.is_none()
         {
             return Err(DataApiError::MissingFilter);
         }
@@ -93,9 +93,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         Query(params): Query<ValidatorRegistrationParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         match data_api.db.get_validator_registration(params.pubkey).await {
-            Ok(result) => {
-                Ok(Json(result.registration_info.registration))
-            }
+            Ok(result) => Ok(Json(result.registration_info.registration)),
             Err(err) => {
                 warn!(error=%err, "Failed to get validator registration info");
                 Err(DataApiError::InternalServerError)

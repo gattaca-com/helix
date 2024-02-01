@@ -1,10 +1,6 @@
-use ethereum_consensus::{
-    types::mainnet::ExecutionPayload,
-    ssz::prelude::*,
-};
+use ethereum_consensus::{ssz::prelude::*, types::mainnet::ExecutionPayload};
 
-use crate::{deneb::BlobsBundle, capella};
-
+use crate::{capella, deneb::BlobsBundle};
 
 #[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
 pub struct PayloadAndBlobs {

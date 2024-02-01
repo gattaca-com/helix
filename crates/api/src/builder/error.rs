@@ -1,10 +1,13 @@
-use axum::{http::StatusCode, response::{IntoResponse, Response}};
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use ethereum_consensus::{
     primitives::{BlsPublicKey, Bytes32, Hash32},
-    ssz::{prelude::*, self},
+    ssz::{self, prelude::*},
 };
-use helix_datastore::error::AuctioneerError;
 use helix_common::simulator::BlockSimError;
+use helix_datastore::error::AuctioneerError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuilderApiError {
@@ -45,7 +48,7 @@ pub enum BuilderApiError {
     PayloadAttributesNotYetKnown,
 
     #[error("payload slot mismatches with current payload attributes slot. got: {got}, expected: {expected}")]
-    PayloadSlotMismatchWithPayloadAttributes {got: u64, expected: u64 },
+    PayloadSlotMismatchWithPayloadAttributes { got: u64, expected: u64 },
 
     #[error("block hash mismatch. message: {message:?}, payload: {payload:?}")]
     BlockHashMismatch { message: Hash32, payload: Hash32 },
@@ -99,18 +102,18 @@ pub enum BuilderApiError {
         "not enough optimistic collateral. builder_pub_key: {builder_pub_key:?}. 
         collateral: {collateral:?}, collateral required: {collateral_required:?}"
     )]
-    NotEnoughOptimisticCollateral { 
+    NotEnoughOptimisticCollateral {
         builder_pub_key: BlsPublicKey,
         collateral: U256,
         collateral_required: U256,
         is_optimistic: bool,
     },
 
-    #[error("builder has been demoted. builder_pub_key: {builder_pub_key:?}")]
-    BuilderDemoted{builder_pub_key: BlsPublicKey},
+    #[error("builder is not optimistic. builder_pub_key: {builder_pub_key:?}")]
+    BuilderNotOptimistic { builder_pub_key: BlsPublicKey },
 
     #[error("builder not in proposer's trusted list: {proposer_trusted_builders:?}")]
-    BuilderNotInProposersTrustedList{proposer_trusted_builders: Vec<String>},
+    BuilderNotInProposersTrustedList { proposer_trusted_builders: Vec<String> },
 
     #[error("V2 submissions invalid if proposer censors")]
     V2SubmissionsInvalidIfProposerCensors,
@@ -216,9 +219,9 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::DuplicateBlockHash { block_hash } => {
                 (StatusCode::BAD_REQUEST, format!("block already received: {block_hash:?}")).into_response()
             },
-            BuilderApiError::NotEnoughOptimisticCollateral { 
-                builder_pub_key, 
-                collateral, 
+            BuilderApiError::NotEnoughOptimisticCollateral {
+                builder_pub_key,
+                collateral,
                 collateral_required,
                 is_optimistic,
              } => {
@@ -227,8 +230,8 @@ impl IntoResponse for BuilderApiError {
                     collateral: {collateral:?}, collateral required: {collateral_required:?}. is_optimistic: {is_optimistic}"
                 )).into_response()
             },
-            BuilderApiError::BuilderDemoted { builder_pub_key } => {
-                (StatusCode::BAD_REQUEST, format!("builder has been demoted. builder_pub_key: {builder_pub_key:?}")).into_response()
+            BuilderApiError::BuilderNotOptimistic { builder_pub_key } => {
+                (StatusCode::BAD_REQUEST, format!("builder is not optimistic. builder_pub_key: {builder_pub_key:?}")).into_response()
             },
             BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders } => {
                 (StatusCode::BAD_REQUEST, format!("builder not in proposer's trusted list: {proposer_trusted_builders:?}")).into_response()

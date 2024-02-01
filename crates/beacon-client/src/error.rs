@@ -1,7 +1,9 @@
 use std::{error::Error, fmt};
 
 use axum::{
-    http::{status::InvalidStatusCode, StatusCode}, response::{IntoResponse, Response}, Json
+    http::{status::InvalidStatusCode, StatusCode},
+    response::{IntoResponse, Response},
+    Json,
 };
 use ethereum_consensus::ssz;
 use serde::{Deserialize, Serialize};
@@ -42,7 +44,10 @@ pub enum BeaconClientError {
     SszSerializationError(#[from] ssz::prelude::SerializeError),
 
     #[error("Error publishing block: {0}")]
-    BlockPublishError(String)
+    BlockPublishError(String),
+
+    #[error("Error initializing broadcaster: {0}")]
+    BroadcasterInitError(String),
 }
 
 impl IntoResponse for BeaconClientError {

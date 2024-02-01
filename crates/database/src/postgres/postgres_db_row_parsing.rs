@@ -4,19 +4,17 @@ use ethereum_consensus::{
     builder::{SignedValidatorRegistration, ValidatorRegistration},
     primitives::{BlsPublicKey, BlsSignature, U256},
 };
-use thiserror::Error;
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, 
-    api::proposer_api::ValidatorRegistrationInfo, 
-    bellatrix::{ByteList, ByteVector, List}, 
-    bid_submission::BidTrace, 
-    pending_block::PendingBlock, 
-    BuilderInfo, 
-    GetPayloadTrace, 
-    ProposerInfo, 
-    SignedValidatorRegistrationEntry,
+    api::{
+        builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
+    },
+    bellatrix::{ByteList, ByteVector, List},
+    bid_submission::BidTrace,
+    pending_block::PendingBlock,
+    BuilderInfo, GetPayloadTrace, ProposerInfo, SignedValidatorRegistrationEntry,
     ValidatorPreferences,
 };
+use thiserror::Error;
 
 use crate::{
     error::DatabaseError, postgres::postgres_db_u256_parsing::PostgresNumeric,
@@ -42,7 +40,8 @@ impl FromRow for DeliveredPayloadDocument {
             payload: Arc::new(ethereum_consensus::types::ExecutionPayload::Bellatrix(
                 ethereum_consensus::bellatrix::ExecutionPayload::from_row(row)?,
             )),
-            latency_trace: GetPayloadTrace::default(), //TODO: If this is needed then we need solve the one to many problem
+            // TODO: If this is needed then we need to solve the one to many problem
+            latency_trace: GetPayloadTrace::default(),
         })
     }
 }
@@ -64,7 +63,7 @@ impl FromRow for BidTrace {
             )?,
             gas_limit: parse_i32_to_u64(row.get::<&str, i32>("gas_limit"))?,
             gas_used: parse_i32_to_u64(row.get::<&str, i32>("gas_used"))?,
-            value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("submission_value"))?,
+            value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("submission_value")),
         })
     }
 }
@@ -126,7 +125,7 @@ impl<
             )?,
             base_fee_per_gas: parse_numeric_to_u256(
                 row.get::<&str, PostgresNumeric>("payload_base_fee_per_gas"),
-            )?,
+            ),
             block_hash: parse_bytes_to_hash::<32>(row.get::<&str, &[u8]>("payload_block_hash"))?,
             transactions: parse_vec_bytes_to_list_bytelist::<
                 MAX_BYTES_PER_TRANSACTION,
@@ -155,7 +154,7 @@ impl FromRow for BidSubmissionDocument {
                 )?,
                 gas_limit: parse_i32_to_u64(row.get::<&str, i32>("gas_limit"))?,
                 gas_used: parse_i32_to_u64(row.get::<&str, i32>("gas_used"))?,
-                value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("submission_value"))?,
+                value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("submission_value")),
             },
             num_txs: parse_i32_to_usize(row.get::<&str, i32>("num_txs"))?,
             timestamp: parse_i64_to_u64(row.get::<&str, i64>("submission_timestamp"))?,
@@ -182,13 +181,14 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                 },
                 preferences: ValidatorPreferences {
                     censoring: parse_bool_to_bool(row.get::<&str, bool>("censoring"))?,
-                    trusted_builders: row.get::<&str, Option<Vec<&str>>>("trusted_builders")
-                    .map(|trusted_builders| {
-                        trusted_builders
-                            .into_iter()
-                            .map(|builder| builder.to_string())
-                            .collect()
-                    }),
+                    trusted_builders: row.get::<&str, Option<Vec<&str>>>("trusted_builders").map(
+                        |trusted_builders| {
+                            trusted_builders
+                                .into_iter()
+                                .map(|builder| builder.to_string())
+                                .collect()
+                        },
+                    ),
                 },
             },
         })
@@ -213,7 +213,7 @@ impl FromRow for BuilderInfo {
         Self: Sized,
     {
         Ok(BuilderInfo {
-            collateral: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("collateral"))?,
+            collateral: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("collateral")),
             is_optimistic: parse_bool_to_bool(row.get::<&str, bool>("is_optimistic"))?,
             builder_id: row.get::<&str, Option<&str>>("builder_id").map(|s| s.to_string()),
         })
@@ -229,8 +229,16 @@ impl FromRow for PendingBlock {
             block_hash: parse_bytes_to_hash::<32>(row.get::<&str, &[u8]>("block_hash"))?,
             builder_pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("builder_pubkey"))?,
             slot: parse_i32_to_u64(row.get::<&str, i32>("slot"))?,
-            header_receive_ms: parse_optional_timestamptz_to_u64_ms(row.get::<&str, Option<std::time::SystemTime>>("header_receive"))?,
-            payload_receive_ms: parse_optional_timestamptz_to_u64_ms(row.get::<&str, Option<std::time::SystemTime>>("payload_receive"))?,
+            header_receive_ms: parse_optional_timestamptz_to_u64_ms(row.get::<&str, Option<
+                std::time::SystemTime,
+            >>(
+                "header_receive"
+            ))?,
+            payload_receive_ms: parse_optional_timestamptz_to_u64_ms(row.get::<&str, Option<
+                std::time::SystemTime,
+            >>(
+                "payload_receive"
+            ))?,
         })
     }
 }
@@ -262,13 +270,14 @@ impl FromRow for SignedValidatorRegistrationEntry {
                 registration: SignedValidatorRegistration::from_row(row)?,
                 preferences: ValidatorPreferences {
                     censoring: parse_bool_to_bool(row.get::<&str, bool>("censoring"))?,
-                    trusted_builders: row.get::<&str, Option<Vec<&str>>>("trusted_builders")
-                    .map(|trusted_builders| {
-                        trusted_builders
-                            .into_iter()
-                            .map(|builder| builder.to_string())
-                            .collect()
-                    }),
+                    trusted_builders: row.get::<&str, Option<Vec<&str>>>("trusted_builders").map(
+                        |trusted_builders| {
+                            trusted_builders
+                                .into_iter()
+                                .map(|builder| builder.to_string())
+                                .collect()
+                        },
+                    ),
                 },
             },
             inserted_at: parse_timestamptz_to_u64(
@@ -304,7 +313,9 @@ pub fn parse_timestamptz_to_u64_ms(timestamp: std::time::SystemTime) -> Result<u
         .map(|duration| duration.as_millis() as u64)
 }
 
-pub fn parse_optional_timestamptz_to_u64_ms(timestamp: Option<std::time::SystemTime>) -> Result<Option<u64>, DatabaseError> {
+pub fn parse_optional_timestamptz_to_u64_ms(
+    timestamp: Option<std::time::SystemTime>,
+) -> Result<Option<u64>, DatabaseError> {
     match timestamp {
         Some(timestamp) => parse_timestamptz_to_u64_ms(timestamp).map(Some),
         None => Ok(None),
@@ -339,8 +350,8 @@ pub fn parse_bytes_to_signature(signature: &[u8]) -> Result<BlsSignature, Databa
     BlsSignature::try_from(signature).map_err(|e| DatabaseError::RowParsingError(Box::new(e)))
 }
 
-pub fn parse_numeric_to_u256(value: PostgresNumeric) -> Result<U256, DatabaseError> {
-    U256::try_from(value).map_err(|e| DatabaseError::RowParsingError(Box::new(e)))
+pub fn parse_numeric_to_u256(value: PostgresNumeric) -> U256 {
+    U256::from(value.0)
 }
 
 pub fn parse_rows<T: FromRow>(rows: Vec<tokio_postgres::Row>) -> Result<Vec<T>, DatabaseError> {

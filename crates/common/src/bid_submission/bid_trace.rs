@@ -1,6 +1,7 @@
 use ethereum_consensus::{
     primitives::{BlsPublicKey, ExecutionAddress, Hash32, Slot, U256},
-    serde::as_str, ssz::prelude::*, 
+    serde::as_str,
+    ssz::prelude::*,
 };
 
 #[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]

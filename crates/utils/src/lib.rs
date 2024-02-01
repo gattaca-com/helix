@@ -1,5 +1,9 @@
 use ::serde::de;
-use ethereum_consensus::{capella::Withdrawal, phase0::mainnet::SLOTS_PER_EPOCH, ssz::{self, prelude::SimpleSerialize}};
+use ethereum_consensus::{
+    capella::Withdrawal,
+    phase0::mainnet::SLOTS_PER_EPOCH,
+    ssz::{self, prelude::SimpleSerialize},
+};
 use reth_primitives::{proofs, Address};
 
 pub mod request_encoding;
@@ -33,7 +37,7 @@ fn to_reth_withdrawal(withdrawal: Withdrawal) -> reth_primitives::Withdrawal {
 
 pub fn try_decode_into<T>(is_ssz: bool, body_bytes: &[u8], json_fallback: bool) -> Option<T>
 where
-    T: SimpleSerialize + de::DeserializeOwned
+    T: SimpleSerialize + de::DeserializeOwned,
 {
     if is_ssz {
         match ssz::prelude::deserialize::<T>(body_bytes).ok() {

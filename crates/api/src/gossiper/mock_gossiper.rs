@@ -1,30 +1,24 @@
 use async_trait::async_trait;
-use tonic::{Response, Status, Request};
+use tonic::{Request, Response, Status};
 
 use crate::{
     gossiper::{
         error::GossipError,
         traits::GossipClientTrait,
         types::{BroadcastHeaderParams, BroadcastPayloadParams},
-    }, 
-    grpc::{
-        self,
-        gossip_service_server::GossipService,
-    }, 
+    },
+    grpc::{self, gossip_service_server::GossipService},
 };
 
-
 #[derive(Clone)]
-pub struct MockGossiper { }
+pub struct MockGossiper {}
 
 impl MockGossiper {
     pub fn new() -> Result<Self, tonic::transport::Error> {
-        Ok(Self {  })
+        Ok(Self {})
     }
 
-    pub async fn start_server(
-        &self,
-    ) -> Result<(), tonic::transport::Error> {
+    pub async fn start_server(&self) -> Result<(), tonic::transport::Error> {
         Ok(())
     }
 }
@@ -39,7 +33,7 @@ impl GossipClientTrait for MockGossiper {
     }
 }
 
-pub struct MockGossiperService{ }
+pub struct MockGossiperService {}
 
 #[tonic::async_trait]
 impl GossipService for MockGossiperService {

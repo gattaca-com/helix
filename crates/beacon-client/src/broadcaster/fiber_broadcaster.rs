@@ -12,11 +12,16 @@ pub struct FiberBroadcaster {
 }
 
 impl FiberBroadcaster {
-    pub async fn new(url: String, api_key: String, encoding: Encoding) -> Self {
+    pub async fn new(
+        url: String,
+        api_key: String,
+        encoding: Encoding,
+    ) -> Result<Self, BeaconClientError> {
+        tokio::time::sleep(tokio::time::Duration::from_secs(12)).await;
         let client = fiber::Client::connect(url, api_key)
             .await
-            .expect("Error initializing Fibre broadcaster");
-        Self { _encoding: encoding, client }
+            .map_err(|err| BeaconClientError::BroadcasterInitError(format!("Fiber Err: {err}")))?;
+        Ok(Self { _encoding: encoding, client })
     }
 
     pub async fn broadcast_block(
@@ -25,7 +30,6 @@ impl FiberBroadcaster {
         _broadcast_validation: Option<BroadcastValidation>,
         _consensus_version: Fork,
     ) -> Result<(), BeaconClientError> {
-        
         match block.get_ssz_bytes_to_publish() {
             Ok(ssz_block) => match self.client.publish_block(ssz_block).await {
                 Ok(_) => Ok(()),

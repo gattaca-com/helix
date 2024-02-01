@@ -1,29 +1,24 @@
-
-
 #[cfg(test)]
 mod data_api_tests {
     // *** IMPORTS ***
     use crate::{
-        test_utils::data_api_app, relay_data::{DataApi, PATH_DATA_API, PATH_BUILDER_BIDS_RECEIVED},
+        relay_data::{
+            DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API, PATH_PROPOSER_PAYLOAD_DELIVERED,
+            PATH_VALIDATOR_REGISTRATION,
+        },
+        test_utils::data_api_app,
     };
-    use ethereum_consensus::{
-        builder::SignedValidatorRegistration,
-        primitives::BlsPublicKey,
+    use ethereum_consensus::{builder::SignedValidatorRegistration, primitives::BlsPublicKey};
+    use helix_common::api::data_api::{
+        BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
+        ReceivedBlocksResponse, ValidatorRegistrationParams,
     };
-    use hyper::StatusCode;
-    use reqwest::{Client, Response};
-    use serial_test::serial;
-    use std::{sync::Arc, time::Duration};
     use helix_database::MockDatabaseService;
     use helix_utils::request_encoding::Encoding;
+    use reqwest::{Client, Response, StatusCode};
+    use serial_test::serial;
+    use std::{sync::Arc, time::Duration};
     use tokio::sync::oneshot;
-    use helix_common::api::data_api::ProposerPayloadDeliveredParams;
-    use crate::relay_data::PATH_PROPOSER_PAYLOAD_DELIVERED;
-    use helix_common::api::data_api::DeliveredPayloadsResponse;
-    use helix_common::api::data_api::BuilderBlocksReceivedParams;
-    use helix_common::api::data_api::ReceivedBlocksResponse;
-    use crate::relay_data::PATH_VALIDATOR_REGISTRATION;
-    use helix_common::api::data_api::ValidatorRegistrationParams;
 
     // +++ HELPER VARIABLES +++
     const ADDRESS: &str = "0.0.0.0";
@@ -55,7 +50,7 @@ mod data_api_tests {
         let client = Client::new();
         let request = client.post(req_url).header("accept", "*/*");
         let request = encoding.to_headers(request);
-        
+
         request.body(req_payload).send().await.unwrap()
     }
 
@@ -76,10 +71,11 @@ mod data_api_tests {
             // run it with hyper on localhost:3000
             let listener = tokio::net::TcpListener::bind(bind_address).await.unwrap();
             axum::serve(listener, router)
-            .with_graceful_shutdown(async {
-                rx.await.ok();
-            })
-            .await.unwrap();
+                .with_graceful_shutdown(async {
+                    rx.await.ok();
+                })
+                .await
+                .unwrap();
         });
 
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -111,9 +107,7 @@ mod data_api_tests {
     }
 
     fn get_test_validator_registration_params() -> ValidatorRegistrationParams {
-        ValidatorRegistrationParams {
-            pubkey: BlsPublicKey::default(),
-        }
+        ValidatorRegistrationParams { pubkey: BlsPublicKey::default() }
     }
 
     // *** TESTS ***
@@ -123,7 +117,6 @@ mod data_api_tests {
         // Start the server
         let (tx, http_config, _api, _database) = start_api_server().await;
 
-        
         // Prepare the request
         let req_url = format!(
             "{}{}{}",
@@ -157,7 +150,6 @@ mod data_api_tests {
         // Start the server
         let (tx, http_config, _api, _database) = start_api_server().await;
 
-        
         // Prepare the request
         let req_url = format!(
             "{}{}{}",
@@ -192,14 +184,9 @@ mod data_api_tests {
         // Start the server
         let (tx, http_config, _api, _database) = start_api_server().await;
 
-        
         // Prepare the request
-        let req_url = format!(
-            "{}{}{}",
-            http_config.base_url(),
-            PATH_DATA_API,
-            PATH_BUILDER_BIDS_RECEIVED,
-        );
+        let req_url =
+            format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_BUILDER_BIDS_RECEIVED,);
 
         let mut query_params = get_test_builder_blocks_received_params();
         query_params.slot = None;
@@ -214,7 +201,10 @@ mod data_api_tests {
             .unwrap();
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(resp.text().await.unwrap(), "need to query for specific slot or block_hash or block_number or builder_pubkey");
+        assert_eq!(
+            resp.text().await.unwrap(),
+            "need to query for specific slot or block_hash or block_number or builder_pubkey"
+        );
 
         // Shut down the server
         let _ = tx.send(());
@@ -226,17 +216,12 @@ mod data_api_tests {
         // Start the server
         let (tx, http_config, _api, _database) = start_api_server().await;
 
-        
         // Prepare the request
-        let req_url = format!(
-            "{}{}{}",
-            http_config.base_url(),
-            PATH_DATA_API,
-            PATH_BUILDER_BIDS_RECEIVED,
-        );
+        let req_url =
+            format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_BUILDER_BIDS_RECEIVED,);
 
         let mut query_params = get_test_builder_blocks_received_params();
-       query_params.limit = Some(501);
+        query_params.limit = Some(501);
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
@@ -260,14 +245,9 @@ mod data_api_tests {
         // Start the server
         let (tx, http_config, _api, _database) = start_api_server().await;
 
-        
         // Prepare the request
-        let req_url = format!(
-            "{}{}{}",
-            http_config.base_url(),
-            PATH_DATA_API,
-            PATH_BUILDER_BIDS_RECEIVED,
-        );
+        let req_url =
+            format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_BUILDER_BIDS_RECEIVED,);
 
         let query_params = get_test_builder_blocks_received_params();
 
@@ -295,14 +275,9 @@ mod data_api_tests {
         // Start the server
         let (tx, http_config, _api, _database) = start_api_server().await;
 
-        
         // Prepare the request
-        let req_url = format!(
-            "{}{}{}",
-            http_config.base_url(),
-            PATH_DATA_API,
-            PATH_VALIDATOR_REGISTRATION,
-        );
+        let req_url =
+            format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_VALIDATOR_REGISTRATION,);
 
         let query_params = get_test_validator_registration_params();
 
@@ -323,5 +298,4 @@ mod data_api_tests {
         // Shut down the server
         let _ = tx.send(());
     }
-
 }

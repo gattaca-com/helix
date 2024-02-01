@@ -1,6 +1,7 @@
 use ethereum_consensus::{
+    ssz::{self, prelude::*},
     types::mainnet::SignedBeaconBlock,
-    ssz::{prelude::*, self}, Fork,
+    Fork,
 };
 
 use crate::deneb::SignedBlockContents;
@@ -39,29 +40,26 @@ impl VersionedSignedProposal {
 
     pub fn block_contents(&self) -> &SignedBlockContents {
         match self {
-            Self::Bellatrix(_) => unreachable!("VersionedSignedProposal::Bellatrix is not supported in block_contents"),
-            Self::Capella(_) => unreachable!("VersionedSignedProposal::Capella is not supported in block_contents"),
+            Self::Bellatrix(_) => unreachable!(
+                "VersionedSignedProposal::Bellatrix is not supported in block_contents"
+            ),
+            Self::Capella(_) => {
+                unreachable!("VersionedSignedProposal::Capella is not supported in block_contents")
+            }
             Self::Deneb(block_contents) => block_contents,
         }
     }
 
     pub fn get_ssz_bytes_to_publish(&self) -> Result<Vec<u8>, SerializeError> {
         match self {
-            Self::Bellatrix(block) => {
-                ssz::prelude::serialize(block)
-            },
-            Self::Capella(block) => {
-                ssz::prelude::serialize(block)
-            },
-            Self::Deneb(block_contents) => {
-                ssz::prelude::serialize(&block_contents.signed_block)
-            },
+            Self::Bellatrix(block) => ssz::prelude::serialize(block),
+            Self::Capella(block) => ssz::prelude::serialize(block),
+            Self::Deneb(block_contents) => ssz::prelude::serialize(&block_contents.signed_block),
         }
     }
 }
 
-impl<'de,> serde::Deserialize<'de> for VersionedSignedProposal
-{
+impl<'de> serde::Deserialize<'de> for VersionedSignedProposal {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,

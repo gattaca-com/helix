@@ -3,44 +3,59 @@ mod tests {
 
     // +++ IMPORTS +++
     use crate::{
-        builder::mock_simulator::MockSimulator,
         builder::{
-            api::{BuilderApi, MAX_PAYLOAD_LENGTH, decode_payload, decode_header_submission},
+            api::{decode_header_submission, decode_payload, BuilderApi, MAX_PAYLOAD_LENGTH},
+            mock_simulator::MockSimulator,
             PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK,
         },
+        gossiper::mock_gossiper::MockGossiper,
+        service::API_REQUEST_TIMEOUT,
         test_utils::builder_api_app,
     };
+    use axum::http::{header, Method, Request, Uri};
     use core::panic;
-    use axum::{body::Body, http::{header, Method, Request, StatusCode, Uri}};
     use ethereum_consensus::{
         builder::{SignedValidatorRegistration, ValidatorRegistration},
         configs::mainnet::CAPELLA_FORK_EPOCH,
         phase0::mainnet::SLOTS_PER_EPOCH,
         primitives::{BlsPublicKey, BlsSignature},
-        ssz::{prelude::*, self}, Fork, types::mainnet::ExecutionPayloadHeader,
+        ssz::{self, prelude::*},
+        types::mainnet::{ExecutionPayload, ExecutionPayloadHeader},
+        Fork,
     };
+    use futures::{stream::FuturesOrdered, Future};
     use helix_beacon_client::types::PayloadAttributes;
+    use helix_common::{
+        api::{
+            builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
+            proposer_api::ValidatorRegistrationInfo,
+        },
+        bid_submission::{
+            v2::header_submission::{
+                SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb,
+            },
+            BidSubmission, SignedBidSubmission,
+        },
+        HeaderSubmissionTrace, SubmissionTrace, ValidatorPreferences,
+    };
+    use helix_database::MockDatabaseService;
+    use helix_datastore::MockAuctioneer;
+    use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
+    use helix_utils::request_encoding::Encoding;
     use rand::Rng;
     use reqwest::{Client, Response};
     use reth_primitives::hex;
     use serde_json::json;
     use serial_test::serial;
-    use std::{io::Write, sync::Arc, time::Duration, str::FromStr};
-    use ethereum_consensus::types::mainnet::ExecutionPayload;
-    use helix_database::MockDatabaseService;
-    use helix_datastore::MockAuctioneer;
-    use helix_common::{
-        api::builder_api::{BuilderGetValidatorsResponseEntry, BuilderGetValidatorsResponse}, bid_submission::{SignedBidSubmission, v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb}, BidSubmission}, SubmissionTrace, HeaderSubmissionTrace,
+    use std::{
+        convert::Infallible, future::pending, io::Write, pin::Pin, str::FromStr, sync::Arc,
+        time::Duration,
     };
-    use helix_common::api::proposer_api::ValidatorRegistrationInfo;
-    use helix_common::ValidatorPreferences;
-    use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-    use helix_utils::request_encoding::Encoding;
     use tokio::sync::{
         mpsc::{Receiver, Sender},
         oneshot,
     };
-    use crate::gossiper::mock_gossiper::MockGossiper;
+    use tonic::transport::Body;
 
     // +++ HELPER VARIABLES +++
     const ADDRESS: &str = "0.0.0.0";
@@ -76,7 +91,7 @@ mod tests {
         let client = Client::new();
         let request = client.post(req_url).header("accept", "*/*");
         let request = encoding.to_headers(request);
-        
+
         request.body(req_payload).send().await.unwrap()
     }
 
@@ -117,8 +132,7 @@ mod tests {
         BuilderGetValidatorsResponseEntry {
             slot: submission_slot.unwrap_or(SUBMISSION_SLOT),
             validator_index: VALIDATOR_INDEX,
-            entry: 
-            ValidatorRegistrationInfo {
+            entry: ValidatorRegistrationInfo {
                 registration: SignedValidatorRegistration {
                     message: ValidatorRegistration {
                         fee_recipient: get_byte_vector_20_for_hex("0x5cc0dde14e7256340cc820415a6022a7d1c93a35"),
@@ -292,10 +306,11 @@ mod tests {
             // run it with hyper on localhost:3000
             let listener = tokio::net::TcpListener::bind(bind_address).await.unwrap();
             axum::serve(listener, router)
-            .with_graceful_shutdown(async {
-                rx.await.ok();
-            })
-            .await.unwrap();
+                .with_graceful_shutdown(async {
+                    rx.await.ok();
+                })
+                .await
+                .unwrap();
         });
 
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -350,7 +365,7 @@ mod tests {
         gzip_encoding: bool,
         ssz_content_type: bool,
         payload: &[u8],
-    ) -> Request<Body> {
+    ) -> Request<axum::body::Body> {
         // Construct the URI with cancellations query parameter
         let uri_str = if cancellations_enabled {
             "http://example.com?cancellations=1"
@@ -358,33 +373,29 @@ mod tests {
             "http://example.com"
         };
         let uri = Uri::from_str(uri_str).unwrap();
-    
+
         // Construct the request method and body
         let method = Method::POST;
-        let body = Body::from(payload.to_vec());
-    
+        let body = axum::body::Body::from(payload.to_vec());
+
         // Create the request builder
-        let mut request_builder = Request::builder()
-        .method(method)
-        .uri(uri);
+        let mut request_builder = Request::builder().method(method).uri(uri);
 
         // Add headers based on flags
         if gzip_encoding {
             request_builder = request_builder.header(header::CONTENT_ENCODING, "gzip");
         }
         if ssz_content_type {
-            request_builder = request_builder.header(header::CONTENT_TYPE, "application/octet-stream");
+            request_builder =
+                request_builder.header(header::CONTENT_TYPE, "application/octet-stream");
         } else {
             request_builder = request_builder.header(header::CONTENT_TYPE, "application/json");
         }
 
         // Build the request
-        request_builder
-            .body(body)
-            .unwrap()
+        request_builder.body(body).unwrap()
     }
 
-    
     // +++ TESTS +++
 
     #[tokio::test]
@@ -400,10 +411,14 @@ mod tests {
         let mut header_submission_trace = HeaderSubmissionTrace::default();
         let uuid = uuid::Uuid::new_v4();
         let request = generate_request(false, false, false, &req_payload_bytes);
-        let decoded_submission = decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
+        let decoded_submission =
+            decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
 
         assert_eq!(decoded_submission.0.slot(), 5552306);
-        assert!(matches!(decoded_submission.0.execution_payload_header(), ExecutionPayloadHeader::Capella(_)));
+        assert!(matches!(
+            decoded_submission.0.execution_payload_header(),
+            ExecutionPayloadHeader::Capella(_)
+        ));
         assert!(decoded_submission.0.blobs_bundle().is_none());
     }
 
@@ -417,7 +432,8 @@ mod tests {
         let req_payload_bytes =
             load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
-        let decoded_submission: SignedHeaderSubmissionDeneb = serde_json::from_slice(&req_payload_bytes).unwrap();
+        let decoded_submission: SignedHeaderSubmissionDeneb =
+            serde_json::from_slice(&req_payload_bytes).unwrap();
 
         assert_eq!(decoded_submission.message.bid_trace.slot, 5552306);
     }
@@ -435,12 +451,14 @@ mod tests {
         let mut header_submission_trace = HeaderSubmissionTrace::default();
         let uuid = uuid::Uuid::new_v4();
         let request = generate_request(false, false, true, &req_payload_bytes);
-        let decoded_submission = decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
+        let decoded_submission =
+            decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
 
         assert!(matches!(decoded_submission.0, SignedHeaderSubmission::Capella(_)));
         assert!(decoded_submission.0.blobs_bundle().is_none());
 
-        let header: SignedHeaderSubmissionCapella = ssz::prelude::deserialize(&req_payload_bytes).unwrap();
+        let header: SignedHeaderSubmissionCapella =
+            ssz::prelude::deserialize(&req_payload_bytes).unwrap();
         println!("{:?}", header);
     }
 
@@ -457,12 +475,14 @@ mod tests {
         let mut header_submission_trace = HeaderSubmissionTrace::default();
         let uuid = uuid::Uuid::new_v4();
         let request = generate_request(false, false, true, &req_payload_bytes);
-        let decoded_submission = decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
+        let decoded_submission =
+            decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
 
         assert!(matches!(decoded_submission.0, SignedHeaderSubmission::Deneb(_)));
         assert!(decoded_submission.0.blobs_bundle().is_some());
 
-        let header: SignedHeaderSubmissionDeneb = ssz::prelude::deserialize(&req_payload_bytes).unwrap();
+        let header: SignedHeaderSubmissionDeneb =
+            ssz::prelude::deserialize(&req_payload_bytes).unwrap();
         println!("{:?}", header);
     }
 
@@ -479,11 +499,12 @@ mod tests {
         let mut submission_trace = SubmissionTrace::default();
         let uuid = uuid::Uuid::new_v4();
         let request = generate_request(false, false, false, &req_payload_bytes);
-        let decoded_submission = decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
+        let decoded_submission =
+            decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
 
         assert_eq!(decoded_submission.0.message().slot, 5552306);
-        assert!(matches!(decoded_submission.0.execution_payload(),ExecutionPayload::Capella(_)));
-        assert!(matches!(decoded_submission.0.execution_payload().version(),Fork::Capella));
+        assert!(matches!(decoded_submission.0.execution_payload(), ExecutionPayload::Capella(_)));
+        assert!(matches!(decoded_submission.0.execution_payload().version(), Fork::Capella));
         assert!(decoded_submission.0.blobs_bundle().is_none());
     }
 
@@ -500,11 +521,12 @@ mod tests {
         let mut submission_trace = SubmissionTrace::default();
         let uuid = uuid::Uuid::new_v4();
         let request = generate_request(false, true, false, &req_payload_bytes);
-        let decoded_submission = decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
+        let decoded_submission =
+            decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
 
         assert_eq!(decoded_submission.0.message().slot, 5552306);
-        assert!(matches!(decoded_submission.0.execution_payload(),ExecutionPayload::Capella(_)));
-        assert!(matches!(decoded_submission.0.execution_payload().version(),Fork::Capella));
+        assert!(matches!(decoded_submission.0.execution_payload(), ExecutionPayload::Capella(_)));
+        assert!(matches!(decoded_submission.0.execution_payload().version(), Fork::Capella));
         assert!(decoded_submission.0.blobs_bundle().is_none());
     }
 
@@ -521,17 +543,17 @@ mod tests {
         let mut submission_trace = SubmissionTrace::default();
         let uuid = uuid::Uuid::new_v4();
         let request = generate_request(false, false, false, &req_payload_bytes);
-        let (decoded_submission, _) = decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
+        let (decoded_submission, _) =
+            decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
 
         assert_eq!(decoded_submission.message().slot, 5552306);
-        assert!(matches!(decoded_submission.execution_payload(),ExecutionPayload::Deneb(_)));
-        assert!(matches!(decoded_submission.execution_payload().version(),Fork::Deneb));
+        assert!(matches!(decoded_submission.execution_payload(), ExecutionPayload::Deneb(_)));
+        assert!(matches!(decoded_submission.execution_payload().version(), Fork::Deneb));
         let deneb_payload = decoded_submission.execution_payload().deneb().unwrap();
         assert_eq!(deneb_payload.blob_gas_used, 100);
         assert_eq!(deneb_payload.excess_blob_gas, 50);
         assert!(decoded_submission.blobs_bundle().is_some());
     }
-
 
     #[tokio::test]
     #[serial]
@@ -572,13 +594,10 @@ mod tests {
         let body = resp.bytes().await.unwrap();
 
         let expected_response = get_dummy_slot_update(None, None).new_duties.unwrap();
-        let expected_response: Vec<BuilderGetValidatorsResponse> = expected_response
-            .into_iter()
-            .map(|item| item.into())
-            .collect();
+        let expected_response: Vec<BuilderGetValidatorsResponse> =
+            expected_response.into_iter().map(|item| item.into()).collect();
 
-        let expected_json_bytes =
-            serde_json::to_string(&expected_response).unwrap();
+        let expected_json_bytes = serde_json::to_string(&expected_response).unwrap();
 
         assert_eq!(body, expected_json_bytes);
 
@@ -964,10 +983,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
-        assert_eq!(
-            resp.text().await.unwrap(),
-            "length limit exceeded"
-        );
+        assert_eq!(resp.text().await.unwrap(), "length limit exceeded");
 
         // Shut down the server
         let _ = tx.send(());
@@ -1159,13 +1175,10 @@ mod tests {
         // assert the body is the bytes of the new duties
         let body = resp.bytes().await.unwrap();
         let expected_response = get_dummy_slot_update(None, None).new_duties.unwrap();
-        let expected_response: Vec<BuilderGetValidatorsResponse> = expected_response
-            .into_iter()
-            .map(|item| item.into())
-            .collect();
+        let expected_response: Vec<BuilderGetValidatorsResponse> =
+            expected_response.into_iter().map(|item| item.into()).collect();
 
-        let expected_json_bytes =
-            serde_json::to_string(&expected_response).unwrap();
+        let expected_json_bytes = serde_json::to_string(&expected_response).unwrap();
 
         assert_eq!(body, expected_json_bytes);
 
@@ -1202,5 +1215,65 @@ mod tests {
 
         // Shut down the server
         let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_submit_block_timeout_triggered() {
+        // Start the server
+        let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+
+        // Send slot & payload attributes updates
+        let slot_update_sender = slot_update_receiver.recv().await.unwrap();
+        send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
+        send_dummy_payload_attributes_update(slot_update_sender, None).await;
+
+        // Prepare the request
+        let cancellations_enabled = false;
+        let req_url = format!(
+            "{}{}{}{}",
+            http_config.base_url(),
+            PATH_BUILDER_API,
+            PATH_SUBMIT_BLOCK,
+            if cancellations_enabled { "?cancellations=1" } else { "" }
+        );
+
+        let mut body: FuturesOrdered<
+            Pin<Box<dyn Future<Output = Result<Vec<u8>, Infallible>> + Send>>,
+        > = FuturesOrdered::new();
+        body.push_back(Box::pin(async move {
+            // Stream max allowed payload length bytes
+            Ok::<_, Infallible>(vec![0u8; MAX_PAYLOAD_LENGTH])
+        }));
+        body.push_back(Box::pin(async move {
+            // never complete the request
+            pending::<()>().await;
+            Ok::<_, Infallible>(vec![])
+        }));
+        let body = Body::wrap_stream(body);
+
+        let test_timeout = API_REQUEST_TIMEOUT + Duration::from_secs(3);
+        let timeout_result = tokio::time::timeout(test_timeout, async {
+            // Send request by streaming the malicious body
+            let resp = reqwest::Client::new()
+                .post(req_url.as_str())
+                .header("accept", "*/*")
+                .header("Content-Type", "application/json")
+                .body(body)
+                .send()
+                .await
+                .unwrap();
+
+            assert_eq!(resp.status(), reqwest::StatusCode::REQUEST_TIMEOUT);
+
+            // Shut down the server
+            let _ = tx.send(());
+        })
+        .await;
+
+        // Check if the test timed out
+        if timeout_result.is_err() {
+            panic!("Test timed out");
+        }
     }
 }
