@@ -22,7 +22,7 @@ use helix_common::{
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-const INIT_BROADCASTER_TIMEOUT: Duration = Duration::from_secs(5);
+const INIT_BROADCASTER_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct ApiService {}
 
