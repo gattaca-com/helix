@@ -927,8 +927,8 @@ where
         let slot_cutoff_millis = (slot_time * 1000) + GET_PAYLOAD_REQUEST_CUTOFF_MS as u64;
 
         let mut last_error: Option<ProposerApiError> = None;
-
-        while get_millis_timestamp()? < slot_cutoff_millis {
+        let mut first_try = true;  // Try at least once to cover case where get_payload is called too late.
+        while first_try || get_millis_timestamp()? < slot_cutoff_millis {
             match self.auctioneer.get_execution_payload(slot, pub_key, block_hash).await {
                 Ok(Some(versioned_payload)) => return Ok(versioned_payload),
                 Ok(None) => {
@@ -940,6 +940,7 @@ where
                 }
             }
 
+            first_try = false;
             sleep(RETRY_DELAY).await;
         }
 
