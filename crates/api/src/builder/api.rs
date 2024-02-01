@@ -561,6 +561,18 @@ where
         // Decode the incoming request body into a payload
         let (payload, _) = decode_payload(req, &mut trace, &request_id).await?;
 
+        // Verify the payload is for the current slot
+        if payload.slot() <= head_slot {
+            warn!(
+                request_id = %request_id,
+                "submission is for a past slot",
+            );
+            return Err(BuilderApiError::SubmissionForPastSlot {
+                current_slot: head_slot,
+                submission_slot: payload.slot(),
+            });
+        }
+
         let builder_pub_key = payload.builder_public_key().clone();
         let block_hash = payload.message().block_hash.clone();
         debug!(
