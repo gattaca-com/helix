@@ -70,7 +70,7 @@ impl GrpcGossiperClient {
             if let Err(err) = client.broadcast_header(request).await {
                 return match err.code() {
                     tonic::Code::Unavailable => {
-                        error!(err = %err, "failed to broadcast block");
+                        error!(err = %err, "failed to broadcast header");
                         drop(client_guard);
                         // Reconnect
                         self.connect().await;
