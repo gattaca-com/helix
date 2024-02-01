@@ -303,8 +303,13 @@ mod beacon_client_tests {
         let client = BeaconClient::from_endpoint_str(&server.url());
 
         let test_block = VersionedSignedProposal::default();
-        let result =
-            client.publish_block(test_block.into(), Some(BroadcastValidation::ConsensusAndEquivocation), ethereum_consensus::Fork::Capella).await;
+        let result = client
+            .publish_block(
+                test_block.into(),
+                Some(BroadcastValidation::ConsensusAndEquivocation),
+                ethereum_consensus::Fork::Capella,
+            )
+            .await;
         assert!(result.is_ok());
 
         let code = result.unwrap();

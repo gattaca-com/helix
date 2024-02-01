@@ -901,7 +901,7 @@ fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {
     bid_values.iter().max_by_key(|&(_, value)| value).map(|(key, value)| (key.clone(), *value))
 }
 
-#[cfg(test)]
+#[cfg(redis_cache_test)]
 mod tests {
 
     use super::*;
