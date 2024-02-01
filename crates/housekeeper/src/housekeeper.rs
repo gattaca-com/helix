@@ -7,7 +7,7 @@ use std::{
 use ethereum_consensus::primitives::BlsPublicKey;
 use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
 use tokio::{
-    sync::{mpsc::channel, Mutex},
+    sync::{broadcast, Mutex},
     time::{sleep, Instant},
 };
 use tracing::{debug, error, info, warn};
@@ -27,7 +27,6 @@ use helix_datastore::Auctioneer;
 use crate::error::HousekeeperError;
 use uuid::Uuid;
 
-pub(crate) const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 8;
 
 const TRUSTED_PROPOSERS_UPDATE_FREQ: u64 = 5;
@@ -103,17 +102,24 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     /// Start the Housekeeper service.
     pub async fn start(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
+        head_event_receiver: &mut broadcast::Receiver<HeadEventData>,
     ) -> Result<(), BeaconClientError> {
         let best_sync_status = self.beacon_client.best_sync_status().await?;
 
         self.process_new_slot(best_sync_status.head_slot).await;
-
-        // Process all future head events.
-        let (head_event_sender, mut head_event_receiver) =
-            channel::<HeadEventData>(HEAD_EVENT_CHANNEL_SIZE);
-        self.beacon_client.subscribe_to_head_events(head_event_sender).await;
-        while let Some(head_event) = head_event_receiver.recv().await {
-            self.process_new_slot(head_event.slot).await;
+        loop {
+            match head_event_receiver.recv().await {
+                Ok(head_event) => {
+                    self.process_new_slot(head_event.slot).await;
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("head events lagged by {n} events");
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    error!("head event channel closed");
+                    break;
+                }
+            }
         }
 
         Ok(())

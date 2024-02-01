@@ -5,8 +5,8 @@ use ethereum_consensus::{primitives::Root, ssz};
 use futures::StreamExt;
 use reqwest::header::CONTENT_TYPE;
 use reqwest_eventsource::EventSource;
-use tokio::{sync::mpsc::Sender, time::sleep};
-use tracing::{error, warn};
+use tokio::{sync::broadcast::Sender, time::sleep};
+use tracing::{debug, error, warn};
 use url::Url;
 
 use helix_common::{
@@ -100,9 +100,9 @@ impl BeaconClient {
                     Ok(reqwest_eventsource::Event::Message(message)) => {
                         match serde_json::from_str::<T>(&message.data) {
                             Ok(data) => {
-                                chan.send(data)
-                                    .await
-                                    .map_err(|_| BeaconClientError::ChannelError)?;
+                                if chan.send(data).is_err() {
+                                    debug!("no subscribers connected to sse broadcaster");
+                                }
                             }
                             Err(err) => error!(err=%err, "Error parsing chunk"),
                         }
@@ -226,7 +226,7 @@ impl BeaconClientTrait for BeaconClient {
 mod beacon_client_tests {
     use super::*;
     use mockito::Matcher;
-    use tokio::sync::mpsc::channel;
+    use tokio::sync::broadcast::channel;
 
     #[tokio::test]
     async fn test_get_sync_status_ok() {
@@ -331,11 +331,13 @@ mod beacon_client_tests {
 
         loop {
             match rx.recv().await {
-                Some(head_event) => {
+                Ok(head_event) => {
                     println!("Passed: {:?}", head_event);
                     return;
                 }
-                None => {}
+                Err(err) => {
+                    println!("Error: {:?}", err);
+                }
             }
         }
     }
@@ -355,11 +357,13 @@ mod beacon_client_tests {
 
         loop {
             match rx.recv().await {
-                Some(head_event) => {
+                Ok(head_event) => {
                     println!("Passed: {:?}", head_event);
                     return;
                 }
-                None => {}
+                Err(err) => {
+                    println!("Error: {:?}", err);
+                }
             }
         }
     }

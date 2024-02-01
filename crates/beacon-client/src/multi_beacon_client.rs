@@ -10,7 +10,7 @@ use helix_common::{
     bellatrix::SimpleSerialize, signed_proposal::VersionedSignedProposal, ProposerDuty,
     ValidatorSummary,
 };
-use tokio::{sync::mpsc::Sender, task::JoinError};
+use tokio::{sync::broadcast::Sender, task::JoinError};
 use tracing::error;
 
 use crate::{
