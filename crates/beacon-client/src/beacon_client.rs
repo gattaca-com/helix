@@ -225,7 +225,6 @@ impl BeaconClientTrait for BeaconClient {
 #[cfg(test)]
 mod beacon_client_tests {
     use super::*;
-    use ethereum_consensus::capella;
     use mockito::Matcher;
     use tokio::sync::mpsc::channel;
 
@@ -284,7 +283,7 @@ mod beacon_client_tests {
         assert!(result.is_ok());
         let (node, proposer_duties) = result.unwrap();
         assert_eq!(
-            node.to_string(),
+            format!("{node:?}"),
             "0x44bff3186a234cf4fb2799c9a44dc089e33cd976a804081c652c47a8d66f11c2"
         );
         assert_eq!(proposer_duties.len(), 32);
@@ -294,20 +293,23 @@ mod beacon_client_tests {
     async fn test_publish_block_ok() {
         let mut server = mockito::Server::new();
         let _m = server
-            .mock("GET", Matcher::Regex("/eth/v2/beacon/blocks".to_string()))
-            .with_status(20)
-            .with_header("content-type", "application/json")
+            .mock("POST", Matcher::Regex("/eth/v2/beacon/blocks".to_string()))
+            .with_status(200)
+            .with_header("content-type", "application/octet-stream")
+            .with_header("broadcast_validation", "consensus_and_equivocation")
             .with_body(r#""#)
             .create();
 
         let client = BeaconClient::from_endpoint_str(&server.url());
 
-        let block_str = r#"{"version":"capella","execution_optimistic":false,"data":{"message":{"slot":"7222896","proposer_index":"97377","parent_root":"0xf1009b1ca7be5f9ff2b47402e47ef876641e8f4e479ff21826476663d018cbed","state_root":"0xf0dd85c94810e2c5b606c4c337b9a8b961b45196cda3bd656db8d669189036f5","body":{"randao_reveal":"0x851269f30259309d142fd5d4d473e5bfd9950b5d1c664a575ac041ac963748351f605ce087952de12ec64e67b4f06f3d19c4718eef0941e8b384eec02aae27516422c8ef341a7f65b2d66d6d6c91b54b2f9d0fff9e4a45fd88ab02097abb2414","eth1_data":{"deposit_root":"0xb0476286e5cb428531b4d941958a3ae3c5ea01eeb773a9d3c3fd83f097c44afb","deposit_count":"940963","block_hash":"0x4b6baf5e565b201d5fdf44a4a9a94687116b0795cbe8ce2072cf64d70369bcc0"},"graffiti":"0x5374616b65204561726e2052656c617820f09f90a0207374616b656669736800","proposer_slashings":[],"attester_slashings":[],"attestations":[{"aggregation_bits":"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f","data":{"slot":"7222895","index":"56","beacon_block_root":"0xf1009b1ca7be5f9ff2b47402e47ef876641e8f4e479ff21826476663d018cbed","source":{"epoch":"225714","root":"0xd970dfc62b9e78ed3069ceec0f6b838fb0a752e3e622a9236c3d810983251023"},"target":{"epoch":"225715","root":"0xc10fda82caed2d402c2345fd0ce9fab0da74344d1e8a19fe65c3861aa0a92fba"}},"signature":"0x8886f82260f48f426007fdfe833d11b09e8ececfb6d8fcebf3efeac9f01ba77a452cb0cbc2e314276ec6669ffdc5a1c0136d3b40ef0dc027139d5dbbf9e65277476dde65a7229496c88059da49159973ca21b96537efc0d2356fa077b407fc23"},{"aggregation_bits":"0x0000000000000000000000000000000000000008000000000000000000000000000000000000000000000000000040","data":{"slot":"7222889","index":"30","beacon_block_root":"0x76e1aeee592b284cd631b451d1d72494daefd41e7d12824c0e1d43965d9d7283","source":{"epoch":"225714","root":"0xd970dfc62b9e78ed3069ceec0f6b838fb0a752e3e622a9236c3d810983251023"},"target":{"epoch":"225715","root":"0xc10fda82caed2d402c2345fd0ce9fab0da74344d1e8a19fe65c3861aa0a92fba"}},"signature":"0xa3c6f0f37b5bb7c63443ee15c0f6804ac6619f746f2385968917013839ca4d825a1efbd5a5d5499dae874e5d689884f70e8aaf5b9af40ac914968aac93650a338534bb6f1754b13fabe55d932277bcd8697c8c0e19df5315b5c523b6a7d4342c"}],"deposits":[],"voluntary_exits":[],"sync_aggregate":{"sync_committee_bits":"0xfffffffffffffffffffffffffff7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7ffffffffffffffffffffffffffff","sync_committee_signature":"0x8af1744b4f9de7c56b4fd2149e3de7843d8ca5c52bb79d8fc68aacf951c23ca902dfe74da26bd6f29a5f122507c2277c0c109026bb238888acd20db66a102ff0af2ddda1fcda97f013b66b94d13ca219dbd88da5b26eca5a6e7558bf7af0e6e8"},"execution_payload":{"parent_hash":"0x4eafb14dfc9bb7550ca92513a8a25b1b424c189c662dd490b48b60c4dcd8ae2a","fee_recipient":"0x1f9090aae28b8a3dceadf281b0f12828e676c326","state_root":"0x6e30a2ba68ebf6534d8321eb037f9f3cdfd1494a7751baf419bd6c2b98d1876f","receipts_root":"0x7121144a0c20f843b2d3109b770cfaa039b912c8b1f75db5267dbeb9a4115ac2","logs_bloom":"0x9cb1c292c11972a251045810c3ca9aea4d0020218003726629690445fd3b2470c4453316b20022597238ed6253302106973d02f2dea721019f3227321f6dd0206802528e4125cb2eaa8c5b8f50aa6a3083450efa05443a3a181e59d3cceb9e5a00d1ed04069a9a734400605811db2c4c42540a32ec1f8d8507247db6084a0065cd81b573c90fd920b46ca0b969009ce6430434234da00d1d165530cc24da1d3ccfaa4b470388e1e1204d10ce19d04490354c48bc11e92ace4860463b720d09c95dc0103f448ce65ad3b10c2fcd7674d4e0f10547250810154e54f3e668b363cc14587e629862224284c4976288a2087682e8f45151e88cc309e8b912ab0bce45","prev_randao":"0x9f9197e9f0284db1e29376ea0819091d587743d879d46db910477d3cdce99b87","block_number":"18035707","gas_limit":"30000000","gas_used":"15971176","timestamp":"1693498775","extra_data":"0x7273796e632d6275696c6465722e78797a","base_fee_per_gas":"38847930295","block_hash":"0x43ab8f7f090036723a5a2fe741892e46cef8a2b97acc3bb9997d1a7083cbe4c0","transactions":["0x02f901740181b0851ea8e4ab1e851ea8e4ab1e83022b949451c72848c68a965f66fa7a88855f9f7784502a7f80b90104771d503f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000088e6a0c2ddd26feeb64f039a2c41296fcb3f5640000000000000000000000000000000000000000000000004623f9fc0647cc0000000000000000000000000000000000000000000000000000000001fb4e8af50000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000c00000000000000000000000000000000000000000000000000000000000000014c02aaa39b223fe8d0a0e5c4f27ead9083c756cc2000000000000000000000000c001a0993de2a53fea31bc918b99c5a6b864ebb83f7a26a053a337bb1462359d2ca03ca0658455d62c3b2d924f372a839432f4effb0815decbf186fcfe8d94f8d1c84e69","0x02f870014b8402faf0808509a6219a0783029ecb94b78c467206c6fe9a4bf0a3281ed65d8f1b2c78e380844e71d92dc001a03bcdbe98862c396a3b0ef5bc9733e1b6052c1261c26ec2a94d910e96bd78588da038fa2754ec67f19be9068a1be290dd48266e032750a071eed5c091eec2be8b03","0x02f87101830392308085090b845fb782522994ffee087852cb4898e6c3532e776e68bc68b1143b87901bbce9b23f0880c001a0070a87ae9c98e312d6fc9d51a44e27b02d7034fa9efe9d764b7d08dc1bae36c8a06b7894d340857351e26066d16ca28fbb16612bc8d73b30edf901a422799eda25"],"withdrawals":[{"index":"16012063","validator_index":"508528","address":"0xc436eb8aed128275c8f224de2f1dd202c0ab5830","amount":"15605289"},{"index":"16012064","validator_index":"508529","address":"0xc436eb8aed128275c8f224de2f1dd202c0ab5830","amount":"15593371"}]},"bls_to_execution_changes":[]}},"signature":"0x8842473cb4159b6dc9c3485f364dce92b8f22943105458fe1a03a82d649d2f1f823b38055516697dd41f8b7be23d50a614efcf6cbacf96bd00d3bcbafe4e0847246bc866a1d1e73140e1aea76a376a64364d3573643c7b219b128861d5b00fea"}}"#;
-        let test_block =
-            serde_json::from_str::<capella::minimal::SignedBeaconBlock>(block_str).unwrap();
-
-        let result =
-            client.publish_block(test_block.into(), None, ethereum_consensus::Fork::Capella).await;
+        let test_block = VersionedSignedProposal::default();
+        let result = client
+            .publish_block(
+                test_block.into(),
+                Some(BroadcastValidation::ConsensusAndEquivocation),
+                ethereum_consensus::Fork::Capella,
+            )
+            .await;
         assert!(result.is_ok());
 
         let code = result.unwrap();
@@ -315,6 +317,7 @@ mod beacon_client_tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_subscribe_to_head_events_live() {
         let client = get_test_client();
         let (tx, mut rx) = channel::<HeadEventData>(1);
@@ -338,6 +341,7 @@ mod beacon_client_tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_subscribe_to_payload_events_live() {
         let client = get_test_client();
         let (tx, mut rx) = channel::<PayloadAttributesEvent>(1);
@@ -361,6 +365,7 @@ mod beacon_client_tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_get_live_response() {
         let client = get_test_client();
         match client.sync_status().await {

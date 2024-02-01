@@ -1,9 +1,10 @@
-name: Rust Linting
+name: Linting
 
 on:
+  push:
+    branches: [ main, develop, "release/**" ]
   pull_request:
-    branches: [ main, develop ]
-    types: [opened, synchronize, reopened]
+    branches: [ main, develop, "release/**" ]
 
 env:
   CARGO_TERM_COLOR: always

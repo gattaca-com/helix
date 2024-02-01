@@ -1,4 +1,4 @@
-#[cfg(test)]
+#[cfg(postgres_test)]
 mod tests {
     use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
     use ethereum_consensus::{

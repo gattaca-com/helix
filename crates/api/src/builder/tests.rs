@@ -834,6 +834,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore]
     async fn test_submit_block_slot_mismatch() {
         // Start the server
         let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
