@@ -689,7 +689,13 @@ mod proposer_api_tests {
 
         // Send slot & payload attributes updates
         let slot_update_sender = slot_update_receiver.recv().await.unwrap();
-        send_dummy_slot_update(slot_update_sender.clone(), Some(current_slot-1), Some(current_slot), None).await;
+        send_dummy_slot_update(
+            slot_update_sender.clone(),
+            Some(current_slot - 1),
+            Some(current_slot),
+            None,
+        )
+        .await;
         send_dummy_payload_attr_update(slot_update_sender.clone(), current_slot).await;
 
         // Prepare the request
