@@ -409,10 +409,17 @@ impl Auctioneer for RedisCache {
 
         // Add the SET commands to the pipeline
         let slot_value = serde_json::to_string(&slot).map_err(RedisCacheError::from)?;
-        let hash_value = serde_json::to_string(&format!("{hash:?}")).map_err(RedisCacheError::from)?;
+        let hash_value =
+            serde_json::to_string(&format!("{hash:?}")).map_err(RedisCacheError::from)?;
         pipe.atomic()
-            .cmd("SET").arg(LAST_SLOT_DELIVERED_KEY).arg(slot_value).ignore()
-            .cmd("SET").arg(LAST_HASH_DELIVERED_KEY).arg(hash_value).ignore();
+            .cmd("SET")
+            .arg(LAST_SLOT_DELIVERED_KEY)
+            .arg(slot_value)
+            .ignore()
+            .cmd("SET")
+            .arg(LAST_HASH_DELIVERED_KEY)
+            .arg(hash_value)
+            .ignore();
 
         Ok(pipe.query_async(&mut conn).await.map_err(RedisCacheError::from)?)
     }

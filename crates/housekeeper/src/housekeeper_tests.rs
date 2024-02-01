@@ -10,10 +10,10 @@ mod housekeeper_tests {
     };
 
     // ++++ IMPORTS ++++
-    use crate::housekeeper::{
-        Housekeeper, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS,
+    use crate::housekeeper::{Housekeeper, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS};
+    use helix_beacon_client::{
+        mock_multi_beacon_client::MockMultiBeaconClient, MultiBeaconClientTrait,
     };
-    use helix_beacon_client::{mock_multi_beacon_client::MockMultiBeaconClient, MultiBeaconClientTrait};
     use helix_common::{api::builder_api::BuilderGetValidatorsResponseEntry, ValidatorSummary};
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
@@ -48,7 +48,7 @@ mod housekeeper_tests {
             proposer_duties,
             state_validators_has_been_read,
             proposer_duties_has_been_read,
-            beacon_client
+            beacon_client,
         }
     }
 
@@ -56,7 +56,8 @@ mod housekeeper_tests {
         housekeeper: Arc<Housekeeper<MockDatabaseService, MockMultiBeaconClient, MockAuctioneer>>,
         beacon_client: MockMultiBeaconClient,
     ) {
-        let (head_event_sender, mut head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
+        let (head_event_sender, mut head_event_receiver) =
+            broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
         beacon_client.subscribe_to_head_events(head_event_sender).await;
         task::spawn(async move {
             housekeeper.start(&mut head_event_receiver).await.unwrap();
@@ -84,19 +85,13 @@ mod housekeeper_tests {
 
         // assert that the len of the channel is correct at 1 as the
         // beacon client sends a dummy event
-        assert!(
-            vars.chan_head_events_capacity.load(std::sync::atomic::Ordering::Relaxed) ==
-                1
-        );
+        assert!(vars.chan_head_events_capacity.load(std::sync::atomic::Ordering::Relaxed) == 1);
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         // assert that the len of the channel is correct at 0 as the
         // housekeeper has processed the dummy event
         assert!(vars.subscribed_to_head_events.load(std::sync::atomic::Ordering::Relaxed));
-        assert!(
-            vars.chan_head_events_capacity.load(std::sync::atomic::Ordering::Relaxed) ==
-                0
-        );
+        assert!(vars.chan_head_events_capacity.load(std::sync::atomic::Ordering::Relaxed) == 0);
     }
 
     #[tokio::test]

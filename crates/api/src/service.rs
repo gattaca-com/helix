@@ -1,7 +1,10 @@
 use std::{env, sync::Arc, time::Duration};
 
 use ethereum_consensus::crypto::SecretKey;
-use tokio::{sync::broadcast, time::{sleep, timeout}};
+use tokio::{
+    sync::broadcast,
+    time::{sleep, timeout},
+};
 use tracing::{error, info};
 
 use crate::{
@@ -10,7 +13,8 @@ use crate::{
     router::{build_router, BuilderApiProd, DataApiProd, ProposerApiProd},
 };
 use helix_beacon_client::{
-    beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster, multi_beacon_client::MultiBeaconClient, BlockBroadcaster, MultiBeaconClientTrait
+    beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
+    multi_beacon_client::MultiBeaconClient, BlockBroadcaster, MultiBeaconClientTrait,
 };
 use helix_common::{
     chain_info::ChainInfo, signing::RelaySigningContext, BroadcasterConfig, NetworkConfig,
@@ -51,7 +55,8 @@ impl ApiService {
         // Subscribe to head and payload attribute events
         let (head_event_sender, head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
         multi_beacon_client.subscribe_to_head_events(head_event_sender).await;
-        let (payload_attribute_sender, payload_attribute_receiver) = broadcast::channel(PAYLOAD_ATTRIBUTE_CHANNEL_SIZE);
+        let (payload_attribute_sender, payload_attribute_receiver) =
+            broadcast::channel(PAYLOAD_ATTRIBUTE_CHANNEL_SIZE);
         multi_beacon_client.subscribe_to_payload_attributes_events(payload_attribute_sender).await;
 
         let chain_info = Arc::new(match config.network_config {
@@ -100,7 +105,9 @@ impl ApiService {
         let chain_updater_head_events = head_event_receiver.resubscribe();
         let chain_updater_payload_events = payload_attribute_receiver.resubscribe();
         tokio::spawn(async move {
-            chain_event_updater.start(chain_updater_head_events, chain_updater_payload_events).await;
+            chain_event_updater
+                .start(chain_updater_head_events, chain_updater_payload_events)
+                .await;
         });
 
         let gossiper = Arc::new(

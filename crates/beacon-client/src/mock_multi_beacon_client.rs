@@ -66,8 +66,7 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                chan_head_events_capacity
-                    .store(chan.len(), std::sync::atomic::Ordering::Relaxed);
+                chan_head_events_capacity.store(chan.len(), std::sync::atomic::Ordering::Relaxed);
             }
         });
     }

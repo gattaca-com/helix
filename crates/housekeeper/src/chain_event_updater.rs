@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
 use ethereum_consensus::{configs::goerli::CAPELLA_FORK_EPOCH, primitives::Bytes32};
-use tokio::sync::{mpsc, broadcast};
+use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info, warn};
 
-use helix_beacon_client::types::{
-    HeadEventData, PayloadAttributes, PayloadAttributesEvent,
-};
+use helix_beacon_client::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::api::builder_api::BuilderGetValidatorsResponseEntry;
 use helix_database::DatabaseService;
 use helix_utils::{calculate_withdrawals_root, has_reached_fork};
@@ -70,8 +68,8 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
 
     /// Starts the updater and listens to head events and new subscriptions.
     pub async fn start(
-        &mut self, 
-        mut head_event_rx: broadcast::Receiver<HeadEventData>, 
+        &mut self,
+        mut head_event_rx: broadcast::Receiver<HeadEventData>,
         mut payload_attributes_rx: broadcast::Receiver<PayloadAttributesEvent>,
     ) {
         loop {

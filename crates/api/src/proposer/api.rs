@@ -170,8 +170,7 @@ where
         // Bulk check if the validators are known
         let registration_pub_keys =
             registrations.iter().map(|r| r.message.public_key.clone()).collect();
-        let known_pub_keys =
-            proposer_api.db.check_known_validators(registration_pub_keys).await?;
+        let known_pub_keys = proposer_api.db.check_known_validators(registration_pub_keys).await?;
 
         // Check each registration
         let mut valid_registrations = Vec::with_capacity(known_pub_keys.len());
