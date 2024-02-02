@@ -267,7 +267,7 @@ impl IntoResponse for ProposerApiError {
                 (StatusCode::BAD_REQUEST, format!("sent too late. cutoff: {cutoff}, request time into slot: {request_time}")).into_response()
             },
             ProposerApiError::NoExecutionPayloadFound => {
-                (StatusCode::BAD_REQUEST, "No execution payload for this request").into_response()
+                (StatusCode::INTERNAL_SERVER_ERROR, "No execution payload for this request").into_response()
             },
             ProposerApiError::InvalidExecutionPayloadSignature => {
                 (StatusCode::BAD_REQUEST, "Could not verify execution payload signature").into_response()
