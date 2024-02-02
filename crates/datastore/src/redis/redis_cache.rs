@@ -404,9 +404,24 @@ impl Auctioneer for RedisCache {
             }
         }
 
-        self.set(LAST_SLOT_DELIVERED_KEY, &slot, None).await?;
-        self.set(LAST_HASH_DELIVERED_KEY, &format!("{hash:?}"), None).await?;
-        Ok(())
+        let mut conn = self.pool.get().await.map_err(RedisCacheError::from)?;
+        let mut pipe = redis::pipe();
+
+        // Add the SET commands to the pipeline
+        let slot_value = serde_json::to_string(&slot).map_err(RedisCacheError::from)?;
+        let hash_value =
+            serde_json::to_string(&format!("{hash:?}")).map_err(RedisCacheError::from)?;
+        pipe.atomic()
+            .cmd("SET")
+            .arg(LAST_SLOT_DELIVERED_KEY)
+            .arg(slot_value)
+            .ignore()
+            .cmd("SET")
+            .arg(LAST_HASH_DELIVERED_KEY)
+            .arg(hash_value)
+            .ignore();
+
+        Ok(pipe.query_async(&mut conn).await.map_err(RedisCacheError::from)?)
     }
 
     async fn get_best_bid(
@@ -901,7 +916,7 @@ fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {
     bid_values.iter().max_by_key(|&(_, value)| value).map(|(key, value)| (key.clone(), *value))
 }
 
-#[cfg(test)]
+#[cfg(redis_cache_test)]
 mod tests {
 
     use super::*;

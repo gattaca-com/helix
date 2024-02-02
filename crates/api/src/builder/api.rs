@@ -581,6 +581,18 @@ where
             .await
             .map_err(|_| BuilderApiError::InternalError)?;
 
+        // Verify the payload is for the current slot
+        if payload.slot() <= head_slot {
+            warn!(
+                request_id = %request_id,
+                "submission is for a past slot",
+            );
+            return Err(BuilderApiError::SubmissionForPastSlot {
+                current_slot: head_slot,
+                submission_slot: payload.slot(),
+            });
+        }
+
         // Fetch builder info
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
 
@@ -1282,6 +1294,14 @@ where
             warn!(request_id = %request_id, "could not find slot duty");
             BuilderApiError::ProposerDutyNotFound
         })?;
+
+        if next_proposer_duty.slot != slot {
+            warn!(request_id = %request_id, "request for past slot");
+            return Err(BuilderApiError::SubmissionForPastSlot {
+                current_slot: next_proposer_duty.slot,
+                submission_slot: slot,
+            })
+        }
 
         let payload_attributes =
             self.payload_attributes.read().await.get(parent_hash).cloned().ok_or_else(|| {

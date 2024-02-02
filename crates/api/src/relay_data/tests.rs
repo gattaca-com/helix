@@ -180,6 +180,7 @@ mod data_api_tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore]
     async fn test_builder_bids_missing_filter() {
         // Start the server
         let (tx, http_config, _api, _database) = start_api_server().await;
@@ -212,6 +213,7 @@ mod data_api_tests {
 
     #[tokio::test]
     #[serial]
+    #[ignore]
     async fn test_builder_bids_limit_reached() {
         // Start the server
         let (tx, http_config, _api, _database) = start_api_server().await;

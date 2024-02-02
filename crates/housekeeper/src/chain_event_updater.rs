@@ -1,13 +1,10 @@
 use std::sync::Arc;
 
 use ethereum_consensus::{configs::goerli::CAPELLA_FORK_EPOCH, primitives::Bytes32};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info, warn};
 
-use helix_beacon_client::{
-    types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent},
-    MultiBeaconClientTrait,
-};
+use helix_beacon_client::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::api::builder_api::BuilderGetValidatorsResponseEntry;
 use helix_database::DatabaseService;
 use helix_utils::{calculate_withdrawals_root, has_reached_fork};
@@ -70,28 +67,35 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
     }
 
     /// Starts the updater and listens to head events and new subscriptions.
-    pub async fn start<T: MultiBeaconClientTrait>(&mut self, beacon_client: T) {
-        let mut head_event_rx = self.subscribe_to_head_events(&beacon_client).await;
-        let mut payload_attributes_rx = self.subscribe_to_payload_attributes(&beacon_client).await;
-
+    pub async fn start(
+        &mut self,
+        mut head_event_rx: broadcast::Receiver<HeadEventData>,
+        mut payload_attributes_rx: broadcast::Receiver<PayloadAttributesEvent>,
+    ) {
         loop {
             tokio::select! {
                 head_event_result = head_event_rx.recv() => {
                     match head_event_result {
-                        Some(head_event) => self.process_head_event(head_event).await,
-                        None => {
-                            // Re-subscribe if the channel was closed
-                            head_event_rx = self.subscribe_to_head_events(&beacon_client).await;
-                        },
+                        Ok(head_event) => self.process_head_event(head_event).await,
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("head events lagged by {n} events");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            error!("head event channel closed");
+                            break;
+                        }
                     }
                 }
                 payload_attributes_result = payload_attributes_rx.recv() => {
                     match payload_attributes_result {
-                        Some(payload_attributes) => self.process_payload_attributes(payload_attributes).await,
-                        None => {
-                            // Re-subscribe if the channel was closed
-                            payload_attributes_rx = self.subscribe_to_payload_attributes(&beacon_client).await;
-                        },
+                        Ok(payload_attributes) => self.process_payload_attributes(payload_attributes).await,
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("payload attributes events lagged by {n} events");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            error!("payload attributes event channel closed");
+                            break;
+                        }
                     }
                 }
                 Some(sender) = self.subscription_channel.recv() => {
@@ -198,25 +202,5 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         for index in to_unsubscribe.into_iter().rev() {
             self.subscribers.remove(index);
         }
-    }
-
-    /// Subscribe to head events from the beacon client.
-    async fn subscribe_to_head_events<T: MultiBeaconClientTrait>(
-        &self,
-        beacon_client: &T,
-    ) -> mpsc::Receiver<HeadEventData> {
-        let (tx, rx) = mpsc::channel(100);
-        beacon_client.subscribe_to_head_events(tx).await;
-        rx
-    }
-
-    /// Subscribe to head events from the beacon client.
-    async fn subscribe_to_payload_attributes<T: MultiBeaconClientTrait>(
-        &self,
-        beacon_client: &T,
-    ) -> mpsc::Receiver<PayloadAttributesEvent> {
-        let (tx, rx) = mpsc::channel(100);
-        beacon_client.subscribe_to_payload_attributes_events(tx).await;
-        rx
     }
 }

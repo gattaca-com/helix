@@ -10,7 +10,7 @@ use helix_common::{
     bellatrix::SimpleSerialize, signed_proposal::VersionedSignedProposal, ProposerDuty,
     ValidatorSummary,
 };
-use tokio::{sync::mpsc::Sender, task::JoinError};
+use tokio::{sync::broadcast::Sender, task::JoinError};
 use tracing::error;
 
 use crate::{
@@ -333,6 +333,6 @@ mod multi_beacon_client_tests {
             )
             .await;
 
-        assert!(matches!(result, Err(BeaconClientError::BlockValidationFailed)));
+        assert!(matches!(result, Err(BeaconClientError::BlockIntegrationFailed)));
     }
 }
