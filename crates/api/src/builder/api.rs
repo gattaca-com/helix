@@ -1297,7 +1297,10 @@ where
 
         if next_proposer_duty.slot != slot {
             warn!(request_id = %request_id, "request for past slot");
-            return Err(BuilderApiError::SubmissionForPastSlot { current_slot: next_proposer_duty.slot, submission_slot: slot })
+            return Err(BuilderApiError::SubmissionForPastSlot {
+                current_slot: next_proposer_duty.slot,
+                submission_slot: slot,
+            })
         }
 
         let payload_attributes =
