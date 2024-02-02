@@ -149,9 +149,14 @@ impl PostgresDatabaseService {
                                 entries.push(entry.registration_info.clone());
                             }
                         }
-                        match self_clone._save_validator_registrations(entries).await {
+                        match self_clone._save_validator_registrations(&entries).await {
                             Ok(_) => {
-                                self_clone.pending_validator_registrations.clear();
+                                for entry in entries.iter() {
+                                    self_clone
+                                        .pending_validator_registrations
+                                        .remove(&entry.registration.message.public_key);
+                                    
+                                }
                                 info!("Saved validator registrations");
                             }
                             Err(e) => {
@@ -166,7 +171,7 @@ impl PostgresDatabaseService {
 
     async fn _save_validator_registrations(
         &self,
-        entries: Vec<ValidatorRegistrationInfo>,
+        entries: &Vec<ValidatorRegistrationInfo>,
     ) -> Result<(), DatabaseError> {
         let mut client = self.pool.get().await?;
 
