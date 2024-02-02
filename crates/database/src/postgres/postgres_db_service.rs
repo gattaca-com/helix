@@ -654,6 +654,7 @@ impl DatabaseService for PostgresDatabaseService {
                     let public_key: BlsPublicKey =
                         parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?;
                     self.known_validators_cache.insert(public_key.clone());
+                    pub_keys.insert(public_key);
                 }
             }
         }
