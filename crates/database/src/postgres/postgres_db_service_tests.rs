@@ -206,14 +206,17 @@ mod tests {
     async fn test_save_and_get_proposer_duties() {
         env_logger::builder().is_test(true).try_init().unwrap();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
-        let registration = get_randomized_signed_validator_registration();
-        db_service.save_validator_registration(registration.clone()).await.unwrap();
+        let mut proposer_duties = Vec::new();
+        for i in 0..10 {
+            let registration = get_randomized_signed_validator_registration();
+            db_service.save_validator_registration(registration.clone()).await.unwrap();
 
-        let proposer_duties = vec![BuilderGetValidatorsResponseEntry {
-            slot: 0,
-            validator_index: 0,
-            entry: registration.clone(),
-        }];
+            proposer_duties.push(BuilderGetValidatorsResponseEntry {
+                slot: i,
+                validator_index: i as usize,
+                entry: registration.clone(),
+            });
+        }
 
         let result = db_service.set_proposer_duties(proposer_duties).await;
         assert!(result.is_ok());

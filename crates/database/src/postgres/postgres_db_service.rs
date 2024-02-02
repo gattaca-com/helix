@@ -1,3 +1,4 @@
+use core::num;
 use std::{
     collections::HashSet,
     ops::DerefMut,
@@ -227,26 +228,15 @@ impl PostgresDatabaseService {
 
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql = String::from("INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at) VALUES ");
-            let values_clauses: Vec<String> = params
-                .chunks(6)
-                .enumerate()
-                .map(|(i, _)| {
-                    if i == 0 {
-                        String::from("($1, $2, $3, $4, $5, $6)")
-                    } else {
-                        let offset = i * 6;
-                        format!(
-                            "(${}, ${}, ${}, ${}, ${}, ${})",
-                            offset + 1,
-                            offset + 2,
-                            offset + 3,
-                            offset + 4,
-                            offset + 5,
-                            offset + 6,
-                        )
-                    }
-                })
-                .collect();
+            let num_params_per_row = 6;
+            let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
+            .map(|row| {
+                let placeholders: Vec<String> = (1..=num_params_per_row)
+                    .map(|n| format!("${}", row * num_params_per_row + n))
+                    .collect();
+                format!("({})", placeholders.join(", "))
+            })
+            .collect();
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
@@ -269,16 +259,13 @@ impl PostgresDatabaseService {
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql =
                 String::from("INSERT INTO validator_preferences (public_key, censoring, trusted_builders) VALUES ");
-            let values_clauses: Vec<String> = params
-                .chunks(3)
-                .enumerate()
-                .map(|(i, _)| {
-                    if i == 0 {
-                        String::from("($1, $2, $3)")
-                    } else {
-                        let offset = i * 3;
-                        format!("(${}, ${}, ${})", offset + 1, offset + 2, offset + 3,)
-                    }
+                let num_params_per_row = 3;
+                let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
+                .map(|row| {
+                    let placeholders: Vec<String> = (1..=num_params_per_row)
+                        .map(|n| format!("${}", row * num_params_per_row + n))
+                        .collect();
+                    format!("({})", placeholders.join(", "))
                 })
                 .collect();
 
@@ -475,7 +462,7 @@ impl DatabaseService for PostgresDatabaseService {
 
         let params: Vec<Box<dyn ToSql + Sync + Send>> = pub_keys
             .iter()
-            .map(|key| Box::new(key.as_ref()) as Box<dyn ToSql + Sync + Send>)
+            .map(|key: &BlsPublicKey| Box::new(key.as_ref()) as Box<dyn ToSql + Sync + Send>)
             .collect();
 
         let params_slice: Vec<&(dyn ToSql + Sync)> =
@@ -527,18 +514,15 @@ impl DatabaseService for PostgresDatabaseService {
         let mut sql = String::from(
             "INSERT INTO proposer_duties (slot_number, validator_index, public_key) VALUES ",
         );
-        let values_clauses: Vec<String> = params
-            .chunks(3)
-            .enumerate()
-            .map(|(i, _)| {
-                if i == 0 {
-                    String::from("($1, $2, $3)")
-                } else {
-                    let offset = i * 3;
-                    format!("(${}, ${}, ${})", offset + 1, offset + 2, offset + 3)
-                }
-            })
-            .collect();
+        let num_params_per_row = 3;
+        let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
+        .map(|row| {
+            let placeholders: Vec<String> = (1..=num_params_per_row)
+                .map(|n| format!("${}", row * num_params_per_row + n))
+                .collect();
+            format!("({})", placeholders.join(", "))
+        })
+        .collect();
 
         // Join the values clauses and append them to the SQL statement
         sql.push_str(&values_clauses.join(", "));
@@ -768,18 +752,15 @@ impl DatabaseService for PostgresDatabaseService {
 
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql = String::from("INSERT INTO transaction (block_hash, bytes) VALUES ");
-            let values_clauses: Vec<String> = params
-                .chunks(2)
-                .enumerate()
-                .map(|(i, _)| {
-                    if i == 0 {
-                        String::from("($1, $2)")
-                    } else {
-                        let offset = i * 2;
-                        format!("(${}, ${})", offset + 1, offset + 2)
-                    }
-                })
-                .collect();
+            let num_params_per_row = 2;
+            let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
+            .map(|row| {
+                let placeholders: Vec<String> = (1..=num_params_per_row)
+                    .map(|n| format!("${}", row * num_params_per_row + n))
+                    .collect();
+                format!("({})", placeholders.join(", "))
+            })
+            .collect();
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
@@ -820,25 +801,15 @@ impl DatabaseService for PostgresDatabaseService {
             let mut sql = String::from(
                 "INSERT INTO withdrawal (index, block_hash, validator_index, address, amount) VALUES ",
             );
-            let values_clauses: Vec<String> = params
-                .chunks(5)
-                .enumerate()
-                .map(|(i, _)| {
-                    if i == 0 {
-                        String::from("($1, $2, $3, $4, $5)")
-                    } else {
-                        let offset = i * 5;
-                        format!(
-                            "(${}, ${}, ${}, ${}, ${})",
-                            offset + 1,
-                            offset + 2,
-                            offset + 3,
-                            offset + 4,
-                            offset + 5
-                        )
-                    }
-                })
-                .collect();
+            let num_params_per_row = 5;
+            let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
+            .map(|row| {
+                let placeholders: Vec<String> = (1..=num_params_per_row)
+                    .map(|n| format!("${}", row * num_params_per_row + n))
+                    .collect();
+                format!("({})", placeholders.join(", "))
+            })
+            .collect();
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
