@@ -156,7 +156,6 @@ impl PostgresDatabaseService {
                                     self_clone
                                         .pending_validator_registrations
                                         .remove(&entry.registration.message.public_key);
-                                    
                                 }
                                 info!("Saved validator registrations");
                             }
@@ -230,13 +229,13 @@ impl PostgresDatabaseService {
             let mut sql = String::from("INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at) VALUES ");
             let num_params_per_row = 6;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
-            .map(|row| {
-                let placeholders: Vec<String> = (1..=num_params_per_row)
-                    .map(|n| format!("${}", row * num_params_per_row + n))
-                    .collect();
-                format!("({})", placeholders.join(", "))
-            })
-            .collect();
+                .map(|row| {
+                    let placeholders: Vec<String> = (1..=num_params_per_row)
+                        .map(|n| format!("${}", row * num_params_per_row + n))
+                        .collect();
+                    format!("({})", placeholders.join(", "))
+                })
+                .collect();
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
@@ -259,8 +258,8 @@ impl PostgresDatabaseService {
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql =
                 String::from("INSERT INTO validator_preferences (public_key, censoring, trusted_builders) VALUES ");
-                let num_params_per_row = 3;
-                let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
+            let num_params_per_row = 3;
+            let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
                         .map(|n| format!("${}", row * num_params_per_row + n))
@@ -516,13 +515,13 @@ impl DatabaseService for PostgresDatabaseService {
         );
         let num_params_per_row = 3;
         let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
-        .map(|row| {
-            let placeholders: Vec<String> = (1..=num_params_per_row)
-                .map(|n| format!("${}", row * num_params_per_row + n))
-                .collect();
-            format!("({})", placeholders.join(", "))
-        })
-        .collect();
+            .map(|row| {
+                let placeholders: Vec<String> = (1..=num_params_per_row)
+                    .map(|n| format!("${}", row * num_params_per_row + n))
+                    .collect();
+                format!("({})", placeholders.join(", "))
+            })
+            .collect();
 
         // Join the values clauses and append them to the SQL statement
         sql.push_str(&values_clauses.join(", "));
@@ -754,13 +753,13 @@ impl DatabaseService for PostgresDatabaseService {
             let mut sql = String::from("INSERT INTO transaction (block_hash, bytes) VALUES ");
             let num_params_per_row = 2;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
-            .map(|row| {
-                let placeholders: Vec<String> = (1..=num_params_per_row)
-                    .map(|n| format!("${}", row * num_params_per_row + n))
-                    .collect();
-                format!("({})", placeholders.join(", "))
-            })
-            .collect();
+                .map(|row| {
+                    let placeholders: Vec<String> = (1..=num_params_per_row)
+                        .map(|n| format!("${}", row * num_params_per_row + n))
+                        .collect();
+                    format!("({})", placeholders.join(", "))
+                })
+                .collect();
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
@@ -803,13 +802,13 @@ impl DatabaseService for PostgresDatabaseService {
             );
             let num_params_per_row = 5;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
-            .map(|row| {
-                let placeholders: Vec<String> = (1..=num_params_per_row)
-                    .map(|n| format!("${}", row * num_params_per_row + n))
-                    .collect();
-                format!("({})", placeholders.join(", "))
-            })
-            .collect();
+                .map(|row| {
+                    let placeholders: Vec<String> = (1..=num_params_per_row)
+                        .map(|n| format!("${}", row * num_params_per_row + n))
+                        .collect();
+                    format!("({})", placeholders.join(", "))
+                })
+                .collect();
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
