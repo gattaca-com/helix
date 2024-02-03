@@ -160,7 +160,7 @@ pub enum ProposerApiError {
     )]
     InvalidBlindedBlockSlot { internal_slot: u64, blinded_block_slot: u64 },
 
-    #[error("expected parent hash: {expected_parent_hash} does not match blinded block parent hash: {blinded_block_parent_hash}")]
+    #[error("expected parent hash: {expected_parent_hash:?} does not match blinded block parent hash: {blinded_block_parent_hash:?}")]
     InvalidBlindedBlockParentHash {
         expected_parent_hash: Hash32,
         blinded_block_parent_hash: Hash32,

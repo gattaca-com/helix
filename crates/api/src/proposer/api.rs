@@ -1,6 +1,5 @@
 use std::{
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    collections::HashMap, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}
 };
 
 use axum::{
@@ -10,7 +9,6 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
-use dashmap::DashMap;
 use ethereum_consensus::{
     builder::SignedValidatorRegistration,
     clock::get_current_unix_time_in_nanos,
@@ -74,7 +72,7 @@ where
     /// Information about the current head slot and next proposer duty
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
 
-    parent_hash_map: Arc<DashMap<u64, Hash32>>,
+    parent_hash_map: Arc<RwLock<HashMap<u64, Hash32>>>,
 
     chain_info: Arc<ChainInfo>,
     validator_preferences: Arc<ValidatorPreferences>,
@@ -104,7 +102,7 @@ where
             broadcasters,
             multi_beacon_client,
             curr_slot_info: Arc::new(RwLock::new((0, None))),
-            parent_hash_map: Arc::new(DashMap::with_capacity(10)),
+            parent_hash_map: Arc::new(RwLock::new(HashMap::with_capacity(10))),
             chain_info,
             validator_preferences,
             target_get_payload_propagation_duration_ms,
@@ -770,14 +768,14 @@ where
             });
         }
 
-        if let Some(expected_parent_hash) = self.parent_hash_map.get(&slot_duty.slot) {
+        if let Some(expected_parent_hash) = self.parent_hash_map.read().await.get(&slot_duty.slot) {
             let blinded_block_parent_hash = signed_blinded_block
                 .message()
                 .body()
                 .execution_payload_header()
                 .parent_hash()
                 .clone();
-            if expected_parent_hash.value() != &blinded_block_parent_hash {
+            if expected_parent_hash != &blinded_block_parent_hash {
                 return Err(ProposerApiError::InvalidBlindedBlockParentHash {
                     expected_parent_hash: expected_parent_hash.clone(),
                     blinded_block_parent_hash,
@@ -1093,11 +1091,17 @@ where
             timestamp = payload_attributes.payload_attributes.timestamp,
         );
 
+        // Discard payload attributes if already known
+        let mut parent_hash_map = self.parent_hash_map.write().await;
+        if parent_hash_map.contains_key(&payload_attributes.slot) {
+            return;
+        }
+
         // Clean up hashes more than 2 slots old
-        self.parent_hash_map.retain(|key, _| *key >= head_slot.saturating_sub(2));
+        parent_hash_map.retain(|key, _| *key >= head_slot.saturating_sub(2));
 
         // Save new one
-        self.parent_hash_map.insert(payload_attributes.slot, payload_attributes.parent_hash);
+        parent_hash_map.insert(payload_attributes.slot, payload_attributes.parent_hash);
     }
 }
 

@@ -1516,12 +1516,12 @@ where
         );
 
         // Discard payload attributes if already known
-        if self.payload_attributes.read().await.contains_key(&payload_attributes.parent_hash) {
+        let mut all_payload_attributes = self.payload_attributes.write().await;
+        if all_payload_attributes.contains_key(&payload_attributes.parent_hash) {
             return;
         }
 
         // Clean up old payload attributes
-        let mut all_payload_attributes = self.payload_attributes.write().await;
         all_payload_attributes.retain(|_, value| value.slot >= head_slot - 2);
 
         // Save new one
