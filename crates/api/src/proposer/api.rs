@@ -1,5 +1,7 @@
 use std::{
-    collections::HashMap, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
