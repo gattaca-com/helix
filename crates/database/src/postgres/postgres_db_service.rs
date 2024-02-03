@@ -1,4 +1,3 @@
-use core::num;
 use std::{
     collections::HashSet,
     ops::DerefMut,
@@ -171,7 +170,7 @@ impl PostgresDatabaseService {
 
     async fn _save_validator_registrations(
         &self,
-        entries: &Vec<ValidatorRegistrationInfo>,
+        entries: &[ValidatorRegistrationInfo],
     ) -> Result<(), DatabaseError> {
         let mut client = self.pool.get().await?;
 

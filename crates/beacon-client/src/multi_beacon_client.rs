@@ -30,14 +30,10 @@ pub struct MultiBeaconClient<BeaconClient: BeaconClientTrait + 'static> {
 
 impl<BeaconClient: BeaconClientTrait> MultiBeaconClient<BeaconClient> {
     pub fn new(beacon_clients: Vec<Arc<BeaconClient>>) -> Self {
-        let beacon_clients_with_index = beacon_clients
-            .into_iter()
-            .enumerate()
-            .map(|(index, client)| (index, client))
-            .collect();
+        let beacon_clients_with_index = beacon_clients.into_iter().enumerate().collect();
 
-        Self { 
-            beacon_clients: beacon_clients_with_index, 
+        Self {
+            beacon_clients: beacon_clients_with_index,
             best_beacon_instance: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -81,7 +77,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
 
         let handles = clients
             .into_iter()
-            .map(|(index, client)| tokio::spawn(async move { client.sync_status().await }))
+            .map(|(_, client)| tokio::spawn(async move { client.sync_status().await }))
             .collect::<Vec<_>>();
 
         let results: Vec<Result<Result<SyncStatus, BeaconClientError>, JoinError>> =

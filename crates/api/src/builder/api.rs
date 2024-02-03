@@ -83,7 +83,7 @@ where
 
     /// Information about the current head slot and next proposer duty
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
-    
+
     proposer_duties_response: Arc<RwLock<Option<Vec<u8>>>>,
     payload_attributes: Arc<RwLock<HashMap<Bytes32, PayloadAttributesUpdate>>>,
 }
@@ -194,7 +194,7 @@ where
         if next_duty.is_none() {
             warn!(request_id = %request_id, "could not find slot duty");
             return Err(BuilderApiError::ProposerDutyNotFound);
-        } 
+        }
         let next_duty = next_duty.unwrap();
 
         // Decode the incoming request body into a payload
@@ -376,7 +376,7 @@ where
         if next_duty.is_none() {
             warn!(request_id = %request_id, "could not find slot duty");
             return Err(BuilderApiError::ProposerDutyNotFound);
-        } 
+        }
         let next_duty = next_duty.unwrap();
 
         // Decode the incoming request body into a payload
@@ -609,7 +609,7 @@ where
         if next_duty.is_none() {
             warn!(request_id = %request_id, "could not find slot duty");
             return Err(BuilderApiError::ProposerDutyNotFound);
-        } 
+        }
         let next_duty = next_duty.unwrap();
 
         // Fetch the next payload attributes and validate basic information
