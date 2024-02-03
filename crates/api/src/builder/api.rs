@@ -1745,6 +1745,13 @@ fn sanity_check_block_submission(
         return Err(BuilderApiError::SlotMismatch { got: payload.slot(), expected: next_duty.slot });
     }
 
+    if next_duty.entry.registration.message.public_key != bid_trace.proposer_public_key {
+        return Err(BuilderApiError::ProposerPublicKeyMismatch {
+            got: bid_trace.proposer_public_key.clone(),
+            expected: next_duty.entry.registration.message.public_key.clone(),
+        });
+    }
+
     // Check payload attrs
     if *payload.prev_randao() != payload_attributes.payload_attributes.prev_randao {
         return Err(BuilderApiError::PrevRandaoMismatch {
