@@ -626,7 +626,12 @@ mod tests {
             if cancellations_enabled { "?cancellations=1" } else { "" }
         );
 
-        let signed_bid_submission: SignedBidSubmission = load_bid_submission();
+        let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+        signed_bid_submission.message_mut().proposer_public_key = get_valid_payload_register_validator(None)
+            .entry
+            .registration
+            .message
+            .public_key;
 
         // Send JSON encoded request
         let resp = send_request(
@@ -896,6 +901,11 @@ mod tests {
             }
             _ => panic!("unexpected execution payload type"),
         }
+        signed_bid_submission.message_mut().proposer_public_key = get_valid_payload_register_validator(None)
+            .entry
+            .registration
+            .message
+            .public_key;
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
@@ -938,11 +948,16 @@ mod tests {
         let req_url =
             format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
 
-        let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
+        let mut signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
             "submitBlockPayloadCapella_Goerli_incorrect_withdrawal_root.json",
             Some(CAPELLA_FORK_EPOCH * SLOTS_PER_EPOCH + 1),
             Some(1681338467),
         );
+        signed_bid_submission.message_mut().proposer_public_key = get_valid_payload_register_validator(None)
+            .entry
+            .registration
+            .message
+            .public_key;
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
@@ -1212,7 +1227,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
-        assert_eq!(resp.text().await.unwrap(), "Prev randao mismatch. got: 0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5, expected: 0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e4");
+        assert_eq!(resp.text().await.unwrap(), "Proposer public key mismatch. got: 0x8559727ee65c295279332198029c939557f4d2aba0751fc55f71d0733b8aa17cd0301232a7f21a895f81eacf55c97ec4, expected: 0x84e975405f8691ad7118527ee9ee4ed2e4e8bae973f6e29aa9ca9ee4aea83605ae3536d22acc9aa1af0545064eacf82e");
 
         // Shut down the server
         let _ = tx.send(());
