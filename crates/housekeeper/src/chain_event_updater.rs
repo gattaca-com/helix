@@ -158,6 +158,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         if self.last_payload_attribute_parent == event.data.parent_block_hash {
             return;
         }
+        self.last_payload_attribute_parent = event.data.parent_block_hash.clone();
 
         info!(
             head_slot = self.last_slot,
