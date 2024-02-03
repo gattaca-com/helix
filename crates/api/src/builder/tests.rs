@@ -627,11 +627,8 @@ mod tests {
         );
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
-        signed_bid_submission.message_mut().proposer_public_key = get_valid_payload_register_validator(None)
-            .entry
-            .registration
-            .message
-            .public_key;
+        signed_bid_submission.message_mut().proposer_public_key =
+            get_valid_payload_register_validator(None).entry.registration.message.public_key;
 
         // Send JSON encoded request
         let resp = send_request(
@@ -901,11 +898,8 @@ mod tests {
             }
             _ => panic!("unexpected execution payload type"),
         }
-        signed_bid_submission.message_mut().proposer_public_key = get_valid_payload_register_validator(None)
-            .entry
-            .registration
-            .message
-            .public_key;
+        signed_bid_submission.message_mut().proposer_public_key =
+            get_valid_payload_register_validator(None).entry.registration.message.public_key;
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
@@ -953,11 +947,8 @@ mod tests {
             Some(CAPELLA_FORK_EPOCH * SLOTS_PER_EPOCH + 1),
             Some(1681338467),
         );
-        signed_bid_submission.message_mut().proposer_public_key = get_valid_payload_register_validator(None)
-            .entry
-            .registration
-            .message
-            .public_key;
+        signed_bid_submission.message_mut().proposer_public_key =
+            get_valid_payload_register_validator(None).entry.registration.message.public_key;
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
