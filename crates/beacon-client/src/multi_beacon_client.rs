@@ -21,39 +21,37 @@ use crate::{
 
 #[derive(Clone)]
 pub struct MultiBeaconClient<BeaconClient: BeaconClientTrait + 'static> {
-    pub beacon_clients: Vec<Arc<BeaconClient>>,
+    /// Vec of all beacon clients with a fixed usize ID used when
+    /// fetching: `beacon_clients_by_last_response`
+    pub beacon_clients: Vec<(usize, Arc<BeaconClient>)>,
+    /// The ID of the beacon client with the most recent successful response.
     pub best_beacon_instance: Arc<AtomicUsize>,
 }
 
 impl<BeaconClient: BeaconClientTrait> MultiBeaconClient<BeaconClient> {
     pub fn new(beacon_clients: Vec<Arc<BeaconClient>>) -> Self {
-        Self { beacon_clients, best_beacon_instance: Arc::new(AtomicUsize::new(0)) }
+        let beacon_clients_with_index = beacon_clients
+            .into_iter()
+            .enumerate()
+            .map(|(index, client)| (index, client))
+            .collect();
+
+        Self { 
+            beacon_clients: beacon_clients_with_index, 
+            best_beacon_instance: Arc::new(AtomicUsize::new(0)),
+        }
     }
 
     /// Returns a list of beacon clients, prioritized by the last successful response.
     ///
     /// The beacon client with the most recent successful response is placed at the
     /// beginning of the returned vector. All other clients maintain their original order.
-    pub fn beacon_clients_by_last_response(&self) -> Vec<Arc<BeaconClient>> {
+    pub fn beacon_clients_by_last_response(&self) -> Vec<(usize, Arc<BeaconClient>)> {
         let mut instances = self.beacon_clients.clone();
         let index = self.best_beacon_instance.load(Ordering::Relaxed);
         if index != 0 {
-            instances.swap(0, index);
-        }
-        instances
-    }
-
-    /// Returns a list of beacon clients, prioritized by least recent usage.
-    ///
-    /// The beacon client with the most recent successful response is placed at the
-    /// end of the returned vector, effectively reversing the order produced by
-    /// `beacon_clients_by_last_response`.
-    pub fn beacon_clients_by_least_used(&self) -> Vec<Arc<BeaconClient>> {
-        let beacon_clients = self.beacon_clients_by_last_response();
-        let mut instances = Vec::with_capacity(beacon_clients.len());
-
-        for i in (0..beacon_clients.len()).rev() {
-            instances.push(beacon_clients[i].clone());
+            let pos = instances.iter().position(|(i, _)| *i == index).unwrap();
+            instances.swap(0, pos);
         }
         instances
     }
@@ -83,7 +81,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
 
         let handles = clients
             .into_iter()
-            .map(|client| tokio::spawn(async move { client.sync_status().await }))
+            .map(|(index, client)| tokio::spawn(async move { client.sync_status().await }))
             .collect::<Vec<_>>();
 
         let results: Vec<Result<Result<SyncStatus, BeaconClientError>, JoinError>> =
@@ -118,7 +116,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
     async fn subscribe_to_head_events(&self, chan: Sender<HeadEventData>) {
         let clients = self.beacon_clients_by_last_response();
 
-        for client in clients {
+        for (_, client) in clients {
             let chan = chan.clone();
             tokio::spawn(async move {
                 if let Err(err) = client.subscribe_to_head_events(chan).await {
@@ -136,7 +134,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
     async fn subscribe_to_payload_attributes_events(&self, chan: Sender<PayloadAttributesEvent>) {
         let clients = self.beacon_clients_by_last_response();
 
-        for client in clients {
+        for (_, client) in clients {
             let chan = chan.clone();
             tokio::spawn(async move {
                 if let Err(err) = client.subscribe_to_payload_attributes_events(chan).await {
@@ -153,7 +151,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
         let clients = self.beacon_clients_by_last_response();
         let mut last_error = None;
 
-        for (i, client) in clients.into_iter().enumerate() {
+        for (i, client) in clients.into_iter() {
             match client.get_state_validators(state_id.clone()).await {
                 Ok(state_validators) => {
                     self.best_beacon_instance.store(i, Ordering::Relaxed);
@@ -175,7 +173,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
         let clients = self.beacon_clients_by_last_response();
         let mut last_error = None;
 
-        for (i, client) in clients.into_iter().enumerate() {
+        for (i, client) in clients.into_iter() {
             match client.get_proposer_duties(epoch).await {
                 Ok(proposer_duties) => {
                     self.best_beacon_instance.store(i, Ordering::Relaxed);
@@ -206,7 +204,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
         let num_clients = clients.len();
         let (sender, mut receiver) = tokio::sync::mpsc::channel(num_clients);
 
-        clients.into_iter().enumerate().for_each(|(i, client)| {
+        clients.into_iter().for_each(|(i, client)| {
             let block = block.clone();
             let broadcast_validation = broadcast_validation.clone();
             let sender = sender.clone();
@@ -260,27 +258,10 @@ mod multi_beacon_client_tests {
         multi_client.best_beacon_instance.store(2, Ordering::Relaxed);
         let clients = multi_client.beacon_clients_by_last_response();
 
-        assert!(Arc::ptr_eq(&clients[0], &multi_client.beacon_clients[2]));
-        assert!(Arc::ptr_eq(&clients[1], &multi_client.beacon_clients[1]));
-        assert!(Arc::ptr_eq(&clients[2], &multi_client.beacon_clients[0]));
-        assert!(Arc::ptr_eq(&clients[3], &multi_client.beacon_clients[3]));
-    }
-
-    #[tokio::test]
-    async fn test_beacon_clients_by_least_used() {
-        let client1 = Arc::new(MockBeaconClient::new());
-        let client2 = Arc::new(MockBeaconClient::new());
-        let client3 = Arc::new(MockBeaconClient::new());
-        let client4 = Arc::new(MockBeaconClient::new());
-        let multi_client = MultiBeaconClient::new(vec![client1, client2, client3, client4]);
-
-        multi_client.best_beacon_instance.store(2, Ordering::Relaxed);
-        let clients = multi_client.beacon_clients_by_least_used();
-
-        assert!(Arc::ptr_eq(&clients[0], &multi_client.beacon_clients[3]));
-        assert!(Arc::ptr_eq(&clients[1], &multi_client.beacon_clients[0]));
-        assert!(Arc::ptr_eq(&clients[2], &multi_client.beacon_clients[1]));
-        assert!(Arc::ptr_eq(&clients[3], &multi_client.beacon_clients[2]));
+        assert_eq!(clients[0].0, multi_client.beacon_clients[2].0);
+        assert_eq!(clients[1].0, multi_client.beacon_clients[1].0);
+        assert_eq!(clients[2].0, multi_client.beacon_clients[0].0);
+        assert_eq!(clients[3].0, multi_client.beacon_clients[3].0);
     }
 
     #[tokio::test]
