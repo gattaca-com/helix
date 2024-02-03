@@ -19,7 +19,6 @@ helix-housekeeper.workspace = true
 async-trait = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
-dashmap = { workspace = true }
 futures = { workspace = true }
 hyper = { workspace = true }
 reqwest = { workspace = true }

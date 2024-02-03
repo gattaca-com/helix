@@ -59,6 +59,9 @@ pub enum BuilderApiError {
     #[error("fee recipient mismatch. got: {got:?}, expected: {expected:?}")]
     FeeRecipientMismatch { got: ByteVector<20>, expected: ByteVector<20> },
 
+    #[error("proposer public key mismatch. got: {got:?}, expected: {expected:?}")]
+    ProposerPublicKeyMismatch { got: BlsPublicKey, expected: BlsPublicKey },
+
     #[error("slot mismatch. got: {got}, expected: {expected}")]
     SlotMismatch { got: u64, expected: u64 },
 
@@ -166,6 +169,9 @@ impl IntoResponse for BuilderApiError {
             },
             BuilderApiError::ParentHashMismatch { message, payload } => {
                 (StatusCode::BAD_REQUEST, format!("Parent hash mismatch. message: {message:?}, payload: {payload:?}")).into_response()
+            },
+            BuilderApiError::ProposerPublicKeyMismatch { got, expected } => {
+                (StatusCode::BAD_REQUEST, format!("Proposer public key mismatch. got: {got:?}, expected: {expected:?}")).into_response()
             },
             BuilderApiError::ZeroValueBlock => {
                 (StatusCode::BAD_REQUEST, "Zero value block").into_response()
