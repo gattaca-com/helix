@@ -1,8 +1,5 @@
 use std::{
-    sync::{
-        atomic::{self, AtomicU64},
-        Arc,
-    },
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -74,11 +71,12 @@ where
     broadcasters: Vec<Arc<BlockBroadcaster>>,
     multi_beacon_client: Arc<M>,
 
-    curr_slot: Arc<AtomicU64>,
+    /// Information about the current head slot and next proposer duty
+    curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
+
     parent_hash_map: Arc<DashMap<u64, Hash32>>,
 
     chain_info: Arc<ChainInfo>,
-    next_proposer_duty: Arc<RwLock<Option<BuilderGetValidatorsResponseEntry>>>,
     validator_preferences: Arc<ValidatorPreferences>,
 
     target_get_payload_propagation_duration_ms: u64,
@@ -105,10 +103,9 @@ where
             db,
             broadcasters,
             multi_beacon_client,
-            curr_slot: Arc::new(AtomicU64::new(0)),
+            curr_slot_info: Arc::new(RwLock::new((0, None))),
             parent_hash_map: Arc::new(DashMap::with_capacity(10)),
             chain_info,
-            next_proposer_duty: Arc::new(RwLock::new(None)),
             validator_preferences,
             target_get_payload_propagation_duration_ms,
         };
@@ -158,7 +155,7 @@ where
         let mut trace =
             RegisterValidatorsTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
-        let head_slot = proposer_api.curr_slot.load(atomic::Ordering::Relaxed);
+        let (head_slot, _) = *proposer_api.curr_slot_info.read().await;
         let num_registrations = registrations.len();
         debug!(
             request_id = %request_id,
@@ -291,7 +288,7 @@ where
         let request_id = Uuid::new_v4();
         let mut trace = GetHeaderTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
-        let head_slot = proposer_api.curr_slot.load(atomic::Ordering::Relaxed);
+        let (head_slot, _) = *proposer_api.curr_slot_info.read().await;
         info!(
             request_id = %request_id,
             event = "get_header",
@@ -427,7 +424,7 @@ where
         let block_hash =
             signed_blinded_block.message().body().execution_payload_header().block_hash().clone();
 
-        let head_slot = self.curr_slot.load(atomic::Ordering::Relaxed);
+        let (head_slot, slot_duty) = self.curr_slot_info.read().await.clone();
 
         info!(
             request_id = %request_id,
@@ -437,13 +434,21 @@ where
             block_hash = ?block_hash,
         );
 
-        let slot_duty = match self.get_next_proposer_duty().await {
-            Ok(slot_duty) => slot_duty,
-            Err(err) => {
-                warn!(request_id = %request_id, error = %err, "could not get next proposer duty!");
-                return Err(err);
-            }
-        };
+        // Verify that the request is for the current slot
+        if signed_blinded_block.message().slot() <= head_slot {
+            warn!(request_id = %request_id, "request for past slot");
+            return Err(ProposerApiError::RequestForPastSlot {
+                request_slot: signed_blinded_block.message().slot(),
+                head_slot,
+            });
+        }
+
+        // Verify that we have a proposer connected for the current proposal
+        if slot_duty.is_none() {
+            warn!(request_id = %request_id, "no slot proposer duty");
+            return Err(ProposerApiError::ProposerNotRegistered);
+        }
+        let slot_duty = slot_duty.unwrap();
 
         if let Err(err) =
             self.validate_proposal_coordinate(&signed_blinded_block, &slot_duty, head_slot).await
@@ -785,18 +790,6 @@ where
         Ok(())
     }
 
-    /// Retrieves the next proposer duty from the internal cache.
-    async fn get_next_proposer_duty(
-        &self,
-    ) -> Result<BuilderGetValidatorsResponseEntry, ProposerApiError> {
-        self.next_proposer_duty
-            .read()
-            .await
-            .as_ref()
-            .cloned()
-            .ok_or(ProposerApiError::ProposerNotRegistered)
-    }
-
     /// Validates that the `ExecutionPayloadHeader` of a given `SignedBlindedBeaconBlock` matches
     /// the known `ExecutionPayload`.
     ///
@@ -1089,12 +1082,11 @@ where
             "Updated head slot",
         );
 
-        self.curr_slot.store(slot_update.slot, atomic::Ordering::Relaxed);
-        *self.next_proposer_duty.write().await = slot_update.next_duty;
+        *self.curr_slot_info.write().await = (slot_update.slot, slot_update.next_duty);
     }
 
     async fn handle_new_payload_attributes(&self, payload_attributes: PayloadAttributesUpdate) {
-        let head_slot = self.curr_slot.load(atomic::Ordering::Relaxed);
+        let (head_slot, _) = *self.curr_slot_info.read().await;
 
         debug!(
             randao = ?payload_attributes.payload_attributes.prev_randao,
