@@ -1,10 +1,7 @@
 use std::{
     collections::HashMap,
     io::Read,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -84,9 +81,10 @@ where
 
     db_sender: Sender<DbInfo>,
 
-    curr_slot: Arc<AtomicU64>,
+    /// Information about the current head slot and next proposer duty
+    curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
+
     proposer_duties_response: Arc<RwLock<Option<Vec<u8>>>>,
-    next_proposer_duty: Arc<RwLock<Option<BuilderGetValidatorsResponseEntry>>>,
     payload_attributes: Arc<RwLock<HashMap<Bytes32, PayloadAttributesUpdate>>>,
 }
 
@@ -125,9 +123,8 @@ where
 
             db_sender,
 
-            curr_slot: AtomicU64::new(0).into(),
+            curr_slot_info: Arc::new(RwLock::new((0, None))),
             proposer_duties_response: Arc::new(RwLock::new(None)),
-            next_proposer_duty: Arc::new(RwLock::new(None)),
             payload_attributes: Arc::new(RwLock::new(HashMap::new())),
         };
 
@@ -184,7 +181,7 @@ where
     ) -> Result<StatusCode, BuilderApiError> {
         let request_id = Uuid::new_v4();
         let mut trace = SubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
-        let head_slot = api.curr_slot.load(Ordering::Relaxed);
+        let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
         info!(
             request_id = %request_id,
@@ -192,6 +189,13 @@ where
             head_slot = head_slot,
             timestamp_request_start = trace.receive,
         );
+
+        // Verify that we have a validator connected for this slot
+        if next_duty.is_none() {
+            warn!(request_id = %request_id, "could not find slot duty");
+            return Err(BuilderApiError::ProposerDutyNotFound);
+        }
+        let next_duty = next_duty.unwrap();
 
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) =
@@ -218,6 +222,11 @@ where
             });
         }
 
+        // Fetch the next payload attributes and validate basic information
+        let payload_attributes = api
+            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &request_id)
+            .await?;
+
         // Handle duplicates.
         api.check_for_duplicate_block_hash(
             &block_hash,
@@ -241,12 +250,6 @@ where
             )
             .await?;
         trace.floor_bid_checks = get_nanos_timestamp()?;
-
-        // Fetch the next proposer duty/ payload attributes and validate basic information about the
-        // payload
-        let (next_duty, payload_attributes) = api
-            .fetch_proposer_and_attributes(payload.slot(), payload.parent_hash(), &request_id)
-            .await?;
 
         // Fetch builder info
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
@@ -360,7 +363,7 @@ where
         let request_id = Uuid::new_v4();
         let mut trace =
             HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
-        let head_slot: u64 = api.curr_slot.load(Ordering::Relaxed);
+        let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
         info!(
             request_id = %request_id,
@@ -368,6 +371,13 @@ where
             head_slot = head_slot,
             timestamp_request_start = trace.receive,
         );
+
+        // Verify that we have a validator connected for this slot
+        if next_duty.is_none() {
+            warn!(request_id = %request_id, "could not find slot duty");
+            return Err(BuilderApiError::ProposerDutyNotFound);
+        }
+        let next_duty = next_duty.unwrap();
 
         // Decode the incoming request body into a payload
         let (mut payload, is_cancellations_enabled) =
@@ -394,6 +404,11 @@ where
             });
         }
 
+        // Fetch the next payload attributes and validate basic information
+        let payload_attributes = api
+            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &request_id)
+            .await?;
+
         // Fetch builder info
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
 
@@ -413,11 +428,6 @@ where
             &request_id,
         )
         .await?;
-
-        // Fetch the next proposer duty/ payload attributes
-        let (next_duty, payload_attributes) = api
-            .fetch_proposer_and_attributes(payload.slot(), payload.parent_hash(), &request_id)
-            .await?;
 
         // Discard any OptimisticV2 submissions if the proposer has censoring enabled
         if next_duty.entry.preferences.censoring {
@@ -549,7 +559,7 @@ where
     ) -> Result<StatusCode, BuilderApiError> {
         let request_id = Uuid::new_v4();
         let mut trace = SubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
-        let head_slot = api.curr_slot.load(Ordering::Relaxed);
+        let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
         info!(
             request_id = %request_id,
@@ -593,6 +603,20 @@ where
             });
         }
 
+        // Verify that we have a validator connected for this slot
+        // Note: in `submit_block_v2` we have to do this check after decoding
+        // so we can send a `PayloadReceived` message.
+        if next_duty.is_none() {
+            warn!(request_id = %request_id, "could not find slot duty");
+            return Err(BuilderApiError::ProposerDutyNotFound);
+        }
+        let next_duty = next_duty.unwrap();
+
+        // Fetch the next payload attributes and validate basic information
+        let payload_attributes = api
+            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &request_id)
+            .await?;
+
         // Fetch builder info
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
 
@@ -602,12 +626,6 @@ where
             warn!(request_id = %request_id, error = %err, "builder has insufficient collateral");
             return Err(err);
         }
-
-        // Fetch the next proposer duty/ payload attributes and validate basic information about the
-        // payload
-        let (next_duty, payload_attributes) = api
-            .fetch_proposer_and_attributes(payload.slot(), payload.parent_hash(), &request_id)
-            .await?;
 
         // Discard any OptimisticV2 submissions if the proposer has censoring enabled
         if next_duty.entry.preferences.censoring {
@@ -722,11 +740,13 @@ where
             ..Default::default()
         };
 
-        // Check that this request is for a known payload attribute for the current slot.
-        if let Err(err) =
-            self.fetch_proposer_and_attributes(req.slot, &req.parent_hash, &request_id).await
-        {
-            warn!(request_id = %request_id, error = %err, "out of date request");
+        // Verify that the gossiped header is not for a past slot
+        let (head_slot, _) = self.curr_slot_info.read().await.clone();
+        if req.slot <= head_slot {
+            warn!(
+                request_id = %request_id,
+                "received gossiped header for a past slot",
+            );
             return;
         }
 
@@ -829,16 +849,13 @@ where
             ..Default::default()
         };
 
-        // Check that this request is for a known payload attribute for the current slot.
-        if let Err(err) = self
-            .fetch_proposer_and_attributes(
-                req.slot,
-                req.execution_payload.execution_payload.parent_hash(),
-                &request_id,
-            )
-            .await
-        {
-            warn!(request_id = %request_id, error = %err, "out of date request");
+        // Verify that the gossiped payload is not for a past slot
+        let (head_slot, _) = self.curr_slot_info.read().await.clone();
+        if req.slot <= head_slot {
+            warn!(
+                request_id = %request_id,
+                "received gossiped payload for a past slot",
+            );
             return;
         }
 
@@ -1284,25 +1301,12 @@ where
         }
     }
 
-    async fn fetch_proposer_and_attributes(
+    async fn fetch_payload_attributes(
         &self,
         slot: u64,
         parent_hash: &Hash32,
         request_id: &Uuid,
-    ) -> Result<(BuilderGetValidatorsResponseEntry, PayloadAttributesUpdate), BuilderApiError> {
-        let next_proposer_duty = self.next_proposer_duty.read().await.clone().ok_or_else(|| {
-            warn!(request_id = %request_id, "could not find slot duty");
-            BuilderApiError::ProposerDutyNotFound
-        })?;
-
-        if next_proposer_duty.slot != slot {
-            warn!(request_id = %request_id, "request for past slot");
-            return Err(BuilderApiError::SubmissionForPastSlot {
-                current_slot: next_proposer_duty.slot,
-                submission_slot: slot,
-            })
-        }
-
+    ) -> Result<PayloadAttributesUpdate, BuilderApiError> {
         let payload_attributes =
             self.payload_attributes.read().await.get(parent_hash).cloned().ok_or_else(|| {
                 warn!(request_id = %request_id, "payload attributes not yet known");
@@ -1317,7 +1321,7 @@ where
             });
         }
 
-        Ok((next_proposer_duty, payload_attributes))
+        Ok(payload_attributes)
     }
 
     /// Checks for later bid submissions from the same builder.
@@ -1488,8 +1492,7 @@ where
             "updated head slot",
         );
 
-        self.curr_slot.store(slot_update.slot, Ordering::Relaxed);
-        *self.next_proposer_duty.write().await = slot_update.next_duty;
+        *self.curr_slot_info.write().await = (slot_update.slot, slot_update.next_duty);
 
         if let Some(new_duties) = slot_update.new_duties {
             let response: Vec<BuilderGetValidatorsResponse> =
@@ -1505,7 +1508,7 @@ where
     }
 
     async fn handle_new_payload_attributes(&self, payload_attributes: PayloadAttributesUpdate) {
-        let head_slot = self.curr_slot.load(Ordering::Relaxed);
+        let (head_slot, _) = *self.curr_slot_info.read().await;
 
         debug!(
             randao = ?payload_attributes.payload_attributes.prev_randao,
@@ -1740,6 +1743,13 @@ fn sanity_check_block_submission(
 
     if payload.slot() != next_duty.slot {
         return Err(BuilderApiError::SlotMismatch { got: payload.slot(), expected: next_duty.slot });
+    }
+
+    if next_duty.entry.registration.message.public_key != bid_trace.proposer_public_key {
+        return Err(BuilderApiError::ProposerPublicKeyMismatch {
+            got: bid_trace.proposer_public_key.clone(),
+            expected: next_duty.entry.registration.message.public_key.clone(),
+        });
     }
 
     // Check payload attrs
