@@ -2455,7 +2455,6 @@ dependencies = [
  "auto_impl",
  "axum 0.7.4",
  "bytes",
- "dashmap",
  "ethereum-consensus",
  "flate2",
  "futures",
