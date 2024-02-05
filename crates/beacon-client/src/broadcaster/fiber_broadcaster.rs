@@ -1,6 +1,7 @@
-use ethereum_consensus::Fork;
+use ethereum_consensus::{clock::get_current_unix_time_in_nanos, Fork};
 use helix_common::signed_proposal::VersionedSignedProposal;
 use std::sync::Arc;
+use tracing::debug;
 
 use helix_utils::request_encoding::Encoding;
 
@@ -30,11 +31,30 @@ impl FiberBroadcaster {
         _broadcast_validation: Option<BroadcastValidation>,
         _consensus_version: Fork,
     ) -> Result<(), BeaconClientError> {
+        let ts_before_ssz = get_current_unix_time_in_nanos();
         match block.get_ssz_bytes_to_publish() {
-            Ok(ssz_block) => match self.client.publish_block(ssz_block).await {
-                Ok(_) => Ok(()),
-                Err(err) => Err(BeaconClientError::BlockPublishError(err.to_string())),
-            },
+            Ok(ssz_block) => {
+                let ts_after_ssz = get_current_unix_time_in_nanos();
+                match self.client.publish_block(ssz_block).await {
+                    Ok(_) => {
+                        let ts_after_publish = get_current_unix_time_in_nanos();
+                        let latency_ssz = ts_after_ssz - ts_before_ssz;
+                        let latency_publish = ts_after_publish - ts_after_ssz;
+                        let latency_total = ts_after_publish - ts_before_ssz;
+                        debug!(
+                            start = %ts_before_ssz,
+                            end_ssz = %ts_after_ssz,
+                            end_publish = %ts_after_publish,
+                            latency_ssz = %latency_ssz,
+                            latency_publish = %latency_publish,
+                            latency_total = %latency_total,
+                            "FiberBroadcaster: block publishing",
+                        );
+                        Ok(())
+                    }
+                    Err(err) => Err(BeaconClientError::BlockPublishError(err.to_string())),
+                }
+            }
             Err(err) => Err(BeaconClientError::SszSerializationError(err)),
         }
     }
