@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -16,7 +15,7 @@ use ethereum_consensus::{
     clock::get_current_unix_time_in_nanos,
     deneb::{Context, Root},
     phase0::mainnet::SLOTS_PER_EPOCH,
-    primitives::{BlsPublicKey, Hash32},
+    primitives::BlsPublicKey,
     ssz::prelude::*,
     types::mainnet::{
         ExecutionPayloadHeader, ExecutionPayloadHeaderRef, SignedBeaconBlock,
@@ -48,7 +47,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
-use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
+use helix_housekeeper::{ChainUpdate, SlotUpdate};
 use helix_utils::signing::{verify_signed_builder_message, verify_signed_consensus_message};
 
 use crate::proposer::{
@@ -73,8 +72,6 @@ where
 
     /// Information about the current head slot and next proposer duty
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
-
-    parent_hash_map: Arc<RwLock<HashMap<u64, Hash32>>>,
 
     chain_info: Arc<ChainInfo>,
     validator_preferences: Arc<ValidatorPreferences>,
@@ -104,7 +101,6 @@ where
             broadcasters,
             multi_beacon_client,
             curr_slot_info: Arc::new(RwLock::new((0, None))),
-            parent_hash_map: Arc::new(RwLock::new(HashMap::with_capacity(10))),
             chain_info,
             validator_preferences,
             target_get_payload_propagation_duration_ms,
@@ -739,7 +735,6 @@ where
     /// - Compares the proposer index of the block with the expected index for the current slot.
     /// - Compares the api `head_slot` with the `slot_duty` slot.
     /// - Compares the `slot_duty.slot` with the signed blinded block slot.
-    /// - Compares the blinded block parent hash with our internal parent hash.
     async fn validate_proposal_coordinate(
         &self,
         signed_blinded_block: &SignedBlindedBeaconBlock,
@@ -768,23 +763,6 @@ where
                 internal_slot: slot_duty.slot,
                 blinded_block_slot: signed_blinded_block.message().slot(),
             });
-        }
-
-        if let Some(expected_parent_hash) = self.parent_hash_map.read().await.get(&slot_duty.slot) {
-            let blinded_block_parent_hash = signed_blinded_block
-                .message()
-                .body()
-                .execution_payload_header()
-                .parent_hash()
-                .clone();
-            if expected_parent_hash != &blinded_block_parent_hash {
-                return Err(ProposerApiError::InvalidBlindedBlockParentHash {
-                    expected_parent_hash: expected_parent_hash.clone(),
-                    blinded_block_parent_hash,
-                });
-            }
-        } else {
-            return Err(ProposerApiError::ParentHashUnknownForSlot { slot: slot_duty.slot });
         }
 
         Ok(())
@@ -1061,9 +1039,7 @@ where
                 ChainUpdate::SlotUpdate(slot_update) => {
                     self.handle_new_slot(slot_update).await;
                 }
-                ChainUpdate::PayloadAttributesUpdate(payload_attributes) => {
-                    self.handle_new_payload_attributes(payload_attributes).await;
-                }
+                ChainUpdate::PayloadAttributesUpdate(_) => {}
             }
         }
 
@@ -1083,27 +1059,6 @@ where
         );
 
         *self.curr_slot_info.write().await = (slot_update.slot, slot_update.next_duty);
-    }
-
-    async fn handle_new_payload_attributes(&self, payload_attributes: PayloadAttributesUpdate) {
-        let (head_slot, _) = *self.curr_slot_info.read().await;
-
-        debug!(
-            randao = ?payload_attributes.payload_attributes.prev_randao,
-            timestamp = payload_attributes.payload_attributes.timestamp,
-        );
-
-        // Discard payload attributes if already known
-        let mut parent_hash_map = self.parent_hash_map.write().await;
-        if parent_hash_map.contains_key(&payload_attributes.slot) {
-            return;
-        }
-
-        // Clean up hashes more than 2 slots old
-        parent_hash_map.retain(|key, _| *key >= head_slot.saturating_sub(2));
-
-        // Save new one
-        parent_hash_map.insert(payload_attributes.slot, payload_attributes.parent_hash);
     }
 }
 
