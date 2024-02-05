@@ -314,13 +314,7 @@ where
         trace.pre_checks = get_nanos_timestamp()?;
 
         let (payload, was_simulated_optimistically) = api
-            .verify_submitted_block(
-                payload,
-                next_duty,
-                &builder_info,
-                &mut trace,
-                &request_id,
-            )
+            .verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id)
             .await?;
 
         // If cancellations are enabled, then abort now if there is a later submission
@@ -723,13 +717,7 @@ where
         trace.pre_checks = get_nanos_timestamp()?;
 
         let (payload, _) = match api
-            .verify_submitted_block(
-                payload,
-                next_duty,
-                &builder_info,
-                &mut trace,
-                &request_id,
-            )
+            .verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id)
             .await
         {
             Ok(val) => val,
