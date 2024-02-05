@@ -25,8 +25,8 @@ use helix_datastore::redis::redis_cache::RedisCache;
 use helix_housekeeper::{ChainEventUpdater, Housekeeper};
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-const INIT_BROADCASTER_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+const INIT_BROADCASTER_TIMEOUT: Duration = Duration::from_secs(30);
 
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PAYLOAD_ATTRIBUTE_CHANNEL_SIZE: usize = 300;
