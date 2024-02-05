@@ -228,14 +228,26 @@ where
             .await?;
 
         // Handle duplicates.
-        api.check_for_duplicate_block_hash(
+        if let Err(err) = api.check_for_duplicate_block_hash(
             &block_hash,
             payload.slot(),
             payload.parent_hash(),
             payload.proposer_public_key(),
             &request_id,
         )
-        .await?;
+        .await {
+            match err {
+                BuilderApiError::DuplicateBlockHash { block_hash } => {
+                    warn!(
+                        request_id = %request_id, 
+                        block_hash = ?block_hash, 
+                        builder_pub_key = ?payload.builder_public_key(),
+                        "block hash already seen"
+                    );
+                }
+                _ => return Err(err),
+            }
+        }
 
         // Verify the payload value is above the floor bid
         let floor_bid_value = api
@@ -432,14 +444,26 @@ where
         }
 
         // Handle duplicates.
-        api.check_for_duplicate_block_hash(
+        if let Err(err) = api.check_for_duplicate_block_hash(
             &block_hash,
             payload.slot(),
             payload.parent_hash(),
             payload.proposer_public_key(),
             &request_id,
         )
-        .await?;
+        .await {
+            match err {
+                BuilderApiError::DuplicateBlockHash { block_hash } => {
+                    warn!(
+                        request_id = %request_id, 
+                        block_hash = ?block_hash, 
+                        builder_pub_key = ?payload.builder_public_key(),
+                        "block hash already seen"
+                    );
+                }
+                _ => return Err(err),
+            }
+        }
 
         // Discard any OptimisticV2 submissions if the proposer has censoring enabled
         if next_duty.entry.preferences.censoring {
