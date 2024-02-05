@@ -228,23 +228,25 @@ where
             .await?;
 
         // Handle duplicates.
-        if let Err(err) = api.check_for_duplicate_block_hash(
-            &block_hash,
-            payload.slot(),
-            payload.parent_hash(),
-            payload.proposer_public_key(),
-            &request_id,
-        )
-        .await {
+        if let Err(err) = api
+            .check_for_duplicate_block_hash(
+                &block_hash,
+                payload.slot(),
+                payload.parent_hash(),
+                payload.proposer_public_key(),
+                &request_id,
+            )
+            .await
+        {
             match err {
                 BuilderApiError::DuplicateBlockHash { block_hash } => {
                     // We dont return the error here as we want to continue processing the request.
                     // This mitigates the risk of someone sending an invalid payload
-                    // with a valid header, which would block subsequent submissions with the same header
-                    // and valid payload.
+                    // with a valid header, which would block subsequent submissions with the same
+                    // header and valid payload.
                     debug!(
-                        request_id = %request_id, 
-                        block_hash = ?block_hash, 
+                        request_id = %request_id,
+                        block_hash = ?block_hash,
                         builder_pub_key = ?payload.builder_public_key(),
                         "block hash already seen"
                     );
@@ -448,23 +450,25 @@ where
         }
 
         // Handle duplicates.
-        if let Err(err) = api.check_for_duplicate_block_hash(
-            &block_hash,
-            payload.slot(),
-            payload.parent_hash(),
-            payload.proposer_public_key(),
-            &request_id,
-        )
-        .await {
+        if let Err(err) = api
+            .check_for_duplicate_block_hash(
+                &block_hash,
+                payload.slot(),
+                payload.parent_hash(),
+                payload.proposer_public_key(),
+                &request_id,
+            )
+            .await
+        {
             match err {
                 BuilderApiError::DuplicateBlockHash { block_hash } => {
                     // We dont return the error here as we want to continue processing the request.
                     // This mitigates the risk of someone sending an invalid payload
-                    // with a valid header, which would block subsequent submissions with the same header
-                    // and valid payload.
+                    // with a valid header, which would block subsequent submissions with the same
+                    // header and valid payload.
                     debug!(
-                        request_id = %request_id, 
-                        block_hash = ?block_hash, 
+                        request_id = %request_id,
+                        block_hash = ?block_hash,
                         builder_pub_key = ?payload.builder_public_key(),
                         "block hash already seen"
                     );
