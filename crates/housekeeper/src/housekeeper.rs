@@ -319,7 +319,8 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             }
 
             if v2_submission_late(&pending_block, current_time) {
-                let reason = format!("builder demoted due to missing payload submission. {pending_block:?}");
+                let reason =
+                    format!("builder demoted due to missing payload submission. {pending_block:?}");
                 info!(builder_pub_key = ?pending_block.builder_pubkey, reason);
                 self.auctioneer.demote_builder(&pending_block.builder_pubkey).await?;
                 self.db

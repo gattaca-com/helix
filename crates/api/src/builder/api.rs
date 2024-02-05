@@ -228,14 +228,32 @@ where
             .await?;
 
         // Handle duplicates.
-        api.check_for_duplicate_block_hash(
-            &block_hash,
-            payload.slot(),
-            payload.parent_hash(),
-            payload.proposer_public_key(),
-            &request_id,
-        )
-        .await?;
+        if let Err(err) = api
+            .check_for_duplicate_block_hash(
+                &block_hash,
+                payload.slot(),
+                payload.parent_hash(),
+                payload.proposer_public_key(),
+                &request_id,
+            )
+            .await
+        {
+            match err {
+                BuilderApiError::DuplicateBlockHash { block_hash } => {
+                    // We dont return the error here as we want to continue processing the request.
+                    // This mitigates the risk of someone sending an invalid payload
+                    // with a valid header, which would block subsequent submissions with the same
+                    // header and valid payload.
+                    debug!(
+                        request_id = %request_id,
+                        block_hash = ?block_hash,
+                        builder_pub_key = ?payload.builder_public_key(),
+                        "block hash already seen"
+                    );
+                }
+                _ => return Err(err),
+            }
+        }
 
         // Verify the payload value is above the floor bid
         let floor_bid_value = api
@@ -282,15 +300,21 @@ where
             }
         }
 
+        // Sanity check the payload
+        if let Err(err) = sanity_check_block_submission(
+            &payload,
+            payload.bid_trace(),
+            &next_duty,
+            &payload_attributes,
+            &api.chain_info,
+        ) {
+            warn!(request_id = %request_id, error = %err, "failed sanity check");
+            return Err(err);
+        }
+        trace.pre_checks = get_nanos_timestamp()?;
+
         let (payload, was_simulated_optimistically) = api
-            .verify_submitted_block(
-                payload,
-                next_duty,
-                &payload_attributes,
-                &builder_info,
-                &mut trace,
-                &request_id,
-            )
+            .verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id)
             .await?;
 
         // If cancellations are enabled, then abort now if there is a later submission
@@ -420,14 +444,32 @@ where
         }
 
         // Handle duplicates.
-        api.check_for_duplicate_block_hash(
-            &block_hash,
-            payload.slot(),
-            payload.parent_hash(),
-            payload.proposer_public_key(),
-            &request_id,
-        )
-        .await?;
+        if let Err(err) = api
+            .check_for_duplicate_block_hash(
+                &block_hash,
+                payload.slot(),
+                payload.parent_hash(),
+                payload.proposer_public_key(),
+                &request_id,
+            )
+            .await
+        {
+            match err {
+                BuilderApiError::DuplicateBlockHash { block_hash } => {
+                    // We dont return the error here as we want to continue processing the request.
+                    // This mitigates the risk of someone sending an invalid payload
+                    // with a valid header, which would block subsequent submissions with the same
+                    // header and valid payload.
+                    debug!(
+                        request_id = %request_id,
+                        block_hash = ?block_hash,
+                        builder_pub_key = ?payload.builder_public_key(),
+                        "block hash already seen"
+                    );
+                }
+                _ => return Err(err),
+            }
+        }
 
         // Discard any OptimisticV2 submissions if the proposer has censoring enabled
         if next_duty.entry.preferences.censoring {
@@ -661,15 +703,21 @@ where
             }
         }
 
+        // Sanity check the payload
+        if let Err(err) = sanity_check_block_submission(
+            &payload,
+            payload.bid_trace(),
+            &next_duty,
+            &payload_attributes,
+            &api.chain_info,
+        ) {
+            warn!(request_id = %request_id, error = %err, "failed sanity check");
+            return Err(err);
+        }
+        trace.pre_checks = get_nanos_timestamp()?;
+
         let (payload, _) = match api
-            .verify_submitted_block(
-                payload,
-                next_duty,
-                &payload_attributes,
-                &builder_info,
-                &mut trace,
-                &request_id,
-            )
+            .verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id)
             .await
         {
             Ok(val) => val,
@@ -1006,23 +1054,10 @@ where
         &self,
         mut payload: SignedBidSubmission,
         next_duty: BuilderGetValidatorsResponseEntry,
-        payload_attributes: &PayloadAttributesUpdate,
         builder_info: &BuilderInfo,
         trace: &mut SubmissionTrace,
         request_id: &Uuid,
     ) -> Result<(Arc<SignedBidSubmission>, bool), BuilderApiError> {
-        if let Err(err) = sanity_check_block_submission(
-            &payload,
-            payload.bid_trace(),
-            &next_duty,
-            payload_attributes,
-            &self.chain_info,
-        ) {
-            warn!(request_id = %request_id, error = %err, "failed sanity check");
-            return Err(err);
-        }
-        trace.pre_checks = get_nanos_timestamp()?;
-
         // Verify the payload signature
         if let Err(err) = payload.verify_signature(&self.chain_info.context) {
             warn!(request_id = %request_id, error = %err, "failed to verify signature");
