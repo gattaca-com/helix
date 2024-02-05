@@ -282,11 +282,23 @@ where
             }
         }
 
+        // Sanity check the payload
+        if let Err(err) = sanity_check_block_submission(
+            &payload,
+            payload.bid_trace(),
+            &next_duty,
+            &payload_attributes,
+            &api.chain_info,
+        ) {
+            warn!(request_id = %request_id, error = %err, "failed sanity check");
+            return Err(err);
+        }
+        trace.pre_checks = get_nanos_timestamp()?;
+
         let (payload, was_simulated_optimistically) = api
             .verify_submitted_block(
                 payload,
                 next_duty,
-                &payload_attributes,
                 &builder_info,
                 &mut trace,
                 &request_id,
@@ -661,11 +673,23 @@ where
             }
         }
 
+        // Sanity check the payload
+        if let Err(err) = sanity_check_block_submission(
+            &payload,
+            payload.bid_trace(),
+            &next_duty,
+            &payload_attributes,
+            &api.chain_info,
+        ) {
+            warn!(request_id = %request_id, error = %err, "failed sanity check");
+            return Err(err);
+        }
+        trace.pre_checks = get_nanos_timestamp()?;
+
         let (payload, _) = match api
             .verify_submitted_block(
                 payload,
                 next_duty,
-                &payload_attributes,
                 &builder_info,
                 &mut trace,
                 &request_id,
@@ -1006,23 +1030,10 @@ where
         &self,
         mut payload: SignedBidSubmission,
         next_duty: BuilderGetValidatorsResponseEntry,
-        payload_attributes: &PayloadAttributesUpdate,
         builder_info: &BuilderInfo,
         trace: &mut SubmissionTrace,
         request_id: &Uuid,
     ) -> Result<(Arc<SignedBidSubmission>, bool), BuilderApiError> {
-        if let Err(err) = sanity_check_block_submission(
-            &payload,
-            payload.bid_trace(),
-            &next_duty,
-            payload_attributes,
-            &self.chain_info,
-        ) {
-            warn!(request_id = %request_id, error = %err, "failed sanity check");
-            return Err(err);
-        }
-        trace.pre_checks = get_nanos_timestamp()?;
-
         // Verify the payload signature
         if let Err(err) = payload.verify_signature(&self.chain_info.context) {
             warn!(request_id = %request_id, error = %err, "failed to verify signature");
