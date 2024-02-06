@@ -11,7 +11,7 @@ use helix_common::{
     ValidatorSummary,
 };
 use tokio::{sync::broadcast::Sender, task::JoinError};
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::{
     error::BeaconClientError,
@@ -207,7 +207,11 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
 
             tokio::spawn(async move {
                 let res = client.publish_block(block, broadcast_validation, fork).await;
-                sender.send((i, res)).await.unwrap();
+                if let Err(err) = sender.send((i, res)).await {
+                    // TODO: we might be able to completely remove this as this should only error if the receiver is dropped
+                    // this happens if we've received an ok response
+                    warn!("failed to send publish_block response: {err:?}");
+                }
             });
         });
 
