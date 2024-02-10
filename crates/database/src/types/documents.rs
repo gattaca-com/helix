@@ -1,10 +1,8 @@
-use std::sync::Arc;
+
 
 use ethereum_consensus::{
-    clock::get_current_unix_time_in_nanos,
     primitives::{BlsPublicKey, Hash32},
     ssz::prelude::*,
-    types::mainnet::ExecutionPayload,
 };
 use serde::{Deserialize, Serialize};
 
@@ -13,10 +11,9 @@ use helix_common::{
         builder_api::BuilderGetValidatorsResponseEntry,
         data_api::{DeliveredPayloadsResponse, ReceivedBlocksResponse},
     },
-    bid_submission::{BidSubmission, BidTrace, SignedBidSubmission},
+    bid_submission::BidTrace,
     builder_info::BuilderInfo,
-    simulator::BlockSimError,
-    GetPayloadTrace, SubmissionTrace,
+    simulator::BlockSimError, SubmissionTrace,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -36,8 +33,8 @@ pub struct TooLateGetPayloadDocument {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeliveredPayloadDocument {
     pub bid_trace: BidTrace,
-    pub payload: Arc<ExecutionPayload>,
-    pub latency_trace: GetPayloadTrace,
+    pub block_number: u64,
+    pub num_txs: usize,
 }
 
 impl DeliveredPayloadDocument {
@@ -58,8 +55,8 @@ impl From<DeliveredPayloadDocument> for DeliveredPayloadsResponse {
             value: doc.bid_trace.value,
             gas_limit: doc.bid_trace.gas_limit,
             gas_used: doc.bid_trace.gas_used,
-            block_number: doc.payload.block_number(),
-            num_tx: doc.payload.transactions().len(),
+            block_number: doc.block_number,
+            num_tx: doc.num_txs,
         }
     }
 }
@@ -114,17 +111,6 @@ pub struct BidSubmissionDocument {
     pub num_txs: usize,
 }
 
-impl BidSubmissionDocument {
-    pub fn from_signed_submission(value: &SignedBidSubmission) -> Self {
-        Self {
-            timestamp: get_current_unix_time_in_nanos() as u64,
-            bid_trace: value.bid_trace().clone(),
-            block_number: value.block_number(),
-            num_txs: value.transactions().len(),
-        }
-    }
-}
-
 impl From<BidSubmissionDocument> for ReceivedBlocksResponse {
     fn from(value: BidSubmissionDocument) -> Self {
         ReceivedBlocksResponse {
@@ -139,7 +125,8 @@ impl From<BidSubmissionDocument> for ReceivedBlocksResponse {
             value: value.bid_trace.value,
             block_number: value.block_number,
             num_tx: value.num_txs,
-            timestamp: value.timestamp,
+            // Other mev-boost relays return this timestamp in seconds
+            timestamp: value.timestamp / 1_000_000_000,
             timestamp_ms: value.timestamp / 1_000_000,
         }
     }
