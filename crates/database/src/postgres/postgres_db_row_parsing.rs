@@ -1,4 +1,4 @@
-use std::sync::Arc;
+
 
 use ethereum_consensus::{
     builder::{SignedValidatorRegistration, ValidatorRegistration},
@@ -37,11 +37,8 @@ impl FromRow for DeliveredPayloadDocument {
     fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError> {
         Ok(DeliveredPayloadDocument {
             bid_trace: BidTrace::from_row(row)?,
-            payload: Arc::new(ethereum_consensus::types::ExecutionPayload::Bellatrix(
-                ethereum_consensus::bellatrix::ExecutionPayload::from_row(row)?,
-            )),
-            // TODO: If this is needed then we need to solve the one to many problem
-            latency_trace: GetPayloadTrace::default(),
+            block_number: parse_i32_to_u64(row.get::<&str, i32>("block_number"))?,
+            num_txs: parse_i32_to_usize(row.get::<&str, i32>("num_txs"))?,
         })
     }
 }

@@ -486,6 +486,15 @@ impl DatabaseService for PostgresDatabaseService {
         transaction
             .execute(
                 "
+                INSERT INTO proposer_duties_archive SELECT * FROM proposer_duties;
+            ",
+                &[],
+            )
+            .await?;
+
+        transaction
+            .execute(
+                "
                 TRUNCATE TABLE proposer_duties;
             ",
                 &[],
@@ -558,41 +567,47 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         known_validators: Vec<ValidatorSummary>,
     ) -> Result<(), DatabaseError> {
-        if known_validators.is_empty() {
-            return Ok(()); // Early return if there are no validators to process.
+    
+        let new_keys_set: HashSet<BlsPublicKey> = known_validators
+            .iter()
+            .map(|validator| validator.validator.public_key.clone())
+            .collect();
+
+        let old_keys_hash_set: HashSet<BlsPublicKey> = self.known_validators_cache.iter()
+        .map(|ref_multi| ref_multi.key().clone()) // Access and clone the key from RefMulti
+        .collect();
+    
+        let keys_to_add: Vec<BlsPublicKey> = new_keys_set.difference(&old_keys_hash_set).cloned().collect();
+        let keys_to_remove: Vec<BlsPublicKey> = old_keys_hash_set.difference(&new_keys_set).cloned().collect();
+    
+        for key in &keys_to_add {
+            self.known_validators_cache.insert(key.clone());
         }
-
-        self.known_validators_cache.clear();
-
-        for validator in known_validators.iter() {
-            self.known_validators_cache.insert(validator.validator.public_key.clone());
+        for key in &keys_to_remove {
+            self.known_validators_cache.remove(key);
         }
-
+    
         let mut client = self.pool.get().await?;
         let transaction = client.transaction().await?;
-
-        transaction
-            .execute(
-                "
-                TRUNCATE TABLE known_validators;
-            ",
-                &[],
-            )
-            .await?;
-
-        let batch_size = 10000;
-
-        for chunk in known_validators.chunks(batch_size) {
+    
+        // Perform batch deletion
+        for chunk in keys_to_remove.chunks(10000) {
+            let sql = "DELETE FROM known_validators WHERE public_key = ANY($1::bytea[])";
+            let byte_keys: Vec<&[u8]> = chunk.iter().map(|k| k.as_ref()).collect();
+            transaction.execute(sql, &[&byte_keys]).await?;
+        }
+    
+        // Perform batch insertion
+        for chunk in keys_to_add.chunks(10000) {
             let mut sql = String::from("INSERT INTO known_validators (public_key) VALUES ");
-            let values_clauses: Vec<String> =
-                chunk.iter().enumerate().map(|(i, _)| format!("(${})", i + 1)).collect();
-
+            let values_clauses: Vec<String> = (1..=chunk.len()).map(|i| format!("(${})", i)).collect();
+    
             sql.push_str(&values_clauses.join(", "));
             sql.push_str(" ON CONFLICT (public_key) DO NOTHING");
 
             let mut structured_params: Vec<&[u8]> = Vec::new();
             for validator in chunk.iter() {
-                structured_params.push(validator.validator.public_key.as_ref());
+                structured_params.push(validator.as_ref());
             }
 
             let params: Vec<&(dyn ToSql + Sync)> =
@@ -600,9 +615,9 @@ impl DatabaseService for PostgresDatabaseService {
 
             transaction.execute(&sql, &params[..]).await?;
         }
-
+    
         transaction.commit().await?;
-
+    
         Ok(())
     }
 
@@ -1056,9 +1071,18 @@ impl DatabaseService for PostgresDatabaseService {
                             block_submission.gas_used gas_used,
                             block_submission.value submission_value,
                             block_submission.num_txs num_txs,
-                            block_submission.timestamp submission_timestamp
+                            st.receive submission_timestamp
                         FROM 
-                            block_submission 
+                            block_submission
+                        INNER JOIN (
+                            SELECT
+                                block_hash,
+                                MIN(receive) as receive
+                            FROM
+                                submission_trace
+                            GROUP BY
+                                block_hash
+                        ) st ON block_submission.block_hash = st.block_hash
                         WHERE 
                             ($1::integer IS NULL OR block_submission.slot_number = $1::integer)
                         AND ($2::integer IS NULL OR block_submission.block_number = $2::integer)
@@ -1090,54 +1114,24 @@ impl DatabaseService for PostgresDatabaseService {
                 .await?
                 .query(
                     "
-                        WITH transactions_subquery AS (
-                            SELECT
-                                block_hash block_hash,
-                                array_agg(bytes) txs
-                            FROM
-                                transaction
-                            GROUP BY
-                                block_hash
-                        )
                         SELECT
-                            block_submission.block_hash             block_hash,
-                            block_submission.timestamp              submission_timestamp,
                             block_submission.slot_number            slot_number,
-                            block_submission.block_number           block_number,
                             block_submission.parent_hash            parent_hash,
+                            block_submission.block_hash             block_hash,
                             block_submission.builder_pubkey         builder_public_key,
                             block_submission.proposer_pubkey        proposer_public_key,
                             block_submission.proposer_fee_recipient proposer_fee_recipient,
+                            block_submission.value                  submission_value,
                             block_submission.gas_limit              gas_limit,
                             block_submission.gas_used               gas_used,
-                            block_submission.value                  submission_value,
-                            block_submission.num_txs                num_txs,
-
-                            delivered_payload.block_hash            payload_block_hash,
-                            delivered_payload.payload_parent_hash   payload_parent_hash,
-                            delivered_payload.fee_recipient         payload_fee_recipient,
-                            delivered_payload.state_root            payload_state_root,
-                            delivered_payload.receipts_root         payload_receipts_root,
-                            delivered_payload.logs_bloom            payload_logs_bloom,
-                            delivered_payload.prev_randao           payload_prev_randao,
-                            delivered_payload.timestamp             payload_timestamp,
-                            delivered_payload.block_number          payload_block_number,
-                            delivered_payload.gas_limit             payload_gas_limit,
-                            delivered_payload.gas_used              payload_gas_used,
-                            delivered_payload.extra_data            payload_extra_data,
-                            delivered_payload.base_fee_per_gas      payload_base_fee_per_gas,
-
-                            transactions_subquery.txs                   txs
+                            block_submission.block_number           block_number,
+                            block_submission.num_txs                num_txs
                         FROM 
                             delivered_payload 
                         INNER JOIN
                             block_submission 
                         ON 
                             block_submission.block_hash = delivered_payload.block_hash
-                        INNER JOIN
-                            transactions_subquery
-                        ON
-                            delivered_payload.block_hash = transactions_subquery.block_hash
                         WHERE
                             (
                                 ($1::integer IS NOT NULL AND block_submission.slot_number = $1::integer) OR
