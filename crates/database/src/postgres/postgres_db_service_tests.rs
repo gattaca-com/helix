@@ -1,18 +1,15 @@
 #[cfg(postgres_test)]
 mod tests {
+    use rand::{seq::SliceRandom, thread_rng};
+    use rand::Rng;
     use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
     use ethereum_consensus::{
-        builder::{SignedValidatorRegistration, ValidatorRegistration},
-        crypto::SecretKey,
-        primitives::U256,
+        builder::{SignedValidatorRegistration, ValidatorRegistration}, clock::get_current_unix_time_in_nanos, crypto::SecretKey, primitives::U256
     };
     use helix_common::{
-        bellatrix::{ByteList, ByteVector, List},
-        bid_submission::{
+        bellatrix::{ByteList, ByteVector, List}, bid_submission::{
             v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
-        },
-        versioned_payload::PayloadAndBlobs,
-        GetPayloadTrace, HeaderSubmissionTrace,
+        }, versioned_payload::PayloadAndBlobs, GetPayloadTrace, HeaderSubmissionTrace, SubmissionTrace, ValidatorSummary
     };
     use std::{
         default::Default,
@@ -232,53 +229,88 @@ mod tests {
 
         let mut validator_summaries = Vec::new();
 
-        let mut rng = rand::thread_rng();
-        let key1 = SecretKey::random(&mut rng).unwrap();
-        let public_key1 = key1.public_key();
-        let key2 = SecretKey::random(&mut rng).unwrap();
-        let public_key2 = key2.public_key();
+        for i in 0..100 {
+            let mut rng = rand::thread_rng();
+            let key = SecretKey::random(&mut rng).unwrap();
+            let public_key = key.public_key();
 
-        let validator_summary1 = helix_common::ValidatorSummary {
-            index: 0,
-            balance: 0,
-            status: helix_common::ValidatorStatus::Active,
-            validator: Validator {
-                public_key: public_key1.clone(),
-                withdrawal_credentials: Default::default(),
-                effective_balance: 0,
-                slashed: false,
-                activation_eligibility_epoch: 0,
-                activation_epoch: 0,
-                exit_epoch: 0,
-                withdrawable_epoch: 0,
-            },
-        };
+            let validator_summary = helix_common::ValidatorSummary {
+                index: i,
+                balance: 0,
+                status: helix_common::ValidatorStatus::Active,
+                validator: Validator {
+                    public_key: public_key.clone(),
+                    withdrawal_credentials: Default::default(),
+                    effective_balance: 0,
+                    slashed: false,
+                    activation_eligibility_epoch: 0,
+                    activation_epoch: 0,
+                    exit_epoch: 0,
+                    withdrawable_epoch: 0,
+                },
+            };
 
-        validator_summaries.push(validator_summary1);
+            validator_summaries.push(validator_summary);
+        }
 
-        let validator_summary2 = helix_common::ValidatorSummary {
-            index: 1,
-            balance: 0,
-            status: helix_common::ValidatorStatus::Active,
-            validator: Validator {
-                public_key: public_key2.clone(),
-                withdrawal_credentials: Default::default(),
-                effective_balance: 0,
-                slashed: false,
-                activation_eligibility_epoch: 0,
-                activation_epoch: 0,
-                exit_epoch: 0,
-                withdrawable_epoch: 0,
-            },
-        };
-
-        validator_summaries.push(validator_summary2);
+        let mut validator_summaries_clone = validator_summaries.clone();
 
         let result = db_service.set_known_validators(validator_summaries).await;
         assert!(result.is_ok());
 
-        let result = db_service.check_known_validators(vec![public_key1, public_key2]).await;
+        let mut new_validator_summaries = Vec::new();
+
+        for i in 0..10 {
+            let mut rng = rand::thread_rng();
+            let key = SecretKey::random(&mut rng).unwrap();
+            let public_key = key.public_key();
+
+            let validator_summary = helix_common::ValidatorSummary {
+                index: i,
+                balance: 0,
+                status: helix_common::ValidatorStatus::Active,
+                validator: Validator {
+                    public_key: public_key.clone(),
+                    withdrawal_credentials: Default::default(),
+                    effective_balance: 0,
+                    slashed: false,
+                    activation_eligibility_epoch: 0,
+                    activation_epoch: 0,
+                    exit_epoch: 0,
+                    withdrawable_epoch: 0,
+                },
+            };
+
+            new_validator_summaries.push(validator_summary);
+        }
+
+        let removed = remove_random_items::<ValidatorSummary>(&mut validator_summaries_clone, 5);
+
+        randomly_insert_values::<ValidatorSummary>(&mut validator_summaries_clone, new_validator_summaries);
+
+        let final_list = validator_summaries_clone.clone();
+
+        let result = db_service.set_known_validators(validator_summaries_clone).await;
         assert!(result.is_ok());
+
+        // Check that the removed validators are no longer known
+        for removed_validator in removed {
+            let result = db_service
+                .check_known_validators(vec![removed_validator.validator.public_key])
+                .await;
+            assert!(result.is_ok());
+            assert!(result.unwrap().is_empty());
+        }
+
+        // Check that all validators in the final list are known
+        for new_validator in final_list {
+            let result = db_service
+                .check_known_validators(vec![new_validator.validator.public_key])
+                .await;
+            assert!(result.is_ok());
+            assert!(!result.unwrap().is_empty());
+        }
+
     }
 
     #[tokio::test]
@@ -378,10 +410,13 @@ mod tests {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
+        let mut rng = rand::thread_rng(); // Get a random number generator
+        let random_bytes: [u8; 32] = rng.gen();
+
         let bid_trace = BidTrace {
             slot: 1234,
             parent_hash: Default::default(),
-            block_hash: Default::default(),
+            block_hash: ByteVector::<32>::try_from(random_bytes.as_slice()).unwrap(),
             builder_public_key: Default::default(),
             proposer_public_key: Default::default(),
             proposer_fee_recipient: Default::default(),
@@ -399,10 +434,13 @@ mod tests {
             }
         }
 
+        let mut submission_trace = SubmissionTrace::default();
+        submission_trace.receive = get_current_unix_time_in_nanos() as u64;
+
         db_service
             .store_block_submission(
                 Arc::new(signed_bid_submission),
-                Arc::new(Default::default()),
+                Arc::new(submission_trace),
                 0,
             )
             .await?;
@@ -432,7 +470,7 @@ mod tests {
     async fn test_save_delivered_payloads() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let extra_data = [0u8; 32];
-        let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
+        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
         let mut execution_payload = ethereum_consensus::types::ExecutionPayload::Capella(
             ethereum_consensus::capella::ExecutionPayload {
                 parent_hash: ByteVector::default(),
@@ -599,4 +637,32 @@ mod tests {
 
         Ok(())
     }
+
+    fn remove_random_items<T>(vec: &mut Vec<T>, count: usize) -> Vec<T> {
+        let mut rng = thread_rng();
+        
+        // Ensure we don't try to remove more items than the Vec contains
+        let count = std::cmp::min(count, vec.len());
+        
+        // Shuffle the Vec to randomize which items are at the end
+        vec.shuffle(&mut rng);
+        
+        // Calculate the index from where to split the Vec to keep the first part
+        // and return the second part containing 'count' items
+        let split_index = vec.len() - count;
+        
+        // Use split_off to divide the Vec and return the removed items
+        vec.split_off(split_index)
+    }
+
+    fn randomly_insert_values<T>(existing_vec: &mut Vec<T>, new_values: Vec<T>) {
+        let mut rng = rand::thread_rng();
+        
+        for value in new_values {
+            let insert_index = rng.gen_range(0..=existing_vec.len()); // Generate a random index
+            existing_vec.insert(insert_index, value); // Insert the new value at the random index
+        }
+    }
 }
+
+

@@ -894,7 +894,7 @@ impl Auctioneer for RedisCache {
     /// to allow the leader to renew the lock before it expires.
     ///
     /// Arguments:
-    /// - `leader`: A `bool` indicating whether the current instance believes it is the leader.
+    /// - `leader`: A unique id for this relay.
     ///
     /// Returns:
     /// - `true` if the instance is the leader and successfully renews the lock, or if it

@@ -6,10 +6,8 @@ use std::{
 
 use async_trait::async_trait;
 use ethereum_consensus::{
-    capella,
     primitives::{BlsPublicKey, Hash32},
     ssz::prelude::*,
-    types::mainnet::ExecutionPayload,
 };
 use helix_common::{
     api::{
@@ -207,8 +205,8 @@ impl DatabaseService for MockDatabaseService {
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
         let doc = DeliveredPayloadDocument {
             bid_trace: Default::default(),
-            payload: Arc::new(ExecutionPayload::Capella(capella::ExecutionPayload::default())),
-            latency_trace: Default::default(),
+            block_number: 0,
+            num_txs: 0,
         };
 
         Ok(vec![doc])
