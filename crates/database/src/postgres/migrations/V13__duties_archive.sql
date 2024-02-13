@@ -1,5 +1,5 @@
 
-CREATE TABLE proposer_duties (
+CREATE TABLE proposer_duties_archive (
   "public_key" bytea,
   "slot_number" integer PRIMARY KEY,
   "validator_index" integer
