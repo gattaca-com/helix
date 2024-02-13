@@ -486,7 +486,7 @@ impl DatabaseService for PostgresDatabaseService {
         transaction
             .execute(
                 "
-                INSERT INTO proposer_duties_archive SELECT * FROM proposer_duties;
+                INSERT INTO proposer_duties_archive SELECT * FROM proposer_duties ON CONFLICT (slot_number) DO NOTHING;
             ",
                 &[],
             )
