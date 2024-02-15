@@ -1,4 +1,4 @@
-use ethereum_consensus::primitives::{BlsPublicKey, ExecutionAddress, Hash32, U256};
+use ethereum_consensus::{primitives::{BlsPublicKey, ExecutionAddress, Hash32, U256}, serde::as_str};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -57,6 +57,7 @@ pub struct DeliveredPayloadsResponse {
     pub proposer_fee_recipient: ExecutionAddress,
     pub gas_limit: u64,
     pub gas_used: u64,
+    #[serde(with = "as_str")]
     pub value: U256,
     pub block_number: u64,
     pub num_tx: usize,
@@ -96,6 +97,7 @@ pub struct ReceivedBlocksResponse {
     pub proposer_fee_recipient: ExecutionAddress,
     pub gas_limit: u64,
     pub gas_used: u64,
+    #[serde(with = "as_str")]
     pub value: U256,
     pub block_number: u64,
     pub num_tx: usize,

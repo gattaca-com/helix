@@ -196,7 +196,9 @@ impl DatabaseService for MockDatabaseService {
         &self,
         _filters: &BidFilters,
     ) -> Result<Vec<BidSubmissionDocument>, DatabaseError> {
-        Ok(vec![BidSubmissionDocument::default()])
+        let mut bid = BidSubmissionDocument::default();
+        bid.bid_trace.value = U256::from(1000);
+        Ok(vec![bid])
     }
 
     async fn get_delivered_payloads(
