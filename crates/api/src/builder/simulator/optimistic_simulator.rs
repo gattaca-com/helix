@@ -144,7 +144,10 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
     ) -> bool {
         // TMP
         if request.proposer_preferences.censoring {
-            info!("V2 DEBUG proposer preference is censoring so not processing optimistically");
+            info!(
+                builder_info=?builder_info,
+                "V2 DEBUG proposer preference is censoring so not processing optimistically"
+            );
             return false;
         }
 
@@ -162,12 +165,16 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
 
         // TMP
         if !builder_info.is_optimistic {
-            info!("V2 DEBUG Builder is not optimistic. Skipping optimistic simulation");
+            info!(
+                builder_info=?builder_info,
+                "V2 DEBUG Builder is not optimistic. Skipping optimistic simulation"
+            );
         }
 
         // TMP
         if request.message.value > builder_info.collateral {
             info!(
+                builder_info=?builder_info,
                 request_value=%request.message.value,
                 builder_collateral=%builder_info.collateral,
                 "V2 DEBUG Builder collateral not high enough. Skipping optimistic simulation"
@@ -217,7 +224,7 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
                 block_parent_hash=?request.execution_payload.parent_hash(),
                 block_number=%request.execution_payload.block_number(),
                 request=?request.message,
-                "processing simulation request"
+                "processing simulation synchronously"
             );
             self.handle_simulation(
                 request,
