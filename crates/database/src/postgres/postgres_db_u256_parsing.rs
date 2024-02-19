@@ -50,7 +50,7 @@ impl<'a> FromSql<'a> for PostgresNumeric {
         };
 
         let num_groups = read_two_bytes(raw, &mut offset)?;
-        let _weight = read_two_bytes(raw, &mut offset)?;
+        let weight = read_two_bytes(raw, &mut offset)?;
         let _sign = read_two_bytes(raw, &mut offset)?;
         let _dscale = read_two_bytes(raw, &mut offset)?;
 
@@ -58,6 +58,8 @@ impl<'a> FromSql<'a> for PostgresNumeric {
         for _ in 0..num_groups {
             value = value * n_base + U256::from(read_two_bytes(raw, &mut offset)?);
         }
+
+        value *= n_base.pow(U256::from(weight));
 
         Ok(PostgresNumeric(value))
     }
