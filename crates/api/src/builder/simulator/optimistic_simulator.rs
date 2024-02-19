@@ -142,9 +142,12 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         request: &BlockSimRequest,
         builder_info: &BuilderInfo,
     ) -> bool {
+        // TMP
         if request.proposer_preferences.censoring {
+            info!("V2 DEBUG proposer preference is censoring so not processing optimistically");
             return false;
         }
+
         if builder_info.is_optimistic && request.message.value <= builder_info.collateral {
             if *self.failsafe_triggered.read().await {
                 warn!(
@@ -156,6 +159,21 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             }
             return true;
         }
+
+        // TMP
+        if !builder_info.is_optimistic {
+            info!("V2 DEBUG Builder is not optimistic. Skipping optimistic simulation");
+        }
+
+        // TMP
+        if request.message.value > builder_info.collateral {
+            info!(
+                request_value=%request.message.value,
+                builder_collateral=%builder_info.collateral,
+                "V2 DEBUG Builder collateral not high enough. Skipping optimistic simulation"
+            );
+        }
+
         false
     }
 }
@@ -171,10 +189,10 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
         request_id: Uuid,
     ) -> Result<bool, BlockSimError> {
         if self.should_process_optimistically(&request, builder_info).await {
-            debug!(
+            info!(
                 request_id=%request_id,
                 block_hash=%request.execution_payload.block_hash(),
-                "Optimistically processing request"
+                "optimistically processing request"
             );
 
             let cloned_self = self.clone_for_async();
@@ -195,8 +213,8 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
         } else {
             info!(
                 request_id=%request_id,
-                block_hash=%request.execution_payload.block_hash(),
-                block_parent_hash=%request.execution_payload.parent_hash(),
+                block_hash=?request.execution_payload.block_hash(),
+                block_parent_hash=?request.execution_payload.parent_hash(),
                 block_number=%request.execution_payload.block_number(),
                 request=?request.message,
                 "processing simulation request"
