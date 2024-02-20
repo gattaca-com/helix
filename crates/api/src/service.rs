@@ -43,7 +43,6 @@ impl ApiService {
         let db = Arc::new(postgres_db);
 
         let builder_infos = db.get_all_builder_infos().await.expect("failed to load builder infos");
-        info!("Loaded builder infos: {:?}", builder_infos);
         let auctioneer = Arc::new(RedisCache::new(&config.redis.url, builder_infos).await.unwrap());
         let broadcasters = init_broadcasters(&config).await;
 
