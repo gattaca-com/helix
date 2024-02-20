@@ -59,7 +59,7 @@ impl<'a> FromSql<'a> for PostgresNumeric {
             value = value * n_base + U256::from(read_two_bytes(raw, &mut offset)?);
         }
 
-        value *= n_base.pow(U256::from(weight));
+        value *= n_base.pow(U256::from((weight + 1).saturating_sub(num_groups)));
 
         Ok(PostgresNumeric(value))
     }
@@ -190,36 +190,5 @@ mod tests {
 
             assert_eq!(value, reconstructed_value.0);
         }
-    }
-
-    #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-    pub struct TestStruct {
-        #[serde(with = "as_str")]
-        pub value: U256,
-    }
-
-    #[test]
-    fn xx() {
-        let v = U256::MAX;
-        let s = TestStruct { value: v };
-        let json = serde_json::to_string(&s).unwrap();
-        println!("{:?}", json);
-
-        let pg_numeric = PostgresNumeric::from(v);
-        let mut buf = BytesMut::new();
-
-        // Convert PostgresNumeric to SQL format
-        let result = pg_numeric.to_sql(&Type::NUMERIC, &mut buf);
-        assert!(result.is_ok());
-
-
-        let deserialized_pg_numeric = PostgresNumeric::from_sql(&Type::NUMERIC, &buf.freeze()).expect("Deserialization failed");
-
-        // Convert PostgresNumeric back to U256
-        let deserialized_value: U256 = deserialized_pg_numeric.into();
-
-        let s = TestStruct { value: deserialized_value };
-        let json = serde_json::to_string(&s).unwrap();
-        println!("{:?}", json);
     }
 }
