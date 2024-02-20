@@ -289,6 +289,8 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             }
         };
 
+        info!(builder_infos=?builder_infos, "COLLATERAL DEBUG");
+
         if let Err(err) = self.auctioneer.update_builder_infos(builder_infos).await {
             error!(err = %err, "failed to update builder infos in auctioneer");
             return Err(HousekeeperError::AuctioneerError(err));
