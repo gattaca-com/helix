@@ -1416,7 +1416,7 @@ where
         } else if builder_info.collateral < payload.value() {
             warn!(
                 request_id = %request_id,
-                builder=%payload.builder_public_key(),
+                builder=?payload.builder_public_key(),
                 collateral=%builder_info.collateral,
                 collateral_required=%payload.value(),
                 "builder does not have enough collateral"
