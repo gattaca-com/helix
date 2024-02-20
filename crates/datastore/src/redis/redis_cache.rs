@@ -687,14 +687,11 @@ impl Auctioneer for RedisCache {
         let redis_builder_infos: HashMap<String, BuilderInfo> =
             self.hgetall(BUILDER_INFO_KEY).await?.unwrap_or_default();
 
-        tracing::info!(redis_builder_infos=?redis_builder_infos, "COLLATERAL DEBUG");
-
         // Update Redis value if the builder info has changed or it's a new builder
         for builder_info in builder_infos {
             let builder_pub_key_str = format!("{:?}", builder_info.pub_key);
             if let Some(redis_builder_info) = redis_builder_infos.get(&builder_pub_key_str) {
                 if builder_info.builder_info != *redis_builder_info {
-                    tracing::info!(updated_builder_info=?builder_info.builder_info, "COLLATERAL DEBUG");
                     self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info)
                         .await?;
                 }

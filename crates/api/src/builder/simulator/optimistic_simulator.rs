@@ -142,12 +142,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         request: &BlockSimRequest,
         builder_info: &BuilderInfo,
     ) -> bool {
-        // TMP
         if request.proposer_preferences.censoring {
-            info!(
-                builder_info=?builder_info,
-                "V2 DEBUG proposer preference is censoring so not processing optimistically"
-            );
             return false;
         }
 
@@ -161,24 +156,6 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
                 return false;
             }
             return true;
-        }
-
-        // TMP
-        if !builder_info.is_optimistic {
-            info!(
-                builder_info=?builder_info,
-                "V2 DEBUG Builder is not optimistic. Skipping optimistic simulation"
-            );
-        }
-
-        // TMP
-        if request.message.value > builder_info.collateral {
-            info!(
-                builder_info=?builder_info,
-                request_value=%request.message.value,
-                builder_collateral=%builder_info.collateral,
-                "V2 DEBUG Builder collateral not high enough. Skipping optimistic simulation"
-            );
         }
 
         false
