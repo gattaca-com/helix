@@ -605,7 +605,8 @@ where
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let request_id = Uuid::new_v4();
-        let mut trace = SubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let now = SystemTime::now();
+        let mut trace = SubmissionTrace { receive: get_nanos_from(now.clone())?, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
         info!(
@@ -633,9 +634,8 @@ where
         let block_hash_clone = payload.block_hash().clone();
         let builder_pubkey = payload.builder_public_key().clone();
         let slot = payload.slot();
-        let time = SystemTime::now();
         tokio::spawn(async move {
-            if let Err(err) = db.save_pending_block(&block_hash_clone, &builder_pubkey, slot, time).await {
+            if let Err(err) = db.save_pending_block(&block_hash_clone, &builder_pubkey, slot, now).await {
                 error!(
                     error = %err,
                     "failed to store payload received",
@@ -1938,6 +1938,12 @@ fn get_nanos_timestamp() -> Result<u64, BuilderApiError> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .map_err(|_| BuilderApiError::InternalError)
+}
+
+fn get_nanos_from(now: SystemTime) -> Result<u64, BuilderApiError> {
+    now.duration_since(UNIX_EPOCH)
+    .map(|d| d.as_nanos() as u64)
+    .map_err(|_| BuilderApiError::InternalError)
 }
 
 #[cfg(test)]
