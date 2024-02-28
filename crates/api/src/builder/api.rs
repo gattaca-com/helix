@@ -576,10 +576,15 @@ where
         );
 
         // Save submission to db.
-        api.db_sender
-            .send(DbInfo::NewHeaderSubmission(payload.clone(), Arc::new(trace)))
-            .await
-            .map_err(|_| BuilderApiError::InternalError)?;
+        let db = api.db.clone();
+        tokio::spawn(async move {
+            if let Err(err) = db.store_header_submission(payload, Arc::new(trace)).await {
+                error!(
+                    error = %err,
+                    "failed to store header submission",
+                )
+            }
+        });
 
         Ok(StatusCode::OK)
     }
@@ -623,15 +628,20 @@ where
             "payload decoded",
         );
 
-        api.db_sender
-            .send(DbInfo::PayloadReceived {
-                block_hash: payload.block_hash().clone(),
-                builder_pubkey: payload.builder_public_key().clone(),
-                slot: payload.slot(),
-                time: SystemTime::now(),
-            })
-            .await
-            .map_err(|_| BuilderApiError::InternalError)?;
+        // Save submission to db.
+        let db = api.db.clone();
+        let block_hash_clone = payload.block_hash().clone();
+        let builder_pubkey = payload.builder_public_key().clone();
+        let slot = payload.slot();
+        let time = SystemTime::now();
+        tokio::spawn(async move {
+            if let Err(err) = db.save_pending_block(&block_hash_clone, &builder_pubkey, slot, time).await {
+                error!(
+                    error = %err,
+                    "failed to store payload received",
+                )
+            }
+        });
 
         // Verify the payload is for the current slot
         if payload.slot() <= head_slot {
