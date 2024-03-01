@@ -1251,6 +1251,15 @@ where
             registration_info.registration.message.gas_limit,
             payload.clone(),
             registration_info.preferences,
+            match self.payload_attributes.read().await.get(&payload.parent_hash()) {
+                Some(payload_attributes) => payload_attributes
+                .payload_attributes
+                .parent_beacon_block_root.clone(),
+                None => {
+                    warn!(request_id = %request_id, "payload attributes not yet known");
+                    return Err(BuilderApiError::PayloadAttributesNotYetKnown);
+                }
+            }
         );
         let result = self
             .simulator
