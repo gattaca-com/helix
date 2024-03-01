@@ -163,6 +163,7 @@ mod tests {
             ),
             suggested_fee_recipient: "0x5cc0dde14e7256340cc820415a6022a7d1c93a35".to_string(),
             withdrawals: vec![],
+            parent_beacon_block_root: None,
         }
     }
 

@@ -314,7 +314,7 @@ where
         trace.pre_checks = get_nanos_timestamp()?;
 
         let (payload, was_simulated_optimistically) = api
-            .verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id)
+            .verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id, &payload_attributes)
             .await?;
 
         // If cancellations are enabled, then abort now if there is a later submission
@@ -739,7 +739,7 @@ where
         trace.pre_checks = get_nanos_timestamp()?;
 
         let (payload, _) = match api
-            .verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id)
+            .verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id, &payload_attributes)
             .await
         {
             Ok(val) => val,
@@ -1089,6 +1089,7 @@ where
         builder_info: &BuilderInfo,
         trace: &mut SubmissionTrace,
         request_id: &Uuid,
+        payload_attributes: &PayloadAttributesUpdate,
     ) -> Result<(Arc<SignedBidSubmission>, bool), BuilderApiError> {
         // Verify the payload signature
         if let Err(err) = payload.verify_signature(&self.chain_info.context) {
@@ -1100,7 +1101,7 @@ where
         // Simulate the submission
         let payload = Arc::new(payload);
         let was_simulated_optimistically = self
-            .simulate_submission(payload.clone(), builder_info, trace, next_duty.entry, request_id)
+            .simulate_submission(payload.clone(), builder_info, trace, next_duty.entry, request_id, payload_attributes)
             .await?;
 
         Ok((payload, was_simulated_optimistically))
@@ -1228,6 +1229,7 @@ where
         trace: &mut SubmissionTrace,
         registration_info: ValidatorRegistrationInfo,
         request_id: &Uuid,
+        payload_attributes: &PayloadAttributesUpdate,
     ) -> Result<bool, BuilderApiError> {
         let mut is_top_bid = false;
         match self
@@ -1251,6 +1253,7 @@ where
             registration_info.registration.message.gas_limit,
             payload.clone(),
             registration_info.preferences,
+            payload_attributes.payload_attributes.parent_beacon_block_root.clone(),
         );
         let result = self
             .simulator

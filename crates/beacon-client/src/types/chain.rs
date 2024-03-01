@@ -122,4 +122,5 @@ pub struct PayloadAttributes {
     pub prev_randao: Bytes32,
     pub suggested_fee_recipient: String,
     pub withdrawals: Vec<Withdrawal>,
+    pub parent_beacon_block_root: Option<Bytes32>,
 }
