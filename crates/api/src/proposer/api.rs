@@ -285,7 +285,7 @@ where
         let mut trace = GetHeaderTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
         let (head_slot, _) = *proposer_api.curr_slot_info.read().await;
-        info!(
+        debug!(
             request_id = %request_id,
             event = "get_header",
             head_slot = head_slot,
