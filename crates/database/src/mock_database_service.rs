@@ -1,7 +1,6 @@
 use std::{
     collections::HashSet,
     sync::{Arc, Mutex},
-    time::SystemTime,
 };
 
 use async_trait::async_trait;
@@ -17,7 +16,6 @@ use helix_common::{
     bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
     },
-    pending_block::PendingBlock,
     simulator::BlockSimError,
     versioned_payload::PayloadAndBlobs,
     BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace,
@@ -146,16 +144,6 @@ impl DatabaseService for MockDatabaseService {
         Ok(())
     }
 
-    async fn save_pending_block(
-        &self,
-        _block_hash: &Hash32,
-        _builder_pub_key: &BlsPublicKey,
-        _slot: u64,
-        _time: SystemTime,
-    ) -> Result<(), DatabaseError> {
-        Ok(())
-    }
-
     async fn store_builder_info(
         &self,
         _builder_pub_key: &BlsPublicKey,
@@ -254,15 +242,6 @@ impl DatabaseService for MockDatabaseService {
         _block_hash: ByteVector<32>,
         _trace: Arc<GossipedPayloadTrace>,
     ) -> Result<(), DatabaseError> {
-        Ok(())
-    }
-
-    async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, DatabaseError> {
-        let expired_blocks: Vec<PendingBlock> = vec![];
-        Ok(expired_blocks)
-    }
-
-    async fn remove_old_pending_blocks(&self) -> Result<(), DatabaseError> {
         Ok(())
     }
 

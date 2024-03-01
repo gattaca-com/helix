@@ -1,4 +1,4 @@
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::{collections::HashMap, sync::{atomic::AtomicBool, Arc, Mutex}};
 
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
@@ -6,11 +6,7 @@ use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 use helix_common::{
     bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
-    },
-    eth::SignedBuilderBid,
-    signing::RelaySigningContext,
-    versioned_payload::PayloadAndBlobs,
-    BuilderInfo, ProposerInfo,
+    }, eth::SignedBuilderBid, pending_block::PendingBlock, signing::RelaySigningContext, versioned_payload::PayloadAndBlobs, BuilderInfo, ProposerInfo
 };
 use helix_database::types::BuilderInfoDocument;
 
@@ -228,6 +224,37 @@ impl Auctioneer for MockAuctioneer {
         _proposer_pub_key: &BlsPublicKey,
     ) -> Result<bool, AuctioneerError> {
         Ok(true)
+    }
+
+    async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, AuctioneerError> {
+        Ok(vec![])
+    }
+
+    async fn save_pending_block_header(
+        &self,
+        _slot: u64,
+        _builder_pub_key: &BlsPublicKey,
+        _block_hash: &Hash32,
+        _timestamp_ms: u64,
+    ) -> Result<(), AuctioneerError> {
+        Ok(())
+    }
+
+    async fn save_pending_block_payload(
+        &self,
+        _slot: u64,
+        _builder_pub_key: &BlsPublicKey,
+        _block_hash: &Hash32,
+        _timestamp_ms: u64,
+    ) -> Result<(), AuctioneerError> {
+        Ok(())
+    }
+
+    async fn remove_pending_blocks(
+        &self,
+        _pending_blocks: HashMap<BlsPublicKey, Vec<Hash32>>,
+    ) -> Result<(), AuctioneerError> {
+        Ok(())
     }
 
     async fn try_acquire_or_renew_leadership(&self, _leader_id: &str) -> bool {

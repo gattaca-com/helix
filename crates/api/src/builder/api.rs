@@ -575,7 +575,20 @@ where
             "submit_header request finished"
         );
 
-        // Save submission to db.
+        // Save pending block header to auctioneer
+        api.auctioneer
+            .save_pending_block_header(
+                payload.slot(),
+                payload.builder_public_key(),
+                payload.block_hash(),
+                trace.receive / 1_000_000, // convert to ms
+            ).await
+            .map_err(|err| {
+                error!(request_id = %request_id, error = %err, "failed to save pending block header");
+                BuilderApiError::AuctioneerError(err)
+            })?;
+
+        // Save submission to db
         let db = api.db.clone();
         tokio::spawn(async move {
             if let Err(err) = db.store_header_submission(payload, Arc::new(trace)).await {
@@ -629,19 +642,18 @@ where
             "payload decoded",
         );
 
-        // Save submission to db.
-        let db = api.db.clone();
-        let block_hash_clone = payload.block_hash().clone();
-        let builder_pubkey = payload.builder_public_key().clone();
-        let slot = payload.slot();
-        tokio::spawn(async move {
-            if let Err(err) = db.save_pending_block(&block_hash_clone, &builder_pubkey, slot, now).await {
-                error!(
-                    error = %err,
-                    "failed to store payload received",
-                )
-            }
-        });
+        // Save pending block payload to auctioneer
+        api.auctioneer
+            .save_pending_block_payload(
+                payload.slot(),
+                payload.builder_public_key(),
+                payload.block_hash(),
+                trace.receive / 1_000_000, // convert to ms
+            ).await
+            .map_err(|err| {
+                error!(request_id = %request_id, error = %err, "failed to save pending block header");
+                BuilderApiError::AuctioneerError(err)
+            })?;
 
         // Verify the payload is for the current slot
         if payload.slot() <= head_slot {
@@ -906,6 +918,16 @@ where
             receive: get_nanos_timestamp().unwrap_or_default(),
             ..Default::default()
         };
+
+        // Save gossiped payload to auctioneer in case it was sent to diffent region than the header
+        if let Err(err) = self.auctioneer.save_pending_block_payload(
+            req.slot,
+            &req.proposer_pub_key,
+            &req.execution_payload.execution_payload.block_hash().clone(),
+            trace.receive / 1_000_000, // convert to ms
+        ).await {
+            error!(request_id = %request_id, error = %err, "failed to save pending block header");
+        }
 
         // Verify that the gossiped payload is not for a past slot
         let (head_slot, _) = self.curr_slot_info.read().await.clone();
@@ -1892,16 +1914,6 @@ async fn process_db_additions<DB: DatabaseService + 'static>(
                     error!(
                         error = %err,
                         "failed to store header submission",
-                    )
-                }
-            }
-            DbInfo::PayloadReceived { block_hash, builder_pubkey, slot, time } => {
-                if let Err(err) =
-                    db.save_pending_block(&block_hash, &builder_pubkey, slot, time).await
-                {
-                    error!(
-                        error = %err,
-                        "failed to store payload received",
                     )
                 }
             }
