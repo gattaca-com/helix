@@ -15,7 +15,7 @@ use helix_common::{
         v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
     },
     builder_info::BuilderInfo,
-    pending_block::PendingBlock,
+
     simulator::BlockSimError,
     versioned_payload::PayloadAndBlobs,
     GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace,
@@ -99,14 +99,6 @@ pub trait DatabaseService: Send + Sync + Clone {
         optimistic_version: i16,
     ) -> Result<(), DatabaseError>;
 
-    async fn save_pending_block(
-        &self,
-        block_hash: &Hash32,
-        builder_pub_key: &BlsPublicKey,
-        slot: u64,
-        time: SystemTime,
-    ) -> Result<(), DatabaseError>;
-
     async fn store_builder_info(
         &self,
         builder_pub_key: &BlsPublicKey,
@@ -176,10 +168,6 @@ pub trait DatabaseService: Send + Sync + Clone {
         block_hash: ByteVector<32>,
         trace: Arc<GossipedPayloadTrace>,
     ) -> Result<(), DatabaseError>;
-
-    async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, DatabaseError>;
-
-    async fn remove_old_pending_blocks(&self) -> Result<(), DatabaseError>;
 
     async fn get_trusted_proposers(&self) -> Result<Vec<ProposerInfo>, DatabaseError>;
 }

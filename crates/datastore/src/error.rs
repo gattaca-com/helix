@@ -40,6 +40,9 @@ pub enum AuctioneerError {
 
     #[error("ethereum consensus error: {0}")]
     EthereumConsensusError(#[from] ethereum_consensus::Error),
+
+    #[error("ethereum consensus crypto error: {0}")]
+    EthereumConsensusCryptoError(#[from] ethereum_consensus::crypto::Error),
 }
 
 impl IntoResponse for AuctioneerError {
@@ -79,6 +82,10 @@ impl IntoResponse for AuctioneerError {
                     .into_response()
             }
             AuctioneerError::EthereumConsensusError(err) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Ethereum consensus error: {err:?}"))
+                    .into_response()
+            }
+            AuctioneerError::EthereumConsensusCryptoError(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("Ethereum consensus error: {err:?}"))
                     .into_response()
             }

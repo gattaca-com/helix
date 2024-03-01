@@ -10,7 +10,6 @@ use helix_common::{
     },
     bellatrix::{ByteList, ByteVector, List},
     bid_submission::BidTrace,
-    pending_block::PendingBlock,
     BuilderInfo, GetPayloadTrace, ProposerInfo, SignedValidatorRegistrationEntry,
     ValidatorPreferences,
 };
@@ -213,29 +212,6 @@ impl FromRow for BuilderInfo {
             collateral: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("collateral")),
             is_optimistic: parse_bool_to_bool(row.get::<&str, bool>("is_optimistic"))?,
             builder_id: row.get::<&str, Option<&str>>("builder_id").map(|s| s.to_string()),
-        })
-    }
-}
-
-impl FromRow for PendingBlock {
-    fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError>
-    where
-        Self: Sized,
-    {
-        Ok(PendingBlock {
-            block_hash: parse_bytes_to_hash::<32>(row.get::<&str, &[u8]>("block_hash"))?,
-            builder_pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("builder_pubkey"))?,
-            slot: parse_i32_to_u64(row.get::<&str, i32>("slot"))?,
-            header_receive_ms: parse_optional_timestamptz_to_u64_ms(row.get::<&str, Option<
-                std::time::SystemTime,
-            >>(
-                "header_receive"
-            ))?,
-            payload_receive_ms: parse_optional_timestamptz_to_u64_ms(row.get::<&str, Option<
-                std::time::SystemTime,
-            >>(
-                "payload_receive"
-            ))?,
         })
     }
 }

@@ -627,17 +627,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_save_pending_block() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
-        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
-        db_service
-            .save_pending_block(&Default::default(), &Default::default(), 359023, SystemTime::now())
-            .await?;
-
-        Ok(())
-    }
-
     fn remove_random_items<T>(vec: &mut Vec<T>, count: usize) -> Vec<T> {
         let mut rng = thread_rng();
         
