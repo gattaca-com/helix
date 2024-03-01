@@ -1,14 +1,11 @@
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 use helix_common::{
     bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
-    },
-    builder_info::BuilderInfo,
-    eth::SignedBuilderBid,
-    signing::RelaySigningContext,
-    versioned_payload::PayloadAndBlobs,
-    ProposerInfo,
+    }, builder_info::BuilderInfo, eth::SignedBuilderBid, pending_block::PendingBlock, signing::RelaySigningContext, versioned_payload::PayloadAndBlobs, ProposerInfo
 };
 use helix_database::BuilderInfoDocument;
 
@@ -158,6 +155,30 @@ pub trait Auctioneer: Send + Sync + Clone {
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<bool, AuctioneerError>;
 
+    async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, AuctioneerError>;
+    
+    async fn save_pending_block_header(
+        &self,
+        slot: u64,
+        builder_pub_key: &BlsPublicKey,
+        block_hash: &Hash32,
+        timestamp_ms: u64,
+    ) -> Result<(), AuctioneerError>;
+    
+    async fn save_pending_block_payload(
+        &self,
+        slot: u64,
+        builder_pub_key: &BlsPublicKey,
+        block_hash: &Hash32,
+        timestamp_ms: u64,
+    ) -> Result<(), AuctioneerError>;
+
+    async fn remove_pending_blocks(
+        &self,
+        pending_blocks: HashMap<BlsPublicKey, Vec<Hash32>>,
+    ) -> Result<(), AuctioneerError>;
+
+    
     /// Try to acquire or renew leadership for the housekeeper.
     /// Returns: true if the housekeeper is the leader, false if it isn't.
     async fn try_acquire_or_renew_leadership(&self, leader_id: &str) -> bool;
