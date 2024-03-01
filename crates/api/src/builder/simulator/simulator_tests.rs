@@ -47,7 +47,7 @@ mod simulator_tests {
             execution_payload,
         });
 
-        BlockSimRequest::new(0, Arc::new(signed_bid_submission), ValidatorPreferences::default())
+        BlockSimRequest::new(0, Arc::new(signed_bid_submission), ValidatorPreferences::default(), None)
     }
 
     // ++++ TESTS ++++
