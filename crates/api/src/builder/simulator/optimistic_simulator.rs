@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32};
 use reqwest::Client;
 use tokio::sync::{mpsc::Sender, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use helix_common::{simulator::BlockSimError, BuilderInfo};

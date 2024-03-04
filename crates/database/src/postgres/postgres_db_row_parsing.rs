@@ -279,22 +279,6 @@ pub fn parse_timestamptz_to_u64(timestamp: std::time::SystemTime) -> Result<u64,
         .map(|duration| duration.as_secs())
 }
 
-pub fn parse_timestamptz_to_u64_ms(timestamp: std::time::SystemTime) -> Result<u64, DatabaseError> {
-    timestamp
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| DatabaseError::RowParsingError(Box::new(e)))
-        .map(|duration| duration.as_millis() as u64)
-}
-
-pub fn parse_optional_timestamptz_to_u64_ms(
-    timestamp: Option<std::time::SystemTime>,
-) -> Result<Option<u64>, DatabaseError> {
-    match timestamp {
-        Some(timestamp) => parse_timestamptz_to_u64_ms(timestamp).map(Some),
-        None => Ok(None),
-    }
-}
-
 pub fn parse_bool_to_bool(value: bool) -> Result<bool, DatabaseError> {
     Ok(value)
 }
