@@ -11,17 +11,12 @@ use axum::{
     Extension,
 };
 use ethereum_consensus::{
-    builder::SignedValidatorRegistration,
-    clock::get_current_unix_time_in_nanos,
-    deneb::{Context, Root},
-    phase0::mainnet::SLOTS_PER_EPOCH,
-    primitives::BlsPublicKey,
-    ssz::prelude::*,
-    types::mainnet::{
+    builder::SignedValidatorRegistration, clock::get_current_unix_time_in_nanos, deneb::{Context, Root}, phase0::mainnet::SLOTS_PER_EPOCH, primitives::BlsPublicKey, ssz::prelude::*, types::mainnet::{
         ExecutionPayloadHeader, ExecutionPayloadHeaderRef, SignedBeaconBlock,
         SignedBlindedBeaconBlock,
-    },
+    }
 };
+
 use tokio::{
     sync::{
         mpsc,
@@ -38,12 +33,7 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry,
         proposer_api::{GetPayloadResponse, ValidatorRegistrationInfo},
-    },
-    chain_info::{ChainInfo, Network},
-    signed_proposal::VersionedSignedProposal,
-    try_execution_header_from_payload,
-    versioned_payload::PayloadAndBlobs,
-    BidRequest, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace, ValidatorPreferences,
+    }, chain_info::{ChainInfo, Network}, signed_proposal::VersionedSignedProposal, try_execution_header_from_payload, versioned_payload::PayloadAndBlobs, BidRequest, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace, ValidatorPreferences
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
@@ -1015,7 +1005,6 @@ async fn deserialize_get_payload_bytes(
 ) -> Result<SignedBlindedBeaconBlock, ProposerApiError> {
     let body = req.into_body();
     let body_bytes = to_bytes(body, MAX_BLINDED_BLOCK_LENGTH).await?;
-    info!(body_bytes = ?body_bytes, "received get_payload request");
     Ok(serde_json::from_slice(&body_bytes)?)
 }
 

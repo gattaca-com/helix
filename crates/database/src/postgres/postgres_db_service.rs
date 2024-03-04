@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     ops::DerefMut,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;

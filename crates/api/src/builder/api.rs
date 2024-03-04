@@ -619,7 +619,7 @@ where
     ) -> Result<StatusCode, BuilderApiError> {
         let request_id = Uuid::new_v4();
         let now = SystemTime::now();
-        let mut trace = SubmissionTrace { receive: get_nanos_from(now.clone())?, ..Default::default() };
+        let mut trace = SubmissionTrace { receive: get_nanos_from(now)?, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
         info!(

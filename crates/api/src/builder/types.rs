@@ -1,6 +1,6 @@
-use std::{sync::Arc, time::SystemTime};
+use std::{sync::Arc};
 
-use ethereum_consensus::primitives::BlsPublicKey;
+
 use helix_common::{
     bellatrix::ByteVector,
     bid_submission::{v2::header_submission::SignedHeaderSubmission, SignedBidSubmission},
