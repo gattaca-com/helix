@@ -1015,6 +1015,7 @@ async fn deserialize_get_payload_bytes(
 ) -> Result<SignedBlindedBeaconBlock, ProposerApiError> {
     let body = req.into_body();
     let body_bytes = to_bytes(body, MAX_BLINDED_BLOCK_LENGTH).await?;
+    info!(body_bytes = ?body_bytes, "received get_payload request");
     Ok(serde_json::from_slice(&body_bytes)?)
 }
 
