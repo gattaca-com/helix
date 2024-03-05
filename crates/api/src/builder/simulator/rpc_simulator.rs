@@ -6,7 +6,7 @@ use reqwest::{
 };
 use serde_json::json;
 use tokio::sync::mpsc::Sender;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use helix_common::simulator::BlockSimError;
 use uuid::Uuid;
@@ -64,6 +64,11 @@ impl RpcSimulator {
                 "params": [request]
             })
         };
+
+        info!(
+            payload = ?rpc_payload,
+            "Sending RPC request"
+        );
 
         self.http.post(&self.endpoint).headers(headers).json(&rpc_payload).send().await
     }
