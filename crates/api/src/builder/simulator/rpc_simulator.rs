@@ -49,6 +49,8 @@ impl RpcSimulator {
             headers.insert("X-High-Priority", HeaderValue::from_static("true"));
         }
 
+        let json_str = serde_json::to_string(&request).unwrap();
+
         let rpc_payload = if request.beacon_root.is_none() {
             json!({
                 "jsonrpc": "2.0",
@@ -66,7 +68,7 @@ impl RpcSimulator {
         };
 
         info!(
-            payload = ?rpc_payload,
+            payload = ?json_str,
             "Sending RPC request"
         );
 
