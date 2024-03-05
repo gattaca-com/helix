@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32};
 use reqwest::Client;
 use tokio::sync::{mpsc::Sender, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use helix_common::{simulator::BlockSimError, BuilderInfo};
@@ -145,6 +145,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         if request.proposer_preferences.censoring {
             return false;
         }
+
         if builder_info.is_optimistic && request.message.value <= builder_info.collateral {
             if *self.failsafe_triggered.read().await {
                 warn!(
@@ -156,6 +157,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             }
             return true;
         }
+
         false
     }
 }
@@ -171,10 +173,10 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
         request_id: Uuid,
     ) -> Result<bool, BlockSimError> {
         if self.should_process_optimistically(&request, builder_info).await {
-            debug!(
+            info!(
                 request_id=%request_id,
                 block_hash=%request.execution_payload.block_hash(),
-                "Optimistically processing request"
+                "optimistically processing request"
             );
 
             let cloned_self = self.clone_for_async();
@@ -195,11 +197,11 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
         } else {
             info!(
                 request_id=%request_id,
-                block_hash=%request.execution_payload.block_hash(),
-                block_parent_hash=%request.execution_payload.parent_hash(),
+                block_hash=?request.execution_payload.block_hash(),
+                block_parent_hash=?request.execution_payload.parent_hash(),
                 block_number=%request.execution_payload.block_number(),
                 request=?request.message,
-                "processing simulation request"
+                "processing simulation synchronously"
             );
             self.handle_simulation(
                 request,

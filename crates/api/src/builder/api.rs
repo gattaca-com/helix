@@ -314,7 +314,7 @@ where
         trace.pre_checks = get_nanos_timestamp()?;
 
         let (payload, was_simulated_optimistically) = api
-            .verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id)
+            .verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id, &payload_attributes)
             .await?;
 
         // If cancellations are enabled, then abort now if there is a later submission
@@ -575,11 +575,29 @@ where
             "submit_header request finished"
         );
 
-        // Save submission to db.
-        api.db_sender
-            .send(DbInfo::NewHeaderSubmission(payload.clone(), Arc::new(trace)))
-            .await
-            .map_err(|_| BuilderApiError::InternalError)?;
+        // Save pending block header to auctioneer
+        api.auctioneer
+            .save_pending_block_header(
+                payload.slot(),
+                payload.builder_public_key(),
+                payload.block_hash(),
+                trace.receive / 1_000_000, // convert to ms
+            ).await
+            .map_err(|err| {
+                error!(request_id = %request_id, error = %err, "failed to save pending block header");
+                BuilderApiError::AuctioneerError(err)
+            })?;
+
+        // Save submission to db
+        let db = api.db.clone();
+        tokio::spawn(async move {
+            if let Err(err) = db.store_header_submission(payload, Arc::new(trace)).await {
+                error!(
+                    error = %err,
+                    "failed to store header submission",
+                )
+            }
+        });
 
         Ok(StatusCode::OK)
     }
@@ -600,7 +618,8 @@ where
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let request_id = Uuid::new_v4();
-        let mut trace = SubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let now = SystemTime::now();
+        let mut trace = SubmissionTrace { receive: get_nanos_from(now)?, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
         info!(
@@ -623,15 +642,18 @@ where
             "payload decoded",
         );
 
-        api.db_sender
-            .send(DbInfo::PayloadReceived {
-                block_hash: payload.block_hash().clone(),
-                builder_pubkey: payload.builder_public_key().clone(),
-                slot: payload.slot(),
-                time: SystemTime::now(),
-            })
-            .await
-            .map_err(|_| BuilderApiError::InternalError)?;
+        // Save pending block payload to auctioneer
+        api.auctioneer
+            .save_pending_block_payload(
+                payload.slot(),
+                payload.builder_public_key(),
+                payload.block_hash(),
+                trace.receive / 1_000_000, // convert to ms
+            ).await
+            .map_err(|err| {
+                error!(request_id = %request_id, error = %err, "failed to save pending block header");
+                BuilderApiError::AuctioneerError(err)
+            })?;
 
         // Verify the payload is for the current slot
         if payload.slot() <= head_slot {
@@ -717,7 +739,7 @@ where
         trace.pre_checks = get_nanos_timestamp()?;
 
         let (payload, _) = match api
-            .verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id)
+            .verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id, &payload_attributes)
             .await
         {
             Ok(val) => val,
@@ -897,6 +919,16 @@ where
             ..Default::default()
         };
 
+        // Save gossiped payload to auctioneer in case it was sent to diffent region than the header
+        if let Err(err) = self.auctioneer.save_pending_block_payload(
+            req.slot,
+            &req.proposer_pub_key,
+            &req.execution_payload.execution_payload.block_hash().clone(),
+            trace.receive / 1_000_000, // convert to ms
+        ).await {
+            error!(request_id = %request_id, error = %err, "failed to save pending block header");
+        }
+
         // Verify that the gossiped payload is not for a past slot
         let (head_slot, _) = self.curr_slot_info.read().await.clone();
         if req.slot <= head_slot {
@@ -1057,6 +1089,7 @@ where
         builder_info: &BuilderInfo,
         trace: &mut SubmissionTrace,
         request_id: &Uuid,
+        payload_attributes: &PayloadAttributesUpdate,
     ) -> Result<(Arc<SignedBidSubmission>, bool), BuilderApiError> {
         // Verify the payload signature
         if let Err(err) = payload.verify_signature(&self.chain_info.context) {
@@ -1068,7 +1101,7 @@ where
         // Simulate the submission
         let payload = Arc::new(payload);
         let was_simulated_optimistically = self
-            .simulate_submission(payload.clone(), builder_info, trace, next_duty.entry, request_id)
+            .simulate_submission(payload.clone(), builder_info, trace, next_duty.entry, request_id, payload_attributes)
             .await?;
 
         Ok((payload, was_simulated_optimistically))
@@ -1196,6 +1229,7 @@ where
         trace: &mut SubmissionTrace,
         registration_info: ValidatorRegistrationInfo,
         request_id: &Uuid,
+        payload_attributes: &PayloadAttributesUpdate,
     ) -> Result<bool, BuilderApiError> {
         let mut is_top_bid = false;
         match self
@@ -1219,6 +1253,7 @@ where
             registration_info.registration.message.gas_limit,
             payload.clone(),
             registration_info.preferences,
+            payload_attributes.payload_attributes.parent_beacon_block_root.clone(),
         );
         let result = self
             .simulator
@@ -1416,7 +1451,7 @@ where
         } else if builder_info.collateral < payload.value() {
             warn!(
                 request_id = %request_id,
-                builder=%payload.builder_public_key(),
+                builder=?payload.builder_public_key(),
                 collateral=%builder_info.collateral,
                 collateral_required=%payload.value(),
                 "builder does not have enough collateral"
@@ -1885,16 +1920,6 @@ async fn process_db_additions<DB: DatabaseService + 'static>(
                     )
                 }
             }
-            DbInfo::PayloadReceived { block_hash, builder_pubkey, slot, time } => {
-                if let Err(err) =
-                    db.save_pending_block(&block_hash, &builder_pubkey, slot, time).await
-                {
-                    error!(
-                        error = %err,
-                        "failed to store payload received",
-                    )
-                }
-            }
             DbInfo::GossipedHeader { block_hash, trace } => {
                 if let Err(err) = db.save_gossiped_header_trace(block_hash, trace).await {
                     error!(
@@ -1928,6 +1953,12 @@ fn get_nanos_timestamp() -> Result<u64, BuilderApiError> {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)
         .map_err(|_| BuilderApiError::InternalError)
+}
+
+fn get_nanos_from(now: SystemTime) -> Result<u64, BuilderApiError> {
+    now.duration_since(UNIX_EPOCH)
+    .map(|d| d.as_nanos() as u64)
+    .map_err(|_| BuilderApiError::InternalError)
 }
 
 #[cfg(test)]

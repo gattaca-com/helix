@@ -313,7 +313,14 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
         let mut demoted_builders = HashSet::new();
 
-        for pending_block in self.db.get_pending_blocks().await? {
+        let mut pending_block_hashes = HashMap::new();
+
+        for pending_block in self.auctioneer.get_pending_blocks().await? {
+            pending_block_hashes
+                .entry(pending_block.builder_pubkey.clone())
+                .or_insert_with(Vec::new)
+                .push(pending_block.block_hash.clone());
+
             if demoted_builders.contains(&pending_block.builder_pubkey) {
                 continue;
             }
@@ -335,7 +342,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         }
 
         // Remove expired entries (entries that have been in the db for > 45s).
-        self.db.remove_old_pending_blocks().await?;
+        self.auctioneer.remove_pending_blocks(pending_block_hashes).await?;
 
         Ok(())
     }

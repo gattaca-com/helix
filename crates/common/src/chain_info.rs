@@ -76,6 +76,11 @@ pub struct ChainInfo {
 
 impl ChainInfo {
     pub fn for_mainnet() -> Self {
+        let mut cxt = Context::for_holesky();
+        // override the deneb fork epoch and version as library defaults are incorrect
+        // TODO: remove this once the library defaults are fixed
+        cxt.deneb_fork_epoch = 269568;
+
         Self {
             network: Network::Mainnet,
             genesis_validators_root: Node::try_from(MAINNET_GENESIS_VALIDATOR_ROOT.as_ref())
@@ -112,11 +117,17 @@ impl ChainInfo {
     }
 
     pub fn for_holesky() -> Self {
+        let mut cxt = Context::for_holesky();
+        // override the deneb fork epoch and version as library defaults are incorrect
+        // TODO: remove this once the library defaults are fixed
+        cxt.deneb_fork_epoch = 29696;
+        cxt.deneb_fork_version = [5, 1, 112, 0];
+
         Self {
             network: Network::Holesky,
             genesis_validators_root: Node::try_from(HOLESKY_GENESIS_VALIDATOR_ROOT.as_ref())
                 .unwrap(),
-            context: Context::for_holesky(),
+            context: cxt,
             clock: for_holesky(),
             genesis_time_in_secs: HOLESKY_GENESIS_TIME,
             seconds_per_slot: configs::holesky::SECONDS_PER_SLOT,

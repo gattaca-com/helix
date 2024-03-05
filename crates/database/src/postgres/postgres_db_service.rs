@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     ops::DerefMut,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -18,7 +18,6 @@ use helix_common::{
     bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission,
     },
-    pending_block::PendingBlock,
     simulator::BlockSimError,
     versioned_payload::PayloadAndBlobs,
     BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace,
@@ -897,36 +896,6 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(())
     }
 
-    async fn save_pending_block(
-        &self,
-        block_hash: &Hash32,
-        builder_pub_key: &BlsPublicKey,
-        slot: u64,
-        time: SystemTime,
-    ) -> Result<(), DatabaseError> {
-        self.pool
-            .get()
-            .await?.execute(
-            "
-                INSERT INTO
-                    pending_blocks (block_hash, builder_pubkey, slot, header_receive, payload_receive)
-                VALUES
-                    ($1, $2, $3, $4, $5)
-                ON CONFLICT (block_hash)
-                DO UPDATE SET payload_receive = EXCLUDED.payload_receive;
-            ",
-            &[
-                &(block_hash.as_ref()),
-                &(builder_pub_key.as_ref()),
-                &(slot as i32),
-                &(Option::<SystemTime>::None),
-                &(time),
-            ],
-        ).await?;
-
-        Ok(())
-    }
-
     async fn store_builder_info(
         &self,
         builder_pub_key: &BlsPublicKey,
@@ -1328,24 +1297,6 @@ impl DatabaseService for PostgresDatabaseService {
             ],
         ).await?;
 
-        transaction.execute(
-            "
-                INSERT INTO
-                    pending_blocks (block_hash, builder_pubkey, slot, header_receive, payload_receive)
-                VALUES
-                    ($1, $2, $3, $4, $5)
-                ON CONFLICT (block_hash)
-                DO UPDATE SET header_receive = EXCLUDED.header_receive;
-            ",
-            &[
-                &(submission.block_hash().as_ref()),
-                &(submission.builder_public_key().as_ref()),
-                &(submission.slot() as i32),
-                &(UNIX_EPOCH + Duration::from_nanos(trace.receive)),
-                &(Option::<SystemTime>::None),
-            ],
-        ).await?;
-
         transaction.commit().await?;
 
         Ok(())
@@ -1399,37 +1350,6 @@ impl DatabaseService for PostgresDatabaseService {
                 &(trace.auctioneer_update as i64),
             ],
         ).await?;
-        Ok(())
-    }
-
-    async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, DatabaseError> {
-        parse_rows(
-            self.pool
-                .get()
-                .await?
-                .query(
-                    "
-                    SELECT * FROM pending_blocks 
-                ",
-                    &[],
-                )
-                .await?,
-        )
-    }
-
-    async fn remove_old_pending_blocks(&self) -> Result<(), DatabaseError> {
-        self.pool
-            .get()
-            .await?
-            .execute(
-                "
-                    DELETE FROM pending_blocks 
-                    WHERE created_at < (NOW() - INTERVAL '45 seconds')
-                ",
-                &[],
-            )
-            .await?;
-
         Ok(())
     }
 
