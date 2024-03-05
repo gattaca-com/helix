@@ -24,7 +24,7 @@ pub struct BlockSimRequest {
     pub signature: BlsSignature,
     pub proposer_preferences: ValidatorPreferences,
     pub blobs_bundle: Option<BlobsBundle>,
-    pub beacon_root: Option<Bytes32>
+    pub parent_beacon_block_root: Option<Bytes32>
 }
 
 impl BlockSimRequest {
@@ -32,7 +32,7 @@ impl BlockSimRequest {
         registered_gas_limit: u64,
         block: Arc<SignedBidSubmission>,
         proposer_preferences: ValidatorPreferences,
-        beacon_root: Option<Bytes32>,
+        parent_beacon_block_root: Option<Bytes32>,
     ) -> Self {
         Self {
             registered_gas_limit,
@@ -41,7 +41,7 @@ impl BlockSimRequest {
             signature: block.signature().clone(),
             proposer_preferences,
             blobs_bundle: block.blobs_bundle().cloned(),
-            beacon_root,
+            parent_beacon_block_root,
         }
     }
 }
