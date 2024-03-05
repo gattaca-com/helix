@@ -67,11 +67,6 @@ impl RpcSimulator {
             })
         };
 
-        info!(
-            payload = ?json_str,
-            "Sending RPC request"
-        );
-
         self.http.post(&self.endpoint).headers(headers).json(&rpc_payload).send().await
     }
 
