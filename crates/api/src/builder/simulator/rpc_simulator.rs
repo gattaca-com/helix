@@ -49,9 +49,7 @@ impl RpcSimulator {
             headers.insert("X-High-Priority", HeaderValue::from_static("true"));
         }
 
-        let json_str = serde_json::to_string(&request).unwrap();
-
-        let rpc_payload = if request.beacon_root.is_none() {
+        let rpc_payload = if request.parent_beacon_block_root.is_none() {
             json!({
                 "jsonrpc": "2.0",
                 "id": "1",
