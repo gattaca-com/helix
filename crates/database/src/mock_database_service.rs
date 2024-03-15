@@ -215,6 +215,7 @@ impl DatabaseService for MockDatabaseService {
 
     async fn save_failed_get_payload(
         &self,
+        _slot: u64,
         _block_hash: ByteVector<32>,
         _error: String,
         _trace: GetPayloadTrace,
