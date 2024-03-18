@@ -1114,11 +1114,12 @@ impl DatabaseService for PostgresDatabaseService {
                         ORDER BY
                             CASE
                                 WHEN $7 >= 0 THEN block_submission.value
-                                ELSE NULL
                             END ASC,
                             CASE
                                 WHEN $7 < 0 THEN block_submission.value
-                                ELSE NULL
+                            END DESC,
+                            CASE
+                                WHEN $7 IS NULL THEN block_submission.slot_number
                             END DESC
                         LIMIT
                             CASE
