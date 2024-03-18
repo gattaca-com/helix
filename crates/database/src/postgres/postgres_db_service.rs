@@ -1104,7 +1104,7 @@ impl DatabaseService for PostgresDatabaseService {
                         WHERE
                             (
                                 ($1::integer IS NOT NULL AND block_submission.slot_number = $1::integer) OR
-                                ($1::integer IS NULL AND $2::integer IS NOT NULL AND block_submission.slot_number >= $2::integer) OR
+                                ($1::integer IS NULL AND $2::integer IS NOT NULL AND block_submission.slot_number <= $2::integer) OR
                                 ($1::integer IS NULL AND $2::integer IS NULL)
                             )
                             AND ($3::integer IS NULL OR block_submission.block_number = $3::integer)
