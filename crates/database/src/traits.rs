@@ -146,6 +146,7 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn save_failed_get_payload(
         &self,
+        slot: u64,
         block_hash: ByteVector<32>,
         error: String,
         trace: GetPayloadTrace,

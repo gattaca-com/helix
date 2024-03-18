@@ -1104,7 +1104,7 @@ impl DatabaseService for PostgresDatabaseService {
                         WHERE
                             (
                                 ($1::integer IS NOT NULL AND block_submission.slot_number = $1::integer) OR
-                                ($1::integer IS NULL AND $2::integer IS NOT NULL AND block_submission.slot_number >= $2::integer) OR
+                                ($1::integer IS NULL AND $2::integer IS NOT NULL AND block_submission.slot_number <= $2::integer) OR
                                 ($1::integer IS NULL AND $2::integer IS NULL)
                             )
                             AND ($3::integer IS NULL OR block_submission.block_number = $3::integer)
@@ -1197,6 +1197,7 @@ impl DatabaseService for PostgresDatabaseService {
 
     async fn save_failed_get_payload(
         &self,
+        slot: u64,
         block_hash: ByteVector<32>,
         error: String,
         trace: GetPayloadTrace,
@@ -1210,11 +1211,11 @@ impl DatabaseService for PostgresDatabaseService {
             .execute(
                 "
                     INSERT INTO failed_payload
-                        (region_id, block_hash, error)
+                        (region_id, slot_number, block_hash, error)
                     VALUES
-                        ($1, $2, $3)
+                        ($1, $2, $3, $4)
                 ",
-                &[&(region_id), &(block_hash.as_ref()), &(error)],
+                &[&(region_id), &(slot as i32), &(block_hash.as_ref()), &(error)],
             )
             .await?;
 

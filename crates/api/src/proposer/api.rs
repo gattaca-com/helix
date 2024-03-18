@@ -383,6 +383,8 @@ where
             };
         let block_hash =
             signed_blinded_block.message().body().execution_payload_header().block_hash().clone();
+        
+        let slot = signed_blinded_block.message().slot();
 
         match proposer_api._get_payload(signed_blinded_block, &mut trace, &request_id).await {
             Ok(get_payload_response) => Ok(axum::Json(get_payload_response)),
@@ -390,7 +392,7 @@ where
                 // Save error to DB
                 if let Err(err) = proposer_api
                     .db
-                    .save_failed_get_payload(block_hash, err.to_string(), trace)
+                    .save_failed_get_payload(slot, block_hash, err.to_string(), trace)
                     .await
                 {
                     error!(err = ?err, "error saving failed get payload");

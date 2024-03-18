@@ -76,7 +76,7 @@ pub struct ChainInfo {
 
 impl ChainInfo {
     pub fn for_mainnet() -> Self {
-        let mut cxt = Context::for_holesky();
+        let mut cxt = Context::for_mainnet();
         // override the deneb fork epoch and version as library defaults are incorrect
         // TODO: remove this once the library defaults are fixed
         cxt.deneb_fork_epoch = 269568;
@@ -85,7 +85,7 @@ impl ChainInfo {
             network: Network::Mainnet,
             genesis_validators_root: Node::try_from(MAINNET_GENESIS_VALIDATOR_ROOT.as_ref())
                 .unwrap(),
-            context: Context::for_mainnet(),
+            context: cxt,
             clock: for_mainnet(),
             genesis_time_in_secs: MAINNET_GENESIS_TIME,
             seconds_per_slot: configs::mainnet::SECONDS_PER_SLOT,

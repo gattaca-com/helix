@@ -263,6 +263,26 @@ impl RedisCache {
         Ok(pipeline.query_async(&mut conn).await?)
     }
 
+    async fn hset_multiple_not_exists<T: Serialize>(
+        &self,
+        key: &str,
+        entries: &[(&str, T)],
+        expiry: usize,
+    ) -> Result<(), RedisCacheError> {
+        let mut conn = self.pool.get().await?;
+        let mut pipeline = redis::pipe();
+    
+        // Iterate over the entries to serialize each value
+        for (field, value) in entries {
+            let str_val = serde_json::to_string(value)?;
+            pipeline.cmd("HSETNX").arg(key).arg(field).arg(str_val);
+        }
+
+        pipeline.expire(key, expiry);
+
+        Ok(pipeline.query_async(&mut conn).await?)
+    }
+
     #[allow(dead_code)]
     async fn rpush(&self, key: &str, value: &impl Serialize) -> Result<(), RedisCacheError> {
         let mut conn = self.pool.get().await?;
@@ -960,7 +980,7 @@ impl Auctioneer for RedisCache {
             ("slot", slot),
             ("header_received", timestamp_ms),
         ];
-        self.hset_multiple(key.as_str(), &entries, PENDING_BLOCK_EXPIRY_S).await?;
+        self.hset_multiple_not_exists(key.as_str(), &entries, PENDING_BLOCK_EXPIRY_S).await?;
 
         Ok(())
     }
@@ -981,7 +1001,7 @@ impl Auctioneer for RedisCache {
             ("slot", slot),
             ("payload_received", timestamp_ms),
         ];
-        self.hset_multiple(key.as_str(), &entries, PENDING_BLOCK_EXPIRY_S).await?;
+        self.hset_multiple_not_exists(key.as_str(), &entries, PENDING_BLOCK_EXPIRY_S).await?;
 
         Ok(())
     }
@@ -2336,6 +2356,53 @@ mod tests {
             assert_eq!(i.builder_pubkey, builder_pub_key);
             assert_eq!(i.header_receive_ms, Some(time));
             assert_eq!(i.payload_receive_ms, None);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pending_blocks_dublicate_payload() {
+        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        cache.clear_cache().await.unwrap();
+
+        let builder_infos = vec![
+            BuilderInfoDocument {
+                builder_info: BuilderInfo{
+                    collateral: U256::from(100),
+                    is_optimistic: true,
+                    builder_id: None,
+                },
+                pub_key: BlsPublicKey::default(),
+            }
+        ];
+
+        cache.update_builder_infos(builder_infos).await.unwrap();
+        
+
+        let slot = 42;
+        let block_hash = Hash32::try_from([5u8; 32].as_ref()).unwrap();
+        let builder_pub_key = BlsPublicKey::default();
+        let time = 1616237123000u64;
+
+        cache.save_pending_block_header(slot, &builder_pub_key, &block_hash,  time)
+            .await
+            .unwrap();
+
+        cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash,  time)
+            .await
+            .unwrap();
+
+            cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash,  1716237123000u64)
+            .await
+            .unwrap();
+
+        let pending_blocks = cache.get_pending_blocks().await.unwrap();
+
+        for i in pending_blocks {
+            assert_eq!(i.slot, slot);
+            assert_eq!(i.block_hash, block_hash);
+            assert_eq!(i.builder_pubkey, builder_pub_key);
+            assert_eq!(i.header_receive_ms, Some(time));
+            assert_eq!(i.payload_receive_ms, Some(time));
         }
     }
 
