@@ -491,6 +491,11 @@ mod tests {
             },
         );
 
+
+        execution_payload
+            .transactions_mut()
+            .push(ethereum_consensus::capella::Transaction::default());
+        
         execution_payload
             .transactions_mut()
             .push(ethereum_consensus::capella::Transaction::default());
@@ -504,7 +509,7 @@ mod tests {
         );
 
         let mut bid_trace = BidTrace::default();
-        bid_trace.slot = 1234;
+        bid_trace.slot = 1235;
         let latency_trace = GetPayloadTrace::default();
 
         let payload_and_blobs =
@@ -577,7 +582,7 @@ mod tests {
         let _reg = get_randomized_signed_validator_registration().registration;
 
         db_service
-            .save_failed_get_payload(Default::default(), "error".to_string(), Default::default())
+            .save_failed_get_payload(1, Default::default(), "error".to_string(), Default::default())
             .await?;
 
         Ok(())
