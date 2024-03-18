@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
     BoxError, Extension, Router,
 };
-use helix_common::chain_info::ChainInfo;
+use helix_common::{chain_info::ChainInfo, Route};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use helix_beacon_client::{
@@ -24,7 +24,6 @@ use crate::{
     builder::{
         api::{BuilderApi, MAX_PAYLOAD_LENGTH},
         mock_simulator::MockSimulator,
-        PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK,
     },
     gossiper::mock_gossiper::MockGossiper,
     proposer::{
@@ -133,11 +132,11 @@ pub fn builder_api_app() -> (
 
     let mut router = Router::new()
         .route(
-            &format!("{PATH_BUILDER_API}{PATH_GET_VALIDATORS}"),
+            &Route::GetValidators.path(),
             get(BuilderApi::<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>::get_validators),
         )
         .route(
-            &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK}"),
+            &Route::SubmitBlock.path(),
             post(BuilderApi::<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>::submit_block),
         )
         .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH))
