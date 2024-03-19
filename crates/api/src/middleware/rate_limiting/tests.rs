@@ -1,10 +1,12 @@
 #![cfg(test)]
-mod rate_limit_tests {
+mod tests {
     use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::time::Duration;
     use axum::{middleware, Router};
     use axum::routing::get;
+    use serial_test::serial;
+    use tokio::sync::oneshot;
     use crate::middleware::rate_limiting::rate_limit_by_ip::{rate_limit_by_ip, RateLimitState, RateLimitStateForRoute};
 
     const ROUTE_NO_LIMIT: &str = "/test_without_limit";
@@ -30,34 +32,50 @@ mod rate_limit_tests {
         app
     }
 
-    async fn start_server() {
-        let router = get_router();
-        // Start the server
-        let listener: tokio::net::TcpListener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-        axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
+    async fn start_server() -> oneshot::Sender<()> {
+
+        let (tx, rx) = oneshot::channel();
+
+        tokio::spawn(async {
+            let router = get_router();
+            // Start the server
+            let listener: tokio::net::TcpListener = tokio::net::TcpListener::bind("0.0.0.0:4040").await.unwrap();
+            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
+            .with_graceful_shutdown(async {
+                rx.await.ok();
+            }).await.unwrap();
+        });
+
+        tx
+        
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_no_limit() {
-        start_server().await;
-        let url = format!("http://localhost:3000{}", ROUTE_NO_LIMIT);
-        for _ in 0..10 {
+        let tx = start_server().await;
+        let url = format!("http://localhost:4040{}", ROUTE_NO_LIMIT);
+        for _ in 0..11 {
             let response = reqwest::get(url.clone()).await.unwrap();
             assert_eq!(response.status(), 200);
             assert_eq!(response.text().await.unwrap(), NO_LIMIT_RESPONSE);
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+
+        // Shut down the server
+        let _ = tx.send(());
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_limit() {
-        start_server().await;
-        let url = format!("http://localhost:3000{}", ROUTE_WITH_LIMIT);
-        let response = reqwest::get(url).await.unwrap();
+        let tx = start_server().await;
+        let url = format!("http://localhost:4040{}", ROUTE_WITH_LIMIT);
+        let response = reqwest::get(url.clone()).await.unwrap();
         assert_eq!(response.status(), 200);
         assert_eq!(response.text().await.unwrap(), LIMIT_RESPONSE);
 
-        for _ in 0..10 {
+        for _ in 0..11 {
             let response = reqwest::get(url.clone()).await.unwrap();
             assert_eq!(response.status(), 429);
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -68,25 +86,33 @@ mod rate_limit_tests {
         let response = reqwest::get(url.clone()).await.unwrap();
         assert_eq!(response.status(), 200);
         assert_eq!(response.text().await.unwrap(), LIMIT_RESPONSE);
+
+        // Shut down the server
+        let _ = tx.send(());
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_high_limit() {
-        start_server().await;
-        let url = format!("http://localhost:3000{}", ROUTE_WITH_HIGH_LIMIT);
-        for _ in 0..9 {
+        let tx = start_server().await;
+        let url = format!("http://localhost:4040{}", ROUTE_WITH_HIGH_LIMIT);
+        for _ in 0..10 {
             let response = reqwest::get(url.clone()).await.unwrap();
             assert_eq!(response.status(), 200);
             assert_eq!(response.text().await.unwrap(), HIGH_LIMIT_RESPONSE);
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+
+        // Shut down the server
+        let _ = tx.send(());
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_high_limit_exceeded() {
-        start_server().await;
-        let url = format!("http://localhost:3000{}", ROUTE_WITH_HIGH_LIMIT);
-        for _ in 0..9 {
+        let tx = start_server().await;
+        let url = format!("http://localhost:4040{}", ROUTE_WITH_HIGH_LIMIT);
+        for _ in 0..10 {
             let response = reqwest::get(url.clone()).await.unwrap();
             assert_eq!(response.status(), 200);
             assert_eq!(response.text().await.unwrap(), HIGH_LIMIT_RESPONSE);
@@ -95,13 +121,17 @@ mod rate_limit_tests {
 
         let response = reqwest::get(url).await.unwrap();
         assert_eq!(response.status(), 429);
+
+        // Shut down the server
+        let _ = tx.send(());
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_high_limit_reset() {
-        start_server().await;
-        let url = format!("http://localhost:3000{}", ROUTE_WITH_HIGH_LIMIT);
-        for _ in 0..9 {
+        let tx = start_server().await;
+        let url = format!("http://localhost:4040{}", ROUTE_WITH_HIGH_LIMIT);
+        for _ in 0..10 {
             let response = reqwest::get(url.clone()).await.unwrap();
             assert_eq!(response.status(), 200);
             assert_eq!(response.text().await.unwrap(), HIGH_LIMIT_RESPONSE);
@@ -110,39 +140,43 @@ mod rate_limit_tests {
 
         tokio::time::sleep(Duration::from_secs(10)).await;
 
-        for _ in 0..9 {
+        for _ in 0..10 {
             let response = reqwest::get(url.clone()).await.unwrap();
             assert_eq!(response.status(), 200);
             assert_eq!(response.text().await.unwrap(), HIGH_LIMIT_RESPONSE);
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+
+        // Shut down the server
+        let _ = tx.send(());
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_mixed_requests() {
-        start_server().await;
-        let url_no_limit = format!("http://localhost:3000{}", ROUTE_NO_LIMIT);
-        let url_with_limit = format!("http://localhost:3000{}", ROUTE_WITH_LIMIT);
-        let url_with_high_limit = format!("http://localhost:3000{}", ROUTE_WITH_HIGH_LIMIT);
+        let tx = start_server().await;
+        let url_no_limit = format!("http://localhost:4040{}", ROUTE_NO_LIMIT);
+        let url_with_limit = format!("http://localhost:4040{}", ROUTE_WITH_LIMIT);
+        let url_with_high_limit = format!("http://localhost:4040{}", ROUTE_WITH_HIGH_LIMIT);
 
-        let response = reqwest::get(url_with_limit).await.unwrap();
+        let response = reqwest::get(url_with_limit.clone()).await.unwrap();
         assert_eq!(response.status(), 200);
         assert_eq!(response.text().await.unwrap(), LIMIT_RESPONSE);
 
-        for _ in 0..9 {
+        for _ in 0..10 {
             let response = reqwest::get(url_with_limit.clone()).await.unwrap();
             assert_eq!(response.status(), 429);
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        for _ in 0..10 {
+        for _ in 0..11 {
             let response = reqwest::get(url_no_limit.clone()).await.unwrap();
             assert_eq!(response.status(), 200);
             assert_eq!(response.text().await.unwrap(), NO_LIMIT_RESPONSE);
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
 
-        for _ in 0..9 {
+        for _ in 0..10 {
             let response = reqwest::get(url_with_high_limit.clone()).await.unwrap();
             assert_eq!(response.status(), 200);
             assert_eq!(response.text().await.unwrap(), HIGH_LIMIT_RESPONSE);
@@ -154,6 +188,9 @@ mod rate_limit_tests {
         let response = reqwest::get(url_with_limit.clone()).await.unwrap();
         assert_eq!(response.status(), 200);
         assert_eq!(response.text().await.unwrap(), LIMIT_RESPONSE);
+
+        // Shut down the server
+        let _ = tx.send(());
     }
 
 }
