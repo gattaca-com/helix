@@ -6,7 +6,6 @@ mod tests {
         builder::{
             api::{decode_header_submission, decode_payload, BuilderApi, MAX_PAYLOAD_LENGTH},
             mock_simulator::MockSimulator,
-            PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK,
         },
         gossiper::mock_gossiper::MockGossiper,
         service::API_REQUEST_TIMEOUT,
@@ -29,14 +28,12 @@ mod tests {
         api::{
             builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
             proposer_api::ValidatorRegistrationInfo,
-        },
-        bid_submission::{
+        }, bid_submission::{
             v2::header_submission::{
                 SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb,
             },
             BidSubmission, SignedBidSubmission,
-        },
-        HeaderSubmissionTrace, SubmissionTrace, ValidatorPreferences,
+        }, HeaderSubmissionTrace, Route, SubmissionTrace, ValidatorPreferences
     };
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
@@ -563,7 +560,7 @@ mod tests {
 
         // GET validators
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_GET_VALIDATORS);
+            format!("{}{}", http_config.base_url(), Route::GetValidators.path());
         let resp = reqwest::Client::new().get(req_url.as_str()).send().await.unwrap();
 
         // Check the response
@@ -585,7 +582,7 @@ mod tests {
 
         // GET validators
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_GET_VALIDATORS);
+            format!("{}{}", http_config.base_url(), Route::GetValidators.path());
         let resp = reqwest::Client::new().get(req_url.as_str()).send().await.unwrap();
 
         // Check the response
@@ -620,10 +617,9 @@ mod tests {
         // Prepare the request
         let cancellations_enabled = false;
         let req_url = format!(
-            "{}{}{}{}",
+            "{}{}{}",
             http_config.base_url(),
-            PATH_BUILDER_API,
-            PATH_SUBMIT_BLOCK,
+            Route::SubmitBlock.path(),
             if cancellations_enabled { "?cancellations=1" } else { "" }
         );
 
@@ -687,10 +683,9 @@ mod tests {
         // Prepare the request
         let cancellations_enabled = false;
         let req_url = format!(
-            "{}{}{}{}",
+            "{}{}{}",
             http_config.base_url(),
-            PATH_BUILDER_API,
-            PATH_SUBMIT_BLOCK,
+            Route::SubmitBlock.path(),
             if cancellations_enabled { "?cancellations=1" } else { "" }
         );
 
@@ -730,7 +725,7 @@ mod tests {
 
         // Prepare the request
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
+            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let signed_bid_submission: SignedBidSubmission = load_bid_submission();
 
@@ -770,7 +765,7 @@ mod tests {
 
         // Prepare the request
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
+            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
         signed_bid_submission.message_mut().slot = 1;
@@ -805,7 +800,7 @@ mod tests {
 
         // Prepare the request
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
+            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
         match signed_bid_submission.execution_payload_mut() {
@@ -849,7 +844,7 @@ mod tests {
 
         // Prepare the request
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
+            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let signed_bid_submission: SignedBidSubmission = load_bid_submission();
 
@@ -883,7 +878,7 @@ mod tests {
 
         // Prepare the request
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
+        format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
         match signed_bid_submission.execution_payload_mut() {
@@ -941,7 +936,7 @@ mod tests {
 
         // Prepare the request
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
+        format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
             "submitBlockPayloadCapella_Goerli_incorrect_withdrawal_root.json",
@@ -976,7 +971,7 @@ mod tests {
 
         // Prepare the request
         let req_url =
-            format!("{}{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK, "");
+        format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let my_vec = vec![0u8; MAX_PAYLOAD_LENGTH + 1];
 
@@ -1013,7 +1008,7 @@ mod tests {
 
         // Prepare the request
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
+            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
             "submitBlockPayloadCapella_Goerli_zero_value.json",
@@ -1054,7 +1049,7 @@ mod tests {
 
         // Prepare the request
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
+            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
             "submitBlockPayloadCapella_Goerli_empty_transactions.json",
@@ -1095,7 +1090,7 @@ mod tests {
 
         // Prepare the request
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
+            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
             "submitBlockPayloadCapella_Goerli_incorrect_block_hash.json",
@@ -1136,7 +1131,7 @@ mod tests {
 
         // Prepare the request
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
+            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
             "submitBlockPayloadCapella_Goerli_incorrect_parent_hash.json",
@@ -1174,7 +1169,7 @@ mod tests {
 
         // GET validators
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_GET_VALIDATORS);
+            format!("{}{}", http_config.base_url(), Route::GetValidators.path());
         let resp = reqwest::Client::new().get(req_url.as_str()).send().await.unwrap();
 
         // Check the response
@@ -1192,7 +1187,7 @@ mod tests {
 
         // Test payload attributes is updated
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_BUILDER_API, PATH_SUBMIT_BLOCK);
+            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
         match signed_bid_submission.execution_payload_mut() {
             ExecutionPayload::Capella(ref mut payload) => {
@@ -1239,10 +1234,9 @@ mod tests {
         // Prepare the request
         let cancellations_enabled = false;
         let req_url = format!(
-            "{}{}{}{}",
+            "{}{}{}",
             http_config.base_url(),
-            PATH_BUILDER_API,
-            PATH_SUBMIT_BLOCK,
+            Route::SubmitBlock.path(),
             if cancellations_enabled { "?cancellations=1" } else { "" }
         );
 
