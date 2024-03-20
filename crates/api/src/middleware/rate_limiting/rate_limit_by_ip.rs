@@ -18,11 +18,21 @@ impl RateLimitState {
     }
 
     pub fn check_rate_limit(&self, ip: IpAddr, route: &str) -> bool {
-        if let Some(state) = self.state_per_route.get(route) {
+        if let Some(state) = self.state_per_route.get(replace_dynamic_routes(route)) {
             state.check_rate_limit(ip)
         } else {
             true
         }
+    }
+}
+
+// TODO: feels a bit hacky, maybe there's a better way to do this?
+fn replace_dynamic_routes(route: &str) -> &str {
+    // Currently, the only dynamic route is /eth/v1/builder/header/:slot/:parent_hash/:pubkey
+    if route.starts_with("/eth/v1/builder/header") {
+        "/eth/v1/builder/header/:slot/:parent_hash/:pubkey"
+    } else {
+        route
     }
 }
 
