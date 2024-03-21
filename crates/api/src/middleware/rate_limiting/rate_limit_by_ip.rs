@@ -125,13 +125,9 @@ pub async fn rate_limit_by_ip(
 ) -> Response {
 
     let ip = connect_info.0.ip();
-
-    info!("RLIMT_TEST: Rate limiting request from IP address: {}", ip);
     
     // Extract the real IP address from the request headers in case of reverse proxy
     let real_ip = extract_ip_from_request(&request).unwrap_or(ip);
-
-    info!("RLIMT_TEST: Real IP address: {}", real_ip);
 
     let route = request.uri().path();
 
