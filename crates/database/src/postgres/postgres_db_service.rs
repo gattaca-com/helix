@@ -1040,24 +1040,29 @@ impl DatabaseService for PostgresDatabaseService {
                             block_submission.gas_used gas_used,
                             block_submission.value submission_value,
                             block_submission.num_txs num_txs,
-                            st.receive submission_timestamp
+                            min(submission_trace.receive) submission_timestamp
                         FROM 
                             block_submission
-                        INNER JOIN (
-                            SELECT
-                                block_hash,
-                                MIN(receive) as receive
-                            FROM
-                                submission_trace
-                            GROUP BY
-                                block_hash
-                        ) st ON block_submission.block_hash = st.block_hash
+                        INNER JOIN
+                            submission_trace ON block_submission.block_hash = submission_trace.block_hash
                         WHERE 
                             ($1::integer IS NULL OR block_submission.slot_number = $1::integer)
                         AND ($2::integer IS NULL OR block_submission.block_number = $2::integer)
                         AND ($3::bytea IS NULL OR block_submission.proposer_pubkey = $3::bytea)
                         AND ($4::bytea IS NULL OR block_submission.builder_pubkey = $4::bytea)
                         AND ($5::bytea IS NULL OR block_submission.block_hash = $5::bytea)
+                        GROUP BY
+                            block_submission.block_number,
+                            block_submission.slot_number,
+                            block_submission.parent_hash,
+                            block_submission.block_hash,
+                            block_submission.builder_pubkey,
+                            block_submission.proposer_pubkey,
+                            block_submission.proposer_fee_recipient,
+                            block_submission.gas_limit,
+                            block_submission.gas_used,
+                            block_submission.value,
+                            block_submission.num_txs
                     ",
                     &[
                         &filters.slot(),
