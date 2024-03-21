@@ -1,4 +1,4 @@
-#[cfg(postgres_test)]
+#[cfg(test)]
 mod tests {
     use rand::{seq::SliceRandom, thread_rng};
     use rand::Rng;
