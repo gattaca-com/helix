@@ -1,7 +1,8 @@
 use std::{collections::HashMap, net::{IpAddr, SocketAddr}, sync::{Arc, Mutex}, time::{Duration, Instant}};
 use axum::{
-    extract::{connect_info, Request, State}, middleware::Next, response::{IntoResponse, Response}
+    body::Body, extract::{connect_info, Request, State}, middleware::Next, response::{IntoResponse, Response}
 };
+use tracing::info;
 
 use super::error::RateLimitExceeded;
 
@@ -123,19 +124,46 @@ pub async fn rate_limit_by_ip(
     next: Next,
 ) -> Response {
 
-    let timestamp = Instant::now();
     let ip = connect_info.0.ip();
+
+    info!("RLIMT_TEST: Rate limiting request from IP address: {}", ip);
+    
+    // Extract the real IP address from the request headers in case of reverse proxy
+    let real_ip = extract_ip_from_request(&request).unwrap_or(ip);
+
+    info!("RLIMT_TEST: Real IP address: {}", real_ip);
 
     let route = request.uri().path();
 
     // Check if the IP address is within the rate limit
-    if !state.check_rate_limit(ip, route) {
+    if !state.check_rate_limit(real_ip, route) {
         return RateLimitExceeded::new().into_response();
     }
 
-    let elapsed = timestamp.elapsed();
-    println!("Request from {} for route {} took {:?}", ip, route, elapsed);
-
     // Execute the remaining middleware stack.
     next.run(request).await
+}
+
+fn extract_ip_from_request(req: &Request<Body>) -> Option<IpAddr> {
+    let headers_to_check = ["True-Client-IP", "X-Real-IP", "X-Forwarded-For"];
+
+    for &header_name in headers_to_check.iter() {
+        if let Some(header_value) = req.headers().get(header_name) {
+            if let Ok(header_str) = header_value.to_str() {
+                // For "X-Forwarded-For", consider only the first IP if multiple are listed
+                let first_ip = if header_name == "X-Forwarded-For" {
+                    header_str.split(',').next().unwrap_or("").trim()
+                } else {
+                    header_str.trim()
+                };
+
+                // Attempt to parse the IP address
+                if let Ok(ip_addr) = first_ip.parse::<IpAddr>() {
+                    return Some(ip_addr); // Return the first successfully parsed IP address
+                }
+            }
+        }
+    }
+
+    None // No suitable IP address found9
 }
