@@ -95,6 +95,9 @@ Alex Stokes. A lot of the types used are derived/ taken from these repos:
 - https://github.com/ralexstokes/mev-rs
 - https://github.com/ralexstokes/beacon-api-client
 
+## Audits
+- Audit conducted by Spearbit, with [Alex Stokes](https://github.com/ralexstokes) (EF) and [Matthias Seitz](https://github.com/mattsse) (Reth, Foundry, ethers-rs) leading as security researchers. See the report [here](audits/spearbit).
+
 ## License
 MIT + Apache-2.0
 
