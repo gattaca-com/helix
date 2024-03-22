@@ -63,6 +63,10 @@ It is worth mentioning that all submissions during this period were simulated op
 ![Median Latency](images/relay-v2-median.png)
 ![P99 Latency](images/relay-v2-p99.png)
 
+The graphs illustrate a marked reduction in latency across several operational segments, with the most notable improvements observed in the Receive -> Decode and Bid Checks -> Auctioneer phases.
+
+In addition to the improvements made in internal processing efficiency, using the OptimisticV2 implementation has resulted in significantly lower network latencies from our builders.
+
 ## Future Work
 
 ### In-Memory Auctioneer
