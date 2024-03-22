@@ -22,6 +22,13 @@ The current Flashbots MEV-Boost relay [implementation](https://github.com/flashb
 - Automatic call routing via DNS resolution ensures low latency communication to relays.
 - We've addressed potential non-determinism, such as differing routes for `get_header` and `get_payload`, by implementing the `GossipClientTrait` using gRPC, which ensures payload availability across all clusters.
 
+### Optimistic V2
+OptimisticV2, initially proposed [here](https://frontier.tech/optimistic-relays-and-where-to-find-them), introduces an architectural change where the lightweight header (1 MTU) is decoupled from the much heavier payload. Due to the much smaller size, the header can be quickly downloaded, deserialised and saved. Ready for `get_header` responses. Meanwhile, the much heavier full SignedBidSubmission is downloaded and verified asynchronously.
+
+We have implemented two distinct endpoints for builders: `submit_header` and `submit_block_v2`. Builders will be responsible for ensuring that they only use these endpoints if their collateral covers the block value and that they submit payloads in a timely manner to the relay. Builders that fail to submit payloads will have their collateral slashed in the same process as the current Optimistic V1 implementation.
+
+Along with reducing the internal latency, separating the header and payload drastically reduces the network latency.
+
 ### Censoring/ Non-Censoring Support
 Operating censoring and non-censoring relays independently results in doubling the operational costs. To address this, we have integrated both functionalities into a single relay, aiming to reduce overhead and streamline operations.
 - Censoring and non-censoring have been unified into a single relay by allowing proposers to specify “preferences” on-registration.
