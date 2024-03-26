@@ -2,6 +2,8 @@ use thiserror::Error;
 
 const UNKNOWN_ANCESTOR: &str = "unknown ancestor";
 const MISSING_TRIE_NODE: &str = "missing trie node";
+const BLOCK_ALREADY_KNOWN: &str = "block already known";
+const BLOCK_REQ_REORG: &str = "block requires a reorg";
 
 #[derive(Debug, Clone, Error, serde::Serialize, serde::Deserialize)]
 pub enum BlockSimError {
@@ -23,6 +25,8 @@ impl BlockSimError {
         match self {
             BlockSimError::BlockValidationFailed(reason) => match reason.to_lowercase().as_str() {
                 UNKNOWN_ANCESTOR => false,
+                BLOCK_ALREADY_KNOWN => false,
+                BLOCK_REQ_REORG => false,
                 r if r.starts_with(MISSING_TRIE_NODE) => false,
                 _ => true,
             },

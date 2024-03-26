@@ -1,4 +1,4 @@
-use std::{env, sync::Arc, time::Duration};
+use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 
 use ethereum_consensus::crypto::SecretKey;
 use tokio::{
@@ -150,7 +150,7 @@ impl ApiService {
         let router = build_router(&mut config.router_config, builder_api, proposer_api, data_api);
 
         let listener = tokio::net::TcpListener::bind("0.0.0.0:4040").await.unwrap();
-        match axum::serve(listener, router).await {
+        match axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await {
             Ok(_) => println!("Server exited successfully"),
             Err(e) => println!("Server exited with error: {e}"),
         }
