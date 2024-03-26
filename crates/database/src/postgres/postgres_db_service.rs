@@ -14,15 +14,9 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
-    },
-    bid_submission::{
+    }, bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission,
-    },
-    simulator::BlockSimError,
-    versioned_payload::PayloadAndBlobs,
-    BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace,
-    HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry,
-    SubmissionTrace, ValidatorSummary,
+    }, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
 };
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{error, info};
@@ -724,6 +718,20 @@ impl DatabaseService for PostgresDatabaseService {
                 &(PostgresNumeric::from(*payload.execution_payload.base_fee_per_gas())),
             ],
             ).await?;
+        
+            transaction.execute(
+                "
+                    INSERT INTO delivered_payload_preferences (block_hash, censoring, trusted_builders)
+                    SELECT $1::bytea, censoring, trusted_builders
+                    FROM validator_preferences
+                    WHERE public_key = $2::bytea
+                    ON CONFLICT (block_hash) DO NOTHING;                
+                ",
+                &[
+                    &(bid_trace.block_hash.as_ref()),
+                    &(bid_trace.proposer_public_key.as_ref()),
+                ],
+                ).await?;
 
         transaction.execute(
             "
@@ -1079,8 +1087,15 @@ impl DatabaseService for PostgresDatabaseService {
     async fn get_delivered_payloads(
         &self,
         filters: &BidFilters,
+        validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
         let filters = PgBidFilters::from(filters);
+
+        let censored = if validator_preferences.censoring {
+            Option::Some(true)
+        } else {
+            Option::None
+        };
 
         parse_rows(
             self.pool
@@ -1106,6 +1121,10 @@ impl DatabaseService for PostgresDatabaseService {
                             block_submission 
                         ON 
                             block_submission.block_hash = delivered_payload.block_hash
+                        INNER JOIN
+                            delivered_payload_preferences
+                        ON
+                            delivered_payload.block_hash = delivered_payload_preferences.block_hash
                         WHERE
                             (
                                 ($1::integer IS NOT NULL AND block_submission.slot_number = $1::integer) OR
@@ -1116,6 +1135,8 @@ impl DatabaseService for PostgresDatabaseService {
                             AND ($4::bytea IS NULL OR block_submission.proposer_pubkey = $4::bytea)
                             AND ($5::bytea IS NULL OR block_submission.builder_pubkey = $5::bytea)
                             AND ($6::bytea IS NULL OR block_submission.block_hash = $6::bytea)
+                            AND ($9::boolean IS NULL OR delivered_payload_preferences.censoring = $9::boolean)
+                            AND ($10::character varying[] IS NULL OR delivered_payload_preferences.trusted_builders @> $10::character varying[])
                         ORDER BY
                             CASE
                                 WHEN $7 >= 0 THEN block_submission.value
@@ -1140,7 +1161,9 @@ impl DatabaseService for PostgresDatabaseService {
                         &filters.builder_pubkey(),
                         &filters.block_hash(),
                         &filters.order(),
-                        &filters.limit()
+                        &filters.limit(),
+                        &censored,
+                        &validator_preferences.trusted_builders,
                     ],
                 )
                 .await?,
