@@ -10,17 +10,9 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
-    },
-    bid_submission::{
+    }, bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
-    },
-    builder_info::BuilderInfo,
-
-    simulator::BlockSimError,
-    versioned_payload::PayloadAndBlobs,
-    GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace,
-    HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace,
-    ValidatorSummary,
+    }, builder_info::BuilderInfo, simulator::BlockSimError, validator_preferences, versioned_payload::PayloadAndBlobs, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
 };
 
 use crate::{
@@ -133,6 +125,7 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn get_delivered_payloads(
         &self,
         filters: &BidFilters,
+        validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError>;
 
     async fn save_get_header_call(
