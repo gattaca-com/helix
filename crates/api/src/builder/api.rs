@@ -61,7 +61,7 @@ use crate::{
     },
 };
 
-pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 4;
+pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
 pub(crate) const MAX_HEADER_LENGTH: usize = 1024 * 1024;
 
 #[derive(Clone)]
