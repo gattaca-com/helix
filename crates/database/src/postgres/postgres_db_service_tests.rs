@@ -1,5 +1,7 @@
-#[cfg(test)]
+#[cfg(postgres_test)]
 mod tests {
+    use ethereum_consensus::altair::validator;
+    use ethereum_consensus::crypto::PublicKey;
     use rand::{seq::SliceRandom, thread_rng};
     use rand::Rng;
     use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
@@ -414,11 +416,11 @@ mod tests {
         let random_bytes: [u8; 32] = rng.gen();
 
         let bid_trace = BidTrace {
-            slot: 1234,
+            slot: 1235,
             parent_hash: Default::default(),
             block_hash: ByteVector::<32>::try_from(random_bytes.as_slice()).unwrap(),
             builder_public_key: Default::default(),
-            proposer_public_key: Default::default(),
+            proposer_public_key:  PublicKey::try_from(hex::decode("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").unwrap().as_ref()).unwrap(),
             proposer_fee_recipient: Default::default(),
             gas_limit: 0,
             gas_used: 0,
@@ -485,20 +487,20 @@ mod tests {
                 timestamp: 0,
                 extra_data: ByteList::try_from(extra_data.as_slice()).unwrap(),
                 base_fee_per_gas: U256::from(1234),
-                block_hash: ByteVector::default(),
+                block_hash: ByteVector::try_from(hex::decode("6AD0CC0183284A1F2CEBB5188DC68F49EC6D522D9E99706DA097EF2BD8148D88").unwrap().as_slice()).unwrap(),
                 transactions: List::default(),
                 withdrawals: Default::default(),
             },
         );
 
 
-        execution_payload
-            .transactions_mut()
-            .push(ethereum_consensus::capella::Transaction::default());
+        // execution_payload
+        //     .transactions_mut()
+        //     .push(ethereum_consensus::capella::Transaction::default());
         
-        execution_payload
-            .transactions_mut()
-            .push(ethereum_consensus::capella::Transaction::default());
+        // execution_payload
+        //     .transactions_mut()
+        //     .push(ethereum_consensus::capella::Transaction::default());
         execution_payload.withdrawals_mut().unwrap().push(
             ethereum_consensus::capella::Withdrawal {
                 index: 0,
@@ -510,6 +512,8 @@ mod tests {
 
         let mut bid_trace = BidTrace::default();
         bid_trace.slot = 1235;
+        bid_trace.block_hash = ByteVector::try_from(hex::decode("6AD0CC0183284A1F2CEBB5188DC68F49EC6D522D9E99706DA097EF2BD8148D88").unwrap().as_slice()).unwrap();
+        bid_trace.proposer_public_key = PublicKey::try_from(hex::decode("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").unwrap().as_ref()).unwrap();
         let latency_trace = GetPayloadTrace::default();
 
         let payload_and_blobs =
@@ -535,7 +539,12 @@ mod tests {
             builder_pubkey: None,
             order_by: None,
         };
-        let delivered_payloads = db_service.get_delivered_payloads(&filter).await?;
+
+        let mut validator_preferences = ValidatorPreferences::default();
+        // validator_preferences.censoring = false;
+        // validator_preferences.trusted_builders = Some(vec!["TitanSolidus".to_string()]);
+
+        let delivered_payloads = db_service.get_delivered_payloads(&filter, Arc::new(validator_preferences)).await?;
         println!("delivered payloads {:?}", delivered_payloads);
         Ok(())
     }

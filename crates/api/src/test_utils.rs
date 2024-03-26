@@ -53,7 +53,7 @@ pub fn app() -> Router {
         ));
 
     let data_api =
-        Arc::new(DataApi::<MockDatabaseService>::new(Arc::new(MockDatabaseService::default())));
+        Arc::new(DataApi::<MockDatabaseService>::new(Arc::new(ValidatorPreferences::default()), Arc::new(MockDatabaseService::default())));
 
     Router::new()
         .route(
@@ -201,7 +201,7 @@ pub fn proposer_api_app() -> (
 
 pub fn data_api_app() -> (Router, Arc<DataApi<MockDatabaseService>>, Arc<MockDatabaseService>) {
     let mock_database = Arc::new(MockDatabaseService::default());
-    let proposer_api_service = Arc::new(DataApi::<MockDatabaseService>::new(mock_database.clone()));
+    let proposer_api_service = Arc::new(DataApi::<MockDatabaseService>::new(Arc::new(ValidatorPreferences::default()), mock_database.clone()));
 
     let router = Router::new()
         .route(
