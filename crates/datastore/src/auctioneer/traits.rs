@@ -173,11 +173,6 @@ pub trait Auctioneer: Send + Sync + Clone {
         timestamp_ms: u64,
     ) -> Result<(), AuctioneerError>;
 
-    async fn remove_pending_blocks(
-        &self,
-        pending_blocks: HashMap<BlsPublicKey, Vec<Hash32>>,
-    ) -> Result<(), AuctioneerError>;
-
     
     /// Try to acquire or renew leadership for the housekeeper.
     /// Returns: true if the housekeeper is the leader, false if it isn't.

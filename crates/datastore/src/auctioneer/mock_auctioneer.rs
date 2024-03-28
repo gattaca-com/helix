@@ -250,13 +250,6 @@ impl Auctioneer for MockAuctioneer {
         Ok(())
     }
 
-    async fn remove_pending_blocks(
-        &self,
-        _pending_blocks: HashMap<BlsPublicKey, Vec<Hash32>>,
-    ) -> Result<(), AuctioneerError> {
-        Ok(())
-    }
-
     async fn try_acquire_or_renew_leadership(&self, _leader_id: &str) -> bool {
         true
     }

@@ -340,10 +340,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
                 demoted_builders.insert(pending_block.builder_pubkey);
             }
         }
-
-        // Remove expired entries (entries that have been in the db for > 45s).
-        self.auctioneer.remove_pending_blocks(pending_block_hashes).await?;
-
+        
         Ok(())
     }
 
