@@ -16,7 +16,7 @@ use crate::{
     builder::{
         api::{BuilderApi, MAX_HEADER_LENGTH, MAX_PAYLOAD_LENGTH},
         optimistic_simulator::OptimisticSimulator,
-        PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK, PATH_SUBMIT_BLOCK_OPTIMISTIC,
+        PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK, PATH_SUBMIT_BLOCK_OPTIMISTIC_V2,
         PATH_SUBMIT_HEADER,
     },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
@@ -73,7 +73,7 @@ pub fn build_router(
             Route::SubmitBlockOptimistic => {
                 router = router
                     .route(
-                        &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC}"),
+                        &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC_V2}"),
                         post(BuilderApiProd::submit_block_v2),
                     )
                     .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));

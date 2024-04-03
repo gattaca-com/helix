@@ -12,7 +12,7 @@ pub(crate) const PATH_BUILDER_API: &str = "/relay/v1/builder";
 
 pub(crate) const PATH_GET_VALIDATORS: &str = "/validators";
 pub(crate) const PATH_SUBMIT_BLOCK: &str = "/blocks";
-pub(crate) const PATH_SUBMIT_BLOCK_OPTIMISTIC: &str = "/blocks_optimistic";
+pub(crate) const PATH_SUBMIT_BLOCK_OPTIMISTIC_V2: &str = "/blocks_optimistic_v2";
 pub(crate) const PATH_SUBMIT_HEADER: &str = "/headers";
 
 #[derive(Clone)]
