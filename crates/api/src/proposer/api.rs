@@ -6,7 +6,7 @@ use std::{
 use axum::{
     body::{to_bytes, Body},
     extract::{Json, Path},
-    http::{Request, StatusCode},
+    http::{Request, StatusCode, HeaderMap},
     response::IntoResponse,
     Extension,
 };
@@ -131,11 +131,24 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/registerValidator>
     pub async fn register_validators(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M>>>,
+        headers: HeaderMap,
         Json(registrations): Json<Vec<SignedValidatorRegistration>>,
     ) -> Result<StatusCode, ProposerApiError> {
         if registrations.is_empty() {
             return Err(ProposerApiError::EmptyRequest);
         }
+
+        // Get optional api key from headers
+        let api_key = headers.get("x-api-key").map(|v| v.to_str().unwrap_or_default());
+
+        // Get base64 encoded validator preferences from headers
+        let custom_params: Option<ValidatorPreferences> = headers
+            .get("x-validator-preferences")
+            .map(|v| v.to_str().unwrap_or_default())
+            .map(|v| base64::decode(v).ok())
+            .flatten()
+            .map(|v| serde_json::from_slice(&v).ok())
+            .flatten();
 
         let request_id = Uuid::new_v4();
         let mut trace =
