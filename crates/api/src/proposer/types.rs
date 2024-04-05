@@ -5,7 +5,7 @@ use ethereum_consensus::{
 };
 use helix_common::{
     deneb::SignedBlockContents, signed_proposal::VersionedSignedProposal,
-    versioned_payload::PayloadAndBlobs,
+    versioned_payload::PayloadAndBlobs, ValidatorPreferences,
 };
 use serde::Deserialize;
 
