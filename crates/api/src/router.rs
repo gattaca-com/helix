@@ -11,7 +11,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
     builder::{
-        api::{BuilderApi, MAX_HEADER_LENGTH, MAX_PAYLOAD_LENGTH},
+        api::{BuilderApi, MAX_PAYLOAD_LENGTH},
         optimistic_simulator::OptimisticSimulator,
         PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK, PATH_SUBMIT_BLOCK_OPTIMISTIC_V2,
         PATH_SUBMIT_HEADER,
@@ -74,24 +74,21 @@ pub fn build_router(
                     .route(
                         &route.path(),
                         post(BuilderApiProd::submit_block),
-                    )
-                    .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));
+                    );
             }
             Route::SubmitBlockOptimistic => {
                 router = router
                     .route(
                         &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC_V2}"),
                         post(BuilderApiProd::submit_block_v2),
-                    )
-                    .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));
+                    );
             }
             Route::SubmitHeader => {
                 router = router
                     .route(
                         &route.path(),
                         post(BuilderApiProd::submit_header),
-                    )
-                    .layer(RequestBodyLimitLayer::new(MAX_HEADER_LENGTH));
+                    );
             }
             Route::Status => {
                 router = router.route(
@@ -104,8 +101,7 @@ pub fn build_router(
                     .route(
                         &route.path(),
                         post(ProposerApiProd::register_validators),
-                    )
-                    .layer(RequestBodyLimitLayer::new(MAX_VAL_REGISTRATIONS_LENGTH));
+                    );
             }
             Route::GetHeader => {
                 router = router.route(
@@ -118,8 +114,7 @@ pub fn build_router(
                     .route(
                         &route.path(),
                         post(ProposerApiProd::get_payload),
-                    )
-                    .layer(RequestBodyLimitLayer::new(MAX_BLINDED_BLOCK_LENGTH));
+                    );
             }
             Route::ProposerPayloadDelivered => {
                 router = router.route(
@@ -144,6 +139,9 @@ pub fn build_router(
             }
         }
     }
+
+    // Add payload size limit
+    router = router.layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));
 
     // Add Rate-Limiting Layer
     router = router.route_layer(middleware::from_fn_with_state(rate_limiting_state.clone(), rate_limit_by_ip));
