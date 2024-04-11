@@ -1018,15 +1018,24 @@ impl Auctioneer for RedisCache {
         }
         
         for (bulder_pub_key_str, builder_info) in redis_builder_infos.unwrap() {
+            let mut expired: Vec<String> = Vec::new();
+
+            let builder_pubkey = get_pubkey_from_hex(&bulder_pub_key_str)?;
+            let builder_key: String = get_pending_block_builder_key(&builder_pubkey);
+
             if builder_info.is_optimistic {
-                let builder_pubkey = get_pubkey_from_hex(&bulder_pub_key_str)?;
-                let key: String = get_pending_block_builder_key(&builder_pubkey);
-                let block_hashes: Vec<String> = self.get_set_members(key.as_str()).await?;
-                let builder_key_clone = builder_pubkey.clone();
+                
+                let block_hashes: Vec<String> = self.get_set_members(builder_key.as_str()).await?;
+                let builder_pubkey_clone = builder_pubkey.clone();
                 for block_hash_str in block_hashes {
                     let block_hash = get_hash_from_hex(&block_hash_str)?;
-                    let key = get_pending_block_builder_block_hash_key(&builder_key_clone, &block_hash);
+                    let key = get_pending_block_builder_block_hash_key(&builder_pubkey_clone, &block_hash);
                     let pending_block = self.hgetall_raw(key.as_str()).await?;
+
+                    if pending_block.is_empty() {
+                        expired.push(block_hash_str);
+                        continue;
+                    }
 
                     let slot = match pending_block.get("slot") {
                         Some(s) => serde_json::from_slice(s).map_err(RedisCacheError::from)?,
@@ -1046,7 +1055,7 @@ impl Auctioneer for RedisCache {
                     let pending_block = PendingBlock {
                         slot: slot,
                         block_hash,
-                        builder_pubkey: builder_key_clone.clone(),
+                        builder_pubkey: builder_pubkey_clone.clone(),
                         header_receive_ms: header_received,
                         payload_receive_ms: payload_received,
                     };
@@ -1054,19 +1063,12 @@ impl Auctioneer for RedisCache {
                     pending_blocks.push(pending_block);
                 }
             }
+
+            if !expired.is_empty() {
+                self.remove(builder_key.as_str(), expired).await?;
+            }
         }
         Ok(pending_blocks)
-    }
-
-    async fn remove_pending_blocks(
-        &self,
-        pending_blocks: HashMap<BlsPublicKey, Vec<Hash32>>,
-    ) -> Result<(), AuctioneerError> {
-        for (builder_pub_key, block_hashs) in pending_blocks {
-            let builder_key = get_pending_block_builder_key(&builder_pub_key);
-            self.remove(builder_key.as_str(), block_hashs.iter().map(|h| format!("{h:?}")).collect()).await?;
-        }
-        Ok(())
     }
 
     /// Attempts to acquire or renew leadership for a distributed task based on the current
@@ -2277,8 +2279,6 @@ mod tests {
                 .or_insert_with(Vec::new)
                 .push(pending_block.block_hash.clone());
         }
-
-        cache.remove_pending_blocks(pending_block_hashes).await.unwrap();
     }
 
     #[tokio::test]

@@ -62,7 +62,6 @@ use crate::{
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
-pub(crate) const MAX_HEADER_LENGTH: usize = 1024 * 1024;
 
 #[derive(Clone)]
 pub struct BuilderApi<A, DB, S, G>
@@ -190,17 +189,17 @@ where
             timestamp_request_start = trace.receive,
         );
 
+        // Decode the incoming request body into a payload
+        let (payload, is_cancellations_enabled) =
+            decode_payload(req, &mut trace, &request_id).await?;
+        let block_hash = payload.message().block_hash.clone();
+
         // Verify that we have a validator connected for this slot
         if next_duty.is_none() {
             warn!(request_id = %request_id, "could not find slot duty");
             return Err(BuilderApiError::ProposerDutyNotFound);
         }
         let next_duty = next_duty.unwrap();
-
-        // Decode the incoming request body into a payload
-        let (payload, is_cancellations_enabled) =
-            decode_payload(req, &mut trace, &request_id).await?;
-        let block_hash = payload.message().block_hash.clone();
 
         debug!(
             request_id = %request_id,
@@ -396,17 +395,17 @@ where
             timestamp_request_start = trace.receive,
         );
 
+        // Decode the incoming request body into a payload
+        let (mut payload, is_cancellations_enabled) =
+            decode_header_submission(req, &mut trace, &request_id).await?;
+        let block_hash = payload.block_hash().clone();
+
         // Verify that we have a validator connected for this slot
         if next_duty.is_none() {
             warn!(request_id = %request_id, "could not find slot duty");
             return Err(BuilderApiError::ProposerDutyNotFound);
         }
         let next_duty = next_duty.unwrap();
-
-        // Decode the incoming request body into a payload
-        let (mut payload, is_cancellations_enabled) =
-            decode_header_submission(req, &mut trace, &request_id).await?;
-        let block_hash = payload.block_hash().clone();
 
         debug!(
             request_id = %request_id,

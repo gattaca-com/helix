@@ -7,10 +7,10 @@ use axum::{
 };
 use tracing::warn;
 
-use helix_common::api::data_api::{
+use helix_common::{api::data_api::{
     BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
     ReceivedBlocksResponse, ValidatorRegistrationParams,
-};
+}, validator_preferences, ValidatorPreferences};
 use helix_database::DatabaseService;
 
 use crate::relay_data::error::DataApiError;
@@ -23,12 +23,19 @@ pub(crate) const PATH_VALIDATOR_REGISTRATION: &str = "/validator_registration";
 
 #[derive(Clone)]
 pub struct DataApi<DB: DatabaseService> {
+    validator_preferences: Arc<ValidatorPreferences>,
     db: Arc<DB>,
 }
 
 impl<DB: DatabaseService + 'static> DataApi<DB> {
-    pub fn new(db: Arc<DB>) -> Self {
-        Self { db }
+    pub fn new(
+        validator_preferences: Arc<ValidatorPreferences>,
+        db: Arc<DB>
+    ) -> Self {
+        Self {
+            validator_preferences,
+            db
+        }
     }
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getDeliveredPayloads>
@@ -40,7 +47,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
             return Err(DataApiError::SlotAndCursor);
         }
 
-        match data_api.db.get_delivered_payloads(&params.into()).await {
+        match data_api.db.get_delivered_payloads(&params.into(), data_api.validator_preferences.clone()).await {
             Ok(result) => {
                 let response = result
                     .into_iter()
