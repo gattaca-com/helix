@@ -19,6 +19,7 @@ pub struct RelayConfig {
     pub network_config: NetworkConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
+    #[serde(default)]
     pub validator_preferences: ValidatorPreferences,
     pub router_config: RouterConfig,
     #[serde(default = "default_duration")]
@@ -244,7 +245,7 @@ fn test_config() {
     config.network_config = NetworkConfig::Mainnet;
     config.logging =
         LoggingConfig::File { dir_path: "hello".to_string(), file_name: "test".to_string() };
-    config.validator_preferences = ValidatorPreferences { censoring: true, trusted_builders: None };
+    config.validator_preferences = ValidatorPreferences { censoring: true, trusted_builders: None, header_delay: true};
     config.router_config = RouterConfig {
         enabled_routes: vec![
             RouteInfo { route: Route::GetValidators, rate_limit: None },

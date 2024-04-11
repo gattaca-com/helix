@@ -185,6 +185,7 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                                 .collect()
                         },
                     ),
+                    header_delay: row.get::<&str, bool>("header_delay"),
                 },
             },
         })
@@ -251,11 +252,13 @@ impl FromRow for SignedValidatorRegistrationEntry {
                                 .collect()
                         },
                     ),
+                    header_delay: row.get::<&str, bool>("header_delay"),
                 },
             },
             inserted_at: parse_timestamptz_to_u64(
                 row.get::<&str, std::time::SystemTime>("inserted_at"),
             )?,
+            pool_name: None, //TODO: maybe fetch pool name? but not currently needed here
         })
     }
 }
