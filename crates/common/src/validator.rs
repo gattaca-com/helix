@@ -45,13 +45,15 @@ pub enum ValidatorStatus {
 pub struct SignedValidatorRegistrationEntry {
     pub registration_info: ValidatorRegistrationInfo,
     pub inserted_at: u64,
+    pub pool_name: Option<String>,
 }
 
 impl SignedValidatorRegistrationEntry {
-    pub fn new(registration_info: ValidatorRegistrationInfo) -> Self {
+    pub fn new(registration_info: ValidatorRegistrationInfo, pool_name: Option<String>) -> Self {
         Self {
             registration_info,
             inserted_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
+            pool_name,
         }
     }
 
@@ -75,6 +77,7 @@ impl SignedValidatorRegistrationEntry {
                 preferences: ValidatorPreferences::default(), // TODO: impl this table in postgres
             },
             inserted_at: inserted_at as u64,
+            pool_name: None, // TODO: fetch pool name, but not currently needed here
         }
     }
 

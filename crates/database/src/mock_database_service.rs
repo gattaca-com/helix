@@ -42,12 +42,15 @@ impl DatabaseService for MockDatabaseService {
     async fn save_validator_registration(
         &self,
         _entry: ValidatorRegistrationInfo,
+        _pool_name: Option<String>,
+
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
     async fn save_validator_registrations(
         &self,
         _entries: Vec<ValidatorRegistrationInfo>,
+        pool_name: Option<String>,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -243,5 +246,12 @@ impl DatabaseService for MockDatabaseService {
 
     async fn get_trusted_proposers(&self) -> Result<Vec<ProposerInfo>, DatabaseError> {
         Ok(vec![])
+    }
+
+    async fn get_validator_pool_name(
+        &self,
+        api_key: &str,
+    ) -> Result<Option<String>, DatabaseError> {
+        Ok(None)
     }
 }

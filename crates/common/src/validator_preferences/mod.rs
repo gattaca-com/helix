@@ -8,6 +8,11 @@ pub struct ValidatorPreferences {
     /// This allows for limiting submissions to a trusted set of builders.
     pub trusted_builders: Option<Vec<String>>,
 
-    /// An optional delay in milliseconds that the validator is willing to accept for get_header
-    pub delay: Option<u64>,
+    /// Allows validators to express a preference for whether a delay should be applied to get headers or not.
+    #[serde(default = "default_header_delay")]
+    pub header_delay: bool,
+}
+
+fn default_header_delay() -> bool {
+    true
 }

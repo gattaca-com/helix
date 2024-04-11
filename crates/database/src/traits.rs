@@ -25,11 +25,13 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn save_validator_registration(
         &self,
         entry: ValidatorRegistrationInfo,
+        pool_name: Option<String>,
     ) -> Result<(), DatabaseError>;
 
     async fn save_validator_registrations(
         &self,
         entries: Vec<ValidatorRegistrationInfo>,
+        pool_name: Option<String>,
     ) -> Result<(), DatabaseError>;
 
     async fn get_validator_registration(
@@ -164,4 +166,9 @@ pub trait DatabaseService: Send + Sync + Clone {
     ) -> Result<(), DatabaseError>;
 
     async fn get_trusted_proposers(&self) -> Result<Vec<ProposerInfo>, DatabaseError>;
+
+    async fn get_validator_pool_name(
+        &self,
+        api_key: &str,
+    ) -> Result<Option<String>, DatabaseError>;
 }
