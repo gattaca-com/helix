@@ -83,6 +83,9 @@ pub enum ProposerApiError {
     #[error("invalid signature: {0}")]
     InvalidSignature(#[from] ethereum_consensus::Error),
 
+    #[error("invalid api key")]
+    InvalidApiKey,
+
     #[error("proposer not registered")]
     ProposerNotRegistered,
 
@@ -244,6 +247,9 @@ impl IntoResponse for ProposerApiError {
             },
             ProposerApiError::ProposerNotRegistered => {
                 (StatusCode::BAD_REQUEST, "proposer not registered").into_response()
+            },
+            ProposerApiError::InvalidApiKey => {
+                (StatusCode::UNAUTHORIZED, "invalid api key").into_response()
             },
             ProposerApiError::TimestampTooEarly { timestamp, min_timestamp } => {
                 (StatusCode::BAD_REQUEST, format!("Timestamp too early. {timestamp} < {min_timestamp}")).into_response()
