@@ -139,15 +139,17 @@ where
         }
 
         // Get optional api key from headers
-        let api_key = match headers.get("x-api-key") {
-            Some(api_key) => {
-                Some(api_key.to_str()?)
-            },
-            None => None
-        };
+        let api_key = headers.get("x-api-key").and_then(|key| key.to_str().ok());
 
         let pool_name = match api_key {
-            Some(api_key) => proposer_api.db.get_validator_pool_name(api_key).await?,
+            Some(api_key) => match proposer_api.db.get_validator_pool_name(api_key).await? {
+                Some(pool_name) => Some(pool_name),
+                None => {
+                    warn!("Invalid api key provided");
+                    return Err(ProposerApiError::InvalidApiKey);
+                }
+            
+            },
             None => None
         };
 
@@ -262,7 +264,7 @@ where
             .into_iter()
             .map(|r| ValidatorRegistrationInfo {
                 registration: r,
-                preferences: validator_preferences.clone().unwrap_or_else(|| (*proposer_api.validator_preferences).clone()),
+                preferences: validator_preferences.clone().unwrap_or((*proposer_api.validator_preferences).clone()),
             })
             .collect::<Vec<ValidatorRegistrationInfo>>();
 

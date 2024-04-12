@@ -57,30 +57,6 @@ impl SignedValidatorRegistrationEntry {
         }
     }
 
-    pub fn from_row(row: &Row) -> Self {
-        let timestamp: i64 = row.get(2);
-        let gas_limit: i64 = row.get(3);
-        let inserted_at: i64 = row.get(6);
-        Self {
-            registration_info: ValidatorRegistrationInfo {
-                registration: SignedValidatorRegistration {
-                    message: ValidatorRegistration {
-                        fee_recipient: string_to_execution_address(
-                            row.try_get::<_, String>(1).unwrap(),
-                        ),
-                        timestamp: timestamp as u64,
-                        gas_limit: gas_limit as u64,
-                        public_key: string_to_bls_public_key(row.try_get::<_, String>(4).unwrap()),
-                    },
-                    signature: string_to_signature(row.try_get::<_, String>(5).unwrap()),
-                },
-                preferences: ValidatorPreferences::default(), // TODO: impl this table in postgres
-            },
-            inserted_at: inserted_at as u64,
-            pool_name: None, // TODO: fetch pool name, but not currently needed here
-        }
-    }
-
     pub fn public_key(&self) -> &BlsPublicKey {
         &self.registration_info.registration.message.public_key
     }
