@@ -7,4 +7,12 @@ pub struct ValidatorPreferences {
     /// submissions from builders whose public keys are linked to the IDs in this list.
     /// This allows for limiting submissions to a trusted set of builders.
     pub trusted_builders: Option<Vec<String>>,
+
+    /// Allows validators to express a preference for whether a delay should be applied to get headers or not.
+    #[serde(default = "default_header_delay")]
+    pub header_delay: bool,
+}
+
+fn default_header_delay() -> bool {
+    true
 }

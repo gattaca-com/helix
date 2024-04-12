@@ -6,7 +6,7 @@ use std::{
 use axum::{
     body::{to_bytes, Body},
     extract::{Json, Path},
-    http::{Request, StatusCode},
+    http::{HeaderMap, Request, StatusCode},
     response::IntoResponse,
     Extension,
 };
@@ -33,7 +33,7 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry,
         proposer_api::{GetPayloadResponse, ValidatorRegistrationInfo},
-    }, chain_info::{ChainInfo, Network}, signed_proposal::VersionedSignedProposal, try_execution_header_from_payload, versioned_payload::PayloadAndBlobs, BidRequest, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace, ValidatorPreferences
+    }, chain_info::{ChainInfo, Network}, signed_proposal::VersionedSignedProposal, try_execution_header_from_payload, validator_preferences, versioned_payload::PayloadAndBlobs, BidRequest, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace, ValidatorPreferences
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
@@ -41,7 +41,7 @@ use helix_housekeeper::{ChainUpdate, SlotUpdate};
 use helix_utils::signing::{verify_signed_builder_message, verify_signed_consensus_message};
 
 use crate::proposer::{
-    error::ProposerApiError, unblind_beacon_block, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS,
+    error::ProposerApiError, unblind_beacon_block, GetHeaderParams, PreferencesHeader, GET_HEADER_REQUEST_CUTOFF_MS
 };
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
@@ -131,11 +131,45 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/registerValidator>
     pub async fn register_validators(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M>>>,
+        headers: HeaderMap,
         Json(registrations): Json<Vec<SignedValidatorRegistration>>,
     ) -> Result<StatusCode, ProposerApiError> {
         if registrations.is_empty() {
             return Err(ProposerApiError::EmptyRequest);
         }
+
+        // Get optional api key from headers
+        let api_key = headers.get("x-api-key").and_then(|key| key.to_str().ok());
+
+        let pool_name = match api_key {
+            Some(api_key) => match proposer_api.db.get_validator_pool_name(api_key).await? {
+                Some(pool_name) => Some(pool_name),
+                None => {
+                    warn!("Invalid api key provided");
+                    return Err(ProposerApiError::InvalidApiKey);
+                }
+            
+            },
+            None => None
+        };
+
+        let mut validator_preferences: Option<ValidatorPreferences> = None;
+
+        // If a valid api key is provided, check for preferences
+        if pool_name.is_some() {
+            let preferences_header = headers.get("x-preferences");
+            let preferences = match preferences_header {
+                Some(preferences_header) => {
+                    let decoded_prefs: PreferencesHeader = serde_json::from_str(preferences_header.to_str()?)?;
+                    Some(decoded_prefs)
+                },
+                None => None
+            };
+
+            if let Some(preferences) = preferences {
+                validator_preferences = Some(preferences.into());
+            }
+        }   
 
         let request_id = Uuid::new_v4();
         let mut trace =
@@ -230,14 +264,14 @@ where
             .into_iter()
             .map(|r| ValidatorRegistrationInfo {
                 registration: r,
-                preferences: (*proposer_api.validator_preferences).clone(),
+                preferences: validator_preferences.clone().unwrap_or((*proposer_api.validator_preferences).clone()),
             })
             .collect::<Vec<ValidatorRegistrationInfo>>();
 
         // Bulk write registrations to db
         tokio::spawn(async move {
             if let Err(err) =
-                proposer_api.db.save_validator_registrations(valid_registrations).await
+                proposer_api.db.save_validator_registrations(valid_registrations, pool_name).await
             {
                 error!(
                     request_id = %request_id,

@@ -12,13 +12,12 @@ use ethereum_consensus::{altair::Hash32, primitives::BlsPublicKey, ssz::prelude:
 
 use helix_common::{
     api::{
-        builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
-        proposer_api::ValidatorRegistrationInfo,
+        self, builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters, proposer_api::ValidatorRegistrationInfo
     }, bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission,
     }, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
 };
-use tokio_postgres::{types::ToSql, NoTls};
+use tokio_postgres::{row, types::ToSql, NoTls};
 use tracing::{error, info};
 
 use crate::{
@@ -46,6 +45,12 @@ struct PreferenceParams<'a> {
     public_key: &'a [u8],
     censoring: bool,
     trusted_builders: Option<Vec<String>>,
+    header_delay: bool,
+}
+
+struct TrustedProposerParams<'a> {
+    public_key: &'a [u8],
+    name: Option<String>,
 }
 
 #[derive(Clone)]
@@ -53,6 +58,7 @@ pub struct PostgresDatabaseService {
     validator_registration_cache: Arc<DashMap<BlsPublicKey, SignedValidatorRegistrationEntry>>,
     pending_validator_registrations: Arc<DashSet<BlsPublicKey>>,
     known_validators_cache: Arc<DashSet<BlsPublicKey>>,
+    validator_pool_cache: Arc<DashMap<String, String>>,
     region: i16,
     pool: Arc<Pool>,
 }
@@ -64,6 +70,7 @@ impl PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
             known_validators_cache: Arc::new(DashSet::new()),
+            validator_pool_cache: Arc::new(DashMap::new()),
             region,
             pool: Arc::new(pool),
         })
@@ -84,6 +91,7 @@ impl PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
             known_validators_cache: Arc::new(DashSet::new()),
+            validator_pool_cache: Arc::new(DashMap::new()),
             region: relay_config.postgres.region,
             pool: Arc::new(pool),
         })
@@ -139,7 +147,7 @@ impl PostgresDatabaseService {
                         for key in self_clone.pending_validator_registrations.iter() {
                             if let Some(entry) = self_clone.validator_registration_cache.get(&*key)
                             {
-                                entries.push(entry.registration_info.clone());
+                                entries.push(entry.clone());
                             }
                         }
                         match self_clone._save_validator_registrations(&entries).await {
@@ -147,7 +155,7 @@ impl PostgresDatabaseService {
                                 for entry in entries.iter() {
                                     self_clone
                                         .pending_validator_registrations
-                                        .remove(&entry.registration.message.public_key);
+                                        .remove(&entry.registration_info.registration.message.public_key);
                                 }
                                 info!("Saved validator registrations");
                             }
@@ -163,7 +171,7 @@ impl PostgresDatabaseService {
 
     async fn _save_validator_registrations(
         &self,
-        entries: &[ValidatorRegistrationInfo],
+        entries: &[SignedValidatorRegistrationEntry],
     ) -> Result<(), DatabaseError> {
         let mut client = self.pool.get().await?;
 
@@ -176,12 +184,16 @@ impl PostgresDatabaseService {
 
             let mut structured_params_for_pref: Vec<PreferenceParams> =
                 Vec::with_capacity(chunk.len());
+            
+            let mut structured_params_for_trusted: Vec<TrustedProposerParams> =
+                Vec::with_capacity(chunk.len());
 
             for entry in chunk.iter() {
-                let registration = &entry.registration.message;
+                let registration = &entry.registration_info.registration.message;
                 let fee_recipient = &registration.fee_recipient;
                 let public_key = &registration.public_key;
-                let signature = &entry.registration.signature;
+                let signature = &entry.registration_info.registration.signature;
+                let name = &entry.pool_name;
 
                 let inserted_at = SystemTime::now();
 
@@ -197,9 +209,18 @@ impl PostgresDatabaseService {
 
                 structured_params_for_pref.push(PreferenceParams {
                     public_key: public_key.as_ref(),
-                    censoring: entry.preferences.censoring,
-                    trusted_builders: entry.preferences.trusted_builders.clone(),
+                    censoring: entry.registration_info.preferences.censoring,
+                    trusted_builders: entry.registration_info.preferences.trusted_builders.clone(),
+                    header_delay: entry.registration_info.preferences.header_delay,
                 });
+
+
+                if name.is_some() {
+                    structured_params_for_trusted.push(TrustedProposerParams {
+                        public_key: public_key.as_ref(),
+                        name: name.clone(),
+                    });
+                }
             }
 
             // Prepare the params vector from the structured parameters
@@ -243,14 +264,15 @@ impl PostgresDatabaseService {
                         &tuple.public_key as &(dyn ToSql + Sync),
                         &tuple.censoring,
                         &tuple.trusted_builders,
+                        &tuple.header_delay,
                     ]
                 })
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql =
-                String::from("INSERT INTO validator_preferences (public_key, censoring, trusted_builders) VALUES ");
-            let num_params_per_row = 3;
+                String::from("INSERT INTO validator_preferences (public_key, censoring, trusted_builders, header_delay) VALUES ");
+            let num_params_per_row = 4;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -262,7 +284,42 @@ impl PostgresDatabaseService {
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
-            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET censoring = excluded.censoring, trusted_builders = excluded.trusted_builders");
+            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET censoring = excluded.censoring, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay");
+
+            // Execute the query
+            transaction.execute(&sql, &params[..]).await?;
+
+            if structured_params_for_trusted.is_empty() {
+                transaction.commit().await?;
+                continue;
+            }
+
+            let params: Vec<&(dyn ToSql + Sync)> = structured_params_for_trusted
+                .iter()
+                .flat_map(|tuple| {
+                    vec![
+                        &tuple.public_key as &(dyn ToSql + Sync),
+                        &tuple.name,
+                    ]
+                })
+                .collect();
+
+            // Construct the SQL statement with multiple VALUES clauses
+            let mut sql =
+                String::from("INSERT INTO trusted_proposers (pub_key, name) VALUES ");
+            let num_params_per_row = 2;
+            let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
+                .map(|row| {
+                    let placeholders: Vec<String> = (1..=num_params_per_row)
+                        .map(|n| format!("${}", row * num_params_per_row + n))
+                        .collect();
+                    format!("({})", placeholders.join(", "))
+                })
+                .collect();
+
+            // Join the values clauses and append them to the SQL statement
+            sql.push_str(&values_clauses.join(", "));
+            sql.push_str(" ON CONFLICT (pub_key) DO NOTHING");
 
             // Execute the query
             transaction.execute(&sql, &params[..]).await?;
@@ -290,6 +347,7 @@ impl Default for PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
             known_validators_cache: Arc::new(DashSet::new()),
+            validator_pool_cache: Arc::new(DashMap::new()),
             region: 1,
             pool: Arc::new(pool),
         }
@@ -301,6 +359,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn save_validator_registration(
         &self,
         registration_info: ValidatorRegistrationInfo,
+        pool_name: Option<String>,
     ) -> Result<(), DatabaseError> {
         let registration = registration_info.registration.message.clone();
 
@@ -321,16 +380,17 @@ impl DatabaseService for PostgresDatabaseService {
 
         transaction
             .execute(
-                "INSERT INTO validator_preferences (public_key, censoring, trusted_builders)
-            VALUES ($1, $2, $3)
+                "INSERT INTO validator_preferences (public_key, censoring, trusted_builders, header_delay)
+            VALUES ($1, $2, $3, $4)
             ON CONFLICT (public_key)
             DO UPDATE SET
-                censoring = excluded.censoring, trusted_builders = excluded.trusted_builders
+                censoring = excluded.censoring, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay
             ",
                 &[
                     &public_key.as_ref(),
                     &registration_info.preferences.censoring,
                     &registration_info.preferences.trusted_builders,
+                    &registration_info.preferences.header_delay,
                 ],
             )
             .await?;
@@ -359,6 +419,7 @@ impl DatabaseService for PostgresDatabaseService {
                 self.validator_registration_cache.insert(public_key.clone(), SignedValidatorRegistrationEntry {
                     registration_info,
                     inserted_at: inserted_at.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
+                    pool_name,
                 });
             }
             Err(e) => {
@@ -374,6 +435,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn save_validator_registrations(
         &self,
         mut entries: Vec<ValidatorRegistrationInfo>,
+        pool_name: Option<String>,
     ) -> Result<(), DatabaseError> {
         entries.retain(|entry| {
             if let Some(existing_entry) =
@@ -393,7 +455,7 @@ impl DatabaseService for PostgresDatabaseService {
                 .insert(entry.registration.message.public_key.clone());
             self.validator_registration_cache.insert(
                 entry.registration.message.public_key.clone(),
-                SignedValidatorRegistrationEntry::new(entry.clone()),
+                SignedValidatorRegistrationEntry::new(entry.clone(), pool_name.clone()),
             );
         }
 
@@ -418,6 +480,7 @@ impl DatabaseService for PostgresDatabaseService {
                     validator_registrations.signature,
                     validator_preferences.censoring,
                     validator_preferences.trusted_builders,
+                    validator_preferences.header_delay,
                     validator_registrations.inserted_at
                 FROM validator_registrations
                 INNER JOIN validator_preferences ON validator_registrations.public_key = validator_preferences.public_key
@@ -650,6 +713,52 @@ impl DatabaseService for PostgresDatabaseService {
         }
 
         Ok(pub_keys)
+    }
+
+    async fn get_validator_pool_name(
+        &self,
+        api_key: &str,
+    ) -> Result<Option<String>, DatabaseError> {
+        let client = self.pool.get().await?;
+
+        if self.validator_pool_cache.is_empty() {
+            let rows = client.query("SELECT * FROM validator_pools", &[]).await?;
+            for row in rows {
+                let api_key: String = row.get::<&str, &str>("api_key").to_string();
+                let name: String = row.get::<&str, &str>("name").to_string();
+                self.validator_pool_cache.insert(api_key, name);
+            }
+        }
+
+
+        if self.validator_pool_cache.contains_key(api_key) {
+            return Ok(self.validator_pool_cache.get(api_key).map(|f| f.clone()));
+        }
+
+
+        let api_key = api_key.to_string();
+        let rows = match client
+            .query(
+                "SELECT * FROM validator_pools WHERE api_key = $1",
+                &[&api_key],
+            )
+            .await {
+            Ok(rows) => rows,
+            Err(e) => {
+                error!("Error querying validator_pools: {}", e);
+                return Err(DatabaseError::from(e));
+            }
+        };
+
+        if rows.is_empty() {
+            return Ok(None);
+        }
+
+        let name: String = rows[0].get("name");
+
+        self.validator_pool_cache.insert(api_key.to_string(), name.clone());
+
+        Ok(Some(name))
     }
 
     async fn save_too_late_get_payload(

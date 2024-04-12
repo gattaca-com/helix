@@ -4,6 +4,7 @@ mod tests {
     use ethereum_consensus::crypto::PublicKey;
     use rand::{seq::SliceRandom, thread_rng};
     use rand::Rng;
+    use tokio::time::sleep;
     use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
     use ethereum_consensus::{
         builder::{SignedValidatorRegistration, ValidatorRegistration}, clock::get_current_unix_time_in_nanos, crypto::SecretKey, primitives::U256
@@ -13,6 +14,7 @@ mod tests {
             v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
         }, versioned_payload::PayloadAndBlobs, GetPayloadTrace, HeaderSubmissionTrace, SubmissionTrace, ValidatorSummary
     };
+    use std::time::Duration;
     use std::{
         default::Default,
         ops::DerefMut,
@@ -103,6 +105,7 @@ mod tests {
             preferences: ValidatorPreferences {
                 censoring: false,
                 trusted_builders: Some(vec!["test".to_string(), "test2".to_string()]),
+                header_delay: true,
             },
         }
     }
@@ -111,10 +114,12 @@ mod tests {
     async fn test_save_and_get_validator_registration() {
         env_logger::builder().is_test(true).try_init().unwrap();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
+        db_service.start_registration_processor().await;
 
         let registration = get_randomized_signed_validator_registration();
 
-        db_service.save_validator_registration(registration.clone()).await.unwrap();
+        db_service.save_validator_registration(registration.clone(), Some("test".to_string())).await.unwrap();
+        sleep(Duration::from_secs(5)).await;
 
         let result = db_service
             .get_validator_registration(registration.registration.message.public_key)
@@ -130,6 +135,7 @@ mod tests {
     async fn test_save_and_get_validator_registrations() {
         env_logger::builder().is_test(true).try_init().unwrap();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
+        db_service.start_registration_processor().await;
 
         const NUM_REGISTRATIONS: usize = 2;
 
@@ -137,7 +143,8 @@ mod tests {
             .map(|_| get_randomized_signed_validator_registration())
             .collect::<Vec<_>>();
 
-        db_service.save_validator_registrations(registrations.clone()).await.unwrap();
+        db_service.save_validator_registrations(registrations.clone(), Some("test".to_string())).await.unwrap();
+        sleep(Duration::from_secs(5)).await;
 
         for registration in registrations {
             let result = db_service
@@ -155,6 +162,7 @@ mod tests {
     async fn test_save_and_get_validator_registrations_for_pub_keys() {
         env_logger::builder().is_test(true).try_init().unwrap();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
+        db_service.start_registration_processor().await;
 
         const N_REGISTRATIONS: usize = 2;
 
@@ -162,7 +170,10 @@ mod tests {
             .map(|_| get_randomized_signed_validator_registration())
             .collect::<Vec<_>>();
 
-        db_service.save_validator_registrations(registrations.clone()).await.unwrap();
+        db_service.save_validator_registrations(registrations.clone(), Some("test".to_string())).await.unwrap();
+        
+        sleep(Duration::from_secs(5)).await;
+        
         let result = db_service
             .get_validator_registrations_for_pub_keys(
                 registrations
@@ -192,8 +203,12 @@ mod tests {
     async fn test_save_and_get_validator_registration_timestamp() {
         env_logger::builder().is_test(true).try_init().unwrap();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
+        db_service.start_registration_processor().await;
+
         let registration = get_randomized_signed_validator_registration();
-        db_service.save_validator_registration(registration.clone()).await.unwrap();
+        db_service.save_validator_registration(registration.clone(), Some("test".to_string())).await.unwrap();
+
+        sleep(Duration::from_secs(5)).await;
 
         let result = db_service
             .get_validator_registration_timestamp(registration.registration.message.public_key)
@@ -208,7 +223,7 @@ mod tests {
         let mut proposer_duties = Vec::new();
         for i in 0..10 {
             let registration = get_randomized_signed_validator_registration();
-            db_service.save_validator_registration(registration.clone()).await.unwrap();
+            db_service.save_validator_registration(registration.clone(), Some("test".to_string())).await.unwrap();
 
             proposer_duties.push(BuilderGetValidatorsResponseEntry {
                 slot: i,
