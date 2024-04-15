@@ -81,7 +81,7 @@ impl PostgresDatabaseService {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut cfg = Config::new();
         cfg.host = Some(relay_config.postgres.hostname.clone());
-        cfg.port = Some(5432);
+        cfg.port = Some(relay_config.postgres.port.clone());
         cfg.dbname = Some(relay_config.postgres.db_name.clone());
         cfg.user = Some(relay_config.postgres.user.clone());
         cfg.password = Some(relay_config.postgres.password.clone());

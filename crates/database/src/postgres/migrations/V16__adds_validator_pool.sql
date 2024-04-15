@@ -4,4 +4,4 @@ CREATE TABLE validator_pools (
 );
 
 ALTER TABLE validator_preferences
-ADD COLUMN "header_delay" boolean;
+ADD COLUMN "header_delay" boolean DEFAULT true;

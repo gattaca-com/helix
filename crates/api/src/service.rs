@@ -152,8 +152,8 @@ impl ApiService {
 
         let listener = tokio::net::TcpListener::bind("0.0.0.0:4040").await.unwrap();
         match axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await {
-            Ok(_) => println!("Server exited successfully"),
-            Err(e) => println!("Server exited with error: {e}"),
+            Ok(_) => info!("Server exited successfully"),
+            Err(e) => error!("Server exited with error: {e}"),
         }
     }
 }
