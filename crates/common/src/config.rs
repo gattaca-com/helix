@@ -38,11 +38,17 @@ impl RelayConfig {
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct PostgresConfig {
     pub hostname: String,
+    #[serde(default = "default_port")]
+    pub port: u16,
     pub db_name: String,
     pub user: String,
     pub password: String,
     pub region: i16,
     pub region_name: String,
+}
+
+fn default_port() -> u16 {
+    5432
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
