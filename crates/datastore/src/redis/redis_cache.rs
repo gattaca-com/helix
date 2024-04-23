@@ -4,13 +4,15 @@ use async_trait::async_trait;
 use deadpool_redis::{Config, CreatePoolError, Pool, Runtime};
 use ethereum_consensus::{
     primitives::{BlsPublicKey, Hash32},
-    ssz::prelude::*,
+    ssz::{self, prelude::*},
 };
+use futures_util::TryStreamExt;
 use helix_common::{
-    bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission}, pending_block::PendingBlock, versioned_payload::PayloadAndBlobs, ProposerInfo
+    api::builder_api::TopBidUpdate, bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission}, pending_block::PendingBlock, versioned_payload::PayloadAndBlobs, ProposerInfo
 };
 use redis::{AsyncCommands, RedisResult, Script, Value};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tokio::sync::broadcast;
 use tracing::error;
 
 use helix_common::{
@@ -20,6 +22,9 @@ use helix_common::{
     BuilderInfo,
 };
 use helix_database::types::BuilderInfoDocument;
+
+
+use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
 
 use crate::{
     error::AuctioneerError,
@@ -37,8 +42,7 @@ use crate::{
         keys::{
             BUILDER_INFO_KEY, HOUSEKEEPER_LOCK_KEY, LAST_HASH_DELIVERED_KEY,
             LAST_SLOT_DELIVERED_KEY, PROPOSER_WHITELIST_KEY,
-        },
-        SaveBidAndUpdateTopBidResponse,
+        }, signed_builder_bid_wrapper::SignedBuilderBidWrapper, SaveBidAndUpdateTopBidResponse
     },
     Auctioneer,
 };
@@ -48,6 +52,8 @@ use super::utils::{get_hash_from_hex, get_pending_block_builder_block_hash_key, 
 const BID_CACHE_EXPIRY_S: usize = 45;
 const PENDING_BLOCK_EXPIRY_S: usize = 45;
 const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 45_000;
+
+const BEST_BIDS_CHANNEL: &str = "best_bids";
 
 const RENEW_SCRIPT: &str = r#"
 if redis.call('get', KEYS[1]) == ARGV[1] then
@@ -59,6 +65,7 @@ return nil
 #[derive(Clone)]
 pub struct RedisCache {
     pool: Pool,
+    tx: broadcast::Sender<Vec<u8>>,
 }
 
 impl RedisCache {
@@ -68,7 +75,8 @@ impl RedisCache {
     ) -> Result<Self, CreatePoolError> {
         let cfg = Config::from_url(conn_str);
         let pool = cfg.create_pool(Some(Runtime::Tokio1))?;
-        let cache = Self { pool };
+        let (tx, _) = broadcast::channel(1000);
+        let cache = Self { pool, tx };
 
         // Load in builder info
         if let Err(err) = cache.update_builder_infos(builder_infos).await {
@@ -77,6 +85,65 @@ impl RedisCache {
 
         Ok(cache)
     }
+
+    pub async fn start_best_bid_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(BEST_BIDS_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        let mut conn = self.pool.get().await?;
+
+        while let Some(message) = message_stream.next().await {
+            let payload : String = match message.get_payload(){
+                Ok(payload) => payload,
+                Err(err) => {
+                    error!(err=%err, "Failed to get payload from message");
+                    continue;
+                }
+            
+            };
+
+            let data: String = match conn.get(payload).await {
+                Ok(data) => data,
+                Err(err) => {
+                    error!(err=%err, "Failed to get data from redis");
+                    continue;
+                }
+            };
+            let sig_bid: SignedBuilderBidWrapper = match serde_json::from_str(&data) {
+                Ok(sig_bid) => sig_bid,
+                Err(err) => {
+                    error!(err=%err, "Failed to deserialize data");
+                    continue;
+                }
+            
+            };
+
+            let top_bid_update: TopBidUpdate = sig_bid.into();
+            //ssz encode the top bid update
+            let serialized = match ssz::prelude::serialize(&top_bid_update) {
+                Ok(serialized) => serialized,
+                Err(err) => {
+                    error!(err=%err, "Failed to serialize top bid update");
+                    continue;
+                }
+            };
+            
+            match self.tx.send(serialized) {
+                Ok(_) => (),
+                Err(err) => {
+                    error!(err=%err, "Failed to send top bid update");
+                    continue;
+                }
+                
+            }
+        }
+
+        Ok(())
+    }
+    
 
     async fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, RedisCacheError> {
         let mut conn = self.pool.get().await?;
@@ -168,6 +235,11 @@ impl RedisCache {
             Some(expiry) => Ok(conn.set_ex(key, str_val, expiry).await?),
             None => Ok(conn.set(key, str_val).await?),
         }
+    }
+
+    async fn publish(&self, channel: &str, key: &str) -> Result<(), RedisCacheError> {
+        let mut conn = self.pool.get().await?;
+        Ok(conn.publish(channel, key).await?)
     }
 
     /// Attempts to set a lock in Redis with a specified key and expiry.
@@ -427,6 +499,8 @@ impl RedisCache {
         let top_bid_value_key = get_top_bid_value_key(slot, parent_hash, proposer_pub_key);
         self.set(&top_bid_value_key, &state.top_bid_value, Some(BID_CACHE_EXPIRY_S)).await?;
 
+        self.publish(BEST_BIDS_CHANNEL, &top_bid_key).await?;
+
         state.was_top_bid_updated = state.prev_top_bid_value != state.top_bid_value;
 
         Ok(())
@@ -516,7 +590,15 @@ impl Auctioneer for RedisCache {
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<Option<SignedBuilderBid>, AuctioneerError> {
         let key = get_cache_get_header_response_key(slot, parent_hash, proposer_pub_key);
-        Ok(self.get(&key).await?)
+        let wrapped_bid: Option<SignedBuilderBidWrapper> = self.get(&key).await?;
+        Ok(wrapped_bid.map(|wrapped_bid| wrapped_bid.bid))
+    }
+
+    async fn get_best_bids(&self) -> Box<dyn Stream<Item = Result<Vec<u8>, AuctioneerError>> + Send + Unpin> {
+        let rx = self.tx.subscribe();
+        let stream = BroadcastStream::new(rx)
+            .map_err(AuctioneerError::from);
+        Box::new(stream)
     }
 
     async fn save_execution_payload(
@@ -586,7 +668,9 @@ impl Auctioneer for RedisCache {
         let mut conn = self.pool.get().await.map_err(RedisCacheError::from)?;
         let mut pipe = redis::pipe();
 
-        let serialised_bid = serde_json::to_string(&builder_bid).map_err(RedisCacheError::from)?;
+        let wrapped_builder_bid = SignedBuilderBidWrapper::new(builder_bid.clone(), slot, builder_pub_key.clone());
+
+        let serialised_bid = serde_json::to_string(&wrapped_builder_bid).map_err(RedisCacheError::from)?;
         let serialised_value =
             serde_json::to_string(&builder_bid.value()).map_err(RedisCacheError::from)?;
 

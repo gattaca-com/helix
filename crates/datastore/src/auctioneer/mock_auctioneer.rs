@@ -4,11 +4,12 @@ use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 
 use helix_common::{
-    bid_submission::{
+    api::builder_api::TopBidUpdate, bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
     }, eth::SignedBuilderBid, pending_block::PendingBlock, signing::RelaySigningContext, versioned_payload::PayloadAndBlobs, BuilderInfo, ProposerInfo
 };
 use helix_database::types::BuilderInfoDocument;
+use tokio_stream::Stream;
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 
@@ -57,6 +58,9 @@ impl Auctioneer for MockAuctioneer {
             }
         }
         Ok(self.best_bid.lock().unwrap().clone())
+    }
+    async fn get_best_bids(&self) -> Box<dyn Stream<Item = Result<Vec<u8>, AuctioneerError>> + Send + Unpin> {
+        Box::new(tokio_stream::iter(vec![Ok(vec![0; 188]),Ok(vec![0; 188]),Ok(vec![0; 188])].into_iter()))
     }
 
     async fn save_execution_payload(

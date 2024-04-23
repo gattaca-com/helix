@@ -81,6 +81,13 @@ pub fn build_router(
                         post(BuilderApiProd::submit_header),
                     );
             }
+            Route::GetTopBid => {
+                router = router
+                    .route(
+                        &route.path(),
+                        get(BuilderApiProd::get_top_bid),
+                    );
+            }
             Route::Status => {
                 router = router.route(
                     &route.path(),

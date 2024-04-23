@@ -133,6 +133,7 @@ impl RouterConfig {
                 Route::SubmitBlock,
                 Route::SubmitBlockOptimistic,
                 Route::SubmitHeader,
+                Route::GetTopBid,
             ],
         );
 
@@ -200,6 +201,7 @@ pub enum Route {
     SubmitBlock,
     SubmitBlockOptimistic,
     SubmitHeader,
+    GetTopBid,
     Status,
     RegisterValidators,
     GetHeader,
@@ -216,6 +218,7 @@ impl Route {
             Route::SubmitBlock => format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK}"),
             Route::SubmitBlockOptimistic => format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC_V2}"),
             Route::SubmitHeader => format!("{PATH_BUILDER_API}{PATH_SUBMIT_HEADER}"),
+            Route::GetTopBid => format!("{PATH_BUILDER_API}{PATH_GET_TOP_BID}"),
             Route::Status => format!("{PATH_PROPOSER_API}{PATH_STATUS}"),
             Route::RegisterValidators => format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
             Route::GetHeader => format!("{PATH_PROPOSER_API}{PATH_GET_HEADER}"),
