@@ -131,13 +131,9 @@ impl RedisCache {
                 }
             };
             
-            match self.tx.send(serialized) {
-                Ok(_) => (),
-                Err(err) => {
-                    error!(err=%err, "Failed to send top bid update");
-                    continue;
-                }
-                
+            if let Err(err) = self.tx.send(serialized) {
+                error!(err=%err, "Failed to send top bid update");
+                continue;
             }
         }
 

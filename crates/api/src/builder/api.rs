@@ -809,7 +809,7 @@ where
             None => return Err(BuilderApiError::InvalidApiKey),
         }
         
-        Ok(ws.on_upgrade(move |socket| handle_socket(socket, api.auctioneer.clone())))
+        Ok(ws.on_upgrade(move |socket| push_top_bids(socket, api.auctioneer.clone())))
     }
 }
 
@@ -1717,7 +1717,15 @@ pub async fn decode_payload(
     Ok((payload, is_cancellations_enabled))
 }
 
-async fn handle_socket<A: Auctioneer + 'static>(mut socket: WebSocket, auctioneer: Arc<A>) {
+/// `push_top_bids` manages a WebSocket connection to continuously send the top auction bids to a client.
+///
+/// - Periodically fetches the latest auction bids via a stream and sends them to the client in ssz format.
+/// - Sends a ping message every 10 seconds to maintain the connection's liveliness.
+/// - Terminates the connection on sending failures or if a bid stream error occurs, ensuring clean disconnection.
+///
+/// This function operates in an asynchronous loop until the WebSocket connection is closed either due to an error or when the auction ends.
+/// It returns after the socket has been closed, logging the closure status.
+async fn push_top_bids<A: Auctioneer + 'static>(mut socket: WebSocket, auctioneer: Arc<A>) {
     let mut bid_stream = auctioneer.get_best_bids().await;
     let mut interval = time::interval(Duration::from_secs(10));
 
@@ -1748,7 +1756,7 @@ async fn handle_socket<A: Auctioneer + 'static>(mut socket: WebSocket, auctionee
     if let Err(e) = socket.close().await {
         error!("Failed to close socket properly: {}", e);
     }
-    info!("Socket connection closed gracefully.");
+    debug!("Socket connection closed gracefully.");
 }
 
 /// `decode_payload` decodes the payload from `SubmitBlockParams` into a `SignedHeaderSubmission`
