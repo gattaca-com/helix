@@ -2,10 +2,11 @@ use std::{
     collections::HashMap,
     io::Read,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
+    extract::ws::{WebSocket, WebSocketUpgrade, Message},
     body::{to_bytes, Body},
     http::{Request, StatusCode},
     response::{IntoResponse, Response},
@@ -18,12 +19,14 @@ use ethereum_consensus::{
     ssz::{self, prelude::*},
 };
 use flate2::read::GzDecoder;
+use futures::StreamExt;
+use hyper::HeaderMap;
 use tokio::{
     sync::{
         mpsc::{self, error::SendError, Receiver, Sender},
         RwLock,
     },
-    time::Instant,
+    time::{self, Instant},
 };
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -784,6 +787,29 @@ where
             .map_err(|_| BuilderApiError::InternalError)?;
 
         Ok(StatusCode::OK)
+    }
+
+    pub async fn get_top_bid(
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        headers: HeaderMap,
+        ws: WebSocketUpgrade
+    ) -> Result<impl IntoResponse, BuilderApiError> {
+        let api_key = headers.get("x-api-key").and_then(|key| key.to_str().ok());
+        match api_key {
+            Some(key) => {
+                match api.db.check_builder_api_key(key).await {
+                    Ok(true) => {}
+                    Ok(false) => return Err(BuilderApiError::InvalidApiKey),
+                    Err(err) => {
+                        error!(error = %err, "failed to check api key");
+                        return Err(BuilderApiError::InternalError)
+                    },
+                }
+            },
+            None => return Err(BuilderApiError::InvalidApiKey),
+        }
+        
+        Ok(ws.on_upgrade(move |socket| push_top_bids(socket, api.auctioneer.clone())))
     }
 }
 
@@ -1689,6 +1715,48 @@ pub async fn decode_payload(
     );
 
     Ok((payload, is_cancellations_enabled))
+}
+
+/// `push_top_bids` manages a WebSocket connection to continuously send the top auction bids to a client.
+///
+/// - Periodically fetches the latest auction bids via a stream and sends them to the client in ssz format.
+/// - Sends a ping message every 10 seconds to maintain the connection's liveliness.
+/// - Terminates the connection on sending failures or if a bid stream error occurs, ensuring clean disconnection.
+///
+/// This function operates in an asynchronous loop until the WebSocket connection is closed either due to an error or when the auction ends.
+/// It returns after the socket has been closed, logging the closure status.
+async fn push_top_bids<A: Auctioneer + 'static>(mut socket: WebSocket, auctioneer: Arc<A>) {
+    let mut bid_stream = auctioneer.get_best_bids().await;
+    let mut interval = time::interval(Duration::from_secs(10));
+
+    loop {
+        tokio::select! {
+            Some(result) = bid_stream.next() => {
+                match result {
+                    Ok(bid) => {
+                        if socket.send(Message::Binary(bid)).await.is_err() {
+                            error!("Failed to send bid. Disconnecting.");
+                            break;
+                        }
+                    },
+                    Err(e) => {
+                        error!("Error while receiving bid: {}", e);
+                        break;
+                    }
+                }
+            },
+            _ = interval.tick() => {
+                if socket.send(Message::Ping(Vec::new())).await.is_err() {
+                    error!("Failed to send ping.");
+                    break;
+                }
+            },
+        }
+    }
+    if let Err(e) = socket.close().await {
+        error!("Failed to close socket properly: {}", e);
+    }
+    debug!("Socket connection closed gracefully.");
 }
 
 /// `decode_payload` decodes the payload from `SubmitBlockParams` into a `SignedHeaderSubmission`

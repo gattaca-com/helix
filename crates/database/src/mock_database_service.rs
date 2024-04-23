@@ -160,6 +160,17 @@ impl DatabaseService for MockDatabaseService {
         Ok(vec![])
     }
 
+    async fn check_builder_api_key(
+        &self,
+        api_key: &str,
+    ) -> Result<bool, DatabaseError> {
+        if api_key == "valid" {
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     async fn db_demote_builder(
         &self,
         _builder_pub_key: &BlsPublicKey,

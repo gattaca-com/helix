@@ -8,6 +8,7 @@ pub(crate) const PATH_GET_VALIDATORS: &str = "/validators";
 pub(crate) const PATH_SUBMIT_BLOCK: &str = "/blocks";
 pub(crate) const PATH_SUBMIT_BLOCK_OPTIMISTIC_V2: &str = "/blocks_optimistic_v2";
 pub(crate) const PATH_SUBMIT_HEADER: &str = "/headers";
+pub(crate) const PATH_GET_TOP_BID: &str = "/top_bid";
 
 pub(crate) const PATH_PROPOSER_API: &str = "/eth/v1/builder";
 

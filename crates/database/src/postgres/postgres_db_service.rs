@@ -1070,6 +1070,21 @@ impl DatabaseService for PostgresDatabaseService {
         parse_rows(self.pool.get().await?.query("SELECT * FROM builder_info", &[]).await?)
     }
 
+    async fn check_builder_api_key(
+        &self,
+        api_key: &str,
+    ) -> Result<bool, DatabaseError> {
+        let client = self.pool.get().await?;
+        let rows = client
+            .query(
+                "SELECT * FROM builder_info WHERE api_key = $1",
+                &[&(api_key)],
+            )
+            .await?;
+
+        Ok(!rows.is_empty())
+    }
+
     async fn db_demote_builder(
         &self,
         builder_pub_key: &BlsPublicKey,

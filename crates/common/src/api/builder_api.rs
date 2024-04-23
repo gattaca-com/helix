@@ -1,9 +1,12 @@
+use ethereum_consensus::serde::try_bytes_from_hex_str;
+use ethereum_consensus::ssz::prelude::*;
 use ethereum_consensus::{builder::SignedValidatorRegistration, primitives::Slot, serde::as_str};
-use serde::{Deserialize, Serialize};
+use ethereum_consensus::primitives::{BlsPublicKey, ExecutionAddress, Hash32, U256};
 
+use crate::SignedBuilderBid;
 use crate::{api::proposer_api::ValidatorRegistrationInfo, ValidatorPreferences};
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 pub struct BuilderGetValidatorsResponseEntry {
     #[serde(with = "as_str")]
     pub slot: Slot,
@@ -12,7 +15,7 @@ pub struct BuilderGetValidatorsResponseEntry {
     pub entry: ValidatorRegistrationInfo,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 pub struct BuilderGetValidatorsResponse {
     #[serde(with = "as_str")]
     pub slot: Slot,
@@ -31,4 +34,16 @@ impl From<BuilderGetValidatorsResponseEntry> for BuilderGetValidatorsResponse {
             preferences: entry.entry.preferences,
         }
     }
+}
+
+#[derive(Clone, Default, Debug, SimpleSerialize)]
+pub struct TopBidUpdate {
+    pub timestamp: u64,
+    pub slot: u64,
+    pub block_number: u64,
+    pub block_hash: Hash32,
+    pub parent_hash: Hash32,
+    pub builder_pubkey: BlsPublicKey,
+    pub fee_recipient: ExecutionAddress,
+    pub value: U256,
 }

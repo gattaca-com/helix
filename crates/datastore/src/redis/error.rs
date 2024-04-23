@@ -9,6 +9,9 @@ pub enum RedisCacheError {
     #[error("redis pool error: {0}")]
     RedisPoolError(#[from] deadpool_redis::PoolError),
 
+    #[error("redis create pool error: {0}")]
+    CreatePoolError(#[from] deadpool_redis::CreatePoolError),
+
     #[error("redis copy error. Could not copy from {from} to {to}")]
     RedisCopyError { from: String, to: String },
 
