@@ -44,6 +44,9 @@ pub enum BuilderApiError {
     #[error("could not find proposer duty for slot")]
     ProposerDutyNotFound,
 
+    #[error("invalid api key")]
+    InvalidApiKey,
+
     #[error("payload attributes not yet known")]
     PayloadAttributesNotYetKnown,
 
@@ -184,6 +187,9 @@ impl IntoResponse for BuilderApiError {
             },
             BuilderApiError::BidBelowFloor => {
                 (StatusCode::ACCEPTED, "Bid below floor, skipped validation").into_response()
+            },
+            BuilderApiError::InvalidApiKey => {
+                (StatusCode::UNAUTHORIZED, "Invalid api key").into_response()
             },
             BuilderApiError::InternalError => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()

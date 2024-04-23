@@ -139,6 +139,10 @@ pub fn builder_api_app() -> (
             &Route::SubmitBlock.path(),
             post(BuilderApi::<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>::submit_block),
         )
+        .route(
+            &Route::GetTopBid.path(),
+            get(BuilderApi::<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>::get_top_bid),
+        )
         .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH))
         .layer(Extension(builder_api_service.clone()));
 

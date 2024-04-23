@@ -2,10 +2,7 @@ use std::{sync::Arc};
 
 
 use helix_common::{
-    bellatrix::ByteVector,
-    bid_submission::{v2::header_submission::SignedHeaderSubmission, SignedBidSubmission},
-    simulator::BlockSimError,
-    GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, SubmissionTrace,
+    bellatrix::ByteVector, bid_submission::{v2::header_submission::SignedHeaderSubmission, SignedBidSubmission}, simulator::BlockSimError, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, SignedBuilderBid, SubmissionTrace
 };
 
 pub(crate) const PATH_BUILDER_API: &str = "/relay/v1/builder";

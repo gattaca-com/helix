@@ -23,6 +23,7 @@ futures = { workspace = true }
 hyper = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
+tokio-tungstenite = "0.16"
 tower-http = { workspace = true }
 url = { workspace = true }
 tonic = "0.10"

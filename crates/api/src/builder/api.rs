@@ -2,10 +2,11 @@ use std::{
     collections::HashMap,
     io::Read,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
+    extract::ws::{WebSocket, WebSocketUpgrade, Message},
     body::{to_bytes, Body},
     http::{Request, StatusCode},
     response::{IntoResponse, Response},
@@ -18,12 +19,14 @@ use ethereum_consensus::{
     ssz::{self, prelude::*},
 };
 use flate2::read::GzDecoder;
+use futures::StreamExt;
+use hyper::HeaderMap;
 use tokio::{
     sync::{
         mpsc::{self, error::SendError, Receiver, Sender},
         RwLock,
     },
-    time::Instant,
+    time::{self, Instant},
 };
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -784,6 +787,29 @@ where
             .map_err(|_| BuilderApiError::InternalError)?;
 
         Ok(StatusCode::OK)
+    }
+
+    pub async fn get_top_bid(
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        headers: HeaderMap,
+        ws: WebSocketUpgrade
+    ) -> Result<impl IntoResponse, BuilderApiError> {
+        let api_key = headers.get("x-api-key").and_then(|key| key.to_str().ok());
+        match api_key {
+            Some(key) => {
+                match api.db.check_builder_api_key(key).await {
+                    Ok(true) => {}
+                    Ok(false) => return Err(BuilderApiError::InvalidApiKey),
+                    Err(err) => {
+                        error!(error = %err, "failed to check api key");
+                        return Err(BuilderApiError::InternalError)
+                    },
+                }
+            },
+            None => return Err(BuilderApiError::InvalidApiKey),
+        }
+        
+        Ok(ws.on_upgrade(move |socket| handle_socket(socket, api.auctioneer.clone())))
     }
 }
 
@@ -1689,6 +1715,40 @@ pub async fn decode_payload(
     );
 
     Ok((payload, is_cancellations_enabled))
+}
+
+async fn handle_socket<A: Auctioneer + 'static>(mut socket: WebSocket, auctioneer: Arc<A>) {
+    let mut bid_stream = auctioneer.get_best_bids().await;
+    let mut interval = time::interval(Duration::from_secs(10));
+
+    loop {
+        tokio::select! {
+            Some(result) = bid_stream.next() => {
+                match result {
+                    Ok(bid) => {
+                        if socket.send(Message::Binary(bid)).await.is_err() {
+                            error!("Failed to send bid. Disconnecting.");
+                            break;
+                        }
+                    },
+                    Err(e) => {
+                        error!("Error while receiving bid: {}", e);
+                        break;
+                    }
+                }
+            },
+            _ = interval.tick() => {
+                if socket.send(Message::Ping(Vec::new())).await.is_err() {
+                    error!("Failed to send ping.");
+                    break;
+                }
+            },
+        }
+    }
+    if let Err(e) = socket.close().await {
+        error!("Failed to close socket properly: {}", e);
+    }
+    info!("Socket connection closed gracefully.");
 }
 
 /// `decode_payload` decodes the payload from `SubmitBlockParams` into a `SignedHeaderSubmission`
