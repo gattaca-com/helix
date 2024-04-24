@@ -153,7 +153,12 @@ where
             None => None
         };
 
-        let mut validator_preferences: Option<ValidatorPreferences> = None;
+        // Set using default preferences from config
+        let mut validator_preferences = ValidatorPreferences {
+            censoring: proposer_api.validator_preferences.censoring,
+            trusted_builders: proposer_api.validator_preferences.trusted_builders.clone(),
+            header_delay: proposer_api.validator_preferences.header_delay,
+        };
 
         // If a valid api key is provided, check for preferences
         if pool_name.is_some() {
@@ -167,7 +172,20 @@ where
             };
 
             if let Some(preferences) = preferences {
-                validator_preferences = Some(preferences.into());
+                
+                // Overwrite preferences if they are provided
+                
+                if let Some(censoring) = preferences.censoring {
+                    validator_preferences.censoring = censoring;
+                }
+
+                if let Some(trusted_builders) = preferences.trusted_builders {
+                    validator_preferences.trusted_builders = Some(trusted_builders);
+                }
+
+                if let Some(header_delay) = preferences.header_delay {
+                    validator_preferences.header_delay = header_delay;
+                }
             }
         }   
 
@@ -264,7 +282,7 @@ where
             .into_iter()
             .map(|r| ValidatorRegistrationInfo {
                 registration: r,
-                preferences: validator_preferences.clone().unwrap_or((*proposer_api.validator_preferences).clone()),
+                preferences: validator_preferences.clone(),
             })
             .collect::<Vec<ValidatorRegistrationInfo>>();
 
