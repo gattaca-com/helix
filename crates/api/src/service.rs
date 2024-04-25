@@ -58,7 +58,7 @@ impl ApiService {
         let broadcasters = init_broadcasters(&config).await;
 
         let mut beacon_clients = vec![];
-        for cfg in config.beacon_clients {
+        for cfg in &config.beacon_clients {
             beacon_clients.push(Arc::new(BeaconClient::from_endpoint_str(&cfg.url)));
         }
         let multi_beacon_client = Arc::new(MultiBeaconClient::<BeaconClient>::new(beacon_clients));
@@ -78,7 +78,7 @@ impl ApiService {
         });
 
         let housekeeper =
-            Housekeeper::new(db.clone(), multi_beacon_client.clone(), auctioneer.clone());
+            Housekeeper::new(db.clone(), multi_beacon_client.clone(), auctioneer.clone(), config.clone());
         let mut housekeeper_head_events = head_event_receiver.resubscribe();
         tokio::spawn(async move {
             loop {
