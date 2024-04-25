@@ -75,7 +75,13 @@ impl RedisCache {
     ) -> Result<Self, CreatePoolError> {
         let cfg = Config::from_url(conn_str);
         let pool = cfg.create_pool(Some(Runtime::Tokio1))?;
-        let (tx, _) = broadcast::channel(1000);
+        let (tx, mut rx) = broadcast::channel(1000);
+        
+        // ensure at least one subscriber is running
+        tokio::spawn(async move {
+            while let Ok(_message) = rx.recv().await {}
+        });
+
         let cache = Self { pool, tx };
 
         // Load in builder info
