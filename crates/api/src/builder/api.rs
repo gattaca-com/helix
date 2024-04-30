@@ -1804,37 +1804,21 @@ pub async fn decode_header_submission(
         });
     }
 
-    let header: Option<SignedHeaderSubmission>;
 
-    // Decode header (SSZ or JSON)
-    //TODO - this first tries to decode into a capella header, then a deneb header.
-    //TODO - once Deneb is live, we can remove the capella header decoding.
-
-    let mut deneb_header: Option<SignedHeaderSubmissionDeneb> = None;
-
-    let capella_header: Option<SignedHeaderSubmissionCapella> =
-        try_decode_into(is_ssz, &body_bytes, true);
-    if capella_header.is_none() {
-        deneb_header = try_decode_into(is_ssz, &body_bytes, true);
-    }
-
-    if let Some(capella_header) = capella_header {
-        header = Some(SignedHeaderSubmission::Capella(capella_header));
-    } else if let Some(deneb_header) = deneb_header {
-        header = Some(SignedHeaderSubmission::Deneb(deneb_header));
+    // Decode header
+    let header: SignedHeaderSubmission = if is_ssz {
+        match ssz::prelude::deserialize(&body_bytes) {
+            Ok(header) => header,
+            Err(err) => {
+                // Fallback to JSON
+                warn!(request_id = %request_id, error = %err, "Failed to decode header using SSZ; falling back to JSON");
+                serde_json::from_slice(&body_bytes)?
+            }
+        }
     } else {
-        let err = BuilderApiError::FailedToDecodeHeaderSubmission;
-        warn!(request_id = %request_id, error = %err, "Failed to decode header");
-        return Err(err);
-    }
-
-    if header.is_none() {
-        let err = BuilderApiError::FailedToDecodeHeaderSubmission;
-        warn!(request_id = %request_id, error = %err, "Failed to decode header");
-        return Err(err);
-    }
-
-    let header = header.unwrap();
+        serde_json::from_slice(&body_bytes)?
+    };
+    
     trace.decode = get_nanos_timestamp()?;
     info!(
         request_id = %request_id,
