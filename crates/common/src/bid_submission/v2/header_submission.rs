@@ -37,9 +37,11 @@ pub struct HeaderSubmissionDeneb {
 }
 
 #[derive(Clone, Debug, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[ssz(transparent)]
+#[serde(untagged)]
 pub enum SignedHeaderSubmission {
-    Capella(SignedHeaderSubmissionCapella),
     Deneb(SignedHeaderSubmissionDeneb),
+    Capella(SignedHeaderSubmissionCapella),
 }
 
 impl Default for SignedHeaderSubmission {
