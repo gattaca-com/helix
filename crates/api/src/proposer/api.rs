@@ -33,16 +33,16 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry,
         proposer_api::{GetPayloadResponse, ValidatorRegistrationInfo},
-    }, chain_info::{ChainInfo, Network}, signed_proposal::VersionedSignedProposal, try_execution_header_from_payload, validator_preferences, versioned_payload::PayloadAndBlobs, BidRequest, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace, ValidatorPreferences
+    }, chain_info::{ChainInfo, Network}, signed_proposal::VersionedSignedProposal, try_execution_header_from_payload, validator_preferences, versioned_payload::PayloadAndBlobs, BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace, ValidatorPreferences
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
 use helix_housekeeper::{ChainUpdate, SlotUpdate};
 use helix_utils::signing::{verify_signed_builder_message, verify_signed_consensus_message};
 
-use crate::proposer::{
+use crate::{builder::api, proposer::{
     error::ProposerApiError, unblind_beacon_block, GetHeaderParams, PreferencesHeader, GET_HEADER_REQUEST_CUTOFF_MS
-};
+}};
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
 pub(crate) const MAX_BLINDED_BLOCK_LENGTH: usize = 1024 * 1024;
@@ -174,9 +174,16 @@ where
             if let Some(preferences) = preferences {
                 
                 // Overwrite preferences if they are provided
-                
-                if let Some(censoring) = preferences.censoring {
-                    validator_preferences.censoring = censoring;
+
+                if let Some(filtering) = preferences.filtering {
+                    validator_preferences.censoring = match filtering {
+                        Filtering::Global => false,
+                        Filtering::Regional => true,
+                    }
+                } else {
+                    if let Some(censoring) = preferences.censoring {
+                        validator_preferences.censoring = censoring;
+                    }
                 }
 
                 if let Some(trusted_builders) = preferences.trusted_builders {

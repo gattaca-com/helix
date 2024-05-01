@@ -19,7 +19,7 @@ pub fn gen_signed_vr() -> SignedValidatorRegistration {
         public_key: pk,
     };
 
-    let fk = ChainInfo::for_holesky();
+    let fk = ChainInfo::for_mainnet();
     let domain = compute_builder_domain(&fk.context).unwrap();
     let csr = compute_signing_root(&mut vr, domain).unwrap();
 
@@ -955,6 +955,58 @@ mod proposer_api_tests {
             .unwrap();
 
         sleep(Duration::from_secs(30)).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let _ = tx.send(());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_register_validators_with_legacy_pref_header() {
+        let (tx, http_config, _api, _slot_update_receiver, _auctioneer) = start_api_server().await;
+        let req_url =
+            format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_REGISTER_VALIDATORS);
+
+        let signed_validator_registrations = vec![gen_signed_vr()];
+
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .header("x-api-key", "valid")
+            .header("x-preferences", "{\"censoring\": true, \"trusted_builders\": [\"Titan\", \"Beaver\"], \"header_delay\": false}")
+            .json(&signed_validator_registrations)
+            .send()
+            .await
+            .unwrap();
+
+        sleep(Duration::from_secs(5)).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let _ = tx.send(());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_register_validators_with_pref_header() {
+        let (tx, http_config, _api, _slot_update_receiver, _auctioneer) = start_api_server().await;
+        let req_url =
+            format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_REGISTER_VALIDATORS);
+
+        let signed_validator_registrations = vec![gen_signed_vr()];
+
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .header("x-api-key", "valid")
+            .header("x-preferences", "{\"filtering\":\"regional\", \"trusted_builders\": [\"Titan\", \"Beaver\"], \"header_delay\": false}")
+            .json(&signed_validator_registrations)
+            .send()
+            .await
+            .unwrap();
+
+        sleep(Duration::from_secs(5)).await;
 
         assert_eq!(resp.status(), StatusCode::OK);
         let _ = tx.send(());
