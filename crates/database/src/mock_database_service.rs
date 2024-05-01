@@ -107,9 +107,9 @@ impl DatabaseService for MockDatabaseService {
 
     async fn check_known_validators(
         &self,
-        _public_keys: Vec<BlsPublicKey>,
+        public_keys: Vec<BlsPublicKey>,
     ) -> Result<HashSet<BlsPublicKey>, DatabaseError> {
-        Ok(HashSet::new())
+        Ok(public_keys.into_iter().collect())
     }
 
     async fn save_too_late_get_payload(
@@ -263,6 +263,10 @@ impl DatabaseService for MockDatabaseService {
         &self,
         api_key: &str,
     ) -> Result<Option<String>, DatabaseError> {
-        Ok(None)
+        if api_key == "valid" {
+            Ok(Some("test_pool".to_string()))
+        } else {
+            Ok(None)
+        }
     }
 }
