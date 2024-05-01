@@ -21,3 +21,12 @@ fn default_censoring() -> bool {
 fn default_header_delay() -> bool {
     true
 }
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub enum Filtering {
+    #[serde(rename = "regional")]
+    Regional,
+    #[default]
+    #[serde(rename = "global")]
+    Global,
+}
