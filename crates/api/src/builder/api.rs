@@ -1751,6 +1751,37 @@ async fn push_top_bids<A: Auctioneer + 'static>(mut socket: WebSocket, auctionee
                     break;
                 }
             },
+            msg = socket.next() => {
+                match msg {
+                    Some(Ok(Message::Ping(data))) => {
+                        if socket.send(Message::Pong(data)).await.is_err() {
+                            error!("Failed to respond to ping.");
+                            break;
+                        }
+                    },
+                    Some(Ok(Message::Pong(_))) => {
+                        debug!("Received pong response.");
+                    },
+                    Some(Ok(Message::Close(_))) => {
+                        debug!("Received close frame.");
+                        break;
+                    },
+                    Some(Ok(Message::Binary(_))) => {
+                        debug!("Received Binary frame.");
+                    },
+                    Some(Ok(Message::Text(_))) => {
+                        debug!("Received Text frame.");
+                    },
+                    Some(Err(e)) => {
+                        error!("Error in WebSocket connection: {}", e);
+                        break;
+                    },
+                    None => {
+                        error!("WebSocket connection closed by the other side.");
+                        break;
+                    }
+                }
+            }
         }
     }
     if let Err(e) = socket.close().await {
