@@ -1,9 +1,10 @@
+use axum::http::request::Builder;
 use ethereum_consensus::serde::try_bytes_from_hex_str;
 use ethereum_consensus::ssz::prelude::*;
 use ethereum_consensus::{builder::SignedValidatorRegistration, primitives::Slot, serde::as_str};
 use ethereum_consensus::primitives::{BlsPublicKey, ExecutionAddress, Hash32, U256};
 
-use crate::SignedBuilderBid;
+use crate::{BuilderValidatorPreferences, SignedBuilderBid};
 use crate::{api::proposer_api::ValidatorRegistrationInfo, ValidatorPreferences};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
@@ -22,7 +23,7 @@ pub struct BuilderGetValidatorsResponse {
     #[serde(with = "as_str")]
     pub validator_index: usize,
     pub entry: SignedValidatorRegistration,
-    pub preferences: ValidatorPreferences,
+    pub preferences: BuilderValidatorPreferences,
 }
 
 impl From<BuilderGetValidatorsResponseEntry> for BuilderGetValidatorsResponse {
@@ -31,7 +32,7 @@ impl From<BuilderGetValidatorsResponseEntry> for BuilderGetValidatorsResponse {
             slot: entry.slot,
             validator_index: entry.validator_index,
             entry: entry.entry.registration,
-            preferences: entry.entry.preferences,
+            preferences: entry.entry.preferences.into(),
         }
     }
 }
