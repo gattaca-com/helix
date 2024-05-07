@@ -7,11 +7,7 @@ use ethereum_consensus::{
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
-    },
-    bellatrix::{ByteList, ByteVector, List},
-    bid_submission::BidTrace,
-    BuilderInfo, GetPayloadTrace, ProposerInfo, SignedValidatorRegistrationEntry,
-    ValidatorPreferences,
+    }, bellatrix::{ByteList, ByteVector, List}, bid_submission::BidTrace, BuilderInfo, Filtering, GetPayloadTrace, ProposerInfo, SignedValidatorRegistrationEntry, ValidatorPreferences
 };
 use thiserror::Error;
 
@@ -176,7 +172,8 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                     signature: parse_bytes_to_signature(row.get::<&str, &[u8]>("signature"))?,
                 },
                 preferences: ValidatorPreferences {
-                    censoring: parse_bool_to_bool(row.get::<&str, bool>("censoring"))?,
+                    //TODO: change to filtering after migration
+                    filtering: parse_bool_to_filtering(row.get::<&str, bool>("censoring"))?,
                     trusted_builders: row.get::<&str, Option<Vec<&str>>>("trusted_builders").map(
                         |trusted_builders| {
                             trusted_builders
@@ -243,7 +240,8 @@ impl FromRow for SignedValidatorRegistrationEntry {
             registration_info: ValidatorRegistrationInfo {
                 registration: SignedValidatorRegistration::from_row(row)?,
                 preferences: ValidatorPreferences {
-                    censoring: parse_bool_to_bool(row.get::<&str, bool>("censoring"))?,
+                    //TODO: change to filtering after migration
+                    filtering: parse_bool_to_filtering(row.get::<&str, bool>("censoring"))?,
                     trusted_builders: row.get::<&str, Option<Vec<&str>>>("trusted_builders").map(
                         |trusted_builders| {
                             trusted_builders
@@ -284,6 +282,14 @@ pub fn parse_timestamptz_to_u64(timestamp: std::time::SystemTime) -> Result<u64,
 
 pub fn parse_bool_to_bool(value: bool) -> Result<bool, DatabaseError> {
     Ok(value)
+}
+
+pub fn parse_bool_to_filtering(value: bool) -> Result<Filtering, DatabaseError> {
+    match value {
+        true => Ok(Filtering::Regional),
+        false => Ok(Filtering::Global),
+        
+    }
 }
 
 pub fn parse_i32_to_usize(value: i32) -> Result<usize, DatabaseError> {

@@ -473,10 +473,10 @@ where
             }
         }
 
-        // Discard any OptimisticV2 submissions if the proposer has censoring enabled
-        if next_duty.entry.preferences.censoring {
-            warn!(request_id = %request_id, "proposer has censoring enabled, discarding optimistic v2 submission");
-            return Err(BuilderApiError::V2SubmissionsInvalidIfProposerCensors);
+        // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
+        if next_duty.entry.preferences.filtering.is_regional() {
+            warn!(request_id = %request_id, "proposer has regional filtering, discarding optimistic v2 submission");
+            return Err(BuilderApiError::V2SubmissionsInvalidIfProposerRequiresRegionalFiltering);
         }
 
         // Validate basic information about the payload
@@ -693,10 +693,10 @@ where
             return Err(err);
         }
 
-        // Discard any OptimisticV2 submissions if the proposer has censoring enabled
-        if next_duty.entry.preferences.censoring {
-            warn!(request_id = %request_id, "proposer has censoring enabled, discarding optimistic v2 submission");
-            return Err(BuilderApiError::V2SubmissionsInvalidIfProposerCensors);
+        // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
+        if next_duty.entry.preferences.filtering.is_regional() {
+            warn!(request_id = %request_id, "proposer has regional filtering enabled, discarding optimistic v2 submission");
+            return Err(BuilderApiError::V2SubmissionsInvalidIfProposerRequiresRegionalFiltering);
         }
 
         // Handle trusted builders check

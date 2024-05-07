@@ -242,7 +242,7 @@ fn default_duration() -> u64 {
 #[cfg(test)]
 #[test]
 fn test_config() {
-    use crate::ValidatorPreferences;
+    use crate::{Filtering, ValidatorPreferences};
 
     let mut config = RelayConfig::default();
     config.redis.url = "redis://localhost:6379".to_string();
@@ -254,7 +254,7 @@ fn test_config() {
     config.network_config = NetworkConfig::Mainnet;
     config.logging =
         LoggingConfig::File { dir_path: "hello".to_string(), file_name: "test".to_string() };
-    config.validator_preferences = ValidatorPreferences { censoring: true, trusted_builders: None, header_delay: true};
+    config.validator_preferences = ValidatorPreferences { filtering: Filtering::Regional, trusted_builders: None, header_delay: true};
     config.router_config = RouterConfig {
         enabled_routes: vec![
             RouteInfo { route: Route::GetValidators, rate_limit: None },

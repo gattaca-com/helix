@@ -43,7 +43,9 @@ struct RegistrationParams<'a> {
 
 struct PreferenceParams<'a> {
     public_key: &'a [u8],
+    //TODO: remove after migration
     censoring: bool,
+    filtering: i16,
     trusted_builders: Option<Vec<String>>,
     header_delay: bool,
 }
@@ -209,7 +211,9 @@ impl PostgresDatabaseService {
 
                 structured_params_for_pref.push(PreferenceParams {
                     public_key: public_key.as_ref(),
-                    censoring: entry.registration_info.preferences.censoring,
+                    //TODO: remove after migration
+                    censoring: entry.registration_info.preferences.filtering.is_regional(),
+                    filtering: entry.registration_info.preferences.filtering.clone() as i16,
                     trusted_builders: entry.registration_info.preferences.trusted_builders.clone(),
                     header_delay: entry.registration_info.preferences.header_delay,
                 });
@@ -262,17 +266,21 @@ impl PostgresDatabaseService {
                 .flat_map(|tuple| {
                     vec![
                         &tuple.public_key as &(dyn ToSql + Sync),
+                        //TODO: remove after migration
                         &tuple.censoring,
+                        &tuple.filtering,
                         &tuple.trusted_builders,
                         &tuple.header_delay,
                     ]
                 })
                 .collect();
 
+            //TODO: remove references to censoring after migration
+
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql =
-                String::from("INSERT INTO validator_preferences (public_key, censoring, trusted_builders, header_delay) VALUES ");
-            let num_params_per_row = 4;
+                String::from("INSERT INTO validator_preferences (public_key, censoring, filtering, trusted_builders, header_delay) VALUES ");
+            let num_params_per_row = 5;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -284,7 +292,7 @@ impl PostgresDatabaseService {
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
-            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET censoring = excluded.censoring, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay");
+            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET censoring = excluded.censoring, filtering = excluded.filtering, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay");
 
             // Execute the query
             transaction.execute(&sql, &params[..]).await?;
@@ -380,15 +388,16 @@ impl DatabaseService for PostgresDatabaseService {
 
         transaction
             .execute(
-                "INSERT INTO validator_preferences (public_key, censoring, trusted_builders, header_delay)
+                "INSERT INTO validator_preferences (public_key, censoring, filtering, trusted_builders, header_delay)
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (public_key)
             DO UPDATE SET
-                censoring = excluded.censoring, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay
+                censoring = excluded.censoring, filtering = excluded.filtering, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay
             ",
                 &[
                     &public_key.as_ref(),
-                    &registration_info.preferences.censoring,
+                    &registration_info.preferences.filtering.is_regional(),
+                    &(registration_info.preferences.filtering as i16),
                     &registration_info.preferences.trusted_builders,
                     &registration_info.preferences.header_delay,
                 ],
@@ -830,8 +839,8 @@ impl DatabaseService for PostgresDatabaseService {
         
             transaction.execute(
                 "
-                    INSERT INTO delivered_payload_preferences (block_hash, censoring, trusted_builders)
-                    SELECT $1::bytea, censoring, trusted_builders
+                    INSERT INTO delivered_payload_preferences (block_hash, censoring, filtering, trusted_builders)
+                    SELECT $1::bytea, censoring, filtering, trusted_builders
                     FROM validator_preferences
                     WHERE public_key = $2::bytea
                     ON CONFLICT (block_hash) DO NOTHING;                
@@ -1215,7 +1224,7 @@ impl DatabaseService for PostgresDatabaseService {
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
         let filters = PgBidFilters::from(filters);
 
-        let censored = if validator_preferences.censoring {
+        let censored = if validator_preferences.filtering.is_global() {
             Option::Some(true)
         } else {
             Option::None
