@@ -136,13 +136,13 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
     /// - The failsafe hasn't been triggered.
     /// - The builder has optimistic relaying enabled.
     /// - The builder collateral is greater than the block value.
-    /// - The proposer preferences do not have censoring enabled.
+    /// - The proposer preferences do not have regional filtering enabled.
     async fn should_process_optimistically(
         &self,
         request: &BlockSimRequest,
         builder_info: &BuilderInfo,
     ) -> bool {
-        if request.proposer_preferences.censoring {
+        if request.proposer_preferences.filtering.is_regional() {
             return false;
         }
 

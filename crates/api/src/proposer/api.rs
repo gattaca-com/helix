@@ -155,7 +155,7 @@ where
 
         // Set using default preferences from config
         let mut validator_preferences = ValidatorPreferences {
-            censoring: proposer_api.validator_preferences.censoring,
+            filtering: proposer_api.validator_preferences.filtering,
             trusted_builders: proposer_api.validator_preferences.trusted_builders.clone(),
             header_delay: proposer_api.validator_preferences.header_delay,
         };
@@ -176,13 +176,13 @@ where
                 // Overwrite preferences if they are provided
 
                 if let Some(filtering) = preferences.filtering {
-                    validator_preferences.censoring = match filtering {
-                        Filtering::Global => false,
-                        Filtering::Regional => true,
-                    }
+                    validator_preferences.filtering = filtering;
                 } else {
                     if let Some(censoring) = preferences.censoring {
-                        validator_preferences.censoring = censoring;
+                        validator_preferences.filtering = match censoring {
+                            true => Filtering::Regional,
+                            false => Filtering::Global
+                        };
                     }
                 }
 
