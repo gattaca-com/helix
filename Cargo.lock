@@ -2522,6 +2522,7 @@ version = "0.0.1"
 dependencies = [
  "helix-api",
  "helix-common",
+ "num_cpus",
  "tokio",
  "tracing",
  "tracing-appender",
