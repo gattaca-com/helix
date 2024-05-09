@@ -159,7 +159,7 @@ impl PostgresDatabaseService {
                                         .pending_validator_registrations
                                         .remove(&entry.registration_info.registration.message.public_key);
                                 }
-                                info!("Saved validator registrations");
+                                info!("Saved {} validator registrations", entries.len());
                             }
                             Err(e) => {
                                 error!("Error saving validator registrations: {}", e);
