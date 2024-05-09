@@ -1224,7 +1224,7 @@ impl DatabaseService for PostgresDatabaseService {
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
         let filters = PgBidFilters::from(filters);
 
-        let censored = if validator_preferences.filtering.is_global() {
+        let censored = if validator_preferences.filtering.is_regional() {
             Option::Some(true)
         } else {
             Option::None
