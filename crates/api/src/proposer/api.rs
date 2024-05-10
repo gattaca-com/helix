@@ -160,41 +160,39 @@ where
             header_delay: proposer_api.validator_preferences.header_delay,
         };
 
-        // If a valid api key is provided, check for preferences
-        if pool_name.is_some() {
-            let preferences_header = headers.get("x-preferences");
-            let preferences = match preferences_header {
-                Some(preferences_header) => {
-                    let decoded_prefs: PreferencesHeader = serde_json::from_str(preferences_header.to_str()?)?;
-                    Some(decoded_prefs)
-                },
-                None => None
-            };
 
-            if let Some(preferences) = preferences {
-                
-                // Overwrite preferences if they are provided
+        let preferences_header = headers.get("x-preferences");
+        let preferences = match preferences_header {
+            Some(preferences_header) => {
+                let decoded_prefs: PreferencesHeader = serde_json::from_str(preferences_header.to_str()?)?;
+                Some(decoded_prefs)
+            },
+            None => None
+        };
 
-                if let Some(filtering) = preferences.filtering {
-                    validator_preferences.filtering = filtering;
-                } else {
-                    if let Some(censoring) = preferences.censoring {
-                        validator_preferences.filtering = match censoring {
-                            true => Filtering::Regional,
-                            false => Filtering::Global
-                        };
-                    }
-                }
+        if let Some(preferences) = preferences {
+            
+            // Overwrite preferences if they are provided
 
-                if let Some(trusted_builders) = preferences.trusted_builders {
-                    validator_preferences.trusted_builders = Some(trusted_builders);
-                }
-
-                if let Some(header_delay) = preferences.header_delay {
-                    validator_preferences.header_delay = header_delay;
+            if let Some(filtering) = preferences.filtering {
+                validator_preferences.filtering = filtering;
+            } else {
+                if let Some(censoring) = preferences.censoring {
+                    validator_preferences.filtering = match censoring {
+                        true => Filtering::Regional,
+                        false => Filtering::Global
+                    };
                 }
             }
-        }   
+
+            if let Some(trusted_builders) = preferences.trusted_builders {
+                validator_preferences.trusted_builders = Some(trusted_builders);
+            }
+
+            if let Some(header_delay) = preferences.header_delay {
+                validator_preferences.header_delay = header_delay;
+            }
+        }
 
         let request_id = Uuid::new_v4();
         let mut trace =
@@ -629,13 +627,21 @@ where
             };
         let payload = Arc::new(versioned_payload);
 
+        let is_trusted_proposer = self.is_trusted_proposer(&proposer_public_key).await?;
+
+        let broadcast_validation = if is_trusted_proposer {
+            BroadcastValidation::Gossip
+        } else {
+            BroadcastValidation::ConsensusAndEquivocation
+        };
+
         // Publish and validate payload with multi-beacon-client
         let fork = unblinded_payload.version();
         if let Err(err) = self
             .multi_beacon_client
             .publish_block(
                 unblinded_payload.clone(),
-                Some(BroadcastValidation::ConsensusAndEquivocation),
+                Some(broadcast_validation),
                 fork,
             )
             .await
@@ -678,7 +684,7 @@ where
 
         // Pause execution if the proposer is not whitelisted
         let is_mainnet = matches!(self.chain_info.network, Network::Mainnet);
-        if is_mainnet && !self.is_trusted_proposer(&proposer_public_key).await? {
+        if is_mainnet && !is_trusted_proposer {
             // Calculate the remaining time needed to reach the target propagation duration.
             // Conditionally pause the execution until we hit
             // `TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS` to allow the block to
