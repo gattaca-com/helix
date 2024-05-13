@@ -629,62 +629,87 @@ where
 
         let is_trusted_proposer = self.is_trusted_proposer(&proposer_public_key).await?;
 
-        let broadcast_validation = if is_trusted_proposer {
-            BroadcastValidation::Gossip
-        } else {
-            BroadcastValidation::ConsensusAndEquivocation
-        };
-
         // Publish and validate payload with multi-beacon-client
         let fork = unblinded_payload.version();
-        if let Err(err) = self
+        if is_trusted_proposer {
+            
+            let self_clone = self.clone();
+            let unblinded_payload_clone = unblinded_payload.clone();
+            let request_id_clone = request_id.clone();
+            let mut trace_clone = trace.clone();
+            let payload_clone = payload.clone();
+            
+            tokio::spawn(async move {
+                if let Err(err) = self_clone
+                .multi_beacon_client
+                .publish_block(
+                    unblinded_payload_clone.clone(),
+                    Some(BroadcastValidation::ConsensusAndEquivocation),
+                    fork,
+                )
+                .await
+                {
+                    error!(request_id = %request_id_clone, error = %err, "error publishing block");
+                };
+
+                trace_clone.beacon_client_broadcast = get_nanos_timestamp().unwrap_or_default();
+
+                // Broadcast payload to all broadcasters
+                self_clone.broadcast_signed_block(
+                    unblinded_payload_clone.clone(),
+                    Some(BroadcastValidation::Gossip),
+                    &request_id_clone,
+                );
+                trace_clone.broadcaster_block_broadcast = get_nanos_timestamp().unwrap_or_default();
+        
+                // While we wait for the block to propagate, we also store the payload information
+                trace_clone.on_deliver_payload = get_nanos_timestamp().unwrap_or_default();
+                self_clone.save_delivered_payload_info(
+                    payload_clone,
+                    &signed_blinded_block,
+                    &proposer_public_key,
+                    &trace_clone,
+                    &request_id_clone,
+                )
+                .await;
+            });
+
+        } else {
+
+            if let Err(err) = self
             .multi_beacon_client
             .publish_block(
                 unblinded_payload.clone(),
-                Some(broadcast_validation),
+                Some(BroadcastValidation::ConsensusAndEquivocation),
                 fork,
             )
             .await
-        {
-            error!(request_id = %request_id, error = %err, "error publishing block");
-            return Err(err.into());
-        }
-        trace.beacon_client_broadcast = get_nanos_timestamp()?;
-
-        // Broadcast payload to all broadcasters
-        self.broadcast_signed_block(
-            unblinded_payload.clone(),
-            Some(BroadcastValidation::Gossip),
-            request_id,
-        );
-        trace.broadcaster_block_broadcast = get_nanos_timestamp()?;
-
-        // While we wait for the block to propagate, we also store the payload information
-        trace.on_deliver_payload = get_nanos_timestamp()?;
-        self.save_delivered_payload_info(
-            payload.clone(),
-            &signed_blinded_block,
-            &proposer_public_key,
-            trace,
-            request_id,
-        )
-        .await;
-
-        let get_payload_response = match GetPayloadResponse::try_from_execution_payload(&payload) {
-            Some(get_payload_response) => get_payload_response,
-            None => {
-                error!(
-                    request_id = %request_id,
-                    "payload type mismatch getting payload response from execution payload.
-                    All previous validation steps have passed, this should not happen",
-                );
-                return Err(ProposerApiError::PayloadTypeMismatch);
+            {
+                error!(request_id = %request_id, error = %err, "error publishing block");
+                return Err(err.into());
             }
-        };
 
-        // Pause execution if the proposer is not whitelisted
-        let is_mainnet = matches!(self.chain_info.network, Network::Mainnet);
-        if is_mainnet && !is_trusted_proposer {
+            trace.beacon_client_broadcast = get_nanos_timestamp()?;
+
+            // Broadcast payload to all broadcasters
+            self.broadcast_signed_block(
+                unblinded_payload.clone(),
+                Some(BroadcastValidation::Gossip),
+                request_id,
+            );
+            trace.broadcaster_block_broadcast = get_nanos_timestamp()?;
+    
+            // While we wait for the block to propagate, we also store the payload information
+            trace.on_deliver_payload = get_nanos_timestamp()?;
+            self.save_delivered_payload_info(
+                payload.clone(),
+                &signed_blinded_block,
+                &proposer_public_key,
+                trace,
+                request_id,
+            )
+            .await;
+
             // Calculate the remaining time needed to reach the target propagation duration.
             // Conditionally pause the execution until we hit
             // `TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS` to allow the block to
@@ -697,11 +722,20 @@ where
             if remaining_sleep_ms > 0 {
                 sleep(Duration::from_millis(remaining_sleep_ms)).await;
             }
-        } else if !is_mainnet {
-            info!(request_id = %request_id, "not on mainnet, skipping sleep before returning payload");
-        } else {
-            info!(request_id = %request_id, "proposer is trusted, skipping sleep before returning payload");
+
         }
+
+        let get_payload_response = match GetPayloadResponse::try_from_execution_payload(&payload) {
+            Some(get_payload_response) => get_payload_response,
+            None => {
+                error!(
+                    request_id = %request_id,
+                    "payload type mismatch getting payload response from execution payload.
+                    All previous validation steps have passed, this should not happen",
+                );
+                return Err(ProposerApiError::PayloadTypeMismatch);
+            }
+        };
 
         // Return response
         info!(request_id = %request_id, trace = ?trace, timestamp = get_nanos_timestamp()?, "delivering payload");
