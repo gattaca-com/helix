@@ -12,7 +12,7 @@ use helix_common::{
         proposer_api::ValidatorRegistrationInfo,
     }, bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
-    }, builder_info::BuilderInfo, simulator::BlockSimError, validator_preferences, versioned_payload::PayloadAndBlobs, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
+    }, builder_info::BuilderInfo, deneb::SignedValidatorRegistration, simulator::BlockSimError, validator_preferences, versioned_payload::PayloadAndBlobs, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
 };
 
 use crate::{
@@ -33,6 +33,11 @@ pub trait DatabaseService: Send + Sync + Clone {
         entries: Vec<ValidatorRegistrationInfo>,
         pool_name: Option<String>,
     ) -> Result<(), DatabaseError>;
+
+    async fn is_registration_update_required(
+        &self,
+        registration: &SignedValidatorRegistration,
+    ) -> Result<bool, DatabaseError>;
 
     async fn get_validator_registration(
         &self,

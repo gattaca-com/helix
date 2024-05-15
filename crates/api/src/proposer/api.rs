@@ -240,6 +240,15 @@ where
                 continue;
             }
 
+            if !proposer_api_clone.db.is_registration_update_required(&registration).await? {
+                debug!(
+                    request_id = %request_id,
+                    pub_key = ?pub_key,
+                    "Registration update not required",
+                );
+                continue;
+            }
+
             let handle = tokio::task::spawn_blocking(move || {
                 let res = match proposer_api_clone.validate_registration(&mut registration) {
                     Ok(_) => Some(registration),
