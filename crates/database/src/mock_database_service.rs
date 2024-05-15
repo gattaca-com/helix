@@ -14,7 +14,7 @@ use helix_common::{
         proposer_api::ValidatorRegistrationInfo,
     }, bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
-    }, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
+    }, deneb::SignedValidatorRegistration, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
 };
 
 use crate::{
@@ -50,9 +50,16 @@ impl DatabaseService for MockDatabaseService {
     async fn save_validator_registrations(
         &self,
         _entries: Vec<ValidatorRegistrationInfo>,
-        pool_name: Option<String>,
+        _pool_name: Option<String>,
     ) -> Result<(), DatabaseError> {
         Ok(())
+    }
+    async fn is_registration_update_required(
+        &self,
+        _registration: &SignedValidatorRegistration,
+    ) -> Result<bool, DatabaseError>
+    {
+        Ok(true)
     }
     async fn get_validator_registration(
         &self,

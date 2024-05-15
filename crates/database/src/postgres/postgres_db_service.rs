@@ -15,7 +15,7 @@ use helix_common::{
         self, builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters, proposer_api::ValidatorRegistrationInfo
     }, bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission,
-    }, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
+    }, deneb::SignedValidatorRegistration, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
 };
 use tokio_postgres::{row, types::ToSql, NoTls};
 use tracing::{error, info};
@@ -469,6 +469,22 @@ impl DatabaseService for PostgresDatabaseService {
         }
 
         Ok(())
+    }
+
+    async fn is_registration_update_required(
+        &self,
+        registration: &SignedValidatorRegistration,
+    ) -> Result<bool, DatabaseError> {
+        if let Some(existing_entry) = 
+            self.validator_registration_cache.get(&registration.message.public_key)
+        {
+            if existing_entry.registration_info.registration.message.timestamp >=
+                registration.message.timestamp
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     async fn get_validator_registration(
