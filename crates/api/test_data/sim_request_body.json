@@ -149,7 +149,7 @@
       "value" : "2501054200751610"
    },
    "proposer_preferences" : {
-      "censoring" : false,
+      "filtering" : 0,
       "trusted_builders" : null
    },
    "registered_gas_limit" : "30000000",

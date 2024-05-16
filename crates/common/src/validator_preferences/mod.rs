@@ -52,6 +52,7 @@ impl Filtering {
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BuilderValidatorPreferences {
     pub censoring: bool,
+    pub filtering: Filtering,
     pub trusted_builders: Option<Vec<String>>,
 }
 
@@ -59,6 +60,7 @@ impl From<ValidatorPreferences> for BuilderValidatorPreferences {
     fn from(preferences: ValidatorPreferences) -> Self {
         Self {
             censoring: preferences.filtering.is_regional(),
+            filtering: preferences.filtering,
             trusted_builders: preferences.trusted_builders.clone(),
         }
     }

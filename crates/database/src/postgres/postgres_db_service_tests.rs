@@ -2,6 +2,7 @@
 mod tests {
     use ethereum_consensus::altair::validator;
     use ethereum_consensus::crypto::PublicKey;
+    use helix_common::Filtering;
     use rand::{seq::SliceRandom, thread_rng};
     use rand::Rng;
     use tokio::time::sleep;
@@ -103,7 +104,7 @@ mod tests {
                 signature,
             },
             preferences: ValidatorPreferences {
-                censoring: false,
+                filtering: Filtering::Global,
                 trusted_builders: Some(vec!["test".to_string(), "test2".to_string()]),
                 header_delay: true,
             },
@@ -556,8 +557,6 @@ mod tests {
         };
 
         let mut validator_preferences = ValidatorPreferences::default();
-        // validator_preferences.censoring = false;
-        // validator_preferences.trusted_builders = Some(vec!["TitanSolidus".to_string()]);
 
         let delivered_payloads = db_service.get_delivered_payloads(&filter, Arc::new(validator_preferences)).await?;
         println!("delivered payloads {:?}", delivered_payloads);

@@ -173,7 +173,7 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                 },
                 preferences: ValidatorPreferences {
                     //TODO: change to filtering after migration
-                    filtering: parse_bool_to_filtering(row.get::<&str, bool>("censoring"))?,
+                    filtering: parse_i16_to_filtering(row.get::<&str, i16>("filtering"))?,
                     trusted_builders: row.get::<&str, Option<Vec<&str>>>("trusted_builders").map(
                         |trusted_builders| {
                             trusted_builders
@@ -241,7 +241,7 @@ impl FromRow for SignedValidatorRegistrationEntry {
                 registration: SignedValidatorRegistration::from_row(row)?,
                 preferences: ValidatorPreferences {
                     //TODO: change to filtering after migration
-                    filtering: parse_bool_to_filtering(row.get::<&str, bool>("censoring"))?,
+                    filtering: parse_i16_to_filtering(row.get::<&str, i16>("filtering"))?,
                     trusted_builders: row.get::<&str, Option<Vec<&str>>>("trusted_builders").map(
                         |trusted_builders| {
                             trusted_builders
@@ -284,11 +284,11 @@ pub fn parse_bool_to_bool(value: bool) -> Result<bool, DatabaseError> {
     Ok(value)
 }
 
-pub fn parse_bool_to_filtering(value: bool) -> Result<Filtering, DatabaseError> {
+pub fn parse_i16_to_filtering(value: i16) -> Result<Filtering, DatabaseError> {
     match value {
-        true => Ok(Filtering::Regional),
-        false => Ok(Filtering::Global),
-        
+        1 => Ok(Filtering::Regional),
+        0 => Ok(Filtering::Global),
+        _ => Err(DatabaseError::GeneralError),
     }
 }
 
