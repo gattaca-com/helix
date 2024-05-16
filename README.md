@@ -29,11 +29,14 @@ We have implemented two distinct endpoints for builders: `submit_header` and `su
 
 Along with reducing the internal latency, separating the header and payload drastically reduces the network latency.
 
-### Censoring/ Non-Censoring Support
-Operating censoring and non-censoring relays independently results in doubling the operational costs. To address this, we have integrated both functionalities into a single relay, aiming to reduce overhead and streamline operations.
-- Censoring and non-censoring have been unified into a single relay by allowing proposers to specify “preferences” on-registration.
-- To ensure ease of adoption, we allow proposers to communicate this binary decision by using two different URLs ([titanrelay.xyz](titanrelay.xyz) and [censoring.titanrelay.xyz](censoring.titanrelay.xyz)), registrations to either of these URLs will automatically set the preferences. All other calls will be routed in exactly the same way.
-- On the builder side, there's a requirement to adapt to these changes as the [proposers](https://flashbots.github.io/relay-specs/#/Builder/getproposers) API response will now contain an extra `preferences` field. Minor changes are also required to the internal logic, as censoring moves from a per-relay basis to a per-validator basis.
+### Filtering Support
+
+To efficiently manage transactions based on regional policies, our relay operations have been streamlined as follows:
+
+- **Unified Relay System**: Both regional and global filtering are integrated into a single relay system, allowing proposers to specify their filtering preferences during registration.
+- **Simplified Registration**: Proposers can communicate their filtering preference through two different URLs: [titanrelay.xyz](https://titanrelay.xyz) for global filtering and [regional.titanrelay.xyz](https://regional.titanrelay.xyz) for regional filtering. Registration to either URL will automatically set the appropriate preference. All other calls will be routed the same way.
+- **Builder Adaptations**: Builders need to adapt to the system changes. The [proposers](https://flashbots.github.io/relay-specs/#/Builder/getproposers) API response will now include a `preferences` field indicating the chosen filtering mode. Minor adjustments to internal logic are required, as filtering is now managed on a per-validator basis.
+
 
 
 ### Modular and Generic Design
@@ -86,12 +89,12 @@ As stated in the "Optimised Block Propagation" section, we plan to develop a mod
 
 
 ### PEPC
-In line with the design principles of Protocol Enforced Proposer Commitments (PEPC) [PEPC](https://ethresear.ch/t/unbundling-pbs-towards-protocol-enforced-proposer-commitments-pepc/13879), we aim to offer more granularity in allowing proposers to communicate their preferences regarding the types of blocks they wish to commit to. Currently, this is achieved through the `preferences` field, which enables proposers to indicate whether they prefer to commit to non-censoring or censoring blocks. In the future, we plan to support additional preferences, such as commitment to blocks adhering to relay-established inclusion lists, blocks produced by trusted builders, and others.
+In line with the design principles of Protocol Enforced Proposer Commitments (PEPC) [PEPC](https://ethresear.ch/t/unbundling-pbs-towards-protocol-enforced-proposer-commitments-pepc/13879), we aim to offer more granularity in allowing proposers to communicate their preferences regarding the types of blocks they wish to commit to. Currently, this is achieved through the `preferences` field, which enables proposers to indicate whether they prefer to commit to a regional or global filtering policy. In the future, we plan to support additional preferences, such as commitment to blocks adhering to relay-established inclusion lists, blocks produced by trusted builders, and others.
 
 
 ## Compatability
 - For proposers, Helix is fully compatible with the current MEV-Boost relay spec.
-- For builders, there's a requirement to adapt to these changes as the [proposers](https://flashbots.github.io/relay-specs/#/Builder/getproposers) API response will now contain an extra `preferences` field. Minor changes are also required to the internal logic, as censoring moves from a per-relay basis to a per-validator basis.
+- For builders, there's a requirement to adapt to these changes as the [proposers](https://flashbots.github.io/relay-specs/#/Builder/getproposers) API response will now contain an extra `preferences` field. Minor changes are also required to the internal logic, as filtering moves from a per-relay basis to a per-validator basis.
 
 ## Credit to:
 Flashbots:

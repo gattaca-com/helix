@@ -974,7 +974,7 @@ mod proposer_api_tests {
             .header("accept", "*/*")
             .header("Content-Type", "application/json")
             .header("x-api-key", "valid")
-            .header("x-preferences", "{\"censoring\": true, \"trusted_builders\": [\"Titan\", \"Beaver\"], \"header_delay\": false}")
+            .header("x-preferences", "{\"filtering\": 1, \"trusted_builders\": [\"Titan\", \"Beaver\"], \"header_delay\": false}")
             .json(&signed_validator_registrations)
             .send()
             .await
