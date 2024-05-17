@@ -129,11 +129,11 @@ impl SignedBuilderBid {
                 let signature = sign_builder_message(&mut message, signing_key, context)?;
                 Ok(Self::Capella(capella::SignedBuilderBid { message, signature }))
             }
-            ExecutionPayloadHeader::Deneb(header) => match submission.blobs_bundle() {
-                Some(blobs_bundle) => {
+            ExecutionPayloadHeader::Deneb(header) => match submission.commitments() {
+                Some(commitments) => {
                     let mut message = deneb::BuilderBid {
                         header: header.clone(),
-                        blob_kzg_commitments: blobs_bundle.commitments.clone(),
+                        blob_kzg_commitments: commitments.clone(),
                         value: submission.value(),
                         public_key,
                     };

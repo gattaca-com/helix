@@ -417,7 +417,7 @@ mod tests {
             decoded_submission.0.execution_payload_header(),
             ExecutionPayloadHeader::Capella(_)
         ));
-        assert!(decoded_submission.0.blobs_bundle().is_none());
+        assert!(decoded_submission.0.commitments().is_none());
     }
 
     #[tokio::test]
@@ -433,7 +433,7 @@ mod tests {
         let decoded_submission: SignedHeaderSubmissionDeneb =
             serde_json::from_slice(&req_payload_bytes).unwrap();
 
-        assert_eq!(decoded_submission.message.bid_trace.slot, 5552306);
+        assert_eq!(decoded_submission.message.bid_trace().slot, 5552306);
     }
 
     #[tokio::test]
@@ -453,7 +453,7 @@ mod tests {
             decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
 
         assert!(matches!(decoded_submission.0, SignedHeaderSubmission::Capella(_)));
-        assert!(decoded_submission.0.blobs_bundle().is_none());
+        assert!(decoded_submission.0.commitments().is_none());
 
         let header: SignedHeaderSubmissionCapella =
             ssz::prelude::deserialize(&req_payload_bytes).unwrap();
@@ -477,7 +477,7 @@ mod tests {
             decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
 
         assert!(matches!(decoded_submission.0, SignedHeaderSubmission::Deneb(_)));
-        assert!(decoded_submission.0.blobs_bundle().is_some());
+        assert!(decoded_submission.0.commitments().is_some());
 
         let header: SignedHeaderSubmissionDeneb =
             ssz::prelude::deserialize(&req_payload_bytes).unwrap();
