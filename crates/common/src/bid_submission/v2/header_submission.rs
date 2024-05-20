@@ -45,8 +45,10 @@ pub struct HeaderSubmissionDenebV2 {
     pub commitments: List<KzgCommitment, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
 }
 
+// TODO: remove HeaderSubmissionDeneb when we roll out with just commitments
 #[derive(Clone, Debug, SimpleSerialize, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
+#[ssz(transparent)]
 pub enum HeaderSubmissionMessage {
     V1(HeaderSubmissionDeneb),
     V2(HeaderSubmissionDenebV2),
