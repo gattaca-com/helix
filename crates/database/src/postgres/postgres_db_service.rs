@@ -15,7 +15,7 @@ use helix_common::{
         self, builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters, proposer_api::ValidatorRegistrationInfo
     }, bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission,
-    }, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
+    }, deneb::SignedValidatorRegistration, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
 };
 use tokio_postgres::{row, types::ToSql, NoTls};
 use tracing::{error, info};
@@ -43,8 +43,6 @@ struct RegistrationParams<'a> {
 
 struct PreferenceParams<'a> {
     public_key: &'a [u8],
-    //TODO: remove after migration
-    censoring: bool,
     filtering: i16,
     trusted_builders: Option<Vec<String>>,
     header_delay: bool,
@@ -159,7 +157,7 @@ impl PostgresDatabaseService {
                                         .pending_validator_registrations
                                         .remove(&entry.registration_info.registration.message.public_key);
                                 }
-                                info!("Saved validator registrations");
+                                info!("Saved {} validator registrations", entries.len());
                             }
                             Err(e) => {
                                 error!("Error saving validator registrations: {}", e);
@@ -211,8 +209,6 @@ impl PostgresDatabaseService {
 
                 structured_params_for_pref.push(PreferenceParams {
                     public_key: public_key.as_ref(),
-                    //TODO: remove after migration
-                    censoring: entry.registration_info.preferences.filtering.is_regional(),
                     filtering: entry.registration_info.preferences.filtering.clone() as i16,
                     trusted_builders: entry.registration_info.preferences.trusted_builders.clone(),
                     header_delay: entry.registration_info.preferences.header_delay,
@@ -266,8 +262,6 @@ impl PostgresDatabaseService {
                 .flat_map(|tuple| {
                     vec![
                         &tuple.public_key as &(dyn ToSql + Sync),
-                        //TODO: remove after migration
-                        &tuple.censoring,
                         &tuple.filtering,
                         &tuple.trusted_builders,
                         &tuple.header_delay,
@@ -275,12 +269,10 @@ impl PostgresDatabaseService {
                 })
                 .collect();
 
-            //TODO: remove references to censoring after migration
-
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql =
-                String::from("INSERT INTO validator_preferences (public_key, censoring, filtering, trusted_builders, header_delay) VALUES ");
-            let num_params_per_row = 5;
+                String::from("INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay) VALUES ");
+            let num_params_per_row = 4;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -292,7 +284,7 @@ impl PostgresDatabaseService {
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
-            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET censoring = excluded.censoring, filtering = excluded.filtering, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay");
+            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET filtering = excluded.filtering, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay");
 
             // Execute the query
             transaction.execute(&sql, &params[..]).await?;
@@ -388,15 +380,14 @@ impl DatabaseService for PostgresDatabaseService {
 
         transaction
             .execute(
-                "INSERT INTO validator_preferences (public_key, censoring, filtering, trusted_builders, header_delay)
+                "INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay)
             VALUES ($1, $2, $3, $4)
             ON CONFLICT (public_key)
             DO UPDATE SET
-                censoring = excluded.censoring, filtering = excluded.filtering, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay
+                filtering = excluded.filtering, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay
             ",
                 &[
                     &public_key.as_ref(),
-                    &registration_info.preferences.filtering.is_regional(),
                     &(registration_info.preferences.filtering as i16),
                     &registration_info.preferences.trusted_builders,
                     &registration_info.preferences.header_delay,
@@ -471,6 +462,22 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(())
     }
 
+    async fn is_registration_update_required(
+        &self,
+        registration: &SignedValidatorRegistration,
+    ) -> Result<bool, DatabaseError> {
+        if let Some(existing_entry) = 
+            self.validator_registration_cache.get(&registration.message.public_key)
+        {
+            if existing_entry.registration_info.registration.message.timestamp >=
+                registration.message.timestamp
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     async fn get_validator_registration(
         &self,
         pub_key: BlsPublicKey,
@@ -487,7 +494,7 @@ impl DatabaseService for PostgresDatabaseService {
                     validator_registrations.timestamp,
                     validator_registrations.public_key,
                     validator_registrations.signature,
-                    validator_preferences.censoring,
+                    validator_preferences.filtering,
                     validator_preferences.trusted_builders,
                     validator_preferences.header_delay,
                     validator_registrations.inserted_at
@@ -839,8 +846,8 @@ impl DatabaseService for PostgresDatabaseService {
         
             transaction.execute(
                 "
-                    INSERT INTO delivered_payload_preferences (block_hash, censoring, filtering, trusted_builders)
-                    SELECT $1::bytea, censoring, filtering, trusted_builders
+                    INSERT INTO delivered_payload_preferences (block_hash, filtering, trusted_builders)
+                    SELECT $1::bytea, filtering, trusted_builders
                     FROM validator_preferences
                     WHERE public_key = $2::bytea
                     ON CONFLICT (block_hash) DO NOTHING;                
@@ -1224,10 +1231,9 @@ impl DatabaseService for PostgresDatabaseService {
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
         let filters = PgBidFilters::from(filters);
 
-        let censored = if validator_preferences.filtering.is_global() {
-            Option::Some(true)
-        } else {
-            Option::None
+        let filtering = match validator_preferences.filtering {
+            Filtering::Regional => Some(1_i16),
+            Filtering::Global => None,
         };
 
         parse_rows(
@@ -1268,7 +1274,7 @@ impl DatabaseService for PostgresDatabaseService {
                             AND ($4::bytea IS NULL OR block_submission.proposer_pubkey = $4::bytea)
                             AND ($5::bytea IS NULL OR block_submission.builder_pubkey = $5::bytea)
                             AND ($6::bytea IS NULL OR block_submission.block_hash = $6::bytea)
-                            AND ($9::boolean IS NULL OR delivered_payload_preferences.censoring = $9::boolean)
+                            AND ($9::smallint IS NULL OR delivered_payload_preferences.filtering = $9::smallint)
                             AND ($10::character varying[] IS NULL OR delivered_payload_preferences.trusted_builders @> $10::character varying[])
                         ORDER BY
                             CASE
@@ -1295,7 +1301,7 @@ impl DatabaseService for PostgresDatabaseService {
                         &filters.block_hash(),
                         &filters.order(),
                         &filters.limit(),
-                        &censored,
+                        &filtering,
                         &validator_preferences.trusted_builders,
                     ],
                 )
