@@ -136,6 +136,16 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             return;
         }
 
+        if self.config.router_config.enabled_routes.iter().any(|r| r.route == Route::ValidatorRegistration) {
+            // Spawn a task to asynchronously update known validators.
+            if self.should_refresh_known_validators(head_slot).await {
+                let cloned_self = self.clone();
+                tokio::spawn(async move {
+                    let _ = cloned_self.refresh_known_validators(head_slot).await;
+                });
+            }
+        }
+
         // Skip processing if the GetPayload route is enabled.
         if self.config.router_config.enabled_routes.iter().any(|r| r.route == Route::GetPayload) {
             return;
@@ -159,14 +169,6 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             let cloned_self = self.clone();
             tokio::spawn(async move {
                 let _ = cloned_self.update_proposer_duties(head_slot).await;
-            });
-        }
-
-        // Spawn a task to asynchronously update known validators.
-        if self.should_refresh_known_validators(head_slot).await {
-            let cloned_self = self.clone();
-            tokio::spawn(async move {
-                let _ = cloned_self.refresh_known_validators(head_slot).await;
             });
         }
 
