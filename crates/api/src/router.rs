@@ -16,7 +16,7 @@ use crate::{
     }, gossiper::grpc_gossiper::GrpcGossiperClientManager, middleware::rate_limiting::rate_limit_by_ip::{rate_limit_by_ip, RateLimitState, RateLimitStateForRoute}, proposer::
         api::ProposerApi
     , relay_data::{
-        DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API,
+        BidsCache, DataApi, DeliveredPayloadsCache, PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API
     }, service::API_REQUEST_TIMEOUT
 };
 
@@ -37,6 +37,8 @@ pub fn build_router(
     builder_api: Arc<BuilderApiProd>,
     proposer_api: Arc<ProposerApiProd>,
     data_api: Arc<DataApiProd>,
+    bids_cache: Arc<BidsCache>,
+    delivered_payloads_cache: Arc<DeliveredPayloadsCache>,
 ) -> Router {
     router_config.resolve_condensed_routes();
 
@@ -156,7 +158,9 @@ pub fn build_router(
     router = router
         .layer(Extension(builder_api))
         .layer(Extension(proposer_api))
-        .layer(Extension(data_api));
+        .layer(Extension(data_api))
+        .layer(Extension(bids_cache))
+        .layer(Extension(delivered_payloads_cache));
 
     router
 }

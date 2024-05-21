@@ -47,7 +47,7 @@ impl From<ProposerPayloadDeliveredParams> for BidFilters {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeliveredPayloadsResponse {
     #[serde(with = "as_str")]
     pub slot: u64,
@@ -92,7 +92,7 @@ impl From<BuilderBlocksReceivedParams> for BidFilters {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceivedBlocksResponse {
     #[serde(with = "as_str")]
     pub slot: u64,
