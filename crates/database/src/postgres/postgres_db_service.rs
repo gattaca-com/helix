@@ -658,6 +658,37 @@ impl DatabaseService for PostgresDatabaseService {
         for key in &keys_to_remove {
             self.known_validators_cache.remove(key);
         }
+
+        let mut client = self.pool.get().await?;
+        let transaction = client.transaction().await?;
+    
+        // Perform batch deletion
+        for chunk in keys_to_remove.chunks(10000) {
+            let sql = "DELETE FROM known_validators WHERE public_key = ANY($1::bytea[])";
+            let byte_keys: Vec<&[u8]> = chunk.iter().map(|k| k.as_ref()).collect();
+            transaction.execute(sql, &[&byte_keys]).await?;
+        }
+    
+        // Perform batch insertion
+        for chunk in keys_to_add.chunks(10000) {
+            let mut sql = String::from("INSERT INTO known_validators (public_key) VALUES ");
+            let values_clauses: Vec<String> = (1..=chunk.len()).map(|i| format!("(${})", i)).collect();
+    
+            sql.push_str(&values_clauses.join(", "));
+            sql.push_str(" ON CONFLICT (public_key) DO NOTHING");
+
+            let mut structured_params: Vec<&[u8]> = Vec::new();
+            for validator in chunk.iter() {
+                structured_params.push(validator.as_ref());
+            }
+
+            let params: Vec<&(dyn ToSql + Sync)> =
+                structured_params.iter().flat_map(|v| vec![v as &(dyn ToSql + Sync)]).collect();
+
+            transaction.execute(&sql, &params[..]).await?;
+        }
+    
+        transaction.commit().await?;
     
         Ok(())
     }
@@ -666,11 +697,34 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         public_keys: Vec<BlsPublicKey>,
     ) -> Result<HashSet<BlsPublicKey>, DatabaseError> {
+        let client = self.pool.get().await?;
         let mut pub_keys = HashSet::new();
+
+        if self.known_validators_cache.is_empty() {
+            let rows = client.query("SELECT * FROM known_validators", &[]).await?;
+            for row in rows {
+                let public_key: BlsPublicKey =
+                    parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?;
+                self.known_validators_cache.insert(public_key.clone());
+            }
+        }
 
         for public_key in public_keys.iter() {
             if self.known_validators_cache.contains(public_key) {
                 pub_keys.insert(public_key.clone());
+            } else {
+                let rows = client
+                    .query(
+                        "SELECT * FROM known_validators WHERE public_key = $1",
+                        &[&(public_key.as_ref())],
+                    )
+                    .await?;
+                for row in rows {
+                    let public_key: BlsPublicKey =
+                        parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?;
+                    self.known_validators_cache.insert(public_key.clone());
+                    pub_keys.insert(public_key);
+                }
             }
         }
 
