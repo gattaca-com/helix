@@ -639,6 +639,17 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         known_validators: Vec<ValidatorSummary>,
     ) -> Result<(), DatabaseError> {
+
+        let mut client = self.pool.get().await?;
+
+        if self.known_validators_cache.is_empty() {
+            let rows = client.query("SELECT * FROM known_validators", &[]).await?;
+            for row in rows {
+                let public_key: BlsPublicKey =
+                    parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?;
+                self.known_validators_cache.insert(public_key.clone());
+            }
+        }
     
         let new_keys_set: HashSet<BlsPublicKey> = known_validators
             .iter()
@@ -659,7 +670,7 @@ impl DatabaseService for PostgresDatabaseService {
             self.known_validators_cache.remove(key);
         }
 
-        let mut client = self.pool.get().await?;
+
         let transaction = client.transaction().await?;
     
         // Perform batch deletion
@@ -699,15 +710,6 @@ impl DatabaseService for PostgresDatabaseService {
     ) -> Result<HashSet<BlsPublicKey>, DatabaseError> {
         let client = self.pool.get().await?;
         let mut pub_keys = HashSet::new();
-
-        if self.known_validators_cache.is_empty() {
-            let rows = client.query("SELECT * FROM known_validators", &[]).await?;
-            for row in rows {
-                let public_key: BlsPublicKey =
-                    parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?;
-                self.known_validators_cache.insert(public_key.clone());
-            }
-        }
 
         for public_key in public_keys.iter() {
             if self.known_validators_cache.contains(public_key) {
