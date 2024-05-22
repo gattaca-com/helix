@@ -246,6 +246,7 @@ where
                     pub_key = ?pub_key,
                     "Registration update not required",
                 );
+                valid_registrations.push(registration);
                 continue;
             }
 
@@ -282,13 +283,6 @@ where
         }
         trace.registrations_complete = get_nanos_timestamp()?;
 
-        if valid_registrations.is_empty() {
-            warn!(
-                request_id = %request_id,
-                "All validator registrations failed!",
-            );
-            return Err(ProposerApiError::NoValidatorsCouldBeRegistered);
-        }
         let successful_registrations = valid_registrations.len();
 
         // Add validator preferences to each registration
