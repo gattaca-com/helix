@@ -134,6 +134,15 @@ impl PostgresDatabaseService {
         };
     }
 
+    pub async fn load_known_validators(&self) {
+        let client = self.pool.get().await.unwrap();
+        let rows = client.query("SELECT * FROM known_validators", &[]).await.unwrap();
+        for row in rows {
+            let public_key: BlsPublicKey = parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key")).unwrap();
+            self.known_validators_cache.insert(public_key);
+        }
+    }
+
     pub async fn start_registration_processor(&self) {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
         let self_clone = self.clone();
@@ -641,15 +650,6 @@ impl DatabaseService for PostgresDatabaseService {
     ) -> Result<(), DatabaseError> {
 
         let mut client = self.pool.get().await?;
-
-        if self.known_validators_cache.is_empty() {
-            let rows = client.query("SELECT * FROM known_validators", &[]).await?;
-            for row in rows {
-                let public_key: BlsPublicKey =
-                    parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?;
-                self.known_validators_cache.insert(public_key.clone());
-            }
-        }
     
         let new_keys_set: HashSet<BlsPublicKey> = known_validators
             .iter()
@@ -724,6 +724,7 @@ impl DatabaseService for PostgresDatabaseService {
                 for row in rows {
                     let public_key: BlsPublicKey =
                         parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?;
+                    self.known_validators_cache.insert(public_key.clone());
                     pub_keys.insert(public_key);
                 }
             }
