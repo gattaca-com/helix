@@ -372,10 +372,14 @@ where
         };
 
         // Save submission to db.
-        api.db_sender
-            .send(DbInfo::NewSubmission(payload.clone(), Arc::new(trace), optimistic_version))
-            .await
-            .map_err(|_| BuilderApiError::InternalError)?;
+        tokio::spawn(async move {
+            if let Err(err) = api.db.store_block_submission(payload, Arc::new(trace), optimistic_version as i16).await {
+                error!(
+                    error = %err,
+                    "failed to store block submission",
+                )
+            }
+        });
 
         Ok(StatusCode::OK)
     }
@@ -780,11 +784,15 @@ where
             "sumbit_block_v2 request finished"
         );
 
-        // Gossip payload
-        api.db_sender
-            .send(DbInfo::NewSubmission(payload.clone(), Arc::new(trace), OptimisticVersion::V2))
-            .await
-            .map_err(|_| BuilderApiError::InternalError)?;
+        // Save submission to db
+        tokio::spawn(async move {
+            if let Err(err) = api.db.store_block_submission(payload, Arc::new(trace), OptimisticVersion::V2 as i16).await {
+                error!(
+                    error = %err,
+                    "failed to store block submission",
+                )
+            }
+        });
 
         Ok(StatusCode::OK)
     }
