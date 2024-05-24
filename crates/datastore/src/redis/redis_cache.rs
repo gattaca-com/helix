@@ -670,7 +670,7 @@ impl Auctioneer for RedisCache {
         let mut conn = self.pool.get().await.map_err(RedisCacheError::from)?;
         let mut pipe = redis::pipe();
 
-        let wrapped_builder_bid = SignedBuilderBidWrapper::new(builder_bid.clone(), slot, builder_pub_key.clone());
+        let wrapped_builder_bid = SignedBuilderBidWrapper::new(builder_bid.clone(), slot, builder_pub_key.clone(), received_at);
 
         let serialised_bid = serde_json::to_string(&wrapped_builder_bid).map_err(RedisCacheError::from)?;
         let serialised_value =
