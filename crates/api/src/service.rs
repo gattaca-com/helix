@@ -16,7 +16,7 @@ use helix_beacon_client::{
     multi_beacon_client::MultiBeaconClient, BlockBroadcaster, MultiBeaconClientTrait,
 };
 use helix_common::{
-    chain_info::ChainInfo, signing::RelaySigningContext, validator_preferences, BroadcasterConfig, NetworkConfig, RelayConfig
+    chain_info::ChainInfo, signing::RelaySigningContext, BroadcasterConfig, NetworkConfig, RelayConfig
 };
 use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
 use helix_datastore::redis::redis_cache::RedisCache;
@@ -130,7 +130,8 @@ impl ApiService {
             .expect("failed to initialise gRPC gossiper"),
         );
 
-        let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
+        let (builder_gossip_sender, builder_gossip_receiver) = tokio::sync::mpsc::channel(10_000);
+        let (proposer_gossip_sender, proposer_gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
         let builder_api = Arc::new(BuilderApiProd::new(
             auctioneer.clone(),
@@ -140,22 +141,24 @@ impl ApiService {
             gossiper.clone(),
             relay_signing_context,
             slot_update_sender.clone(),
-            gossip_receiver,
+            builder_gossip_receiver,
         ));
 
-        gossiper.start_server(gossip_sender).await;
+        gossiper.start_server(builder_gossip_sender, proposer_gossip_sender).await;
 
         let validator_preferences = Arc::new(config.validator_preferences.clone());
 
         let proposer_api = Arc::new(ProposerApiProd::new(
             auctioneer.clone(),
             db.clone(),
+            gossiper.clone(),
             broadcasters,
             multi_beacon_client.clone(),
             chain_info.clone(),
             slot_update_sender,
             validator_preferences.clone(),
             config.target_get_payload_propagation_duration_ms,
+            proposer_gossip_receiver,
         ));
 
         let data_api = Arc::new(DataApiProd::new(validator_preferences.clone(), db.clone()));
