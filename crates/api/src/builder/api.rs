@@ -1034,6 +1034,7 @@ where
                         api_clone.process_gossiped_payload(*payload).await;
                     });
                 }
+                _ => {}
             }
         }
     }

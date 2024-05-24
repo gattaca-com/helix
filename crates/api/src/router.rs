@@ -37,7 +37,7 @@ pub type BuilderApiProd = BuilderApi<
 >;
 
 pub type ProposerApiProd =
-    ProposerApi<RedisCache, PostgresDatabaseService, MultiBeaconClient<BeaconClient>>;
+    ProposerApi<RedisCache, PostgresDatabaseService, MultiBeaconClient<BeaconClient>, GrpcGossiperClientManager>;
 
 pub type DataApiProd = DataApi<PostgresDatabaseService>;
 
