@@ -1,7 +1,8 @@
-#[cfg(postgres_test)]
+#[cfg(test)]
 mod tests {
     use ethereum_consensus::altair::validator;
     use ethereum_consensus::crypto::PublicKey;
+    use helix_common::bid_submission::v2::header_submission::{HeaderSubmissionCapella, SignedHeaderSubmissionCapella};
     use helix_common::Filtering;
     use rand::{seq::SliceRandom, thread_rng};
     use rand::Rng;
@@ -616,18 +617,26 @@ mod tests {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
-        let mut signed_bid_submission = SignedHeaderSubmission::default();
-        *signed_bid_submission.bid_trace_mut() = BidTrace {
-            slot: 1234,
-            parent_hash: Default::default(),
-            block_hash: Default::default(),
-            builder_public_key: Default::default(),
-            proposer_public_key: Default::default(),
-            proposer_fee_recipient: Default::default(),
-            gas_limit: 0,
-            gas_used: 0,
-            value: U256::from(1234),
-        };
+        let signed_bid_submission = SignedHeaderSubmission::Capella(
+            SignedHeaderSubmissionCapella {
+                message: HeaderSubmissionCapella {
+                    bid_trace: BidTrace {
+                        slot: 1234,
+                        parent_hash: Default::default(),
+                        block_hash: Default::default(),
+                        builder_public_key: Default::default(),
+                        proposer_public_key: Default::default(),
+                        proposer_fee_recipient: Default::default(),
+                        gas_limit: 0,
+                        gas_used: 0,
+                        value: U256::from(1234),
+                    },
+                    execution_payload_header: Default::default(),
+                },
+                signature: Default::default(),
+            },
+        );
+
         db_service
             .store_header_submission(
                 Arc::new(signed_bid_submission),
