@@ -1173,57 +1173,68 @@ impl DatabaseService for PostgresDatabaseService {
         filters: &BidFilters,
     ) -> Result<Vec<BidSubmissionDocument>, DatabaseError> {
         let filters = PgBidFilters::from(filters);
-
+    
+        let mut query = String::from("
+            SELECT
+                block_submission.block_number block_number,
+                block_submission.slot_number slot_number,
+                block_submission.parent_hash,
+                block_submission.block_hash,
+                block_submission.builder_pubkey builder_public_key,
+                block_submission.proposer_pubkey proposer_public_key,
+                block_submission.proposer_fee_recipient proposer_fee_recipient,
+                block_submission.gas_limit gas_limit,
+                block_submission.gas_used gas_used,
+                block_submission.value submission_value,
+                block_submission.num_txs num_txs,
+                LEAST(block_submission.first_seen, header_submission.first_seen) submission_timestamp
+            FROM 
+                block_submission
+            LEFT JOIN
+                header_submission ON block_submission.block_hash = header_submission.block_hash
+            WHERE 1 = 1
+        ");
+    
+        let mut param_index = 1;
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+    
+        if let Some(slot) = filters.slot() {
+            query.push_str(&format!(" AND block_submission.slot_number = ${}", param_index));
+            params.push(Box::new(slot));
+            param_index += 1;
+        }
+        
+        if let Some(block_number) = filters.block_number() {
+            query.push_str(&format!(" AND block_submission.block_number = ${}", param_index));
+            params.push(Box::new(block_number));
+            param_index += 1;
+        }
+    
+        if let Some(proposer_pubkey) = filters.proposer_pubkey() {
+            query.push_str(&format!(" AND block_submission.proposer_pubkey = ${}", param_index));
+            params.push(Box::new(proposer_pubkey));
+            param_index += 1;
+        }
+    
+        if let Some(builder_pubkey) = filters.builder_pubkey() {
+            query.push_str(&format!(" AND block_submission.builder_pubkey = ${}", param_index));
+            params.push(Box::new(builder_pubkey));
+            param_index += 1;
+        }
+    
+        if let Some(block_hash) = filters.block_hash() {
+            query.push_str(&format!(" AND block_submission.block_hash = ${}", param_index));
+            params.push(Box::new(block_hash));
+            param_index += 1;
+        }
+    
+        let params_refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect();
+    
         parse_rows(
             self.pool
                 .get()
                 .await?
-                .query(
-                    "
-                        SELECT
-                            block_submission.block_number block_number,
-                            block_submission.slot_number slot_number,
-                            block_submission.parent_hash,
-                            block_submission.block_hash,
-                            block_submission.builder_pubkey builder_public_key,
-                            block_submission.proposer_pubkey proposer_public_key,
-                            block_submission.proposer_fee_recipient proposer_fee_recipient,
-                            block_submission.gas_limit gas_limit,
-                            block_submission.gas_used gas_used,
-                            block_submission.value submission_value,
-                            block_submission.num_txs num_txs,
-                            min(submission_trace.receive) submission_timestamp
-                        FROM 
-                            block_submission
-                        INNER JOIN
-                            submission_trace ON block_submission.block_hash = submission_trace.block_hash
-                        WHERE 
-                            ($1::integer IS NULL OR block_submission.slot_number = $1::integer)
-                        AND ($2::integer IS NULL OR block_submission.block_number = $2::integer)
-                        AND ($3::bytea IS NULL OR block_submission.proposer_pubkey = $3::bytea)
-                        AND ($4::bytea IS NULL OR block_submission.builder_pubkey = $4::bytea)
-                        AND ($5::bytea IS NULL OR block_submission.block_hash = $5::bytea)
-                        GROUP BY
-                            block_submission.block_number,
-                            block_submission.slot_number,
-                            block_submission.parent_hash,
-                            block_submission.block_hash,
-                            block_submission.builder_pubkey,
-                            block_submission.proposer_pubkey,
-                            block_submission.proposer_fee_recipient,
-                            block_submission.gas_limit,
-                            block_submission.gas_used,
-                            block_submission.value,
-                            block_submission.num_txs
-                    ",
-                    &[
-                        &filters.slot(),
-                        &filters.block_number(),
-                        &filters.proposer_pubkey(),
-                        &filters.builder_pubkey(),
-                        &filters.block_hash(),
-                    ],
-                )
+                .query(&query, &params_refs[..])
                 .await?,
         )
     }
