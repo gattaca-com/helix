@@ -982,11 +982,12 @@ impl DatabaseService for PostgresDatabaseService {
         transaction.execute(
             "
                 INSERT INTO
-                    block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp)
+                    block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen)
                 VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                 ON CONFLICT (block_hash)
-                DO NOTHING
+                DO UPDATE SET
+                    first_seen = LEAST(block_submission.first_seen, excluded.first_seen)
                 ",
             &[
                 &(submission.block_number() as i32),
@@ -1001,6 +1002,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(PostgresNumeric::from(submission.value())),
                 &(submission.transactions().len() as i32),
                 &(submission.timestamp() as i64),
+                &(trace.receive as i64),
             ],
         ).await?;
 
@@ -1232,81 +1234,113 @@ impl DatabaseService for PostgresDatabaseService {
         validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
         let filters = PgBidFilters::from(filters);
+        let mut query = String::from("
+            SELECT
+                block_submission.slot_number            slot_number,
+                block_submission.parent_hash            parent_hash,
+                block_submission.block_hash             block_hash,
+                block_submission.builder_pubkey         builder_public_key,
+                block_submission.proposer_pubkey        proposer_public_key,
+                block_submission.proposer_fee_recipient proposer_fee_recipient,
+                block_submission.value                  submission_value,
+                block_submission.gas_limit              gas_limit,
+                block_submission.gas_used               gas_used,
+                block_submission.block_number           block_number,
+                block_submission.num_txs                num_txs
+            FROM 
+                delivered_payload 
+            INNER JOIN
+                block_submission 
+            ON 
+                block_submission.block_hash = delivered_payload.block_hash
+        ");
 
         let filtering = match validator_preferences.filtering {
             Filtering::Regional => Some(1_i16),
             Filtering::Global => None,
         };
 
+        if validator_preferences.trusted_builders.is_some() || filtering.is_some() {
+            query.push_str("
+                INNER JOIN
+                    delivered_payload_preferences
+                ON
+                    delivered_payload.block_hash = delivered_payload_preferences.block_hash
+            ");
+        }
+
+        query.push_str(" WHERE 1 = 1");
+
+        let mut param_index = 1;
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+
+        if let Some(slot) = filters.slot() {
+            query.push_str(&format!(" AND block_submission.slot_number = ${}", param_index));
+            params.push(Box::new(slot));
+            param_index += 1;
+        }
+        
+        if let Some(cursor) = filters.cursor() {
+            query.push_str(&format!(" AND block_submission.slot_number <= ${}", param_index));
+            params.push(Box::new(cursor));
+            param_index += 1;
+        }
+
+        if let Some(block_number) = filters.block_number() {
+            query.push_str(&format!(" AND block_submission.block_number = ${}", param_index));
+            params.push(Box::new(block_number));
+            param_index += 1;
+        }
+
+        if let Some(proposer_pubkey) = filters.proposer_pubkey() {
+            query.push_str(&format!(" AND block_submission.proposer_pubkey = ${}", param_index));
+            params.push(Box::new(proposer_pubkey));
+            param_index += 1;
+        }
+
+        if let Some(builder_pubkey) = filters.builder_pubkey() {
+            query.push_str(&format!(" AND block_submission.builder_pubkey = ${}", param_index));
+            params.push(Box::new(builder_pubkey));
+            param_index += 1;
+        }
+
+        if let Some(block_hash) = filters.block_hash() {
+            query.push_str(&format!(" AND block_submission.block_hash = ${}", param_index));
+            params.push(Box::new(block_hash));
+            param_index += 1;
+        }
+
+        if let Some(filtering) = filtering {
+            query.push_str(&format!(" AND delivered_payload_preferences.filtering = ${}", param_index));
+            params.push(Box::new(filtering));
+            param_index += 1;
+        }
+
+        if let Some(trusted_builders) = &validator_preferences.trusted_builders {
+            query.push_str(&format!(" AND delivered_payload_preferences.trusted_builders @> ${}", param_index));
+            params.push(Box::new(trusted_builders));
+            param_index += 1;
+        }
+
+        if let Some(order) = filters.order() {
+            query.push_str(" ORDER BY block_submission.value ");
+            query.push_str(if order >= 0 { "ASC" } else { "DESC" });
+        } else {
+            query.push_str(" ORDER BY block_submission.slot_number DESC");
+        }
+
+        if let Some(limit) = filters.limit() {
+            query.push_str(&format!(" LIMIT ${}", param_index));
+            params.push(Box::new(limit));
+        }
+
+        let params_refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect();
+
         parse_rows(
             self.pool
                 .get()
                 .await?
-                .query(
-                    "
-                        SELECT
-                            block_submission.slot_number            slot_number,
-                            block_submission.parent_hash            parent_hash,
-                            block_submission.block_hash             block_hash,
-                            block_submission.builder_pubkey         builder_public_key,
-                            block_submission.proposer_pubkey        proposer_public_key,
-                            block_submission.proposer_fee_recipient proposer_fee_recipient,
-                            block_submission.value                  submission_value,
-                            block_submission.gas_limit              gas_limit,
-                            block_submission.gas_used               gas_used,
-                            block_submission.block_number           block_number,
-                            block_submission.num_txs                num_txs
-                        FROM 
-                            delivered_payload 
-                        INNER JOIN
-                            block_submission 
-                        ON 
-                            block_submission.block_hash = delivered_payload.block_hash
-                        INNER JOIN
-                            delivered_payload_preferences
-                        ON
-                            delivered_payload.block_hash = delivered_payload_preferences.block_hash
-                        WHERE
-                            (
-                                ($1::integer IS NOT NULL AND block_submission.slot_number = $1::integer) OR
-                                ($1::integer IS NULL AND $2::integer IS NOT NULL AND block_submission.slot_number <= $2::integer) OR
-                                ($1::integer IS NULL AND $2::integer IS NULL)
-                            )
-                            AND ($3::integer IS NULL OR block_submission.block_number = $3::integer)
-                            AND ($4::bytea IS NULL OR block_submission.proposer_pubkey = $4::bytea)
-                            AND ($5::bytea IS NULL OR block_submission.builder_pubkey = $5::bytea)
-                            AND ($6::bytea IS NULL OR block_submission.block_hash = $6::bytea)
-                            AND ($9::smallint IS NULL OR delivered_payload_preferences.filtering = $9::smallint)
-                            AND ($10::character varying[] IS NULL OR delivered_payload_preferences.trusted_builders @> $10::character varying[])
-                        ORDER BY
-                            CASE
-                                WHEN $7 >= 0 THEN block_submission.value
-                            END ASC,
-                            CASE
-                                WHEN $7 < 0 THEN block_submission.value
-                            END DESC,
-                            CASE
-                                WHEN $7 IS NULL THEN block_submission.slot_number
-                            END DESC
-                        LIMIT
-                            CASE
-                                WHEN $8::bigint IS NOT NULL THEN $8::bigint
-                                ELSE NULL
-                            END
-                    ",
-                    &[
-                        &filters.slot(),
-                        &filters.cursor(),
-                        &filters.block_number(),
-                        &filters.proposer_pubkey(),
-                        &filters.builder_pubkey(),
-                        &filters.block_hash(),
-                        &filters.order(),
-                        &filters.limit(),
-                        &filtering,
-                        &validator_preferences.trusted_builders,
-                    ],
-                )
+                .query(&query, &params_refs[..])
                 .await?,
         )
     }
@@ -1427,11 +1461,12 @@ impl DatabaseService for PostgresDatabaseService {
         transaction.execute(
             "
                 INSERT INTO
-                    header_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, timestamp)
+                    header_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, timestamp, first_seen)
                 VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 ON CONFLICT (block_hash)
-                DO NOTHING
+                DO UPDATE SET
+                    first_seen = LEAST(header_submission.first_seen, excluded.first_seen)
                 ",
             &[
                 &(submission.execution_payload_header().block_number() as i32),
@@ -1445,6 +1480,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(submission.gas_used() as i32),
                 &(PostgresNumeric::from(submission.value())),
                 &(submission.timestamp() as i64),
+                &(trace.receive as i64),
             ],
         ).await?;
 
