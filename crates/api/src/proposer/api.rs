@@ -19,8 +19,7 @@ use ethereum_consensus::{
 
 use tokio::{
     sync::{
-        mpsc,
-        mpsc::{error::SendError, Sender},
+        mpsc::{self, error::SendError, Receiver, Sender},
         RwLock,
     },
     time::{sleep, Instant},
@@ -40,7 +39,7 @@ use helix_datastore::{error::AuctioneerError, Auctioneer};
 use helix_housekeeper::{ChainUpdate, SlotUpdate};
 use helix_utils::signing::{verify_signed_builder_message, verify_signed_consensus_message};
 
-use crate::{builder::api, proposer::{
+use crate::{builder::api, gossiper::{traits::GossipClientTrait, types::{BroadcastGetPayloadParams, GossipedMessage}}, proposer::{
     error::ProposerApiError, unblind_beacon_block, GetHeaderParams, PreferencesHeader, GET_HEADER_REQUEST_CUTOFF_MS
 }};
 
@@ -49,14 +48,16 @@ pub(crate) const MAX_BLINDED_BLOCK_LENGTH: usize = 1024 * 1024;
 pub(crate) const MAX_VAL_REGISTRATIONS_LENGTH: usize = 425 * 10_000; // 425 bytes per registration (json) * 10,000 registrations
 
 #[derive(Clone)]
-pub struct ProposerApi<A, DB, M>
+pub struct ProposerApi<A, DB, M, G>
 where
     A: Auctioneer,
     DB: DatabaseService,
     M: MultiBeaconClientTrait,
+    G: GossipClientTrait + 'static,
 {
     auctioneer: Arc<A>,
     db: Arc<DB>,
+    gossiper: Arc<G>,
     broadcasters: Vec<Arc<BlockBroadcaster>>,
     multi_beacon_client: Arc<M>,
 
@@ -69,25 +70,29 @@ where
     target_get_payload_propagation_duration_ms: u64,
 }
 
-impl<A, DB, M> ProposerApi<A, DB, M>
+impl<A, DB, M, G> ProposerApi<A, DB, M, G>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     M: MultiBeaconClientTrait + 'static,
+    G: GossipClientTrait + 'static,
 {
     pub fn new(
         auctioneer: Arc<A>,
         db: Arc<DB>,
+        gossiper: Arc<G>,
         broadcasters: Vec<Arc<BlockBroadcaster>>,
         multi_beacon_client: Arc<M>,
         chain_info: Arc<ChainInfo>,
         slot_update_subscription: Sender<Sender<ChainUpdate>>,
         validator_preferences: Arc<ValidatorPreferences>,
         target_get_payload_propagation_duration_ms: u64,
+        gossip_receiver: Receiver<GossipedMessage>,
     ) -> Self {
         let api = Self {
             auctioneer,
             db,
+            gossiper,
             broadcasters,
             multi_beacon_client,
             curr_slot_info: Arc::new(RwLock::new((0, None))),
@@ -95,6 +100,12 @@ where
             validator_preferences,
             target_get_payload_propagation_duration_ms,
         };
+
+        // Spin up gossip processing task
+        let api_clone = api.clone();
+        tokio::spawn(async move {
+            api_clone.process_gossiped_info(gossip_receiver).await;
+        });
 
         // Spin up the housekeep task
         let api_clone = api.clone();
@@ -112,7 +123,7 @@ where
 
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/status>
     pub async fn status(
-        Extension(_proposer_api): Extension<Arc<ProposerApi<A, DB, M>>>,
+        Extension(_proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         Ok(StatusCode::OK)
     }
@@ -130,7 +141,7 @@ where
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/registerValidator>
     pub async fn register_validators(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
         headers: HeaderMap,
         Json(registrations): Json<Vec<SignedValidatorRegistration>>,
     ) -> Result<StatusCode, ProposerApiError> {
@@ -328,7 +339,7 @@ where
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/getHeader>
     pub async fn get_header(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
         Path(GetHeaderParams { slot, parent_hash, public_key }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         let request_id = Uuid::new_v4();
@@ -422,7 +433,7 @@ where
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlock>
     pub async fn get_payload(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
         req: Request<Body>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         let mut trace = GetPayloadTrace { receive: get_nanos_timestamp()?, ..Default::default() };
@@ -445,6 +456,14 @@ where
             signed_blinded_block.message().body().execution_payload_header().block_hash().clone();
         
         let slot = signed_blinded_block.message().slot();
+
+        // Broadcast get payload request
+        if let Err(e) = proposer_api.gossiper.broadcast_get_payload(BroadcastGetPayloadParams {
+            signed_blinded_beacon_block: signed_blinded_block.clone(),
+        }).await {
+            error!(request_id = %request_id, error = %e, "failed to broadcast get payload");
+        
+        };
 
         match proposer_api._get_payload(signed_blinded_block, &mut trace, &request_id).await {
             Ok(get_payload_response) => Ok(axum::Json(get_payload_response)),
@@ -747,11 +766,12 @@ where
 }
 
 // HELPERS
-impl<A, DB, M> ProposerApi<A, DB, M>
+impl<A, DB, M, G> ProposerApi<A, DB, M, G>
 where
-    A: Auctioneer,
+    A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    M: MultiBeaconClientTrait,
+    M: MultiBeaconClientTrait + 'static,
+    G: GossipClientTrait + 'static,
 {
     /// Validate a single registration.
     pub fn validate_registration(
@@ -975,6 +995,31 @@ where
         }
     }
 
+    /// This function should be run as a seperate async task.
+    /// Will process new gossiped messages from
+    async fn process_gossiped_info(&self, mut recveiver: Receiver<GossipedMessage>) {
+        while let Some(msg) = recveiver.recv().await {
+            match msg {
+                GossipedMessage::GetPayload(payload) => {
+                    let api_clone = self.clone();
+                    tokio::spawn(async move {
+                        let mut trace = GetPayloadTrace { receive: get_nanos_timestamp().unwrap_or_default(), ..Default::default() };
+                        let request_id = Uuid::new_v4();
+                        match api_clone._get_payload(payload.signed_blinded_beacon_block, &mut trace, &request_id).await {
+                            Ok(_get_payload_response) => {
+                                info!(request_id = %request_id, "gossiped payload processed");
+                            }
+                            Err(err) => {
+                                error!(request_id = %request_id, error = %err, "error processing gossiped payload");
+                            }
+                        }
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Fetches the execution payload associated with a given slot, public key, and block hash.
     ///
     /// The function will retry until the slot cutoff is reached.
@@ -1113,11 +1158,12 @@ async fn deserialize_get_payload_bytes(
 }
 
 // STATE SYNC
-impl<A, DB, M> ProposerApi<A, DB, M>
+impl<A, DB, M, G> ProposerApi<A, DB, M, G>
 where
     A: Auctioneer,
     DB: DatabaseService,
     M: MultiBeaconClientTrait,
+    G: GossipClientTrait + 'static,
 {
     /// Subscribes to slot head updater.
     /// Updates the current slot and next proposer duty.

@@ -9,7 +9,7 @@ use crate::{
     gossiper::{
         error::GossipError,
         traits::GossipClientTrait,
-        types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
+        types::{BroadcastHeaderParams, BroadcastPayloadParams, BroadcastGetPayloadParams, GossipedMessage},
     },
     grpc::{
         self,
@@ -111,6 +111,34 @@ impl GrpcGossiperClient {
         }
         Ok(())
     }
+
+    pub async fn broadcast_get_payload(
+        &self,
+        request: grpc::BroadcastGetPayloadParams,
+    ) -> Result<(), GossipError> {
+        let request = Request::new(request);
+        let client = {
+            let client_guard = self.client.read().await;
+            client_guard.clone()
+        };
+
+        if let Some(mut client) = client {
+            if let Err(err) = client.broadcast_get_payload(request).await {
+                return match err.code() {
+                    tonic::Code::Unavailable => {
+                        error!(err = %err, "failed to broadcast get payload");
+                        // Reconnect
+                        self.connect().await;
+                        Err(GossipError::BroadcastError(err))
+                    }
+                    _ => Err(GossipError::BroadcastError(err)),
+                }
+            }
+        } else {
+            return Err(GossipError::ClientNotConnected);
+        }
+        Ok(())
+    }
 }
 
 /// `GrpcGossiperClientManager` manages multiple gRPC connections used for gossiping new bids
@@ -133,8 +161,8 @@ impl GrpcGossiperClientManager {
 
     /// Starts the gRPC server to listen for gossip requests on the 50051 port.
     /// Will panic if the server can't be started.
-    pub async fn start_server(&self, builder_api_sender: Sender<GossipedMessage>) {
-        let service = GrpcGossiperService { builder_api_sender };
+    pub async fn start_server(&self, builder_api_sender: Sender<GossipedMessage>, proposer_api_sender: Sender<GossipedMessage>) {
+        let service = GrpcGossiperService { builder_api_sender, proposer_api_sender };
 
         let addr = "0.0.0.0:50051".parse().unwrap();
         tokio::spawn(async move {
@@ -178,12 +206,28 @@ impl GossipClientTrait for GrpcGossiperClientManager {
         }
         Ok(())
     }
+
+    async fn broadcast_get_payload(&self, request: BroadcastGetPayloadParams) -> Result<(), GossipError> {
+        let request = request.to_proto();
+
+        for client in self.clients.iter() {
+            let client = client.clone();
+            let request = request.clone();
+            tokio::spawn(async move {
+                if let Err(err) = client.broadcast_get_payload(request).await {
+                    error!(err = %err, "failed to broadcast get payload");
+                }
+            });
+        }
+        Ok(())
+    }
 }
 
 /// `GrpcGossiperService` listens to incoming requests from the other geo-distributed instances
 /// and processes them.
 pub struct GrpcGossiperService {
     builder_api_sender: Sender<GossipedMessage>,
+    proposer_api_sender: Sender<GossipedMessage>,
 }
 
 #[tonic::async_trait]
@@ -210,6 +254,19 @@ impl GossipService for GrpcGossiperService {
             self.builder_api_sender.send(GossipedMessage::Payload(Box::new(request))).await
         {
             error!(err = %err, "failed to send payload to builder");
+        }
+        Ok(Response::new(()))
+    }
+
+    async fn broadcast_get_payload(
+        &self,
+        request: Request<grpc::BroadcastGetPayloadParams>,
+    ) -> Result<Response<()>, Status> {
+        let request = BroadcastGetPayloadParams::from_proto(request.into_inner());
+        if let Err(err) =
+            self.proposer_api_sender.send(GossipedMessage::GetPayload(Box::new(request))).await
+        {
+            error!(err = %err, "failed to send get payload to builder");
         }
         Ok(Response::new(()))
     }

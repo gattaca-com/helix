@@ -32,11 +32,10 @@ pub fn gen_signed_vr() -> SignedValidatorRegistration {
 mod proposer_api_tests {
     // +++ IMPORTS +++
     use crate::{
-        proposer::{
+        gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage}, proposer::{
             api::{get_nanos_timestamp, ProposerApi},
             PATH_GET_PAYLOAD, PATH_PROPOSER_API,
-        },
-        test_utils::proposer_api_app,
+        }, test_utils::proposer_api_app
     };
 
     use ethereum_consensus::{
@@ -221,7 +220,7 @@ mod proposer_api_tests {
     async fn start_api_server() -> (
         oneshot::Sender<()>,
         HttpServiceConfig,
-        Arc<ProposerApi<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient>>,
+        Arc<ProposerApi<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient, MockGossiper>>,
         Receiver<Sender<ChainUpdate>>,
         Arc<MockAuctioneer>,
     ) {
@@ -991,18 +990,21 @@ mod proposer_api_tests {
     #[ignore]
     async fn test_validate_registration() {
         let (slot_update_sender, _slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
+        let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
         let auctioneer = Arc::new(MockAuctioneer::default());
 
         let prop_api =
-            ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient>::new(
+            ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient, MockGossiper>::new(
                 auctioneer.clone(),
                 Arc::new(MockDatabaseService::default()),
+                Arc::new(MockGossiper::new().unwrap()),
                 vec![],
                 Arc::new(MockMultiBeaconClient::default()),
                 Arc::new(ChainInfo::for_holesky()),
                 slot_update_sender.clone(),
                 Arc::new(ValidatorPreferences::default()),
                 0,
+                gossip_receiver,
             );
 
         let mut x = gen_signed_vr();
