@@ -52,17 +52,14 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-use helix_utils::{calculate_withdrawals_root, has_reached_fork, try_decode_into};
+use helix_utils::{calculate_withdrawals_root, get_payload_attributes_key, has_reached_fork, try_decode_into};
 
-use crate::{
-    builder::{
-        error::BuilderApiError, traits::BlockSimulator, BlockSimRequest, DbInfo, OptimisticVersion,
-    },
-    gossiper::{
-        traits::GossipClientTrait,
-        types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
-    },
-};
+use crate::{builder::{
+    error::BuilderApiError, traits::BlockSimulator, BlockSimRequest, DbInfo, OptimisticVersion,
+}, gossiper::{
+    traits::GossipClientTrait,
+    types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
+}};
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
 
@@ -87,7 +84,7 @@ where
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
 
     proposer_duties_response: Arc<RwLock<Option<Vec<u8>>>>,
-    payload_attributes: Arc<RwLock<HashMap<Bytes32, PayloadAttributesUpdate>>>,
+    payload_attributes: Arc<RwLock<HashMap<String, PayloadAttributesUpdate>>>,
 }
 
 impl<A, DB, S, G> BuilderApi<A, DB, S, G>
@@ -1410,8 +1407,9 @@ where
         parent_hash: &Hash32,
         request_id: &Uuid,
     ) -> Result<PayloadAttributesUpdate, BuilderApiError> {
+        let payload_attributes_key = get_payload_attributes_key(parent_hash, slot);
         let payload_attributes =
-            self.payload_attributes.read().await.get(parent_hash).cloned().ok_or_else(|| {
+            self.payload_attributes.read().await.get(&payload_attributes_key).cloned().ok_or_else(|| {
                 warn!(request_id = %request_id, "payload attributes not yet known");
                 BuilderApiError::PayloadAttributesNotYetKnown
             })?;
@@ -1613,22 +1611,27 @@ where
     async fn handle_new_payload_attributes(&self, payload_attributes: PayloadAttributesUpdate) {
         let (head_slot, _) = *self.curr_slot_info.read().await;
 
+        if payload_attributes.slot <= head_slot {
+            return;
+        }
+
         debug!(
             randao = ?payload_attributes.payload_attributes.prev_randao,
             timestamp = payload_attributes.payload_attributes.timestamp,
         );
 
         // Discard payload attributes if already known
+        let payload_attributes_key = get_payload_attributes_key(&payload_attributes.parent_hash, payload_attributes.slot);
         let mut all_payload_attributes = self.payload_attributes.write().await;
-        if all_payload_attributes.contains_key(&payload_attributes.parent_hash) {
+        if all_payload_attributes.contains_key(&payload_attributes_key) {
             return;
         }
 
         // Clean up old payload attributes
-        all_payload_attributes.retain(|_, value| value.slot >= head_slot - 2);
+        all_payload_attributes.retain(|_, value| value.slot >= head_slot);
 
         // Save new one
-        all_payload_attributes.insert(payload_attributes.parent_hash.clone(), payload_attributes);
+        all_payload_attributes.insert(payload_attributes_key, payload_attributes);
     }
 }
 
