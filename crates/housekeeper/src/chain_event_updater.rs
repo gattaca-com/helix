@@ -2,6 +2,7 @@ use std::{
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
+use std::collections::HashMap;
 
 use ethereum_consensus::{
     configs::{goerli::CAPELLA_FORK_EPOCH, mainnet::SECONDS_PER_SLOT},
@@ -13,7 +14,7 @@ use tracing::{error, info, warn};
 use helix_beacon_client::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo};
 use helix_database::DatabaseService;
-use helix_utils::{calculate_withdrawals_root, has_reached_fork};
+use helix_utils::{calculate_withdrawals_root, get_payload_attributes_key, has_reached_fork};
 
 // Do not accept slots more than 60 seconds in the future
 const MAX_DISTANCE_FOR_FUTURE_SLOT: u64 = 60;
@@ -45,8 +46,8 @@ pub enum ChainUpdate {
 pub struct ChainEventUpdater<D: DatabaseService> {
     subscribers: Vec<mpsc::Sender<ChainUpdate>>,
 
-    last_slot: u64,
-    last_payload_attribute_parent: Bytes32,
+    head_slot: u64,
+    known_payload_attributes: HashMap<String, PayloadAttributesEvent>,
 
     proposer_duties: Vec<BuilderGetValidatorsResponseEntry>,
 
@@ -63,8 +64,8 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
     ) -> Self {
         Self {
             subscribers: Vec::new(),
-            last_slot: 0,
-            last_payload_attribute_parent: Bytes32::default(),
+            head_slot: 0,
+            known_payload_attributes: Default::default(),
             database,
             subscription_channel,
             proposer_duties: Vec::new(),
@@ -122,7 +123,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
 
     /// Handles a new head event.
     async fn process_head_event(&mut self, event: HeadEventData) {
-        if self.last_slot >= event.slot {
+        if self.head_slot >= event.slot {
             return;
         }
 
@@ -139,13 +140,13 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         }
 
         // Log any missed slots
-        if self.last_slot != 0 {
-            for s in (self.last_slot + 1)..event.slot {
+        if self.head_slot != 0 {
+            for s in (self.head_slot + 1)..event.slot {
                 warn!(missed_slot = s, "missed slot");
             }
         }
 
-        self.last_slot = event.slot;
+        self.head_slot = event.slot;
 
         // Re-fetch proposer duties every 8 slots
         let new_duties = if event.slot % 8 == 0 {
@@ -177,16 +178,24 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
     // Handles a new payload attributes event
     async fn process_payload_attributes(&mut self, event: PayloadAttributesEvent) {
         // require new proposal slot in the future
-        if self.last_slot >= event.data.proposal_slot {
+        if self.head_slot >= event.data.proposal_slot {
             return;
         }
-        if self.last_payload_attribute_parent == event.data.parent_block_hash {
+
+        // Discard payload attributes if already known
+        let payload_attributes_key = get_payload_attributes_key(&event.data.parent_block_hash, event.data.proposal_slot);
+        if self.known_payload_attributes.contains_key(&payload_attributes_key) {
             return;
         }
-        self.last_payload_attribute_parent = event.data.parent_block_hash.clone();
+
+        // Clean up old payload attributes
+        self.known_payload_attributes.retain(|_, value| value.data.proposal_slot >= self.head_slot);
+
+        // Save new one
+        self.known_payload_attributes.insert(payload_attributes_key, event.clone());
 
         info!(
-            head_slot = self.last_slot,
+            head_slot = self.head_slot,
             payload_attribute_slot = event.data.proposal_slot,
             payload_attribute_parent = ?event.data.parent_block_hash,
             "Processing payload attribute event",
