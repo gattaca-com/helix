@@ -649,6 +649,8 @@ impl DatabaseService for PostgresDatabaseService {
         known_validators: Vec<ValidatorSummary>,
     ) -> Result<(), DatabaseError> {
 
+        info!("Known validators: current cache size: {:?}", self.known_validators_cache.len());
+
         let mut client = self.pool.get().await?;
     
         let new_keys_set: HashSet<BlsPublicKey> = known_validators
@@ -669,6 +671,12 @@ impl DatabaseService for PostgresDatabaseService {
         for key in &keys_to_remove {
             self.known_validators_cache.remove(key);
         }
+
+        
+        info!("Known validators: added: {:?}", keys_to_add.len());
+        info!("Known validators: removed: {:?}", keys_to_add.len());
+
+        info!("Known validators: updated cache size: {:?}", self.known_validators_cache.len());
 
 
         let transaction = client.transaction().await?;
