@@ -29,4 +29,5 @@ message BroadcastPayloadParams {
 
 message BroadcastGetPayloadParams {
   bytes signed_blinded_beacon_block = 1;
+  bytes request_id = 2;
 }

@@ -460,6 +460,7 @@ where
         // Broadcast get payload request
         if let Err(e) = proposer_api.gossiper.broadcast_get_payload(BroadcastGetPayloadParams {
             signed_blinded_beacon_block: signed_blinded_block.clone(),
+            request_id: request_id.clone(),
         }).await {
             error!(request_id = %request_id, error = %e, "failed to broadcast get payload");
         
@@ -1004,13 +1005,12 @@ where
                     let api_clone = self.clone();
                     tokio::spawn(async move {
                         let mut trace = GetPayloadTrace { receive: get_nanos_timestamp().unwrap_or_default(), ..Default::default() };
-                        let request_id = Uuid::new_v4();
-                        match api_clone._get_payload(payload.signed_blinded_beacon_block, &mut trace, &request_id).await {
+                        match api_clone._get_payload(payload.signed_blinded_beacon_block, &mut trace, &payload.request_id).await {
                             Ok(_get_payload_response) => {
-                                info!(request_id = %request_id, "gossiped payload processed");
+                                info!(request_id = %payload.request_id, "gossiped payload processed");
                             }
                             Err(err) => {
-                                error!(request_id = %request_id, error = %err, "error processing gossiped payload");
+                                error!(request_id = %payload.request_id, error = %err, "error processing gossiped payload");
                             }
                         }
                     });
