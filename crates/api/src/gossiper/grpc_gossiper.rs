@@ -262,7 +262,6 @@ impl GossipService for GrpcGossiperService {
         &self,
         request: Request<grpc::BroadcastGetPayloadParams>,
     ) -> Result<Response<()>, Status> {
-        info!("received gossiped get_payload");
         let request = BroadcastGetPayloadParams::from_proto(request.into_inner());
         if let Err(err) =
             self.proposer_api_sender.send(GossipedMessage::GetPayload(Box::new(request))).await
