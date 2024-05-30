@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use tokio::{sync::mpsc::Sender, time::sleep};
 use tonic::{transport::Channel, Request, Response, Status};
-use tracing::error;
+use tracing::{error, info};
 
 use crate::{
     gossiper::{
@@ -262,6 +262,7 @@ impl GossipService for GrpcGossiperService {
         &self,
         request: Request<grpc::BroadcastGetPayloadParams>,
     ) -> Result<Response<()>, Status> {
+        info!("received get broadcast payload");
         let request = BroadcastGetPayloadParams::from_proto(request.into_inner());
         if let Err(err) =
             self.proposer_api_sender.send(GossipedMessage::GetPayload(Box::new(request))).await
