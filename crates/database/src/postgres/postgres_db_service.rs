@@ -919,6 +919,7 @@ impl DatabaseService for PostgresDatabaseService {
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
+            sql.push_str(" ON CONFLICT (md5(block_hash::text), md5(bytes::text)) DO NOTHING");
 
             transaction.execute(&sql, &params[..]).await?;
         }
