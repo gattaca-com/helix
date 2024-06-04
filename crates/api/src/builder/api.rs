@@ -924,16 +924,15 @@ where
         info!(request_id = %request_id, "succesfully saved gossiped header");
 
         // Save latency trace to db
-        if let Err(err) = self
-            .db_sender
-            .send(DbInfo::GossipedHeader {
-                block_hash: req.bid_trace.block_hash.clone(),
-                trace: Arc::new(trace),
-            })
-            .await
-        {
-            error!(request_id = %request_id, error = %err, "failed to send latency trace to db");
-        };
+        let db = self.db.clone();
+        tokio::spawn(async move {
+            if let Err(err) = db.save_gossiped_header_trace(req.bid_trace.block_hash.clone(), Arc::new(trace)).await {
+                error!(
+                    error = %err,
+                    "failed to store gossiped header trace",
+                )
+            }
+        });
     }
 
     pub async fn process_gossiped_payload(&self, req: BroadcastPayloadParams) {
@@ -1004,17 +1003,16 @@ where
 
         info!(request_id = %request_id, "succesfully saved gossiped payload");
 
-        // Save latency trace to db
-        if let Err(err) = self
-            .db_sender
-            .send(DbInfo::GossipedPayload {
-                block_hash: req.execution_payload.execution_payload.block_hash().clone(),
-                trace: Arc::new(trace),
-            })
-            .await
-        {
-            error!(request_id = %request_id, error = %err, "failed to send latency trace to db");
-        };
+        // Save gossiped payload trace to db
+        let db = self.db.clone();
+        tokio::spawn(async move {
+            if let Err(err) = db.save_gossiped_payload_trace(req.execution_payload.execution_payload.block_hash().clone(), Arc::new(trace)).await {
+                error!(
+                    error = %err,
+                    "failed to store gossiped payload trace",
+                )
+            }
+        });
     }
 
     /// This function should be run as a seperate async task.

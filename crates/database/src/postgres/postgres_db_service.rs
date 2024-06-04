@@ -614,6 +614,7 @@ impl DatabaseService for PostgresDatabaseService {
 
         // Join the values clauses and append them to the SQL statement
         sql.push_str(&values_clauses.join(", "));
+        sql.push_str(" ON CONFLICT (public_key) DO NOTHING");
 
         // Execute the query
         transaction.execute(&sql, &params[..]).await?;
