@@ -2,22 +2,24 @@ use std::sync::{Arc, RwLock, RwLockReadGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::{Body, to_bytes};
+use axum::Extension;
 use axum::extract::Path;
 use axum::http::{Request, StatusCode};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use ethereum_consensus::primitives::{BlsPublicKey, BlsSignature, Hash32};
 use ethereum_consensus::types::mainnet::SignedBlindedBeaconBlock;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use helix_common::api::builder_api::BuilderGetValidatorsResponseEntry;
-use helix_common::api::constraints_api::{GetGatewayParams, SignedConstraintsMessage, SignedGatewayElection};
+use helix_common::api::constraints_api::{ConstraintsMessage, GetGatewayParams, SignedConstraintsMessage, SignedGatewayElection};
 use helix_common::bellatrix::SimpleSerialize;
 use helix_common::chain_info::ChainInfo;
 use helix_common::ProposerDuty;
 use helix_common::traces::constraints_api::{ElectGatewayTrace, GetGatewayTrace, SetConstraintsTrace};
 use helix_datastore::{Auctioneer, constraints::ConstraintsAuctioneer};
 use helix_utils::signing::verify_signed_builder_message;
+use crate::builder::api::BuilderApi;
 
 use crate::constraints::error::ConstraintsApiError;
 use crate::constraints::SET_CONSTRAINTS_CUTOFF_NS;
@@ -51,9 +53,29 @@ impl<A> ConstraintsApi<A>
 where
     A: ConstraintsAuctioneer + 'static,
 {
+    /// Returns the constraints for the current slot
+    pub async fn get_constraints(
+        Extension(api): Extension<Arc<ConstraintsApi<A>>>,
+    ) -> Result<impl IntoResponse, ConstraintsApiError> {
+        let head_slot = api.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
+
+        let constraints = api.auctioneer.get_constraints(head_slot).await?;
+        let constraints_bytes = serde_json::to_vec(&constraints)?;
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(axum::body::Body::from(constraints_bytes))
+            .unwrap()
+            .into_response()
+        )
+    }
+
     /// Elects a gateway to perform pre-confirmations for a validator. The request must be signed by the validator
     /// and cannot be for a slot more than 2 epochs in the future.
-    pub async fn elect_gateway(&self, req: Request<Body>) -> Result<StatusCode, ConstraintsApiError> {
+    pub async fn elect_gateway(
+        Extension(api): Extension<Arc<ConstraintsApi<A>>>,
+        req: Request<Body>,
+    ) -> Result<StatusCode, ConstraintsApiError> {
         let request_id = Uuid::new_v4();
         let mut trace = ElectGatewayTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
@@ -61,7 +83,7 @@ where
         let mut election_req: SignedGatewayElection = deserialize_json_request_bytes(req, MAX_GATEWAY_ELECTION_SIZE).await?;
         trace.deserialize = get_nanos_timestamp()?;
 
-        let head_slot = self.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
+        let head_slot = api.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
         debug!(
             request_id = %request_id,
             event = "elect_gateway",
@@ -72,7 +94,7 @@ where
             validator_index=%election_req.validator_index(),
         );
 
-        if let Err(err) = self.validate_election_request(&mut election_req, head_slot) {
+        if let Err(err) = api.validate_election_request(&mut election_req, head_slot) {
             warn!(request_id = %request_id, ?err, "validation failed");
             return Err(err);
         }
@@ -80,7 +102,7 @@ where
 
         // Save to constraints datastore
         // TODO: database
-        self.auctioneer.save_new_gateway_election(election_req.gateway_public_key(), election_req.slot()).await?;
+        api.auctioneer.save_new_gateway_election(election_req.gateway_public_key(), election_req.slot()).await?;
         trace.gateway_election_saved = get_nanos_timestamp()?;
 
         info!(%request_id, ?trace, "gateway elected");
@@ -90,13 +112,13 @@ where
     /// Returns the gateway for the given slot. If the request is for a proposer in the next 2 epochs, it will always
     /// return something. If no elected gateway is found, it defaults to the proposer public key.
     pub async fn get_gateway(
-        &self,
+        Extension(api): Extension<Arc<ConstraintsApi<A>>>,
         Path(GetGatewayParams { slot }): Path<GetGatewayParams>,
     ) -> Result<BlsPublicKey, ConstraintsApiError> {
         let request_id = Uuid::new_v4();
         let mut trace = GetGatewayTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
-        let head_slot = self.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
+        let head_slot = api.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
         debug!(
             request_id = %request_id,
             event = "get_gateway",
@@ -111,14 +133,14 @@ where
         }
 
         // Try to fetch from datastore
-        if let Some(elected_gateway) = self.auctioneer.get_gateway(slot).await? {
+        if let Some(elected_gateway) = api.auctioneer.get_gateway(slot).await? {
             trace.gateway_fetched = get_nanos_timestamp()?;
             debug!(%request_id, ?elected_gateway, ?trace, "found elected gateway in datastore");
             return Ok(elected_gateway);
         }
 
         // If it can't be found in the datastore then we default to checking the proposer duties
-        let duties_read_guard = self.proposer_duties.read().map_err(|_| ConstraintsApiError::LockPoisoned)?;
+        let duties_read_guard = api.proposer_duties.read().map_err(|_| ConstraintsApiError::LockPoisoned)?;
         match duties_read_guard.iter().find(|duty| duty.slot == slot) {
             Some(proposer_duty) => {
                 trace.gateway_fetched = get_nanos_timestamp()?;
@@ -139,7 +161,10 @@ where
 
     /// If the request is sent by the preconf for this current slot and this is the first time. We save the constraints.
     /// must also be sent before the cutoff. TODO: fix comment
-    pub async fn set_constraints(&self, req: Request<Body>) -> Result<StatusCode, ConstraintsApiError> {
+    pub async fn set_constraints(
+        Extension(api): Extension<Arc<ConstraintsApi<A>>>,
+        req: Request<Body>,
+    ) -> Result<StatusCode, ConstraintsApiError> {
         let request_id = Uuid::new_v4();
         let mut trace = SetConstraintsTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
@@ -147,7 +172,7 @@ where
         let mut constraints: SignedConstraintsMessage = deserialize_json_request_bytes(req, MAX_SET_CONSTRAINTS_SIZE).await?;
         trace.deserialize = get_nanos_timestamp()?;
 
-        let slot_info = self.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.clone();
+        let slot_info = api.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.clone();
         debug!(
             request_id = %request_id,
             event = "set_constraints",
@@ -158,7 +183,7 @@ where
         );
 
         // Validate request
-        if let Err(err) = self.validate_set_constraints_request(
+        if let Err(err) = api.validate_set_constraints_request(
             &mut constraints,
             &slot_info.elected_gateway,
             slot_info.slot,
@@ -169,7 +194,7 @@ where
         }
         trace.validation_complete = get_nanos_timestamp()?;
 
-        self.auctioneer.save_constraints(constraints.message).await?;
+        api.auctioneer.save_constraints(constraints.message).await?;
         trace.constraints_set = get_nanos_timestamp()?;
 
         info!(%request_id, ?trace, "constraints set");
