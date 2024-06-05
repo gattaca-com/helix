@@ -1,8 +1,8 @@
 use async_trait::async_trait;
+use ethereum_consensus::altair::BlsPublicKey;
 use crate::error::AuctioneerError;
 
 #[async_trait]
-#[auto_impl::auto_impl(Arc)]
 pub trait ConstraintsAuctioneer: Send + Sync + Clone {
-    async fn get_last_slot_delivered(&self) -> Result<Option<u64>, AuctioneerError>;
+    async fn save_new_gateway_election(&self, gateway_public_key: &BlsPublicKey, slot: u64) -> Result<(), AuctioneerError>;
 }

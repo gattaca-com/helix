@@ -5,6 +5,8 @@ use axum::{
 };
 use ethereum_consensus::ssz;
 use tokio::sync::RwLockReadGuard;
+use helix_datastore::error::AuctioneerError;
+use crate::builder::error::BuilderApiError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConstraintsApiError {
@@ -43,6 +45,9 @@ pub enum ConstraintsApiError {
 
     #[error("internal server error")]
     InternalServerError,
+
+    #[error("datastore error: {0}")]
+    AuctioneerError(#[from] AuctioneerError),
 }
 
 impl IntoResponse for ConstraintsApiError {
@@ -83,6 +88,9 @@ impl IntoResponse for ConstraintsApiError {
             },
             ConstraintsApiError::InternalServerError => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
+            },
+            BuilderApiError::AuctioneerError(err) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Auctioneer error: {err}")).into_response()
             },
         }
     }
