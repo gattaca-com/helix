@@ -29,3 +29,8 @@ pub struct GatewayElection {
     pub slot: u64,
     pub public_key: BlsPublicKey,
 }
+
+#[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+pub struct GetGatewayParams {
+    pub slot: u64,
+}
