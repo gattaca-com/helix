@@ -45,8 +45,8 @@ impl<A> ConstraintsApi<A>
 where
     A: ConstraintsAuctioneer + 'static,
 {
-    /// Elects a gateway to do the pre-confirmations for a validator. Must be signed by the validator for the requested slot.
-    /// Cannot be more than 2 epochs in the future as we do not know that
+    /// Elects a gateway to perform pre-confirmations for a validator. The request must be signed by the validator
+    /// and cannot be for a slot more than 2 epochs in the future.
     pub async fn elect_gateway(&self, req: Request<Body>) -> Result<impl IntoResponse, ConstraintsApiError> {
         let request_id = Uuid::new_v4();
         let mut trace = ElectGatewayTrace { receive: get_nanos_timestamp()?, ..Default::default() };
@@ -80,6 +80,11 @@ where
         Ok(StatusCode::OK)
     }
 
+    /// - Checks if the requested slot is in the past.
+    /// - Retrieves the latest known proposer duty.
+    /// - Ensures the request slot is not beyond the latest known proposer duty.
+    /// - Validates that the provided public key is the proposer for the requested slot.
+    /// - Verifies the signature.
     fn validate_election_request(&self, election_req: &mut SignedGatewayElection, head_slot: u64) -> Result<(), ConstraintsApiError> {
         // Cannot elect a gateway for a past slot
         if election_req.slot() < head_slot {
@@ -104,6 +109,7 @@ where
             return Err(ConstraintsApiError::ValidatorIsNotProposerForRequestedSlot);
         }
 
+        // Drop the read lock guard to avoid holding it during signature verification
         drop(duties_read_guard);
 
         // Verify proposer signature
