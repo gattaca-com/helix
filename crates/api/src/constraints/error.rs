@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use ethereum_consensus::primitives::BlsPublicKey;
 use ethereum_consensus::ssz;
 use tokio::sync::RwLockReadGuard;
 use helix_datastore::error::AuctioneerError;
@@ -50,6 +51,21 @@ pub enum ConstraintsApiError {
 
     #[error("no gateway found for slot: {slot}")]
     NoGatewayFoundForSlot { slot: u64 },
+
+    #[error("can only set constraints for current slot. request slot: {request_slot}, curr slot: {curr_slot}")]
+    CanOnlySetConstraintsForCurrentSlot { request_slot: u64, curr_slot: u64 },
+
+    #[error("proposer duty not found. slot: {slot}, validator_index: {validator_index}")]
+    ProposerDutyNotFound { slot: u64, validator_index: usize },
+
+    #[error("not elected gateway. request public key: {request_public_key:?}, elected gateway public key: {elected_gateway_public_key:?}")]
+    NotElectedGateway { request_public_key: BlsPublicKey, elected_gateway_public_key: BlsPublicKey },
+
+    #[error("set constraints sent too late. ns into slot: {ns_into_slot}, cutoff: {cutoff}")]
+    SetConstraintsTooLate { ns_into_slot: u64, cutoff: u64 },
+
+    #[error("constraints already set for slot")]
+    ConstraintsAlreadySetForSlot,
 }
 
 impl IntoResponse for ConstraintsApiError {
@@ -96,6 +112,24 @@ impl IntoResponse for ConstraintsApiError {
             },
             ConstraintsApiError::NoGatewayFoundForSlot{slot} => {
                 (StatusCode::BAD_REQUEST, format!("no gateway found for slot: {slot}")).into_response()
+            },
+            ConstraintsApiError::CanOnlySetConstraintsForCurrentSlot{request_slot, curr_slot} => {
+                (StatusCode::BAD_REQUEST, format!("can only set constraints for current slot. request slot: {request_slot}, curr slot: {curr_slot}")).into_response()
+            },
+            ConstraintsApiError::ProposerDutyNotFound{slot, validator_index} => {
+                (StatusCode::BAD_REQUEST, format!("proposer duty not found. slot: {slot}, validator_index: {validator_index}")).into_response()
+            },
+            ConstraintsApiError::NotElectedGateway{request_public_key, elected_gateway_public_key} => {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("not elected gateway. request public key: {request_public_key:?}, elected gateway public key: {elected_gateway_public_key:?}"),
+                ).into_response()
+            },
+            ConstraintsApiError::SetConstraintsTooLate{ns_into_slot, cutoff} => {
+                (StatusCode::BAD_REQUEST, format!("set constraints sent too late. ns into slot: {ns_into_slot}, cutoff: {cutoff}")).into_response()
+            },
+            ConstraintsApiError::ConstraintsAlreadySetForSlot => {
+                (StatusCode::BAD_REQUEST, "constraints already set for slot").into_response()
             },
         }
     }
