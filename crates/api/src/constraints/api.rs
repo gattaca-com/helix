@@ -7,15 +7,15 @@ use axum::http::{Request, StatusCode};
 use axum::response::IntoResponse;
 use ethereum_consensus::primitives::{BlsPublicKey, BlsSignature, Hash32};
 use ethereum_consensus::types::mainnet::SignedBlindedBeaconBlock;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use helix_common::api::builder_api::BuilderGetValidatorsResponseEntry;
-use helix_common::api::constraints_api::SignedGatewayElection;
+use helix_common::api::constraints_api::{GetGatewayParams, SignedGatewayElection};
 use helix_common::bellatrix::SimpleSerialize;
 use helix_common::chain_info::ChainInfo;
 use helix_common::ProposerDuty;
-use helix_common::traces::constraints_api::ElectGatewayTrace;
+use helix_common::traces::constraints_api::{ElectGatewayTrace, GetGatewayTrace};
 use helix_datastore::{Auctioneer, constraints::ConstraintsAuctioneer};
 use helix_utils::signing::verify_signed_builder_message;
 
@@ -47,7 +47,7 @@ where
 {
     /// Elects a gateway to perform pre-confirmations for a validator. The request must be signed by the validator
     /// and cannot be for a slot more than 2 epochs in the future.
-    pub async fn elect_gateway(&self, req: Request<Body>) -> Result<impl IntoResponse, ConstraintsApiError> {
+    pub async fn elect_gateway(&self, req: Request<Body>) -> Result<StatusCode, ConstraintsApiError> {
         let request_id = Uuid::new_v4();
         let mut trace = ElectGatewayTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
@@ -62,7 +62,6 @@ where
             head_slot = head_slot,
             request_ts = trace.receive,
             slot = %election_req.slot(),
-            parent_hash = ?election_req.parent_hash(),
             public_key = ?election_req.public_key(),
         );
 
@@ -77,7 +76,51 @@ where
         self.auctioneer.save_new_gateway_election(election_req.gateway_public_key(), election_req.slot()).await?;
         trace.gateway_election_saved = get_nanos_timestamp()?;
 
+        info!(%request_id, ?trace, "gateway elected");
         Ok(StatusCode::OK)
+    }
+
+    /// Returns the gateway for the given slot. If the request is for a proposer in the next 2 epochs, it will always
+    /// return something. If no elected gateway is found, it defaults to the proposer public key.
+    pub async fn get_gateway(
+        &self,
+        Path(GetGatewayParams { slot }): Path<GetGatewayParams>,
+    ) -> Result<BlsPublicKey, ConstraintsApiError> {
+        let request_id = Uuid::new_v4();
+        let mut trace = GetGatewayTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+
+        let (head_slot, _) = *self.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?;
+        debug!(
+            request_id = %request_id,
+            event = "get_gateway",
+            head_slot = head_slot,
+            request_ts = trace.receive,
+            request_slot = %slot,
+        );
+
+        if slot < head_slot {
+            warn!(%request_id, "request for past slot");
+            return Err(ConstraintsApiError::RequestForPastSlot { request_slot: slot, head_slot });
+        }
+
+        // Try to fetch from datastore
+        if let Some(elected_gateway) = self.auctioneer.get_gateway(slot).await? {
+            debug!(%request_id, ?elected_gateway, "found elected gateway in datastore");
+            return Ok(elected_gateway);
+        }
+
+        // If it can't be found in the datastore then we default to checking the proposer duties
+        let duties_read_guard = self.proposer_duties.read().map_err(|_| ConstraintsApiError::LockPoisoned)?;
+        match duties_read_guard.iter().find(|duty| duty.slot == slot) {
+            Some(proposer_duty) => {
+                debug!(%request_id, proposer_public_key=?proposer_duty.public_key, "selected elected gateway from duties");
+                Ok(proposer_duty.public_key.clone())
+            }
+            None => {
+                warn!(%request_id, "no gateway found for request");
+                Err(ConstraintsApiError::NoGatewayFoundForSlot {slot})
+            }
+        }
     }
 
     /// - Checks if the requested slot is in the past.
