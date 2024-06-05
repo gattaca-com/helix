@@ -11,20 +11,29 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use helix_common::api::builder_api::BuilderGetValidatorsResponseEntry;
-use helix_common::api::constraints_api::{GetGatewayParams, SignedGatewayElection};
+use helix_common::api::constraints_api::{GetGatewayParams, SignedConstraintsMessage, SignedGatewayElection};
 use helix_common::bellatrix::SimpleSerialize;
 use helix_common::chain_info::ChainInfo;
 use helix_common::ProposerDuty;
-use helix_common::traces::constraints_api::{ElectGatewayTrace, GetGatewayTrace};
+use helix_common::traces::constraints_api::{ElectGatewayTrace, GetGatewayTrace, SetConstraintsTrace};
 use helix_datastore::{Auctioneer, constraints::ConstraintsAuctioneer};
 use helix_utils::signing::verify_signed_builder_message;
 
 use crate::constraints::error::ConstraintsApiError;
+use crate::constraints::SET_CONSTRAINTS_CUTOFF_NS;
 use crate::proposer::api::MAX_BLINDED_BLOCK_LENGTH;
 use crate::proposer::error::ProposerApiError;
-use crate::proposer::GetHeaderParams;
+use crate::proposer::{GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderParams};
 
 pub(crate) const MAX_GATEWAY_ELECTION_SIZE: usize = 1024 * 1024; // TODO: this should be a fixed size that we calc
+pub(crate) const MAX_SET_CONSTRAINTS_SIZE: usize = 1024 * 1024; // TODO: this should be a fixed size that we calc
+
+/// Information about the current head slot and next elected gateway.
+#[derive(Clone)]
+struct SlotInfo {
+    pub slot: u64,
+    pub elected_gateway: BlsPublicKey,
+}
 
 #[derive(Clone)]
 pub struct ConstraintsApi<A>
@@ -35,10 +44,7 @@ where
 
     chain_info: Arc<ChainInfo>,
     proposer_duties: Arc<RwLock<Vec<ProposerDuty>>>,
-
-    /// Information about the current head slot and next proposer duty
-    /// TODO: need to add preconf pubkey here as optional as this will overwrite who we expect preconf from
-    curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
+    curr_slot_info: Arc<RwLock<SlotInfo>>,
 }
 
 impl<A> ConstraintsApi<A>
@@ -55,7 +61,7 @@ where
         let mut election_req: SignedGatewayElection = deserialize_json_request_bytes(req, MAX_GATEWAY_ELECTION_SIZE).await?;
         trace.deserialize = get_nanos_timestamp()?;
 
-        let (head_slot, _) = *self.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?;
+        let head_slot = self.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
         debug!(
             request_id = %request_id,
             event = "elect_gateway",
@@ -63,6 +69,7 @@ where
             request_ts = trace.receive,
             slot = %election_req.slot(),
             public_key = ?election_req.public_key(),
+            validator_index=%election_req.validator_index(),
         );
 
         if let Err(err) = self.validate_election_request(&mut election_req, head_slot) {
@@ -89,7 +96,7 @@ where
         let request_id = Uuid::new_v4();
         let mut trace = GetGatewayTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
-        let (head_slot, _) = *self.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?;
+        let head_slot = self.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
         debug!(
             request_id = %request_id,
             event = "get_gateway",
@@ -105,7 +112,8 @@ where
 
         // Try to fetch from datastore
         if let Some(elected_gateway) = self.auctioneer.get_gateway(slot).await? {
-            debug!(%request_id, ?elected_gateway, "found elected gateway in datastore");
+            trace.gateway_fetched = get_nanos_timestamp()?;
+            debug!(%request_id, ?elected_gateway, ?trace, "found elected gateway in datastore");
             return Ok(elected_gateway);
         }
 
@@ -113,7 +121,13 @@ where
         let duties_read_guard = self.proposer_duties.read().map_err(|_| ConstraintsApiError::LockPoisoned)?;
         match duties_read_guard.iter().find(|duty| duty.slot == slot) {
             Some(proposer_duty) => {
-                debug!(%request_id, proposer_public_key=?proposer_duty.public_key, "selected elected gateway from duties");
+                trace.gateway_fetched = get_nanos_timestamp()?;
+                debug!(
+                    %request_id,
+                    proposer_public_key=?proposer_duty.public_key,
+                    ?trace,
+                    "selected elected gateway from duties",
+                );
                 Ok(proposer_duty.public_key.clone())
             }
             None => {
@@ -121,6 +135,99 @@ where
                 Err(ConstraintsApiError::NoGatewayFoundForSlot {slot})
             }
         }
+    }
+
+    /// If the request is sent by the preconf for this current slot and this is the first time. We save the constraints.
+    /// must also be sent before the cutoff. TODO: fix comment
+    pub async fn set_constraints(&self, req: Request<Body>) -> Result<StatusCode, ConstraintsApiError> {
+        let request_id = Uuid::new_v4();
+        let mut trace = SetConstraintsTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+
+        // Deserialise request
+        let mut constraints: SignedConstraintsMessage = deserialize_json_request_bytes(req, MAX_SET_CONSTRAINTS_SIZE).await?;
+        trace.deserialize = get_nanos_timestamp()?;
+
+        let slot_info = self.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.clone();
+        debug!(
+            request_id = %request_id,
+            event = "set_constraints",
+            head_slot = slot_info.slot,
+            request_ts = trace.receive,
+            request_slot = %constraints.slot(),
+            num_constraints = %constraints.constraints().len(),
+        );
+
+        // Validate request
+        if let Err(err) = self.validate_set_constraints_request(
+            &mut constraints,
+            &slot_info.elected_gateway,
+            slot_info.slot,
+            trace.receive,
+        ).await {
+            warn!(request_id = %request_id, ?err, "validation failed");
+            return Err(err);
+        }
+        trace.validation_complete = get_nanos_timestamp()?;
+
+        self.auctioneer.save_constraints(constraints.message).await?;
+        trace.constraints_set = get_nanos_timestamp()?;
+
+        info!(%request_id, ?trace, "constraints set");
+        Ok(StatusCode::OK)
+    }
+
+    /// - Ensures the constraints can only be set for the current slot.
+    /// - Checks that the constraints are set within the allowed time window.
+    /// - Verifies that the constraint request is from the expected public key.
+    /// - Verifies the signature of the request matches the elected gateway.
+    /// - Checks if we have already received constraints for the current slot.
+    async fn validate_set_constraints_request(
+        &self,
+        constraints: &mut SignedConstraintsMessage,
+        elected_gateway: &BlsPublicKey,
+        head_slot: u64,
+        receive_ns: u64,
+    ) -> Result<(), ConstraintsApiError> {
+        // Can only set constraints for the current slot.
+        if constraints.slot() != head_slot {
+            return Err(ConstraintsApiError::CanOnlySetConstraintsForCurrentSlot { request_slot: constraints.slot(), curr_slot: head_slot });
+        }
+
+        // Constraints cannot be set more than `SET_CONSTRAINTS_CUTOFF_NS` into the previous slot.
+        let slot_start_timestamp = self.chain_info.genesis_time_in_secs +
+            (head_slot * self.chain_info.seconds_per_slot);
+        let ns_into_slot = (receive_ns as i64).saturating_sub((slot_start_timestamp * 1_000_000_000) as i64);
+        if ns_into_slot > SET_CONSTRAINTS_CUTOFF_NS {
+            return Err(ConstraintsApiError::SetConstraintsTooLate {
+                ns_into_slot: ns_into_slot as u64,
+                cutoff: GET_HEADER_REQUEST_CUTOFF_MS as u64,
+            });
+        }
+
+        // Ensure the constraint request is from the expected public key
+        if constraints.public_key() != elected_gateway {
+            return Err(ConstraintsApiError::NotElectedGateway {
+                request_public_key: constraints.public_key().clone(),
+                elected_gateway_public_key: elected_gateway.clone(),
+            });
+        }
+
+        // Verify proposer signature
+        if let Err(err) = verify_signed_builder_message(
+            &mut constraints.message,
+            &constraints.signature,
+            elected_gateway,
+            &self.chain_info.context,
+        ) {
+            return Err(ConstraintsApiError::InvalidSignature(err));
+        }
+
+        // Check we haven't already received constraints for this slot
+        if self.auctioneer.get_constraints(head_slot).await?.is_some() {
+            return Err(ConstraintsApiError::ConstraintsAlreadySetForSlot);
+        }
+
+        Ok(())
     }
 
     /// - Checks if the requested slot is in the past.
@@ -147,7 +254,9 @@ where
 
         // Ensure provided validator public key is the proposer for the requested slot.
         if !duties_read_guard.iter().any(|duty|
-            duty.slot == election_req.slot() && &duty.public_key == election_req.public_key()
+            duty.slot == election_req.slot() &&
+                &duty.public_key == election_req.public_key() &&
+                duty.validator_index == election_req.validator_index()
         ) {
             return Err(ConstraintsApiError::ValidatorIsNotProposerForRequestedSlot);
         }
