@@ -16,6 +16,7 @@ use helix_common::bellatrix::SimpleSerialize;
 use helix_common::chain_info::ChainInfo;
 use helix_common::ProposerDuty;
 use helix_common::traces::constraints_api::ElectGatewayTrace;
+use helix_datastore::{Auctioneer, constraints::ConstraintsAuctioneer};
 use helix_utils::signing::verify_signed_builder_message;
 
 use crate::constraints::error::ConstraintsApiError;
@@ -26,7 +27,12 @@ use crate::proposer::GetHeaderParams;
 pub(crate) const MAX_GATEWAY_ELECTION_SIZE: usize = 1024 * 1024; // TODO: this should be a fixed size that we calc
 
 #[derive(Clone)]
-pub struct ConstraintsApi {
+pub struct ConstraintsApi<A>
+where
+    A: ConstraintsAuctioneer,
+{
+    auctioneer: A,
+
     chain_info: Arc<ChainInfo>,
     proposer_duties: Arc<RwLock<Vec<ProposerDuty>>>,
 
@@ -35,7 +41,10 @@ pub struct ConstraintsApi {
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
 }
 
-impl ConstraintsApi {
+impl<A> ConstraintsApi<A>
+where
+    A: ConstraintsAuctioneer + 'static,
+{
     /// Elects a gateway to do the pre-confirmations for a validator. Must be signed by the validator for the requested slot.
     /// Cannot be more than 2 epochs in the future as we do not know that
     pub async fn elect_gateway(&self, req: Request<Body>) -> Result<impl IntoResponse, ConstraintsApiError> {
@@ -63,8 +72,9 @@ impl ConstraintsApi {
         }
         trace.validation_complete = get_nanos_timestamp()?;
 
-        // Save to constraints datastore + db
-        // TODO
+        // Save to constraints datastore
+        // TODO: database
+        self.auctioneer.save_new_gateway_election(election_req.gateway_public_key(), election_req.slot()).await?;
         trace.gateway_election_saved = get_nanos_timestamp()?;
 
         Ok(StatusCode::OK)

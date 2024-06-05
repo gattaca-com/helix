@@ -18,10 +18,6 @@ impl SignedGatewayElection {
         self.message.slot
     }
 
-    pub fn parent_hash(&self) -> &Hash32 {
-        &self.message.parent_hash
-    }
-
     pub fn public_key(&self) -> &BlsPublicKey {
         &self.message.public_key
     }
@@ -31,6 +27,5 @@ impl SignedGatewayElection {
 pub struct GatewayElection {
     pub gateway_public_key: BlsPublicKey,
     pub slot: u64,
-    pub parent_hash: Hash32,
     pub public_key: BlsPublicKey,
 }
