@@ -8,6 +8,7 @@ pub mod relay_data;
 pub mod router;
 pub mod service;
 pub mod middleware;
+pub mod constraints;
 
 #[cfg(test)]
 pub mod test_utils;

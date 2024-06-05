@@ -1,6 +1,7 @@
 pub mod builder_api;
 pub mod data_api;
 pub mod proposer_api;
+pub mod constraints_api;
 
 pub(crate) const PATH_BUILDER_API: &str = "/relay/v1/builder";
 

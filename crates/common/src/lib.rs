@@ -19,3 +19,4 @@ pub use proposer::*;
 pub use traces::*;
 pub use validator::*;
 pub use validator_preferences::*;
+pub use api::*;
