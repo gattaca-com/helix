@@ -1,7 +1,6 @@
 use ethereum_consensus::{
     clock::{
-        for_goerli, for_holesky, for_mainnet, for_sepolia, Clock, SystemTimeProvider,
-        GOERLI_GENESIS_TIME, HOLESKY_GENESIS_TIME, MAINNET_GENESIS_TIME, SEPOLIA_GENESIS_TIME,
+        for_goerli, for_holesky, for_mainnet, for_sepolia, from_system_time, Clock, SystemTimeProvider, GOERLI_GENESIS_TIME, HOLESKY_GENESIS_TIME, MAINNET_GENESIS_TIME, SEPOLIA_GENESIS_TIME
     },
     configs,
     primitives::Root,
@@ -134,7 +133,20 @@ impl ChainInfo {
         }
     }
 
-    pub fn for_custom(_config: String) -> Self {
-        panic!("custom network not supported yet");
+    pub fn for_custom(config: String, genesis_validators_root: Node, genesis_time_in_secs: u64) -> Result<Self, Error> {
+        let context = Context::try_from_file(&config)?;
+        let network = Network::Custom(config.clone());
+        let clock = from_system_time(genesis_time_in_secs, context.seconds_per_slot, context.slots_per_epoch);
+        let genesis_time_in_secs = genesis_time_in_secs;
+        let seconds_per_slot = context.seconds_per_slot;
+
+        Ok(Self {
+            network,
+            genesis_validators_root,
+            context,
+            clock,
+            genesis_time_in_secs,
+            seconds_per_slot,
+        })
     }
 }
