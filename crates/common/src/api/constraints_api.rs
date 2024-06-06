@@ -42,6 +42,8 @@ pub struct GatewayElection {
     pub public_key: BlsPublicKey,
     /// Validator index of the validator electing the gateway.
     pub validator_index: usize,
+    /// Gateway address builder must pay
+    pub gateway_recipient_address: ExecutionAddress,
 }
 
 #[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
