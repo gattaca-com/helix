@@ -21,6 +21,7 @@ use helix_common::{
 use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
 use helix_datastore::redis::redis_cache::RedisCache;
 use helix_housekeeper::{ChainEventUpdater, Housekeeper};
+use crate::router::ConstraintsApiProd;
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -155,13 +156,15 @@ impl ApiService {
             broadcasters,
             multi_beacon_client.clone(),
             chain_info.clone(),
-            slot_update_sender,
+            slot_update_sender.clone(),
             validator_preferences.clone(),
             config.target_get_payload_propagation_duration_ms,
             proposer_gossip_receiver,
         ));
 
         let data_api = Arc::new(DataApiProd::new(validator_preferences.clone(), db.clone()));
+
+        let constraints_api = Arc::new(ConstraintsApiProd::new(auctioneer.clone(), chain_info.clone(), slot_update_sender));
 
         let bids_cache: Arc<BidsCache> = Arc::new(
             Cache::builder()
@@ -177,7 +180,7 @@ impl ApiService {
                 .build()
         );
 
-        let router = build_router(&mut config.router_config, builder_api, proposer_api, data_api, bids_cache, delivered_payloads_cache);
+        let router = build_router(&mut config.router_config, builder_api, proposer_api, data_api, constraints_api, bids_cache, delivered_payloads_cache);
 
         let listener = tokio::net::TcpListener::bind("0.0.0.0:4040").await.unwrap();
         match axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await {

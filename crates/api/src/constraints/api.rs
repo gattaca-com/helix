@@ -41,19 +41,15 @@ pub(crate) const MAX_GATEWAY_ELECTION_SIZE: usize = 1024 * 1024; // TODO: this s
 pub(crate) const MAX_SET_CONSTRAINTS_SIZE: usize = 1024 * 1024; // TODO: this should be a fixed size that we calc
 
 /// Information about the current head slot and next elected gateway.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct SlotInfo {
     pub slot: u64,
-    pub elected_gateway: Option<BlsPublicKey>,
+    pub elected_gateway: Option<SignedGatewayElection>,
 }
 
 #[derive(Clone)]
-pub struct ConstraintsApi<A>
-where
-    A: ConstraintsAuctioneer,
-{
-    auctioneer: A,
-
+pub struct ConstraintsApi<A: ConstraintsAuctioneer> {
+    auctioneer: Arc<A>,
     chain_info: Arc<ChainInfo>,
     proposer_duties: Arc<RwLock<Vec<BuilderGetValidatorsResponseEntry>>>,
     curr_slot_info: Arc<RwLock<SlotInfo>>,
@@ -63,6 +59,32 @@ impl<A> ConstraintsApi<A>
 where
     A: ConstraintsAuctioneer + 'static,
 {
+    pub fn new(
+        auctioneer: Arc<A>,
+        chain_info: Arc<ChainInfo>,
+        slot_update_subscription: Sender<Sender<ChainUpdate>>,
+    ) -> Self {
+        let api = Self {
+            auctioneer,
+            chain_info,
+            proposer_duties: Arc::new(Default::default()),
+            curr_slot_info: Arc::new(RwLock::new(SlotInfo::default())),
+        };
+
+        // Spin up the housekeep task
+        let api_clone = api.clone();
+        tokio::spawn(async move {
+            if let Err(error) = api_clone.housekeep(slot_update_subscription).await {
+                error!(
+                    %error,
+                    "ConstraintsApi. housekeep task encountered an error",
+                );
+            }
+        });
+
+        api
+    }
+
     /// Returns the constraints for the current slot
     pub async fn get_constraints(
         Extension(api): Extension<Arc<ConstraintsApi<A>>>,
@@ -112,19 +134,18 @@ where
 
         // Save to constraints datastore
         // TODO: database
-        api.auctioneer.save_new_gateway_election(election_req.gateway_public_key(), election_req.slot()).await?;
+        api.auctioneer.save_new_gateway_election(&election_req, election_req.slot()).await?;
         trace.gateway_election_saved = get_nanos_timestamp()?;
 
         info!(%request_id, ?trace, "gateway elected");
         Ok(StatusCode::OK)
     }
 
-    /// Returns the gateway for the given slot. If the request is for a proposer in the next 2 epochs, it will always
-    /// return something. If no elected gateway is found, it defaults to the proposer public key.
+    /// Returns the gateway for the given slot. If no elected gateway is found, it returns an error.
     pub async fn get_gateway(
         Extension(api): Extension<Arc<ConstraintsApi<A>>>,
         Path(GetGatewayParams { slot }): Path<GetGatewayParams>,
-    ) -> Result<BlsPublicKey, ConstraintsApiError> {
+    ) -> Result<axum::Json<SignedGatewayElection>, ConstraintsApiError> {
         let request_id = Uuid::new_v4();
         let mut trace = GetGatewayTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
@@ -143,10 +164,14 @@ where
         }
 
         match api.get_elected_gateway_for_slot(slot).await {
-            Ok(elected_gateway) => {
+            Ok(Some(elected_gateway)) => {
                 trace.gateway_fetched = get_nanos_timestamp()?;
                 debug!(%request_id, ?elected_gateway, ?trace, "found elected gateway");
-                return Ok(elected_gateway);
+                return Ok(axum::Json(elected_gateway));
+            }
+            Ok(None) => {
+                warn!(%request_id, "no gateway found for request");
+                Err(ConstraintsApiError::NoGatewayFoundForSlot {slot})
             }
             Err(err) => {
                 warn!(%request_id, ?err, "no gateway found for request");
@@ -186,7 +211,7 @@ where
         // Validate request
         if let Err(err) = api.validate_set_constraints_request(
             &mut constraints,
-            slot_info.elected_gateway.as_ref().unwrap(),
+            slot_info.elected_gateway.as_ref().unwrap().public_key(),
             slot_info.slot,
             trace.receive,
         ).await {
@@ -304,22 +329,21 @@ where
         Ok(())
     }
 
-    async fn get_elected_gateway_for_slot(&self, slot: u64) -> Result<BlsPublicKey, ConstraintsApiError> {
+    async fn get_elected_gateway_for_slot(&self, slot: u64) -> Result<Option<SignedGatewayElection>, ConstraintsApiError> {
         // Try to fetch from datastore
-        if let Some(elected_gateway) = self.auctioneer.get_gateway(slot).await? {
-            return Ok(elected_gateway);
-        }
+        Ok(self.auctioneer.get_elected_gateway(slot).await?)
 
+        // TODO: currently don't support defaulting to the proposer.
         // If it can't be found in the datastore then we default to checking the proposer duties
-        let duties_read_guard = self.proposer_duties.read().map_err(|_| ConstraintsApiError::LockPoisoned)?;
-        match duties_read_guard.iter().find(|duty| duty.slot == slot) {
-            Some(proposer_duty) => {
-                Ok(proposer_duty.entry.registration.message.public_key.clone())
-            }
-            None => {
-                Err(ConstraintsApiError::NoGatewayFoundForSlot {slot})
-            }
-        }
+        // let duties_read_guard = self.proposer_duties.read().map_err(|_| ConstraintsApiError::LockPoisoned)?;
+        // match duties_read_guard.iter().find(|duty| duty.slot == slot) {
+        //     Some(proposer_duty) => {
+        //         Ok(proposer_duty.entry.registration.message.public_key.clone())
+        //     }
+        //     None => {
+        //         Err(ConstraintsApiError::NoGatewayFoundForSlot {slot})
+        //     }
+        // }
     }
 }
 
@@ -371,7 +395,7 @@ impl<A> ConstraintsApi<A>
             Ok(elected_gateway) => {
                 let mut write_guard = self.curr_slot_info.write().unwrap();
                 write_guard.slot = slot_update.slot;
-                write_guard.elected_gateway = Some(elected_gateway);
+                write_guard.elected_gateway = elected_gateway;
             }
             Err(err) => {
                 error!(?err, "could not fetch elected gateway for head slot");

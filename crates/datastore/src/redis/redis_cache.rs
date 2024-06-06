@@ -25,7 +25,7 @@ use helix_database::types::BuilderInfoDocument;
 
 
 use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
-use helix_common::api::constraints_api::ConstraintsMessage;
+use helix_common::api::constraints_api::{ConstraintsMessage, SignedGatewayElection};
 
 use crate::{
     error::AuctioneerError,
@@ -1205,12 +1205,12 @@ impl Auctioneer for RedisCache {
 
 #[async_trait]
 impl ConstraintsAuctioneer for RedisCache {
-    async fn save_new_gateway_election(&self, gateway_public_key: &BlsPublicKey, slot: u64) -> Result<(), AuctioneerError> {
-        self.hset(ELECTED_GATEWAY_KEY, &slot.to_string(), &format!("{gateway_public_key:?}"), Some(TWO_EPOCH_EXPIRY_S)).await?;
+    async fn save_new_gateway_election(&self, signed_election: &SignedGatewayElection, slot: u64) -> Result<(), AuctioneerError> {
+        self.hset(ELECTED_GATEWAY_KEY, &slot.to_string(), signed_election, Some(TWO_EPOCH_EXPIRY_S)).await?;
         Ok(())
     }
 
-    async fn get_gateway(&self, slot: u64) -> Result<Option<BlsPublicKey>, AuctioneerError> {
+    async fn get_elected_gateway(&self, slot: u64) -> Result<Option<SignedGatewayElection>, AuctioneerError> {
         Ok(self.hget(ELECTED_GATEWAY_KEY, &slot.to_string()).await?)
     }
 
@@ -2533,11 +2533,11 @@ mod tests {
     async fn test_save_new_gateway_election() {
         // Arrange
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
-        let gateway_public_key = BlsPublicKey::default();
+        let election = SignedGatewayElection::default();
         let slot = 42;
 
         // Act
-        let result = cache.save_new_gateway_election(&gateway_public_key, slot).await;
+        let result = cache.save_new_gateway_election(&election, slot).await;
 
         // Assert
         assert!(result.is_ok(), "Failed to save new gateway election");
@@ -2550,7 +2550,7 @@ mod tests {
         let slot = 42;
 
         // Act
-        let result = cache.get_gateway(slot).await;
+        let result = cache.get_elected_gateway(slot).await;
 
         // Assert
         assert!(result.is_ok(), "Failed to get gateway");

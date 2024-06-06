@@ -24,3 +24,10 @@ pub(crate) const PATH_DATA_API: &str = "/relay/v1/data";
 pub(crate) const PATH_PROPOSER_PAYLOAD_DELIVERED: &str = "/bidtraces/proposer_payload_delivered";
 pub(crate) const PATH_BUILDER_BIDS_RECEIVED: &str = "/bidtraces/builder_blocks_received";
 pub(crate) const PATH_VALIDATOR_REGISTRATION: &str = "/validator_registration";
+
+// Constraints API
+pub(crate) const PATH_CONSTRAINTS_API: &str = "/constraints";
+pub(crate) const PATH_GET_CONSTRAINTS: &str = "/get_constraints";
+pub(crate) const PATH_SET_CONSTRAINTS: &str = "/set_constraints";
+pub(crate) const PATH_ELECT_GATEWAY: &str = "/elect_gateway";
+pub(crate) const PATH_GET_GATEWAY: &str = "/preconfer/:slot";

@@ -197,6 +197,7 @@ pub enum Route {
     BuilderApi,
     ProposerApi,
     DataApi,
+    ConstraintsApi,
     GetValidators,
     SubmitBlock,
     SubmitBlockOptimistic,
@@ -209,6 +210,10 @@ pub enum Route {
     ProposerPayloadDelivered,
     BuilderBidsReceived,
     ValidatorRegistration,
+    GetConstraints,
+    SetConstraints,
+    ElectGateway,
+    GetGateway,
 }
 
 impl Route {
@@ -226,10 +231,15 @@ impl Route {
             Route::ProposerPayloadDelivered => format!("{PATH_DATA_API}{PATH_PROPOSER_PAYLOAD_DELIVERED}"),
             Route::BuilderBidsReceived => format!("{PATH_DATA_API}{PATH_BUILDER_BIDS_RECEIVED}"),
             Route::ValidatorRegistration => format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),
+            Route::GetConstraints => format!("{PATH_CONSTRAINTS_API}{PATH_GET_CONSTRAINTS}"),
+            Route::SetConstraints => format!("{PATH_CONSTRAINTS_API}{PATH_SET_CONSTRAINTS}"),
+            Route::ElectGateway => format!("{PATH_CONSTRAINTS_API}{PATH_ELECT_GATEWAY}"),
+            Route::GetGateway => format!("{PATH_CONSTRAINTS_API}{PATH_GET_GATEWAY}"),
             Route::All => panic!("All is not a real route"),
             Route::BuilderApi => panic!("BuilderApi is not a real route"),
             Route::ProposerApi => panic!("ProposerApi is not a real route"),
             Route::DataApi => panic!("DataApi is not a real route"),
+            Route::ConstraintsApi => panic!("ConstraintsApi is not a real route"),
         }
     }
     
