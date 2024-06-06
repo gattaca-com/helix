@@ -11,7 +11,7 @@ pub trait ConstraintsAuctioneer: Send + Sync + Clone {
     async fn get_gateway(&self, slot: u64) -> Result<Option<BlsPublicKey>, AuctioneerError>;
 
     /// Save the constraints for a specific slot.
-    async fn save_constraints(&self, constraints: ConstraintsMessage) -> Result<(), AuctioneerError>;
+    async fn save_constraints(&self, constraints: &ConstraintsMessage) -> Result<(), AuctioneerError>;
 
     /// Get the constraints for a specific slot.
     async fn get_constraints(&self, slot: u64) -> Result<Option<ConstraintsMessage>, AuctioneerError>;
