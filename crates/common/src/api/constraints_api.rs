@@ -4,6 +4,7 @@ use ethereum_consensus::{
     ssz::prelude::*,
 };
 use ethereum_consensus::bellatrix::Transaction;
+use ethereum_consensus::primitives::Bytes32;
 use crate::constraints::Constraint;
 
 #[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]

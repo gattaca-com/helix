@@ -1,3 +1,4 @@
+use ethereum_consensus::altair::Bytes32;
 use ethereum_consensus::ssz::prelude::*;
 use crate::constraints::basic_tx_constraint::BasicTransactionConstraint;
 
@@ -11,6 +12,19 @@ pub const MAX_CONSTRAINTS: usize = 4;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Constraint {
     BasicTransactionConstraint(BasicTransactionConstraint),
+}
+
+impl Constraint {
+    /// Verifies that the constraint is valid for an ordered list of hashes.
+    ///
+    /// Returns true if the constraint is valid, false if not.
+    pub fn verify_from_tx_hash_vec(&self, tx_hashes: &Vec<Bytes32>) -> bool {
+        match self {
+            Constraint::BasicTransactionConstraint(constraint) => {
+                constraint.verify_from_tx_hash_vec(tx_hashes)
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use std::collections::HashSet;
 
 use axum::{
     extract::ws::{WebSocket, WebSocketUpgrade, Message},
@@ -49,8 +50,10 @@ use helix_common::{
     BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace,
     SignedBuilderBid, SubmissionTrace,
 };
+use helix_common::api::constraints_api::ConstraintsMessage;
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
+use helix_datastore::constraints::ConstraintsAuctioneer;
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
 use helix_utils::{calculate_withdrawals_root, get_payload_attributes_key, has_reached_fork, try_decode_into};
 
@@ -66,7 +69,7 @@ pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
 #[derive(Clone)]
 pub struct BuilderApi<A, DB, S, G>
 where
-    A: Auctioneer + 'static,
+    A: Auctioneer + ConstraintsAuctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
@@ -89,7 +92,7 @@ where
 
 impl<A, DB, S, G> BuilderApi<A, DB, S, G>
 where
-    A: Auctioneer + 'static,
+    A: Auctioneer + ConstraintsAuctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
@@ -821,7 +824,7 @@ where
 // Handle Gossiped Payloads
 impl<A, DB, S, G> BuilderApi<A, DB, S, G>
 where
-    A: Auctioneer + 'static,
+    A: Auctioneer + ConstraintsAuctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
@@ -1100,14 +1103,14 @@ where
 // Helpers
 impl<A, DB, S, G> BuilderApi<A, DB, S, G>
 where
-    A: Auctioneer + 'static,
+    A: Auctioneer + ConstraintsAuctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
 {
-    /// This function verifies:
-    /// 1. Runs some basic sanity checks on the payload.
-    /// 2. Verifies the payload signature.
+    /// This function:
+    /// 1. Verifies the payload signature.
+    /// 2. Verifies the pre-confirmation constraints (if any).
     /// 3. Simulates the submission
     ///
     /// Returns: the bid submission in an Arc.
@@ -1127,6 +1130,12 @@ where
         }
         trace.signature = get_nanos_timestamp()?;
 
+        // Verify constraints
+        if let Err(error) = self.verify_constraints(&payload, next_duty.slot).await {
+            warn!(%request_id, %error, "failed to verify constraints");
+            return Err(error);
+        }
+
         // Simulate the submission
         let payload = Arc::new(payload);
         let was_simulated_optimistically = self
@@ -1134,6 +1143,37 @@ where
             .await?;
 
         Ok((payload, was_simulated_optimistically))
+    }
+
+    /// Verifies the block adheres to the constraints if any have been set through the ConstraintsAPI.
+    async fn verify_constraints(&self, payload: &SignedBidSubmission, slot: u64) -> Result<(), BuilderApiError> {
+        let constraints_msg = match self.auctioneer.get_constraints(slot).await? {
+            Some(constraints) => {
+                if constraints.constraints.is_empty() {
+                    return Ok(());
+                }
+                constraints
+            },
+            None => return Ok(()),
+        };
+
+        // Create vec of all transaction hashes in the payload.
+        let payload_transactions = payload.transactions();
+
+        let mut hashes = Vec::with_capacity(payload_transactions.len());
+        for transaction in payload_transactions.iter() {
+            let tx_hash = Bytes32::default();  // TODO:
+            hashes.push(tx_hash);
+        }
+
+        // Assert that each transaction in the constraints is contained
+        for constraint in constraints_msg.constraints.iter() {
+            if !constraint.verify_from_tx_hash_vec(&hashes) {
+                return Err(BuilderApiError::BlockDoesNotAdhereToConstraint {constraint: constraint.clone()})
+            }
+        }
+
+        Ok(())
     }
 
     /// Check for block hashes that have already been processed.
@@ -1552,7 +1592,7 @@ where
 // STATE SYNC
 impl<A, DB, S, G> BuilderApi<A, DB, S, G>
 where
-    A: Auctioneer + 'static,
+    A: Auctioneer + ConstraintsAuctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
