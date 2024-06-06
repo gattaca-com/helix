@@ -6,24 +6,34 @@ use axum::Extension;
 use axum::extract::Path;
 use axum::http::{Request, StatusCode};
 use axum::response::{IntoResponse, Response};
+use ethereum_consensus::crypto::PublicKey;
+use ethereum_consensus::phase0::mainnet::SLOTS_PER_EPOCH;
 use ethereum_consensus::primitives::{BlsPublicKey, BlsSignature, Hash32};
 use ethereum_consensus::types::mainnet::SignedBlindedBeaconBlock;
-use tracing::{debug, info, warn};
+use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::SendError;
+use tokio::sync::mpsc::Sender;
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+use helix_beacon_client::MultiBeaconClientTrait;
 
 use helix_common::api::builder_api::BuilderGetValidatorsResponseEntry;
 use helix_common::api::constraints_api::{ConstraintsMessage, GetGatewayParams, SignedConstraintsMessage, SignedGatewayElection};
 use helix_common::bellatrix::SimpleSerialize;
+use helix_common::builder_api::BuilderGetValidatorsResponse;
 use helix_common::chain_info::ChainInfo;
 use helix_common::ProposerDuty;
 use helix_common::traces::constraints_api::{ElectGatewayTrace, GetGatewayTrace, SetConstraintsTrace};
+use helix_database::DatabaseService;
 use helix_datastore::{Auctioneer, constraints::ConstraintsAuctioneer};
+use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
+use helix_utils::get_payload_attributes_key;
 use helix_utils::signing::verify_signed_builder_message;
 use crate::builder::api::BuilderApi;
 
 use crate::constraints::error::ConstraintsApiError;
 use crate::constraints::SET_CONSTRAINTS_CUTOFF_NS;
-use crate::proposer::api::MAX_BLINDED_BLOCK_LENGTH;
+use crate::proposer::api::{MAX_BLINDED_BLOCK_LENGTH, ProposerApi};
 use crate::proposer::error::ProposerApiError;
 use crate::proposer::{GET_HEADER_REQUEST_CUTOFF_MS, GetHeaderParams};
 
@@ -34,7 +44,7 @@ pub(crate) const MAX_SET_CONSTRAINTS_SIZE: usize = 1024 * 1024; // TODO: this sh
 #[derive(Clone)]
 struct SlotInfo {
     pub slot: u64,
-    pub elected_gateway: BlsPublicKey,
+    pub elected_gateway: Option<BlsPublicKey>,
 }
 
 #[derive(Clone)]
@@ -45,7 +55,7 @@ where
     auctioneer: A,
 
     chain_info: Arc<ChainInfo>,
-    proposer_duties: Arc<RwLock<Vec<ProposerDuty>>>,
+    proposer_duties: Arc<RwLock<Vec<BuilderGetValidatorsResponseEntry>>>,
     curr_slot_info: Arc<RwLock<SlotInfo>>,
 }
 
@@ -132,28 +142,14 @@ where
             return Err(ConstraintsApiError::RequestForPastSlot { request_slot: slot, head_slot });
         }
 
-        // Try to fetch from datastore
-        if let Some(elected_gateway) = api.auctioneer.get_gateway(slot).await? {
-            trace.gateway_fetched = get_nanos_timestamp()?;
-            debug!(%request_id, ?elected_gateway, ?trace, "found elected gateway in datastore");
-            return Ok(elected_gateway);
-        }
-
-        // If it can't be found in the datastore then we default to checking the proposer duties
-        let duties_read_guard = api.proposer_duties.read().map_err(|_| ConstraintsApiError::LockPoisoned)?;
-        match duties_read_guard.iter().find(|duty| duty.slot == slot) {
-            Some(proposer_duty) => {
+        match api.get_elected_gateway_for_slot(slot).await {
+            Ok(elected_gateway) => {
                 trace.gateway_fetched = get_nanos_timestamp()?;
-                debug!(
-                    %request_id,
-                    proposer_public_key=?proposer_duty.public_key,
-                    ?trace,
-                    "selected elected gateway from duties",
-                );
-                Ok(proposer_duty.public_key.clone())
+                debug!(%request_id, ?elected_gateway, ?trace, "found elected gateway");
+                return Ok(elected_gateway);
             }
-            None => {
-                warn!(%request_id, "no gateway found for request");
+            Err(err) => {
+                warn!(%request_id, ?err, "no gateway found for request");
                 Err(ConstraintsApiError::NoGatewayFoundForSlot {slot})
             }
         }
@@ -182,10 +178,15 @@ where
             num_constraints = %constraints.constraints().len(),
         );
 
+        if slot_info.elected_gateway.is_none() {
+            warn!(request_id = %request_id, "no elected gateway set for slot");
+            return Err(ConstraintsApiError::NoGatewayFoundForSlot { slot: slot_info.slot });
+        }
+
         // Validate request
         if let Err(err) = api.validate_set_constraints_request(
             &mut constraints,
-            &slot_info.elected_gateway,
+            slot_info.elected_gateway.as_ref().unwrap(),
             slot_info.slot,
             trace.receive,
         ).await {
@@ -280,7 +281,7 @@ where
         // Ensure provided validator public key is the proposer for the requested slot.
         if !duties_read_guard.iter().any(|duty|
             duty.slot == election_req.slot() &&
-                &duty.public_key == election_req.public_key() &&
+                &duty.entry.registration.message.public_key == election_req.public_key() &&
                 duty.validator_index == election_req.validator_index()
         ) {
             return Err(ConstraintsApiError::ValidatorIsNotProposerForRequestedSlot);
@@ -301,6 +302,84 @@ where
         }
 
         Ok(())
+    }
+
+    async fn get_elected_gateway_for_slot(&self, slot: u64) -> Result<BlsPublicKey, ConstraintsApiError> {
+        // Try to fetch from datastore
+        if let Some(elected_gateway) = self.auctioneer.get_gateway(slot).await? {
+            return Ok(elected_gateway);
+        }
+
+        // If it can't be found in the datastore then we default to checking the proposer duties
+        let duties_read_guard = self.proposer_duties.read().map_err(|_| ConstraintsApiError::LockPoisoned)?;
+        match duties_read_guard.iter().find(|duty| duty.slot == slot) {
+            Some(proposer_duty) => {
+                Ok(proposer_duty.entry.registration.message.public_key.clone())
+            }
+            None => {
+                Err(ConstraintsApiError::NoGatewayFoundForSlot {slot})
+            }
+        }
+    }
+}
+
+// STATE SYNC
+impl<A> ConstraintsApi<A>
+    where
+        A: ConstraintsAuctioneer + 'static,
+{
+    /// Subscribes to slot head updater.
+    /// Updates the current slot and next proposer duty.
+    pub async fn housekeep(
+        &self,
+        slot_update_subscription: Sender<Sender<ChainUpdate>>,
+    ) -> Result<(), SendError<Sender<ChainUpdate>>> {
+        let (tx, mut rx) = mpsc::channel(20);
+        slot_update_subscription.send(tx).await?;
+
+        while let Some(slot_update) = rx.recv().await {
+            match slot_update {
+                ChainUpdate::SlotUpdate(slot_update) => {
+                    self.handle_new_slot(slot_update).await;
+                }
+                ChainUpdate::PayloadAttributesUpdate(_) => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle a new slot update.
+    /// Updates the next proposer duty for the new slot.
+    async fn handle_new_slot(&self, slot_update: SlotUpdate) {
+        let epoch = slot_update.slot / SLOTS_PER_EPOCH;
+        debug!(
+            epoch = epoch,
+            slot = slot_update.slot,
+            slot_start_next_epoch = (epoch + 1) * SLOTS_PER_EPOCH,
+            next_proposer_duty = ?slot_update.next_duty,
+            "Updated head slot",
+        );
+
+        // Update duties if applicable
+        if let Some(new_duties) = slot_update.new_duties {
+            *self.proposer_duties.write().unwrap() = new_duties;
+        }
+
+        // Fetch elected gateway for the current slot
+        match self.get_elected_gateway_for_slot(slot_update.slot).await {
+            Ok(elected_gateway) => {
+                let mut write_guard = self.curr_slot_info.write().unwrap();
+                write_guard.slot = slot_update.slot;
+                write_guard.elected_gateway = Some(elected_gateway);
+            }
+            Err(err) => {
+                error!(?err, "could not fetch elected gateway for head slot");
+                let mut write_guard = self.curr_slot_info.write().unwrap();
+                write_guard.slot = slot_update.slot;
+                write_guard.elected_gateway = None;
+            }
+        }
     }
 }
 
