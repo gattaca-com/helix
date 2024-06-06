@@ -194,7 +194,7 @@ where
         }
         trace.validation_complete = get_nanos_timestamp()?;
 
-        api.auctioneer.save_constraints(constraints.message).await?;
+        api.auctioneer.save_constraints(&constraints.message).await?;
         trace.constraints_set = get_nanos_timestamp()?;
 
         info!(%request_id, ?trace, "constraints set");

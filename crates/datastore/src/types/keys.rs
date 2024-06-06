@@ -15,3 +15,5 @@ pub(crate) const SEEN_BLOCK_HASHES_KEY: &str = "seen-block-hashes";
 pub(crate) const PROPOSER_WHITELIST_KEY: &str = "proposer-whitelist";
 pub(crate) const HOUSEKEEPER_LOCK_KEY: &str = "housekeeper-lock";
 pub(crate) const PENDING_BLOCK_KEY: &str = "pending-block";
+pub(crate) const ELECTED_GATEWAY_KEY: &str = "elected-gateway";
+pub(crate) const CONSTRAINTS_KEY: &str = "constraints";
