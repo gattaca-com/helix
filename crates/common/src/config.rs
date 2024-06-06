@@ -1,5 +1,6 @@
 use crate::{api::*, ValidatorPreferences};
 use clap::Parser;
+use ethereum_consensus::ssz::prelude::Node;
 use helix_utils::request_encoding::Encoding;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs::File};
@@ -91,6 +92,11 @@ pub enum NetworkConfig {
     Goerli,
     Sepolia,
     Holesky,
+    Custom {
+        dir_path: String,
+        genesis_validator_root: Node,
+        genesis_time: u64,
+    },
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
@@ -251,7 +257,7 @@ fn test_config() {
     config.broadcasters.push(BroadcasterConfig::BeaconClient(BeaconClientConfig {
         url: "http://localhost:8080".to_string(),
     }));
-    config.network_config = NetworkConfig::Mainnet;
+    config.network_config = NetworkConfig::Custom { dir_path: "test".to_string(), genesis_validator_root: Default::default(), genesis_time: 1 };
     config.logging =
         LoggingConfig::File { dir_path: "hello".to_string(), file_name: "test".to_string() };
     config.validator_preferences = ValidatorPreferences { filtering: Filtering::Regional, trusted_builders: None, header_delay: true};
