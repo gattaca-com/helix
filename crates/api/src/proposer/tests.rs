@@ -19,7 +19,7 @@ pub fn gen_signed_vr() -> SignedValidatorRegistration {
         public_key: pk,
     };
 
-    let fk = ChainInfo::for_holesky();
+    let fk = ChainInfo::for_mainnet();
     let domain = compute_builder_domain(&fk.context).unwrap();
     let csr = compute_signing_root(&mut vr, domain).unwrap();
 
@@ -32,11 +32,10 @@ pub fn gen_signed_vr() -> SignedValidatorRegistration {
 mod proposer_api_tests {
     // +++ IMPORTS +++
     use crate::{
-        proposer::{
+        gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage}, proposer::{
             api::{get_nanos_timestamp, ProposerApi},
             PATH_GET_PAYLOAD, PATH_PROPOSER_API,
-        },
-        test_utils::proposer_api_app,
+        }, test_utils::proposer_api_app
     };
 
     use ethereum_consensus::{
@@ -60,6 +59,7 @@ mod proposer_api_tests {
             builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
         },
         capella::{self},
+        deneb::{self},
         chain_info::ChainInfo,
         versioned_payload::PayloadAndBlobs,
         SignedBuilderBid, ValidatorPreferences,
@@ -67,7 +67,7 @@ mod proposer_api_tests {
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-    use helix_utils::request_encoding::Encoding;
+    use helix_utils::{request_encoding::Encoding, signing::verify_signed_consensus_message};
     use serial_test::serial;
     use std::{sync::Arc, time::Duration};
     use tokio::{
@@ -220,7 +220,7 @@ mod proposer_api_tests {
     async fn start_api_server() -> (
         oneshot::Sender<()>,
         HttpServiceConfig,
-        Arc<ProposerApi<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient>>,
+        Arc<ProposerApi<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient, MockGossiper>>,
         Receiver<Sender<ChainUpdate>>,
         Arc<MockAuctioneer>,
     ) {
@@ -904,7 +904,7 @@ mod proposer_api_tests {
         let req_url =
             format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
 
-        let mut signed_blinded_beacon_block = capella::SignedBlindedBeaconBlock::default();
+        let mut signed_blinded_beacon_block = deneb::SignedBlindedBeaconBlock::default();
         signed_blinded_beacon_block.message.proposer_index = 1;
         signed_blinded_beacon_block.message.slot = current_slot + 1;
 
@@ -959,27 +959,102 @@ mod proposer_api_tests {
         let _ = tx.send(());
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_register_validators_with_pref_header() {
+        let (tx, http_config, _api, _slot_update_receiver, _auctioneer) = start_api_server().await;
+        let req_url =
+            format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_REGISTER_VALIDATORS);
+
+        let signed_validator_registrations = vec![gen_signed_vr()];
+
+        let resp = reqwest::Client::new()
+            .post(req_url.as_str())
+            .header("accept", "*/*")
+            .header("Content-Type", "application/json")
+            .header("x-api-key", "valid")
+            .header("x-preferences", "{\"filtering\":\"regional\", \"trusted_builders\": [\"Test1\", \"Test2\"], \"header_delay\": false}")
+            .json(&signed_validator_registrations)
+            .send()
+            .await
+            .unwrap();
+
+        sleep(Duration::from_secs(5)).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let _ = tx.send(());
+    }
+
     #[tokio::test]
     #[serial]
     #[ignore]
     async fn test_validate_registration() {
         let (slot_update_sender, _slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
+        let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
         let auctioneer = Arc::new(MockAuctioneer::default());
 
         let prop_api =
-            ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient>::new(
+            ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient, MockGossiper>::new(
                 auctioneer.clone(),
                 Arc::new(MockDatabaseService::default()),
+                Arc::new(MockGossiper::new().unwrap()),
                 vec![],
                 Arc::new(MockMultiBeaconClient::default()),
                 Arc::new(ChainInfo::for_holesky()),
                 slot_update_sender.clone(),
                 Arc::new(ValidatorPreferences::default()),
                 0,
+                gossip_receiver,
             );
 
         let mut x = gen_signed_vr();
 
         prop_api.validate_registration(&mut x).unwrap();
+    }
+
+    #[test]
+    fn test_verify_signed_blinded_block_signature_from_file_deneb() {
+
+        let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
+            if !current_dir.ends_with("api") {
+                current_dir.push("crates/api/");
+            }
+            current_dir.push("test_data/signed_blinded_beacon_block_deneb.json");
+            let req_payload_bytes =
+                load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+
+            let mut decoded_submission: SignedBlindedBeaconBlock =
+                serde_json::from_slice(&req_payload_bytes).unwrap();
+
+        let chain_info = ChainInfo::for_holesky();
+        let slot = decoded_submission.message().slot();
+
+        let public_key = BlsPublicKey::try_from(hex::decode("0xb74ed6ac039a55136d5493333c32ce5b2e0152e4121b5b850830383ab836e22fb5f4f8568c61f12d0646dc0eb0c6d861" ).unwrap().as_slice()).unwrap();
+
+        match decoded_submission {
+            SignedBlindedBeaconBlock::Deneb(mut block) => {
+                let result = verify_signed_consensus_message(
+                    &mut block.message,
+                    &block.signature,
+                    &public_key,
+                    &chain_info.context,
+                    Some(slot),
+                    Some(chain_info.genesis_validators_root),
+                );
+
+                match result {
+                    Ok(_) => {
+                        
+                    }
+                    Err(e) => {
+                        println!("Error: {:?}", e);
+                    }
+                    
+                }
+            }
+            _ => {}
+            
+        }
+        
     }
 }

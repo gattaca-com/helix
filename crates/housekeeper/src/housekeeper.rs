@@ -18,8 +18,7 @@ use helix_beacon_client::{
     MultiBeaconClientTrait,
 };
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, pending_block::PendingBlock, ProposerDuty,
-    SignedValidatorRegistrationEntry,
+    api::builder_api::BuilderGetValidatorsResponseEntry, pending_block::PendingBlock, ProposerDuty, RelayConfig, Route, SignedValidatorRegistrationEntry
 };
 use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
@@ -76,12 +75,14 @@ pub struct Housekeeper<
     refresh_trusted_proposers_lock: Mutex<()>,
 
     leader_id: String,
+
+    config: RelayConfig,
 }
 
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     Housekeeper<DB, BeaconClient, A>
 {
-    pub fn new(db: Arc<DB>, beacon_client: BeaconClient, auctioneer: A) -> Arc<Self> {
+    pub fn new(db: Arc<DB>, beacon_client: BeaconClient, auctioneer: A, config: RelayConfig) -> Arc<Self> {
         Arc::new(Self {
             db,
             beacon_client,
@@ -96,6 +97,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             refreshed_trusted_proposers_slot: Mutex::new(0),
             refresh_trusted_proposers_lock: Mutex::new(()),
             leader_id: Uuid::new_v4().to_string(),
+            config,
         })
     }
 
@@ -131,6 +133,11 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     async fn process_new_slot(self: &SharedHousekeeper<DB, BeaconClient, A>, head_slot: u64) {
         let (is_new_block, prev_head_slot) = self.update_head_slot(head_slot).await;
         if !is_new_block {
+            return;
+        }
+
+        // Skip processing if the GetPayload route is enabled.
+        if self.config.router_config.enabled_routes.iter().any(|r| r.route == Route::GetPayload) {
             return;
         }
 
@@ -313,13 +320,21 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
         let mut demoted_builders = HashSet::new();
 
-        for pending_block in self.db.get_pending_blocks().await? {
+        let mut pending_block_hashes = HashMap::new();
+
+        for pending_block in self.auctioneer.get_pending_blocks().await? {
+            pending_block_hashes
+                .entry(pending_block.builder_pubkey.clone())
+                .or_insert_with(Vec::new)
+                .push(pending_block.block_hash.clone());
+
             if demoted_builders.contains(&pending_block.builder_pubkey) {
                 continue;
             }
 
             if v2_submission_late(&pending_block, current_time) {
-                let reason = "builder demoted due to missing payload submission";
+                let reason =
+                    format!("builder demoted due to missing payload submission. {pending_block:?}");
                 info!(builder_pub_key = ?pending_block.builder_pubkey, reason);
                 self.auctioneer.demote_builder(&pending_block.builder_pubkey).await?;
                 self.db
@@ -332,10 +347,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
                 demoted_builders.insert(pending_block.builder_pubkey);
             }
         }
-
-        // Remove expired entries (entries that have been in the db for > 45s).
-        self.db.remove_old_pending_blocks().await?;
-
+        
         Ok(())
     }
 

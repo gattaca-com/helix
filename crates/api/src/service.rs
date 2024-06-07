@@ -1,6 +1,7 @@
-use std::{env, sync::Arc, time::Duration};
+use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 
 use ethereum_consensus::crypto::SecretKey;
+use moka::sync::Cache;
 use tokio::{
     sync::broadcast,
     time::{sleep, timeout},
@@ -8,24 +9,21 @@ use tokio::{
 use tracing::{error, info};
 
 use crate::{
-    builder::optimistic_simulator::OptimisticSimulator,
-    gossiper::grpc_gossiper::GrpcGossiperClientManager,
-    router::{build_router, BuilderApiProd, DataApiProd, ProposerApiProd},
+    builder::optimistic_simulator::OptimisticSimulator, gossiper::grpc_gossiper::GrpcGossiperClientManager, relay_data::{BidsCache, DeliveredPayloadsCache}, router::{build_router, BuilderApiProd, DataApiProd, ProposerApiProd}
 };
 use helix_beacon_client::{
     beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
     multi_beacon_client::MultiBeaconClient, BlockBroadcaster, MultiBeaconClientTrait,
 };
 use helix_common::{
-    chain_info::ChainInfo, signing::RelaySigningContext, BroadcasterConfig, NetworkConfig,
-    RelayConfig,
+    chain_info::ChainInfo, signing::RelaySigningContext, BroadcasterConfig, NetworkConfig, RelayConfig
 };
 use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
 use helix_datastore::redis::redis_cache::RedisCache;
 use helix_housekeeper::{ChainEventUpdater, Housekeeper};
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const INIT_BROADCASTER_TIMEOUT: Duration = Duration::from_secs(30);
 
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
@@ -38,16 +36,29 @@ impl ApiService {
         let postgres_db = PostgresDatabaseService::from_relay_config(&config).unwrap();
         postgres_db.run_migrations().await;
         postgres_db.init_region(&config).await;
+        postgres_db.load_known_validators().await;
         postgres_db.start_registration_processor().await;
 
         let db = Arc::new(postgres_db);
 
         let builder_infos = db.get_all_builder_infos().await.expect("failed to load builder infos");
+        
         let auctioneer = Arc::new(RedisCache::new(&config.redis.url, builder_infos).await.unwrap());
+
+        let auctioneer_clone = auctioneer.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Err(err) = auctioneer_clone.start_best_bid_listener().await {
+                    tracing::error!("Bid listener error: {}", err);
+                    sleep(Duration::from_secs(5)).await;
+                }
+            }
+        });
+
         let broadcasters = init_broadcasters(&config).await;
 
         let mut beacon_clients = vec![];
-        for cfg in config.beacon_clients {
+        for cfg in &config.beacon_clients {
             beacon_clients.push(Arc::new(BeaconClient::from_endpoint_str(&cfg.url)));
         }
         let multi_beacon_client = Arc::new(MultiBeaconClient::<BeaconClient>::new(beacon_clients));
@@ -64,10 +75,19 @@ impl ApiService {
             NetworkConfig::Goerli => ChainInfo::for_goerli(),
             NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
             NetworkConfig::Holesky => ChainInfo::for_holesky(),
+            NetworkConfig::Custom { ref dir_path, ref genesis_validator_root, genesis_time } => {
+                match ChainInfo::for_custom(dir_path.clone(), genesis_validator_root.clone(), genesis_time) {
+                    Ok(chain_info) => chain_info,
+                    Err(err) => {
+                        error!("Failed to load custom chain info: {:?}", err);
+                        std::process::exit(1);
+                    }
+                }
+            },
         });
 
         let housekeeper =
-            Housekeeper::new(db.clone(), multi_beacon_client.clone(), auctioneer.clone());
+            Housekeeper::new(db.clone(), multi_beacon_client.clone(), auctioneer.clone(), config.clone());
         let mut housekeeper_head_events = head_event_receiver.resubscribe();
         tokio::spawn(async move {
             loop {
@@ -119,7 +139,8 @@ impl ApiService {
             .expect("failed to initialise gRPC gossiper"),
         );
 
-        let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
+        let (builder_gossip_sender, builder_gossip_receiver) = tokio::sync::mpsc::channel(10_000);
+        let (proposer_gossip_sender, proposer_gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
         let builder_api = Arc::new(BuilderApiProd::new(
             auctioneer.clone(),
@@ -129,30 +150,48 @@ impl ApiService {
             gossiper.clone(),
             relay_signing_context,
             slot_update_sender.clone(),
-            gossip_receiver,
+            builder_gossip_receiver,
         ));
 
-        gossiper.start_server(gossip_sender).await;
+        gossiper.start_server(builder_gossip_sender, proposer_gossip_sender).await;
+
+        let validator_preferences = Arc::new(config.validator_preferences.clone());
 
         let proposer_api = Arc::new(ProposerApiProd::new(
             auctioneer.clone(),
             db.clone(),
+            gossiper.clone(),
             broadcasters,
             multi_beacon_client.clone(),
             chain_info.clone(),
             slot_update_sender,
-            Arc::new(config.validator_preferences.clone()),
+            validator_preferences.clone(),
             config.target_get_payload_propagation_duration_ms,
+            proposer_gossip_receiver,
         ));
 
-        let data_api = Arc::new(DataApiProd::new(db.clone()));
+        let data_api = Arc::new(DataApiProd::new(validator_preferences.clone(), db.clone()));
 
-        let router = build_router(&mut config.router_config, builder_api, proposer_api, data_api);
+        let bids_cache: Arc<BidsCache> = Arc::new(
+            Cache::builder()
+                .time_to_live(Duration::from_secs(10))
+                .time_to_idle(Duration::from_secs(5))
+                .build()
+        );
+
+        let delivered_payloads_cache: Arc<DeliveredPayloadsCache> = Arc::new(
+            Cache::builder()
+                .time_to_live(Duration::from_secs(10))
+                .time_to_idle(Duration::from_secs(5))
+                .build()
+        );
+
+        let router = build_router(&mut config.router_config, builder_api, proposer_api, data_api, bids_cache, delivered_payloads_cache);
 
         let listener = tokio::net::TcpListener::bind("0.0.0.0:4040").await.unwrap();
-        match axum::serve(listener, router).await {
-            Ok(_) => println!("Server exited successfully"),
-            Err(e) => println!("Server exited with error: {e}"),
+        match axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await {
+            Ok(_) => info!("Server exited successfully"),
+            Err(e) => error!("Server exited with error: {e}"),
         }
     }
 }

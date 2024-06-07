@@ -1,11 +1,8 @@
-use std::{sync::Arc, time::SystemTime};
+use std::{sync::Arc};
 
-use ethereum_consensus::primitives::BlsPublicKey;
+
 use helix_common::{
-    bellatrix::ByteVector,
-    bid_submission::{v2::header_submission::SignedHeaderSubmission, SignedBidSubmission},
-    simulator::BlockSimError,
-    GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, SubmissionTrace,
+    bellatrix::ByteVector, bid_submission::{v2::header_submission::SignedHeaderSubmission, SignedBidSubmission}, simulator::BlockSimError, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, SignedBuilderBid, SubmissionTrace
 };
 
 pub(crate) const PATH_BUILDER_API: &str = "/relay/v1/builder";
@@ -19,12 +16,6 @@ pub(crate) const PATH_SUBMIT_HEADER: &str = "/headers";
 pub enum DbInfo {
     NewSubmission(Arc<SignedBidSubmission>, Arc<SubmissionTrace>, OptimisticVersion),
     NewHeaderSubmission(Arc<SignedHeaderSubmission>, Arc<HeaderSubmissionTrace>),
-    PayloadReceived {
-        block_hash: ByteVector<32>,
-        builder_pubkey: BlsPublicKey,
-        slot: u64,
-        time: SystemTime,
-    },
     GossipedHeader {
         block_hash: ByteVector<32>,
         trace: Arc<GossipedHeaderTrace>,

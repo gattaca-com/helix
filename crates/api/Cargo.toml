@@ -23,6 +23,7 @@ futures = { workspace = true }
 hyper = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
+tokio-tungstenite = "0.16"
 tower-http = { workspace = true }
 url = { workspace = true }
 tonic = "0.10"
@@ -51,6 +52,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
 bytes = "1.5"
+moka = "0.9"
 
 [build-dependencies]
 tonic-build = "0.10"

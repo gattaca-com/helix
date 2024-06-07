@@ -16,6 +16,8 @@ async-trait.workspace = true
 axum.workspace = true
 hyper.workspace = true
 tokio.workspace = true
+tokio-stream.workspace = true
+futures-util = "0.3"
 
 # Serialization and Data Format 
 reth-primitives.workspace = true

@@ -29,10 +29,12 @@ jobs:
       run: cd ./repos/${{ secrets.REPO_NAME }}
 
     # Install nightly toolchain and rustfmt
-    - name: Install nightly toolchain and rustfmt
-      run: |
-        rustup toolchain install nightly
-        rustup component add rustfmt --toolchain nightly
+    - name: Install nightly toolchain and components
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: nightly-2024-02-05
+        components: clippy, rustfmt
+        override: true
 
     # Rust Linting with Clippy
     - uses: dtolnay/rust-toolchain@clippy
@@ -42,7 +44,7 @@ jobs:
 
     # Run General Clippy Linting
     - name: Clippy
-      run: cargo clippy --all-features
+      run: cargo clippy --all-features --no-deps
       env:
         RUSTFLAGS: -D warnings
       working-directory: ./repos/${{ secrets.REPO_NAME }}

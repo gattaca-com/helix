@@ -4,6 +4,7 @@ use ethereum_consensus::{
     phase0::mainnet::SLOTS_PER_EPOCH,
     ssz::{self, prelude::SimpleSerialize},
 };
+use ethereum_consensus::altair::{Bytes32, Slot};
 use reth_primitives::{proofs, Address};
 
 pub mod request_encoding;
@@ -53,4 +54,8 @@ where
     } else {
         serde_json::from_slice(body_bytes).ok()
     }
+}
+
+pub fn get_payload_attributes_key(parent_hash: &Bytes32, slot: Slot) -> String {
+    format!("{parent_hash:?}:{slot}")
 }

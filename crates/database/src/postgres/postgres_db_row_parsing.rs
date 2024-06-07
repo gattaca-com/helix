@@ -1,4 +1,4 @@
-use std::sync::Arc;
+
 
 use ethereum_consensus::{
     builder::{SignedValidatorRegistration, ValidatorRegistration},
@@ -7,12 +7,7 @@ use ethereum_consensus::{
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
-    },
-    bellatrix::{ByteList, ByteVector, List},
-    bid_submission::BidTrace,
-    pending_block::PendingBlock,
-    BuilderInfo, GetPayloadTrace, ProposerInfo, SignedValidatorRegistrationEntry,
-    ValidatorPreferences,
+    }, bellatrix::{ByteList, ByteVector, List}, bid_submission::BidTrace, BuilderInfo, Filtering, GetPayloadTrace, ProposerInfo, SignedValidatorRegistrationEntry, ValidatorPreferences
 };
 use thiserror::Error;
 
@@ -37,11 +32,8 @@ impl FromRow for DeliveredPayloadDocument {
     fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError> {
         Ok(DeliveredPayloadDocument {
             bid_trace: BidTrace::from_row(row)?,
-            payload: Arc::new(ethereum_consensus::types::ExecutionPayload::Bellatrix(
-                ethereum_consensus::bellatrix::ExecutionPayload::from_row(row)?,
-            )),
-            // TODO: If this is needed then we need to solve the one to many problem
-            latency_trace: GetPayloadTrace::default(),
+            block_number: parse_i32_to_u64(row.get::<&str, i32>("block_number"))?,
+            num_txs: parse_i32_to_usize(row.get::<&str, i32>("num_txs"))?,
         })
     }
 }
@@ -180,7 +172,8 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                     signature: parse_bytes_to_signature(row.get::<&str, &[u8]>("signature"))?,
                 },
                 preferences: ValidatorPreferences {
-                    censoring: parse_bool_to_bool(row.get::<&str, bool>("censoring"))?,
+                    //TODO: change to filtering after migration
+                    filtering: parse_i16_to_filtering(row.get::<&str, i16>("filtering"))?,
                     trusted_builders: row.get::<&str, Option<Vec<&str>>>("trusted_builders").map(
                         |trusted_builders| {
                             trusted_builders
@@ -189,6 +182,7 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                                 .collect()
                         },
                     ),
+                    header_delay: row.get::<&str, bool>("header_delay"),
                 },
             },
         })
@@ -220,29 +214,6 @@ impl FromRow for BuilderInfo {
     }
 }
 
-impl FromRow for PendingBlock {
-    fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError>
-    where
-        Self: Sized,
-    {
-        Ok(PendingBlock {
-            block_hash: parse_bytes_to_hash::<32>(row.get::<&str, &[u8]>("block_hash"))?,
-            builder_pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("builder_pubkey"))?,
-            slot: parse_i32_to_u64(row.get::<&str, i32>("slot"))?,
-            header_receive_ms: parse_optional_timestamptz_to_u64_ms(row.get::<&str, Option<
-                std::time::SystemTime,
-            >>(
-                "header_receive"
-            ))?,
-            payload_receive_ms: parse_optional_timestamptz_to_u64_ms(row.get::<&str, Option<
-                std::time::SystemTime,
-            >>(
-                "payload_receive"
-            ))?,
-        })
-    }
-}
-
 impl FromRow for SignedValidatorRegistration {
     fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError>
     where
@@ -269,7 +240,8 @@ impl FromRow for SignedValidatorRegistrationEntry {
             registration_info: ValidatorRegistrationInfo {
                 registration: SignedValidatorRegistration::from_row(row)?,
                 preferences: ValidatorPreferences {
-                    censoring: parse_bool_to_bool(row.get::<&str, bool>("censoring"))?,
+                    //TODO: change to filtering after migration
+                    filtering: parse_i16_to_filtering(row.get::<&str, i16>("filtering"))?,
                     trusted_builders: row.get::<&str, Option<Vec<&str>>>("trusted_builders").map(
                         |trusted_builders| {
                             trusted_builders
@@ -278,11 +250,13 @@ impl FromRow for SignedValidatorRegistrationEntry {
                                 .collect()
                         },
                     ),
+                    header_delay: row.get::<&str, bool>("header_delay"),
                 },
             },
             inserted_at: parse_timestamptz_to_u64(
                 row.get::<&str, std::time::SystemTime>("inserted_at"),
             )?,
+            pool_name: None, //TODO: maybe fetch pool name? but not currently needed here
         })
     }
 }
@@ -306,24 +280,16 @@ pub fn parse_timestamptz_to_u64(timestamp: std::time::SystemTime) -> Result<u64,
         .map(|duration| duration.as_secs())
 }
 
-pub fn parse_timestamptz_to_u64_ms(timestamp: std::time::SystemTime) -> Result<u64, DatabaseError> {
-    timestamp
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| DatabaseError::RowParsingError(Box::new(e)))
-        .map(|duration| duration.as_millis() as u64)
-}
-
-pub fn parse_optional_timestamptz_to_u64_ms(
-    timestamp: Option<std::time::SystemTime>,
-) -> Result<Option<u64>, DatabaseError> {
-    match timestamp {
-        Some(timestamp) => parse_timestamptz_to_u64_ms(timestamp).map(Some),
-        None => Ok(None),
-    }
-}
-
 pub fn parse_bool_to_bool(value: bool) -> Result<bool, DatabaseError> {
     Ok(value)
+}
+
+pub fn parse_i16_to_filtering(value: i16) -> Result<Filtering, DatabaseError> {
+    match value {
+        1 => Ok(Filtering::Regional),
+        0 => Ok(Filtering::Global),
+        _ => Err(DatabaseError::GeneralError),
+    }
 }
 
 pub fn parse_i32_to_usize(value: i32) -> Result<usize, DatabaseError> {

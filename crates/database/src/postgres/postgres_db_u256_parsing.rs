@@ -59,7 +59,7 @@ impl<'a> FromSql<'a> for PostgresNumeric {
             value = value * n_base + U256::from(read_two_bytes(raw, &mut offset)?);
         }
 
-        value *= n_base.pow(U256::from(weight));
+        value *= n_base.pow(U256::from((weight + 1).saturating_sub(num_groups)));
 
         Ok(PostgresNumeric(value))
     }
@@ -133,14 +133,17 @@ impl ToSql for PostgresNumeric {
 mod tests {
     use super::*;
     use crate::postgres::postgres_db_u256_parsing::PostgresNumeric;
-    use ethereum_consensus::primitives::U256;
+    use bytes::BytesMut;
+    use ethereum_consensus::{primitives::U256, serde::as_str};
+    use serde::{Deserialize, Serialize};
+    use tokio_postgres::types::Type;
 
     fn get_values() -> Vec<U256> {
         vec![
             U256::from(0),
             U256::from(1),
-            U256::from(1234),
             U256::from(12345678),
+            U256::from(12088888526885516_u64),
             U256::from(u64::MAX),
             U256::from_str_radix("1000_000_000_000_000_000", 10).unwrap(),
             U256::from_str_radix("1000_000_000_000_000_000_000", 10).unwrap(),

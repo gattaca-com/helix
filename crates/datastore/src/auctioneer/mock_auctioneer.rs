@@ -1,18 +1,15 @@
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::{collections::HashMap, sync::{atomic::AtomicBool, Arc, Mutex}};
 
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 
 use helix_common::{
-    bid_submission::{
+    api::builder_api::TopBidUpdate, bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
-    },
-    eth::SignedBuilderBid,
-    signing::RelaySigningContext,
-    versioned_payload::PayloadAndBlobs,
-    BuilderInfo, ProposerInfo,
+    }, eth::SignedBuilderBid, pending_block::PendingBlock, signing::RelaySigningContext, versioned_payload::PayloadAndBlobs, BuilderInfo, ProposerInfo
 };
 use helix_database::types::BuilderInfoDocument;
+use tokio_stream::Stream;
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 
@@ -61,6 +58,9 @@ impl Auctioneer for MockAuctioneer {
             }
         }
         Ok(self.best_bid.lock().unwrap().clone())
+    }
+    async fn get_best_bids(&self) -> Box<dyn Stream<Item = Result<Vec<u8>, AuctioneerError>> + Send + Unpin> {
+        Box::new(tokio_stream::iter(vec![Ok(vec![0; 188]),Ok(vec![0; 188]),Ok(vec![0; 188])].into_iter()))
     }
 
     async fn save_execution_payload(
@@ -228,6 +228,30 @@ impl Auctioneer for MockAuctioneer {
         _proposer_pub_key: &BlsPublicKey,
     ) -> Result<bool, AuctioneerError> {
         Ok(true)
+    }
+
+    async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, AuctioneerError> {
+        Ok(vec![])
+    }
+
+    async fn save_pending_block_header(
+        &self,
+        _slot: u64,
+        _builder_pub_key: &BlsPublicKey,
+        _block_hash: &Hash32,
+        _timestamp_ms: u64,
+    ) -> Result<(), AuctioneerError> {
+        Ok(())
+    }
+
+    async fn save_pending_block_payload(
+        &self,
+        _slot: u64,
+        _builder_pub_key: &BlsPublicKey,
+        _block_hash: &Hash32,
+        _timestamp_ms: u64,
+    ) -> Result<(), AuctioneerError> {
+        Ok(())
     }
 
     async fn try_acquire_or_renew_leadership(&self, _leader_id: &str) -> bool {

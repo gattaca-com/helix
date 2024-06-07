@@ -6,7 +6,7 @@ use reqwest::{
 };
 use serde_json::json;
 use tokio::sync::mpsc::Sender;
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use helix_common::simulator::BlockSimError;
 use uuid::Uuid;
@@ -49,12 +49,21 @@ impl RpcSimulator {
             headers.insert("X-High-Priority", HeaderValue::from_static("true"));
         }
 
-        let rpc_payload = json!({
-            "jsonrpc": "2.0",
-            "id": "1",
-            "method": "flashbots_validateBuilderSubmissionV2",
-            "params": [request]
-        });
+        let rpc_payload = if request.parent_beacon_block_root.is_none() {
+            json!({
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "flashbots_validateBuilderSubmissionV2",
+                "params": [request]
+            })
+        } else {
+            json!({
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "flashbots_validateBuilderSubmissionV3",
+                "params": [request]
+            })
+        };
 
         self.http.post(&self.endpoint).headers(headers).json(&rpc_payload).send().await
     }

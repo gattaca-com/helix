@@ -1,7 +1,6 @@
 use ethereum_consensus::{
     clock::{
-        for_goerli, for_holesky, for_mainnet, for_sepolia, Clock, SystemTimeProvider,
-        GOERLI_GENESIS_TIME, HOLESKY_GENESIS_TIME, MAINNET_GENESIS_TIME, SEPOLIA_GENESIS_TIME,
+        for_goerli, for_holesky, for_mainnet, for_sepolia, from_system_time, Clock, SystemTimeProvider, GOERLI_GENESIS_TIME, HOLESKY_GENESIS_TIME, MAINNET_GENESIS_TIME, SEPOLIA_GENESIS_TIME
     },
     configs,
     primitives::Root,
@@ -76,11 +75,16 @@ pub struct ChainInfo {
 
 impl ChainInfo {
     pub fn for_mainnet() -> Self {
+        let mut cxt = Context::for_mainnet();
+        // override the deneb fork epoch and version as library defaults are incorrect
+        // TODO: remove this once the library defaults are fixed
+        cxt.deneb_fork_epoch = 269568;
+
         Self {
             network: Network::Mainnet,
             genesis_validators_root: Node::try_from(MAINNET_GENESIS_VALIDATOR_ROOT.as_ref())
                 .unwrap(),
-            context: Context::for_mainnet(),
+            context: cxt,
             clock: for_mainnet(),
             genesis_time_in_secs: MAINNET_GENESIS_TIME,
             seconds_per_slot: configs::mainnet::SECONDS_PER_SLOT,
@@ -112,18 +116,37 @@ impl ChainInfo {
     }
 
     pub fn for_holesky() -> Self {
+        let mut cxt = Context::for_holesky();
+        // override the deneb fork epoch and version as library defaults are incorrect
+        // TODO: remove this once the library defaults are fixed
+        cxt.deneb_fork_epoch = 29696;
+        cxt.deneb_fork_version = [5, 1, 112, 0];
+
         Self {
             network: Network::Holesky,
             genesis_validators_root: Node::try_from(HOLESKY_GENESIS_VALIDATOR_ROOT.as_ref())
                 .unwrap(),
-            context: Context::for_holesky(),
+            context: cxt,
             clock: for_holesky(),
             genesis_time_in_secs: HOLESKY_GENESIS_TIME,
             seconds_per_slot: configs::holesky::SECONDS_PER_SLOT,
         }
     }
 
-    pub fn for_custom(_config: String) -> Self {
-        panic!("custom network not supported yet");
+    pub fn for_custom(config: String, genesis_validators_root: Node, genesis_time_in_secs: u64) -> Result<Self, Error> {
+        let context = Context::try_from_file(&config)?;
+        let network = Network::Custom(config.clone());
+        let clock = from_system_time(genesis_time_in_secs, context.seconds_per_slot, context.slots_per_epoch);
+        let genesis_time_in_secs = genesis_time_in_secs;
+        let seconds_per_slot = context.seconds_per_slot;
+
+        Ok(Self {
+            network,
+            genesis_validators_root,
+            context,
+            clock,
+            genesis_time_in_secs,
+            seconds_per_slot,
+        })
     }
 }

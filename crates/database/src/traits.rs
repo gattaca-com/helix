@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc, time::SystemTime};
+use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use ethereum_consensus::{
@@ -10,17 +10,9 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
-    },
-    bid_submission::{
+    }, bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
-    },
-    builder_info::BuilderInfo,
-    pending_block::PendingBlock,
-    simulator::BlockSimError,
-    versioned_payload::PayloadAndBlobs,
-    GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace,
-    HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace,
-    ValidatorSummary,
+    }, builder_info::BuilderInfo, deneb::SignedValidatorRegistration, simulator::BlockSimError, validator_preferences, versioned_payload::PayloadAndBlobs, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
 };
 
 use crate::{
@@ -33,12 +25,19 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn save_validator_registration(
         &self,
         entry: ValidatorRegistrationInfo,
+        pool_name: Option<String>,
     ) -> Result<(), DatabaseError>;
 
     async fn save_validator_registrations(
         &self,
         entries: Vec<ValidatorRegistrationInfo>,
+        pool_name: Option<String>,
     ) -> Result<(), DatabaseError>;
+
+    async fn is_registration_update_required(
+        &self,
+        registration: &SignedValidatorRegistration,
+    ) -> Result<bool, DatabaseError>;
 
     async fn get_validator_registration(
         &self,
@@ -99,14 +98,6 @@ pub trait DatabaseService: Send + Sync + Clone {
         optimistic_version: i16,
     ) -> Result<(), DatabaseError>;
 
-    async fn save_pending_block(
-        &self,
-        block_hash: &Hash32,
-        builder_pub_key: &BlsPublicKey,
-        slot: u64,
-        time: SystemTime,
-    ) -> Result<(), DatabaseError>;
-
     async fn store_builder_info(
         &self,
         builder_pub_key: &BlsPublicKey,
@@ -119,6 +110,11 @@ pub trait DatabaseService: Send + Sync + Clone {
     ) -> Result<BuilderInfo, DatabaseError>;
 
     async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError>;
+
+    async fn check_builder_api_key(
+        &self,
+        api_key: &str,
+    ) -> Result<bool, DatabaseError>;
 
     async fn db_demote_builder(
         &self,
@@ -141,6 +137,7 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn get_delivered_payloads(
         &self,
         filters: &BidFilters,
+        validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError>;
 
     async fn save_get_header_call(
@@ -154,6 +151,7 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn save_failed_get_payload(
         &self,
+        slot: u64,
         block_hash: ByteVector<32>,
         error: String,
         trace: GetPayloadTrace,
@@ -177,9 +175,10 @@ pub trait DatabaseService: Send + Sync + Clone {
         trace: Arc<GossipedPayloadTrace>,
     ) -> Result<(), DatabaseError>;
 
-    async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, DatabaseError>;
-
-    async fn remove_old_pending_blocks(&self) -> Result<(), DatabaseError>;
-
     async fn get_trusted_proposers(&self) -> Result<Vec<ProposerInfo>, DatabaseError>;
+
+    async fn get_validator_pool_name(
+        &self,
+        api_key: &str,
+    ) -> Result<Option<String>, DatabaseError>;
 }

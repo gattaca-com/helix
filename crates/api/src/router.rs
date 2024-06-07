@@ -1,20 +1,17 @@
 use axum::{
-    error_handling::HandleErrorLayer,
-    http::StatusCode,
-    routing::{get, post},
-    Extension, Router,
+    error_handling::HandleErrorLayer, http::StatusCode, middleware, routing::{get, post}, Extension, Router
 };
 use helix_beacon_client::{beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient};
 use helix_common::{Route, RouterConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tower::{timeout::TimeoutLayer, BoxError, ServiceBuilder};
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
     builder::{
-        api::{BuilderApi, MAX_HEADER_LENGTH, MAX_PAYLOAD_LENGTH},
+        api::{BuilderApi, MAX_PAYLOAD_LENGTH},
         optimistic_simulator::OptimisticSimulator,
         PATH_BUILDER_API, PATH_GET_VALIDATORS, PATH_SUBMIT_BLOCK, PATH_SUBMIT_BLOCK_OPTIMISTIC_V2,
         PATH_SUBMIT_HEADER,
@@ -40,7 +37,7 @@ pub type BuilderApiProd = BuilderApi<
 >;
 
 pub type ProposerApiProd =
-    ProposerApi<RedisCache, PostgresDatabaseService, MultiBeaconClient<BeaconClient>>;
+    ProposerApi<RedisCache, PostgresDatabaseService, MultiBeaconClient<BeaconClient>, GrpcGossiperClientManager>;
 
 pub type DataApiProd = DataApi<PostgresDatabaseService>;
 
@@ -49,74 +46,88 @@ pub fn build_router(
     builder_api: Arc<BuilderApiProd>,
     proposer_api: Arc<ProposerApiProd>,
     data_api: Arc<DataApiProd>,
+    bids_cache: Arc<BidsCache>,
+    delivered_payloads_cache: Arc<DeliveredPayloadsCache>,
 ) -> Router {
     router_config.resolve_condensed_routes();
 
-    let mut router = Router::new();
+    let mut rate_limits_per_route = HashMap::new();
+    for route_info in &router_config.enabled_routes {
+        if let Some(rate_limit) = route_info.rate_limit.as_ref() {
+            rate_limits_per_route.insert(route_info.route.path(), RateLimitStateForRoute::new(
+                Duration::from_millis(rate_limit.limit_duration_ms),
+                rate_limit.max_requests,
+            ));
+        }
+    }
+    let rate_limiting_state = RateLimitState::new(rate_limits_per_route);
+    let mut router = Router::new().with_state(rate_limiting_state.clone());
 
-    for &route in &router_config.enabled_routes {
+    for route in router_config.enabled_routes.iter().map(|route_info| route_info.route) {
         match route {
             Route::GetValidators => {
                 router = router.route(
-                    &format!("{PATH_BUILDER_API}{PATH_GET_VALIDATORS}"),
+                    &route.path(),
                     get(BuilderApiProd::get_validators),
                 );
             }
             Route::SubmitBlock => {
                 router = router
                     .route(
-                        &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK}"),
+                        &route.path(),
                         post(BuilderApiProd::submit_block),
-                    )
-                    .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));
+                    );
             }
             Route::SubmitBlockOptimistic => {
                 router = router
                     .route(
                         &format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC_V2}"),
                         post(BuilderApiProd::submit_block_v2),
-                    )
-                    .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));
+                    );
             }
             Route::SubmitHeader => {
                 router = router
                     .route(
-                        &format!("{PATH_BUILDER_API}{PATH_SUBMIT_HEADER}"),
+                        &route.path(),
                         post(BuilderApiProd::submit_header),
-                    )
-                    .layer(RequestBodyLimitLayer::new(MAX_HEADER_LENGTH));
+                    );
+            }
+            Route::GetTopBid => {
+                router = router
+                    .route(
+                        &route.path(),
+                        get(BuilderApiProd::get_top_bid),
+                    );
             }
             Route::Status => {
                 router = router.route(
-                    &format!("{PATH_PROPOSER_API}{PATH_STATUS}"),
+                    &route.path(),
                     get(ProposerApiProd::status),
                 );
             }
             Route::RegisterValidators => {
                 router = router
                     .route(
-                        &format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
+                        &route.path(),
                         post(ProposerApiProd::register_validators),
-                    )
-                    .layer(RequestBodyLimitLayer::new(MAX_VAL_REGISTRATIONS_LENGTH));
+                    );
             }
             Route::GetHeader => {
                 router = router.route(
-                    &format!("{PATH_PROPOSER_API}{PATH_GET_HEADER}"),
+                    &route.path(),
                     get(ProposerApiProd::get_header),
                 );
             }
             Route::GetPayload => {
                 router = router
                     .route(
-                        &format!("{PATH_PROPOSER_API}{PATH_GET_PAYLOAD}"),
+                        &route.path(),
                         post(ProposerApiProd::get_payload),
-                    )
-                    .layer(RequestBodyLimitLayer::new(MAX_BLINDED_BLOCK_LENGTH));
+                    );
             }
             Route::ProposerPayloadDelivered => {
                 router = router.route(
-                    &format!("{PATH_DATA_API}{PATH_PROPOSER_PAYLOAD_DELIVERED}"),
+                    &route.path(),
                     get(DataApiProd::proposer_payload_delivered),
                 );
             }
@@ -128,7 +139,7 @@ pub fn build_router(
             }
             Route::ValidatorRegistration => {
                 router = router.route(
-                    &format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),
+                    &route.path(),
                     get(DataApiProd::validator_registration),
                 );
             }
@@ -137,6 +148,12 @@ pub fn build_router(
             }
         }
     }
+
+    // Add payload size limit
+    router = router.layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));
+
+    // Add Rate-Limiting Layer
+    router = router.route_layer(middleware::from_fn_with_state(rate_limiting_state.clone(), rate_limit_by_ip));
 
     // Add Timeout-Layer
     // Add Error-handling layer
@@ -150,7 +167,9 @@ pub fn build_router(
     router = router
         .layer(Extension(builder_api))
         .layer(Extension(proposer_api))
-        .layer(Extension(data_api));
+        .layer(Extension(data_api))
+        .layer(Extension(bids_cache))
+        .layer(Extension(delivered_payloads_cache));
 
     router
 }

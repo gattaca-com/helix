@@ -44,6 +44,9 @@ pub enum BuilderApiError {
     #[error("could not find proposer duty for slot")]
     ProposerDutyNotFound,
 
+    #[error("invalid api key")]
+    InvalidApiKey,
+
     #[error("payload attributes not yet known")]
     PayloadAttributesNotYetKnown,
 
@@ -118,8 +121,8 @@ pub enum BuilderApiError {
     #[error("builder not in proposer's trusted list: {proposer_trusted_builders:?}")]
     BuilderNotInProposersTrustedList { proposer_trusted_builders: Vec<String> },
 
-    #[error("V2 submissions invalid if proposer censors")]
-    V2SubmissionsInvalidIfProposerCensors,
+    #[error("V2 submissions invalid if proposer requires regional filtering")]
+    V2SubmissionsInvalidIfProposerRequiresRegionalFiltering,
 }
 
 impl IntoResponse for BuilderApiError {
@@ -185,6 +188,9 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::BidBelowFloor => {
                 (StatusCode::ACCEPTED, "Bid below floor, skipped validation").into_response()
             },
+            BuilderApiError::InvalidApiKey => {
+                (StatusCode::UNAUTHORIZED, "Invalid api key").into_response()
+            },
             BuilderApiError::InternalError => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
             },
@@ -242,8 +248,8 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders } => {
                 (StatusCode::BAD_REQUEST, format!("builder not in proposer's trusted list: {proposer_trusted_builders:?}")).into_response()
             },
-            BuilderApiError::V2SubmissionsInvalidIfProposerCensors => {
-                (StatusCode::BAD_REQUEST, "V2 submissions invalid if proposer censors").into_response()
+            BuilderApiError::V2SubmissionsInvalidIfProposerRequiresRegionalFiltering => {
+                (StatusCode::BAD_REQUEST, "V2 submissions invalid if proposer requires regional filtering").into_response()
             }
         }
     }

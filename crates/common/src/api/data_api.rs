@@ -1,4 +1,4 @@
-use ethereum_consensus::primitives::{BlsPublicKey, ExecutionAddress, Hash32, U256};
+use ethereum_consensus::{primitives::{BlsPublicKey, ExecutionAddress, Hash32, U256}, serde::as_str};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -47,18 +47,24 @@ impl From<ProposerPayloadDeliveredParams> for BidFilters {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeliveredPayloadsResponse {
+    #[serde(with = "as_str")]
     pub slot: u64,
     pub parent_hash: Hash32,
     pub block_hash: Hash32,
     pub builder_pubkey: BlsPublicKey,
     pub proposer_pubkey: BlsPublicKey,
     pub proposer_fee_recipient: ExecutionAddress,
+    #[serde(with = "as_str")]
     pub gas_limit: u64,
+    #[serde(with = "as_str")]
     pub gas_used: u64,
+    #[serde(with = "as_str")]
     pub value: U256,
+    #[serde(with = "as_str")]
     pub block_number: u64,
+    #[serde(with = "as_str")]
     pub num_tx: usize,
 }
 
@@ -86,20 +92,28 @@ impl From<BuilderBlocksReceivedParams> for BidFilters {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceivedBlocksResponse {
+    #[serde(with = "as_str")]
     pub slot: u64,
     pub parent_hash: Hash32,
     pub block_hash: Hash32,
     pub builder_pubkey: BlsPublicKey,
     pub proposer_pubkey: BlsPublicKey,
     pub proposer_fee_recipient: ExecutionAddress,
+    #[serde(with = "as_str")]
     pub gas_limit: u64,
+    #[serde(with = "as_str")]
     pub gas_used: u64,
+    #[serde(with = "as_str")]
     pub value: U256,
+    #[serde(with = "as_str")]
     pub block_number: u64,
+    #[serde(with = "as_str")]
     pub num_tx: usize,
+    #[serde(with = "as_str")]
     pub timestamp: u64,
+    #[serde(with = "as_str")]
     pub timestamp_ms: u64,
 }
 

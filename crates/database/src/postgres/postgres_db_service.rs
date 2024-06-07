@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     ops::DerefMut,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -12,20 +12,12 @@ use ethereum_consensus::{altair::Hash32, primitives::BlsPublicKey, ssz::prelude:
 
 use helix_common::{
     api::{
-        builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
-        proposer_api::ValidatorRegistrationInfo,
-    },
-    bid_submission::{
+        self, builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters, proposer_api::ValidatorRegistrationInfo
+    }, bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission,
-    },
-    pending_block::PendingBlock,
-    simulator::BlockSimError,
-    versioned_payload::PayloadAndBlobs,
-    BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace,
-    HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry,
-    SubmissionTrace, ValidatorSummary,
+    }, deneb::SignedValidatorRegistration, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
 };
-use tokio_postgres::{types::ToSql, NoTls};
+use tokio_postgres::{row, types::ToSql, NoTls};
 use tracing::{error, info};
 
 use crate::{
@@ -51,8 +43,14 @@ struct RegistrationParams<'a> {
 
 struct PreferenceParams<'a> {
     public_key: &'a [u8],
-    censoring: bool,
+    filtering: i16,
     trusted_builders: Option<Vec<String>>,
+    header_delay: bool,
+}
+
+struct TrustedProposerParams<'a> {
+    public_key: &'a [u8],
+    name: Option<String>,
 }
 
 #[derive(Clone)]
@@ -60,6 +58,7 @@ pub struct PostgresDatabaseService {
     validator_registration_cache: Arc<DashMap<BlsPublicKey, SignedValidatorRegistrationEntry>>,
     pending_validator_registrations: Arc<DashSet<BlsPublicKey>>,
     known_validators_cache: Arc<DashSet<BlsPublicKey>>,
+    validator_pool_cache: Arc<DashMap<String, String>>,
     region: i16,
     pool: Arc<Pool>,
 }
@@ -71,6 +70,7 @@ impl PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
             known_validators_cache: Arc::new(DashSet::new()),
+            validator_pool_cache: Arc::new(DashMap::new()),
             region,
             pool: Arc::new(pool),
         })
@@ -81,7 +81,7 @@ impl PostgresDatabaseService {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut cfg = Config::new();
         cfg.host = Some(relay_config.postgres.hostname.clone());
-        cfg.port = Some(5432);
+        cfg.port = Some(relay_config.postgres.port.clone());
         cfg.dbname = Some(relay_config.postgres.db_name.clone());
         cfg.user = Some(relay_config.postgres.user.clone());
         cfg.password = Some(relay_config.postgres.password.clone());
@@ -91,6 +91,7 @@ impl PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
             known_validators_cache: Arc::new(DashSet::new()),
+            validator_pool_cache: Arc::new(DashMap::new()),
             region: relay_config.postgres.region,
             pool: Arc::new(pool),
         })
@@ -133,6 +134,15 @@ impl PostgresDatabaseService {
         };
     }
 
+    pub async fn load_known_validators(&self) {
+        let client = self.pool.get().await.unwrap();
+        let rows = client.query("SELECT * FROM known_validators", &[]).await.unwrap();
+        for row in rows {
+            let public_key: BlsPublicKey = parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key")).unwrap();
+            self.known_validators_cache.insert(public_key);
+        }
+    }
+
     pub async fn start_registration_processor(&self) {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
         let self_clone = self.clone();
@@ -146,7 +156,7 @@ impl PostgresDatabaseService {
                         for key in self_clone.pending_validator_registrations.iter() {
                             if let Some(entry) = self_clone.validator_registration_cache.get(&*key)
                             {
-                                entries.push(entry.registration_info.clone());
+                                entries.push(entry.clone());
                             }
                         }
                         match self_clone._save_validator_registrations(&entries).await {
@@ -154,9 +164,9 @@ impl PostgresDatabaseService {
                                 for entry in entries.iter() {
                                     self_clone
                                         .pending_validator_registrations
-                                        .remove(&entry.registration.message.public_key);
+                                        .remove(&entry.registration_info.registration.message.public_key);
                                 }
-                                info!("Saved validator registrations");
+                                info!("Saved {} validator registrations", entries.len());
                             }
                             Err(e) => {
                                 error!("Error saving validator registrations: {}", e);
@@ -170,7 +180,7 @@ impl PostgresDatabaseService {
 
     async fn _save_validator_registrations(
         &self,
-        entries: &[ValidatorRegistrationInfo],
+        entries: &[SignedValidatorRegistrationEntry],
     ) -> Result<(), DatabaseError> {
         let mut client = self.pool.get().await?;
 
@@ -183,12 +193,16 @@ impl PostgresDatabaseService {
 
             let mut structured_params_for_pref: Vec<PreferenceParams> =
                 Vec::with_capacity(chunk.len());
+            
+            let mut structured_params_for_trusted: Vec<TrustedProposerParams> =
+                Vec::with_capacity(chunk.len());
 
             for entry in chunk.iter() {
-                let registration = &entry.registration.message;
+                let registration = &entry.registration_info.registration.message;
                 let fee_recipient = &registration.fee_recipient;
                 let public_key = &registration.public_key;
-                let signature = &entry.registration.signature;
+                let signature = &entry.registration_info.registration.signature;
+                let name = &entry.pool_name;
 
                 let inserted_at = SystemTime::now();
 
@@ -204,9 +218,18 @@ impl PostgresDatabaseService {
 
                 structured_params_for_pref.push(PreferenceParams {
                     public_key: public_key.as_ref(),
-                    censoring: entry.preferences.censoring,
-                    trusted_builders: entry.preferences.trusted_builders.clone(),
+                    filtering: entry.registration_info.preferences.filtering.clone() as i16,
+                    trusted_builders: entry.registration_info.preferences.trusted_builders.clone(),
+                    header_delay: entry.registration_info.preferences.header_delay,
                 });
+
+
+                if name.is_some() {
+                    structured_params_for_trusted.push(TrustedProposerParams {
+                        public_key: public_key.as_ref(),
+                        name: name.clone(),
+                    });
+                }
             }
 
             // Prepare the params vector from the structured parameters
@@ -248,16 +271,17 @@ impl PostgresDatabaseService {
                 .flat_map(|tuple| {
                     vec![
                         &tuple.public_key as &(dyn ToSql + Sync),
-                        &tuple.censoring,
+                        &tuple.filtering,
                         &tuple.trusted_builders,
+                        &tuple.header_delay,
                     ]
                 })
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql =
-                String::from("INSERT INTO validator_preferences (public_key, censoring, trusted_builders) VALUES ");
-            let num_params_per_row = 3;
+                String::from("INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay) VALUES ");
+            let num_params_per_row = 4;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -269,7 +293,42 @@ impl PostgresDatabaseService {
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
-            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET censoring = excluded.censoring, trusted_builders = excluded.trusted_builders");
+            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET filtering = excluded.filtering, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay");
+
+            // Execute the query
+            transaction.execute(&sql, &params[..]).await?;
+
+            if structured_params_for_trusted.is_empty() {
+                transaction.commit().await?;
+                continue;
+            }
+
+            let params: Vec<&(dyn ToSql + Sync)> = structured_params_for_trusted
+                .iter()
+                .flat_map(|tuple| {
+                    vec![
+                        &tuple.public_key as &(dyn ToSql + Sync),
+                        &tuple.name,
+                    ]
+                })
+                .collect();
+
+            // Construct the SQL statement with multiple VALUES clauses
+            let mut sql =
+                String::from("INSERT INTO trusted_proposers (pub_key, name) VALUES ");
+            let num_params_per_row = 2;
+            let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
+                .map(|row| {
+                    let placeholders: Vec<String> = (1..=num_params_per_row)
+                        .map(|n| format!("${}", row * num_params_per_row + n))
+                        .collect();
+                    format!("({})", placeholders.join(", "))
+                })
+                .collect();
+
+            // Join the values clauses and append them to the SQL statement
+            sql.push_str(&values_clauses.join(", "));
+            sql.push_str(" ON CONFLICT (pub_key) DO NOTHING");
 
             // Execute the query
             transaction.execute(&sql, &params[..]).await?;
@@ -297,6 +356,7 @@ impl Default for PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
             known_validators_cache: Arc::new(DashSet::new()),
+            validator_pool_cache: Arc::new(DashMap::new()),
             region: 1,
             pool: Arc::new(pool),
         }
@@ -308,6 +368,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn save_validator_registration(
         &self,
         registration_info: ValidatorRegistrationInfo,
+        pool_name: Option<String>,
     ) -> Result<(), DatabaseError> {
         let registration = registration_info.registration.message.clone();
 
@@ -328,16 +389,17 @@ impl DatabaseService for PostgresDatabaseService {
 
         transaction
             .execute(
-                "INSERT INTO validator_preferences (public_key, censoring, trusted_builders)
-            VALUES ($1, $2, $3)
+                "INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay)
+            VALUES ($1, $2, $3, $4)
             ON CONFLICT (public_key)
             DO UPDATE SET
-                censoring = excluded.censoring, trusted_builders = excluded.trusted_builders
+                filtering = excluded.filtering, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay
             ",
                 &[
                     &public_key.as_ref(),
-                    &registration_info.preferences.censoring,
+                    &(registration_info.preferences.filtering as i16),
                     &registration_info.preferences.trusted_builders,
+                    &registration_info.preferences.header_delay,
                 ],
             )
             .await?;
@@ -366,6 +428,7 @@ impl DatabaseService for PostgresDatabaseService {
                 self.validator_registration_cache.insert(public_key.clone(), SignedValidatorRegistrationEntry {
                     registration_info,
                     inserted_at: inserted_at.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
+                    pool_name,
                 });
             }
             Err(e) => {
@@ -381,6 +444,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn save_validator_registrations(
         &self,
         mut entries: Vec<ValidatorRegistrationInfo>,
+        pool_name: Option<String>,
     ) -> Result<(), DatabaseError> {
         entries.retain(|entry| {
             if let Some(existing_entry) =
@@ -400,11 +464,27 @@ impl DatabaseService for PostgresDatabaseService {
                 .insert(entry.registration.message.public_key.clone());
             self.validator_registration_cache.insert(
                 entry.registration.message.public_key.clone(),
-                SignedValidatorRegistrationEntry::new(entry.clone()),
+                SignedValidatorRegistrationEntry::new(entry.clone(), pool_name.clone()),
             );
         }
 
         Ok(())
+    }
+
+    async fn is_registration_update_required(
+        &self,
+        registration: &SignedValidatorRegistration,
+    ) -> Result<bool, DatabaseError> {
+        if let Some(existing_entry) = 
+            self.validator_registration_cache.get(&registration.message.public_key)
+        {
+            if existing_entry.registration_info.registration.message.timestamp >=
+                registration.message.timestamp
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     async fn get_validator_registration(
@@ -423,8 +503,9 @@ impl DatabaseService for PostgresDatabaseService {
                     validator_registrations.timestamp,
                     validator_registrations.public_key,
                     validator_registrations.signature,
-                    validator_preferences.censoring,
+                    validator_preferences.filtering,
                     validator_preferences.trusted_builders,
+                    validator_preferences.header_delay,
                     validator_registrations.inserted_at
                 FROM validator_registrations
                 INNER JOIN validator_preferences ON validator_registrations.public_key = validator_preferences.public_key
@@ -486,7 +567,16 @@ impl DatabaseService for PostgresDatabaseService {
         transaction
             .execute(
                 "
-                TRUNCATE TABLE proposer_duties;
+                INSERT INTO proposer_duties_archive SELECT * FROM proposer_duties ON CONFLICT (slot_number) DO NOTHING;
+            ",
+                &[],
+            )
+            .await?;
+
+        transaction
+            .execute(
+                "
+                DELETE FROM proposer_duties;
             ",
                 &[],
             )
@@ -524,6 +614,7 @@ impl DatabaseService for PostgresDatabaseService {
 
         // Join the values clauses and append them to the SQL statement
         sql.push_str(&values_clauses.join(", "));
+        sql.push_str(" ON CONFLICT (public_key) DO NOTHING");
 
         // Execute the query
         transaction.execute(&sql, &params[..]).await?;
@@ -558,41 +649,57 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         known_validators: Vec<ValidatorSummary>,
     ) -> Result<(), DatabaseError> {
-        if known_validators.is_empty() {
-            return Ok(()); // Early return if there are no validators to process.
-        }
 
-        self.known_validators_cache.clear();
-
-        for validator in known_validators.iter() {
-            self.known_validators_cache.insert(validator.validator.public_key.clone());
-        }
+        info!("Known validators: current cache size: {:?}", self.known_validators_cache.len());
 
         let mut client = self.pool.get().await?;
+    
+        let new_keys_set: HashSet<BlsPublicKey> = known_validators
+            .iter()
+            .map(|validator| validator.validator.public_key.clone())
+            .collect();
+
+        let old_keys_hash_set: HashSet<BlsPublicKey> = self.known_validators_cache.iter()
+        .map(|ref_multi| ref_multi.key().clone()) // Access and clone the key from RefMulti
+        .collect();
+    
+        let keys_to_add: Vec<BlsPublicKey> = new_keys_set.difference(&old_keys_hash_set).cloned().collect();
+        let keys_to_remove: Vec<BlsPublicKey> = old_keys_hash_set.difference(&new_keys_set).cloned().collect();
+    
+        for key in &keys_to_add {
+            self.known_validators_cache.insert(key.clone());
+        }
+        for key in &keys_to_remove {
+            self.known_validators_cache.remove(key);
+        }
+
+        
+        info!("Known validators: added: {:?}", keys_to_add.len());
+        info!("Known validators: removed: {:?}", keys_to_add.len());
+
+        info!("Known validators: updated cache size: {:?}", self.known_validators_cache.len());
+
+
         let transaction = client.transaction().await?;
-
-        transaction
-            .execute(
-                "
-                TRUNCATE TABLE known_validators;
-            ",
-                &[],
-            )
-            .await?;
-
-        let batch_size = 10000;
-
-        for chunk in known_validators.chunks(batch_size) {
+    
+        // Perform batch deletion
+        for chunk in keys_to_remove.chunks(10000) {
+            let sql = "DELETE FROM known_validators WHERE public_key = ANY($1::bytea[])";
+            let byte_keys: Vec<&[u8]> = chunk.iter().map(|k| k.as_ref()).collect();
+            transaction.execute(sql, &[&byte_keys]).await?;
+        }
+    
+        // Perform batch insertion
+        for chunk in keys_to_add.chunks(10000) {
             let mut sql = String::from("INSERT INTO known_validators (public_key) VALUES ");
-            let values_clauses: Vec<String> =
-                chunk.iter().enumerate().map(|(i, _)| format!("(${})", i + 1)).collect();
-
+            let values_clauses: Vec<String> = (1..=chunk.len()).map(|i| format!("(${})", i)).collect();
+    
             sql.push_str(&values_clauses.join(", "));
             sql.push_str(" ON CONFLICT (public_key) DO NOTHING");
 
             let mut structured_params: Vec<&[u8]> = Vec::new();
             for validator in chunk.iter() {
-                structured_params.push(validator.validator.public_key.as_ref());
+                structured_params.push(validator.as_ref());
             }
 
             let params: Vec<&(dyn ToSql + Sync)> =
@@ -600,9 +707,9 @@ impl DatabaseService for PostgresDatabaseService {
 
             transaction.execute(&sql, &params[..]).await?;
         }
-
+    
         transaction.commit().await?;
-
+    
         Ok(())
     }
 
@@ -612,15 +719,6 @@ impl DatabaseService for PostgresDatabaseService {
     ) -> Result<HashSet<BlsPublicKey>, DatabaseError> {
         let client = self.pool.get().await?;
         let mut pub_keys = HashSet::new();
-
-        if self.known_validators_cache.is_empty() {
-            let rows = client.query("SELECT * FROM known_validators", &[]).await?;
-            for row in rows {
-                let public_key: BlsPublicKey =
-                    parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?;
-                self.known_validators_cache.insert(public_key.clone());
-            }
-        }
 
         for public_key in public_keys.iter() {
             if self.known_validators_cache.contains(public_key) {
@@ -642,6 +740,52 @@ impl DatabaseService for PostgresDatabaseService {
         }
 
         Ok(pub_keys)
+    }
+
+    async fn get_validator_pool_name(
+        &self,
+        api_key: &str,
+    ) -> Result<Option<String>, DatabaseError> {
+        let client = self.pool.get().await?;
+
+        if self.validator_pool_cache.is_empty() {
+            let rows = client.query("SELECT * FROM validator_pools", &[]).await?;
+            for row in rows {
+                let api_key: String = row.get::<&str, &str>("api_key").to_string();
+                let name: String = row.get::<&str, &str>("name").to_string();
+                self.validator_pool_cache.insert(api_key, name);
+            }
+        }
+
+
+        if self.validator_pool_cache.contains_key(api_key) {
+            return Ok(self.validator_pool_cache.get(api_key).map(|f| f.clone()));
+        }
+
+
+        let api_key = api_key.to_string();
+        let rows = match client
+            .query(
+                "SELECT * FROM validator_pools WHERE api_key = $1",
+                &[&api_key],
+            )
+            .await {
+            Ok(rows) => rows,
+            Err(e) => {
+                error!("Error querying validator_pools: {}", e);
+                return Err(DatabaseError::from(e));
+            }
+        };
+
+        if rows.is_empty() {
+            return Ok(None);
+        }
+
+        let name: String = rows[0].get("name");
+
+        self.validator_pool_cache.insert(api_key.to_string(), name.clone());
+
+        Ok(Some(name))
     }
 
     async fn save_too_late_get_payload(
@@ -710,6 +854,20 @@ impl DatabaseService for PostgresDatabaseService {
                 &(PostgresNumeric::from(*payload.execution_payload.base_fee_per_gas())),
             ],
             ).await?;
+        
+            transaction.execute(
+                "
+                    INSERT INTO delivered_payload_preferences (block_hash, filtering, trusted_builders)
+                    SELECT $1::bytea, filtering, trusted_builders
+                    FROM validator_preferences
+                    WHERE public_key = $2::bytea
+                    ON CONFLICT (block_hash) DO NOTHING;                
+                ",
+                &[
+                    &(bid_trace.block_hash.as_ref()),
+                    &(bid_trace.proposer_public_key.as_ref()),
+                ],
+                ).await?;
 
         transaction.execute(
             "
@@ -762,6 +920,7 @@ impl DatabaseService for PostgresDatabaseService {
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
+            sql.push_str(" ON CONFLICT (md5(block_hash::text), md5(bytes::text)) DO NOTHING");
 
             transaction.execute(&sql, &params[..]).await?;
         }
@@ -833,11 +992,12 @@ impl DatabaseService for PostgresDatabaseService {
         transaction.execute(
             "
                 INSERT INTO
-                    block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp)
+                    block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen)
                 VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                 ON CONFLICT (block_hash)
-                DO NOTHING
+                DO UPDATE SET
+                    first_seen = LEAST(block_submission.first_seen, excluded.first_seen)
                 ",
             &[
                 &(submission.block_number() as i32),
@@ -852,6 +1012,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(PostgresNumeric::from(submission.value())),
                 &(submission.transactions().len() as i32),
                 &(submission.timestamp() as i64),
+                &(trace.receive as i64),
             ],
         ).await?;
 
@@ -878,36 +1039,6 @@ impl DatabaseService for PostgresDatabaseService {
         ).await?;
 
         transaction.commit().await?;
-
-        Ok(())
-    }
-
-    async fn save_pending_block(
-        &self,
-        block_hash: &Hash32,
-        builder_pub_key: &BlsPublicKey,
-        slot: u64,
-        time: SystemTime,
-    ) -> Result<(), DatabaseError> {
-        self.pool
-            .get()
-            .await?.execute(
-            "
-                INSERT INTO
-                    pending_blocks (block_hash, builder_pubkey, slot, header_receive, payload_receive)
-                VALUES
-                    ($1, $2, $3, $4, $5)
-                ON CONFLICT (block_hash)
-                DO UPDATE SET payload_receive = EXCLUDED.payload_receive;
-            ",
-            &[
-                &(block_hash.as_ref()),
-                &(builder_pub_key.as_ref()),
-                &(slot as i32),
-                &(Option::<SystemTime>::None),
-                &(time),
-            ],
-        ).await?;
 
         Ok(())
     }
@@ -967,6 +1098,21 @@ impl DatabaseService for PostgresDatabaseService {
 
     async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError> {
         parse_rows(self.pool.get().await?.query("SELECT * FROM builder_info", &[]).await?)
+    }
+
+    async fn check_builder_api_key(
+        &self,
+        api_key: &str,
+    ) -> Result<bool, DatabaseError> {
+        let client = self.pool.get().await?;
+        let rows = client
+            .query(
+                "SELECT * FROM builder_info WHERE api_key = $1",
+                &[&(api_key)],
+            )
+            .await?;
+
+        Ok(!rows.is_empty())
     }
 
     async fn db_demote_builder(
@@ -1037,43 +1183,68 @@ impl DatabaseService for PostgresDatabaseService {
         filters: &BidFilters,
     ) -> Result<Vec<BidSubmissionDocument>, DatabaseError> {
         let filters = PgBidFilters::from(filters);
-
+    
+        let mut query = String::from("
+            SELECT
+                block_submission.block_number block_number,
+                block_submission.slot_number slot_number,
+                block_submission.parent_hash,
+                block_submission.block_hash,
+                block_submission.builder_pubkey builder_public_key,
+                block_submission.proposer_pubkey proposer_public_key,
+                block_submission.proposer_fee_recipient proposer_fee_recipient,
+                block_submission.gas_limit gas_limit,
+                block_submission.gas_used gas_used,
+                block_submission.value submission_value,
+                block_submission.num_txs num_txs,
+                LEAST(block_submission.first_seen, header_submission.first_seen) submission_timestamp
+            FROM 
+                block_submission
+            LEFT JOIN
+                header_submission ON block_submission.block_hash = header_submission.block_hash
+            WHERE 1 = 1
+        ");
+    
+        let mut param_index = 1;
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+    
+        if let Some(slot) = filters.slot() {
+            query.push_str(&format!(" AND block_submission.slot_number = ${}", param_index));
+            params.push(Box::new(slot));
+            param_index += 1;
+        }
+        
+        if let Some(block_number) = filters.block_number() {
+            query.push_str(&format!(" AND block_submission.block_number = ${}", param_index));
+            params.push(Box::new(block_number));
+            param_index += 1;
+        }
+    
+        if let Some(proposer_pubkey) = filters.proposer_pubkey() {
+            query.push_str(&format!(" AND block_submission.proposer_pubkey = ${}", param_index));
+            params.push(Box::new(proposer_pubkey));
+            param_index += 1;
+        }
+    
+        if let Some(builder_pubkey) = filters.builder_pubkey() {
+            query.push_str(&format!(" AND block_submission.builder_pubkey = ${}", param_index));
+            params.push(Box::new(builder_pubkey));
+            param_index += 1;
+        }
+    
+        if let Some(block_hash) = filters.block_hash() {
+            query.push_str(&format!(" AND block_submission.block_hash = ${}", param_index));
+            params.push(Box::new(block_hash));
+            param_index += 1;
+        }
+    
+        let params_refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect();
+    
         parse_rows(
             self.pool
                 .get()
                 .await?
-                .query(
-                    "
-                        SELECT
-                            block_submission.block_number block_number,
-                            block_submission.slot_number slot_number,
-                            block_submission.parent_hash,
-                            block_submission.block_hash,
-                            block_submission.builder_pubkey builder_public_key,
-                            block_submission.proposer_pubkey proposer_public_key,
-                            block_submission.proposer_fee_recipient proposer_fee_recipient,
-                            block_submission.gas_limit gas_limit,
-                            block_submission.gas_used gas_used,
-                            block_submission.value submission_value,
-                            block_submission.num_txs num_txs,
-                            block_submission.timestamp submission_timestamp
-                        FROM 
-                            block_submission 
-                        WHERE 
-                            ($1::integer IS NULL OR block_submission.slot_number = $1::integer)
-                        AND ($2::integer IS NULL OR block_submission.block_number = $2::integer)
-                        AND ($3::bytea IS NULL OR block_submission.proposer_pubkey = $3::bytea)
-                        AND ($4::bytea IS NULL OR block_submission.builder_pubkey = $4::bytea)
-                        AND ($5::bytea IS NULL OR block_submission.block_hash = $5::bytea)
-                    ",
-                    &[
-                        &filters.slot(),
-                        &filters.block_number(),
-                        &filters.proposer_pubkey(),
-                        &filters.builder_pubkey(),
-                        &filters.block_hash(),
-                    ],
-                )
+                .query(&query, &params_refs[..])
                 .await?,
         )
     }
@@ -1081,99 +1252,116 @@ impl DatabaseService for PostgresDatabaseService {
     async fn get_delivered_payloads(
         &self,
         filters: &BidFilters,
+        validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
         let filters = PgBidFilters::from(filters);
+        let mut query = String::from("
+            SELECT
+                block_submission.slot_number            slot_number,
+                block_submission.parent_hash            parent_hash,
+                block_submission.block_hash             block_hash,
+                block_submission.builder_pubkey         builder_public_key,
+                block_submission.proposer_pubkey        proposer_public_key,
+                block_submission.proposer_fee_recipient proposer_fee_recipient,
+                block_submission.value                  submission_value,
+                block_submission.gas_limit              gas_limit,
+                block_submission.gas_used               gas_used,
+                block_submission.block_number           block_number,
+                block_submission.num_txs                num_txs
+            FROM 
+                delivered_payload 
+            INNER JOIN
+                block_submission 
+            ON 
+                block_submission.block_hash = delivered_payload.block_hash
+        ");
+
+        let filtering = match validator_preferences.filtering {
+            Filtering::Regional => Some(1_i16),
+            Filtering::Global => None,
+        };
+
+        if validator_preferences.trusted_builders.is_some() || filtering.is_some() {
+            query.push_str("
+                INNER JOIN
+                    delivered_payload_preferences
+                ON
+                    delivered_payload.block_hash = delivered_payload_preferences.block_hash
+            ");
+        }
+
+        query.push_str(" WHERE 1 = 1");
+
+        let mut param_index = 1;
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+
+        if let Some(slot) = filters.slot() {
+            query.push_str(&format!(" AND block_submission.slot_number = ${}", param_index));
+            params.push(Box::new(slot));
+            param_index += 1;
+        }
+        
+        if let Some(cursor) = filters.cursor() {
+            query.push_str(&format!(" AND block_submission.slot_number <= ${}", param_index));
+            params.push(Box::new(cursor));
+            param_index += 1;
+        }
+
+        if let Some(block_number) = filters.block_number() {
+            query.push_str(&format!(" AND block_submission.block_number = ${}", param_index));
+            params.push(Box::new(block_number));
+            param_index += 1;
+        }
+
+        if let Some(proposer_pubkey) = filters.proposer_pubkey() {
+            query.push_str(&format!(" AND block_submission.proposer_pubkey = ${}", param_index));
+            params.push(Box::new(proposer_pubkey));
+            param_index += 1;
+        }
+
+        if let Some(builder_pubkey) = filters.builder_pubkey() {
+            query.push_str(&format!(" AND block_submission.builder_pubkey = ${}", param_index));
+            params.push(Box::new(builder_pubkey));
+            param_index += 1;
+        }
+
+        if let Some(block_hash) = filters.block_hash() {
+            query.push_str(&format!(" AND block_submission.block_hash = ${}", param_index));
+            params.push(Box::new(block_hash));
+            param_index += 1;
+        }
+
+        if let Some(filtering) = filtering {
+            query.push_str(&format!(" AND delivered_payload_preferences.filtering = ${}", param_index));
+            params.push(Box::new(filtering));
+            param_index += 1;
+        }
+
+        if let Some(trusted_builders) = &validator_preferences.trusted_builders {
+            query.push_str(&format!(" AND delivered_payload_preferences.trusted_builders @> ${}", param_index));
+            params.push(Box::new(trusted_builders));
+            param_index += 1;
+        }
+
+        if let Some(order) = filters.order() {
+            query.push_str(" ORDER BY block_submission.value ");
+            query.push_str(if order >= 0 { "ASC" } else { "DESC" });
+        } else {
+            query.push_str(" ORDER BY block_submission.slot_number DESC");
+        }
+
+        if let Some(limit) = filters.limit() {
+            query.push_str(&format!(" LIMIT ${}", param_index));
+            params.push(Box::new(limit));
+        }
+
+        let params_refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect();
 
         parse_rows(
             self.pool
                 .get()
                 .await?
-                .query(
-                    "
-                        WITH transactions_subquery AS (
-                            SELECT
-                                block_hash block_hash,
-                                array_agg(bytes) txs
-                            FROM
-                                transaction
-                            GROUP BY
-                                block_hash
-                        )
-                        SELECT
-                            block_submission.block_hash             block_hash,
-                            block_submission.timestamp              submission_timestamp,
-                            block_submission.slot_number            slot_number,
-                            block_submission.block_number           block_number,
-                            block_submission.parent_hash            parent_hash,
-                            block_submission.builder_pubkey         builder_public_key,
-                            block_submission.proposer_pubkey        proposer_public_key,
-                            block_submission.proposer_fee_recipient proposer_fee_recipient,
-                            block_submission.gas_limit              gas_limit,
-                            block_submission.gas_used               gas_used,
-                            block_submission.value                  submission_value,
-                            block_submission.num_txs                num_txs,
-
-                            delivered_payload.block_hash            payload_block_hash,
-                            delivered_payload.payload_parent_hash   payload_parent_hash,
-                            delivered_payload.fee_recipient         payload_fee_recipient,
-                            delivered_payload.state_root            payload_state_root,
-                            delivered_payload.receipts_root         payload_receipts_root,
-                            delivered_payload.logs_bloom            payload_logs_bloom,
-                            delivered_payload.prev_randao           payload_prev_randao,
-                            delivered_payload.timestamp             payload_timestamp,
-                            delivered_payload.block_number          payload_block_number,
-                            delivered_payload.gas_limit             payload_gas_limit,
-                            delivered_payload.gas_used              payload_gas_used,
-                            delivered_payload.extra_data            payload_extra_data,
-                            delivered_payload.base_fee_per_gas      payload_base_fee_per_gas,
-
-                            transactions_subquery.txs                   txs
-                        FROM 
-                            delivered_payload 
-                        INNER JOIN
-                            block_submission 
-                        ON 
-                            block_submission.block_hash = delivered_payload.block_hash
-                        INNER JOIN
-                            transactions_subquery
-                        ON
-                            delivered_payload.block_hash = transactions_subquery.block_hash
-                        WHERE
-                            (
-                                ($1::integer IS NOT NULL AND block_submission.slot_number = $1::integer) OR
-                                ($1::integer IS NULL AND $2::integer IS NOT NULL AND block_submission.slot_number >= $2::integer) OR
-                                ($1::integer IS NULL AND $2::integer IS NULL)
-                            )
-                            AND ($3::integer IS NULL OR block_submission.block_number = $3::integer)
-                            AND ($4::bytea IS NULL OR block_submission.proposer_pubkey = $4::bytea)
-                            AND ($5::bytea IS NULL OR block_submission.builder_pubkey = $5::bytea)
-                            AND ($6::bytea IS NULL OR block_submission.block_hash = $6::bytea)
-                        ORDER BY
-                            CASE
-                                WHEN $7 >= 0 THEN block_submission.value
-                                ELSE NULL
-                            END ASC,
-                            CASE
-                                WHEN $7 < 0 THEN block_submission.value
-                                ELSE NULL
-                            END DESC
-                        LIMIT
-                            CASE
-                                WHEN $8::bigint IS NOT NULL THEN $8::bigint
-                                ELSE NULL
-                            END
-                    ",
-                    &[
-                        &filters.slot(),
-                        &filters.cursor(),
-                        &filters.block_number(),
-                        &filters.proposer_pubkey(),
-                        &filters.builder_pubkey(),
-                        &filters.block_hash(),
-                        &filters.order(),
-                        &filters.limit()
-                    ],
-                )
+                .query(&query, &params_refs[..])
                 .await?,
         )
     }
@@ -1234,6 +1422,7 @@ impl DatabaseService for PostgresDatabaseService {
 
     async fn save_failed_get_payload(
         &self,
+        slot: u64,
         block_hash: ByteVector<32>,
         error: String,
         trace: GetPayloadTrace,
@@ -1247,11 +1436,11 @@ impl DatabaseService for PostgresDatabaseService {
             .execute(
                 "
                     INSERT INTO failed_payload
-                        (region_id, block_hash, error)
+                        (region_id, slot_number, block_hash, error)
                     VALUES
-                        ($1, $2, $3)
+                        ($1, $2, $3, $4)
                 ",
-                &[&(region_id), &(block_hash.as_ref()), &(error)],
+                &[&(region_id), &(slot as i32), &(block_hash.as_ref()), &(error)],
             )
             .await?;
 
@@ -1293,11 +1482,12 @@ impl DatabaseService for PostgresDatabaseService {
         transaction.execute(
             "
                 INSERT INTO
-                    header_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, timestamp)
+                    header_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, timestamp, first_seen)
                 VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 ON CONFLICT (block_hash)
-                DO NOTHING
+                DO UPDATE SET
+                    first_seen = LEAST(header_submission.first_seen, excluded.first_seen)
                 ",
             &[
                 &(submission.execution_payload_header().block_number() as i32),
@@ -1311,6 +1501,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(submission.gas_used() as i32),
                 &(PostgresNumeric::from(submission.value())),
                 &(submission.timestamp() as i64),
+                &(trace.receive as i64),
             ],
         ).await?;
 
@@ -1331,24 +1522,6 @@ impl DatabaseService for PostgresDatabaseService {
                 &(trace.floor_bid_checks as i64),
                 &(trace.auctioneer_update as i64),
                 &(trace.request_finish as i64),
-            ],
-        ).await?;
-
-        transaction.execute(
-            "
-                INSERT INTO
-                    pending_blocks (block_hash, builder_pubkey, slot, header_receive, payload_receive)
-                VALUES
-                    ($1, $2, $3, $4, $5)
-                ON CONFLICT (block_hash)
-                DO UPDATE SET header_receive = EXCLUDED.header_receive;
-            ",
-            &[
-                &(submission.block_hash().as_ref()),
-                &(submission.builder_public_key().as_ref()),
-                &(submission.slot() as i32),
-                &(UNIX_EPOCH + Duration::from_nanos(trace.receive)),
-                &(Option::<SystemTime>::None),
             ],
         ).await?;
 
@@ -1405,37 +1578,6 @@ impl DatabaseService for PostgresDatabaseService {
                 &(trace.auctioneer_update as i64),
             ],
         ).await?;
-        Ok(())
-    }
-
-    async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, DatabaseError> {
-        parse_rows(
-            self.pool
-                .get()
-                .await?
-                .query(
-                    "
-                    SELECT * FROM pending_blocks 
-                ",
-                    &[],
-                )
-                .await?,
-        )
-    }
-
-    async fn remove_old_pending_blocks(&self) -> Result<(), DatabaseError> {
-        self.pool
-            .get()
-            .await?
-            .execute(
-                "
-                    DELETE FROM pending_blocks 
-                    WHERE created_at < (NOW() - INTERVAL '45 seconds')
-                ",
-                &[],
-            )
-            .await?;
-
         Ok(())
     }
 

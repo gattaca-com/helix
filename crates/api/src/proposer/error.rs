@@ -23,6 +23,9 @@ pub enum ProposerApiError {
     #[error("axum error: {0}")]
     AxumError(#[from] axum::Error),
 
+    #[error("ToStrError: {0}")]
+    ToStrError(#[from] hyper::header::ToStrError),
+
     #[error("bid public key {bid:?} does not match relay public key {relay:?}")]
     BidPublicKeyMismatch { bid: BlsPublicKey, relay: BlsPublicKey },
 
@@ -79,6 +82,9 @@ pub enum ProposerApiError {
 
     #[error("invalid signature: {0}")]
     InvalidSignature(#[from] ethereum_consensus::Error),
+
+    #[error("invalid api key")]
+    InvalidApiKey,
 
     #[error("proposer not registered")]
     ProposerNotRegistered,
@@ -179,6 +185,9 @@ impl IntoResponse for ProposerApiError {
             ProposerApiError::AxumError(err) => {
                 (StatusCode::BAD_REQUEST, format!("Axum error: {err}")).into_response()
             },
+            ProposerApiError::ToStrError(err) => {
+                (StatusCode::BAD_REQUEST, format!("ToStr error: {err}")).into_response()
+            },
             ProposerApiError::BidPublicKeyMismatch { bid, relay } => {
                 (StatusCode::BAD_REQUEST, format!("Bid public key {bid:?} does not match relay public key {relay:?}")).into_response()
             },
@@ -238,6 +247,9 @@ impl IntoResponse for ProposerApiError {
             },
             ProposerApiError::ProposerNotRegistered => {
                 (StatusCode::BAD_REQUEST, "proposer not registered").into_response()
+            },
+            ProposerApiError::InvalidApiKey => {
+                (StatusCode::UNAUTHORIZED, "invalid api key").into_response()
             },
             ProposerApiError::TimestampTooEarly { timestamp, min_timestamp } => {
                 (StatusCode::BAD_REQUEST, format!("Timestamp too early. {timestamp} < {min_timestamp}")).into_response()
