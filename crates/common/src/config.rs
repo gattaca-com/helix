@@ -128,7 +128,7 @@ impl RouterConfig {
         if self.contains(Route::All) {
             // If All is present, replace it with all real routes
             self.remove(&Route::All);
-            self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi]);
+            self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi, Route::ConstraintsApi]);
         }
 
         // Replace BuilderApi, ProposerApi, DataApi with their real routes
@@ -155,6 +155,11 @@ impl RouterConfig {
                 Route::BuilderBidsReceived,
                 Route::ValidatorRegistration,
             ],
+        );
+
+        self.replace_condensed_with_real(
+            Route::ConstraintsApi,
+            &[Route::GetConstraints, Route::SetConstraints, Route::ElectGateway, Route::GetGateway],
         );
     }
 
