@@ -162,6 +162,18 @@ pub fn build_router(
                     get(ConstraintsApiProd::get_gateway),
                 );
             }
+            Route::BoltSetConstraints => {
+                router = router.route(
+                    &route.path(),
+                    post(ConstraintsApiProd::set_constraints),
+                );
+            }
+            Route::BoltGetConstraints => {
+                router = router.route(
+                    &route.path(),
+                    get(ConstraintsApiProd::get_constraints),
+                );
+            }
             _ => {
                 panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route);
             }

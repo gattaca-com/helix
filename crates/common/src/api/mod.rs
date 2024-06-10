@@ -31,3 +31,6 @@ pub(crate) const PATH_GET_CONSTRAINTS: &str = "/get_constraints";
 pub(crate) const PATH_SET_CONSTRAINTS: &str = "/set_constraints";
 pub(crate) const PATH_ELECT_GATEWAY: &str = "/elect_gateway";
 pub(crate) const PATH_GET_GATEWAY: &str = "/preconfer/:slot";
+
+// Bolt
+pub(crate) const PATH_BOLT_CONSTRAINTS: &str = "/constraints";

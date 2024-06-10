@@ -214,6 +214,8 @@ pub enum Route {
     SetConstraints,
     ElectGateway,
     GetGateway,
+    BoltSetConstraints,
+    BoltGetConstraints,
 }
 
 impl Route {
@@ -235,6 +237,8 @@ impl Route {
             Route::SetConstraints => format!("{PATH_CONSTRAINTS_API}{PATH_SET_CONSTRAINTS}"),
             Route::ElectGateway => format!("{PATH_CONSTRAINTS_API}{PATH_ELECT_GATEWAY}"),
             Route::GetGateway => format!("{PATH_CONSTRAINTS_API}{PATH_GET_GATEWAY}"),
+            Route::BoltSetConstraints => format!("{PATH_PROPOSER_API}{PATH_BOLT_CONSTRAINTS}"),
+            Route::BoltGetConstraints => format!("{PATH_BUILDER_API}{PATH_BOLT_CONSTRAINTS}"),
             Route::All => panic!("All is not a real route"),
             Route::BuilderApi => panic!("BuilderApi is not a real route"),
             Route::ProposerApi => panic!("ProposerApi is not a real route"),
