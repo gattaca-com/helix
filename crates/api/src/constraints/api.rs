@@ -116,7 +116,7 @@ where
         trace.deserialize = get_nanos_timestamp()?;
 
         let head_slot = api.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
-        debug!(
+        info!(
             request_id = %request_id,
             event = "elect_gateway",
             head_slot = head_slot,
