@@ -22,8 +22,8 @@ impl SignedPreconferElection {
         self.message.slot
     }
 
-    pub fn public_key(&self) -> &BlsPublicKey {
-        &self.message.public_key
+    pub fn proposer_public_key(&self) -> &BlsPublicKey {
+        &self.message.proposer_public_key
     }
 
     pub fn validator_index(&self) -> usize {
@@ -45,7 +45,7 @@ pub struct ElectedPreconfer {
     /// Slot this delegation is valid for.
     pub slot: u64,
     /// Public key of the validator proposing for `slot`.
-    pub public_key: BlsPublicKey,
+    pub proposer_public_key: BlsPublicKey,
     /// Validator index of the validator proposing for `slot`.
     pub validator_index: usize,
     /// `None` if the proposer is handling the pre-confirmations.
@@ -56,7 +56,7 @@ impl ElectedPreconfer {
     pub fn from_proposer_duty(duty: &BuilderGetValidatorsResponseEntry) -> Self {
         Self {
             slot: duty.slot,
-            public_key: duty.entry.registration.message.public_key.clone(),
+            proposer_public_key: duty.entry.registration.message.public_key.clone(),
             validator_index: duty.validator_index,
             gateway_info: None,
         }

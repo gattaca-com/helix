@@ -122,7 +122,7 @@ where
             head_slot = head_slot,
             request_ts = trace.receive,
             slot = %election_req.slot(),
-            public_key = ?election_req.public_key(),
+            public_key = ?election_req.proposer_public_key(),
             validator_index=%election_req.validator_index(),
         );
 
@@ -261,7 +261,7 @@ where
             }
             None => {
                 // Proposer is doing preconf commitments (e.g., Bolt proposer)
-                &elected_preconfer.public_key
+                &elected_preconfer.proposer_public_key
             }
         };
 
@@ -318,7 +318,7 @@ where
         // Ensure provided validator public key is the proposer for the requested slot.
         if !duties_read_guard.iter().any(|duty|
             duty.slot == election_req.slot() &&
-                &duty.entry.registration.message.public_key == election_req.public_key() &&
+                &duty.entry.registration.message.public_key == election_req.proposer_public_key() &&
                 duty.validator_index == election_req.validator_index()
         ) {
             return Err(ConstraintsApiError::ValidatorIsNotProposerForRequestedSlot);
@@ -328,7 +328,7 @@ where
         drop(duties_read_guard);
 
         // Verify proposer signature
-        let req_proposer_public_key = election_req.public_key().clone();
+        let req_proposer_public_key = election_req.proposer_public_key().clone();
         if let Err(err) = verify_signed_builder_message(
             &mut election_req.message,
             &election_req.signature,
