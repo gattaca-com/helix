@@ -163,7 +163,7 @@ where
             return Err(ConstraintsApiError::RequestForPastSlot { request_slot: slot, head_slot });
         }
 
-        match api.get_elected_gateway_for_slot(slot).await {
+        match api.auctioneer.get_elected_gateway(slot).await {
             Ok(Some(elected_gateway)) => {
                 trace.gateway_fetched = get_nanos_timestamp()?;
                 debug!(%request_id, ?elected_gateway, ?trace, "found elected gateway");
@@ -340,23 +340,6 @@ where
 
         Ok(())
     }
-
-    async fn get_elected_gateway_for_slot(&self, slot: u64) -> Result<Option<SignedPreconferElection>, ConstraintsApiError> {
-        // Try to fetch from datastore
-        Ok(self.auctioneer.get_elected_gateway(slot).await?)
-
-        // TODO: currently don't support defaulting to the proposer.
-        // If it can't be found in the datastore then we default to checking the proposer duties
-        // let duties_read_guard = self.proposer_duties.read().map_err(|_| ConstraintsApiError::LockPoisoned)?;
-        // match duties_read_guard.iter().find(|duty| duty.slot == slot) {
-        //     Some(proposer_duty) => {
-        //         Ok(proposer_duty.entry.registration.message.public_key.clone())
-        //     }
-        //     None => {
-        //         Err(ConstraintsApiError::NoGatewayFoundForSlot {slot})
-        //     }
-        // }
-    }
 }
 
 // STATE SYNC
@@ -403,7 +386,7 @@ impl<A> ConstraintsApi<A>
         }
 
         // Fetch elected gateway for the current slot
-        let elected_preconfer = match self.get_elected_gateway_for_slot(slot_update.slot).await {
+        let elected_preconfer = match self.auctioneer.get_elected_gateway(slot_update.slot).await {
             Ok(Some(elected_gateway)) => Some(elected_gateway),
             _ => {
                 self.proposer_duties
