@@ -140,12 +140,13 @@ impl RouterConfig {
                 Route::SubmitBlockOptimistic,
                 Route::SubmitHeader,
                 Route::GetTopBid,
+                Route::BoltGetConstraints,
             ],
         );
 
         self.replace_condensed_with_real(
             Route::ProposerApi,
-            &[Route::Status, Route::RegisterValidators, Route::GetHeader, Route::GetPayload],
+            &[Route::Status, Route::RegisterValidators, Route::GetHeader, Route::GetPayload, Route::BoltSetConstraints],
         );
 
         self.replace_condensed_with_real(
