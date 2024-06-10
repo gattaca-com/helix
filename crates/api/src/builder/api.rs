@@ -22,6 +22,7 @@ use ethereum_consensus::{
 use flate2::read::GzDecoder;
 use futures::StreamExt;
 use hyper::HeaderMap;
+use reth_primitives::alloy_primitives::private::alloy_rlp::Decodable;
 use tokio::{
     sync::{
         mpsc::{self, error::SendError, Receiver, Sender},
@@ -1131,7 +1132,7 @@ where
         trace.signature = get_nanos_timestamp()?;
 
         // Verify constraints
-        if let Err(error) = self.verify_constraints(&payload, next_duty.slot).await {
+        if let Err(error) = self.verify_constraints(&mut payload, next_duty.slot).await {
             warn!(%request_id, %error, "failed to verify constraints");
             return Err(error);
         }
@@ -1146,7 +1147,7 @@ where
     }
 
     /// Verifies the block adheres to the constraints if any have been set through the ConstraintsAPI.
-    async fn verify_constraints(&self, payload: &SignedBidSubmission, slot: u64) -> Result<(), BuilderApiError> {
+    async fn verify_constraints(&self, payload: &mut SignedBidSubmission, slot: u64) -> Result<(), BuilderApiError> {
         let constraints_msg = match self.auctioneer.get_constraints(slot).await? {
             Some(constraints) => {
                 if constraints.constraints.is_empty() {
@@ -1158,12 +1159,13 @@ where
         };
 
         // Create vec of all transaction hashes in the payload.
-        let payload_transactions = payload.transactions();
+        let payload_transactions = payload.transactions_mut();
 
         let mut hashes = Vec::with_capacity(payload_transactions.len());
-        for transaction in payload_transactions.iter() {
-            let tx_hash = Bytes32::default();  // TODO:
-            hashes.push(tx_hash);
+        for transaction in payload_transactions.iter_mut() {
+            let reth_tx = reth_primitives::TransactionSigned::decode(&mut transaction.as_slice())
+                .map_err(|_| BuilderApiError::TransactionDecodeError)?;
+            hashes.push(Bytes32::try_from(reth_tx.hash.as_slice()).unwrap());
         }
 
         // Assert that each transaction in the constraints is contained

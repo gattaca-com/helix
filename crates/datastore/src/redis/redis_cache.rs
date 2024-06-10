@@ -25,7 +25,7 @@ use helix_database::types::BuilderInfoDocument;
 
 
 use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
-use helix_common::api::constraints_api::{ConstraintsMessage, SignedGatewayElection};
+use helix_common::api::constraints_api::{ConstraintsMessage, SignedPreconferElection};
 
 use crate::{
     error::AuctioneerError,
@@ -1205,12 +1205,12 @@ impl Auctioneer for RedisCache {
 
 #[async_trait]
 impl ConstraintsAuctioneer for RedisCache {
-    async fn save_new_gateway_election(&self, signed_election: &SignedGatewayElection, slot: u64) -> Result<(), AuctioneerError> {
+    async fn save_new_gateway_election(&self, signed_election: &SignedPreconferElection, slot: u64) -> Result<(), AuctioneerError> {
         self.hset(ELECTED_GATEWAY_KEY, &slot.to_string(), signed_election, Some(TWO_EPOCH_EXPIRY_S)).await?;
         Ok(())
     }
 
-    async fn get_elected_gateway(&self, slot: u64) -> Result<Option<SignedGatewayElection>, AuctioneerError> {
+    async fn get_elected_gateway(&self, slot: u64) -> Result<Option<SignedPreconferElection>, AuctioneerError> {
         Ok(self.hget(ELECTED_GATEWAY_KEY, &slot.to_string()).await?)
     }
 
@@ -2533,7 +2533,7 @@ mod tests {
     async fn test_save_new_gateway_election() {
         // Arrange
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
-        let election = SignedGatewayElection::default();
+        let election = SignedPreconferElection::default();
         let slot = 42;
 
         // Act

@@ -127,6 +127,9 @@ pub enum BuilderApiError {
 
     #[error("block does not adhere to constraint: {constraint:?}")]
     BlockDoesNotAdhereToConstraint {constraint: Constraint},
+
+    #[error("failed to decode transaction")]
+    TransactionDecodeError,
 }
 
 impl IntoResponse for BuilderApiError {
@@ -257,7 +260,10 @@ impl IntoResponse for BuilderApiError {
             }
             BuilderApiError::BlockDoesNotAdhereToConstraint { constraint } => {
                 (StatusCode::BAD_REQUEST, format!("block does not adhere to constraint: {constraint:?}")).into_response()
-            },
+            }
+            BuilderApiError::TransactionDecodeError => {
+                (StatusCode::BAD_REQUEST, "failed to decode transaction").into_response()
+            }
         }
     }
 }

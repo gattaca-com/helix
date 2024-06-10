@@ -49,8 +49,8 @@ pub enum ConstraintsApiError {
     #[error("datastore error: {0}")]
     AuctioneerError(#[from] AuctioneerError),
 
-    #[error("no gateway found for slot: {slot}")]
-    NoGatewayFoundForSlot { slot: u64 },
+    #[error("no preconfer found for slot: {slot}")]
+    NoPreconferFoundForSlot { slot: u64 },
 
     #[error("can only set constraints for current slot. request slot: {request_slot}, curr slot: {curr_slot}")]
     CanOnlySetConstraintsForCurrentSlot { request_slot: u64, curr_slot: u64 },
@@ -58,8 +58,8 @@ pub enum ConstraintsApiError {
     #[error("proposer duty not found. slot: {slot}, validator_index: {validator_index}")]
     ProposerDutyNotFound { slot: u64, validator_index: usize },
 
-    #[error("not elected gateway. request public key: {request_public_key:?}, elected gateway public key: {elected_gateway_public_key:?}")]
-    NotElectedGateway { request_public_key: BlsPublicKey, elected_gateway_public_key: BlsPublicKey },
+    #[error("not preconfer. request public key: {request_public_key:?}, preconfer public key: {preconfer_public_key:?}")]
+    NotPreconfer { request_public_key: BlsPublicKey, preconfer_public_key: BlsPublicKey },
 
     #[error("set constraints sent too late. ns into slot: {ns_into_slot}, cutoff: {cutoff}")]
     SetConstraintsTooLate { ns_into_slot: u64, cutoff: u64 },
@@ -110,8 +110,8 @@ impl IntoResponse for ConstraintsApiError {
             ConstraintsApiError::AuctioneerError(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("Auctioneer error: {err}")).into_response()
             },
-            ConstraintsApiError::NoGatewayFoundForSlot{slot} => {
-                (StatusCode::BAD_REQUEST, format!("no gateway found for slot: {slot}")).into_response()
+            ConstraintsApiError::NoPreconferFoundForSlot {slot} => {
+                (StatusCode::BAD_REQUEST, format!("no preconfer found for slot: {slot}")).into_response()
             },
             ConstraintsApiError::CanOnlySetConstraintsForCurrentSlot{request_slot, curr_slot} => {
                 (StatusCode::BAD_REQUEST, format!("can only set constraints for current slot. request slot: {request_slot}, curr slot: {curr_slot}")).into_response()
@@ -119,10 +119,10 @@ impl IntoResponse for ConstraintsApiError {
             ConstraintsApiError::ProposerDutyNotFound{slot, validator_index} => {
                 (StatusCode::BAD_REQUEST, format!("proposer duty not found. slot: {slot}, validator_index: {validator_index}")).into_response()
             },
-            ConstraintsApiError::NotElectedGateway{request_public_key, elected_gateway_public_key} => {
+            ConstraintsApiError::NotPreconfer {request_public_key, preconfer_public_key } => {
                 (
                     StatusCode::BAD_REQUEST,
-                    format!("not elected gateway. request public key: {request_public_key:?}, elected gateway public key: {elected_gateway_public_key:?}"),
+                    format!("not preconfer. request public key: {request_public_key:?}, preconfer public key: {preconfer_public_key:?}"),
                 ).into_response()
             },
             ConstraintsApiError::SetConstraintsTooLate{ns_into_slot, cutoff} => {

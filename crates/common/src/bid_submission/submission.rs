@@ -218,6 +218,19 @@ impl SignedBidSubmission {
         }
     }
 
+    pub fn transactions_mut(
+        &mut self,
+    ) -> &mut List<ByteList<MAX_BYTES_PER_TRANSACTION>, MAX_TRANSACTIONS_PER_PAYLOAD> {
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => {
+                signed_bid_submission.execution_payload.transactions_mut()
+            }
+            SignedBidSubmission::Capella(signed_bid_submission) => {
+                signed_bid_submission.execution_payload.transactions_mut()
+            }
+        }
+    }
+
     pub fn blobs_bundle(&self) -> Option<&BlobsBundle> {
         match &self {
             SignedBidSubmission::Deneb(signed_bid_submission) => {

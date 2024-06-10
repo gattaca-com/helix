@@ -18,7 +18,7 @@ use uuid::Uuid;
 use helix_beacon_client::MultiBeaconClientTrait;
 
 use helix_common::api::builder_api::BuilderGetValidatorsResponseEntry;
-use helix_common::api::constraints_api::{ConstraintsMessage, GetGatewayParams, SignedConstraintsMessage, SignedGatewayElection};
+use helix_common::api::constraints_api::{ConstraintsMessage, ElectedPreconfer, GatewayInfo, GetGatewayParams, SignedConstraintsMessage, SignedPreconferElection};
 use helix_common::bellatrix::SimpleSerialize;
 use helix_common::builder_api::BuilderGetValidatorsResponse;
 use helix_common::chain_info::ChainInfo;
@@ -44,7 +44,7 @@ pub(crate) const MAX_SET_CONSTRAINTS_SIZE: usize = 1024 * 1024; // TODO: this sh
 #[derive(Clone, Default)]
 struct SlotInfo {
     pub slot: u64,
-    pub elected_gateway: Option<SignedGatewayElection>,
+    pub elected_preconfer: Option<SignedPreconferElection>,
 }
 
 #[derive(Clone)]
@@ -112,7 +112,7 @@ where
         let mut trace = ElectGatewayTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
         // Deserialise request
-        let mut election_req: SignedGatewayElection = deserialize_json_request_bytes(req, MAX_GATEWAY_ELECTION_SIZE).await?;
+        let mut election_req: SignedPreconferElection = deserialize_json_request_bytes(req, MAX_GATEWAY_ELECTION_SIZE).await?;
         trace.deserialize = get_nanos_timestamp()?;
 
         let head_slot = api.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
@@ -122,7 +122,7 @@ where
             head_slot = head_slot,
             request_ts = trace.receive,
             slot = %election_req.slot(),
-            public_key = ?election_req.public_key(),
+            public_key = ?election_req.proposer_public_key(),
             validator_index=%election_req.validator_index(),
         );
 
@@ -145,7 +145,7 @@ where
     pub async fn get_gateway(
         Extension(api): Extension<Arc<ConstraintsApi<A>>>,
         Path(GetGatewayParams { slot }): Path<GetGatewayParams>,
-    ) -> Result<axum::Json<SignedGatewayElection>, ConstraintsApiError> {
+    ) -> Result<axum::Json<SignedPreconferElection>, ConstraintsApiError> {
         let request_id = Uuid::new_v4();
         let mut trace = GetGatewayTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
@@ -163,7 +163,7 @@ where
             return Err(ConstraintsApiError::RequestForPastSlot { request_slot: slot, head_slot });
         }
 
-        match api.get_elected_gateway_for_slot(slot).await {
+        match api.auctioneer.get_elected_gateway(slot).await {
             Ok(Some(elected_gateway)) => {
                 trace.gateway_fetched = get_nanos_timestamp()?;
                 debug!(%request_id, ?elected_gateway, ?trace, "found elected gateway");
@@ -171,11 +171,11 @@ where
             }
             Ok(None) => {
                 warn!(%request_id, "no gateway found for request");
-                Err(ConstraintsApiError::NoGatewayFoundForSlot {slot})
+                Err(ConstraintsApiError::NoPreconferFoundForSlot {slot})
             }
             Err(err) => {
                 warn!(%request_id, ?err, "no gateway found for request");
-                Err(ConstraintsApiError::NoGatewayFoundForSlot {slot})
+                Err(ConstraintsApiError::NoPreconferFoundForSlot {slot})
             }
         }
     }
@@ -194,7 +194,7 @@ where
         trace.deserialize = get_nanos_timestamp()?;
 
         let slot_info = api.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.clone();
-        debug!(
+        info!(
             request_id = %request_id,
             event = "set_constraints",
             head_slot = slot_info.slot,
@@ -203,15 +203,15 @@ where
             num_constraints = %constraints.constraints().len(),
         );
 
-        if slot_info.elected_gateway.is_none() {
-            warn!(request_id = %request_id, "no elected gateway set for slot");
-            return Err(ConstraintsApiError::NoGatewayFoundForSlot { slot: slot_info.slot });
+        if slot_info.elected_preconfer.is_none() {
+            warn!(request_id = %request_id, "no elected preconfer set for slot");
+            return Err(ConstraintsApiError::NoPreconferFoundForSlot { slot: slot_info.slot });
         }
 
         // Validate request
         if let Err(err) = api.validate_set_constraints_request(
             &mut constraints,
-            slot_info.elected_gateway.as_ref().unwrap().public_key(),
+            &slot_info.elected_preconfer.as_ref().unwrap().message,
             slot_info.slot,
             trace.receive,
         ).await {
@@ -235,7 +235,7 @@ where
     async fn validate_set_constraints_request(
         &self,
         constraints: &mut SignedConstraintsMessage,
-        elected_gateway: &BlsPublicKey,
+        elected_preconfer: &ElectedPreconfer,
         head_slot: u64,
         receive_ns: u64,
     ) -> Result<(), ConstraintsApiError> {
@@ -255,19 +255,31 @@ where
             });
         }
 
-        // Ensure the constraint request is from the expected public key
-        if constraints.public_key() != elected_gateway {
-            return Err(ConstraintsApiError::NotElectedGateway {
-                request_public_key: constraints.public_key().clone(),
-                elected_gateway_public_key: elected_gateway.clone(),
-            });
+        let elected_public_key = match &elected_preconfer.gateway_info {
+            Some(gateway_info) => {
+                &gateway_info.gateway_public_key
+            }
+            None => {
+                // Proposer is doing preconf commitments (e.g., Bolt proposer)
+                &elected_preconfer.proposer_public_key
+            }
+        };
+
+        // If gateway public key is set then verify the elected key matches.
+        if let Some(constraints_gateway_key) = constraints.gateway_public_key() {
+            if constraints_gateway_key != elected_public_key {
+                return Err(ConstraintsApiError::NotPreconfer {
+                    request_public_key: constraints_gateway_key.clone(),
+                    preconfer_public_key: elected_public_key.clone(),
+                });
+            }
         }
 
         // Verify proposer signature
         if let Err(err) = verify_signed_builder_message(
             &mut constraints.message,
             &constraints.signature,
-            elected_gateway,
+            elected_public_key,
             &self.chain_info.context,
         ) {
             return Err(ConstraintsApiError::InvalidSignature(err));
@@ -286,7 +298,7 @@ where
     /// - Ensures the request slot is not beyond the latest known proposer duty.
     /// - Validates that the provided public key is the proposer for the requested slot.
     /// - Verifies the signature.
-    fn validate_election_request(&self, election_req: &mut SignedGatewayElection, head_slot: u64) -> Result<(), ConstraintsApiError> {
+    fn validate_election_request(&self, election_req: &mut SignedPreconferElection, head_slot: u64) -> Result<(), ConstraintsApiError> {
         // Cannot elect a gateway for a past slot
         if election_req.slot() < head_slot {
             return Err(ConstraintsApiError::RequestForPastSlot { request_slot: election_req.slot(), head_slot });
@@ -306,7 +318,7 @@ where
         // Ensure provided validator public key is the proposer for the requested slot.
         if !duties_read_guard.iter().any(|duty|
             duty.slot == election_req.slot() &&
-                &duty.entry.registration.message.public_key == election_req.public_key() &&
+                &duty.entry.registration.message.public_key == election_req.proposer_public_key() &&
                 duty.validator_index == election_req.validator_index()
         ) {
             return Err(ConstraintsApiError::ValidatorIsNotProposerForRequestedSlot);
@@ -316,7 +328,7 @@ where
         drop(duties_read_guard);
 
         // Verify proposer signature
-        let req_proposer_public_key = election_req.public_key().clone();
+        let req_proposer_public_key = election_req.proposer_public_key().clone();
         if let Err(err) = verify_signed_builder_message(
             &mut election_req.message,
             &election_req.signature,
@@ -327,23 +339,6 @@ where
         }
 
         Ok(())
-    }
-
-    async fn get_elected_gateway_for_slot(&self, slot: u64) -> Result<Option<SignedGatewayElection>, ConstraintsApiError> {
-        // Try to fetch from datastore
-        Ok(self.auctioneer.get_elected_gateway(slot).await?)
-
-        // TODO: currently don't support defaulting to the proposer.
-        // If it can't be found in the datastore then we default to checking the proposer duties
-        // let duties_read_guard = self.proposer_duties.read().map_err(|_| ConstraintsApiError::LockPoisoned)?;
-        // match duties_read_guard.iter().find(|duty| duty.slot == slot) {
-        //     Some(proposer_duty) => {
-        //         Ok(proposer_duty.entry.registration.message.public_key.clone())
-        //     }
-        //     None => {
-        //         Err(ConstraintsApiError::NoGatewayFoundForSlot {slot})
-        //     }
-        // }
     }
 }
 
@@ -391,19 +386,21 @@ impl<A> ConstraintsApi<A>
         }
 
         // Fetch elected gateway for the current slot
-        match self.get_elected_gateway_for_slot(slot_update.slot).await {
-            Ok(elected_gateway) => {
-                let mut write_guard = self.curr_slot_info.write().unwrap();
-                write_guard.slot = slot_update.slot;
-                write_guard.elected_gateway = elected_gateway;
+        let elected_preconfer = match self.auctioneer.get_elected_gateway(slot_update.slot).await {
+            Ok(Some(elected_gateway)) => Some(elected_gateway),
+            _ => {
+                self.proposer_duties
+                    .read()
+                    .unwrap()
+                    .iter()
+                    .find(|duty| duty.slot == slot_update.slot)
+                    .map(|duty| SignedPreconferElection::from_proposer_duty(duty))
             }
-            Err(err) => {
-                error!(?err, "could not fetch elected gateway for head slot");
-                let mut write_guard = self.curr_slot_info.write().unwrap();
-                write_guard.slot = slot_update.slot;
-                write_guard.elected_gateway = None;
-            }
-        }
+        };
+
+        let mut write_guard = self.curr_slot_info.write().unwrap();
+        write_guard.slot = slot_update.slot;
+        write_guard.elected_preconfer = elected_preconfer;
     }
 }
 
