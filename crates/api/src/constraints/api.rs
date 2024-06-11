@@ -255,15 +255,23 @@ where
             });
         }
 
-        let elected_public_key = match &elected_preconfer.gateway_info {
-            Some(gateway_info) => {
-                &gateway_info.gateway_public_key
-            }
-            None => {
-                // Proposer is doing preconf commitments (e.g., Bolt proposer)
-                &elected_preconfer.proposer_public_key
-            }
+        let elected_public_key = if elected_preconfer.gateway_info == GatewayInfo::default() {
+            // Proposer is doing preconf commitments (e.g., Bolt proposer)
+            &elected_preconfer.proposer_public_key
+        } else {
+            &elected_preconfer.gateway_info.gateway_public_key
         };
+
+        // TODO: add back when we figure out Optional values for sigp TreeHash
+        // let elected_public_key = match &elected_preconfer.gateway_info {
+        //     Some(gateway_info) => {
+        //         &gateway_info.gateway_public_key
+        //     }
+        //     None => {
+        //         // Proposer is doing preconf commitments (e.g., Bolt proposer)
+        //         &elected_preconfer.proposer_public_key
+        //     }
+        // };
 
         // If gateway public key is set then verify the elected key matches.
         if let Some(constraints_gateway_key) = constraints.gateway_public_key() {
