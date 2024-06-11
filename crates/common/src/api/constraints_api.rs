@@ -4,7 +4,6 @@ use ethereum_consensus::{
     ssz::prelude::*,
 };
 use crate::builder_api::BuilderGetValidatorsResponseEntry;
-use crate::constraints::bolt::BoltConstraint;
 use crate::constraints::Constraint;
 
 #[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
@@ -93,7 +92,7 @@ impl SignedConstraintsMessage {
         self.message.slot
     }
 
-    pub fn constraints(&self) -> &List<BoltConstraint, 10> {
+    pub fn constraints(&self) -> &List<Constraint, 10> {
         &self.message.constraints
     }
 
@@ -122,7 +121,7 @@ pub struct ConstraintsMessage {
     pub gateway_public_key: BlsPublicKey,
     /// Slot these constraints are valid for.
     pub slot: u64,
-    pub constraints: List<BoltConstraint, 10>,  // TODO: set const
+    pub constraints: List<Constraint, 10>,  // TODO: set const
 }
 
 impl ConstraintsMessage {
