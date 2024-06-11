@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [ constraints-api ]
+    branches: [ preconf ]
 
 env:
   CARGO_TERM_COLOR: always
