@@ -91,15 +91,20 @@ where
     ) -> Result<impl IntoResponse, ConstraintsApiError> {
         let head_slot = api.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
 
-        let constraints = api.auctioneer.get_constraints(head_slot).await?;
-        let constraints_bytes = serde_json::to_vec(&constraints)?;
-
-        Ok(Response::builder()
-            .status(StatusCode::OK)
-            .body(axum::body::Body::from(constraints_bytes))
-            .unwrap()
-            .into_response()
-        )
+        match api.auctioneer.get_constraints(head_slot).await? {
+            Some(constraints) => {
+                let constraints_bytes = serde_json::to_vec(&constraints)?;
+                Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .body(axum::body::Body::from(constraints_bytes))
+                    .unwrap()
+                    .into_response()
+                )
+            }
+            None => {
+                Ok(StatusCode::NO_CONTENT.into_response())
+            }
+        }
     }
 
     /// Elects a gateway to perform pre-confirmations for a validator. The request must be signed by the validator
