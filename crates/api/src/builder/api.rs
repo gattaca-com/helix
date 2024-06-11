@@ -1111,8 +1111,7 @@ where
 {
     /// This function:
     /// 1. Verifies the payload signature.
-    /// 2. Verifies the pre-confirmation constraints (if any).
-    /// 3. Simulates the submission
+    /// 2. Simulates the submission
     ///
     /// Returns: the bid submission in an Arc.
     async fn verify_submitted_block(
@@ -1131,12 +1130,6 @@ where
         }
         trace.signature = get_nanos_timestamp()?;
 
-        // Verify constraints
-        if let Err(error) = self.verify_constraints(&mut payload, next_duty.slot).await {
-            warn!(%request_id, %error, "failed to verify constraints");
-            return Err(error);
-        }
-
         // Simulate the submission
         let payload = Arc::new(payload);
         let was_simulated_optimistically = self
@@ -1144,38 +1137,6 @@ where
             .await?;
 
         Ok((payload, was_simulated_optimistically))
-    }
-
-    /// Verifies the block adheres to the constraints if any have been set through the ConstraintsAPI.
-    async fn verify_constraints(&self, payload: &mut SignedBidSubmission, slot: u64) -> Result<(), BuilderApiError> {
-        let constraints_msg = match self.auctioneer.get_constraints(slot).await? {
-            Some(constraints) => {
-                if constraints.constraints.is_empty() {
-                    return Ok(());
-                }
-                constraints
-            },
-            None => return Ok(()),
-        };
-
-        // Create vec of all transaction hashes in the payload.
-        let payload_transactions = payload.transactions_mut();
-
-        let mut hashes = Vec::with_capacity(payload_transactions.len());
-        for transaction in payload_transactions.iter_mut() {
-            let reth_tx = reth_primitives::TransactionSigned::decode(&mut transaction.as_slice())
-                .map_err(|_| BuilderApiError::TransactionDecodeError)?;
-            hashes.push(Bytes32::try_from(reth_tx.hash.as_slice()).unwrap());
-        }
-
-        // Assert that each transaction in the constraints is contained
-        for constraint in constraints_msg.constraints.iter() {
-            if !constraint.verify_from_tx_hash_vec(&hashes) {
-                return Err(BuilderApiError::BlockDoesNotAdhereToConstraint {constraint: constraint.clone()})
-            }
-        }
-
-        Ok(())
     }
 
     /// Check for block hashes that have already been processed.
