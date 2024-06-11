@@ -28,9 +28,6 @@ pub enum ConstraintsApiError {
     #[error("request for past slot. request slot: {request_slot}, head slot: {head_slot}")]
     RequestForPastSlot { request_slot: u64, head_slot: u64 },
 
-    #[error("cannot elect gateway too far in the future. request slot: {request_slot}, max slot: {max_slot}")]
-    CannotElectGatewayTooFarInTheFuture { request_slot: u64, max_slot: u64 },
-
     #[error("validator is not proposer for requested slot")]
     ValidatorIsNotProposerForRequestedSlot,
 
@@ -88,9 +85,6 @@ impl IntoResponse for ConstraintsApiError {
             },
             ConstraintsApiError::RequestForPastSlot{request_slot, head_slot} => {
                 (StatusCode::BAD_REQUEST, format!("request for past slot. request slot: {request_slot}, head slot: {head_slot}")).into_response()
-            },
-            ConstraintsApiError::CannotElectGatewayTooFarInTheFuture{request_slot, max_slot} => {
-                (StatusCode::BAD_REQUEST, format!("cannot elect gateway too far in the future. request slot: {request_slot}, max slot: {max_slot}")).into_response()
             },
             ConstraintsApiError::ValidatorIsNotProposerForRequestedSlot => {
                 (StatusCode::BAD_REQUEST, "validator is not proposer for requested slot").into_response()

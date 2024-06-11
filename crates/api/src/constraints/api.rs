@@ -317,16 +317,23 @@ where
 
         let duties_read_guard = self.proposer_duties.read().map_err(|_| ConstraintsApiError::LockPoisoned)?;
 
-        // Determine max known proposer duty and ensure the request isn't for a slot beyond that
-        let latest_known_proposer_duty = duties_read_guard.last().ok_or(ConstraintsApiError::ProposerDutiesNotKnown)?;
-        if election_req.slot() > latest_known_proposer_duty.slot {
-            return Err(ConstraintsApiError::CannotElectGatewayTooFarInTheFuture {
-                request_slot: election_req.slot(),
-                max_slot: latest_known_proposer_duty.slot,
-            });
+        // Ensure provided validator public key is the proposer for the requested slot.
+        match duties_read_guard.iter().find(|duty| duty.slot == election_req.slot()) {
+            Some(slot_duty) => {
+                if !(&slot_duty.entry.registration.message.public_key == election_req.proposer_public_key() &&
+                    slot_duty.validator_index == election_req.validator_index())
+                {
+                    return Err(ConstraintsApiError::ValidatorIsNotProposerForRequestedSlot);
+                }
+            }
+            None => {
+                return Err(ConstraintsApiError::ProposerDutyNotFound {
+                    slot: election_req.slot(),
+                    validator_index: election_req.validator_index(),
+                })
+            }
         }
 
-        // Ensure provided validator public key is the proposer for the requested slot.
         if !duties_read_guard.iter().any(|duty|
             duty.slot == election_req.slot() &&
                 &duty.entry.registration.message.public_key == election_req.proposer_public_key() &&
