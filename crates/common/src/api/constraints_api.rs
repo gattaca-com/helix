@@ -77,7 +77,7 @@ pub struct GetGatewayParams {
     pub slot: u64,
 }
 
-#[derive(Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
 pub struct SignedConstraintsMessage {
     pub message: ConstraintsMessage,
     /// Signature over `message`. Must be signed by the key relating to: `message.public_key`.
@@ -102,7 +102,7 @@ impl SignedConstraintsMessage {
     }
 }
 
-#[derive(Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
 pub struct ConstraintsMessage {
     /// Validator index that is setting the constraints.
     /// This will be `Some` if it is the proposer directly.
@@ -113,4 +113,18 @@ pub struct ConstraintsMessage {
     /// Slot these constraints are valid for.
     pub slot: u64,
     pub constraints: List<Constraint, 4>,  // TODO: set const
+}
+
+#[cfg(test)]
+mod tests {
+    use reth_primitives::hex;
+    use super::*;
+
+    #[test]
+    fn test_deserialise_signed_constraints() {
+        let hex_str = "7b226d657373616765223a7b2276616c696461746f725f696e646578223a3132332c22676174657761795f7075626c69635f6b6579223a223078303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030222c22736c6f74223a313234352c22636f6e73747261696e7473223a5b7b227478223a2231373034303530363038303930303137303430343035343330383033222c22696e646578223a313233317d5d7d2c227369676e6174757265223a223078303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030227d";
+        let raw_bytes: Vec<u8> = hex::decode(hex_str).unwrap();
+        let res = serde_json::from_slice::<SignedConstraintsMessage>(&raw_bytes);
+        println!("{res:?}");
+    }
 }

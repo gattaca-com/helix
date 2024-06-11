@@ -17,3 +17,16 @@ impl BoltConstraint {
         true  // TODO
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use reth_primitives::hex;
+    use super::*;
+
+    #[test]
+    fn test_deserialise() {
+        let hex_str = "7b227478223a2231373034303530363038303930303137303430343035343330383033222c22696e646578223a313233317d";
+        let res = serde_json::from_slice::<BoltConstraint>(&hex::decode(hex_str).unwrap());
+        println!("{res:?}");
+    }
+}
