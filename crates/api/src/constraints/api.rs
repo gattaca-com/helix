@@ -285,11 +285,6 @@ where
             return Err(ConstraintsApiError::InvalidSignature(err));
         }
 
-        // Check we haven't already received constraints for this slot
-        if self.auctioneer.get_constraints(head_slot).await?.is_some() {
-            return Err(ConstraintsApiError::ConstraintsAlreadySetForSlot);
-        }
-
         Ok(())
     }
 

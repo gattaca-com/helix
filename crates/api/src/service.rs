@@ -76,6 +76,15 @@ impl ApiService {
             NetworkConfig::Goerli => ChainInfo::for_goerli(),
             NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
             NetworkConfig::Holesky => ChainInfo::for_holesky(),
+            NetworkConfig::Custom { ref dir_path, ref genesis_validator_root, genesis_time } => {
+                match ChainInfo::for_custom(dir_path.clone(), genesis_validator_root.clone(), genesis_time) {
+                    Ok(chain_info) => chain_info,
+                    Err(err) => {
+                        error!("Failed to load custom chain info: {:?}", err);
+                        std::process::exit(1);
+                    }
+                }
+            },
         });
 
         let housekeeper =

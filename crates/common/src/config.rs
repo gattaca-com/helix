@@ -1,5 +1,6 @@
 use crate::{api::*, ValidatorPreferences};
 use clap::Parser;
+use ethereum_consensus::ssz::prelude::Node;
 use helix_utils::request_encoding::Encoding;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs::File};
@@ -91,6 +92,11 @@ pub enum NetworkConfig {
     Goerli,
     Sepolia,
     Holesky,
+    Custom {
+        dir_path: String,
+        genesis_validator_root: Node,
+        genesis_time: u64,
+    },
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
@@ -122,7 +128,7 @@ impl RouterConfig {
         if self.contains(Route::All) {
             // If All is present, replace it with all real routes
             self.remove(&Route::All);
-            self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi]);
+            self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi, Route::ConstraintsApi]);
         }
 
         // Replace BuilderApi, ProposerApi, DataApi with their real routes
@@ -134,12 +140,13 @@ impl RouterConfig {
                 Route::SubmitBlockOptimistic,
                 Route::SubmitHeader,
                 Route::GetTopBid,
+                Route::BoltGetConstraints,
             ],
         );
 
         self.replace_condensed_with_real(
             Route::ProposerApi,
-            &[Route::Status, Route::RegisterValidators, Route::GetHeader, Route::GetPayload],
+            &[Route::Status, Route::RegisterValidators, Route::GetHeader, Route::GetPayload, Route::BoltSetConstraints],
         );
 
         self.replace_condensed_with_real(
@@ -149,6 +156,11 @@ impl RouterConfig {
                 Route::BuilderBidsReceived,
                 Route::ValidatorRegistration,
             ],
+        );
+
+        self.replace_condensed_with_real(
+            Route::ConstraintsApi,
+            &[Route::GetConstraints, Route::SetConstraints, Route::ElectGateway, Route::GetGateway],
         );
     }
 
@@ -265,7 +277,7 @@ fn test_config() {
     config.broadcasters.push(BroadcasterConfig::BeaconClient(BeaconClientConfig {
         url: "http://localhost:8080".to_string(),
     }));
-    config.network_config = NetworkConfig::Mainnet;
+    config.network_config = NetworkConfig::Custom { dir_path: "test".to_string(), genesis_validator_root: Default::default(), genesis_time: 1 };
     config.logging =
         LoggingConfig::File { dir_path: "hello".to_string(), file_name: "test".to_string() };
     config.validator_preferences = ValidatorPreferences { filtering: Filtering::Regional, trusted_builders: None, header_delay: true};
