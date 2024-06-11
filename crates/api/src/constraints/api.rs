@@ -274,14 +274,22 @@ where
         // };
 
         // If gateway public key is set then verify the elected key matches.
-        if let Some(constraints_gateway_key) = constraints.gateway_public_key() {
-            if constraints_gateway_key != elected_public_key {
+        if constraints.message.sent_by_gateway() {
+            if constraints.gateway_public_key() != elected_public_key {
                 return Err(ConstraintsApiError::NotPreconfer {
-                    request_public_key: constraints_gateway_key.clone(),
+                    request_public_key: constraints.gateway_public_key().clone(),
                     preconfer_public_key: elected_public_key.clone(),
                 });
             }
         }
+        // if let Some(constraints_gateway_key) = constraints.gateway_public_key() {
+        //     if constraints_gateway_key != elected_public_key {
+        //         return Err(ConstraintsApiError::NotPreconfer {
+        //             request_public_key: constraints_gateway_key.clone(),
+        //             preconfer_public_key: elected_public_key.clone(),
+        //         });
+        //     }
+        // }
 
         // Verify proposer signature
         if let Err(err) = verify_signed_builder_message(

@@ -6,7 +6,7 @@ use ethereum_consensus::ssz::prelude::*;
 #[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
 pub struct BoltConstraint {
     pub tx: Transaction,
-    pub index: Option<usize>,
+    pub index: usize,
 }
 
 impl BoltConstraint {

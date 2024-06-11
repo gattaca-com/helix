@@ -4,6 +4,7 @@ use ethereum_consensus::{
     ssz::prelude::*,
 };
 use crate::builder_api::BuilderGetValidatorsResponseEntry;
+use crate::constraints::bolt::BoltConstraint;
 use crate::constraints::Constraint;
 
 #[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
@@ -92,16 +93,16 @@ impl SignedConstraintsMessage {
         self.message.slot
     }
 
-    pub fn constraints(&self) -> &List<Constraint, 4> {
+    pub fn constraints(&self) -> &List<BoltConstraint, 10> {
         &self.message.constraints
     }
 
-    pub fn validator_index(&self) -> Option<u64> {
+    pub fn validator_index(&self) -> u64 {
         self.message.validator_index
     }
 
-    pub fn gateway_public_key(&self) -> Option<&BlsPublicKey> {
-        self.message.gateway_public_key.as_ref()
+    pub fn gateway_public_key(&self) -> &BlsPublicKey {
+        &self.message.gateway_public_key
     }
 }
 
@@ -109,13 +110,28 @@ impl SignedConstraintsMessage {
 pub struct ConstraintsMessage {
     /// Validator index that is setting the constraints.
     /// This will be `Some` if it is the proposer directly.
-    pub validator_index: Option<u64>,
+    ///
+    /// Note: Optionality is currently represented by setting this to u64::MAX for None.
+    /// need to solve sigp TreeHash
+    pub validator_index: u64,
     /// Public key of the gateway that is setting the constraints.
     /// This will be `Some` if an elected gateway is setting the constraints.
-    pub gateway_public_key: Option<BlsPublicKey>,
+    ///
+    /// Note: Optionality is currently represented by setting this to u64::MAX for None.
+    /// need to solve sigp TreeHash
+    pub gateway_public_key: BlsPublicKey,
     /// Slot these constraints are valid for.
     pub slot: u64,
-    pub constraints: List<Constraint, 4>,  // TODO: set const
+    pub constraints: List<BoltConstraint, 10>,  // TODO: set const
+}
+
+impl ConstraintsMessage {
+
+    /// If this constraints message was sent by a gateway. This is determined by
+    /// checking if `gateway_public_key` is the default value.
+    pub fn sent_by_gateway(&self) -> bool {
+        self.gateway_public_key != BlsPublicKey::default()
+    }
 }
 
 #[cfg(test)]
@@ -154,6 +170,21 @@ mod tests {
         let res = verify_signed_data(
             &mut signed_election.message,
             &signed_election.signature,
+            &pub_key,
+            RHEA_BUILDER_DOMAIN,
+        );
+        assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_sig_verify_constraints() {
+        let hex_str = "7b226d657373616765223a7b2276616c696461746f725f696e646578223a3132332c22676174657761795f7075626c69635f6b6579223a223078613834393465396134636130623666623539353334376664613034393738656237366330353230623037623736306562636536303963353035316436613765326230316463363866326232656162366163613561386664626264636439333436222c22736c6f74223a313234352c22636f6e73747261696e7473223a5b7b227478223a22222c22696e646578223a313233317d5d7d2c227369676e6174757265223a223078623834306534323037303664666332633935626232663930346431313764626662393234303161306536376531626634383835663238663734623562373739393536373530626431623564326337306665633930663637333163346236373135306562616261613565623662613835373530666164356230373366333665336163346636333363306632386563646362363735393833653764343565316537336361333131666461356664633963633365636530336234656630316563623636227d";
+        let mut signed_constraints = serde_json::from_slice::<SignedConstraintsMessage>(&hex::decode(hex_str).unwrap()).unwrap();
+
+        let pub_key = signed_constraints.message.gateway_public_key.clone();
+        let res = verify_signed_data(
+            &mut signed_constraints.message,
+            &signed_constraints.signature,
             &pub_key,
             RHEA_BUILDER_DOMAIN,
         );
