@@ -1216,7 +1216,21 @@ impl ConstraintsAuctioneer for RedisCache {
 
     async fn save_constraints(&self, constraints: &ConstraintsMessage) -> Result<(), AuctioneerError> {
         let key = constraints.slot.to_string();
-        self.hset(CONSTRAINTS_KEY, &key, &constraints, Some(TWO_EPOCH_EXPIRY_S)).await?;
+        let result: Option<ConstraintsMessage> = self.hget(CONSTRAINTS_KEY, &key).await?;
+        match result {
+            Some(mut existing_constraints) => {
+                for constraint in constraints.constraints.iter() {
+                    existing_constraints.constraints.push(constraint.clone());
+                }
+
+                self.hset(CONSTRAINTS_KEY, &key, &existing_constraints, Some(TWO_EPOCH_EXPIRY_S)).await?;
+                
+            }
+            None => {
+                self.hset(CONSTRAINTS_KEY, &key, &constraints, Some(TWO_EPOCH_EXPIRY_S)).await?;
+            }
+        }
+        
         Ok(())
     }
 
@@ -2569,8 +2583,9 @@ mod tests {
         constraints.push(Constraint::BasicTransactionConstraint(basic_tx_constraint));
 
         let constraints = ConstraintsMessage {
+            validator_index: None,
             slot: 0,
-            public_key: Default::default(),
+            gateway_public_key: Some(Default::default()),
             constraints,
         };
 
@@ -2592,5 +2607,46 @@ mod tests {
 
         // Assert
         assert!(result.is_ok(), "Failed to get constraints");
+    }
+
+    #[tokio::test]
+    async fn test_save_multiple_constraints() {
+
+        let slot = 0;
+        
+        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+
+        let basic_tx_constraint = BasicTransactionConstraint {
+            hash: Default::default(),
+            transaction_bytes: Default::default(),
+        };
+
+        let mut constraints: List<Constraint, 4> = List::default();
+        constraints.push(Constraint::BasicTransactionConstraint(basic_tx_constraint));
+
+        let constraints_1 = ConstraintsMessage {
+            validator_index: None,
+            slot,
+            gateway_public_key: Some(Default::default()),
+            constraints: constraints.clone(),
+        };
+
+        let constraints_2 = ConstraintsMessage {
+            validator_index: None,
+            slot,
+            gateway_public_key: Some(Default::default()),
+            constraints,
+        };
+
+        
+        let result = cache.save_constraints(&constraints_1).await;
+        assert!(result.is_ok(), "Failed to save constraints");
+        let result = cache.save_constraints(&constraints_2).await;
+        assert!(result.is_ok(), "Failed to save constraints");
+
+        let result = cache.get_constraints(slot).await;
+        assert!(result.is_ok(), "Failed to get constraints");
+        
+        assert!(result.unwrap().unwrap().constraints.len() > 1, "Failed to save constraints");
     }
 }
