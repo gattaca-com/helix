@@ -44,7 +44,7 @@ pub(crate) const MAX_SET_CONSTRAINTS_SIZE: usize = 1024 * 1024; // TODO: this sh
 #[derive(Clone, Default)]
 struct SlotInfo {
     pub slot: u64,
-    pub elected_preconfer: Option<SignedPreconferElection>,
+    pub next_elected_preconfer: Option<SignedPreconferElection>,
 }
 
 #[derive(Clone)]
@@ -208,15 +208,15 @@ where
             num_constraints = %constraints.constraints().len(),
         );
 
-        if slot_info.elected_preconfer.is_none() {
+        if slot_info.next_elected_preconfer.is_none() {
             warn!(request_id = %request_id, "no elected preconfer set for slot");
-            return Err(ConstraintsApiError::NoPreconferFoundForSlot { slot: slot_info.slot });
+            return Err(ConstraintsApiError::NoPreconferFoundForSlot { slot: constraints.slot() });
         }
 
         // Validate request
         if let Err(err) = api.validate_set_constraints_request(
             &mut constraints,
-            &slot_info.elected_preconfer.as_ref().unwrap().message,
+            &slot_info.next_elected_preconfer.as_ref().unwrap().message,
             slot_info.slot,
             trace.receive,
         ).await {
@@ -402,6 +402,7 @@ impl<A> ConstraintsApi<A>
             next_proposer_duty = ?slot_update.next_duty,
             "Updated head slot",
         );
+        let next_slot = slot_update.slot + 1;
 
         // Update duties if applicable
         if let Some(new_duties) = slot_update.new_duties {
@@ -409,21 +410,21 @@ impl<A> ConstraintsApi<A>
         }
 
         // Fetch elected gateway for the current slot
-        let elected_preconfer = match self.auctioneer.get_elected_gateway(slot_update.slot).await {
+        let elected_preconfer = match self.auctioneer.get_elected_gateway(next_slot).await {
             Ok(Some(elected_gateway)) => Some(elected_gateway),
             _ => {
                 self.proposer_duties
                     .read()
                     .unwrap()
                     .iter()
-                    .find(|duty| duty.slot == slot_update.slot)
+                    .find(|duty| duty.slot == next_slot)
                     .map(|duty| SignedPreconferElection::from_proposer_duty(duty))
             }
         };
 
         let mut write_guard = self.curr_slot_info.write().unwrap();
         write_guard.slot = slot_update.slot;
-        write_guard.elected_preconfer = elected_preconfer;
+        write_guard.next_elected_preconfer = elected_preconfer;
     }
 }
 
