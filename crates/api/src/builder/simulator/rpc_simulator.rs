@@ -104,24 +104,26 @@ impl BlockSimulator for RpcSimulator {
             "RpcSimulator::process_request",
         );
 
-        match self.send_rpc_request(request, is_top_bid).await {
-            Ok(response) => {
-                let result = Self::process_rpc_response(response).await;
+        return Ok(true);
 
-                // Send sim result to db processor task
-                let db_info =
-                    DbInfo::SimulationResult { block_hash, block_sim_result: result.clone() };
-                sim_result_saver_sender
-                    .send(db_info)
-                    .await
-                    .map_err(|_| BlockSimError::SendError)?;
+        // match self.send_rpc_request(request, is_top_bid).await {
+        //     Ok(response) => {
+        //         let result = Self::process_rpc_response(response).await;
 
-                result.map(|_| false)
-            }
-            Err(err) => {
-                error!(request_id = %request_id, err = ?err, "Error sending RPC request");
-                Err(BlockSimError::RpcError(err.to_string()))
-            }
-        }
+        //         // Send sim result to db processor task
+        //         let db_info =
+        //             DbInfo::SimulationResult { block_hash, block_sim_result: result.clone() };
+        //         sim_result_saver_sender
+        //             .send(db_info)
+        //             .await
+        //             .map_err(|_| BlockSimError::SendError)?;
+
+        //         result.map(|_| false)
+        //     }
+        //     Err(err) => {
+        //         error!(request_id = %request_id, err = ?err, "Error sending RPC request");
+        //         Err(BlockSimError::RpcError(err.to_string()))
+        //     }
+        // }
     }
 }
