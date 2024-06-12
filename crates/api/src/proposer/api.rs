@@ -42,6 +42,7 @@ use helix_utils::signing::{verify_signed_builder_message, verify_signed_consensu
 use crate::{builder::api, gossiper::{traits::GossipClientTrait, types::{BroadcastGetPayloadParams, GossipedMessage}}, proposer::{
     error::ProposerApiError, unblind_beacon_block, GetHeaderParams, PreferencesHeader, GET_HEADER_REQUEST_CUTOFF_MS
 }};
+use crate::builder::api::MAX_PAYLOAD_LENGTH;
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
 pub(crate) const MAX_BLINDED_BLOCK_LENGTH: usize = 1024 * 1024;
@@ -143,8 +144,19 @@ where
     pub async fn register_validators(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
         headers: HeaderMap,
-        Json(registrations): Json<Vec<SignedValidatorRegistration>>,
+        req: Request<Body>,
     ) -> Result<StatusCode, ProposerApiError> {
+
+        let body = req.into_body();
+        let body_bytes = to_bytes(body, MAX_VAL_REGISTRATIONS_LENGTH).await?;
+        let registrations: Vec<SignedValidatorRegistration> = match serde_json::from_slice(&body_bytes) {
+            Ok(registrations) => registrations,
+            Err(error) => {
+                warn!(?error, "failed to deserialise register_validators request");
+                return Err(error.into());
+            }
+        };
+
         if registrations.is_empty() {
             return Err(ProposerApiError::EmptyRequest);
         }
