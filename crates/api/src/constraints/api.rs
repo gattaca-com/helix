@@ -256,7 +256,7 @@ where
         if ns_into_slot > SET_CONSTRAINTS_CUTOFF_NS {
             return Err(ConstraintsApiError::SetConstraintsTooLate {
                 ns_into_slot: ns_into_slot as u64,
-                cutoff: GET_HEADER_REQUEST_CUTOFF_MS as u64,
+                cutoff: SET_CONSTRAINTS_CUTOFF_NS as u64,
             });
         }
 
