@@ -91,7 +91,7 @@ where
     ) -> Result<impl IntoResponse, ConstraintsApiError> {
         let head_slot = api.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
 
-        match api.auctioneer.get_constraints(head_slot).await? {
+        match api.auctioneer.get_constraints(head_slot+1).await? {
             Some(constraints) => {
                 let constraints_bytes = serde_json::to_vec(&constraints)?;
                 Ok(Response::builder()
