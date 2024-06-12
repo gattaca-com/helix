@@ -163,7 +163,7 @@ where
             request_slot = %slot,
         );
 
-        if slot < head_slot {
+        if slot <= head_slot {
             warn!(%request_id, "request for past slot");
             return Err(ConstraintsApiError::RequestForPastSlot { request_slot: slot, head_slot });
         }
@@ -316,7 +316,7 @@ where
     /// - Verifies the signature.
     fn validate_election_request(&self, election_req: &mut SignedPreconferElection, head_slot: u64) -> Result<(), ConstraintsApiError> {
         // Cannot elect a gateway for a past slot
-        if election_req.slot() < head_slot {
+        if election_req.slot() <= head_slot {
             return Err(ConstraintsApiError::RequestForPastSlot { request_slot: election_req.slot(), head_slot });
         }
 
