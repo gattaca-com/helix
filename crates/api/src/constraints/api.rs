@@ -245,8 +245,8 @@ where
         receive_ns: u64,
     ) -> Result<(), ConstraintsApiError> {
         // Can only set constraints for the current slot.
-        if constraints.slot() != head_slot {
-            return Err(ConstraintsApiError::CanOnlySetConstraintsForCurrentSlot { request_slot: constraints.slot(), curr_slot: head_slot });
+        if constraints.slot() <= head_slot {
+            return Err(ConstraintsApiError::CanOnlySetConstraintsForCurrentSlot { request_slot: constraints.slot(), curr_slot: head_slot + 1 });
         }
 
         // Constraints cannot be set more than `SET_CONSTRAINTS_CUTOFF_NS` into the previous slot.
