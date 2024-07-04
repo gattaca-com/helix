@@ -98,10 +98,12 @@ where
         let request_id = Uuid::new_v4();
         let mut trace = GetGatewayTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
+        println!("get_preconfer with slot: {:?}", slot);
+
         let head_slot = api.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
         debug!(
             request_id = %request_id,
-            event = "get_gateway",
+            event = "get_preconfer",
             head_slot = head_slot,
             request_ts = trace.receive,
             request_slot = %slot,
@@ -127,6 +129,41 @@ where
                 Err(ConstraintsApiError::NoPreconferFoundForSlot {slot})
             }
         }
+    }
+
+    /// Returns the preconfer for the given slot. If no elected preconfer is found, it returns an error.
+    pub async fn get_preconfers_for_epoch(
+        Extension(api): Extension<Arc<ConstraintsApi<A>>>,
+    ) -> Result<axum::Json<Vec<SignedPreconferElection>>, ConstraintsApiError> {
+        let request_id = Uuid::new_v4();
+        let mut trace = GetGatewayTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+
+        println!("get_preconfers_for_epoch");
+        assert!(false, "get_preconfers_for_epoch");
+
+        let head_slot = api.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
+        debug!(
+            request_id = %request_id,
+            event = "get_preconfers_for_epoch",
+            head_slot = head_slot,
+            request_ts = trace.receive,
+        );
+
+        let slots_for_epoch = get_remaining_slots_for_epoch(head_slot+1);
+        let mut preconfers = vec![];
+        for slot in slots_for_epoch {
+            match api.auctioneer.get_elected_gateway(slot).await {
+                Ok(Some(elected_gateway)) => {
+                    preconfers.push(elected_gateway);
+                }
+                _ => {}
+            }
+        }
+
+        trace.gateway_fetched = get_nanos_timestamp()?;
+        debug!(%request_id, num_preconfers_fetched = preconfers.len(), ?trace, "found elected gateway");
+
+        Ok(axum::Json(preconfers))
     }
 }
 
@@ -195,4 +232,24 @@ impl<A> ConstraintsApi<A>
 
 fn get_nanos_timestamp() -> Result<u64, ConstraintsApiError> {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).map_err(|_| ConstraintsApiError::InternalServerError)
+}
+
+fn get_remaining_slots_for_epoch(slot: u64) -> Vec<u64> {
+    let epoch = slot / SLOTS_PER_EPOCH;
+    
+    // get a list of slots for the epoch beginning at slot until the end of the epoch
+    let all_slots: Vec<u64> = (epoch * SLOTS_PER_EPOCH..(epoch + 1) * SLOTS_PER_EPOCH).collect();
+    let remaining_slots = all_slots.iter().filter(|&s| *s >= slot).map(|&s| s).collect();
+    remaining_slots
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::constraints::api::get_remaining_slots_for_epoch;
+    #[tokio::test]
+    async fn test_get_remaining_slots_for_epoch() {
+        let slots = get_remaining_slots_for_epoch(5);
+        println!("{:?}", slots);
+        assert_eq!(slots, vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]);
+    }
 }

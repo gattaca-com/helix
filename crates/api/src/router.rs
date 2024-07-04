@@ -155,13 +155,19 @@ pub fn build_router(
                     &route.path(),
                     get(ConstraintsApiProd::get_constraints),
                 );
-            }
+            },
             Route::GetPreconfer => {
                 router = router.route(
                     &route.path(),
                     get(ConstraintsApiProd::get_preconfer),
                 );
-            }
+            },
+            Route::GetPreconfersForEpoch => {
+                router = router.route(
+                    &route.path(),
+                    get(ConstraintsApiProd::get_preconfers_for_epoch),
+                );
+            },
             _ => {
                 panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route);
             }

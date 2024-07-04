@@ -810,15 +810,18 @@ where
             num_constraints = %constraints.constraints().len(),
         );
 
-        if slot_info.next_elected_preconfer.is_none() {
-            warn!(request_id = %request_id, "no elected preconfer set for slot");
-            return Err(ProposerApiError::NoPreconferFoundForSlot { slot: constraints.slot() });
-        }
+        let elected_preconfer = match proposer_api.auctioneer.get_elected_gateway(constraints.slot()).await? {
+            Some(preconfer) => preconfer,
+            None => {
+                warn!(request_id = %request_id, slot = constraints.slot(), "no elected preconfer found for slot");
+                return Err(ProposerApiError::NoPreconferFoundForSlot { slot: constraints.slot() });
+            }
+        };
 
         // Validate request
         if let Err(err) = proposer_api.validate_set_constraints_request(
             &mut constraints,
-            &slot_info.next_elected_preconfer.as_ref().unwrap().message,
+            &elected_preconfer.message,
             slot_info.slot,
             trace.receive,
         ).await {
@@ -827,11 +830,7 @@ where
         }
         trace.validation_complete = get_nanos_timestamp()?;
 
-        // Drop read lock before saving to auctioneer
-        drop(slot_info);
-
-        // Save constraints to auctioneer & local state
-        proposer_api.curr_slot_info.write().await.constraints_set = true;
+        // Save constraints to auctioneer
         proposer_api.auctioneer.save_constraints(&constraints.message).await?;
         trace.constraints_set = get_nanos_timestamp()?;
 
@@ -840,7 +839,7 @@ where
     }
 
     /// Elects a gateway to perform pre-confirmations for a validator. The request must be signed by the validator
-    /// and cannot be for a slot more than 2 epochs in the future.
+    /// and must be for the next epoch.
     pub async fn elect_preconfer(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
         req: Request<Body>,
@@ -879,7 +878,7 @@ where
         Ok(StatusCode::OK)
     }
 
-        /// - Ensures the constraints can only be set for the current slot.
+    /// - Ensures the constraints can only be set for the current epoch.
     /// - Checks that the constraints are set within the allowed time window.
     /// - Verifies that the constraint request is from the expected public key.
     /// - Verifies the signature of the request matches the elected gateway.
@@ -891,19 +890,21 @@ where
         head_slot: u64,
         receive_ns: u64,
     ) -> Result<(), ProposerApiError> {
-        // Can only set constraints for the current slot.
-        if constraints.slot() != head_slot + 1{
-            return Err(ProposerApiError::CanOnlySetConstraintsForCurrentSlot { request_slot: constraints.slot(), curr_slot: head_slot + 1 });
+        // Can only set constraints for the current epoch.
+        let current_epoch = (head_slot+1) / SLOTS_PER_EPOCH;
+        let request_epoch = constraints.slot() / SLOTS_PER_EPOCH;
+        if constraints.slot() <= head_slot || request_epoch != current_epoch {
+            return Err(ProposerApiError::CanOnlySetConstraintsForCurrentEpoch { request_slot: constraints.slot(), curr_slot: head_slot + 1 });
         }
 
         // Constraints can only be set once per slot.
-        if self.curr_slot_info.read().await.constraints_set || self.auctioneer.get_constraints(constraints.slot()).await?.is_some() {
+        if self.auctioneer.get_constraints(constraints.slot()).await?.is_some() {
             return Err(ProposerApiError::ConstraintsAlreadySet { slot: constraints.slot() });
         }
 
-        // Constraints cannot be set more than `SET_CONSTRAINTS_CUTOFF_NS` into the previous slot.
+        // Constraints cannot be set more than `SET_CONSTRAINTS_CUTOFF_NS` into the requested slot.
         let slot_start_timestamp = self.chain_info.genesis_time_in_secs +
-            (head_slot * self.chain_info.seconds_per_slot);
+            (constraints.slot() * self.chain_info.seconds_per_slot);
         let ns_into_slot = (receive_ns as i64).saturating_sub((slot_start_timestamp * 1_000_000_000) as i64);
         if ns_into_slot > SET_CONSTRAINTS_CUTOFF_NS {
             return Err(ProposerApiError::SetConstraintsTooLate {

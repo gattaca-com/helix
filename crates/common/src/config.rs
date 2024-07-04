@@ -161,7 +161,7 @@ impl RouterConfig {
 
         self.replace_condensed_with_real(
             Route::ConstraintsApi,
-            &[Route::GetConstraints, Route::GetPreconfer],
+            &[Route::GetConstraints, Route::GetPreconfer, Route::GetPreconfersForEpoch],
         );
     }
 
@@ -227,6 +227,7 @@ pub enum Route {
     SetConstraints,
     ElectPreconfer,
     GetPreconfer,
+    GetPreconfersForEpoch,
 }
 
 impl Route {
@@ -251,6 +252,7 @@ impl Route {
 
             Route::GetConstraints => format!("{PATH_CONSTRAINTS_API}{PATH_GET_CONSTRAINTS}"),
             Route::GetPreconfer => format!("{PATH_CONSTRAINTS_API}{PATH_GET_PRECONFER}"),
+            Route::GetPreconfersForEpoch => format!("{PATH_CONSTRAINTS_API}{PATH_GET_PRECONFERS}"),
 
             Route::All => panic!("All is not a real route"),
             Route::BuilderApi => panic!("BuilderApi is not a real route"),

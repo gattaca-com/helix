@@ -184,8 +184,8 @@ pub enum ProposerApiError {
     #[error("no preconfer found for slot: {slot}")]
     NoPreconferFoundForSlot { slot: u64 },
 
-    #[error("can only set constraints for current slot. request slot: {request_slot}, curr slot: {curr_slot}")]
-    CanOnlySetConstraintsForCurrentSlot { request_slot: u64, curr_slot: u64 },
+    #[error("can only set constraints for current epoch. request slot: {request_slot}, curr slot: {curr_slot}")]
+    CanOnlySetConstraintsForCurrentEpoch { request_slot: u64, curr_slot: u64 },
 
     #[error("set constraints sent too late. ns into slot: {ns_into_slot}, cutoff: {cutoff}")]
     SetConstraintsTooLate { ns_into_slot: u64, cutoff: u64 },
@@ -374,8 +374,8 @@ impl IntoResponse for ProposerApiError {
             ProposerApiError::NoPreconferFoundForSlot {slot} => {
                 (StatusCode::BAD_REQUEST, format!("no preconfer found for slot: {slot}")).into_response()
             },
-            ProposerApiError::CanOnlySetConstraintsForCurrentSlot{request_slot, curr_slot} => {
-                (StatusCode::BAD_REQUEST, format!("can only set constraints for current slot. request slot: {request_slot}, curr slot: {curr_slot}")).into_response()
+            ProposerApiError::CanOnlySetConstraintsForCurrentEpoch{request_slot, curr_slot} => {
+                (StatusCode::BAD_REQUEST, format!("can only set constraints for current epoch. request slot: {request_slot}, curr slot: {curr_slot}")).into_response()
             },
             ProposerApiError::SetConstraintsTooLate{ns_into_slot, cutoff} => {
                 (StatusCode::BAD_REQUEST, format!("set constraints sent too late. ns into slot: {ns_into_slot}, cutoff: {cutoff}")).into_response()
