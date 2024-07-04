@@ -98,8 +98,6 @@ where
         let request_id = Uuid::new_v4();
         let mut trace = GetGatewayTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
-        println!("get_preconfer with slot: {:?}", slot);
-
         let head_slot = api.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
         debug!(
             request_id = %request_id,
@@ -137,9 +135,6 @@ where
     ) -> Result<axum::Json<Vec<SignedPreconferElection>>, ConstraintsApiError> {
         let request_id = Uuid::new_v4();
         let mut trace = GetGatewayTrace { receive: get_nanos_timestamp()?, ..Default::default() };
-
-        println!("get_preconfers_for_epoch");
-        assert!(false, "get_preconfers_for_epoch");
 
         let head_slot = api.curr_slot_info.read().map_err(|_| ConstraintsApiError::LockPoisoned)?.slot;
         debug!(
