@@ -1249,7 +1249,6 @@ mod tests {
     use super::*;
     use ethereum_consensus::clock::get_current_unix_time_in_nanos;
     use helix_common::capella::{self, ExecutionPayloadHeader};
-    use reth_primitives::revm_primitives::bitvec::vec;
     use serde::{Deserialize, Serialize};
     use helix_common::constraints::basic_tx_constraint::BasicTransactionConstraint;
     use helix_common::constraints::Constraint;
@@ -2579,13 +2578,13 @@ mod tests {
             hash: Default::default(),
             transaction_bytes: Default::default(),
         };
-        let mut constraints: List<Constraint, 4> = List::default();
+        let mut constraints: List<Constraint, 10> = List::default();
         constraints.push(Constraint::BasicTransactionConstraint(basic_tx_constraint));
 
         let constraints = ConstraintsMessage {
-            validator_index: None,
+            validator_index: 0,
             slot: 0,
-            gateway_public_key: Some(Default::default()),
+            gateway_public_key: Default::default(),
             constraints,
         };
 
@@ -2621,20 +2620,20 @@ mod tests {
             transaction_bytes: Default::default(),
         };
 
-        let mut constraints: List<Constraint, 4> = List::default();
+        let mut constraints: List<Constraint, 10> = List::default();
         constraints.push(Constraint::BasicTransactionConstraint(basic_tx_constraint));
 
         let constraints_1 = ConstraintsMessage {
-            validator_index: None,
+            validator_index: 0,
             slot,
-            gateway_public_key: Some(Default::default()),
+            gateway_public_key: Default::default(),
             constraints: constraints.clone(),
         };
 
         let constraints_2 = ConstraintsMessage {
-            validator_index: None,
+            validator_index: 0,
             slot,
-            gateway_public_key: Some(Default::default()),
+            gateway_public_key: Default::default(),
             constraints,
         };
 

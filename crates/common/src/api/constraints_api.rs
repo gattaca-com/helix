@@ -137,6 +137,8 @@ impl ConstraintsMessage {
 mod tests {
     use ethereum_consensus::signing::verify_signed_data;
     use reth_primitives::hex;
+    use crate::constraints::{basic_tx_constraint::BasicTransactionConstraint, bolt::BoltConstraint};
+
     use super::*;
 
     const RHEA_BUILDER_DOMAIN: [u8; 32] = [
@@ -188,5 +190,36 @@ mod tests {
             RHEA_BUILDER_DOMAIN,
         );
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_serialise() {
+        let constraints_array = vec![
+            Constraint::BasicTransactionConstraint(BasicTransactionConstraint {
+                hash: Default::default(),
+                transaction_bytes: Default::default(),
+            }),
+            Constraint::BasicTransactionConstraint(BasicTransactionConstraint {
+                hash: Default::default(),
+                transaction_bytes: Default::default(),
+            }),
+            Constraint::BoltConstraint(BoltConstraint {
+                tx: Default::default(),
+                index: 77,
+            }),
+        ];
+        let constraint_message = ConstraintsMessage {
+            validator_index: 2,
+            gateway_public_key: Default::default(),
+            slot: 88,
+            constraints: List::try_from(constraints_array).unwrap(),
+        };
+
+        let json_serialised = serde_json::to_string_pretty(&constraint_message).unwrap();
+        println!("{}", json_serialised);
+
+        let json_to_vec = serde_json::to_vec(&constraint_message).unwrap();
+        println!("{:?}", json_to_vec);
+
     }
 }

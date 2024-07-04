@@ -39,7 +39,7 @@ use crate::{
 
 pub fn app() -> Router {
     let (slot_update_sender, _slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
-    let (gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
+    let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
 
     let api_service =
         Arc::new(ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient, MockGossiper>::new(
@@ -177,7 +177,7 @@ pub fn proposer_api_app() -> (
     Arc<MockAuctioneer>,
 ) {
     let (slot_update_sender, slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
-    let (gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
+    let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
     let auctioneer = Arc::new(MockAuctioneer::default());
     let proposer_api_service =
         Arc::new(ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient, MockGossiper>::new(
