@@ -140,13 +140,14 @@ impl RouterConfig {
                 Route::SubmitBlockOptimistic,
                 Route::SubmitHeader,
                 Route::GetTopBid,
-                Route::BoltGetConstraints,
+                Route::SetConstraints,
+                Route::ElectPreconfer,
             ],
         );
 
         self.replace_condensed_with_real(
             Route::ProposerApi,
-            &[Route::Status, Route::RegisterValidators, Route::GetHeader, Route::GetPayload, Route::BoltSetConstraints],
+            &[Route::Status, Route::RegisterValidators, Route::GetHeader, Route::GetPayload, Route::SetConstraints, Route::ElectPreconfer],
         );
 
         self.replace_condensed_with_real(
@@ -160,7 +161,7 @@ impl RouterConfig {
 
         self.replace_condensed_with_real(
             Route::ConstraintsApi,
-            &[Route::GetConstraints, Route::SetConstraints, Route::ElectGateway, Route::GetGateway],
+            &[Route::GetConstraints, Route::GetPreconfer],
         );
     }
 
@@ -224,10 +225,8 @@ pub enum Route {
     ValidatorRegistration,
     GetConstraints,
     SetConstraints,
-    ElectGateway,
-    GetGateway,
-    BoltSetConstraints,
-    BoltGetConstraints,
+    ElectPreconfer,
+    GetPreconfer,
 }
 
 impl Route {
@@ -238,19 +237,21 @@ impl Route {
             Route::SubmitBlockOptimistic => format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC_V2}"),
             Route::SubmitHeader => format!("{PATH_BUILDER_API}{PATH_SUBMIT_HEADER}"),
             Route::GetTopBid => format!("{PATH_BUILDER_API}{PATH_GET_TOP_BID}"),
+
             Route::Status => format!("{PATH_PROPOSER_API}{PATH_STATUS}"),
             Route::RegisterValidators => format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
             Route::GetHeader => format!("{PATH_PROPOSER_API}{PATH_GET_HEADER}"),
             Route::GetPayload => format!("{PATH_PROPOSER_API}{PATH_GET_PAYLOAD}"),
+            Route::SetConstraints => format!("{PATH_PROPOSER_API}{PATH_SET_CONSTRAINTS}"),
+            Route::ElectPreconfer => format!("{PATH_PROPOSER_API}{PATH_ELECT_PRECONFER}"),
+
             Route::ProposerPayloadDelivered => format!("{PATH_DATA_API}{PATH_PROPOSER_PAYLOAD_DELIVERED}"),
             Route::BuilderBidsReceived => format!("{PATH_DATA_API}{PATH_BUILDER_BIDS_RECEIVED}"),
             Route::ValidatorRegistration => format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),
+
             Route::GetConstraints => format!("{PATH_CONSTRAINTS_API}{PATH_GET_CONSTRAINTS}"),
-            Route::SetConstraints => format!("{PATH_CONSTRAINTS_API}{PATH_SET_CONSTRAINTS}"),
-            Route::ElectGateway => format!("{PATH_CONSTRAINTS_API}{PATH_ELECT_GATEWAY}"),
-            Route::GetGateway => format!("{PATH_CONSTRAINTS_API}{PATH_GET_GATEWAY}"),
-            Route::BoltSetConstraints => format!("{PATH_PROPOSER_API}{PATH_BOLT_CONSTRAINTS}"),
-            Route::BoltGetConstraints => format!("{PATH_BUILDER_API}{PATH_BOLT_CONSTRAINTS}"),
+            Route::GetPreconfer => format!("{PATH_CONSTRAINTS_API}{PATH_GET_PRECONFER}"),
+
             Route::All => panic!("All is not a real route"),
             Route::BuilderApi => panic!("BuilderApi is not a real route"),
             Route::ProposerApi => panic!("ProposerApi is not a real route"),

@@ -1,8 +1,8 @@
-use std::{sync::Arc};
+use std::sync::Arc;
 
 
 use helix_common::{
-    bellatrix::ByteVector, bid_submission::{v2::header_submission::SignedHeaderSubmission, SignedBidSubmission}, simulator::BlockSimError, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, SignedBuilderBid, SubmissionTrace
+    bellatrix::ByteVector, bid_submission::{v2::header_submission::SignedHeaderSubmission, SignedBidSubmission}, simulator::BlockSimError, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, SubmissionTrace
 };
 
 #[derive(Clone)]

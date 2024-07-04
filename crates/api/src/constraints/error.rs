@@ -1,11 +1,9 @@
-use std::sync::PoisonError;
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 use ethereum_consensus::primitives::BlsPublicKey;
 use ethereum_consensus::ssz;
-use tokio::sync::RwLockReadGuard;
 use helix_datastore::error::AuctioneerError;
 
 #[derive(Debug, thiserror::Error)]

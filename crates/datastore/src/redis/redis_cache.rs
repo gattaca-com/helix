@@ -11,7 +11,7 @@ use helix_common::{
     api::builder_api::TopBidUpdate, bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission}, pending_block::PendingBlock, versioned_payload::PayloadAndBlobs, ProposerInfo
 };
 use redis::{AsyncCommands, RedisResult, Script, Value};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::broadcast;
 use tracing::error;
 
@@ -1215,12 +1215,12 @@ impl ConstraintsAuctioneer for RedisCache {
     }
 
     async fn save_constraints(&self, constraints: &ConstraintsMessage) -> Result<(), AuctioneerError> {
-        let key = constraints.slot.to_string();
+        let key = constraints.slot().to_string();
         let result: Option<ConstraintsMessage> = self.hget(CONSTRAINTS_KEY, &key).await?;
         match result {
             Some(mut existing_constraints) => {
-                for constraint in constraints.constraints.iter() {
-                    existing_constraints.constraints.push(constraint.clone());
+                for constraint in constraints.constraints().iter() {
+                    existing_constraints.add_constraints(constraint.clone());
                 }
 
                 self.hset(CONSTRAINTS_KEY, &key, &existing_constraints, Some(TWO_EPOCH_EXPIRY_S)).await?;
@@ -1248,10 +1248,9 @@ mod tests {
 
     use super::*;
     use ethereum_consensus::clock::get_current_unix_time_in_nanos;
+    use helix_common::api::constraints_api::Constraint;
     use helix_common::capella::{self, ExecutionPayloadHeader};
     use serde::{Deserialize, Serialize};
-    use helix_common::constraints::basic_tx_constraint::BasicTransactionConstraint;
-    use helix_common::constraints::Constraint;
 
     impl RedisCache {
         async fn clear_cache(&self) -> Result<(), RedisCacheError> {
@@ -2574,22 +2573,21 @@ mod tests {
         // Arrange
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
 
-        let basic_tx_constraint = BasicTransactionConstraint {
-            hash: Default::default(),
-            transaction_bytes: Default::default(),
-        };
-        let mut constraints: List<Constraint, 10> = List::default();
-        constraints.push(Constraint::BasicTransactionConstraint(basic_tx_constraint));
+        let constraints_array = vec![
+            Constraint::default(),
+            Constraint::default(),
+        ];
+        let constraints_list_a = List::try_from(constraints_array.clone()).unwrap();
+        let constraints_list_b = List::try_from(constraints_array).unwrap();
+        let list_of_lists = vec![constraints_list_a, constraints_list_b];
 
-        let constraints = ConstraintsMessage {
-            validator_index: 0,
-            slot: 0,
-            gateway_public_key: Default::default(),
-            constraints,
-        };
+        let constraints_message = ConstraintsMessage::new(
+            1, 
+            List::try_from(list_of_lists).unwrap(),
+        );
 
         // Act
-        let result = cache.save_constraints(&constraints).await;
+        let result = cache.save_constraints(&constraints_message).await;
 
         // Assert
         assert!(result.is_ok(), "Failed to save constraints");
@@ -2615,37 +2613,33 @@ mod tests {
         
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
 
-        let basic_tx_constraint = BasicTransactionConstraint {
-            hash: Default::default(),
-            transaction_bytes: Default::default(),
-        };
+        let constraints_array = vec![
+            Constraint::default(),
+            Constraint::default(),
+        ];
+        let constraints_list_a = List::try_from(constraints_array.clone()).unwrap();
+        let constraints_list_b = List::try_from(constraints_array).unwrap();
+        let list_of_lists = vec![constraints_list_a, constraints_list_b];
 
-        let mut constraints: List<Constraint, 10> = List::default();
-        constraints.push(Constraint::BasicTransactionConstraint(basic_tx_constraint));
+        let constraints_message_1 = ConstraintsMessage::new(
+            1, 
+            List::try_from(list_of_lists.clone()).unwrap(),
+        );
 
-        let constraints_1 = ConstraintsMessage {
-            validator_index: 0,
-            slot,
-            gateway_public_key: Default::default(),
-            constraints: constraints.clone(),
-        };
-
-        let constraints_2 = ConstraintsMessage {
-            validator_index: 0,
-            slot,
-            gateway_public_key: Default::default(),
-            constraints,
-        };
+        let constraints_message_2 = ConstraintsMessage::new(
+            1, 
+            List::try_from(list_of_lists).unwrap(),
+        );
 
         
-        let result = cache.save_constraints(&constraints_1).await;
+        let result = cache.save_constraints(&constraints_message_1).await;
         assert!(result.is_ok(), "Failed to save constraints");
-        let result = cache.save_constraints(&constraints_2).await;
+        let result = cache.save_constraints(&constraints_message_2).await;
         assert!(result.is_ok(), "Failed to save constraints");
 
         let result = cache.get_constraints(slot).await;
         assert!(result.is_ok(), "Failed to get constraints");
         
-        assert!(result.unwrap().unwrap().constraints.len() > 1, "Failed to save constraints");
+        assert!(result.unwrap().unwrap().constraints().len() > 1, "Failed to save constraints");
     }
 }
