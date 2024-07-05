@@ -11,6 +11,7 @@ pub mod simulator;
 pub mod traces;
 pub mod validator;
 pub mod validator_preferences;
+pub mod constraints;
 
 pub use builder_info::*;
 pub use config::*;
@@ -19,3 +20,4 @@ pub use proposer::*;
 pub use traces::*;
 pub use validator::*;
 pub use validator_preferences::*;
+pub use api::*;

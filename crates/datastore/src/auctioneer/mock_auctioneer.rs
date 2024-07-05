@@ -4,14 +4,14 @@ use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 
 use helix_common::{
-    api::builder_api::TopBidUpdate, bid_submission::{
+    api::{builder_api::TopBidUpdate, constraints_api::{ConstraintsMessage, SignedPreconferElection}}, bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
     }, eth::SignedBuilderBid, pending_block::PendingBlock, signing::RelaySigningContext, versioned_payload::PayloadAndBlobs, BuilderInfo, ProposerInfo
 };
 use helix_database::types::BuilderInfoDocument;
 use tokio_stream::Stream;
 
-use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse, Auctioneer};
+use crate::{constraints::ConstraintsAuctioneer, error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 
 #[derive(Default, Clone)]
 pub struct MockAuctioneer {
@@ -256,5 +256,34 @@ impl Auctioneer for MockAuctioneer {
 
     async fn try_acquire_or_renew_leadership(&self, _leader_id: &str) -> bool {
         true
+    }
+}
+
+impl ConstraintsAuctioneer for MockAuctioneer {
+    #[must_use]
+#[allow(clippy::type_complexity,clippy::type_repetition_in_bounds)]
+fn save_new_gateway_election<'life0,'life1,'async_trait>(&'life0 self,signed_election: &'life1 SignedPreconferElection,slot:u64) ->  ::core::pin::Pin<Box<dyn ::core::future::Future<Output = Result<(),AuctioneerError> > + ::core::marker::Send+'async_trait> >where 'life0:'async_trait,'life1:'async_trait,Self:'async_trait {
+        todo!()
+    }
+
+    #[doc = " Returns the elected gateway for a slot. None if there is no elected gateway for the slot."]
+#[must_use]
+#[allow(clippy::type_complexity,clippy::type_repetition_in_bounds)]
+fn get_elected_gateway<'life0,'async_trait>(&'life0 self,slot:u64) ->  ::core::pin::Pin<Box<dyn ::core::future::Future<Output = Result<Option<SignedPreconferElection> ,AuctioneerError> > + ::core::marker::Send+'async_trait> >where 'life0:'async_trait,Self:'async_trait {
+        todo!()
+    }
+
+    #[doc = " Save the constraints for a specific slot."]
+#[must_use]
+#[allow(clippy::type_complexity,clippy::type_repetition_in_bounds)]
+fn save_constraints<'life0,'life1,'async_trait>(&'life0 self,constraints: &'life1 ConstraintsMessage) ->  ::core::pin::Pin<Box<dyn ::core::future::Future<Output = Result<(),AuctioneerError> > + ::core::marker::Send+'async_trait> >where 'life0:'async_trait,'life1:'async_trait,Self:'async_trait {
+        todo!()
+    }
+
+    #[doc = " Get the constraints for a specific slot."]
+#[must_use]
+#[allow(clippy::type_complexity,clippy::type_repetition_in_bounds)]
+fn get_constraints<'life0,'async_trait>(&'life0 self,slot:u64) ->  ::core::pin::Pin<Box<dyn ::core::future::Future<Output = Result<Option<ConstraintsMessage> ,AuctioneerError> > + ::core::marker::Send+'async_trait> >where 'life0:'async_trait,Self:'async_trait {
+        todo!()
     }
 }

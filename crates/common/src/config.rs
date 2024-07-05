@@ -128,7 +128,7 @@ impl RouterConfig {
         if self.contains(Route::All) {
             // If All is present, replace it with all real routes
             self.remove(&Route::All);
-            self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi]);
+            self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi, Route::ConstraintsApi]);
         }
 
         // Replace BuilderApi, ProposerApi, DataApi with their real routes
@@ -140,12 +140,14 @@ impl RouterConfig {
                 Route::SubmitBlockOptimistic,
                 Route::SubmitHeader,
                 Route::GetTopBid,
+                Route::SetConstraints,
+                Route::ElectPreconfer,
             ],
         );
 
         self.replace_condensed_with_real(
             Route::ProposerApi,
-            &[Route::Status, Route::RegisterValidators, Route::GetHeader, Route::GetPayload],
+            &[Route::Status, Route::RegisterValidators, Route::GetHeader, Route::GetPayload, Route::SetConstraints, Route::ElectPreconfer],
         );
 
         self.replace_condensed_with_real(
@@ -155,6 +157,11 @@ impl RouterConfig {
                 Route::BuilderBidsReceived,
                 Route::ValidatorRegistration,
             ],
+        );
+
+        self.replace_condensed_with_real(
+            Route::ConstraintsApi,
+            &[Route::GetConstraints, Route::GetPreconfer, Route::GetPreconfersForEpoch],
         );
     }
 
@@ -203,6 +210,7 @@ pub enum Route {
     BuilderApi,
     ProposerApi,
     DataApi,
+    ConstraintsApi,
     GetValidators,
     SubmitBlock,
     SubmitBlockOptimistic,
@@ -215,6 +223,11 @@ pub enum Route {
     ProposerPayloadDelivered,
     BuilderBidsReceived,
     ValidatorRegistration,
+    GetConstraints,
+    SetConstraints,
+    ElectPreconfer,
+    GetPreconfer,
+    GetPreconfersForEpoch,
 }
 
 impl Route {
@@ -225,17 +238,27 @@ impl Route {
             Route::SubmitBlockOptimistic => format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC_V2}"),
             Route::SubmitHeader => format!("{PATH_BUILDER_API}{PATH_SUBMIT_HEADER}"),
             Route::GetTopBid => format!("{PATH_BUILDER_API}{PATH_GET_TOP_BID}"),
+
             Route::Status => format!("{PATH_PROPOSER_API}{PATH_STATUS}"),
             Route::RegisterValidators => format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
             Route::GetHeader => format!("{PATH_PROPOSER_API}{PATH_GET_HEADER}"),
             Route::GetPayload => format!("{PATH_PROPOSER_API}{PATH_GET_PAYLOAD}"),
+            Route::SetConstraints => format!("{PATH_PROPOSER_API}{PATH_SET_CONSTRAINTS}"),
+            Route::ElectPreconfer => format!("{PATH_PROPOSER_API}{PATH_ELECT_PRECONFER}"),
+
             Route::ProposerPayloadDelivered => format!("{PATH_DATA_API}{PATH_PROPOSER_PAYLOAD_DELIVERED}"),
             Route::BuilderBidsReceived => format!("{PATH_DATA_API}{PATH_BUILDER_BIDS_RECEIVED}"),
             Route::ValidatorRegistration => format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),
+
+            Route::GetConstraints => format!("{PATH_CONSTRAINTS_API}{PATH_GET_CONSTRAINTS}"),
+            Route::GetPreconfer => format!("{PATH_CONSTRAINTS_API}{PATH_GET_PRECONFER}"),
+            Route::GetPreconfersForEpoch => format!("{PATH_CONSTRAINTS_API}{PATH_GET_PRECONFERS}"),
+
             Route::All => panic!("All is not a real route"),
             Route::BuilderApi => panic!("BuilderApi is not a real route"),
             Route::ProposerApi => panic!("ProposerApi is not a real route"),
             Route::DataApi => panic!("DataApi is not a real route"),
+            Route::ConstraintsApi => panic!("ConstraintsApi is not a real route"),
         }
     }
     

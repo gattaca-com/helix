@@ -6,7 +6,7 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Bytes32, Hash32},
     ssz::{self, prelude::*},
 };
-use helix_common::simulator::BlockSimError;
+use helix_common::{api::constraints_api::Constraint, simulator::BlockSimError};
 use helix_datastore::error::AuctioneerError;
 
 #[derive(Debug, thiserror::Error)]
@@ -123,6 +123,12 @@ pub enum BuilderApiError {
 
     #[error("V2 submissions invalid if proposer requires regional filtering")]
     V2SubmissionsInvalidIfProposerRequiresRegionalFiltering,
+
+    #[error("block does not adhere to constraint: {constraint:?}")]
+    BlockDoesNotAdhereToConstraint {constraint: Constraint},
+
+    #[error("failed to decode transaction")]
+    TransactionDecodeError,
 }
 
 impl IntoResponse for BuilderApiError {
@@ -250,6 +256,12 @@ impl IntoResponse for BuilderApiError {
             },
             BuilderApiError::V2SubmissionsInvalidIfProposerRequiresRegionalFiltering => {
                 (StatusCode::BAD_REQUEST, "V2 submissions invalid if proposer requires regional filtering").into_response()
+            }
+            BuilderApiError::BlockDoesNotAdhereToConstraint { constraint } => {
+                (StatusCode::BAD_REQUEST, format!("block does not adhere to constraint: {constraint:?}")).into_response()
+            }
+            BuilderApiError::TransactionDecodeError => {
+                (StatusCode::BAD_REQUEST, "failed to decode transaction").into_response()
             }
         }
     }
