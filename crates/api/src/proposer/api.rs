@@ -962,28 +962,25 @@ where
         let duties_read_guard = self.proposer_duties.read().await;
 
         // Ensure provided validator public key is the proposer for the requested slot.
-        match duties_read_guard.iter().find(|duty| duty.slot == election_req.slot()) {
+        let proposer_pub_key = match duties_read_guard.iter().find(|duty| duty.slot == election_req.slot()) {
             Some(slot_duty) => {
-                if &slot_duty.entry.registration.message.public_key != election_req.preconfer_public_key() {
-                    return Err(ProposerApiError::ValidatorIsNotProposerForRequestedSlot);
-                }
+                slot_duty.entry.registration.message.public_key.clone()
             }
             None => {
                 return Err(ProposerApiError::ProposerDutyNotFound {
                     slot: election_req.slot(),
                 });
             }
-        }
+        };
 
         // Drop the read lock guard to avoid holding it during signature verification
         drop(duties_read_guard);
 
         // Verify proposer signature
-        let req_proposer_public_key = election_req.preconfer_public_key().clone();
         if let Err(err) = verify_signed_builder_message(
             &mut election_req.message,
             &election_req.signature,
-            &req_proposer_public_key,
+            &proposer_pub_key,
             &self.chain_info.context,
         ) {
             return Err(ProposerApiError::InvalidSignature(err));
