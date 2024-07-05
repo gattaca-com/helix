@@ -144,7 +144,7 @@ where
             request_ts = trace.receive,
         );
 
-        let slots_for_epoch = get_remaining_slots_for_epoch(head_slot+1);
+        let slots_for_epoch = get_remaining_slots_for_current_and_next_n_epochs(head_slot+1, 1);
         let mut preconfers = vec![];
         for slot in slots_for_epoch {
             match api.auctioneer.get_elected_gateway(slot).await {
@@ -238,6 +238,21 @@ fn get_remaining_slots_for_epoch(slot: u64) -> Vec<u64> {
     remaining_slots
 }
 
+fn get_remaining_slots_for_current_and_next_n_epochs(slot: u64, n: u64) -> Vec<u64> {
+    let mut slots: Vec<u64> = get_remaining_slots_for_epoch(slot);
+
+    // Calculate the starting epoch
+    let start_epoch = slot / SLOTS_PER_EPOCH;
+    
+    // Add slots for the next n epochs
+    for epoch in start_epoch + 1..=start_epoch + n {
+        let epoch_slots: Vec<u64> = (epoch * SLOTS_PER_EPOCH..(epoch + 1) * SLOTS_PER_EPOCH).collect();
+        slots.extend(epoch_slots);
+    }
+
+    slots
+}
+
 #[cfg(test)]
 mod tests {
     use crate::constraints::api::get_remaining_slots_for_epoch;
@@ -246,5 +261,13 @@ mod tests {
         let slots = get_remaining_slots_for_epoch(5);
         println!("{:?}", slots);
         assert_eq!(slots, vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]);
+    }
+
+    use crate::constraints::api::get_remaining_slots_for_current_and_next_n_epochs;
+    #[tokio::test]
+    async fn test_get_remaining_slots_for_epochs() {
+        let slots = get_remaining_slots_for_current_and_next_n_epochs(5, 1);
+        println!("{:?}", slots);
+        assert_eq!(slots, vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63]);
     }
 }
