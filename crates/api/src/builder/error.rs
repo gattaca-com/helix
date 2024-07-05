@@ -6,8 +6,7 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Bytes32, Hash32},
     ssz::{self, prelude::*},
 };
-use helix_common::constraints::Constraint;
-use helix_common::simulator::BlockSimError;
+use helix_common::{api::constraints_api::Constraint, simulator::BlockSimError};
 use helix_datastore::error::AuctioneerError;
 
 #[derive(Debug, thiserror::Error)]

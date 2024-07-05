@@ -120,6 +120,18 @@ pub fn build_router(
                         post(ProposerApiProd::get_payload),
                     );
             }
+            Route::SetConstraints => {
+                router = router.route(
+                    &route.path(),
+                    post(ProposerApiProd::set_constraints),
+                );
+            }
+            Route::ElectPreconfer => {
+                router = router.route(
+                    &route.path(),
+                    post(ProposerApiProd::elect_preconfer),
+                );
+            }
             Route::ProposerPayloadDelivered => {
                 router = router.route(
                     &route.path(),
@@ -143,37 +155,19 @@ pub fn build_router(
                     &route.path(),
                     get(ConstraintsApiProd::get_constraints),
                 );
-            }
-            Route::SetConstraints => {
+            },
+            Route::GetPreconfer => {
                 router = router.route(
                     &route.path(),
-                    post(ConstraintsApiProd::set_constraints),
+                    get(ConstraintsApiProd::get_preconfer),
                 );
-            }
-            Route::ElectGateway => {
+            },
+            Route::GetPreconfersForEpoch => {
                 router = router.route(
                     &route.path(),
-                    post(ConstraintsApiProd::elect_gateway),
+                    get(ConstraintsApiProd::get_preconfers_for_epoch),
                 );
-            }
-            Route::GetGateway => {
-                router = router.route(
-                    &route.path(),
-                    get(ConstraintsApiProd::get_gateway),
-                );
-            }
-            Route::BoltSetConstraints => {
-                router = router.route(
-                    &route.path(),
-                    post(ConstraintsApiProd::set_constraints),
-                );
-            }
-            Route::BoltGetConstraints => {
-                router = router.route(
-                    &route.path(),
-                    get(ConstraintsApiProd::get_constraints),
-                );
-            }
+            },
             _ => {
                 panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route);
             }

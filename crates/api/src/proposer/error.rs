@@ -104,6 +104,9 @@ pub enum ProposerApiError {
     #[error("request for past slot. request slot: {request_slot}, head slot: {head_slot}")]
     RequestForPastSlot { request_slot: u64, head_slot: u64 },
 
+    #[error("preconfer election must be for current epoch + 1. request epoch: {request_epoch}, current epoch: {head_epoch}")]
+    ElectPreconferRequestForInvalidEpoch { request_epoch: u64, head_epoch: u64 },
+
     #[error("slot is too new")]
     SlotTooNew,
 
@@ -174,6 +177,30 @@ pub enum ProposerApiError {
 
     #[error("parent hash unknown for slot: {slot}")]
     ParentHashUnknownForSlot { slot: u64 },
+
+    #[error("lock poisoned")]
+    LockPoisoned,
+
+    #[error("no preconfer found for slot: {slot}")]
+    NoPreconferFoundForSlot { slot: u64 },
+
+    #[error("can only set constraints for current epoch. request slot: {request_slot}, curr slot: {curr_slot}")]
+    CanOnlySetConstraintsForCurrentEpoch { request_slot: u64, curr_slot: u64 },
+
+    #[error("set constraints sent too late. ns into slot: {ns_into_slot}, cutoff: {cutoff}")]
+    SetConstraintsTooLate { ns_into_slot: u64, cutoff: u64 },
+
+    #[error("not preconfer. request public key: {request_public_key:?}, preconfer public key: {preconfer_public_key:?}")]
+    NotPreconfer { request_public_key: BlsPublicKey, preconfer_public_key: BlsPublicKey },
+
+    #[error("validator is not proposer for requested slot")]
+    ValidatorIsNotProposerForRequestedSlot,
+
+    #[error("proposer duty not found. slot: {slot}")]
+    ProposerDutyNotFound { slot: u64 },
+
+    #[error("constraints are already set for slot {slot}")]
+    ConstraintsAlreadySet { slot: u64 },
 }
 
 impl IntoResponse for ProposerApiError {
@@ -340,6 +367,39 @@ impl IntoResponse for ProposerApiError {
             },
             ProposerApiError::ParentHashUnknownForSlot {slot} => {
                 (StatusCode::BAD_REQUEST, format!("parent hash unknown for slot: {slot}")).into_response()
+            },
+            ProposerApiError::LockPoisoned => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "lock poisoned").into_response()
+            },
+            ProposerApiError::NoPreconferFoundForSlot {slot} => {
+                (StatusCode::BAD_REQUEST, format!("no preconfer found for slot: {slot}")).into_response()
+            },
+            ProposerApiError::CanOnlySetConstraintsForCurrentEpoch{request_slot, curr_slot} => {
+                (StatusCode::BAD_REQUEST, format!("can only set constraints for current epoch. request slot: {request_slot}, curr slot: {curr_slot}")).into_response()
+            },
+            ProposerApiError::SetConstraintsTooLate{ns_into_slot, cutoff} => {
+                (StatusCode::BAD_REQUEST, format!("set constraints sent too late. ns into slot: {ns_into_slot}, cutoff: {cutoff}")).into_response()
+            },
+            ProposerApiError::NotPreconfer {request_public_key, preconfer_public_key } => {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("not preconfer. request public key: {request_public_key:?}, preconfer public key: {preconfer_public_key:?}"),
+                ).into_response()
+            },
+            ProposerApiError::ValidatorIsNotProposerForRequestedSlot => {
+                (StatusCode::BAD_REQUEST, "validator is not proposer for requested slot").into_response()
+            },
+            ProposerApiError::ProposerDutyNotFound{slot} => {
+                (StatusCode::BAD_REQUEST, format!("proposer duty not found. slot: {slot}")).into_response()
+            },
+            ProposerApiError::ElectPreconferRequestForInvalidEpoch { request_epoch, head_epoch } => {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("preconfer election must be for current epoch + 1. request epoch: {request_epoch}, current epoch: {head_epoch}"),
+                ).into_response()
+            },
+            ProposerApiError::ConstraintsAlreadySet{slot} => {
+                (StatusCode::BAD_REQUEST, format!("constraints are already set for slot {slot}")).into_response()
             },
         }
     }
