@@ -48,9 +48,7 @@ pub(crate) const MAX_VAL_REGISTRATIONS_LENGTH: usize = 425 * 10_000; // 425 byte
 #[derive(Clone, Default)]
 struct SlotInfo {
     pub slot: u64,
-    pub next_elected_preconfer: Option<SignedPreconferElection>,
     pub slot_duty: Option<BuilderGetValidatorsResponseEntry>,
-    pub constraints_set: bool,
 }
 
 
@@ -104,7 +102,7 @@ where
             broadcasters,
             multi_beacon_client,
             curr_slot_info: Arc::new(RwLock::new(
-                SlotInfo { slot: 0, next_elected_preconfer: None, slot_duty: None, constraints_set: false},
+                SlotInfo { slot: 0, slot_duty: None},
             )),
             proposer_duties: Arc::new(Default::default()),
             chain_info,
@@ -810,11 +808,22 @@ where
             num_constraints = %constraints.constraints().len(),
         );
 
-        let elected_preconfer = match proposer_api.auctioneer.get_elected_gateway(constraints.slot()).await? {
-            Some(preconfer) => preconfer,
-            None => {
-                warn!(request_id = %request_id, slot = constraints.slot(), "no elected preconfer found for slot");
-                return Err(ProposerApiError::NoPreconferFoundForSlot { slot: constraints.slot() });
+        // Fetch elected preconfer for the constraints slot
+        let elected_preconfer = match proposer_api.auctioneer.get_elected_gateway(constraints.slot()).await {
+            Ok(Some(elected_gateway)) => elected_gateway,
+            _ => {
+                match proposer_api.proposer_duties
+                    .read()
+                    .await
+                    .iter()
+                    .find(|duty| duty.slot == constraints.slot())
+                    .map(|duty| SignedPreconferElection::from_proposer_duty(duty, proposer_api.chain_info.context.deposit_chain_id as u64)) {
+                        Some(elected_preconfer) => elected_preconfer,
+                        None => {
+                            warn!(request_id = %request_id, slot = constraints.slot(), "no elected preconfer found for slot");
+                            return Err(ProposerApiError::NoPreconferFoundForSlot { slot: constraints.slot() });
+                        }
+                    }
             }
         };
 
@@ -1425,31 +1434,15 @@ where
             "Updated head slot",
         );
 
-        let next_slot = slot_update.slot + 1;
-
+        
         // Update duties if applicable
         if let Some(new_duties) = slot_update.new_duties {
             *self.proposer_duties.write().await = new_duties;
         }
 
-        // Fetch elected gateway for the current slot
-        let elected_preconfer = match self.auctioneer.get_elected_gateway(next_slot).await {
-            Ok(Some(elected_gateway)) => Some(elected_gateway),
-            _ => {
-                self.proposer_duties
-                    .read()
-                    .await
-                    .iter()
-                    .find(|duty| duty.slot == next_slot)
-                    .map(|duty| SignedPreconferElection::from_proposer_duty(duty, self.chain_info.context.deposit_chain_id as u64))
-            }
-        };
-
         *self.curr_slot_info.write().await = SlotInfo {
             slot: slot_update.slot,
             slot_duty: slot_update.next_duty,
-            next_elected_preconfer: elected_preconfer,
-            constraints_set: false,
         };
     }
 }
