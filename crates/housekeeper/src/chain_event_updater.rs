@@ -5,14 +5,13 @@ use std::{
 use std::collections::HashMap;
 
 use ethereum_consensus::{
-    configs::{goerli::CAPELLA_FORK_EPOCH, mainnet::SECONDS_PER_SLOT},
-    primitives::Bytes32,
+    configs::{goerli::CAPELLA_FORK_EPOCH, mainnet::SECONDS_PER_SLOT}, deneb::Withdrawal, primitives::Bytes32
 };
 use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info, warn};
 
 use helix_beacon_client::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
-use helix_common::{api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo};
+use helix_common::{api::builder_api::BuilderGetValidatorsResponseEntry, bellatrix::{List, Merkleized, Node}, chain_info::ChainInfo};
 use helix_database::DatabaseService;
 use helix_utils::{calculate_withdrawals_root, get_payload_attributes_key, has_reached_fork};
 
@@ -24,7 +23,7 @@ const MAX_DISTANCE_FOR_FUTURE_SLOT: u64 = 60;
 pub struct PayloadAttributesUpdate {
     pub slot: u64,
     pub parent_hash: Bytes32,
-    pub withdrawals_root: Option<[u8; 32]>,
+    pub withdrawals_root: Option<Node>,
     pub payload_attributes: PayloadAttributes,
 }
 
@@ -203,8 +202,8 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
 
         let mut withdrawals_root = None;
         if has_reached_fork(event.data.proposal_slot, CAPELLA_FORK_EPOCH) {
-            withdrawals_root =
-                Some(calculate_withdrawals_root(&event.data.payload_attributes.withdrawals));
+            let mut withdrawals_list : List<Withdrawal, 16> = event.data.payload_attributes.withdrawals.clone().try_into().unwrap();
+            withdrawals_root = withdrawals_list.hash_tree_root().ok();
         }
 
         let update = ChainUpdate::PayloadAttributesUpdate(PayloadAttributesUpdate {

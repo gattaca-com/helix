@@ -1,8 +1,5 @@
 use std::{
-    collections::HashMap,
-    io::Read,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    collections::HashMap, io::Read, ops::Deref, sync::Arc, time::{Duration, SystemTime, UNIX_EPOCH}
 };
 
 use axum::{
@@ -1922,23 +1919,42 @@ fn sanity_check_block_submission(
         });
     }
 
-    if has_reached_fork(payload.slot(), CAPELLA_FORK_EPOCH) && payload.is_full_payload() {
-        let payload_withdrawals = match payload.withdrawals() {
-            Some(w) => w,
-            None => return Err(BuilderApiError::MissingWithdrawls),
-        };
+    if has_reached_fork(payload.slot(), CAPELLA_FORK_EPOCH) {
 
-        let withdrawals_root = calculate_withdrawals_root(payload_withdrawals);
-        let expected_withdrawals_root = match payload_attributes.withdrawals_root {
-            Some(wr) => wr,
-            None => return Err(BuilderApiError::MissingWithdrawls),
-        };
+        if payload.is_full_payload() {
+            let withdrawals_root = match payload.withdrawals_root() {
+                Some(w) => w,
+                None => return Err(BuilderApiError::MissingWithdrawls),
+            };
 
-        if withdrawals_root != expected_withdrawals_root {
-            return Err(BuilderApiError::WithdrawalsRootMismatch {
-                got: withdrawals_root,
-                expected: expected_withdrawals_root,
-            });
+            let expected_withdrawals_root = match payload_attributes.withdrawals_root {
+                Some(wr) => wr,
+                None => return Err(BuilderApiError::MissingWithdrawls),
+            };
+    
+            if withdrawals_root != expected_withdrawals_root {
+                return Err(BuilderApiError::WithdrawalsRootMismatch {
+                    got: Hash32::try_from(withdrawals_root.as_ref()).unwrap(),
+                    expected: Hash32::try_from(expected_withdrawals_root.as_ref()).unwrap(),
+                });
+            }
+        } else {
+            let expected_withdrawals_root = match payload_attributes.withdrawals_root {
+                Some(wr) => wr,
+                None => return Err(BuilderApiError::MissingWithdrawlsRoot),
+            };
+
+            let payload_withdrawals_root = match payload.withdrawals_root() {
+                Some(wr) => wr,
+                None => return Err(BuilderApiError::MissingWithdrawlsRoot),
+            };
+
+            if payload_withdrawals_root != expected_withdrawals_root {
+                return Err(BuilderApiError::WithdrawalsRootMismatch {
+                    got: Hash32::try_from(payload_withdrawals_root.as_ref()).unwrap(),
+                    expected: Hash32::try_from(expected_withdrawals_root.as_ref()).unwrap(),
+                });
+            }
         }
     }
 
