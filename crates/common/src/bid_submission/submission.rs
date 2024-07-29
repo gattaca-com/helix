@@ -183,6 +183,26 @@ impl BidSubmission for SignedBidSubmission {
         }
     }
 
+    fn withdrawals_root(&self) -> Option<Node> {
+        match &self.execution_payload() {
+            ExecutionPayload::Bellatrix(_) => None,
+            ExecutionPayload::Capella(payload) => {
+                let mut withdrawals = payload.withdrawals.clone();
+                match withdrawals.hash_tree_root() {
+                    Ok(root) => Some(root),
+                    Err(_) => None,
+                }
+            },
+            ExecutionPayload::Deneb(payload) => {
+                let mut withdrawals = payload.withdrawals.clone();
+                match withdrawals.hash_tree_root() {
+                    Ok(root) => Some(root),
+                    Err(_) => None,
+                }
+            },
+        }
+    }
+
     fn consensus_version(&self) -> Fork {
         match self {
             SignedBidSubmission::Deneb(_) => Fork::Deneb,

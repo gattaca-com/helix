@@ -266,6 +266,17 @@ impl BidSubmission for SignedHeaderSubmission {
         None
     }
 
+    fn withdrawals_root(&self) -> Option<Node> {
+        match self {
+            Self::Capella(signed_header_submission) => {
+                Some(signed_header_submission.message.execution_payload_header.withdrawals_root)
+            }
+            Self::Deneb(signed_header_submission) => {
+                Some(signed_header_submission.message.execution_payload_header().withdrawals_root)
+            }
+        }
+    }
+
     fn consensus_version(&self) -> Fork {
         match self {
             Self::Capella(_) => Fork::Capella,

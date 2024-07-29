@@ -15,13 +15,7 @@ mod tests {
     use tokio_tungstenite::{connect_async, tungstenite::{self, Message}};
     use core::panic;
     use ethereum_consensus::{
-        builder::{SignedValidatorRegistration, ValidatorRegistration},
-        configs::mainnet::CAPELLA_FORK_EPOCH,
-        phase0::mainnet::SLOTS_PER_EPOCH,
-        primitives::{BlsPublicKey, BlsSignature},
-        ssz::{self, prelude::*},
-        types::mainnet::{ExecutionPayload, ExecutionPayloadHeader},
-        Fork,
+        builder::{SignedValidatorRegistration, ValidatorRegistration}, configs::mainnet::CAPELLA_FORK_EPOCH, deneb::{Transaction, Withdrawal}, phase0::mainnet::SLOTS_PER_EPOCH, primitives::{BlsPublicKey, BlsSignature}, ssz::{self, prelude::*}, types::mainnet::{ExecutionPayload, ExecutionPayloadHeader}, Fork
     };
     use futures::{stream::FuturesOrdered, Future, SinkExt, StreamExt};
     use helix_beacon_client::types::PayloadAttributes;
@@ -39,14 +33,14 @@ mod tests {
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-    use helix_utils::request_encoding::Encoding;
+    use helix_utils::{calculate_withdrawals_root, request_encoding::Encoding};
     use rand::Rng;
     use reqwest::{Client, Response};
     use reth_primitives::hex;
     use serde_json::json;
     use serial_test::serial;
     use std::{
-        convert::Infallible, future::pending, io::Write, net::IpAddr, pin::Pin, str::FromStr, sync::Arc, time::Duration
+        convert::Infallible, future::pending, io::Write, net::IpAddr, ops::Deref, pin::Pin, str::FromStr, sync::Arc, time::Duration
     };
     use tokio::sync::{
         mpsc::{Receiver, Sender},
@@ -172,9 +166,7 @@ mod tests {
             parent_hash: get_byte_vector_32_for_hex(
                 "0xbd3291854dc822b7ec585925cda0e18f06af28fa2886e15f52d52dd4b6f94ed6",
             ),
-            withdrawals_root: Some(hex_to_byte_arr_32(
-                "0xb15ed76298ff84a586b1d875df08b6676c98dfe9c7cd73fab88450348d8e70c8",
-            )),
+            withdrawals_root: None,
             payload_attributes: get_dummy_payload_attributes(),
         }
     }
@@ -1375,6 +1367,44 @@ mod tests {
 
         let _ = tx.send(());
 
+    }
+
+    #[tokio::test]
+    async fn test_calculate_withdrawals_root() {
+
+        let json_str = r#"
+        [
+            {"index": "53516667", "validator_index": "226593", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18829431"},
+            {"index": "53516668", "validator_index": "226594", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18895995"},
+            {"index": "53516669", "validator_index": "226595", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18921948"},
+            {"index": "53516670", "validator_index": "226596", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18879996"},
+            {"index": "53516671", "validator_index": "226597", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18862058"},
+            {"index": "53516672", "validator_index": "226598", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18877682"},
+            {"index": "53516673", "validator_index": "226599", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18876362"},
+            {"index": "53516674", "validator_index": "226600", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18905370"},
+            {"index": "53516675", "validator_index": "226601", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18911572"},
+            {"index": "53516676", "validator_index": "226602", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18908681"},
+            {"index": "53516677", "validator_index": "226603", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18904531"},
+            {"index": "53516678", "validator_index": "226604", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18829228"},
+            {"index": "53516679", "validator_index": "226605", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18883181"},
+            {"index": "53516680", "validator_index": "226606", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "63784192"},
+            {"index": "53516681", "validator_index": "226607", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18875686"},
+            {"index": "53516682", "validator_index": "226608", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18924753"}
+        ]
+    "#;
+
+        let withdrawals: Vec<Withdrawal> = serde_json::from_str(json_str).unwrap();
+
+        let withdrawals_root = calculate_withdrawals_root(&withdrawals);
+
+        // calculate_withdrawals_root use MPT to calculate the root
+        assert_eq!(hex::encode(withdrawals_root), "25068b16d9a849006edff1fbe9bf96799ef524f0ba87199559d1f714719a8202");
+
+        let mut wlist : List<Withdrawal, 16> = withdrawals.try_into().unwrap();
+        let root = wlist.hash_tree_root().unwrap();
+
+        // hash_tree_root use SSZ to calculate the root
+        assert_eq!(hex::encode(root.deref()),"c4726ded906a1d6775eec5e83fa867cffb9f77c6da58b3ceb2e412df971b07f1");
     }
 
 }

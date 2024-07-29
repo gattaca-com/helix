@@ -58,6 +58,8 @@ pub trait BidSubmission {
 
     fn withdrawals(&self) -> Option<&[Withdrawal]>;
 
+    fn withdrawals_root(&self) -> Option<Node>;
+
     fn consensus_version(&self) -> Fork;
 
     /// True if full submission payload, false if not (e.g. Optimistic V2)

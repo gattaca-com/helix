@@ -74,8 +74,14 @@ pub enum BuilderApiError {
     #[error("missing withdrawls")]
     MissingWithdrawls,
 
+    #[error("invalid withdrawls root")]
+    InvalidWithdrawlsRoot,
+
+    #[error("missing withdrawls root")]
+    MissingWithdrawlsRoot,
+
     #[error("withdrawls root mismatch. got: {got:?}, expected: {expected:?}")]
-    WithdrawalsRootMismatch { got: [u8; 32], expected: [u8; 32] },
+    WithdrawalsRootMismatch { got: Hash32, expected: Hash32 },
 
     #[error("signature verification failed")]
     SignatureVerificationFailed,
@@ -218,6 +224,12 @@ impl IntoResponse for BuilderApiError {
             },
             BuilderApiError::MissingWithdrawls => {
                 (StatusCode::BAD_REQUEST, "missing withdrawals").into_response()
+            },
+            BuilderApiError::InvalidWithdrawlsRoot => {
+                (StatusCode::BAD_REQUEST, "invalid withdrawals root").into_response()
+            },
+            BuilderApiError::MissingWithdrawlsRoot => {
+                (StatusCode::BAD_REQUEST, "missing withdrawals root").into_response()
             },
             BuilderApiError::WithdrawalsRootMismatch { got, expected } => {
                 (StatusCode::BAD_REQUEST, format!("Withdrawals root mismatch. got: {got:?}, expected: {expected:?}")).into_response()
