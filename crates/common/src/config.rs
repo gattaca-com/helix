@@ -1,9 +1,11 @@
-use crate::{api::*, ValidatorPreferences};
+use std::{collections::HashSet, fs::File};
+
 use clap::Parser;
 use ethereum_consensus::ssz::prelude::Node;
 use helix_utils::request_encoding::Encoding;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, fs::File};
+
+use crate::{api::*, ValidatorPreferences};
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RelayConfig {
@@ -22,6 +24,7 @@ pub struct RelayConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub validator_preferences: ValidatorPreferences,
+    #[serde(default)]
     pub router_config: RouterConfig,
     #[serde(default = "default_duration")]
     pub target_get_payload_propagation_duration_ms: u64,
@@ -44,7 +47,9 @@ pub struct PostgresConfig {
     pub db_name: String,
     pub user: String,
     pub password: String,
+    #[serde(default)]
     pub region: i16,
+    #[serde(default)]
     pub region_name: String,
 }
 
@@ -122,47 +127,46 @@ pub struct RouterConfig {
 }
 
 impl RouterConfig {
-
     // Function to resolve condensed variants and replace them with real routes
     pub fn resolve_condensed_routes(&mut self) {
-        if self.contains(Route::All) {
-            // If All is present, replace it with all real routes
-            self.remove(&Route::All);
-            self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi, Route::ConstraintsApi]);
+        if self.enabled_routes.is_empty() {
+            // If no routes are enabled, enable all real routes
+            self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi]);
+        } else {
+            if self.contains(Route::All) {
+                // If All is present, replace it with all real routes
+                self.remove(&Route::All);
+                self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi]);
+            }
         }
 
         // Replace BuilderApi, ProposerApi, DataApi with their real routes
-        self.replace_condensed_with_real(
-            Route::BuilderApi,
-            &[
-                Route::GetValidators,
-                Route::SubmitBlock,
-                Route::SubmitBlockOptimistic,
-                Route::SubmitHeader,
-                Route::GetTopBid,
-                Route::SetConstraints,
-                Route::ElectPreconfer,
-            ],
-        );
+        self.replace_condensed_with_real(Route::BuilderApi, &[
+            Route::GetValidators,
+            Route::SubmitBlock,
+            Route::SubmitBlockOptimistic,
+            Route::SubmitHeader,
+            Route::GetTopBid,
+            Route::SetConstraints,
+            Route::ElectPreconfer,
+        ]);
 
-        self.replace_condensed_with_real(
-            Route::ProposerApi,
-            &[Route::Status, Route::RegisterValidators, Route::GetHeader, Route::GetPayload, Route::SetConstraints, Route::ElectPreconfer],
-        );
+        self.replace_condensed_with_real(Route::ProposerApi, &[
+            Route::Status,
+            Route::RegisterValidators,
+            Route::GetHeader,
+            Route::GetPayload,
+            Route::SetConstraints,
+            Route::ElectPreconfer,
+        ]);
 
-        self.replace_condensed_with_real(
-            Route::DataApi,
-            &[
-                Route::ProposerPayloadDelivered,
-                Route::BuilderBidsReceived,
-                Route::ValidatorRegistration,
-            ],
-        );
+        self.replace_condensed_with_real(Route::DataApi, &[
+            Route::ProposerPayloadDelivered,
+            Route::BuilderBidsReceived,
+            Route::ValidatorRegistration,
+        ]);
 
-        self.replace_condensed_with_real(
-            Route::ConstraintsApi,
-            &[Route::GetConstraints, Route::GetPreconfer, Route::GetPreconfersForEpoch],
-        );
+        self.replace_condensed_with_real(Route::ConstraintsApi, &[Route::GetConstraints, Route::GetPreconfer, Route::GetPreconfersForEpoch]);
     }
 
     fn contains(&self, route: Route) -> bool {
@@ -188,7 +192,6 @@ impl RouterConfig {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteInfo {
@@ -261,7 +264,6 @@ impl Route {
             Route::ConstraintsApi => panic!("ConstraintsApi is not a real route"),
         }
     }
-    
 }
 
 fn default_duration() -> u64 {
@@ -277,13 +279,10 @@ fn test_config() {
     config.redis.url = "redis://localhost:6379".to_string();
     config.simulator.url = "http://localhost:8080".to_string();
     config.beacon_clients.push(BeaconClientConfig { url: "http://localhost:8080".to_string() });
-    config.broadcasters.push(BroadcasterConfig::BeaconClient(BeaconClientConfig {
-        url: "http://localhost:8080".to_string(),
-    }));
+    config.broadcasters.push(BroadcasterConfig::BeaconClient(BeaconClientConfig { url: "http://localhost:8080".to_string() }));
     config.network_config = NetworkConfig::Custom { dir_path: "test".to_string(), genesis_validator_root: Default::default(), genesis_time: 1 };
-    config.logging =
-        LoggingConfig::File { dir_path: "hello".to_string(), file_name: "test".to_string() };
-    config.validator_preferences = ValidatorPreferences { filtering: Filtering::Regional, trusted_builders: None, header_delay: true};
+    config.logging = LoggingConfig::File { dir_path: "hello".to_string(), file_name: "test".to_string() };
+    config.validator_preferences = ValidatorPreferences { filtering: Filtering::Regional, trusted_builders: None, header_delay: true };
     config.router_config = RouterConfig {
         enabled_routes: vec![
             RouteInfo { route: Route::GetValidators, rate_limit: None },
