@@ -22,6 +22,7 @@ pub struct RelayConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub validator_preferences: ValidatorPreferences,
+    #[serde(default)]
     pub router_config: RouterConfig,
     #[serde(default = "default_duration")]
     pub target_get_payload_propagation_duration_ms: u64,
@@ -44,7 +45,9 @@ pub struct PostgresConfig {
     pub db_name: String,
     pub user: String,
     pub password: String,
+    #[serde(default)]
     pub region: i16,
+    #[serde(default)]
     pub region_name: String,
 }
 
@@ -125,10 +128,16 @@ impl RouterConfig {
 
     // Function to resolve condensed variants and replace them with real routes
     pub fn resolve_condensed_routes(&mut self) {
-        if self.contains(Route::All) {
-            // If All is present, replace it with all real routes
-            self.remove(&Route::All);
+
+        if self.enabled_routes.is_empty() {
+            // If no routes are enabled, enable all real routes
             self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi]);
+        } else {
+            if self.contains(Route::All) {
+                // If All is present, replace it with all real routes
+                self.remove(&Route::All);
+                self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi]);
+            }   
         }
 
         // Replace BuilderApi, ProposerApi, DataApi with their real routes
