@@ -1,0 +1,23 @@
+postgres:
+  hostname: "localhost"
+  port: 5432
+  db_name: "postgres"
+  user: "postgres"
+  password: "postgres"
+
+redis:
+  url: "redis://localhost:6379"
+
+broadcasters: 
+  - !BeaconClient
+    url: "http://127.0.0.1:<beacon_port>"
+
+beacon_clients:
+  - url: "http://127.0.0.1:<beacon_port>"
+
+network_config: "Holesky"
+
+simulator: 
+  url: "http://127.0.0.1:<rpc_port>"
+
+logging: "Console"

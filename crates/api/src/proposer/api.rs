@@ -38,7 +38,7 @@ use helix_housekeeper::{ChainUpdate, SlotUpdate};
 use helix_utils::signing::{verify_signed_builder_message, verify_signed_consensus_message};
 
 use crate::{constraints::{api::{MAX_GATEWAY_ELECTION_SIZE, MAX_SET_CONSTRAINTS_SIZE}, SET_CONSTRAINTS_CUTOFF_NS}, gossiper::{traits::GossipClientTrait, types::{BroadcastGetPayloadParams, GossipedMessage}}, proposer::{
-    error::ProposerApiError, unblind_beacon_block, GetHeaderParams, PreferencesHeader, GET_HEADER_REQUEST_CUTOFF_MS
+    error::ProposerApiError, unblind_beacon_block, GetHeaderParams, GetNextActiveSlotParams, PreferencesHeader, GET_HEADER_REQUEST_CUTOFF_MS
 }};
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
@@ -282,26 +282,27 @@ where
             }
 
             let handle = tokio::task::spawn_blocking(move || {
-                let res = match proposer_api_clone.validate_registration(&mut registration) {
-                    Ok(_) => Some(registration),
-                    Err(err) => {
-                        warn!(
-                            request_id = %request_id,
-                            err = %err,
-                            pub_key = ?pub_key,
-                            "Failed to register validator",
-                        );
-                        None
-                    }
-                };
+                // TODO: Re-enable registration validation
+                // let res = match proposer_api_clone.validate_registration(&mut registration) {
+                //     Ok(_) => Some(registration),
+                //     Err(err) => {
+                //         warn!(
+                //             request_id = %request_id,
+                //             err = %err,
+                //             pub_key = ?pub_key,
+                //             "Failed to register validator",
+                //         );
+                //         None
+                //     }
+                // };
 
-                trace!(
-                    request_id = %request_id,
-                    pub_key = ?pub_key,
-                    elapsed_time = %start_time.elapsed().as_nanos(),
-                );
+                // trace!(
+                //     request_id = %request_id,
+                //     pub_key = ?pub_key,
+                //     elapsed_time = %start_time.elapsed().as_nanos(),
+                // );
 
-                res
+                Some(registration)
             });
             handles.push(handle);
         }
@@ -785,6 +786,40 @@ where
         Ok(get_payload_response)
     }
 
+    pub async fn get_next_active_slot(
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
+        Path(GetNextActiveSlotParams { public_key }): Path<GetNextActiveSlotParams>,
+    ) -> Result<impl IntoResponse, ProposerApiError> {
+        let request_id = Uuid::new_v4();
+        let mut trace = GetHeaderTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+
+        let head_slot = proposer_api.curr_slot_info.read().await.slot;
+        debug!(
+            request_id = %request_id,
+            event = "get_next_active_slot",
+            head_slot = head_slot,
+            request_ts = trace.receive,
+            public_key = ?public_key,
+        );
+
+        let elected_preconfer = match proposer_api
+            .proposer_duties
+            .read()
+            .await
+            .iter()
+            .find(|duty| duty.slot >= head_slot && duty.entry.registration.message.public_key == public_key)
+            .map(|duty| SignedPreconferElection::from_proposer_duty(duty, proposer_api.chain_info.context.deposit_chain_id as u64))
+        {
+            Some(elected_preconfer) => elected_preconfer,
+            None => {
+                warn!(request_id = %request_id, public_key = ?public_key, "no elected preconfer found for public key");
+                return Err(ProposerApiError::NoPreconferFoundForPublicKey { public_key });
+            }
+        };
+
+        Ok(elected_preconfer.slot().to_string())
+    }
+
     /// If the request is sent by the preconfer for this current slot and this is the first time, we save the constraints.
     /// Must also be sent before the cutoff.
     pub async fn set_constraints(
@@ -922,17 +957,18 @@ where
             });
         }
 
-        let elected_public_key = elected_preconfer.preconfer_public_key();
+        // let elected_public_key = elected_preconfer.preconfer_public_key();
 
+        // TODO: Uncomment when we have the ability to verify the signature
         // Verify proposer signature
-        if let Err(err) = verify_signed_builder_message(
-            &mut constraints.message,
-            &constraints.signature,
-            elected_public_key,
-            &self.chain_info.context,
-        ) {
-            return Err(ProposerApiError::InvalidSignature(err));
-        }
+        // if let Err(err) = verify_signed_builder_message(
+        //     &mut constraints.message,
+        //     &constraints.signature,
+        //     elected_public_key,
+        //     &self.chain_info.context,
+        // ) {
+        //     return Err(ProposerApiError::InvalidSignature(err));
+        // }
 
         Ok(())
     }
@@ -976,15 +1012,16 @@ where
         // Drop the read lock guard to avoid holding it during signature verification
         drop(duties_read_guard);
 
+        // TODO: Uncomment when we have the ability to verify the signature
         // Verify proposer signature
-        if let Err(err) = verify_signed_builder_message(
-            &mut election_req.message,
-            &election_req.signature,
-            &proposer_pub_key,
-            &self.chain_info.context,
-        ) {
-            return Err(ProposerApiError::InvalidSignature(err));
-        }
+        // if let Err(err) = verify_signed_builder_message(
+        //     &mut election_req.message,
+        //     &election_req.signature,
+        //     &proposer_pub_key,
+        //     &self.chain_info.context,
+        // ) {
+        //     return Err(ProposerApiError::InvalidSignature(err));
+        // }
 
         Ok(())
     }

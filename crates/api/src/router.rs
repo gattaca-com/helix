@@ -132,6 +132,12 @@ pub fn build_router(
                     post(ProposerApiProd::elect_preconfer),
                 );
             }
+            Route::GetNextActiveSlot => {
+                router = router.route(
+                    &route.path(), 
+                    get(ProposerApiProd::get_next_active_slot)
+                );
+            }
             Route::ProposerPayloadDelivered => {
                 router = router.route(
                     &route.path(),
