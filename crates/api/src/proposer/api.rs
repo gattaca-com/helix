@@ -282,27 +282,26 @@ where
             }
 
             let handle = tokio::task::spawn_blocking(move || {
-                // TODO: Re-enable registration validation
-                // let res = match proposer_api_clone.validate_registration(&mut registration) {
-                //     Ok(_) => Some(registration),
-                //     Err(err) => {
-                //         warn!(
-                //             request_id = %request_id,
-                //             err = %err,
-                //             pub_key = ?pub_key,
-                //             "Failed to register validator",
-                //         );
-                //         None
-                //     }
-                // };
+                let res = match proposer_api_clone.validate_registration(&mut registration) {
+                    Ok(_) => Some(registration),
+                    Err(err) => {
+                        warn!(
+                            request_id = %request_id,
+                            err = %err,
+                            pub_key = ?pub_key,
+                            "Failed to register validator",
+                        );
+                        None
+                    }
+                };
 
-                // trace!(
-                //     request_id = %request_id,
-                //     pub_key = ?pub_key,
-                //     elapsed_time = %start_time.elapsed().as_nanos(),
-                // );
+                trace!(
+                    request_id = %request_id,
+                    pub_key = ?pub_key,
+                    elapsed_time = %start_time.elapsed().as_nanos(),
+                );
 
-                Some(registration)
+                res
             });
             handles.push(handle);
         }
@@ -957,18 +956,17 @@ where
             });
         }
 
-        // let elected_public_key = elected_preconfer.preconfer_public_key();
+        let elected_public_key = elected_preconfer.preconfer_public_key();
 
-        // TODO: Uncomment when we have the ability to verify the signature
         // Verify proposer signature
-        // if let Err(err) = verify_signed_builder_message(
-        //     &mut constraints.message,
-        //     &constraints.signature,
-        //     elected_public_key,
-        //     &self.chain_info.context,
-        // ) {
-        //     return Err(ProposerApiError::InvalidSignature(err));
-        // }
+        if let Err(err) = verify_signed_builder_message(
+            &mut constraints.message,
+            &constraints.signature,
+            elected_public_key,
+            &self.chain_info.context,
+        ) {
+            return Err(ProposerApiError::InvalidSignature(err));
+        }
 
         Ok(())
     }
@@ -1012,16 +1010,15 @@ where
         // Drop the read lock guard to avoid holding it during signature verification
         drop(duties_read_guard);
 
-        // TODO: Uncomment when we have the ability to verify the signature
         // Verify proposer signature
-        // if let Err(err) = verify_signed_builder_message(
-        //     &mut election_req.message,
-        //     &election_req.signature,
-        //     &proposer_pub_key,
-        //     &self.chain_info.context,
-        // ) {
-        //     return Err(ProposerApiError::InvalidSignature(err));
-        // }
+        if let Err(err) = verify_signed_builder_message(
+            &mut election_req.message,
+            &election_req.signature,
+            &proposer_pub_key,
+            &self.chain_info.context,
+        ) {
+            return Err(ProposerApiError::InvalidSignature(err));
+        }
 
         Ok(())
     }
