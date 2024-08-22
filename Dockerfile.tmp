@@ -1,0 +1,36 @@
+# Use an official Rust image as the base image
+FROM rust:1.76.0 as builder
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Copy the Rust toolchain files and source code into the container
+COPY . .
+
+# Build your application in release mode
+RUN cargo build --release
+
+# Use Ubuntu as the runtime base image
+FROM ubuntu:latest as runtime
+
+# Set the working directory to /app
+WORKDIR /app
+
+# Install necessary packages
+RUN apt-get update && apt-get install -y \
+  openssl \
+  ca-certificates \
+  libssl3 \
+  libssl-dev \
+  && rm -rf /var/lib/apt/lists/*
+
+ENV RELAY_KEY="0x16f3bec1b7f4f1b87c5e1930f944a6dda76ad211a89bc98e8c8e88b5069f8a04"
+
+# Copy the binary from the builder stage to the runtime stage
+COPY --from=builder /app/target/release/helix-cmd /usr/local/bin
+
+# Copy the configuration file into the container
+COPY config.yml /app/config.yml
+
+# Set the entrypoint for the container
+ENTRYPOINT ["/usr/local/bin/helix-cmd"]
