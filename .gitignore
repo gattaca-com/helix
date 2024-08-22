@@ -39,3 +39,5 @@ db-tools/
 
 # Coverage report
 lcov.info
+
+psql_data

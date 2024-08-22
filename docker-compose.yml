@@ -13,7 +13,7 @@ services:
     build: .
     restart: always
     volumes:
-      - 'psql_data:/var/lib/postgresql/data'
+      - './psql_data:/var/lib/postgresql/data'
     ports:
       - '5432:5432'
     environment:
