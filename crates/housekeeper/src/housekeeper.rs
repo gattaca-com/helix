@@ -430,17 +430,23 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         proposer_duties: Vec<ProposerDuty>,
         mut signed_validator_registrations: HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>,
     ) -> Result<usize, DatabaseError> {
+        let mut unique_public_keys = HashSet::new();
         let mut formatted_proposer_duties: Vec<BuilderGetValidatorsResponseEntry> =
             Vec::with_capacity(proposer_duties.len());
 
         for duty in proposer_duties {
-            if let Some(reg) = signed_validator_registrations.remove(&duty.public_key) {
+            if let Some(reg) = signed_validator_registrations.get(&duty.public_key) {
                 formatted_proposer_duties.push(BuilderGetValidatorsResponseEntry {
                     slot: duty.slot,
                     validator_index: duty.validator_index,
-                    entry: reg.registration_info,
+                    entry: reg.registration_info.clone(),
                 });
+                unique_public_keys.insert(duty.public_key);
             }
+        }
+
+        for public_key in unique_public_keys {
+          signed_validator_registrations.remove(&public_key);
         }
 
         let num_duties = formatted_proposer_duties.len();

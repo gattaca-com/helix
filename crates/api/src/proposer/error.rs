@@ -184,8 +184,8 @@ pub enum ProposerApiError {
     #[error("no preconfer found for slot: {slot}")]
     NoPreconferFoundForSlot { slot: u64 },
 
-    #[error("no preconfer found for public_key: {public_key:?}")]
-    NoPreconferFoundForPublicKey { public_key: BlsPublicKey },
+    #[error("no preconfer found for public_key: {public_key:?} for the current epoch {current_epoch}")]
+    NoPreconferFoundForPublicKey { public_key: BlsPublicKey, current_epoch: u64 },
 
     #[error("can only set constraints for current epoch. request slot: {request_slot}, curr slot: {curr_slot}")]
     CanOnlySetConstraintsForCurrentEpoch { request_slot: u64, curr_slot: u64 },
@@ -329,8 +329,8 @@ impl IntoResponse for ProposerApiError {
             ProposerApiError::BlindedBlockAndPayloadHeaderMismatch => {
                 (StatusCode::BAD_REQUEST, "Blinded block header hash does not match payload header hash").into_response()
             },
-            ProposerApiError::NoPreconferFoundForPublicKey { public_key } => {
-                (StatusCode::BAD_REQUEST, format!("no preconfer found for public_key: {public_key:?}")).into_response()
+            ProposerApiError::NoPreconferFoundForPublicKey { public_key, current_epoch } => {
+                (StatusCode::BAD_REQUEST, format!("no preconfer found for public_key: {public_key:?} for the current epoch {current_epoch}")).into_response()
             },
             ProposerApiError::UnsupportedBeaconChainVersion => {
                 (StatusCode::BAD_REQUEST, "unsupported beacon chain version").into_response()

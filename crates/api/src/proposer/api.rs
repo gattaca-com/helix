@@ -801,18 +801,24 @@ where
             public_key = ?public_key,
         );
 
+        let current_epoch = (head_slot+1) / SLOTS_PER_EPOCH;
+
         let elected_preconfer = match proposer_api
             .proposer_duties
             .read()
             .await
             .iter()
-            .find(|duty| duty.slot >= head_slot && duty.entry.registration.message.public_key == public_key)
+            .filter(|duty| {
+              let slot_epoch = duty.slot / SLOTS_PER_EPOCH;
+              duty.slot > head_slot + 1 && slot_epoch == current_epoch
+            })
+            .find(|duty| duty.entry.registration.message.public_key == public_key)
             .map(|duty| SignedPreconferElection::from_proposer_duty(duty, proposer_api.chain_info.context.deposit_chain_id as u64))
         {
             Some(elected_preconfer) => elected_preconfer,
             None => {
-                warn!(request_id = %request_id, public_key = ?public_key, "no elected preconfer found for public key");
-                return Err(ProposerApiError::NoPreconferFoundForPublicKey { public_key });
+                warn!(request_id = %request_id, public_key = ?public_key, current_epoch = current_epoch, "no elected preconfer found for public key for the current epoch");
+                return Err(ProposerApiError::NoPreconferFoundForPublicKey { public_key, current_epoch });
             }
         };
 
