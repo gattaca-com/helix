@@ -164,7 +164,7 @@ impl GrpcGossiperClientManager {
     pub async fn start_server(&self, builder_api_sender: Sender<GossipedMessage>, proposer_api_sender: Sender<GossipedMessage>) {
         let service = GrpcGossiperService { builder_api_sender, proposer_api_sender };
 
-        let addr = "0.0.0.0:50055".parse().unwrap();
+        let addr = "0.0.0.0:50051".parse().unwrap();
         tokio::spawn(async move {
             tonic::transport::Server::builder()
                 .add_service(GossipServiceServer::new(service))
