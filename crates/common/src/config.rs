@@ -131,12 +131,12 @@ impl RouterConfig {
     pub fn resolve_condensed_routes(&mut self) {
         if self.enabled_routes.is_empty() {
             // If no routes are enabled, enable all real routes
-            self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi]);
+            self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi, Route::ConstraintsApi]);
         } else {
             if self.contains(Route::All) {
                 // If All is present, replace it with all real routes
                 self.remove(&Route::All);
-                self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi]);
+                self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi, Route::ConstraintsApi]);
             }
         }
 
