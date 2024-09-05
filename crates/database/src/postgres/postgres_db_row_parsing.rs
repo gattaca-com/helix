@@ -183,6 +183,7 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                         },
                     ),
                     header_delay: row.get::<&str, bool>("header_delay"),
+                    gossip_blobs: row.get::<&str, bool>("gossip_blobs"),
                 },
             },
         })
@@ -251,6 +252,7 @@ impl FromRow for SignedValidatorRegistrationEntry {
                         },
                     ),
                     header_delay: row.get::<&str, bool>("header_delay"),
+                    gossip_blobs: row.get::<&str, bool>("gossip_blobs"),
                 },
             },
             inserted_at: parse_timestamptz_to_u64(

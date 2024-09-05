@@ -11,6 +11,8 @@ pub mod simulator;
 pub mod traces;
 pub mod validator;
 pub mod validator_preferences;
+pub mod beacon_api;
+
 
 pub use builder_info::*;
 pub use config::*;

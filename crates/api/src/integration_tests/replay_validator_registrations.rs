@@ -5,14 +5,15 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Slot},
     serde::as_str,
 };
-use helix_beacon_client::BeaconClientTrait;
+use helix_beacon_client::{beacon_client::BeaconClient, BeaconClientTrait};
 use reqwest::Error;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::channel;
 
-use helix_common::api::{
+use helix_common::{api::{
     builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
-};
+}, BeaconClientConfig};
+use url::Url;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct BuilderGetValidatorsResponseEntryExternal {
@@ -119,9 +120,10 @@ async fn run() {
     ];
 
     let helix_register_endpoint = "http://localhost:4040/eth/v1/builder/validators";
-    let beacon_client = helix_beacon_client::beacon_client::BeaconClient::from_endpoint_str(
-        "http://localhost:5052",
-    );
+    let beacon_client = BeaconClient::from_config(BeaconClientConfig{
+        url: Url::parse("http://localhost:5052").unwrap(),
+        gossip_blobs_enabled: false,
+    });
 
     let (head_event_sender, mut head_event_receiver) =
         tokio::sync::broadcast::channel::<helix_beacon_client::types::HeadEventData>(100);
