@@ -158,7 +158,6 @@ impl RouterConfig {
             Route::GetPayload,
             Route::SetConstraints,
             Route::ElectPreconfer,
-            Route::GetNextActiveSlot
         ]);
 
         self.replace_condensed_with_real(Route::DataApi, &[
@@ -232,7 +231,6 @@ pub enum Route {
     ElectPreconfer,
     GetPreconfer,
     GetPreconfersForEpoch,
-    GetNextActiveSlot,
 }
 
 impl Route {
@@ -250,7 +248,6 @@ impl Route {
             Route::GetPayload => format!("{PATH_PROPOSER_API}{PATH_GET_PAYLOAD}"),
             Route::SetConstraints => format!("{PATH_PROPOSER_API}{PATH_SET_CONSTRAINTS}"),
             Route::ElectPreconfer => format!("{PATH_PROPOSER_API}{PATH_ELECT_PRECONFER}"),
-            Route::GetNextActiveSlot => format!("{PATH_PROPOSER_API}{PATH_GET_NEXT_ACTIVE_SLOT}"),
 
             Route::ProposerPayloadDelivered => format!("{PATH_DATA_API}{PATH_PROPOSER_PAYLOAD_DELIVERED}"),
             Route::BuilderBidsReceived => format!("{PATH_DATA_API}{PATH_BUILDER_BIDS_RECEIVED}"),

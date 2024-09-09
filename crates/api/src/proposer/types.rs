@@ -20,12 +20,6 @@ pub(crate) const PATH_GET_PAYLOAD: &str = "/blinded_blocks";
 pub(crate) const GET_HEADER_REQUEST_CUTOFF_MS: i64 = 3000;
 
 #[derive(Debug, Deserialize)]
-pub struct GetNextActiveSlotParams {
-    #[serde(rename = "pubkey")]
-    pub public_key: BlsPublicKey,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct GetHeaderParams {
     pub slot: u64,
     pub parent_hash: Hash32,
