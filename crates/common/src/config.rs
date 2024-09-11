@@ -1,7 +1,11 @@
 use crate::{api::*, ValidatorPreferences};
 use clap::Parser;
 use ethereum_consensus::ssz::prelude::Node;
-use helix_utils::request_encoding::Encoding;
+use helix_utils::{
+    request_encoding::Encoding,
+    serde::{default_bool, deserialize_url, serialize_url},
+};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs::File};
 
@@ -80,7 +84,12 @@ pub struct SimulatorConfig {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BeaconClientConfig {
-    pub url: String,
+    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
+    pub url: Url,
+    /// Bool representing if this beacon client is configured to
+    /// handle async blob gossiping.
+    #[serde(default = "default_bool::<false>")]
+    pub gossip_blobs_enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -262,14 +271,18 @@ fn test_config() {
     let mut config = RelayConfig::default();
     config.redis.url = "redis://localhost:6379".to_string();
     config.simulator.url = "http://localhost:8080".to_string();
-    config.beacon_clients.push(BeaconClientConfig { url: "http://localhost:8080".to_string() });
+    config.beacon_clients.push(BeaconClientConfig {
+        url: Url::parse("http://localhost:8080").unwrap(),
+        gossip_blobs_enabled: false,
+    });
     config.broadcasters.push(BroadcasterConfig::BeaconClient(BeaconClientConfig {
-        url: "http://localhost:8080".to_string(),
+        url: Url::parse("http://localhost:8080").unwrap(),
+        gossip_blobs_enabled: false,
     }));
     config.network_config = NetworkConfig::Custom { dir_path: "test".to_string(), genesis_validator_root: Default::default(), genesis_time: 1 };
     config.logging =
         LoggingConfig::File { dir_path: "hello".to_string(), file_name: "test".to_string() };
-    config.validator_preferences = ValidatorPreferences { filtering: Filtering::Regional, trusted_builders: None, header_delay: true};
+    config.validator_preferences = ValidatorPreferences { filtering: Filtering::Regional, trusted_builders: None, header_delay: true, gossip_blobs: false };
     config.router_config = RouterConfig {
         enabled_routes: vec![
             RouteInfo { route: Route::GetValidators, rate_limit: None },

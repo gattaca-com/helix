@@ -48,6 +48,9 @@ pub enum BeaconClientError {
 
     #[error("Error initializing broadcaster: {0}")]
     BroadcasterInitError(String),
+
+    #[error("Request not supported")]
+    RequestNotSupported,
 }
 
 impl IntoResponse for BeaconClientError {

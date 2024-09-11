@@ -32,7 +32,7 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry,
         proposer_api::{GetPayloadResponse, ValidatorRegistrationInfo},
-    }, chain_info::{ChainInfo, Network}, signed_proposal::VersionedSignedProposal, try_execution_header_from_payload, validator_preferences, versioned_payload::PayloadAndBlobs, BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace, ValidatorPreferences
+    }, beacon_api::PublishBlobsRequest, chain_info::{ChainInfo, Network}, deneb::{BlobSidecars, BuildBlobSidecarError}, signed_proposal::VersionedSignedProposal, try_execution_header_from_payload, validator_preferences, versioned_payload::PayloadAndBlobs, BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace, ValidatorPreferences
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
@@ -169,6 +169,7 @@ where
             filtering: proposer_api.validator_preferences.filtering,
             trusted_builders: proposer_api.validator_preferences.trusted_builders.clone(),
             header_delay: proposer_api.validator_preferences.header_delay,
+            gossip_blobs: proposer_api.validator_preferences.gossip_blobs,
         };
 
 
@@ -202,6 +203,10 @@ where
 
             if let Some(header_delay) = preferences.header_delay {
                 validator_preferences.header_delay = header_delay;
+            }
+
+            if let Some(gossip_blobs) = preferences.gossip_blobs {
+                validator_preferences.gossip_blobs = gossip_blobs;
             }
         }
 
@@ -650,6 +655,19 @@ where
             };
         let payload = Arc::new(versioned_payload);
 
+        if self.validator_preferences.gossip_blobs || !matches!(self.chain_info.network, Network::Mainnet) {
+            info!(?request_id, "gossip blobs: about to gossip blobs");
+            let self_clone = self.clone();
+            let unblinded_payload_clone = unblinded_payload.clone();
+            let req_id = *request_id;
+            tokio::spawn(async move {
+                self_clone.gossip_blobs(unblinded_payload_clone, req_id).await;
+            });
+        } else {
+            info!(?request_id, "gossip blobs: bug")
+        }
+
+
         let is_trusted_proposer = self.is_trusted_proposer(&proposer_public_key).await?;
 
         // Publish and validate payload with multi-beacon-client
@@ -993,6 +1011,38 @@ where
                     );
                 }
             });
+        }
+    }
+
+        /// If there are blobs in the unblinded payload, this function will send them directly to the
+    /// beacon chain to be propagated async to the full block.
+    async fn gossip_blobs(
+        &self,
+        unblinded_payload: Arc<VersionedSignedProposal>,
+        request_id: Uuid,
+    ) {
+        let blob_sidecars = match BlobSidecars::try_from_unblinded_payload(unblinded_payload.clone()) {
+            Ok(blob_sidecars) => blob_sidecars,
+            Err(err) => {
+                match err {
+                    BuildBlobSidecarError::NoBlobsInPayload | BuildBlobSidecarError::PayloadVersionBeforeBlobs=> {}
+                    error => {
+                        error!(%request_id, ?error, "gossip blobs: failed to build blob sidecars for async gossiping");
+                    }
+                }
+                return;
+            }
+        };
+
+        info!(%request_id, "gossip blobs: successfully built blob sidecars for request. Gossiping async..");
+
+        // Send blob sidecars to beacon clients.
+        let publish_blob_request = PublishBlobsRequest {
+            blob_sidecars,
+            beacon_root: unblinded_payload.beacon_block().message().parent_root().clone(),
+        };
+        if let Err(error) = self.multi_beacon_client.publish_blobs(publish_blob_request).await {
+            error!(%request_id, ?error, "gossip blobs: failed to gossip blob sidecars");
         }
     }
 

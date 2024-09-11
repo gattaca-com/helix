@@ -12,6 +12,9 @@ pub struct ValidatorPreferences {
     /// Allows validators to express a preference for whether a delay should be applied to get headers or not.
     #[serde(default = "default_header_delay")]
     pub header_delay: bool,
+
+    #[serde(default)]
+    pub gossip_blobs: bool,
 }
 
 fn default_filtering() -> Filtering {
