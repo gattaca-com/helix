@@ -136,8 +136,8 @@ impl ChainInfo {
     pub fn for_custom(config: String, genesis_validators_root: Node, genesis_time_in_secs: u64) -> Result<Self, Error> {
         let context = Context::try_from_file(&config)?;
         let network = Network::Custom(config.clone());
-        let clock = from_system_time(genesis_time_in_secs, context.seconds_per_slot, context.slots_per_epoch);
         let genesis_time_in_secs = genesis_time_in_secs + context.genesis_delay;
+        let clock = from_system_time(genesis_time_in_secs, context.seconds_per_slot, context.slots_per_epoch);
         let seconds_per_slot = context.seconds_per_slot;
 
         Ok(Self {
