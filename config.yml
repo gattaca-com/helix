@@ -18,8 +18,8 @@ beacon_clients:
 network_config: 
   !Custom
     dir_path: "./chain-info.yml"
-    genesis_validator_root: "0x68c9a86ac87db548086ed316fc4515355ff08e9b1e9a3361ab243584b933752f"
-    genesis_time: 1724410824
+    genesis_validator_root: "0xf46823260c2f95df6f0dcb3e0117f88784fde9a5f54c59612c881d82b2a57805"
+    genesis_time: 1727185220
 
 simulator: 
   url: "http://127.0.0.1:32002"
