@@ -10,7 +10,6 @@ mod tests {
 
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
     use ethereum_consensus::{
-        altair::validator,
         builder::{SignedValidatorRegistration, ValidatorRegistration},
         clock::get_current_unix_time_in_nanos,
         crypto::{PublicKey, SecretKey},
@@ -498,7 +497,7 @@ mod tests {
             order_by: None,
         };
 
-        let mut validator_preferences = ValidatorPreferences::default();
+        let validator_preferences = ValidatorPreferences::default();
 
         let delivered_payloads = db_service.get_delivered_payloads(&filter, Arc::new(validator_preferences)).await?;
         println!("delivered payloads {:?}", delivered_payloads);

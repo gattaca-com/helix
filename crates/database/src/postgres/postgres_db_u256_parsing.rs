@@ -123,10 +123,7 @@ impl ToSql for PostgresNumeric {
 }
 #[cfg(test)]
 mod tests {
-    use bytes::BytesMut;
-    use ethereum_consensus::{primitives::U256, serde::as_str};
-    use serde::{Deserialize, Serialize};
-    use tokio_postgres::types::Type;
+    use ethereum_consensus::primitives::U256;
 
     use super::*;
     use crate::postgres::postgres_db_u256_parsing::PostgresNumeric;

@@ -1,3 +1,4 @@
+#![allow(unused)]
 #[cfg(test)]
 mod data_api_tests {
     // *** IMPORTS ***

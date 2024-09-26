@@ -3,7 +3,7 @@ mod tests {
 
     // +++ IMPORTS +++
     use core::panic;
-    use std::{convert::Infallible, future::pending, io::Write, net::IpAddr, pin::Pin, str::FromStr, sync::Arc, time::Duration};
+    use std::{convert::Infallible, future::pending, io::Write, pin::Pin, str::FromStr, sync::Arc, time::Duration};
 
     use axum::http::{header, Method, Request, Uri};
     use ethereum_consensus::{
@@ -45,7 +45,6 @@ mod tests {
         connect_async,
         tungstenite::{self, Message},
     };
-    use tonic::transport::Body;
 
     use crate::{
         builder::{
@@ -1130,7 +1129,17 @@ mod tests {
             pending::<()>().await;
             Ok::<_, Infallible>(vec![])
         }));
-        let body = Body::wrap_stream(body);
+        // let body = Body::wrap_stream(body);
+        let results: Vec<Result<Vec<u8>, Infallible>> = body.collect().await;
+        let mut data: Vec<u8> = Vec::new();
+        for result in results {
+            match result {
+                Ok(bytes) => data.extend(bytes),
+                Err(_) => {
+                    unreachable!()
+                }
+            }
+        }
 
         let test_timeout = API_REQUEST_TIMEOUT + Duration::from_secs(3);
         let timeout_result = tokio::time::timeout(test_timeout, async {
@@ -1139,7 +1148,7 @@ mod tests {
                 .post(req_url.as_str())
                 .header("accept", "*/*")
                 .header("Content-Type", "application/json")
-                .body(body)
+                .body(data)
                 .send()
                 .await
                 .unwrap();
@@ -1159,7 +1168,7 @@ mod tests {
 
     #[tokio::test]
     async fn websocket_test() {
-        let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+        let (tx, _http_config, _api, mut slot_update_receiver) = start_api_server().await;
 
         // Send a slot update
         // wait for the slot update to be received
@@ -1187,7 +1196,7 @@ mod tests {
                             let payload: TopBidUpdate = ethereum_consensus::ssz::prelude::deserialize(&msg).unwrap();
                             assert_eq!(payload.slot, 0);
                         }
-                        Message::Text(msg) => {}
+                        Message::Text(_auto_implmsg) => {}
                         Message::Ping(_) => {
                             ws_stream.send(Message::Pong(vec![])).await.unwrap();
                         }
@@ -1212,7 +1221,7 @@ mod tests {
 
     #[tokio::test]
     async fn websocket_test_auth_fails() {
-        let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+        let (tx, _http_config, _api, mut slot_update_receiver) = start_api_server().await;
 
         // Send a slot update
         // wait for the slot update to be received
