@@ -35,5 +35,5 @@ redis.workspace = true
 auto_impl.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-uuid.workspace = true
+uuid = { workspace = true, features = ["fast-rng", "v4"] }
 

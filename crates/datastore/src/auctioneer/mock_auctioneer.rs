@@ -1,12 +1,16 @@
-use std::{collections::HashMap, sync::{atomic::AtomicBool, Arc, Mutex}};
+#![allow(unused)]
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
-
 use helix_common::{
-    api::{builder_api::TopBidUpdate, constraints_api::{ConstraintsMessage, SignedPreconferElection}}, bid_submission::{
-        v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
-    }, eth::SignedBuilderBid, pending_block::PendingBlock, signing::RelaySigningContext, versioned_payload::PayloadAndBlobs, BuilderInfo, ProposerInfo
+    api::constraints_api::{ConstraintsMessage, SignedPreconferElection},
+    bid_submission::{v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission},
+    eth::SignedBuilderBid,
+    pending_block::PendingBlock,
+    signing::RelaySigningContext,
+    versioned_payload::PayloadAndBlobs,
+    BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
 use tokio_stream::Stream;
@@ -37,11 +41,7 @@ impl Auctioneer for MockAuctioneer {
     async fn get_last_slot_delivered(&self) -> Result<Option<u64>, AuctioneerError> {
         Ok(None)
     }
-    async fn check_and_set_last_slot_and_hash_delivered(
-        &self,
-        _slot: u64,
-        _hash: &Hash32,
-    ) -> Result<(), AuctioneerError> {
+    async fn check_and_set_last_slot_and_hash_delivered(&self, _slot: u64, _hash: &Hash32) -> Result<(), AuctioneerError> {
         Ok(())
     }
 
@@ -60,7 +60,7 @@ impl Auctioneer for MockAuctioneer {
         Ok(self.best_bid.lock().unwrap().clone())
     }
     async fn get_best_bids(&self) -> Box<dyn Stream<Item = Result<Vec<u8>, AuctioneerError>> + Send + Unpin> {
-        Box::new(tokio_stream::iter(vec![Ok(vec![0; 188]),Ok(vec![0; 188]),Ok(vec![0; 188])].into_iter()))
+        Box::new(tokio_stream::iter(vec![Ok(vec![0; 188]), Ok(vec![0; 188]), Ok(vec![0; 188])].into_iter()))
     }
 
     async fn save_execution_payload(
@@ -81,12 +81,7 @@ impl Auctioneer for MockAuctioneer {
         Ok(self.versioned_execution_payload.lock().unwrap().clone())
     }
 
-    async fn get_bid_trace(
-        &self,
-        _slot: u64,
-        _proposer_pub_key: &BlsPublicKey,
-        _block_hash: &Hash32,
-    ) -> Result<Option<BidTrace>, AuctioneerError> {
+    async fn get_bid_trace(&self, _slot: u64, _proposer_pub_key: &BlsPublicKey, _block_hash: &Hash32) -> Result<Option<BidTrace>, AuctioneerError> {
         Ok(None)
     }
     async fn save_bid_trace(&self, _bid_trace: &BidTrace) -> Result<(), AuctioneerError> {
@@ -127,12 +122,7 @@ impl Auctioneer for MockAuctioneer {
         Ok(None)
     }
 
-    async fn get_top_bid_value(
-        &self,
-        _slot: u64,
-        _parent_hash: &Hash32,
-        _proposer_pub_key: &BlsPublicKey,
-    ) -> Result<Option<U256>, AuctioneerError> {
+    async fn get_top_bid_value(&self, _slot: u64, _parent_hash: &Hash32, _proposer_pub_key: &BlsPublicKey) -> Result<Option<U256>, AuctioneerError> {
         Ok(None)
     }
     async fn get_builder_latest_value(
@@ -163,10 +153,7 @@ impl Auctioneer for MockAuctioneer {
         Ok(())
     }
 
-    async fn get_builder_info(
-        &self,
-        _builder_pub_key: &BlsPublicKey,
-    ) -> Result<BuilderInfo, AuctioneerError> {
+    async fn get_builder_info(&self, _builder_pub_key: &BlsPublicKey) -> Result<BuilderInfo, AuctioneerError> {
         Ok(self.builder_info.clone().unwrap_or_default())
     }
 
@@ -175,10 +162,7 @@ impl Auctioneer for MockAuctioneer {
         Ok(())
     }
 
-    async fn update_builder_infos(
-        &self,
-        _builder_infos: Vec<BuilderInfoDocument>,
-    ) -> Result<(), AuctioneerError> {
+    async fn update_builder_infos(&self, _builder_infos: Vec<BuilderInfoDocument>) -> Result<(), AuctioneerError> {
         Ok(())
     }
 
@@ -216,17 +200,11 @@ impl Auctioneer for MockAuctioneer {
         Ok(None)
     }
 
-    async fn update_trusted_proposers(
-        &self,
-        _proposer_whitelist: Vec<ProposerInfo>,
-    ) -> Result<(), AuctioneerError> {
+    async fn update_trusted_proposers(&self, _proposer_whitelist: Vec<ProposerInfo>) -> Result<(), AuctioneerError> {
         Ok(())
     }
 
-    async fn is_trusted_proposer(
-        &self,
-        _proposer_pub_key: &BlsPublicKey,
-    ) -> Result<bool, AuctioneerError> {
+    async fn is_trusted_proposer(&self, _proposer_pub_key: &BlsPublicKey) -> Result<bool, AuctioneerError> {
         Ok(true)
     }
 
@@ -261,29 +239,64 @@ impl Auctioneer for MockAuctioneer {
 
 impl ConstraintsAuctioneer for MockAuctioneer {
     #[must_use]
-#[allow(clippy::type_complexity,clippy::type_repetition_in_bounds)]
-fn save_new_gateway_election<'life0,'life1,'async_trait>(&'life0 self,signed_election: &'life1 SignedPreconferElection,slot:u64) ->  ::core::pin::Pin<Box<dyn ::core::future::Future<Output = Result<(),AuctioneerError> > + ::core::marker::Send+'async_trait> >where 'life0:'async_trait,'life1:'async_trait,Self:'async_trait {
+    #[allow(clippy::type_complexity, clippy::type_repetition_in_bounds)]
+    fn save_new_gateway_election<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        signed_election: &'life1 SignedPreconferElection,
+        slot: u64,
+    ) -> ::core::pin::Pin<Box<dyn ::core::future::Future<Output = Result<(), AuctioneerError>> + ::core::marker::Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
         todo!()
     }
 
     #[doc = " Returns the elected gateway for a slot. None if there is no elected gateway for the slot."]
-#[must_use]
-#[allow(clippy::type_complexity,clippy::type_repetition_in_bounds)]
-fn get_elected_gateway<'life0,'async_trait>(&'life0 self,slot:u64) ->  ::core::pin::Pin<Box<dyn ::core::future::Future<Output = Result<Option<SignedPreconferElection> ,AuctioneerError> > + ::core::marker::Send+'async_trait> >where 'life0:'async_trait,Self:'async_trait {
+    #[must_use]
+    #[allow(clippy::type_complexity, clippy::type_repetition_in_bounds)]
+    fn get_elected_gateway<'life0, 'async_trait>(
+        &'life0 self,
+        slot: u64,
+    ) -> ::core::pin::Pin<
+        Box<dyn ::core::future::Future<Output = Result<Option<SignedPreconferElection>, AuctioneerError>> + ::core::marker::Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
         todo!()
     }
 
     #[doc = " Save the constraints for a specific slot."]
-#[must_use]
-#[allow(clippy::type_complexity,clippy::type_repetition_in_bounds)]
-fn save_constraints<'life0,'life1,'async_trait>(&'life0 self,constraints: &'life1 ConstraintsMessage) ->  ::core::pin::Pin<Box<dyn ::core::future::Future<Output = Result<(),AuctioneerError> > + ::core::marker::Send+'async_trait> >where 'life0:'async_trait,'life1:'async_trait,Self:'async_trait {
+    #[must_use]
+    #[allow(clippy::type_complexity, clippy::type_repetition_in_bounds)]
+    fn save_constraints<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        constraints: &'life1 ConstraintsMessage,
+    ) -> ::core::pin::Pin<Box<dyn ::core::future::Future<Output = Result<(), AuctioneerError>> + ::core::marker::Send + 'async_trait>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
         todo!()
     }
 
     #[doc = " Get the constraints for a specific slot."]
-#[must_use]
-#[allow(clippy::type_complexity,clippy::type_repetition_in_bounds)]
-fn get_constraints<'life0,'async_trait>(&'life0 self,slot:u64) ->  ::core::pin::Pin<Box<dyn ::core::future::Future<Output = Result<Option<ConstraintsMessage> ,AuctioneerError> > + ::core::marker::Send+'async_trait> >where 'life0:'async_trait,Self:'async_trait {
+    #[must_use]
+    #[allow(clippy::type_complexity, clippy::type_repetition_in_bounds)]
+    fn get_constraints<'life0, 'async_trait>(
+        &'life0 self,
+        slot: u64,
+    ) -> ::core::pin::Pin<
+        Box<dyn ::core::future::Future<Output = Result<Option<ConstraintsMessage>, AuctioneerError>> + ::core::marker::Send + 'async_trait>,
+    >
+    where
+        'life0: 'async_trait,
+        Self: 'async_trait,
+    {
         todo!()
     }
 }

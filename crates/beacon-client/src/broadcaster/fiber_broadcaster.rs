@@ -1,9 +1,9 @@
+use std::sync::Arc;
+
 use ethereum_consensus::{clock::get_current_unix_time_in_nanos, Fork};
 use helix_common::signed_proposal::VersionedSignedProposal;
-use std::sync::Arc;
-use tracing::debug;
-
 use helix_utils::request_encoding::Encoding;
+use tracing::debug;
 
 use crate::{error::BeaconClientError, types::BroadcastValidation};
 
@@ -13,15 +13,10 @@ pub struct FiberBroadcaster {
 }
 
 impl FiberBroadcaster {
-    pub async fn new(
-        url: String,
-        api_key: String,
-        encoding: Encoding,
-    ) -> Result<Self, BeaconClientError> {
+    pub async fn new(url: String, api_key: String, encoding: Encoding) -> Result<Self, BeaconClientError> {
         tokio::time::sleep(tokio::time::Duration::from_secs(12)).await;
-        let client = fiber::Client::connect(url, api_key)
-            .await
-            .map_err(|err| BeaconClientError::BroadcasterInitError(format!("Fiber Err: {err}")))?;
+        let client =
+            fiber::Client::connect(url, api_key).await.map_err(|err| BeaconClientError::BroadcasterInitError(format!("Fiber Err: {err}")))?;
         Ok(Self { _encoding: encoding, client })
     }
 

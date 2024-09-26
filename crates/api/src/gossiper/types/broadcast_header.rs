@@ -26,10 +26,8 @@ impl BroadcastHeaderParams {
             bid_trace: ssz::prelude::deserialize(&proto_params.bid_trace).unwrap(),
             slot: proto_params.slot,
             parent_hash: Hash32::try_from(proto_params.parent_hash.as_slice()).unwrap(),
-            proposer_pub_key: BlsPublicKey::try_from(proto_params.proposer_pub_key.as_slice())
-                .unwrap(),
-            builder_pub_key: BlsPublicKey::try_from(proto_params.builder_pub_key.as_slice())
-                .unwrap(),
+            proposer_pub_key: BlsPublicKey::try_from(proto_params.proposer_pub_key.as_slice()).unwrap(),
+            builder_pub_key: BlsPublicKey::try_from(proto_params.builder_pub_key.as_slice()).unwrap(),
             is_cancellations_enabled: proto_params.is_cancellations_enabled,
             on_receive: proto_params.on_receive,
         }

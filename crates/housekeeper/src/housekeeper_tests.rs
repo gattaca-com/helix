@@ -9,15 +9,14 @@ mod housekeeper_tests {
         time::Duration,
     };
 
-    // ++++ IMPORTS ++++
-    use crate::housekeeper::{Housekeeper, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS};
-    use helix_beacon_client::{
-        mock_multi_beacon_client::MockMultiBeaconClient, MultiBeaconClientTrait,
-    };
+    use helix_beacon_client::{mock_multi_beacon_client::MockMultiBeaconClient, MultiBeaconClientTrait};
     use helix_common::{api::builder_api::BuilderGetValidatorsResponseEntry, RelayConfig, ValidatorSummary};
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use tokio::{sync::broadcast, task};
+
+    // ++++ IMPORTS ++++
+    use crate::housekeeper::{Housekeeper, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS};
 
     const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 
@@ -26,8 +25,7 @@ mod housekeeper_tests {
         let subscribed_to_head_events = Arc::new(AtomicBool::new(false));
         let chan_head_events_capacity = Arc::new(AtomicUsize::new(0));
         let known_validators: Arc<Mutex<Vec<ValidatorSummary>>> = Arc::new(Mutex::new(vec![]));
-        let proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>> =
-            Arc::new(Mutex::new(vec![]));
+        let proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>> = Arc::new(Mutex::new(vec![]));
         let state_validators_has_been_read: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
         let proposer_duties_has_been_read: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
         let db = MockDatabaseService::new(known_validators.clone(), proposer_duties.clone());
@@ -56,8 +54,7 @@ mod housekeeper_tests {
         housekeeper: Arc<Housekeeper<MockDatabaseService, MockMultiBeaconClient, MockAuctioneer>>,
         beacon_client: MockMultiBeaconClient,
     ) {
-        let (head_event_sender, mut head_event_receiver) =
-            broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
+        let (head_event_sender, mut head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
         beacon_client.subscribe_to_head_events(head_event_sender).await;
         task::spawn(async move {
             housekeeper.start(&mut head_event_receiver).await.unwrap();
@@ -65,8 +62,7 @@ mod housekeeper_tests {
     }
 
     struct HelperVars {
-        pub housekeeper:
-            Arc<Housekeeper<MockDatabaseService, MockMultiBeaconClient, MockAuctioneer>>,
+        pub housekeeper: Arc<Housekeeper<MockDatabaseService, MockMultiBeaconClient, MockAuctioneer>>,
         pub subscribed_to_head_events: Arc<AtomicBool>,
         pub chan_head_events_capacity: Arc<AtomicUsize>,
         pub known_validators: Arc<Mutex<Vec<ValidatorSummary>>>,
@@ -98,10 +94,7 @@ mod housekeeper_tests {
     async fn test_known_validators_are_set() {
         let vars = get_housekeeper();
         start_housekeeper(vars.housekeeper.clone(), vars.beacon_client).await;
-        tokio::time::sleep(
-            SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS + Duration::from_millis(100),
-        )
-        .await;
+        tokio::time::sleep(SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS + Duration::from_millis(100)).await;
 
         assert!(vars.known_validators.lock().unwrap().len() == 1);
         let validators = vars.known_validators.lock().unwrap();
@@ -134,10 +127,7 @@ mod housekeeper_tests {
     async fn test_state_validators_have_been_read() {
         let vars = get_housekeeper();
         start_housekeeper(vars.housekeeper.clone(), vars.beacon_client).await;
-        tokio::time::sleep(
-            SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS + Duration::from_millis(100),
-        )
-        .await;
+        tokio::time::sleep(SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS + Duration::from_millis(100)).await;
 
         assert!(vars.state_validators_has_been_read.load(std::sync::atomic::Ordering::Relaxed));
     }

@@ -3,8 +3,6 @@ pub mod submission;
 pub mod v2;
 
 pub use bid_trace::*;
-pub use submission::*;
-
 use ethereum_consensus::{
     altair::Bytes32,
     capella::Withdrawal,
@@ -13,6 +11,7 @@ use ethereum_consensus::{
     ssz::prelude::*,
     Fork,
 };
+pub use submission::*;
 
 #[auto_impl::auto_impl(Arc)]
 pub trait BidSubmission {

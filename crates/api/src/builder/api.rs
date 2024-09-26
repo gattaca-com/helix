@@ -4,11 +4,10 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use std::collections::HashSet;
 
 use axum::{
-    extract::ws::{WebSocket, WebSocketUpgrade, Message},
     body::{to_bytes, Body},
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::{Request, StatusCode},
     response::{IntoResponse, Response},
     Extension,
@@ -16,13 +15,28 @@ use axum::{
 use ethereum_consensus::{
     configs::mainnet::{CAPELLA_FORK_EPOCH, SECONDS_PER_SLOT},
     phase0::mainnet::SLOTS_PER_EPOCH,
-    primitives::{BlsPublicKey, Bytes32, Hash32},
+    primitives::{BlsPublicKey, Hash32},
     ssz::{self, prelude::*},
 };
 use flate2::read::GzDecoder;
 use futures::StreamExt;
+use helix_common::{
+    api::{
+        builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
+        proposer_api::ValidatorRegistrationInfo,
+    },
+    bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission},
+    chain_info::ChainInfo,
+    signing::RelaySigningContext,
+    simulator::BlockSimError,
+    versioned_payload::PayloadAndBlobs,
+    BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, SignedBuilderBid, SubmissionTrace,
+};
+use helix_database::DatabaseService;
+use helix_datastore::{constraints::ConstraintsAuctioneer, types::SaveBidAndUpdateTopBidResponse, Auctioneer};
+use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
+use helix_utils::{calculate_withdrawals_root, get_payload_attributes_key, has_reached_fork};
 use hyper::HeaderMap;
-use reth_primitives::alloy_primitives::private::alloy_rlp::Decodable;
 use tokio::{
     sync::{
         mpsc::{self, error::SendError, Receiver, Sender},
@@ -33,37 +47,13 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use helix_common::{
-    api::{
-        builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
-        proposer_api::ValidatorRegistrationInfo,
+use crate::{
+    builder::{error::BuilderApiError, traits::BlockSimulator, BlockSimRequest, DbInfo, OptimisticVersion},
+    gossiper::{
+        traits::GossipClientTrait,
+        types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
     },
-    bid_submission::{
-        v2::header_submission::{
-            SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb,
-        },
-        BidSubmission, BidTrace, SignedBidSubmission,
-    },
-    chain_info::ChainInfo,
-    signing::RelaySigningContext,
-    simulator::BlockSimError,
-    versioned_payload::PayloadAndBlobs,
-    BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace,
-    SignedBuilderBid, SubmissionTrace,
 };
-use helix_common::api::constraints_api::ConstraintsMessage;
-use helix_database::DatabaseService;
-use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
-use helix_datastore::constraints::ConstraintsAuctioneer;
-use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-use helix_utils::{calculate_withdrawals_root, get_payload_attributes_key, has_reached_fork, try_decode_into};
-
-use crate::{builder::{
-    error::BuilderApiError, traits::BlockSimulator, BlockSimRequest, DbInfo, OptimisticVersion,
-}, gossiper::{
-    traits::GossipClientTrait,
-    types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
-}};
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
 
@@ -153,16 +143,10 @@ where
     }
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/getValidators>
-    pub async fn get_validators(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
-    ) -> impl IntoResponse {
+    pub async fn get_validators(Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>) -> impl IntoResponse {
         let duty_bytes = api.proposer_duties_response.read().await.clone();
         match duty_bytes {
-            Some(bytes) => Response::builder()
-                .status(StatusCode::OK)
-                .body(axum::body::Body::from(bytes.clone()))
-                .unwrap()
-                .into_response(),
+            Some(bytes) => Response::builder().status(StatusCode::OK).body(axum::body::Body::from(bytes.clone())).unwrap().into_response(),
             None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }
@@ -178,10 +162,7 @@ where
     /// 6. Saves the bid to auctioneer and db.
     ///
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
-    pub async fn submit_block(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
-        req: Request<Body>,
-    ) -> Result<StatusCode, BuilderApiError> {
+    pub async fn submit_block(Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>, req: Request<Body>) -> Result<StatusCode, BuilderApiError> {
         let request_id = Uuid::new_v4();
         let mut trace = SubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
@@ -194,8 +175,7 @@ where
         );
 
         // Decode the incoming request body into a payload
-        let (payload, is_cancellations_enabled) =
-            decode_payload(req, &mut trace, &request_id).await?;
+        let (payload, is_cancellations_enabled) = decode_payload(req, &mut trace, &request_id).await?;
         let block_hash = payload.message().block_hash.clone();
 
         // Verify that we have a validator connected for this slot
@@ -219,27 +199,15 @@ where
                 request_id = %request_id,
                 "submission is for a past slot",
             );
-            return Err(BuilderApiError::SubmissionForPastSlot {
-                current_slot: head_slot,
-                submission_slot: payload.slot(),
-            });
+            return Err(BuilderApiError::SubmissionForPastSlot { current_slot: head_slot, submission_slot: payload.slot() });
         }
 
         // Fetch the next payload attributes and validate basic information
-        let payload_attributes = api
-            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &request_id)
-            .await?;
+        let payload_attributes = api.fetch_payload_attributes(payload.slot(), payload.parent_hash(), &request_id).await?;
 
         // Handle duplicates.
-        if let Err(err) = api
-            .check_for_duplicate_block_hash(
-                &block_hash,
-                payload.slot(),
-                payload.parent_hash(),
-                payload.proposer_public_key(),
-                &request_id,
-            )
-            .await
+        if let Err(err) =
+            api.check_for_duplicate_block_hash(&block_hash, payload.slot(), payload.parent_hash(), payload.proposer_public_key(), &request_id).await
         {
             match err {
                 BuilderApiError::DuplicateBlockHash { block_hash } => {
@@ -284,9 +252,7 @@ where
                 proposer_trusted_builders = ?proposer_trusted_builders,
                 "builder not in proposer trusted builders list",
             );
-            return Err(BuilderApiError::BuilderNotInProposersTrustedList {
-                proposer_trusted_builders,
-            });
+            return Err(BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders });
         }
 
         // Verify payload has not already been delivered
@@ -304,55 +270,29 @@ where
         }
 
         // Sanity check the payload
-        if let Err(err) = sanity_check_block_submission(
-            &payload,
-            payload.bid_trace(),
-            &next_duty,
-            &payload_attributes,
-            &api.chain_info,
-        ) {
+        if let Err(err) = sanity_check_block_submission(&payload, payload.bid_trace(), &next_duty, &payload_attributes, &api.chain_info) {
             warn!(request_id = %request_id, error = %err, "failed sanity check");
             return Err(err);
         }
         trace.pre_checks = get_nanos_timestamp()?;
 
-        let (payload, was_simulated_optimistically) = api
-            .verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id, &payload_attributes)
-            .await?;
+        let (payload, was_simulated_optimistically) =
+            api.verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id, &payload_attributes).await?;
 
         // If cancellations are enabled, then abort now if there is a later submission
         if is_cancellations_enabled {
-            if let Err(err) =
-                api.check_for_later_submissions(&payload, trace.receive, &request_id).await
-            {
+            if let Err(err) = api.check_for_later_submissions(&payload, trace.receive, &request_id).await {
                 warn!(request_id = %request_id, error = %err, "already processing later submission");
                 return Err(err);
             }
         }
 
         // Save bid to auctioneer
-        match api
-            .save_bid_to_auctioneer(
-                &payload,
-                &mut trace,
-                is_cancellations_enabled,
-                floor_bid_value,
-                &request_id,
-            )
-            .await?
-        {
+        match api.save_bid_to_auctioneer(&payload, &mut trace, is_cancellations_enabled, floor_bid_value, &request_id).await? {
             // If the bid was succesfully saved then we gossip the header and payload to all other
             // relays.
             Some((builder_bid, execution_payload)) => {
-                api.gossip_new_submission(
-                    &payload,
-                    execution_payload,
-                    builder_bid,
-                    is_cancellations_enabled,
-                    trace.receive,
-                    &request_id,
-                )
-                .await;
+                api.gossip_new_submission(&payload, execution_payload, builder_bid, is_cancellations_enabled, trace.receive, &request_id).await;
             }
             None => { /* Bid wasn't saved so no need to gossip as it will never be served */ }
         }
@@ -366,11 +306,7 @@ where
             "submit_block request finished"
         );
 
-        let optimistic_version = if was_simulated_optimistically {
-            OptimisticVersion::V1
-        } else {
-            OptimisticVersion::NotOptimistic
-        };
+        let optimistic_version = if was_simulated_optimistically { OptimisticVersion::V1 } else { OptimisticVersion::NotOptimistic };
 
         // Save submission to db.
         tokio::spawn(async move {
@@ -387,13 +323,9 @@ where
 
     /// Handles the submission of a new payload header by performing various checks and
     /// verifications before saving the headre to the auctioneer.
-    pub async fn submit_header(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
-        req: Request<Body>,
-    ) -> Result<StatusCode, BuilderApiError> {
+    pub async fn submit_header(Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>, req: Request<Body>) -> Result<StatusCode, BuilderApiError> {
         let request_id = Uuid::new_v4();
-        let mut trace =
-            HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let mut trace = HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
         info!(
@@ -404,8 +336,7 @@ where
         );
 
         // Decode the incoming request body into a payload
-        let (mut payload, is_cancellations_enabled) =
-            decode_header_submission(req, &mut trace, &request_id).await?;
+        let (mut payload, is_cancellations_enabled) = decode_header_submission(req, &mut trace, &request_id).await?;
         let block_hash = payload.block_hash().clone();
 
         // Verify that we have a validator connected for this slot
@@ -429,16 +360,11 @@ where
                 request_id = %request_id,
                 "submission is for a past slot",
             );
-            return Err(BuilderApiError::SubmissionForPastSlot {
-                current_slot: head_slot,
-                submission_slot: payload.slot(),
-            });
+            return Err(BuilderApiError::SubmissionForPastSlot { current_slot: head_slot, submission_slot: payload.slot() });
         }
 
         // Fetch the next payload attributes and validate basic information
-        let payload_attributes = api
-            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &request_id)
-            .await?;
+        let payload_attributes = api.fetch_payload_attributes(payload.slot(), payload.parent_hash(), &request_id).await?;
 
         // Fetch builder info
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
@@ -451,15 +377,8 @@ where
         }
 
         // Handle duplicates.
-        if let Err(err) = api
-            .check_for_duplicate_block_hash(
-                &block_hash,
-                payload.slot(),
-                payload.parent_hash(),
-                payload.proposer_public_key(),
-                &request_id,
-            )
-            .await
+        if let Err(err) =
+            api.check_for_duplicate_block_hash(&block_hash, payload.slot(), payload.parent_hash(), payload.proposer_public_key(), &request_id).await
         {
             match err {
                 BuilderApiError::DuplicateBlockHash { block_hash } => {
@@ -485,13 +404,7 @@ where
         }
 
         // Validate basic information about the payload
-        if let Err(err) = sanity_check_block_submission(
-            &payload,
-            payload.bid_trace(),
-            &next_duty,
-            &payload_attributes,
-            &api.chain_info,
-        ) {
+        if let Err(err) = sanity_check_block_submission(&payload, payload.bid_trace(), &next_duty, &payload_attributes, &api.chain_info) {
             warn!(request_id = %request_id, error = %err, "failed sanity check");
             return Err(err);
         }
@@ -505,9 +418,7 @@ where
                 proposer_trusted_builders = ?proposer_trusted_builders,
                 "builder not in proposer trusted builders list",
             );
-            return Err(BuilderApiError::BuilderNotInProposersTrustedList {
-                proposer_trusted_builders,
-            });
+            return Err(BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders });
         }
 
         trace.pre_checks = get_nanos_timestamp()?;
@@ -550,25 +461,9 @@ where
         trace.floor_bid_checks = get_nanos_timestamp()?;
 
         // Save bid to auctioneer
-        match api
-            .save_header_bid_to_auctioneer(
-                payload.clone(),
-                &mut trace,
-                is_cancellations_enabled,
-                floor_bid_value,
-                &request_id,
-            )
-            .await?
-        {
+        match api.save_header_bid_to_auctioneer(payload.clone(), &mut trace, is_cancellations_enabled, floor_bid_value, &request_id).await? {
             Some(builder_bid) => {
-                api.gossip_header(
-                    builder_bid,
-                    payload.bid_trace(),
-                    is_cancellations_enabled,
-                    trace.receive,
-                    &request_id,
-                )
-                .await;
+                api.gossip_header(builder_bid, payload.bid_trace(), is_cancellations_enabled, trace.receive, &request_id).await;
             }
             None => { /* Bid wasn't saved so no need to gossip as it will never be served */ }
         }
@@ -589,7 +484,8 @@ where
                 payload.builder_public_key(),
                 payload.block_hash(),
                 trace.receive / 1_000_000, // convert to ms
-            ).await
+            )
+            .await
             .map_err(|err| {
                 error!(request_id = %request_id, error = %err, "failed to save pending block header");
                 BuilderApiError::AuctioneerError(err)
@@ -620,10 +516,7 @@ where
     /// 6. Saves the bid to auctioneer and db.
     ///
     /// Implements this API: TODO: point to gattaca spec. rename?
-    pub async fn submit_block_v2(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
-        req: Request<Body>,
-    ) -> Result<StatusCode, BuilderApiError> {
+    pub async fn submit_block_v2(Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>, req: Request<Body>) -> Result<StatusCode, BuilderApiError> {
         let request_id = Uuid::new_v4();
         let now = SystemTime::now();
         let mut trace = SubmissionTrace { receive: get_nanos_from(now)?, ..Default::default() };
@@ -656,7 +549,8 @@ where
                 payload.builder_public_key(),
                 payload.block_hash(),
                 trace.receive / 1_000_000, // convert to ms
-            ).await
+            )
+            .await
             .map_err(|err| {
                 error!(request_id = %request_id, error = %err, "failed to save pending block header");
                 BuilderApiError::AuctioneerError(err)
@@ -668,10 +562,7 @@ where
                 request_id = %request_id,
                 "submission is for a past slot",
             );
-            return Err(BuilderApiError::SubmissionForPastSlot {
-                current_slot: head_slot,
-                submission_slot: payload.slot(),
-            });
+            return Err(BuilderApiError::SubmissionForPastSlot { current_slot: head_slot, submission_slot: payload.slot() });
         }
 
         // Verify that we have a validator connected for this slot
@@ -684,9 +575,7 @@ where
         let next_duty = next_duty.unwrap();
 
         // Fetch the next payload attributes and validate basic information
-        let payload_attributes = api
-            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &request_id)
-            .await?;
+        let payload_attributes = api.fetch_payload_attributes(payload.slot(), payload.parent_hash(), &request_id).await?;
 
         // Fetch builder info
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
@@ -713,9 +602,7 @@ where
                 proposer_trusted_builders = ?proposer_trusted_builders,
                 "builder not in proposer trusted builders list",
             );
-            return Err(BuilderApiError::BuilderNotInProposersTrustedList {
-                proposer_trusted_builders,
-            });
+            return Err(BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders });
         }
 
         // Verify payload has not already been delivered
@@ -733,22 +620,13 @@ where
         }
 
         // Sanity check the payload
-        if let Err(err) = sanity_check_block_submission(
-            &payload,
-            payload.bid_trace(),
-            &next_duty,
-            &payload_attributes,
-            &api.chain_info,
-        ) {
+        if let Err(err) = sanity_check_block_submission(&payload, payload.bid_trace(), &next_duty, &payload_attributes, &api.chain_info) {
             warn!(request_id = %request_id, error = %err, "failed sanity check");
             return Err(err);
         }
         trace.pre_checks = get_nanos_timestamp()?;
 
-        let (payload, _) = match api
-            .verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id, &payload_attributes)
-            .await
-        {
+        let (payload, _) = match api.verify_submitted_block(payload, next_duty, &builder_info, &mut trace, &request_id, &payload_attributes).await {
             Ok(val) => val,
             Err(err) => {
                 // Any invalid submission for optimistic v2 results in a demotion.
@@ -760,12 +638,7 @@ where
         // Save bid to auctioneer
         if let Err(err) = api
             .auctioneer
-            .save_execution_payload(
-                payload.slot(),
-                &payload.message().proposer_public_key,
-                payload.block_hash(),
-                &payload.payload_and_blobs(),
-            )
+            .save_execution_payload(payload.slot(), &payload.message().proposer_public_key, payload.block_hash(), &payload.payload_and_blobs())
             .await
         {
             error!(request_id = %request_id, error = %err, "failed to save execution payload");
@@ -801,23 +674,21 @@ where
     pub async fn get_top_bid(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
         headers: HeaderMap,
-        ws: WebSocketUpgrade
+        ws: WebSocketUpgrade,
     ) -> Result<impl IntoResponse, BuilderApiError> {
         let api_key = headers.get("x-api-key").and_then(|key| key.to_str().ok());
         match api_key {
-            Some(key) => {
-                match api.db.check_builder_api_key(key).await {
-                    Ok(true) => {}
-                    Ok(false) => return Err(BuilderApiError::InvalidApiKey),
-                    Err(err) => {
-                        error!(error = %err, "failed to check api key");
-                        return Err(BuilderApiError::InternalError)
-                    },
+            Some(key) => match api.db.check_builder_api_key(key).await {
+                Ok(true) => {}
+                Ok(false) => return Err(BuilderApiError::InvalidApiKey),
+                Err(err) => {
+                    error!(error = %err, "failed to check api key");
+                    return Err(BuilderApiError::InternalError)
                 }
             },
             None => return Err(BuilderApiError::InvalidApiKey),
         }
-        
+
         Ok(ws.on_upgrade(move |socket| push_top_bids(socket, api.auctioneer.clone())))
     }
 }
@@ -838,11 +709,8 @@ where
             "received gossiped header",
         );
 
-        let mut trace = GossipedHeaderTrace {
-            on_receive: req.on_receive,
-            on_gossip_receive: get_nanos_timestamp().unwrap_or_default(),
-            ..Default::default()
-        };
+        let mut trace =
+            GossipedHeaderTrace { on_receive: req.on_receive, on_gossip_receive: get_nanos_timestamp().unwrap_or_default(), ..Default::default() };
 
         // Verify that the gossiped header is not for a past slot
         let (head_slot, _) = self.curr_slot_info.read().await.clone();
@@ -856,13 +724,7 @@ where
 
         // Handle duplicates.
         if self
-            .check_for_duplicate_block_hash(
-                req.signed_builder_bid.block_hash(),
-                req.slot,
-                &req.parent_hash,
-                &req.proposer_pub_key,
-                &request_id,
-            )
+            .check_for_duplicate_block_hash(req.signed_builder_bid.block_hash(), req.slot, &req.parent_hash, &req.proposer_pub_key, &request_id)
             .await
             .is_err()
         {
@@ -947,18 +809,19 @@ where
             "received gossiped payload",
         );
 
-        let mut trace = GossipedPayloadTrace {
-            receive: get_nanos_timestamp().unwrap_or_default(),
-            ..Default::default()
-        };
+        let mut trace = GossipedPayloadTrace { receive: get_nanos_timestamp().unwrap_or_default(), ..Default::default() };
 
         // Save gossiped payload to auctioneer in case it was sent to diffent region than the header
-        if let Err(err) = self.auctioneer.save_pending_block_payload(
-            req.slot,
-            &req.proposer_pub_key,
-            &req.execution_payload.execution_payload.block_hash().clone(),
-            trace.receive / 1_000_000, // convert to ms
-        ).await {
+        if let Err(err) = self
+            .auctioneer
+            .save_pending_block_payload(
+                req.slot,
+                &req.proposer_pub_key,
+                &req.execution_payload.execution_payload.block_hash().clone(),
+                trace.receive / 1_000_000, // convert to ms
+            )
+            .await
+        {
             error!(request_id = %request_id, error = %err, "failed to save pending block header");
         }
 
@@ -991,12 +854,7 @@ where
         // Save payload to auctioneer
         if let Err(err) = self
             .auctioneer
-            .save_execution_payload(
-                req.slot,
-                &req.proposer_pub_key,
-                req.execution_payload.execution_payload.block_hash(),
-                &req.execution_payload,
-            )
+            .save_execution_payload(req.slot, &req.proposer_pub_key, req.execution_payload.execution_payload.block_hash(), &req.execution_payload)
             .await
         {
             error!(request_id = %request_id, error = %err, "failed to save execution payload");
@@ -1050,14 +908,7 @@ where
         on_receive: u64,
         request_id: &Uuid,
     ) {
-        self.gossip_header(
-            builder_bid,
-            payload.bid_trace(),
-            is_cancellations_enabled,
-            on_receive,
-            request_id,
-        )
-        .await;
+        self.gossip_header(builder_bid, payload.bid_trace(), is_cancellations_enabled, on_receive, request_id).await;
         self.gossip_payload(payload, execution_payload, request_id).await;
     }
 
@@ -1084,17 +935,8 @@ where
         }
     }
 
-    async fn gossip_payload(
-        &self,
-        payload: &SignedBidSubmission,
-        execution_payload: PayloadAndBlobs,
-        request_id: &Uuid,
-    ) {
-        let params = BroadcastPayloadParams {
-            execution_payload,
-            slot: payload.slot(),
-            proposer_pub_key: payload.proposer_public_key().clone(),
-        };
+    async fn gossip_payload(&self, payload: &SignedBidSubmission, execution_payload: PayloadAndBlobs, request_id: &Uuid) {
+        let params = BroadcastPayloadParams { execution_payload, slot: payload.slot(), proposer_pub_key: payload.proposer_public_key().clone() };
         if let Err(err) = self.gossiper.broadcast_payload(params).await {
             error!(request_id = %request_id, error = %err, "failed to broadcast payload");
         }
@@ -1132,9 +974,8 @@ where
 
         // Simulate the submission
         let payload = Arc::new(payload);
-        let was_simulated_optimistically = self
-            .simulate_submission(payload.clone(), builder_info, trace, next_duty.entry, request_id, payload_attributes)
-            .await?;
+        let was_simulated_optimistically =
+            self.simulate_submission(payload.clone(), builder_info, trace, next_duty.entry, request_id, payload_attributes).await?;
 
         Ok((payload, was_simulated_optimistically))
     }
@@ -1151,11 +992,7 @@ where
         proposer_public_key: &BlsPublicKey,
         request_id: &Uuid,
     ) -> Result<(), BuilderApiError> {
-        match self
-            .auctioneer
-            .seen_or_insert_block_hash(block_hash, slot, parent_hash, proposer_public_key)
-            .await
-        {
+        match self.auctioneer.seen_or_insert_block_hash(block_hash, slot, parent_hash, proposer_public_key).await {
             Ok(false) => Ok(()),
             Ok(true) => {
                 warn!(request_id = %request_id, block_hash = ?block_hash, "duplicate block hash");
@@ -1171,8 +1008,7 @@ where
     /// Checks if the bid in the payload is below the floor value.
     ///
     /// - If cancellations are enabled and the bid is below the floor, it deletes the previous bid.
-    /// - If cancellations are not enabled and the bid is at or below the floor, then skip the
-    ///   submission.
+    /// - If cancellations are not enabled and the bid is at or below the floor, then skip the submission.
     ///
     /// Returns the floor bid value.
     async fn check_if_bid_is_below_floor(
@@ -1185,26 +1021,20 @@ where
         is_cancellations_enabled: bool,
         request_id: &Uuid,
     ) -> Result<U256, BuilderApiError> {
-        let floor_bid_value =
-            match self.auctioneer.get_floor_bid_value(slot, parent_hash, proposer_public_key).await
-            {
-                Ok(floor_value) => floor_value.unwrap_or(U256::ZERO),
-                Err(err) => {
-                    error!(request_id = %request_id, error = %err, "Failed to get floor bid value");
-                    return Err(BuilderApiError::InternalError);
-                }
-            };
+        let floor_bid_value = match self.auctioneer.get_floor_bid_value(slot, parent_hash, proposer_public_key).await {
+            Ok(floor_value) => floor_value.unwrap_or(U256::ZERO),
+            Err(err) => {
+                error!(request_id = %request_id, error = %err, "Failed to get floor bid value");
+                return Err(BuilderApiError::InternalError);
+            }
+        };
 
         let is_bid_below_floor = value < floor_bid_value;
         let is_bid_at_or_below_floor = value <= floor_bid_value;
 
         if is_cancellations_enabled && is_bid_below_floor {
             debug!(request_id = %request_id, "submission below floor bid value, with cancellation");
-            if let Err(err) = self
-                .auctioneer
-                .delete_builder_bid(slot, parent_hash, proposer_public_key, builder_public_key)
-                .await
-            {
+            if let Err(err) = self.auctioneer.delete_builder_bid(slot, parent_hash, proposer_public_key, builder_public_key).await {
                 error!(
                     request_id = %request_id,
                     error = %err,
@@ -1229,11 +1059,7 @@ where
     /// This function retrieves the ID associated with the builder's public key from the auctioneer.
     /// It then checks if this ID is included in the list of trusted builders specified by the
     /// proposer.
-    async fn check_if_trusted_builder(
-        &self,
-        next_duty: &BuilderGetValidatorsResponseEntry,
-        builder_info: &BuilderInfo,
-    ) -> bool {
+    async fn check_if_trusted_builder(&self, next_duty: &BuilderGetValidatorsResponseEntry, builder_info: &BuilderInfo) -> bool {
         if let Some(trusted_builders) = &next_duty.entry.preferences.trusted_builders {
             // Handle case where proposer specifies an empty list.
             if trusted_builders.is_empty() {
@@ -1264,11 +1090,7 @@ where
         payload_attributes: &PayloadAttributesUpdate,
     ) -> Result<bool, BuilderApiError> {
         let mut is_top_bid = false;
-        match self
-            .auctioneer
-            .get_top_bid_value(payload.slot(), payload.parent_hash(), payload.proposer_public_key())
-            .await
-        {
+        match self.auctioneer.get_top_bid_value(payload.slot(), payload.parent_hash(), payload.proposer_public_key()).await {
             Ok(top_bid_value) => {
                 let top_bid_value = top_bid_value.unwrap_or(U256::ZERO);
                 is_top_bid = payload.value() > top_bid_value;
@@ -1287,16 +1109,7 @@ where
             registration_info.preferences,
             payload_attributes.payload_attributes.parent_beacon_block_root.clone(),
         );
-        let result = self
-            .simulator
-            .process_request(
-                sim_request,
-                builder_info,
-                is_top_bid,
-                self.db_sender.clone(),
-                *request_id,
-            )
-            .await;
+        let result = self.simulator.process_request(sim_request, builder_info, is_top_bid, self.db_sender.clone(), *request_id).await;
 
         match result {
             Ok(sim_optimistic) => {
@@ -1345,12 +1158,7 @@ where
             Ok(Some((builder_bid, execution_payload))) => {
                 // Log the results of the bid submission
                 trace.auctioneer_update = get_nanos_timestamp()?;
-                log_save_bid_info(
-                    &update_bid_result,
-                    trace.simulation,
-                    trace.auctioneer_update,
-                    request_id,
-                );
+                log_save_bid_info(&update_bid_result, trace.simulation, trace.auctioneer_update, request_id);
 
                 Ok(Some((builder_bid, execution_payload)))
             }
@@ -1386,12 +1194,7 @@ where
             Ok(Some(builder_bid)) => {
                 // Log the results of the bid submission
                 trace.auctioneer_update = get_nanos_timestamp()?;
-                log_save_bid_info(
-                    &update_bid_result,
-                    trace.floor_bid_checks,
-                    trace.auctioneer_update,
-                    request_id,
-                );
+                log_save_bid_info(&update_bid_result, trace.floor_bid_checks, trace.auctioneer_update, request_id);
 
                 Ok(Some(builder_bid))
             }
@@ -1403,25 +1206,16 @@ where
         }
     }
 
-    async fn fetch_payload_attributes(
-        &self,
-        slot: u64,
-        parent_hash: &Hash32,
-        request_id: &Uuid,
-    ) -> Result<PayloadAttributesUpdate, BuilderApiError> {
+    async fn fetch_payload_attributes(&self, slot: u64, parent_hash: &Hash32, request_id: &Uuid) -> Result<PayloadAttributesUpdate, BuilderApiError> {
         let payload_attributes_key = get_payload_attributes_key(parent_hash, slot);
-        let payload_attributes =
-            self.payload_attributes.read().await.get(&payload_attributes_key).cloned().ok_or_else(|| {
-                warn!(request_id = %request_id, "payload attributes not yet known");
-                BuilderApiError::PayloadAttributesNotYetKnown
-            })?;
+        let payload_attributes = self.payload_attributes.read().await.get(&payload_attributes_key).cloned().ok_or_else(|| {
+            warn!(request_id = %request_id, "payload attributes not yet known");
+            BuilderApiError::PayloadAttributesNotYetKnown
+        })?;
 
         if payload_attributes.slot != slot {
             warn!(request_id = %request_id, "payload attributes slot mismatch with payload attributes");
-            return Err(BuilderApiError::PayloadSlotMismatchWithPayloadAttributes {
-                got: slot,
-                expected: payload_attributes.slot,
-            });
+            return Err(BuilderApiError::PayloadSlotMismatchWithPayloadAttributes { got: slot, expected: payload_attributes.slot });
         }
 
         Ok(payload_attributes)
@@ -1432,12 +1226,7 @@ where
     /// This function should be called only if cancellations are enabled.
     /// It checks if there is a later submission.
     /// If a later submission exists, it returns an error.
-    async fn check_for_later_submissions(
-        &self,
-        payload: &impl BidSubmission,
-        on_receive: u64,
-        request_id: &Uuid,
-    ) -> Result<(), BuilderApiError> {
+    async fn check_for_later_submissions(&self, payload: &impl BidSubmission, on_receive: u64, request_id: &Uuid) -> Result<(), BuilderApiError> {
         match self
             .auctioneer
             .get_builder_latest_payload_received_at(
@@ -1478,9 +1267,7 @@ where
                 builder=%payload.builder_public_key(),
                 "builder is not optimistic"
             );
-            return Err(BuilderApiError::BuilderNotOptimistic {
-                builder_pub_key: payload.builder_public_key().clone(),
-            });
+            return Err(BuilderApiError::BuilderNotOptimistic { builder_pub_key: payload.builder_public_key().clone() });
         } else if builder_info.collateral < payload.value() {
             warn!(
                 request_id = %request_id,
@@ -1516,13 +1303,7 @@ where
         }
     }
 
-    async fn demote_builder(
-        &self,
-        builder_pub_key: &BlsPublicKey,
-        block_hash: &Hash32,
-        err: &BuilderApiError,
-        request_id: &Uuid,
-    ) {
+    async fn demote_builder(&self, builder_pub_key: &BlsPublicKey, block_hash: &Hash32, err: &BuilderApiError, request_id: &Uuid) {
         error!(
             request_id = %request_id,
             error = %err,
@@ -1539,9 +1320,7 @@ where
             );
         }
 
-        if let Err(err) =
-            self.db.db_demote_builder(builder_pub_key, block_hash, err.to_string()).await
-        {
+        if let Err(err) = self.db.db_demote_builder(builder_pub_key, block_hash, err.to_string()).await {
             error!(
                 builder=%builder_pub_key,
                 err=%err,
@@ -1562,10 +1341,7 @@ where
 {
     /// Subscribes to slot head updater.
     /// Updates the current slot, next proposer duty and prepares the get_validators() response.
-    pub async fn housekeep(
-        &self,
-        slot_update_subscription: Sender<Sender<ChainUpdate>>,
-    ) -> Result<(), SendError<Sender<ChainUpdate>>> {
+    pub async fn housekeep(&self, slot_update_subscription: Sender<Sender<ChainUpdate>>) -> Result<(), SendError<Sender<ChainUpdate>>> {
         let (tx, mut rx) = mpsc::channel(20);
         slot_update_subscription.send(tx).await?;
 
@@ -1598,8 +1374,7 @@ where
         *self.curr_slot_info.write().await = (slot_update.slot, slot_update.next_duty);
 
         if let Some(new_duties) = slot_update.new_duties {
-            let response: Vec<BuilderGetValidatorsResponse> =
-                new_duties.into_iter().map(|duty| duty.into()).collect();
+            let response: Vec<BuilderGetValidatorsResponse> = new_duties.into_iter().map(|duty| duty.into()).collect();
             match serde_json::to_vec(&response) {
                 Ok(duty_bytes) => *self.proposer_duties_response.write().await = Some(duty_bytes),
                 Err(err) => {
@@ -1666,26 +1441,15 @@ pub async fn decode_payload(
         .unwrap_or(false);
 
     // Get content encoding and content type
-    let is_gzip = req
-        .headers()
-        .get("Content-Encoding")
-        .and_then(|val| val.to_str().ok())
-        .map_or(false, |v| v == "gzip");
+    let is_gzip = req.headers().get("Content-Encoding").and_then(|val| val.to_str().ok()).map_or(false, |v| v == "gzip");
 
-    let is_ssz = req
-        .headers()
-        .get("Content-Type")
-        .and_then(|val| val.to_str().ok())
-        .map_or(false, |v| v == "application/octet-stream");
+    let is_ssz = req.headers().get("Content-Type").and_then(|val| val.to_str().ok()).map_or(false, |v| v == "application/octet-stream");
 
     // Read the body
     let body = req.into_body();
     let mut body_bytes = to_bytes(body, MAX_PAYLOAD_LENGTH).await?;
     if body_bytes.len() > MAX_PAYLOAD_LENGTH {
-        return Err(BuilderApiError::PayloadTooLarge {
-            max_size: MAX_PAYLOAD_LENGTH,
-            size: body_bytes.len(),
-        });
+        return Err(BuilderApiError::PayloadTooLarge { max_size: MAX_PAYLOAD_LENGTH, size: body_bytes.len() });
     }
 
     // Decompress if necessary
@@ -1832,22 +1596,14 @@ pub async fn decode_header_submission(
         })
         .unwrap_or(false);
 
-    let is_ssz = req
-        .headers()
-        .get("Content-Type")
-        .and_then(|val| val.to_str().ok())
-        .map_or(false, |v| v == "application/octet-stream");
+    let is_ssz = req.headers().get("Content-Type").and_then(|val| val.to_str().ok()).map_or(false, |v| v == "application/octet-stream");
 
     // Read the body
     let body = req.into_body();
     let body_bytes = to_bytes(body, MAX_PAYLOAD_LENGTH).await?;
     if body_bytes.len() > MAX_PAYLOAD_LENGTH {
-        return Err(BuilderApiError::PayloadTooLarge {
-            max_size: MAX_PAYLOAD_LENGTH,
-            size: body_bytes.len(),
-        });
+        return Err(BuilderApiError::PayloadTooLarge { max_size: MAX_PAYLOAD_LENGTH, size: body_bytes.len() });
     }
-
 
     // Decode header
     let header: SignedHeaderSubmission = if is_ssz {
@@ -1862,7 +1618,7 @@ pub async fn decode_header_submission(
     } else {
         serde_json::from_slice(&body_bytes)?
     };
-    
+
     trace.decode = get_nanos_timestamp()?;
     info!(
         request_id = %request_id,
@@ -1892,10 +1648,7 @@ fn sanity_check_block_submission(
 ) -> Result<(), BuilderApiError> {
     let expected_timestamp = chain_info.genesis_time_in_secs + (bid_trace.slot * SECONDS_PER_SLOT);
     if payload.timestamp() != expected_timestamp {
-        return Err(BuilderApiError::IncorrectTimestamp {
-            got: payload.timestamp(),
-            expected: expected_timestamp,
-        });
+        return Err(BuilderApiError::IncorrectTimestamp { got: payload.timestamp(), expected: expected_timestamp });
     }
 
     // Check duty
@@ -1938,10 +1691,7 @@ fn sanity_check_block_submission(
         };
 
         if withdrawals_root != expected_withdrawals_root {
-            return Err(BuilderApiError::WithdrawalsRootMismatch {
-                got: withdrawals_root,
-                expected: expected_withdrawals_root,
-            });
+            return Err(BuilderApiError::WithdrawalsRootMismatch { got: withdrawals_root, expected: expected_withdrawals_root });
         }
     }
 
@@ -1951,28 +1701,17 @@ fn sanity_check_block_submission(
     }
 
     if bid_trace.block_hash != *payload.block_hash() {
-        return Err(BuilderApiError::BlockHashMismatch {
-            message: bid_trace.block_hash.clone(),
-            payload: payload.block_hash().clone(),
-        });
+        return Err(BuilderApiError::BlockHashMismatch { message: bid_trace.block_hash.clone(), payload: payload.block_hash().clone() });
     }
 
     if bid_trace.parent_hash != *payload.parent_hash() {
-        return Err(BuilderApiError::ParentHashMismatch {
-            message: bid_trace.parent_hash.clone(),
-            payload: payload.parent_hash().clone(),
-        });
+        return Err(BuilderApiError::ParentHashMismatch { message: bid_trace.parent_hash.clone(), payload: payload.parent_hash().clone() });
     }
 
     Ok(())
 }
 
-fn log_save_bid_info(
-    update_bid_result: &SaveBidAndUpdateTopBidResponse,
-    bid_update_start: u64,
-    bid_update_finish: u64,
-    request_id: &Uuid,
-) {
+fn log_save_bid_info(update_bid_result: &SaveBidAndUpdateTopBidResponse, bid_update_start: u64, bid_update_finish: u64, request_id: &Uuid) {
     info!(
         request_id = %request_id,
         bid_update_latency = bid_update_finish.saturating_sub(bid_update_start),
@@ -1992,15 +1731,11 @@ fn log_save_bid_info(
 
 /// Should be called as a new async task.
 /// Stores updates to the db out of the critical path.
-async fn process_db_additions<DB: DatabaseService + 'static>(
-    db: Arc<DB>,
-    mut db_receiver: mpsc::Receiver<DbInfo>,
-) {
+async fn process_db_additions<DB: DatabaseService + 'static>(db: Arc<DB>, mut db_receiver: mpsc::Receiver<DbInfo>) {
     while let Some(db_info) = db_receiver.recv().await {
         match db_info {
             DbInfo::NewSubmission(submission, trace, version) => {
-                if let Err(err) = db.store_block_submission(submission, trace, version as i16).await
-                {
+                if let Err(err) = db.store_block_submission(submission, trace, version as i16).await {
                     error!(
                         error = %err,
                         "failed to store block submission",
@@ -2044,28 +1779,22 @@ async fn process_db_additions<DB: DatabaseService + 'static>(
 }
 
 fn get_nanos_timestamp() -> Result<u64, BuilderApiError> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .map_err(|_| BuilderApiError::InternalError)
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).map_err(|_| BuilderApiError::InternalError)
 }
 
 fn get_nanos_from(now: SystemTime) -> Result<u64, BuilderApiError> {
-    now.duration_since(UNIX_EPOCH)
-    .map(|d| d.as_nanos() as u64)
-    .map_err(|_| BuilderApiError::InternalError)
+    now.duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).map_err(|_| BuilderApiError::InternalError)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use axum::http::{
         header::{CONTENT_ENCODING, CONTENT_TYPE},
         HeaderValue, Uri,
     };
-
     use uuid::Uuid;
+
+    use super::*;
 
     async fn build_test_request(payload: Vec<u8>, is_gzip: bool, is_ssz: bool) -> Request<Body> {
         let mut req = Request::new(Body::from(payload));
@@ -2076,8 +1805,7 @@ mod tests {
         }
 
         if is_ssz {
-            req.headers_mut()
-                .insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
+            req.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
         }
 
         req
@@ -2108,131 +1836,86 @@ mod tests {
     #[tokio::test]
     async fn test_decode_empty_tx_payload_json() {
         let json_payload = vec![
-            123, 10, 32, 32, 34, 109, 101, 115, 115, 97, 103, 101, 34, 58, 32, 123, 10, 32, 32, 32,
-            32, 34, 115, 108, 111, 116, 34, 58, 32, 34, 49, 34, 44, 10, 32, 32, 32, 32, 34, 112,
-            97, 114, 101, 110, 116, 95, 104, 97, 115, 104, 34, 58, 32, 34, 48, 120, 99, 102, 56,
-            101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48, 49, 100, 48, 55, 57,
-            48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 52, 51, 100, 53, 97, 49, 56,
-            56, 52, 53, 54, 48, 51, 54, 55, 101, 56, 50, 48, 56, 100, 57, 50, 48, 102, 50, 34, 44,
-            10, 32, 32, 32, 32, 34, 98, 108, 111, 99, 107, 95, 104, 97, 115, 104, 34, 58, 32, 34,
-            48, 120, 99, 102, 56, 101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51,
-            48, 49, 100, 48, 55, 57, 48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 52,
-            51, 100, 53, 97, 49, 56, 56, 52, 53, 54, 48, 51, 54, 55, 101, 56, 50, 48, 56, 100, 57,
-            50, 48, 102, 50, 34, 44, 10, 32, 32, 32, 32, 34, 98, 117, 105, 108, 100, 101, 114, 95,
-            112, 117, 98, 107, 101, 121, 34, 58, 32, 34, 48, 120, 57, 51, 50, 52, 55, 102, 50, 50,
-            48, 57, 97, 98, 99, 97, 99, 102, 53, 55, 98, 55, 53, 97, 53, 49, 100, 97, 102, 97, 101,
-            55, 55, 55, 102, 57, 100, 100, 51, 56, 98, 99, 55, 48, 53, 51, 100, 49, 97, 102, 53,
-            50, 54, 102, 50, 50, 48, 97, 55, 52, 56, 57, 97, 54, 100, 51, 97, 50, 55, 53, 51, 101,
-            53, 102, 51, 101, 56, 98, 49, 99, 102, 101, 51, 57, 98, 53, 54, 102, 52, 51, 54, 49,
-            49, 100, 102, 55, 52, 97, 34, 44, 10, 32, 32, 32, 32, 34, 112, 114, 111, 112, 111, 115,
-            101, 114, 95, 112, 117, 98, 107, 101, 121, 34, 58, 32, 34, 48, 120, 56, 53, 53, 57, 55,
-            50, 55, 101, 101, 54, 53, 99, 50, 57, 53, 50, 55, 57, 51, 51, 50, 49, 57, 56, 48, 50,
-            57, 99, 57, 51, 57, 53, 53, 55, 102, 52, 100, 50, 97, 98, 97, 48, 55, 53, 49, 102, 99,
-            53, 53, 102, 55, 49, 100, 48, 55, 51, 51, 98, 56, 97, 97, 49, 55, 99, 100, 48, 51, 48,
-            49, 50, 51, 50, 97, 55, 102, 50, 49, 97, 56, 57, 53, 102, 56, 49, 101, 97, 99, 102, 53,
-            53, 99, 57, 55, 101, 99, 52, 34, 44, 10, 32, 32, 32, 32, 34, 112, 114, 111, 112, 111,
-            115, 101, 114, 95, 102, 101, 101, 95, 114, 101, 99, 105, 112, 105, 101, 110, 116, 34,
-            58, 32, 34, 48, 120, 97, 98, 99, 102, 56, 101, 48, 100, 52, 101, 57, 53, 56, 55, 51,
-            54, 57, 98, 50, 51, 48, 49, 100, 48, 55, 57, 48, 51, 52, 55, 51, 50, 48, 51, 48, 50,
-            99, 99, 48, 57, 34, 44, 10, 32, 32, 32, 32, 34, 103, 97, 115, 95, 108, 105, 109, 105,
-            116, 34, 58, 32, 34, 49, 34, 44, 10, 32, 32, 32, 32, 34, 103, 97, 115, 95, 117, 115,
-            101, 100, 34, 58, 32, 34, 49, 34, 44, 10, 32, 32, 32, 32, 34, 118, 97, 108, 117, 101,
-            34, 58, 32, 34, 49, 34, 10, 32, 32, 125, 44, 10, 32, 32, 34, 101, 120, 101, 99, 117,
-            116, 105, 111, 110, 95, 112, 97, 121, 108, 111, 97, 100, 34, 58, 32, 123, 10, 32, 32,
-            32, 32, 34, 112, 97, 114, 101, 110, 116, 95, 104, 97, 115, 104, 34, 58, 32, 34, 48,
-            120, 99, 102, 56, 101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48,
-            49, 100, 48, 55, 57, 48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 52, 51,
-            100, 53, 97, 49, 56, 56, 52, 53, 54, 48, 51, 54, 55, 101, 56, 50, 48, 56, 100, 57, 50,
-            48, 102, 50, 34, 44, 10, 32, 32, 32, 32, 34, 102, 101, 101, 95, 114, 101, 99, 105, 112,
-            105, 101, 110, 116, 34, 58, 32, 34, 48, 120, 97, 98, 99, 102, 56, 101, 48, 100, 52,
-            101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48, 49, 100, 48, 55, 57, 48, 51, 52, 55,
-            51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 34, 44, 10, 32, 32, 32, 32, 34, 115, 116, 97,
-            116, 101, 95, 114, 111, 111, 116, 34, 58, 32, 34, 48, 120, 99, 102, 56, 101, 48, 100,
-            52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48, 49, 100, 48, 55, 57, 48, 51, 52,
-            55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 52, 51, 100, 53, 97, 49, 56, 56, 52, 53,
-            54, 48, 51, 54, 55, 101, 56, 50, 48, 56, 100, 57, 50, 48, 102, 50, 34, 44, 10, 32, 32,
-            32, 32, 34, 114, 101, 99, 101, 105, 112, 116, 115, 95, 114, 111, 111, 116, 34, 58, 32,
-            34, 48, 120, 99, 102, 56, 101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50,
-            51, 48, 49, 100, 48, 55, 57, 48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57,
-            52, 51, 100, 53, 97, 49, 56, 56, 52, 53, 54, 48, 51, 54, 55, 101, 56, 50, 48, 56, 100,
-            57, 50, 48, 102, 50, 34, 44, 10, 32, 32, 32, 32, 34, 108, 111, 103, 115, 95, 98, 108,
-            111, 111, 109, 34, 58, 32, 34, 48, 120, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 34, 44, 10, 32, 32, 32,
-            32, 34, 112, 114, 101, 118, 95, 114, 97, 110, 100, 97, 111, 34, 58, 32, 34, 48, 120,
-            99, 102, 56, 101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48, 49,
-            100, 48, 55, 57, 48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 52, 51, 100,
-            53, 97, 49, 56, 56, 52, 53, 54, 48, 51, 54, 55, 101, 56, 50, 48, 56, 100, 57, 50, 48,
-            102, 50, 34, 44, 10, 32, 32, 32, 32, 34, 98, 108, 111, 99, 107, 95, 110, 117, 109, 98,
-            101, 114, 34, 58, 32, 34, 49, 34, 44, 10, 32, 32, 32, 32, 34, 103, 97, 115, 95, 108,
-            105, 109, 105, 116, 34, 58, 32, 34, 49, 34, 44, 10, 32, 32, 32, 32, 34, 103, 97, 115,
-            95, 117, 115, 101, 100, 34, 58, 32, 34, 49, 34, 44, 10, 32, 32, 32, 32, 34, 116, 105,
-            109, 101, 115, 116, 97, 109, 112, 34, 58, 32, 34, 49, 34, 44, 10, 32, 32, 32, 32, 34,
-            101, 120, 116, 114, 97, 95, 100, 97, 116, 97, 34, 58, 32, 34, 48, 120, 99, 102, 56,
-            101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48, 49, 100, 48, 55, 57,
-            48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 52, 51, 100, 53, 97, 49, 56,
-            56, 52, 53, 54, 48, 51, 54, 55, 101, 56, 50, 48, 56, 100, 57, 50, 48, 102, 50, 34, 44,
-            10, 32, 32, 32, 32, 34, 98, 97, 115, 101, 95, 102, 101, 101, 95, 112, 101, 114, 95,
-            103, 97, 115, 34, 58, 32, 34, 49, 34, 44, 10, 32, 32, 32, 32, 34, 98, 108, 111, 99,
-            107, 95, 104, 97, 115, 104, 34, 58, 32, 34, 48, 120, 99, 102, 56, 101, 48, 100, 52,
-            101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48, 49, 100, 48, 55, 57, 48, 51, 52, 55,
-            51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 52, 51, 100, 53, 97, 49, 56, 56, 52, 53, 54,
-            48, 51, 54, 55, 101, 56, 50, 48, 56, 100, 57, 50, 48, 102, 50, 34, 44, 10, 32, 32, 32,
-            32, 34, 116, 114, 97, 110, 115, 97, 99, 116, 105, 111, 110, 115, 34, 58, 32, 91, 10,
-            32, 32, 32, 32, 32, 32, 34, 48, 120, 48, 50, 102, 56, 55, 56, 56, 51, 49, 52, 54, 57,
-            54, 54, 56, 51, 48, 51, 102, 53, 49, 100, 56, 52, 51, 98, 57, 97, 99, 57, 102, 57, 56,
-            52, 51, 98, 57, 97, 99, 97, 48, 48, 56, 50, 53, 50, 48, 56, 57, 52, 99, 57, 51, 50, 54,
-            57, 98, 55, 51, 48, 57, 54, 57, 57, 56, 100, 98, 54, 54, 98, 101, 48, 52, 52, 49, 101,
-            56, 51, 54, 100, 56, 55, 51, 53, 51, 53, 99, 98, 57, 99, 56, 56, 57, 52, 97, 49, 57,
-            48, 52, 49, 56, 56, 54, 102, 48, 48, 48, 48, 56, 48, 99, 48, 48, 49, 97, 48, 51, 49,
-            99, 99, 50, 57, 50, 51, 52, 48, 51, 54, 97, 102, 98, 102, 57, 97, 49, 102, 98, 57, 52,
-            55, 54, 98, 52, 54, 51, 51, 54, 55, 99, 98, 49, 102, 57, 53, 55, 97, 99, 48, 98, 57,
-            49, 57, 98, 54, 57, 98, 98, 99, 55, 57, 56, 52, 51, 54, 101, 54, 48, 52, 97, 97, 97,
-            48, 49, 56, 99, 52, 101, 57, 99, 51, 57, 49, 52, 101, 98, 50, 55, 97, 97, 100, 100, 48,
-            98, 57, 49, 101, 49, 48, 98, 49, 56, 54, 53, 53, 55, 51, 57, 102, 99, 102, 56, 99, 49,
-            102, 99, 51, 57, 56, 55, 54, 51, 97, 57, 102, 49, 98, 101, 101, 99, 98, 56, 100, 100,
-            99, 56, 54, 34, 10, 32, 32, 32, 32, 93, 44, 10, 32, 32, 32, 32, 34, 119, 105, 116, 104,
-            100, 114, 97, 119, 97, 108, 115, 34, 58, 32, 91, 10, 32, 32, 32, 32, 32, 32, 123, 10,
-            32, 32, 32, 32, 32, 32, 32, 32, 34, 105, 110, 100, 101, 120, 34, 58, 32, 34, 49, 34,
-            44, 10, 32, 32, 32, 32, 32, 32, 32, 32, 34, 118, 97, 108, 105, 100, 97, 116, 111, 114,
-            95, 105, 110, 100, 101, 120, 34, 58, 32, 34, 49, 34, 44, 10, 32, 32, 32, 32, 32, 32,
-            32, 32, 34, 97, 100, 100, 114, 101, 115, 115, 34, 58, 32, 34, 48, 120, 97, 98, 99, 102,
-            56, 101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48, 49, 100, 48, 55,
-            57, 48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 34, 44, 10, 32, 32, 32, 32,
-            32, 32, 32, 32, 34, 97, 109, 111, 117, 110, 116, 34, 58, 32, 34, 51, 50, 48, 48, 48,
-            48, 48, 48, 48, 48, 48, 34, 10, 32, 32, 32, 32, 32, 32, 125, 10, 32, 32, 32, 32, 93,
-            10, 32, 32, 125, 44, 10, 32, 32, 34, 115, 105, 103, 110, 97, 116, 117, 114, 101, 34,
-            58, 32, 34, 48, 120, 49, 98, 54, 54, 97, 99, 49, 102, 98, 54, 54, 51, 99, 57, 98, 99,
-            53, 57, 53, 48, 57, 56, 52, 54, 100, 54, 101, 99, 48, 53, 51, 52, 53, 98, 100, 57, 48,
-            56, 101, 100, 97, 55, 51, 101, 54, 55, 48, 97, 102, 56, 56, 56, 100, 97, 52, 49, 97,
-            102, 49, 55, 49, 53, 48, 53, 99, 99, 52, 49, 49, 100, 54, 49, 50, 53, 50, 102, 98, 54,
-            99, 98, 51, 102, 97, 48, 48, 49, 55, 98, 54, 55, 57, 102, 56, 98, 98, 50, 51, 48, 53,
-            98, 50, 54, 97, 50, 56, 53, 102, 97, 50, 55, 51, 55, 102, 49, 55, 53, 54, 54, 56, 100,
-            48, 100, 102, 102, 57, 49, 99, 99, 49, 98, 54, 54, 97, 99, 49, 102, 98, 54, 54, 51, 99,
-            57, 98, 99, 53, 57, 53, 48, 57, 56, 52, 54, 100, 54, 101, 99, 48, 53, 51, 52, 53, 98,
-            100, 57, 48, 56, 101, 100, 97, 55, 51, 101, 54, 55, 48, 97, 102, 56, 56, 56, 100, 97,
-            52, 49, 97, 102, 49, 55, 49, 53, 48, 53, 34, 10, 125,
+            123, 10, 32, 32, 34, 109, 101, 115, 115, 97, 103, 101, 34, 58, 32, 123, 10, 32, 32, 32, 32, 34, 115, 108, 111, 116, 34, 58, 32, 34, 49,
+            34, 44, 10, 32, 32, 32, 32, 34, 112, 97, 114, 101, 110, 116, 95, 104, 97, 115, 104, 34, 58, 32, 34, 48, 120, 99, 102, 56, 101, 48, 100,
+            52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48, 49, 100, 48, 55, 57, 48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 52, 51,
+            100, 53, 97, 49, 56, 56, 52, 53, 54, 48, 51, 54, 55, 101, 56, 50, 48, 56, 100, 57, 50, 48, 102, 50, 34, 44, 10, 32, 32, 32, 32, 34, 98,
+            108, 111, 99, 107, 95, 104, 97, 115, 104, 34, 58, 32, 34, 48, 120, 99, 102, 56, 101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98,
+            50, 51, 48, 49, 100, 48, 55, 57, 48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 52, 51, 100, 53, 97, 49, 56, 56, 52, 53, 54, 48,
+            51, 54, 55, 101, 56, 50, 48, 56, 100, 57, 50, 48, 102, 50, 34, 44, 10, 32, 32, 32, 32, 34, 98, 117, 105, 108, 100, 101, 114, 95, 112,
+            117, 98, 107, 101, 121, 34, 58, 32, 34, 48, 120, 57, 51, 50, 52, 55, 102, 50, 50, 48, 57, 97, 98, 99, 97, 99, 102, 53, 55, 98, 55, 53,
+            97, 53, 49, 100, 97, 102, 97, 101, 55, 55, 55, 102, 57, 100, 100, 51, 56, 98, 99, 55, 48, 53, 51, 100, 49, 97, 102, 53, 50, 54, 102, 50,
+            50, 48, 97, 55, 52, 56, 57, 97, 54, 100, 51, 97, 50, 55, 53, 51, 101, 53, 102, 51, 101, 56, 98, 49, 99, 102, 101, 51, 57, 98, 53, 54,
+            102, 52, 51, 54, 49, 49, 100, 102, 55, 52, 97, 34, 44, 10, 32, 32, 32, 32, 34, 112, 114, 111, 112, 111, 115, 101, 114, 95, 112, 117, 98,
+            107, 101, 121, 34, 58, 32, 34, 48, 120, 56, 53, 53, 57, 55, 50, 55, 101, 101, 54, 53, 99, 50, 57, 53, 50, 55, 57, 51, 51, 50, 49, 57, 56,
+            48, 50, 57, 99, 57, 51, 57, 53, 53, 55, 102, 52, 100, 50, 97, 98, 97, 48, 55, 53, 49, 102, 99, 53, 53, 102, 55, 49, 100, 48, 55, 51, 51,
+            98, 56, 97, 97, 49, 55, 99, 100, 48, 51, 48, 49, 50, 51, 50, 97, 55, 102, 50, 49, 97, 56, 57, 53, 102, 56, 49, 101, 97, 99, 102, 53, 53,
+            99, 57, 55, 101, 99, 52, 34, 44, 10, 32, 32, 32, 32, 34, 112, 114, 111, 112, 111, 115, 101, 114, 95, 102, 101, 101, 95, 114, 101, 99,
+            105, 112, 105, 101, 110, 116, 34, 58, 32, 34, 48, 120, 97, 98, 99, 102, 56, 101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50,
+            51, 48, 49, 100, 48, 55, 57, 48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 34, 44, 10, 32, 32, 32, 32, 34, 103, 97, 115, 95,
+            108, 105, 109, 105, 116, 34, 58, 32, 34, 49, 34, 44, 10, 32, 32, 32, 32, 34, 103, 97, 115, 95, 117, 115, 101, 100, 34, 58, 32, 34, 49,
+            34, 44, 10, 32, 32, 32, 32, 34, 118, 97, 108, 117, 101, 34, 58, 32, 34, 49, 34, 10, 32, 32, 125, 44, 10, 32, 32, 34, 101, 120, 101, 99,
+            117, 116, 105, 111, 110, 95, 112, 97, 121, 108, 111, 97, 100, 34, 58, 32, 123, 10, 32, 32, 32, 32, 34, 112, 97, 114, 101, 110, 116, 95,
+            104, 97, 115, 104, 34, 58, 32, 34, 48, 120, 99, 102, 56, 101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48, 49, 100, 48,
+            55, 57, 48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 52, 51, 100, 53, 97, 49, 56, 56, 52, 53, 54, 48, 51, 54, 55, 101, 56, 50,
+            48, 56, 100, 57, 50, 48, 102, 50, 34, 44, 10, 32, 32, 32, 32, 34, 102, 101, 101, 95, 114, 101, 99, 105, 112, 105, 101, 110, 116, 34, 58,
+            32, 34, 48, 120, 97, 98, 99, 102, 56, 101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48, 49, 100, 48, 55, 57, 48, 51, 52,
+            55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 34, 44, 10, 32, 32, 32, 32, 34, 115, 116, 97, 116, 101, 95, 114, 111, 111, 116, 34, 58, 32,
+            34, 48, 120, 99, 102, 56, 101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48, 49, 100, 48, 55, 57, 48, 51, 52, 55, 51, 50,
+            48, 51, 48, 50, 99, 99, 48, 57, 52, 51, 100, 53, 97, 49, 56, 56, 52, 53, 54, 48, 51, 54, 55, 101, 56, 50, 48, 56, 100, 57, 50, 48, 102,
+            50, 34, 44, 10, 32, 32, 32, 32, 34, 114, 101, 99, 101, 105, 112, 116, 115, 95, 114, 111, 111, 116, 34, 58, 32, 34, 48, 120, 99, 102, 56,
+            101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48, 49, 100, 48, 55, 57, 48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99,
+            48, 57, 52, 51, 100, 53, 97, 49, 56, 56, 52, 53, 54, 48, 51, 54, 55, 101, 56, 50, 48, 56, 100, 57, 50, 48, 102, 50, 34, 44, 10, 32, 32,
+            32, 32, 34, 108, 111, 103, 115, 95, 98, 108, 111, 111, 109, 34, 58, 32, 34, 48, 120, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 34, 44, 10, 32, 32, 32, 32, 34, 112, 114,
+            101, 118, 95, 114, 97, 110, 100, 97, 111, 34, 58, 32, 34, 48, 120, 99, 102, 56, 101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98,
+            50, 51, 48, 49, 100, 48, 55, 57, 48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 52, 51, 100, 53, 97, 49, 56, 56, 52, 53, 54, 48,
+            51, 54, 55, 101, 56, 50, 48, 56, 100, 57, 50, 48, 102, 50, 34, 44, 10, 32, 32, 32, 32, 34, 98, 108, 111, 99, 107, 95, 110, 117, 109, 98,
+            101, 114, 34, 58, 32, 34, 49, 34, 44, 10, 32, 32, 32, 32, 34, 103, 97, 115, 95, 108, 105, 109, 105, 116, 34, 58, 32, 34, 49, 34, 44, 10,
+            32, 32, 32, 32, 34, 103, 97, 115, 95, 117, 115, 101, 100, 34, 58, 32, 34, 49, 34, 44, 10, 32, 32, 32, 32, 34, 116, 105, 109, 101, 115,
+            116, 97, 109, 112, 34, 58, 32, 34, 49, 34, 44, 10, 32, 32, 32, 32, 34, 101, 120, 116, 114, 97, 95, 100, 97, 116, 97, 34, 58, 32, 34, 48,
+            120, 99, 102, 56, 101, 48, 100, 52, 101, 57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48, 49, 100, 48, 55, 57, 48, 51, 52, 55, 51, 50, 48, 51,
+            48, 50, 99, 99, 48, 57, 52, 51, 100, 53, 97, 49, 56, 56, 52, 53, 54, 48, 51, 54, 55, 101, 56, 50, 48, 56, 100, 57, 50, 48, 102, 50, 34,
+            44, 10, 32, 32, 32, 32, 34, 98, 97, 115, 101, 95, 102, 101, 101, 95, 112, 101, 114, 95, 103, 97, 115, 34, 58, 32, 34, 49, 34, 44, 10, 32,
+            32, 32, 32, 34, 98, 108, 111, 99, 107, 95, 104, 97, 115, 104, 34, 58, 32, 34, 48, 120, 99, 102, 56, 101, 48, 100, 52, 101, 57, 53, 56,
+            55, 51, 54, 57, 98, 50, 51, 48, 49, 100, 48, 55, 57, 48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 52, 51, 100, 53, 97, 49, 56,
+            56, 52, 53, 54, 48, 51, 54, 55, 101, 56, 50, 48, 56, 100, 57, 50, 48, 102, 50, 34, 44, 10, 32, 32, 32, 32, 34, 116, 114, 97, 110, 115,
+            97, 99, 116, 105, 111, 110, 115, 34, 58, 32, 91, 10, 32, 32, 32, 32, 32, 32, 34, 48, 120, 48, 50, 102, 56, 55, 56, 56, 51, 49, 52, 54,
+            57, 54, 54, 56, 51, 48, 51, 102, 53, 49, 100, 56, 52, 51, 98, 57, 97, 99, 57, 102, 57, 56, 52, 51, 98, 57, 97, 99, 97, 48, 48, 56, 50,
+            53, 50, 48, 56, 57, 52, 99, 57, 51, 50, 54, 57, 98, 55, 51, 48, 57, 54, 57, 57, 56, 100, 98, 54, 54, 98, 101, 48, 52, 52, 49, 101, 56,
+            51, 54, 100, 56, 55, 51, 53, 51, 53, 99, 98, 57, 99, 56, 56, 57, 52, 97, 49, 57, 48, 52, 49, 56, 56, 54, 102, 48, 48, 48, 48, 56, 48, 99,
+            48, 48, 49, 97, 48, 51, 49, 99, 99, 50, 57, 50, 51, 52, 48, 51, 54, 97, 102, 98, 102, 57, 97, 49, 102, 98, 57, 52, 55, 54, 98, 52, 54,
+            51, 51, 54, 55, 99, 98, 49, 102, 57, 53, 55, 97, 99, 48, 98, 57, 49, 57, 98, 54, 57, 98, 98, 99, 55, 57, 56, 52, 51, 54, 101, 54, 48, 52,
+            97, 97, 97, 48, 49, 56, 99, 52, 101, 57, 99, 51, 57, 49, 52, 101, 98, 50, 55, 97, 97, 100, 100, 48, 98, 57, 49, 101, 49, 48, 98, 49, 56,
+            54, 53, 53, 55, 51, 57, 102, 99, 102, 56, 99, 49, 102, 99, 51, 57, 56, 55, 54, 51, 97, 57, 102, 49, 98, 101, 101, 99, 98, 56, 100, 100,
+            99, 56, 54, 34, 10, 32, 32, 32, 32, 93, 44, 10, 32, 32, 32, 32, 34, 119, 105, 116, 104, 100, 114, 97, 119, 97, 108, 115, 34, 58, 32, 91,
+            10, 32, 32, 32, 32, 32, 32, 123, 10, 32, 32, 32, 32, 32, 32, 32, 32, 34, 105, 110, 100, 101, 120, 34, 58, 32, 34, 49, 34, 44, 10, 32, 32,
+            32, 32, 32, 32, 32, 32, 34, 118, 97, 108, 105, 100, 97, 116, 111, 114, 95, 105, 110, 100, 101, 120, 34, 58, 32, 34, 49, 34, 44, 10, 32,
+            32, 32, 32, 32, 32, 32, 32, 34, 97, 100, 100, 114, 101, 115, 115, 34, 58, 32, 34, 48, 120, 97, 98, 99, 102, 56, 101, 48, 100, 52, 101,
+            57, 53, 56, 55, 51, 54, 57, 98, 50, 51, 48, 49, 100, 48, 55, 57, 48, 51, 52, 55, 51, 50, 48, 51, 48, 50, 99, 99, 48, 57, 34, 44, 10, 32,
+            32, 32, 32, 32, 32, 32, 32, 34, 97, 109, 111, 117, 110, 116, 34, 58, 32, 34, 51, 50, 48, 48, 48, 48, 48, 48, 48, 48, 48, 34, 10, 32, 32,
+            32, 32, 32, 32, 125, 10, 32, 32, 32, 32, 93, 10, 32, 32, 125, 44, 10, 32, 32, 34, 115, 105, 103, 110, 97, 116, 117, 114, 101, 34, 58, 32,
+            34, 48, 120, 49, 98, 54, 54, 97, 99, 49, 102, 98, 54, 54, 51, 99, 57, 98, 99, 53, 57, 53, 48, 57, 56, 52, 54, 100, 54, 101, 99, 48, 53,
+            51, 52, 53, 98, 100, 57, 48, 56, 101, 100, 97, 55, 51, 101, 54, 55, 48, 97, 102, 56, 56, 56, 100, 97, 52, 49, 97, 102, 49, 55, 49, 53,
+            48, 53, 99, 99, 52, 49, 49, 100, 54, 49, 50, 53, 50, 102, 98, 54, 99, 98, 51, 102, 97, 48, 48, 49, 55, 98, 54, 55, 57, 102, 56, 98, 98,
+            50, 51, 48, 53, 98, 50, 54, 97, 50, 56, 53, 102, 97, 50, 55, 51, 55, 102, 49, 55, 53, 54, 54, 56, 100, 48, 100, 102, 102, 57, 49, 99, 99,
+            49, 98, 54, 54, 97, 99, 49, 102, 98, 54, 54, 51, 99, 57, 98, 99, 53, 57, 53, 48, 57, 56, 52, 54, 100, 54, 101, 99, 48, 53, 51, 52, 53,
+            98, 100, 57, 48, 56, 101, 100, 97, 55, 51, 101, 54, 55, 48, 97, 102, 56, 56, 56, 100, 97, 52, 49, 97, 102, 49, 55, 49, 53, 48, 53, 34,
+            10, 125,
         ];
         match serde_json::from_slice::<SignedBidSubmission>(&json_payload) {
             Ok(res) => {
@@ -2260,82 +1943,55 @@ mod tests {
     #[tokio::test]
     async fn test_decode_ssz_payload_empty() {
         let ssz_payload = vec![
-            178, 184, 84, 0, 0, 0, 0, 0, 189, 50, 145, 133, 77, 200, 34, 183, 236, 88, 89, 37, 205,
-            160, 225, 143, 6, 175, 40, 250, 40, 134, 225, 95, 82, 213, 45, 212, 182, 249, 78, 214,
-            27, 175, 220, 69, 65, 22, 182, 5, 0, 83, 100, 151, 107, 19, 77, 118, 29, 215, 54, 203,
-            71, 136, 210, 92, 131, 87, 131, 180, 109, 174, 177, 33, 182, 122, 81, 72, 160, 50, 41,
-            146, 110, 52, 177, 144, 175, 129, 168, 42, 129, 196, 223, 102, 131, 28, 152, 192, 58,
-            19, 151, 120, 65, 141, 208, 154, 59, 84, 44, 237, 0, 34, 98, 13, 25, 243, 87, 129, 236,
-            230, 220, 54, 133, 89, 114, 126, 230, 92, 41, 82, 121, 51, 33, 152, 2, 156, 147, 149,
-            87, 244, 210, 171, 160, 117, 31, 197, 95, 113, 208, 115, 59, 138, 161, 124, 208, 48,
-            18, 50, 167, 242, 26, 137, 95, 129, 234, 207, 85, 201, 126, 196, 92, 192, 221, 225, 78,
-            114, 86, 52, 12, 200, 32, 65, 90, 96, 34, 167, 209, 201, 58, 53, 128, 195, 201, 1, 0,
-            0, 0, 0, 205, 212, 138, 1, 0, 0, 0, 0, 103, 160, 177, 121, 204, 223, 252, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 80, 1, 0, 0, 162, 222,
-            245, 66, 55, 191, 235, 29, 146, 105, 54, 94, 133, 59, 84, 105, 246, 139, 127, 74, 213,
-            28, 167, 135, 126, 64, 108, 169, 75, 200, 169, 75, 186, 84, 193, 64, 36, 178, 249, 237,
-            55, 216, 105, 11, 185, 250, 197, 38, 0, 183, 255, 82, 185, 107, 132, 60, 216, 82, 158,
-            158, 204, 36, 151, 160, 236, 213, 219, 131, 114, 226, 4, 145, 86, 224, 250, 147, 52,
-            213, 193, 176, 239, 100, 47, 25, 38, 117, 181, 134, 236, 190, 111, 195, 129, 23, 143,
-            136, 189, 50, 145, 133, 77, 200, 34, 183, 236, 88, 89, 37, 205, 160, 225, 143, 6, 175,
-            40, 250, 40, 134, 225, 95, 82, 213, 45, 212, 182, 249, 78, 214, 182, 74, 48, 57, 159,
-            127, 107, 12, 21, 76, 46, 122, 240, 163, 236, 123, 10, 91, 19, 26, 116, 247, 77, 21,
-            220, 176, 11, 161, 148, 144, 17, 54, 242, 1, 157, 214, 190, 45, 76, 136, 200, 34, 120,
-            109, 249, 5, 97, 165, 80, 25, 56, 153, 180, 16, 250, 52, 161, 49, 38, 38, 219, 60, 65,
-            211, 37, 84, 94, 159, 36, 233, 3, 213, 221, 155, 156, 38, 8, 130, 170, 219, 76, 40,
-            250, 142, 64, 247, 72, 69, 33, 226, 244, 248, 0, 30, 217, 176, 129, 5, 149, 196, 80,
-            56, 8, 68, 175, 97, 9, 68, 33, 129, 4, 210, 28, 34, 0, 40, 170, 106, 21, 10, 134, 49,
-            43, 0, 0, 64, 64, 25, 9, 229, 72, 231, 28, 106, 5, 18, 138, 88, 96, 114, 0, 16, 63,
-            196, 0, 52, 111, 110, 152, 67, 194, 226, 12, 114, 160, 13, 123, 216, 19, 138, 36, 154,
-            131, 32, 134, 151, 192, 208, 61, 118, 51, 193, 130, 72, 165, 143, 232, 130, 132, 36,
-            10, 14, 67, 231, 130, 198, 176, 193, 22, 122, 0, 172, 152, 8, 190, 73, 153, 80, 232,
-            80, 2, 40, 119, 105, 128, 38, 100, 144, 242, 28, 144, 64, 179, 10, 48, 180, 146, 44,
-            58, 122, 248, 80, 186, 8, 242, 0, 1, 70, 234, 133, 4, 1, 233, 120, 3, 142, 18, 5, 9,
-            66, 21, 2, 80, 22, 174, 136, 17, 22, 105, 97, 71, 125, 104, 82, 44, 130, 108, 154, 13,
-            32, 34, 140, 130, 45, 226, 172, 131, 5, 3, 177, 57, 54, 181, 224, 27, 159, 149, 50,
-            236, 35, 34, 199, 12, 73, 28, 26, 33, 97, 133, 51, 194, 132, 41, 155, 24, 146, 7, 207,
-            14, 55, 242, 199, 161, 147, 12, 102, 103, 129, 95, 210, 56, 41, 9, 38, 38, 92, 194,
-            128, 149, 160, 160, 36, 2, 52, 175, 56, 16, 146, 138, 150, 42, 208, 38, 74, 73, 5, 1,
-            138, 2, 161, 153, 98, 129, 110, 157, 10, 57, 253, 76, 128, 147, 83, 56, 167, 65, 220,
-            145, 109, 21, 69, 105, 78, 65, 235, 90, 80, 94, 26, 48, 152, 249, 228, 220, 89, 136, 0,
-            0, 0, 0, 0, 128, 195, 201, 1, 0, 0, 0, 0, 205, 212, 138, 1, 0, 0, 0, 0, 184, 156, 82,
-            100, 0, 0, 0, 0, 0, 2, 0, 0, 255, 18, 249, 112, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 27, 175, 220, 69, 65, 22, 182, 5, 0, 83,
-            100, 151, 107, 19, 77, 118, 29, 215, 54, 203, 71, 136, 210, 92, 131, 87, 131, 180, 109,
-            174, 177, 33, 31, 2, 0, 0, 31, 2, 0, 0, 73, 108, 108, 117, 109, 105, 110, 97, 116, 101,
-            32, 68, 109, 111, 99, 114, 97, 116, 105, 122, 101, 32, 68, 115, 116, 114, 105, 98, 117,
-            116, 101, 75, 38, 68, 0, 0, 0, 0, 0, 84, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136,
-            218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 86, 104, 29, 0, 0,
-            0, 0, 0, 76, 38, 68, 0, 0, 0, 0, 0, 85, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136,
-            218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 161, 141, 29, 0, 0,
-            0, 0, 0, 77, 38, 68, 0, 0, 0, 0, 0, 86, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136,
-            218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 212, 184, 28, 0, 0,
-            0, 0, 0, 78, 38, 68, 0, 0, 0, 0, 0, 87, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136,
-            218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 157, 132, 29, 0, 0,
-            0, 0, 0, 79, 38, 68, 0, 0, 0, 0, 0, 88, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136,
-            218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 52, 170, 29, 0, 0,
-            0, 0, 0, 80, 38, 68, 0, 0, 0, 0, 0, 89, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136,
-            218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 121, 155, 29, 0, 0,
-            0, 0, 0, 81, 38, 68, 0, 0, 0, 0, 0, 90, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136,
-            218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 225, 68, 29, 0, 0,
-            0, 0, 0, 82, 38, 68, 0, 0, 0, 0, 0, 91, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136,
-            218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 39, 49, 29, 0, 0, 0,
-            0, 0, 83, 38, 68, 0, 0, 0, 0, 0, 92, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218,
-            1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 209, 107, 28, 0, 0, 0, 0,
-            0, 84, 38, 68, 0, 0, 0, 0, 0, 93, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1,
-            5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 110, 85, 29, 0, 0, 0, 0, 0,
-            85, 38, 68, 0, 0, 0, 0, 0, 94, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5,
-            124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 14, 157, 29, 0, 0, 0, 0, 0, 86,
-            38, 68, 0, 0, 0, 0, 0, 95, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124,
-            8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 41, 72, 29, 0, 0, 0, 0, 0, 87, 38,
-            68, 0, 0, 0, 0, 0, 96, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8,
-            228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 105, 5, 29, 0, 0, 0, 0, 0, 88, 38, 68,
-            0, 0, 0, 0, 0, 97, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8, 228,
-            193, 186, 168, 250, 166, 41, 129, 156, 42, 90, 141, 28, 0, 0, 0, 0, 0, 89, 38, 68, 0,
-            0, 0, 0, 0, 98, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8, 228,
-            193, 186, 168, 250, 166, 41, 129, 156, 42, 170, 78, 28, 0, 0, 0, 0, 0, 90, 38, 68, 0,
-            0, 0, 0, 0, 99, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8, 228,
-            193, 186, 168, 250, 166, 41, 129, 156, 42, 209, 28, 29, 0, 0, 0, 0, 0,
+            178, 184, 84, 0, 0, 0, 0, 0, 189, 50, 145, 133, 77, 200, 34, 183, 236, 88, 89, 37, 205, 160, 225, 143, 6, 175, 40, 250, 40, 134, 225, 95,
+            82, 213, 45, 212, 182, 249, 78, 214, 27, 175, 220, 69, 65, 22, 182, 5, 0, 83, 100, 151, 107, 19, 77, 118, 29, 215, 54, 203, 71, 136, 210,
+            92, 131, 87, 131, 180, 109, 174, 177, 33, 182, 122, 81, 72, 160, 50, 41, 146, 110, 52, 177, 144, 175, 129, 168, 42, 129, 196, 223, 102,
+            131, 28, 152, 192, 58, 19, 151, 120, 65, 141, 208, 154, 59, 84, 44, 237, 0, 34, 98, 13, 25, 243, 87, 129, 236, 230, 220, 54, 133, 89,
+            114, 126, 230, 92, 41, 82, 121, 51, 33, 152, 2, 156, 147, 149, 87, 244, 210, 171, 160, 117, 31, 197, 95, 113, 208, 115, 59, 138, 161,
+            124, 208, 48, 18, 50, 167, 242, 26, 137, 95, 129, 234, 207, 85, 201, 126, 196, 92, 192, 221, 225, 78, 114, 86, 52, 12, 200, 32, 65, 90,
+            96, 34, 167, 209, 201, 58, 53, 128, 195, 201, 1, 0, 0, 0, 0, 205, 212, 138, 1, 0, 0, 0, 0, 103, 160, 177, 121, 204, 223, 252, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 80, 1, 0, 0, 162, 222, 245, 66, 55, 191, 235, 29, 146, 105, 54, 94, 133,
+            59, 84, 105, 246, 139, 127, 74, 213, 28, 167, 135, 126, 64, 108, 169, 75, 200, 169, 75, 186, 84, 193, 64, 36, 178, 249, 237, 55, 216,
+            105, 11, 185, 250, 197, 38, 0, 183, 255, 82, 185, 107, 132, 60, 216, 82, 158, 158, 204, 36, 151, 160, 236, 213, 219, 131, 114, 226, 4,
+            145, 86, 224, 250, 147, 52, 213, 193, 176, 239, 100, 47, 25, 38, 117, 181, 134, 236, 190, 111, 195, 129, 23, 143, 136, 189, 50, 145, 133,
+            77, 200, 34, 183, 236, 88, 89, 37, 205, 160, 225, 143, 6, 175, 40, 250, 40, 134, 225, 95, 82, 213, 45, 212, 182, 249, 78, 214, 182, 74,
+            48, 57, 159, 127, 107, 12, 21, 76, 46, 122, 240, 163, 236, 123, 10, 91, 19, 26, 116, 247, 77, 21, 220, 176, 11, 161, 148, 144, 17, 54,
+            242, 1, 157, 214, 190, 45, 76, 136, 200, 34, 120, 109, 249, 5, 97, 165, 80, 25, 56, 153, 180, 16, 250, 52, 161, 49, 38, 38, 219, 60, 65,
+            211, 37, 84, 94, 159, 36, 233, 3, 213, 221, 155, 156, 38, 8, 130, 170, 219, 76, 40, 250, 142, 64, 247, 72, 69, 33, 226, 244, 248, 0, 30,
+            217, 176, 129, 5, 149, 196, 80, 56, 8, 68, 175, 97, 9, 68, 33, 129, 4, 210, 28, 34, 0, 40, 170, 106, 21, 10, 134, 49, 43, 0, 0, 64, 64,
+            25, 9, 229, 72, 231, 28, 106, 5, 18, 138, 88, 96, 114, 0, 16, 63, 196, 0, 52, 111, 110, 152, 67, 194, 226, 12, 114, 160, 13, 123, 216,
+            19, 138, 36, 154, 131, 32, 134, 151, 192, 208, 61, 118, 51, 193, 130, 72, 165, 143, 232, 130, 132, 36, 10, 14, 67, 231, 130, 198, 176,
+            193, 22, 122, 0, 172, 152, 8, 190, 73, 153, 80, 232, 80, 2, 40, 119, 105, 128, 38, 100, 144, 242, 28, 144, 64, 179, 10, 48, 180, 146, 44,
+            58, 122, 248, 80, 186, 8, 242, 0, 1, 70, 234, 133, 4, 1, 233, 120, 3, 142, 18, 5, 9, 66, 21, 2, 80, 22, 174, 136, 17, 22, 105, 97, 71,
+            125, 104, 82, 44, 130, 108, 154, 13, 32, 34, 140, 130, 45, 226, 172, 131, 5, 3, 177, 57, 54, 181, 224, 27, 159, 149, 50, 236, 35, 34,
+            199, 12, 73, 28, 26, 33, 97, 133, 51, 194, 132, 41, 155, 24, 146, 7, 207, 14, 55, 242, 199, 161, 147, 12, 102, 103, 129, 95, 210, 56, 41,
+            9, 38, 38, 92, 194, 128, 149, 160, 160, 36, 2, 52, 175, 56, 16, 146, 138, 150, 42, 208, 38, 74, 73, 5, 1, 138, 2, 161, 153, 98, 129, 110,
+            157, 10, 57, 253, 76, 128, 147, 83, 56, 167, 65, 220, 145, 109, 21, 69, 105, 78, 65, 235, 90, 80, 94, 26, 48, 152, 249, 228, 220, 89,
+            136, 0, 0, 0, 0, 0, 128, 195, 201, 1, 0, 0, 0, 0, 205, 212, 138, 1, 0, 0, 0, 0, 184, 156, 82, 100, 0, 0, 0, 0, 0, 2, 0, 0, 255, 18, 249,
+            112, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 27, 175, 220, 69, 65, 22, 182, 5, 0, 83, 100,
+            151, 107, 19, 77, 118, 29, 215, 54, 203, 71, 136, 210, 92, 131, 87, 131, 180, 109, 174, 177, 33, 31, 2, 0, 0, 31, 2, 0, 0, 73, 108, 108,
+            117, 109, 105, 110, 97, 116, 101, 32, 68, 109, 111, 99, 114, 97, 116, 105, 122, 101, 32, 68, 115, 116, 114, 105, 98, 117, 116, 101, 75,
+            38, 68, 0, 0, 0, 0, 0, 84, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156,
+            42, 86, 104, 29, 0, 0, 0, 0, 0, 76, 38, 68, 0, 0, 0, 0, 0, 85, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8, 228, 193,
+            186, 168, 250, 166, 41, 129, 156, 42, 161, 141, 29, 0, 0, 0, 0, 0, 77, 38, 68, 0, 0, 0, 0, 0, 86, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22,
+            136, 218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 212, 184, 28, 0, 0, 0, 0, 0, 78, 38, 68, 0, 0, 0, 0, 0, 87, 98,
+            6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 157, 132, 29, 0, 0, 0, 0, 0,
+            79, 38, 68, 0, 0, 0, 0, 0, 88, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129,
+            156, 42, 52, 170, 29, 0, 0, 0, 0, 0, 80, 38, 68, 0, 0, 0, 0, 0, 89, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8, 228,
+            193, 186, 168, 250, 166, 41, 129, 156, 42, 121, 155, 29, 0, 0, 0, 0, 0, 81, 38, 68, 0, 0, 0, 0, 0, 90, 98, 6, 0, 0, 0, 0, 0, 89, 176,
+            215, 22, 136, 218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 225, 68, 29, 0, 0, 0, 0, 0, 82, 38, 68, 0, 0, 0, 0, 0,
+            91, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 39, 49, 29, 0, 0, 0,
+            0, 0, 83, 38, 68, 0, 0, 0, 0, 0, 92, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41,
+            129, 156, 42, 209, 107, 28, 0, 0, 0, 0, 0, 84, 38, 68, 0, 0, 0, 0, 0, 93, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8,
+            228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 110, 85, 29, 0, 0, 0, 0, 0, 85, 38, 68, 0, 0, 0, 0, 0, 94, 98, 6, 0, 0, 0, 0, 0, 89, 176,
+            215, 22, 136, 218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 14, 157, 29, 0, 0, 0, 0, 0, 86, 38, 68, 0, 0, 0, 0, 0,
+            95, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 41, 72, 29, 0, 0, 0,
+            0, 0, 87, 38, 68, 0, 0, 0, 0, 0, 96, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41,
+            129, 156, 42, 105, 5, 29, 0, 0, 0, 0, 0, 88, 38, 68, 0, 0, 0, 0, 0, 97, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8,
+            228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 90, 141, 28, 0, 0, 0, 0, 0, 89, 38, 68, 0, 0, 0, 0, 0, 98, 98, 6, 0, 0, 0, 0, 0, 89, 176,
+            215, 22, 136, 218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 170, 78, 28, 0, 0, 0, 0, 0, 90, 38, 68, 0, 0, 0, 0, 0,
+            99, 98, 6, 0, 0, 0, 0, 0, 89, 176, 215, 22, 136, 218, 1, 5, 124, 8, 228, 193, 186, 168, 250, 166, 41, 129, 156, 42, 209, 28, 29, 0, 0, 0,
+            0, 0,
         ];
 
         match ssz::prelude::deserialize::<SignedBidSubmission>(&ssz_payload) {

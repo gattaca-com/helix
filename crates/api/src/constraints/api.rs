@@ -1,23 +1,31 @@
-use std::sync::{Arc, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    sync::{Arc, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use axum::Extension;
-use axum::extract::Path;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::{
+    extract::Path,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    Extension,
+};
 use ethereum_consensus::phase0::mainnet::SLOTS_PER_EPOCH;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::SendError;
-use tokio::sync::mpsc::Sender;
-use tracing::{debug, error, warn};
-use uuid::Uuid;
-
-use helix_common::api::builder_api::BuilderGetValidatorsResponseEntry;
-use helix_common::api::constraints_api::{GetConstraintsParams, GetPreconferParams, SignedPreconferElection};
-use helix_common::chain_info::ChainInfo;
-use helix_common::traces::constraints_api::GetGatewayTrace;
+use helix_common::{
+    api::{
+        builder_api::BuilderGetValidatorsResponseEntry,
+        constraints_api::{GetConstraintsParams, GetPreconferParams, SignedPreconferElection},
+    },
+    chain_info::ChainInfo,
+    traces::constraints_api::GetGatewayTrace,
+};
 use helix_datastore::constraints::ConstraintsAuctioneer;
 use helix_housekeeper::{ChainUpdate, SlotUpdate};
+use tokio::sync::{
+    mpsc,
+    mpsc::{error::SendError, Sender},
+};
+use tracing::{debug, error, warn};
+use uuid::Uuid;
 
 use crate::constraints::error::ConstraintsApiError;
 
@@ -43,11 +51,7 @@ impl<A> ConstraintsApi<A>
 where
     A: ConstraintsAuctioneer + 'static,
 {
-    pub fn new(
-        auctioneer: Arc<A>,
-        chain_info: Arc<ChainInfo>,
-        slot_update_subscription: Sender<Sender<ChainUpdate>>,
-    ) -> Self {
+    pub fn new(auctioneer: Arc<A>, chain_info: Arc<ChainInfo>, slot_update_subscription: Sender<Sender<ChainUpdate>>) -> Self {
         let api = Self {
             auctioneer,
             chain_info,
@@ -77,16 +81,9 @@ where
         match api.auctioneer.get_constraints(slot).await? {
             Some(constraints) => {
                 let constraints_bytes = serde_json::to_vec(&constraints)?;
-                Ok(Response::builder()
-                    .status(StatusCode::OK)
-                    .body(axum::body::Body::from(constraints_bytes))
-                    .unwrap()
-                    .into_response()
-                )
+                Ok(Response::builder().status(StatusCode::OK).body(axum::body::Body::from(constraints_bytes)).unwrap().into_response())
             }
-            None => {
-                Ok(StatusCode::NO_CONTENT.into_response())
-            }
+            None => Ok(StatusCode::NO_CONTENT.into_response()),
         }
     }
 
@@ -120,11 +117,11 @@ where
             }
             Ok(None) => {
                 warn!(%request_id, "no gateway found for request");
-                Err(ConstraintsApiError::NoPreconferFoundForSlot {slot})
+                Err(ConstraintsApiError::NoPreconferFoundForSlot { slot })
             }
             Err(err) => {
                 warn!(%request_id, ?err, "no gateway found for request");
-                Err(ConstraintsApiError::NoPreconferFoundForSlot {slot})
+                Err(ConstraintsApiError::NoPreconferFoundForSlot { slot })
             }
         }
     }
@@ -144,7 +141,7 @@ where
             request_ts = trace.receive,
         );
 
-        let slots_for_epoch = get_remaining_slots_for_current_and_next_n_epochs(head_slot+1, 1);
+        let slots_for_epoch = get_remaining_slots_for_current_and_next_n_epochs(head_slot + 1, 1);
         let mut preconfers = vec![];
         for slot in slots_for_epoch {
             match api.auctioneer.get_elected_gateway(slot).await {
@@ -164,15 +161,12 @@ where
 
 // STATE SYNC
 impl<A> ConstraintsApi<A>
-    where
-        A: ConstraintsAuctioneer + 'static,
+where
+    A: ConstraintsAuctioneer + 'static,
 {
     /// Subscribes to slot head updater.
     /// Updates the current slot and next proposer duty.
-    pub async fn housekeep(
-        &self,
-        slot_update_subscription: Sender<Sender<ChainUpdate>>,
-    ) -> Result<(), SendError<Sender<ChainUpdate>>> {
+    pub async fn housekeep(&self, slot_update_subscription: Sender<Sender<ChainUpdate>>) -> Result<(), SendError<Sender<ChainUpdate>>> {
         let (tx, mut rx) = mpsc::channel(20);
         slot_update_subscription.send(tx).await?;
 
@@ -209,14 +203,13 @@ impl<A> ConstraintsApi<A>
         // Fetch elected gateway for the current slot
         let elected_preconfer = match self.auctioneer.get_elected_gateway(next_slot).await {
             Ok(Some(elected_gateway)) => Some(elected_gateway),
-            _ => {
-                self.proposer_duties
-                    .read()
-                    .unwrap()
-                    .iter()
-                    .find(|duty| duty.slot == next_slot)
-                    .map(|duty| SignedPreconferElection::from_proposer_duty(duty, self.chain_info.context.deposit_chain_id as u64))
-            }
+            _ => self
+                .proposer_duties
+                .read()
+                .unwrap()
+                .iter()
+                .find(|duty| duty.slot == next_slot)
+                .map(|duty| SignedPreconferElection::from_proposer_duty(duty, self.chain_info.context.deposit_chain_id as u64)),
         };
 
         let mut write_guard = self.curr_slot_info.write().unwrap();
@@ -231,7 +224,7 @@ fn get_nanos_timestamp() -> Result<u64, ConstraintsApiError> {
 
 fn get_remaining_slots_for_epoch(slot: u64) -> Vec<u64> {
     let epoch = slot / SLOTS_PER_EPOCH;
-    
+
     // get a list of slots for the epoch beginning at slot until the end of the epoch
     let all_slots: Vec<u64> = (epoch * SLOTS_PER_EPOCH..(epoch + 1) * SLOTS_PER_EPOCH).collect();
     let remaining_slots = all_slots.iter().filter(|&s| *s >= slot).map(|&s| s).collect();
@@ -243,7 +236,7 @@ fn get_remaining_slots_for_current_and_next_n_epochs(slot: u64, n: u64) -> Vec<u
 
     // Calculate the starting epoch
     let start_epoch = slot / SLOTS_PER_EPOCH;
-    
+
     // Add slots for the next n epochs
     for epoch in start_epoch + 1..=start_epoch + n {
         let epoch_slots: Vec<u64> = (epoch * SLOTS_PER_EPOCH..(epoch + 1) * SLOTS_PER_EPOCH).collect();
@@ -268,6 +261,9 @@ mod tests {
     async fn test_get_remaining_slots_for_epochs() {
         let slots = get_remaining_slots_for_current_and_next_n_epochs(5, 1);
         println!("{:?}", slots);
-        assert_eq!(slots, vec![5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63]);
+        assert_eq!(slots, vec![
+            5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+            40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63
+        ]);
     }
 }

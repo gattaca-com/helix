@@ -15,4 +15,4 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 
-num_cpus = "1.16.0"
+num_cpus.workspace = true

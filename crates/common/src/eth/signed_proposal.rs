@@ -1,12 +1,8 @@
-use ethereum_consensus::{
-    ssz::{self, prelude::*},
-    types::mainnet::SignedBeaconBlock,
-    Fork,
-};
+use ethereum_consensus::{ssz, ssz::prelude::*, types::mainnet::SignedBeaconBlock, Fork};
 
 use crate::deneb::SignedBlockContents;
 
-#[derive(Debug, Clone, PartialEq, Eq, SimpleSerialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serializable, HashTreeRoot, serde::Serialize)]
 #[ssz(transparent)]
 #[serde(untagged)]
 pub enum VersionedSignedProposal {
@@ -40,9 +36,7 @@ impl VersionedSignedProposal {
 
     pub fn block_contents(&self) -> &SignedBlockContents {
         match self {
-            Self::Bellatrix(_) => unreachable!(
-                "VersionedSignedProposal::Bellatrix is not supported in block_contents"
-            ),
+            Self::Bellatrix(_) => unreachable!("VersionedSignedProposal::Bellatrix is not supported in block_contents"),
             Self::Capella(_) => {
                 unreachable!("VersionedSignedProposal::Capella is not supported in block_contents")
             }

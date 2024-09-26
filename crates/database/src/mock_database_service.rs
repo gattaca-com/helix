@@ -9,18 +9,16 @@ use ethereum_consensus::{
     ssz::prelude::*,
 };
 use helix_common::{
-    api::{
-        builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
-        proposer_api::ValidatorRegistrationInfo,
-    }, bid_submission::{
-        v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
-    }, deneb::SignedValidatorRegistration, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
+    api::{builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters, proposer_api::ValidatorRegistrationInfo},
+    bid_submission::{v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission},
+    deneb::SignedValidatorRegistration,
+    simulator::BlockSimError,
+    versioned_payload::PayloadAndBlobs,
+    BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo,
+    SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
 };
 
-use crate::{
-    error::DatabaseError, BidSubmissionDocument, BuilderInfoDocument, DatabaseService,
-    DeliveredPayloadDocument,
-};
+use crate::{error::DatabaseError, BidSubmissionDocument, BuilderInfoDocument, DatabaseService, DeliveredPayloadDocument};
 
 #[derive(Default, Clone)]
 pub struct MockDatabaseService {
@@ -29,42 +27,23 @@ pub struct MockDatabaseService {
 }
 
 impl MockDatabaseService {
-    pub fn new(
-        known_validators: Arc<Mutex<Vec<ValidatorSummary>>>,
-        proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>>,
-    ) -> Self {
+    pub fn new(known_validators: Arc<Mutex<Vec<ValidatorSummary>>>, proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>>) -> Self {
         Self { known_validators, proposer_duties }
     }
 }
 
 #[async_trait]
 impl DatabaseService for MockDatabaseService {
-    async fn save_validator_registration(
-        &self,
-        _entry: ValidatorRegistrationInfo,
-        _pool_name: Option<String>,
-
-    ) -> Result<(), DatabaseError> {
+    async fn save_validator_registration(&self, _entry: ValidatorRegistrationInfo, _pool_name: Option<String>) -> Result<(), DatabaseError> {
         Ok(())
     }
-    async fn save_validator_registrations(
-        &self,
-        _entries: Vec<ValidatorRegistrationInfo>,
-        _pool_name: Option<String>,
-    ) -> Result<(), DatabaseError> {
+    async fn save_validator_registrations(&self, _entries: Vec<ValidatorRegistrationInfo>, _pool_name: Option<String>) -> Result<(), DatabaseError> {
         Ok(())
     }
-    async fn is_registration_update_required(
-        &self,
-        _registration: &SignedValidatorRegistration,
-    ) -> Result<bool, DatabaseError>
-    {
+    async fn is_registration_update_required(&self, _registration: &SignedValidatorRegistration) -> Result<bool, DatabaseError> {
         Ok(true)
     }
-    async fn get_validator_registration(
-        &self,
-        _pub_key: BlsPublicKey,
-    ) -> Result<SignedValidatorRegistrationEntry, DatabaseError> {
+    async fn get_validator_registration(&self, _pub_key: BlsPublicKey) -> Result<SignedValidatorRegistrationEntry, DatabaseError> {
         Ok(SignedValidatorRegistrationEntry::default())
     }
     async fn get_validator_registrations_for_pub_keys(
@@ -78,33 +57,22 @@ impl DatabaseService for MockDatabaseService {
         Ok(entries)
     }
 
-    async fn get_validator_registration_timestamp(
-        &self,
-        _pub_key: BlsPublicKey,
-    ) -> Result<u64, DatabaseError> {
+    async fn get_validator_registration_timestamp(&self, _pub_key: BlsPublicKey) -> Result<u64, DatabaseError> {
         Ok(0)
     }
 
-    async fn set_proposer_duties(
-        &self,
-        proposer_duties: Vec<BuilderGetValidatorsResponseEntry>,
-    ) -> Result<(), DatabaseError> {
+    async fn set_proposer_duties(&self, proposer_duties: Vec<BuilderGetValidatorsResponseEntry>) -> Result<(), DatabaseError> {
         println!("received proposer duties: {:?}", proposer_duties);
         self.proposer_duties.lock().unwrap().clear();
         self.proposer_duties.lock().unwrap().extend(proposer_duties);
 
         Ok(())
     }
-    async fn get_proposer_duties(
-        &self,
-    ) -> Result<Vec<BuilderGetValidatorsResponseEntry>, DatabaseError> {
+    async fn get_proposer_duties(&self) -> Result<Vec<BuilderGetValidatorsResponseEntry>, DatabaseError> {
         Ok(vec![])
     }
 
-    async fn set_known_validators(
-        &self,
-        known_validators: Vec<ValidatorSummary>,
-    ) -> Result<(), DatabaseError> {
+    async fn set_known_validators(&self, known_validators: Vec<ValidatorSummary>) -> Result<(), DatabaseError> {
         println!("received known validators: {:?}", known_validators);
         self.known_validators.lock().unwrap().clear();
         self.known_validators.lock().unwrap().extend(known_validators);
@@ -112,10 +80,7 @@ impl DatabaseService for MockDatabaseService {
         Ok(())
     }
 
-    async fn check_known_validators(
-        &self,
-        public_keys: Vec<BlsPublicKey>,
-    ) -> Result<HashSet<BlsPublicKey>, DatabaseError> {
+    async fn check_known_validators(&self, public_keys: Vec<BlsPublicKey>) -> Result<HashSet<BlsPublicKey>, DatabaseError> {
         Ok(public_keys.into_iter().collect())
     }
 
@@ -148,18 +113,11 @@ impl DatabaseService for MockDatabaseService {
         Ok(())
     }
 
-    async fn store_builder_info(
-        &self,
-        _builder_pub_key: &BlsPublicKey,
-        _builder_info: BuilderInfo,
-    ) -> Result<(), DatabaseError> {
+    async fn store_builder_info(&self, _builder_pub_key: &BlsPublicKey, _builder_info: BuilderInfo) -> Result<(), DatabaseError> {
         Ok(())
     }
 
-    async fn db_get_builder_info(
-        &self,
-        _builder_pub_key: &BlsPublicKey,
-    ) -> Result<BuilderInfo, DatabaseError> {
+    async fn db_get_builder_info(&self, _builder_pub_key: &BlsPublicKey) -> Result<BuilderInfo, DatabaseError> {
         Ok(BuilderInfo::default())
     }
 
@@ -167,10 +125,7 @@ impl DatabaseService for MockDatabaseService {
         Ok(vec![])
     }
 
-    async fn check_builder_api_key(
-        &self,
-        api_key: &str,
-    ) -> Result<bool, DatabaseError> {
+    async fn check_builder_api_key(&self, api_key: &str) -> Result<bool, DatabaseError> {
         if api_key == "valid" {
             Ok(true)
         } else {
@@ -178,27 +133,15 @@ impl DatabaseService for MockDatabaseService {
         }
     }
 
-    async fn db_demote_builder(
-        &self,
-        _builder_pub_key: &BlsPublicKey,
-        _block_hash: &Hash32,
-        _reason: String,
-    ) -> Result<(), DatabaseError> {
+    async fn db_demote_builder(&self, _builder_pub_key: &BlsPublicKey, _block_hash: &Hash32, _reason: String) -> Result<(), DatabaseError> {
         Ok(())
     }
 
-    async fn save_simulation_result(
-        &self,
-        _block_hash: ByteVector<32>,
-        _block_sim_result: Result<(), BlockSimError>,
-    ) -> Result<(), DatabaseError> {
+    async fn save_simulation_result(&self, _block_hash: ByteVector<32>, _block_sim_result: Result<(), BlockSimError>) -> Result<(), DatabaseError> {
         Ok(())
     }
 
-    async fn get_bids(
-        &self,
-        _filters: &BidFilters,
-    ) -> Result<Vec<BidSubmissionDocument>, DatabaseError> {
+    async fn get_bids(&self, _filters: &BidFilters) -> Result<Vec<BidSubmissionDocument>, DatabaseError> {
         let mut bid = BidSubmissionDocument::default();
         bid.bid_trace.value = U256::from(1000);
         Ok(vec![bid])
@@ -209,11 +152,7 @@ impl DatabaseService for MockDatabaseService {
         _filters: &BidFilters,
         _validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
-        let doc = DeliveredPayloadDocument {
-            bid_trace: Default::default(),
-            block_number: 0,
-            num_txs: 0,
-        };
+        let doc = DeliveredPayloadDocument { bid_trace: Default::default(), block_number: 0, num_txs: 0 };
 
         Ok(vec![doc])
     }
@@ -246,19 +185,11 @@ impl DatabaseService for MockDatabaseService {
         Ok(())
     }
 
-    async fn save_gossiped_header_trace(
-        &self,
-        _block_hash: ByteVector<32>,
-        _trace: Arc<GossipedHeaderTrace>,
-    ) -> Result<(), DatabaseError> {
+    async fn save_gossiped_header_trace(&self, _block_hash: ByteVector<32>, _trace: Arc<GossipedHeaderTrace>) -> Result<(), DatabaseError> {
         Ok(())
     }
 
-    async fn save_gossiped_payload_trace(
-        &self,
-        _block_hash: ByteVector<32>,
-        _trace: Arc<GossipedPayloadTrace>,
-    ) -> Result<(), DatabaseError> {
+    async fn save_gossiped_payload_trace(&self, _block_hash: ByteVector<32>, _trace: Arc<GossipedPayloadTrace>) -> Result<(), DatabaseError> {
         Ok(())
     }
 
@@ -266,10 +197,7 @@ impl DatabaseService for MockDatabaseService {
         Ok(vec![])
     }
 
-    async fn get_validator_pool_name(
-        &self,
-        api_key: &str,
-    ) -> Result<Option<String>, DatabaseError> {
+    async fn get_validator_pool_name(&self, api_key: &str) -> Result<Option<String>, DatabaseError> {
         if api_key == "valid" {
             Ok(Some("test_pool".to_string()))
         } else {

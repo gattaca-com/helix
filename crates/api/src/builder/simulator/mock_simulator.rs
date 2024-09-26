@@ -1,7 +1,6 @@
 use async_trait::async_trait;
-use tokio::sync::mpsc::Sender;
-
 use helix_common::{simulator::BlockSimError, BuilderInfo};
+use tokio::sync::mpsc::Sender;
 use uuid::Uuid;
 
 use crate::builder::{traits::BlockSimulator, BlockSimRequest, DbInfo};

@@ -21,7 +21,7 @@ serde_json.workspace = true
 # DB 
 tokio-postgres.workspace = true
 deadpool-postgres.workspace = true
-refinery.workspace = true
+refinery = { workspace = true, features = ["tokio-postgres"] }
 bytes.workspace = true
 chrono.workspace = true
 
@@ -36,7 +36,7 @@ env_logger.workspace = true
 
 # Misc 
 hex.workspace = true
-rand = "0.8"
+rand.workspace = true
 dashmap.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

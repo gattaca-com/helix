@@ -7,8 +7,9 @@ use async_trait::async_trait;
 use ethereum_consensus::{
     phase0::Validator,
     primitives::{BlsPublicKey, Root},
+    ssz::prelude::*,
 };
-use helix_common::{bellatrix::SimpleSerialize, ProposerDuty, ValidatorStatus, ValidatorSummary};
+use helix_common::{ProposerDuty, ValidatorStatus, ValidatorSummary};
 use tokio::sync::broadcast::Sender;
 
 use crate::{
@@ -33,13 +34,7 @@ impl MockMultiBeaconClient {
         state_validators_has_been_read: Arc<AtomicBool>,
         proposer_duties_has_been_read: Arc<AtomicBool>,
     ) -> Self {
-        Self {
-            subscribed_to_head_events,
-            chan_head_events_capacity,
-            _chan: None,
-            state_validators_has_been_read,
-            proposer_duties_has_been_read,
-        }
+        Self { subscribed_to_head_events, chan_head_events_capacity, _chan: None, state_validators_has_been_read, proposer_duties_has_been_read }
     }
 }
 
@@ -53,11 +48,7 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
         self.subscribed_to_head_events.store(true, std::sync::atomic::Ordering::Relaxed);
 
         // send a dummy event
-        let head_event = HeadEventData {
-            slot: 19,
-            block: "test_block".to_string(),
-            state: "test_state".to_string(),
-        };
+        let head_event = HeadEventData { slot: 19, block: "test_block".to_string(), state: "test_state".to_string() };
         let _ = chan.send(head_event);
         self.chan_head_events_capacity.store(chan.len(), std::sync::atomic::Ordering::Relaxed);
 
@@ -71,33 +62,15 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
         });
     }
     async fn subscribe_to_payload_attributes_events(&self, _chan: Sender<PayloadAttributesEvent>) {}
-    async fn get_state_validators(
-        &self,
-        _state_id: StateId,
-    ) -> Result<Vec<ValidatorSummary>, BeaconClientError> {
+    async fn get_state_validators(&self, _state_id: StateId) -> Result<Vec<ValidatorSummary>, BeaconClientError> {
         self.state_validators_has_been_read.store(true, std::sync::atomic::Ordering::Relaxed);
-        Ok(vec![ValidatorSummary {
-            index: 1,
-            balance: 1,
-            status: ValidatorStatus::Active,
-            validator: Validator::default(),
-        }])
+        Ok(vec![ValidatorSummary { index: 1, balance: 1, status: ValidatorStatus::Active, validator: Validator::default() }])
     }
-    async fn get_proposer_duties(
-        &self,
-        _epoch: u64,
-    ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError> {
+    async fn get_proposer_duties(&self, _epoch: u64) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError> {
         self.proposer_duties_has_been_read.store(true, std::sync::atomic::Ordering::Relaxed);
-        Ok((
-            Root::default(),
-            vec![ProposerDuty {
-                public_key: BlsPublicKey::default(),
-                validator_index: 1,
-                slot: 19,
-            }],
-        ))
+        Ok((Root::default(), vec![ProposerDuty { public_key: BlsPublicKey::default(), validator_index: 1, slot: 19 }]))
     }
-    async fn publish_block<VersionedSignedProposal: SimpleSerialize + Send + Sync + 'static>(
+    async fn publish_block<VersionedSignedProposal: Serializable + HashTreeRoot + Send + Sync + 'static>(
         &self,
         _block: Arc<VersionedSignedProposal>,
         _broadcast_validation: Option<BroadcastValidation>,

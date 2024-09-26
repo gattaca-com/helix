@@ -1,26 +1,19 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use ethereum_consensus::{primitives::Root, ssz};
+use ethereum_consensus::{primitives::Root, ssz, ssz::prelude::*};
 use futures::StreamExt;
+use helix_common::{signed_proposal::VersionedSignedProposal, ProposerDuty, ValidatorSummary};
 use reqwest::header::CONTENT_TYPE;
 use reqwest_eventsource::EventSource;
 use tokio::{sync::broadcast::Sender, time::sleep};
 use tracing::{debug, error, warn};
 use url::Url;
 
-use helix_common::{
-    bellatrix::SimpleSerialize, signed_proposal::VersionedSignedProposal, ProposerDuty,
-    ValidatorSummary,
-};
-
 use crate::{
     error::{ApiError, BeaconClientError},
     traits::BeaconClientTrait,
-    types::{
-        ApiResult, BeaconResponse, BroadcastValidation, HeadEventData, PayloadAttributesEvent,
-        StateId, SyncStatus,
-    },
+    types::{ApiResult, BeaconResponse, BroadcastValidation, HeadEventData, PayloadAttributesEvent, StateId, SyncStatus},
 };
 
 const CONSENSUS_VERSION_HEADER: &str = "eth-consensus-version";
@@ -39,15 +32,11 @@ impl BeaconClient {
 
     pub fn from_endpoint_str(endpoint: &str) -> Self {
         let endpoint = Url::parse(endpoint).unwrap();
-        let client =
-            reqwest::ClientBuilder::new().timeout(BEACON_CLIENT_REQUEST_TIMEOUT).build().unwrap();
+        let client = reqwest::ClientBuilder::new().timeout(BEACON_CLIENT_REQUEST_TIMEOUT).build().unwrap();
         Self::new(client, endpoint)
     }
 
-    pub async fn get<T: serde::Serialize + serde::de::DeserializeOwned>(
-        &self,
-        path: &str,
-    ) -> Result<T, BeaconClientError> {
+    pub async fn get<T: serde::Serialize + serde::de::DeserializeOwned>(&self, path: &str) -> Result<T, BeaconClientError> {
         let result = self.http_get(path).await?.json().await?;
         match result {
             ApiResult::Ok(result) => Ok(result),
@@ -60,11 +49,7 @@ impl BeaconClient {
         Ok(self.http.get(target).send().await?)
     }
 
-    pub async fn post<T: serde::Serialize + ?Sized>(
-        &self,
-        path: &str,
-        argument: &T,
-    ) -> Result<(), BeaconClientError> {
+    pub async fn post<T: serde::Serialize + ?Sized>(&self, path: &str, argument: &T) -> Result<(), BeaconClientError> {
         let response = self.http_post(path, argument).await?;
         match response.status() {
             reqwest::StatusCode::OK | reqwest::StatusCode::ACCEPTED => Ok(()),
@@ -75,21 +60,13 @@ impl BeaconClient {
         }
     }
 
-    pub async fn http_post<T: serde::Serialize + ?Sized>(
-        &self,
-        path: &str,
-        argument: &T,
-    ) -> Result<reqwest::Response, BeaconClientError> {
+    pub async fn http_post<T: serde::Serialize + ?Sized>(&self, path: &str, argument: &T) -> Result<reqwest::Response, BeaconClientError> {
         let target = self.endpoint.join(path)?;
         Ok(self.http.post(target).json(argument).send().await?)
     }
 
     /// Subscribe to SSE events from the beacon client `events` endpoint.
-    pub async fn subscribe_to_sse<T: serde::de::DeserializeOwned>(
-        &self,
-        topic: &str,
-        chan: Sender<T>,
-    ) -> Result<(), BeaconClientError> {
+    pub async fn subscribe_to_sse<T: serde::de::DeserializeOwned>(&self, topic: &str, chan: Sender<T>) -> Result<(), BeaconClientError> {
         let url = format!("{}eth/v1/events?topics={}", self.endpoint, topic);
 
         loop {
@@ -97,16 +74,14 @@ impl BeaconClient {
 
             while let Some(event) = es.next().await {
                 match event {
-                    Ok(reqwest_eventsource::Event::Message(message)) => {
-                        match serde_json::from_str::<T>(&message.data) {
-                            Ok(data) => {
-                                if chan.send(data).is_err() {
-                                    debug!("no subscribers connected to sse broadcaster");
-                                }
+                    Ok(reqwest_eventsource::Event::Message(message)) => match serde_json::from_str::<T>(&message.data) {
+                        Ok(data) => {
+                            if chan.send(data).is_err() {
+                                debug!("no subscribers connected to sse broadcaster");
                             }
-                            Err(err) => error!(err=%err, "Error parsing chunk"),
                         }
-                    }
+                        Err(err) => error!(err=%err, "Error parsing chunk"),
+                    },
                     Ok(reqwest_eventsource::Event::Open) => {}
                     Err(err) => {
                         warn!(err=%err, "SSE stream ended, reconnecting...");
@@ -146,48 +121,35 @@ impl BeaconClientTrait for BeaconClient {
         Ok(sync_status.head_slot)
     }
 
-    async fn subscribe_to_head_events(
-        &self,
-        chan: Sender<HeadEventData>,
-    ) -> Result<(), BeaconClientError> {
+    async fn subscribe_to_head_events(&self, chan: Sender<HeadEventData>) -> Result<(), BeaconClientError> {
         self.subscribe_to_sse("head", chan).await
     }
 
-    async fn subscribe_to_payload_attributes_events(
-        &self,
-        chan: Sender<PayloadAttributesEvent>,
-    ) -> Result<(), BeaconClientError> {
+    async fn subscribe_to_payload_attributes_events(&self, chan: Sender<PayloadAttributesEvent>) -> Result<(), BeaconClientError> {
         self.subscribe_to_sse("payload_attributes", chan).await
     }
 
     /// Fetch all known validators with an `active` status.
-    async fn get_state_validators(
-        &self,
-        state_id: StateId,
-    ) -> Result<Vec<ValidatorSummary>, BeaconClientError> {
+    async fn get_state_validators(&self, state_id: StateId) -> Result<Vec<ValidatorSummary>, BeaconClientError> {
         let endpoint = format!("eth/v1/beacon/states/{state_id}/validators?status=active,pending");
         let result: BeaconResponse<Vec<ValidatorSummary>> = self.get(&endpoint).await?;
         Ok(result.data)
     }
 
-    async fn get_proposer_duties(
-        &self,
-        epoch: u64,
-    ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError> {
+    async fn get_proposer_duties(&self, epoch: u64) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError> {
         let endpoint = format!("eth/v1/validator/duties/proposer/{epoch}");
         let mut result: BeaconResponse<Vec<ProposerDuty>> = self.get(&endpoint).await?;
-        let dependent_root_value = result.meta.remove("dependent_root").ok_or_else(|| {
-            BeaconClientError::MissingExpectedData(
-                "missing `dependent_root` in response".to_string(),
-            )
-        })?;
+        let dependent_root_value = result
+            .meta
+            .remove("dependent_root")
+            .ok_or_else(|| BeaconClientError::MissingExpectedData("missing `dependent_root` in response".to_string()))?;
         let dependent_root: Root = serde_json::from_value(dependent_root_value)?;
         Ok((dependent_root, result.data))
     }
 
     /// `publish_block` publishes the signed beacon block ssz-encoded via
     /// <https://ethereum.github.io/beacon-APIs/#/ValidatorRequiredApi/publishBlockV2>
-    async fn publish_block<SB: Send + Sync + SimpleSerialize>(
+    async fn publish_block<SB: Send + Sync + Serializable + HashTreeRoot>(
         &self,
         block: Arc<SB>,
         broadcast_validation: Option<BroadcastValidation>,
@@ -207,9 +169,7 @@ impl BeaconClientTrait for BeaconClient {
         let response = request.send().await?;
 
         match response.status() {
-            reqwest::StatusCode::OK | reqwest::StatusCode::ACCEPTED => {
-                Ok(response.status().as_u16())
-            }
+            reqwest::StatusCode::OK | reqwest::StatusCode::ACCEPTED => Ok(response.status().as_u16()),
             _ => {
                 let api_err = response.json::<ApiError>().await?;
                 Err(BeaconClientError::Api(api_err))
@@ -224,14 +184,16 @@ impl BeaconClientTrait for BeaconClient {
 
 #[cfg(test)]
 mod beacon_client_tests {
-    use super::*;
     use mockito::Matcher;
     use tokio::sync::broadcast::channel;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_get_sync_status_ok() {
         let mut server = mockito::Server::new();
-        let _mock = server.mock("GET", Matcher::Regex("/eth/v1/node/syncing".to_string()))
+        let _mock = server
+            .mock("GET", Matcher::Regex("/eth/v1/node/syncing".to_string()))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"data":{"is_syncing":false,"is_optimistic":false,"head_slot":"7222736","sync_distance":"1"}}"#)
@@ -282,10 +244,7 @@ mod beacon_client_tests {
 
         assert!(result.is_ok());
         let (node, proposer_duties) = result.unwrap();
-        assert_eq!(
-            format!("{node:?}"),
-            "0x44bff3186a234cf4fb2799c9a44dc089e33cd976a804081c652c47a8d66f11c2"
-        );
+        assert_eq!(format!("{node:?}"), "0x44bff3186a234cf4fb2799c9a44dc089e33cd976a804081c652c47a8d66f11c2");
         assert_eq!(proposer_duties.len(), 32);
     }
 
@@ -303,13 +262,8 @@ mod beacon_client_tests {
         let client = BeaconClient::from_endpoint_str(&server.url());
 
         let test_block = VersionedSignedProposal::default();
-        let result = client
-            .publish_block(
-                test_block.into(),
-                Some(BroadcastValidation::ConsensusAndEquivocation),
-                ethereum_consensus::Fork::Capella,
-            )
-            .await;
+        let result =
+            client.publish_block(test_block.into(), Some(BroadcastValidation::ConsensusAndEquivocation), ethereum_consensus::Fork::Capella).await;
         assert!(result.is_ok());
 
         let code = result.unwrap();

@@ -14,12 +14,7 @@ impl SignedBuilderBidWrapper {
         // convert received_at to millis, from nanos.
         let received_at = received_at / 1_000_000;
 
-        Self {
-            bid,
-            slot,
-            builder_pub_key,
-            received_at_ms: received_at as u64,
-        }
+        Self { bid, slot, builder_pub_key, received_at_ms: received_at as u64 }
     }
 }
 

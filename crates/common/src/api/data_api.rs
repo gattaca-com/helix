@@ -1,4 +1,7 @@
-use ethereum_consensus::{primitives::{BlsPublicKey, ExecutionAddress, Hash32, U256}, serde::as_str};
+use ethereum_consensus::{
+    primitives::{BlsPublicKey, ExecutionAddress, Hash32, U256},
+    serde::as_str,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]

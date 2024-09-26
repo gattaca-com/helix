@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use ethereum_consensus::{
     builder::{compute_builder_domain, SignedValidatorRegistration, ValidatorRegistration},
     crypto::SecretKey,
@@ -5,7 +7,6 @@ use ethereum_consensus::{
 };
 use helix_common::chain_info::ChainInfo;
 use rand::thread_rng;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn gen_signed_vr() -> SignedValidatorRegistration {
     let mut rng = thread_rng();
@@ -31,12 +32,7 @@ pub fn gen_signed_vr() -> SignedValidatorRegistration {
 #[cfg(test)]
 mod proposer_api_tests {
     // +++ IMPORTS +++
-    use crate::{
-        gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage}, proposer::{
-            api::{get_nanos_timestamp, ProposerApi},
-            PATH_GET_PAYLOAD, PATH_PROPOSER_API,
-        }, test_utils::proposer_api_app
-    };
+    use std::{sync::Arc, time::Duration};
 
     use ethereum_consensus::{
         bellatrix,
@@ -46,21 +42,14 @@ mod proposer_api_tests {
         phase0::Eth1Data,
         primitives::{BlsPublicKey, BlsSignature},
         ssz::prelude::*,
+        types::mainnet::{ExecutionPayload, SignedBlindedBeaconBlock},
     };
-    use rand::Rng;
-    use reqwest::{Client, Response, StatusCode};
-    use reth_primitives::hex;
-
-    use crate::proposer::{tests::gen_signed_vr, PATH_REGISTER_VALIDATORS};
-    use ethereum_consensus::types::mainnet::{ExecutionPayload, SignedBlindedBeaconBlock};
     use helix_beacon_client::mock_multi_beacon_client::MockMultiBeaconClient;
     use helix_common::{
-        api::{
-            builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
-        },
+        api::{builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo},
         capella::{self},
-        deneb::{self},
         chain_info::ChainInfo,
+        deneb::{self},
         versioned_payload::PayloadAndBlobs,
         SignedBuilderBid, ValidatorPreferences,
     };
@@ -68,14 +57,26 @@ mod proposer_api_tests {
     use helix_datastore::MockAuctioneer;
     use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
     use helix_utils::{request_encoding::Encoding, signing::verify_signed_consensus_message};
+    use rand::Rng;
+    use reqwest::{Client, Response, StatusCode};
+    use reth_primitives::hex;
     use serial_test::serial;
-    use std::{sync::Arc, time::Duration};
     use tokio::{
         sync::{
             mpsc::{channel, Receiver, Sender},
             oneshot,
         },
         time::sleep,
+    };
+
+    use crate::{
+        gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
+        proposer::{
+            api::{get_nanos_timestamp, ProposerApi},
+            tests::gen_signed_vr,
+            PATH_GET_PAYLOAD, PATH_PROPOSER_API, PATH_REGISTER_VALIDATORS,
+        },
+        test_utils::proposer_api_app,
     };
 
     // +++ HELPER VARIABLES +++
@@ -147,10 +148,7 @@ mod proposer_api_tests {
         arr
     }
 
-    fn get_valid_payload_register_validator(
-        submission_slot: Option<u64>,
-        validator_index: Option<usize>,
-    ) -> BuilderGetValidatorsResponseEntry {
+    fn get_valid_payload_register_validator(submission_slot: Option<u64>, validator_index: Option<usize>) -> BuilderGetValidatorsResponseEntry {
         BuilderGetValidatorsResponseEntry {
             slot: submission_slot.unwrap_or(SUBMISSION_SLOT),
             validator_index: validator_index.unwrap_or(VALIDATOR_INDEX),
@@ -169,18 +167,11 @@ mod proposer_api_tests {
         }
     }
 
-    fn get_dummy_slot_update(
-        head_slot: Option<u64>,
-        submission_slot: Option<u64>,
-        validator_index: Option<usize>,
-    ) -> SlotUpdate {
+    fn get_dummy_slot_update(head_slot: Option<u64>, submission_slot: Option<u64>, validator_index: Option<usize>) -> SlotUpdate {
         SlotUpdate {
             slot: head_slot.unwrap_or(HEAD_SLOT),
             next_duty: Some(get_valid_payload_register_validator(submission_slot, validator_index)),
-            new_duties: Some(vec![get_valid_payload_register_validator(
-                submission_slot,
-                validator_index,
-            )]),
+            new_duties: Some(vec![get_valid_payload_register_validator(submission_slot, validator_index)]),
         }
     }
 
@@ -190,21 +181,14 @@ mod proposer_api_tests {
         submission_slot: Option<u64>,
         validator_index: Option<usize>,
     ) {
-        let chain_update = ChainUpdate::SlotUpdate(get_dummy_slot_update(
-            head_slot,
-            submission_slot,
-            validator_index,
-        ));
+        let chain_update = ChainUpdate::SlotUpdate(get_dummy_slot_update(head_slot, submission_slot, validator_index));
         slot_update_sender.send(chain_update).await.unwrap();
 
         // sleep for a bit to allow the api to process the slot update
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    async fn send_dummy_payload_attr_update(
-        slot_update_sender: Sender<ChainUpdate>,
-        submission_slot: u64,
-    ) {
+    async fn send_dummy_payload_attr_update(slot_update_sender: Sender<ChainUpdate>, submission_slot: u64) {
         let chain_update = ChainUpdate::PayloadAttributesUpdate(PayloadAttributesUpdate {
             slot: submission_slot,
             parent_hash: Default::default(),
@@ -270,13 +254,9 @@ mod proposer_api_tests {
             eth1_data: Eth1Data {
                 deposit_root: Node::default(),
                 deposit_count: 0,
-                block_hash: get_byte_vector_32_for_hex(
-                    "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e4",
-                ),
+                block_hash: get_byte_vector_32_for_hex("0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e4"),
             },
-            graffiti: get_byte_vector_32_for_hex(
-                "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e4",
-            ),
+            graffiti: get_byte_vector_32_for_hex("0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e4"),
             proposer_slashings: List::default(),
             attester_slashings: List::default(),
             attestations: List::default(),
@@ -291,8 +271,7 @@ mod proposer_api_tests {
     fn get_blinded_beacon_block(
         slot: u64,
         proposer_index: usize,
-    ) -> ethereum_consensus::capella::BlindedBeaconBlock<16, 2048, 2, 128, 16, 16, 512, 256, 32, 16>
-    {
+    ) -> ethereum_consensus::capella::BlindedBeaconBlock<16, 2048, 2, 128, 16, 16, 512, 256, 32, 16> {
         ethereum_consensus::capella::BlindedBeaconBlock {
             slot,
             proposer_index,
@@ -302,20 +281,14 @@ mod proposer_api_tests {
         }
     }
 
-    fn get_invalid_sig_signed_blinded_beacon_block(
-        slot: u64,
-        proposer_index: usize,
-    ) -> SignedBlindedBeaconBlock {
+    fn get_invalid_sig_signed_blinded_beacon_block(slot: u64, proposer_index: usize) -> SignedBlindedBeaconBlock {
         SignedBlindedBeaconBlock::Capella(capella::SignedBlindedBeaconBlock {
             message: get_blinded_beacon_block(slot, proposer_index),
             signature: BlsSignature::default(),
         })
     }
 
-    fn get_valid_signed_blinded_beacon_block(
-        slot: u64,
-        proposer_index: usize,
-    ) -> SignedBlindedBeaconBlock {
+    fn get_valid_signed_blinded_beacon_block(slot: u64, proposer_index: usize) -> SignedBlindedBeaconBlock {
         SignedBlindedBeaconBlock::Capella(capella::SignedBlindedBeaconBlock {
             message: get_blinded_beacon_block(slot, proposer_index),
             signature: BlsSignature::default(),
@@ -332,19 +305,15 @@ mod proposer_api_tests {
         buffer
     }
 
-    fn load_signed_blinded_beacon_block_from_file_fixed(
-        filename: &str,
-    ) -> capella::SignedBlindedBeaconBlock {
+    fn load_signed_blinded_beacon_block_from_file_fixed(filename: &str) -> capella::SignedBlindedBeaconBlock {
         let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
         if !current_dir.ends_with("api") {
             current_dir.push("crates/api/");
         }
         current_dir.push("test_data/");
         current_dir.push(filename);
-        let req_payload_bytes =
-            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
-        let signed_blinded_block: capella::SignedBlindedBeaconBlock =
-            serde_json::from_slice(&req_payload_bytes).unwrap();
+        let req_payload_bytes = load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+        let signed_blinded_block: capella::SignedBlindedBeaconBlock = serde_json::from_slice(&req_payload_bytes).unwrap();
 
         signed_blinded_block
     }
@@ -356,36 +325,20 @@ mod proposer_api_tests {
     #[serial]
     async fn test_get_header_for_past_slot() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, _auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, mut slot_update_receiver, _auctioneer) = start_api_server().await;
 
         // Send slot & payload attributes updates
         let slot_update_sender = slot_update_receiver.recv().await.unwrap();
         send_dummy_slot_update(slot_update_sender.clone(), None, None, None).await;
 
         // Prepare the request
-        let req_url = format!(
-            "{}{}/header/{}/{}/{}",
-            http_config.base_url(),
-            PATH_PROPOSER_API,
-            1,
-            PARENT_HASH,
-            PUB_KEY,
-        );
+        let req_url = format!("{}{}/header/{}/{}/{}", http_config.base_url(), PATH_PROPOSER_API, 1, PARENT_HASH, PUB_KEY,);
 
         // Send JSON encoded request
-        let resp = reqwest::Client::new()
-            .get(req_url.as_str())
-            .header("accept", "application/json")
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(req_url.as_str()).header("accept", "application/json").send().await.unwrap();
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            resp.text().await.unwrap(),
-            "request for past slot. request slot: 1, head slot: 32"
-        );
+        assert_eq!(resp.text().await.unwrap(), "request for past slot. request slot: 1, head slot: 32");
 
         // Shut down the server
         let _ = tx.send(());
@@ -395,30 +348,17 @@ mod proposer_api_tests {
     #[serial]
     async fn test_get_header_too_far_into_slot() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, _auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, mut slot_update_receiver, _auctioneer) = start_api_server().await;
 
         // Send slot & payload attributes updates
         let slot_update_sender = slot_update_receiver.recv().await.unwrap();
         send_dummy_slot_update(slot_update_sender.clone(), None, None, None).await;
 
         // Prepare the request
-        let req_url = format!(
-            "{}{}/header/{}/{}/{}",
-            http_config.base_url(),
-            PATH_PROPOSER_API,
-            HEAD_SLOT,
-            PARENT_HASH,
-            PUB_KEY,
-        );
+        let req_url = format!("{}{}/header/{}/{}/{}", http_config.base_url(), PATH_PROPOSER_API, HEAD_SLOT, PARENT_HASH, PUB_KEY,);
 
         // Send JSON encoded request
-        let resp = reqwest::Client::new()
-            .get(req_url.as_str())
-            .header("accept", "application/json")
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(req_url.as_str()).header("accept", "application/json").send().await.unwrap();
 
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
         // we cant assert the body because, it is empty for NO_CONTENT responses
@@ -432,8 +372,7 @@ mod proposer_api_tests {
     #[ignore]
     async fn test_get_header_for_current_slot_no_header() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, _auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, mut slot_update_receiver, _auctioneer) = start_api_server().await;
 
         // Send slot & payload attributes updates
         let slot_update_sender = slot_update_receiver.recv().await.unwrap();
@@ -442,22 +381,10 @@ mod proposer_api_tests {
         let current_slot = calculate_current_slot();
 
         // Prepare the request
-        let req_url = format!(
-            "{}{}/header/{}/{}/{}",
-            http_config.base_url(),
-            PATH_PROPOSER_API,
-            current_slot + 1,
-            PARENT_HASH,
-            PUB_KEY,
-        );
+        let req_url = format!("{}{}/header/{}/{}/{}", http_config.base_url(), PATH_PROPOSER_API, current_slot + 1, PARENT_HASH, PUB_KEY,);
 
         // Send JSON encoded request
-        let resp = reqwest::Client::new()
-            .get(req_url.as_str())
-            .header("accept", "application/json")
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(req_url.as_str()).header("accept", "application/json").send().await.unwrap();
 
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
         // we cant assert the body because, it is empty for NO_CONTENT responses
@@ -470,8 +397,7 @@ mod proposer_api_tests {
     #[serial]
     async fn test_get_header_for_current_slot_bid_value_zero() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::ZERO);
@@ -484,22 +410,10 @@ mod proposer_api_tests {
         let current_slot = calculate_current_slot();
 
         // Prepare the request
-        let req_url = format!(
-            "{}{}/header/{}/{}/{}",
-            http_config.base_url(),
-            PATH_PROPOSER_API,
-            current_slot + 1,
-            PARENT_HASH,
-            PUB_KEY,
-        );
+        let req_url = format!("{}{}/header/{}/{}/{}", http_config.base_url(), PATH_PROPOSER_API, current_slot + 1, PARENT_HASH, PUB_KEY,);
 
         // Send JSON encoded request
-        let resp = reqwest::Client::new()
-            .get(req_url.as_str())
-            .header("accept", "application/json")
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(req_url.as_str()).header("accept", "application/json").send().await.unwrap();
 
         assert_eq!(resp.status(), StatusCode::NO_CONTENT);
         // we cant assert the body because, it is empty for NO_CONTENT responses
@@ -512,8 +426,7 @@ mod proposer_api_tests {
     #[serial]
     async fn test_get_header_for_current_slot_auctioneer_error() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(9999)); // special value that results in an auctioneer error
@@ -526,22 +439,10 @@ mod proposer_api_tests {
         let current_slot = calculate_current_slot();
 
         // Prepare the request
-        let req_url = format!(
-            "{}{}/header/{}/{}/{}",
-            http_config.base_url(),
-            PATH_PROPOSER_API,
-            current_slot + 1,
-            PARENT_HASH,
-            PUB_KEY,
-        );
+        let req_url = format!("{}{}/header/{}/{}/{}", http_config.base_url(), PATH_PROPOSER_API, current_slot + 1, PARENT_HASH, PUB_KEY,);
 
         // Send JSON encoded request
-        let resp = reqwest::Client::new()
-            .get(req_url.as_str())
-            .header("accept", "application/json")
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(req_url.as_str()).header("accept", "application/json").send().await.unwrap();
 
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(resp.text().await.unwrap(), "Internal server error");
@@ -554,8 +455,7 @@ mod proposer_api_tests {
     #[serial]
     async fn test_get_header_for_current_slot_ok() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(10));
@@ -568,22 +468,10 @@ mod proposer_api_tests {
         let current_slot = calculate_current_slot();
 
         // Prepare the request
-        let req_url = format!(
-            "{}{}/header/{}/{}/{}",
-            http_config.base_url(),
-            PATH_PROPOSER_API,
-            current_slot + 1,
-            PARENT_HASH,
-            PUB_KEY,
-        );
+        let req_url = format!("{}{}/header/{}/{}/{}", http_config.base_url(), PATH_PROPOSER_API, current_slot + 1, PARENT_HASH, PUB_KEY,);
 
         // Send JSON encoded request
-        let resp = reqwest::Client::new()
-            .get(req_url.as_str())
-            .header("accept", "application/json")
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(req_url.as_str()).header("accept", "application/json").send().await.unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
         // Now we can assert the body
@@ -611,8 +499,7 @@ mod proposer_api_tests {
         let current_slot = calculate_current_slot();
 
         // Prepare the request
-        let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
 
         let signed_blinded_beacon_block = get_valid_signed_blinded_beacon_block(current_slot, 1);
 
@@ -638,8 +525,7 @@ mod proposer_api_tests {
     #[ignore]
     async fn test_get_payload_validator_index_mismatch() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(10));
@@ -652,8 +538,7 @@ mod proposer_api_tests {
         let current_slot = calculate_current_slot();
 
         // Prepare the request
-        let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
 
         let signed_blinded_beacon_block = get_valid_signed_blinded_beacon_block(current_slot, 2);
 
@@ -678,8 +563,7 @@ mod proposer_api_tests {
     #[serial]
     async fn test_get_payload_invalid_signature() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(10));
@@ -689,21 +573,13 @@ mod proposer_api_tests {
 
         // Send slot & payload attributes updates
         let slot_update_sender = slot_update_receiver.recv().await.unwrap();
-        send_dummy_slot_update(
-            slot_update_sender.clone(),
-            Some(current_slot - 1),
-            Some(current_slot),
-            None,
-        )
-        .await;
+        send_dummy_slot_update(slot_update_sender.clone(), Some(current_slot - 1), Some(current_slot), None).await;
         send_dummy_payload_attr_update(slot_update_sender.clone(), current_slot).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
 
-        let signed_blinded_beacon_block =
-            get_invalid_sig_signed_blinded_beacon_block(current_slot, 1);
+        let signed_blinded_beacon_block = get_invalid_sig_signed_blinded_beacon_block(current_slot, 1);
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
@@ -727,8 +603,7 @@ mod proposer_api_tests {
     #[ignore]
     async fn test_get_payload_not_found() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(10));
@@ -741,8 +616,7 @@ mod proposer_api_tests {
         let current_slot = calculate_current_slot();
 
         // Prepare the request
-        let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
 
         let signed_blinded_beacon_block = get_valid_signed_blinded_beacon_block(current_slot, 1);
 
@@ -768,36 +642,23 @@ mod proposer_api_tests {
     #[ignore]
     async fn test_get_payload_payload_header_mismatch() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(10));
         let _ = auctioneer.best_bid.lock().unwrap().insert(builder_bid.clone());
-        let _ = auctioneer
-            .versioned_execution_payload
-            .lock()
-            .unwrap()
-            .insert(PayloadAndBlobs::default());
+        let _ = auctioneer.versioned_execution_payload.lock().unwrap().insert(PayloadAndBlobs::default());
 
         let current_slot = calculate_current_slot();
 
         // Send slot & payload attributes updates
         let slot_update_sender = slot_update_receiver.recv().await.unwrap();
-        send_dummy_slot_update(
-            slot_update_sender.clone(),
-            Some(current_slot),
-            Some(current_slot + 1),
-            None,
-        )
-        .await;
+        send_dummy_slot_update(slot_update_sender.clone(), Some(current_slot), Some(current_slot + 1), None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
 
-        let mut signed_blinded_beacon_block =
-            load_signed_blinded_beacon_block_from_file_fixed("signed_blinded_beacon_block.json");
+        let mut signed_blinded_beacon_block = load_signed_blinded_beacon_block_from_file_fixed("signed_blinded_beacon_block.json");
         signed_blinded_beacon_block.message.slot = current_slot + 1;
 
         // Send JSON encoded request
@@ -822,8 +683,7 @@ mod proposer_api_tests {
     #[ignore]
     async fn test_get_payload_type_mismatch() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) = start_api_server().await;
 
         let current_slot = calculate_current_slot();
 
@@ -831,25 +691,14 @@ mod proposer_api_tests {
         let builder_bid = get_signed_builder_bid(U256::from(10));
         let _ = auctioneer.best_bid.lock().unwrap().insert(builder_bid.clone());
         let versioned_execution_payload = PayloadAndBlobs::default();
-        let _ = auctioneer
-            .versioned_execution_payload
-            .lock()
-            .unwrap()
-            .insert(versioned_execution_payload.clone());
+        let _ = auctioneer.versioned_execution_payload.lock().unwrap().insert(versioned_execution_payload.clone());
 
         // Send slot & payload attributes updates
         let slot_update_sender = slot_update_receiver.recv().await.unwrap();
-        send_dummy_slot_update(
-            slot_update_sender.clone(),
-            Some(current_slot),
-            Some(current_slot + 1),
-            Some(0),
-        )
-        .await;
+        send_dummy_slot_update(slot_update_sender.clone(), Some(current_slot), Some(current_slot + 1), Some(0)).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
 
         let signed_blinded_beacon_block = bellatrix::mainnet::SignedBlindedBeaconBlock::default();
 
@@ -875,8 +724,7 @@ mod proposer_api_tests {
     #[ignore]
     async fn test_get_payload_ok() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) = start_api_server().await;
 
         let current_slot = calculate_current_slot();
 
@@ -884,25 +732,14 @@ mod proposer_api_tests {
         let builder_bid = get_signed_builder_bid(U256::from(10));
         let _ = auctioneer.best_bid.lock().unwrap().insert(builder_bid.clone());
         let versioned_execution_payload = PayloadAndBlobs::default();
-        let _ = auctioneer
-            .versioned_execution_payload
-            .lock()
-            .unwrap()
-            .insert(versioned_execution_payload.clone());
+        let _ = auctioneer.versioned_execution_payload.lock().unwrap().insert(versioned_execution_payload.clone());
 
         // Send slot & payload attributes updates
         let slot_update_sender = slot_update_receiver.recv().await.unwrap();
-        send_dummy_slot_update(
-            slot_update_sender.clone(),
-            Some(current_slot),
-            Some(current_slot + 1),
-            None,
-        )
-        .await;
+        send_dummy_slot_update(slot_update_sender.clone(), Some(current_slot), Some(current_slot + 1), None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
 
         let mut signed_blinded_beacon_block = deneb::SignedBlindedBeaconBlock::default();
         signed_blinded_beacon_block.message.proposer_index = 1;
@@ -922,10 +759,7 @@ mod proposer_api_tests {
         // Now we can assert the body and assert it can be deserialized into a ExecutionPayload
         let body = resp.text().await.unwrap();
         let payload: ExecutionPayload = serde_json::from_str(&body).unwrap();
-        assert_eq!(
-            payload.block_hash(),
-            versioned_execution_payload.execution_payload.block_hash()
-        );
+        assert_eq!(payload.block_hash(), versioned_execution_payload.execution_payload.block_hash());
 
         // Shut down the server
         let _ = tx.send(());
@@ -936,8 +770,7 @@ mod proposer_api_tests {
     #[ignore]
     async fn test_register_validators() {
         let (tx, http_config, _api, _slot_update_receiver, _auctioneer) = start_api_server().await;
-        let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_REGISTER_VALIDATORS);
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_REGISTER_VALIDATORS);
 
         let mut signed_validator_registrations = vec![];
         for _ in 0..1_000_000 {
@@ -963,8 +796,7 @@ mod proposer_api_tests {
     #[serial]
     async fn test_register_validators_with_pref_header() {
         let (tx, http_config, _api, _slot_update_receiver, _auctioneer) = start_api_server().await;
-        let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_REGISTER_VALIDATORS);
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_REGISTER_VALIDATORS);
 
         let signed_validator_registrations = vec![gen_signed_vr()];
 
@@ -993,19 +825,18 @@ mod proposer_api_tests {
         let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
         let auctioneer = Arc::new(MockAuctioneer::default());
 
-        let prop_api =
-            ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient, MockGossiper>::new(
-                auctioneer.clone(),
-                Arc::new(MockDatabaseService::default()),
-                Arc::new(MockGossiper::new().unwrap()),
-                vec![],
-                Arc::new(MockMultiBeaconClient::default()),
-                Arc::new(ChainInfo::for_holesky()),
-                slot_update_sender.clone(),
-                Arc::new(ValidatorPreferences::default()),
-                0,
-                gossip_receiver,
-            );
+        let prop_api = ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient, MockGossiper>::new(
+            auctioneer.clone(),
+            Arc::new(MockDatabaseService::default()),
+            Arc::new(MockGossiper::new().unwrap()),
+            vec![],
+            Arc::new(MockMultiBeaconClient::default()),
+            Arc::new(ChainInfo::for_holesky()),
+            slot_update_sender.clone(),
+            Arc::new(ValidatorPreferences::default()),
+            0,
+            gossip_receiver,
+        );
 
         let mut x = gen_signed_vr();
 
@@ -1014,22 +845,22 @@ mod proposer_api_tests {
 
     #[test]
     fn test_verify_signed_blinded_block_signature_from_file_deneb() {
-
         let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
-            if !current_dir.ends_with("api") {
-                current_dir.push("crates/api/");
-            }
-            current_dir.push("test_data/signed_blinded_beacon_block_deneb.json");
-            let req_payload_bytes =
-                load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+        if !current_dir.ends_with("api") {
+            current_dir.push("crates/api/");
+        }
+        current_dir.push("test_data/signed_blinded_beacon_block_deneb.json");
+        let req_payload_bytes = load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
-            let decoded_submission: SignedBlindedBeaconBlock =
-                serde_json::from_slice(&req_payload_bytes).unwrap();
+        let decoded_submission: SignedBlindedBeaconBlock = serde_json::from_slice(&req_payload_bytes).unwrap();
 
         let chain_info = ChainInfo::for_holesky();
         let slot = decoded_submission.message().slot();
 
-        let public_key = BlsPublicKey::try_from(hex::decode("0xb74ed6ac039a55136d5493333c32ce5b2e0152e4121b5b850830383ab836e22fb5f4f8568c61f12d0646dc0eb0c6d861" ).unwrap().as_slice()).unwrap();
+        let public_key = BlsPublicKey::try_from(
+            hex::decode("0xb74ed6ac039a55136d5493333c32ce5b2e0152e4121b5b850830383ab836e22fb5f4f8568c61f12d0646dc0eb0c6d861").unwrap().as_slice(),
+        )
+        .unwrap();
 
         match decoded_submission {
             SignedBlindedBeaconBlock::Deneb(mut block) => {
@@ -1043,18 +874,13 @@ mod proposer_api_tests {
                 );
 
                 match result {
-                    Ok(_) => {
-                        
-                    }
+                    Ok(_) => {}
                     Err(e) => {
                         println!("Error: {:?}", e);
                     }
-                    
                 }
             }
             _ => {}
-            
         }
-        
     }
 }

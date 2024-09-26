@@ -23,10 +23,7 @@ async fn run() {
 
             let filter_layer = tracing_subscriber::EnvFilter::from_default_env();
 
-            tracing_subscriber::fmt()
-                .with_env_filter(filter_layer)
-                .with_writer(non_blocking)
-                .init();
+            tracing_subscriber::fmt().with_env_filter(filter_layer).with_writer(non_blocking).init();
             _guard = Some(guard);
         }
     }
@@ -39,12 +36,7 @@ fn main() {
     let worker_threads = num_cpus;
     let max_blocking_threads = num_cpus / 2;
 
-    let rt = Builder::new_multi_thread()
-        .worker_threads(worker_threads)
-        .max_blocking_threads(max_blocking_threads)
-        .enable_all()
-        .build()
-        .unwrap();
+    let rt = Builder::new_multi_thread().worker_threads(worker_threads).max_blocking_threads(max_blocking_threads).enable_all().build().unwrap();
 
     rt.block_on(run());
 }

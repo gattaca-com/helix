@@ -4,12 +4,9 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
-use ethereum_consensus::primitives::Root;
+use ethereum_consensus::{primitives::Root, ssz::prelude::*};
 use futures::future::join_all;
-use helix_common::{
-    bellatrix::SimpleSerialize, signed_proposal::VersionedSignedProposal, ProposerDuty,
-    ValidatorSummary,
-};
+use helix_common::{signed_proposal::VersionedSignedProposal, ProposerDuty, ValidatorSummary};
 use tokio::{sync::broadcast::Sender, task::JoinError};
 use tracing::{error, warn};
 
@@ -32,10 +29,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClient<BeaconClient> {
     pub fn new(beacon_clients: Vec<Arc<BeaconClient>>) -> Self {
         let beacon_clients_with_index = beacon_clients.into_iter().enumerate().collect();
 
-        Self {
-            beacon_clients: beacon_clients_with_index,
-            best_beacon_instance: Arc::new(AtomicUsize::new(0)),
-        }
+        Self { beacon_clients: beacon_clients_with_index, best_beacon_instance: Arc::new(AtomicUsize::new(0)) }
     }
 
     /// Returns a list of beacon clients, prioritized by the last successful response.
@@ -75,22 +69,16 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
     async fn best_sync_status(&self) -> Result<SyncStatus, BeaconClientError> {
         let clients = self.beacon_clients_by_last_response();
 
-        let handles = clients
-            .into_iter()
-            .map(|(_, client)| tokio::spawn(async move { client.sync_status().await }))
-            .collect::<Vec<_>>();
+        let handles = clients.into_iter().map(|(_, client)| tokio::spawn(async move { client.sync_status().await })).collect::<Vec<_>>();
 
-        let results: Vec<Result<Result<SyncStatus, BeaconClientError>, JoinError>> =
-            join_all(handles).await;
+        let results: Vec<Result<Result<SyncStatus, BeaconClientError>, JoinError>> = join_all(handles).await;
 
         let mut best_sync_status: Option<SyncStatus> = None;
         for join_result in results {
             match join_result {
                 Ok(sync_status_result) => match sync_status_result {
                     Ok(sync_status) => {
-                        if best_sync_status.as_ref().map_or(true, |current_best| {
-                            current_best.head_slot < sync_status.head_slot
-                        }) {
+                        if best_sync_status.as_ref().map_or(true, |current_best| current_best.head_slot < sync_status.head_slot) {
                             best_sync_status = Some(sync_status);
                         }
                     }
@@ -140,10 +128,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
         }
     }
 
-    async fn get_state_validators(
-        &self,
-        state_id: StateId,
-    ) -> Result<Vec<ValidatorSummary>, BeaconClientError> {
+    async fn get_state_validators(&self, state_id: StateId) -> Result<Vec<ValidatorSummary>, BeaconClientError> {
         let clients = self.beacon_clients_by_last_response();
         let mut last_error = None;
 
@@ -162,10 +147,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
         Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
     }
 
-    async fn get_proposer_duties(
-        &self,
-        epoch: u64,
-    ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError> {
+    async fn get_proposer_duties(&self, epoch: u64) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError> {
         let clients = self.beacon_clients_by_last_response();
         let mut last_error = None;
 
@@ -190,7 +172,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
     /// It will instantly return after the first successful response.
     ///
     /// Follows the spec: [Ethereum 2.0 Beacon APIs documentation](https://ethereum.github.io/beacon-APIs/#/ValidatorRequiredApi/publishBlock).
-    async fn publish_block<T: Send + Sync + 'static + SimpleSerialize>(
+    async fn publish_block<T: Send + Sync + 'static + Serializable + HashTreeRoot>(
         &self,
         block: Arc<T>,
         broadcast_validation: Option<BroadcastValidation>,
@@ -267,16 +249,8 @@ mod multi_beacon_client_tests {
 
     #[tokio::test]
     async fn test_best_sync_status() {
-        let client1 = MockBeaconClient::new().with_sync_status(SyncStatus {
-            head_slot: 10,
-            sync_distance: 0,
-            is_syncing: false,
-        });
-        let client2 = MockBeaconClient::new().with_sync_status(SyncStatus {
-            head_slot: 20,
-            sync_distance: 0,
-            is_syncing: false,
-        });
+        let client1 = MockBeaconClient::new().with_sync_status(SyncStatus { head_slot: 10, sync_distance: 0, is_syncing: false });
+        let client2 = MockBeaconClient::new().with_sync_status(SyncStatus { head_slot: 20, sync_distance: 0, is_syncing: false });
 
         let multi_client = MultiBeaconClient::new(vec![Arc::new(client1), Arc::new(client2)]);
         let best_status = multi_client.best_sync_status().await.unwrap();
@@ -291,11 +265,7 @@ mod multi_beacon_client_tests {
 
         let multi_client = MultiBeaconClient::new(vec![client1, client2]);
         let result = multi_client
-            .publish_block(
-                Arc::new(VersionedSignedProposal::default()),
-                Some(BroadcastValidation::default()),
-                ethereum_consensus::Fork::Capella,
-            )
+            .publish_block(Arc::new(VersionedSignedProposal::default()), Some(BroadcastValidation::default()), ethereum_consensus::Fork::Capella)
             .await;
 
         assert!(result.is_ok());
@@ -308,11 +278,7 @@ mod multi_beacon_client_tests {
 
         let multi_client = MultiBeaconClient::new(vec![client1, client2]);
         let result = multi_client
-            .publish_block(
-                Arc::new(VersionedSignedProposal::default()),
-                Some(BroadcastValidation::default()),
-                ethereum_consensus::Fork::Capella,
-            )
+            .publish_block(Arc::new(VersionedSignedProposal::default()), Some(BroadcastValidation::default()), ethereum_consensus::Fork::Capella)
             .await;
 
         assert!(matches!(result, Err(BeaconClientError::BlockIntegrationFailed)));

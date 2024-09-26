@@ -1,12 +1,13 @@
 pub mod fiber_broadcaster;
 pub mod mock_block_broadcaster;
 
-use helix_common::signed_proposal::VersionedSignedProposal;
 use std::sync::Arc;
 
+use helix_common::signed_proposal::VersionedSignedProposal;
+
 use crate::{
-    beacon_client::BeaconClient, error::BeaconClientError, fiber_broadcaster::FiberBroadcaster,
-    mock_block_broadcaster::MockBlockBroadcaster, types::BroadcastValidation,
+    beacon_client::BeaconClient, error::BeaconClientError, fiber_broadcaster::FiberBroadcaster, mock_block_broadcaster::MockBlockBroadcaster,
+    types::BroadcastValidation,
 };
 
 pub enum BlockBroadcaster {
@@ -23,15 +24,9 @@ impl BlockBroadcaster {
         consensus_version: ethereum_consensus::Fork,
     ) -> Result<(), BeaconClientError> {
         match self {
-            BlockBroadcaster::Fiber(f) => {
-                f.broadcast_block(block, broadcast_validation, consensus_version).await
-            }
-            BlockBroadcaster::BeaconClient(b) => {
-                b.broadcast_block(block, broadcast_validation, consensus_version).await
-            }
-            BlockBroadcaster::Mock(b) => {
-                b.broadcast_block(block, broadcast_validation, consensus_version).await
-            }
+            BlockBroadcaster::Fiber(f) => f.broadcast_block(block, broadcast_validation, consensus_version).await,
+            BlockBroadcaster::BeaconClient(b) => b.broadcast_block(block, broadcast_validation, consensus_version).await,
+            BlockBroadcaster::Mock(b) => b.broadcast_block(block, broadcast_validation, consensus_version).await,
         }
     }
 

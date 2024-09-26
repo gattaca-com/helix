@@ -1,11 +1,7 @@
-
-
 use ethereum_consensus::{
     primitives::{BlsPublicKey, Hash32},
     ssz::prelude::*,
 };
-use serde::{Deserialize, Serialize};
-
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry,
@@ -13,8 +9,10 @@ use helix_common::{
     },
     bid_submission::BidTrace,
     builder_info::BuilderInfo,
-    simulator::BlockSimError, SubmissionTrace,
+    simulator::BlockSimError,
+    SubmissionTrace,
 };
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 pub struct ProposerDutiesDocument {

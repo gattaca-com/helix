@@ -1,3 +1,5 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use ethereum_consensus::{
     builder::{compute_builder_domain, SignedValidatorRegistration, ValidatorRegistration},
     crypto::SecretKey,
@@ -5,7 +7,6 @@ use ethereum_consensus::{
 };
 use helix_common::chain_info::ChainInfo;
 use rand::thread_rng;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn gen_signed_vr() -> SignedValidatorRegistration {
     let mut rng = thread_rng();
@@ -31,22 +32,21 @@ pub fn gen_signed_vr() -> SignedValidatorRegistration {
 #[cfg(test)]
 mod constraint_api_tests {
     // +++ IMPORTS +++
-    use crate::{
-        constraints::{api::ConstraintsApi, types::PATH_CONSTRAINTS_API}, test_utils::constraints_api_app
-    };
-
-    use reqwest::{Client, Response};
+    use std::{sync::Arc, time::Duration};
 
     use helix_datastore::MockAuctioneer;
     use helix_housekeeper::ChainUpdate;
     use helix_utils::request_encoding::Encoding;
+    use reqwest::{Client, Response};
     use serial_test::serial;
-    use std::{sync::Arc, time::Duration};
-    use tokio::{
-        sync::{
-            mpsc::{Receiver, Sender},
-            oneshot,
-        },
+    use tokio::sync::{
+        mpsc::{Receiver, Sender},
+        oneshot,
+    };
+
+    use crate::{
+        constraints::{api::ConstraintsApi, types::PATH_CONSTRAINTS_API},
+        test_utils::constraints_api_app,
     };
 
     // +++ HELPER VARIABLES +++
@@ -82,13 +82,8 @@ mod constraint_api_tests {
         request.body(req_payload).send().await.unwrap()
     }
 
-    async fn start_api_server() -> (
-        oneshot::Sender<()>,
-        HttpServiceConfig,
-        Arc<ConstraintsApi<MockAuctioneer>>,
-        Receiver<Sender<ChainUpdate>>,
-        Arc<MockAuctioneer>,
-    ) {
+    async fn start_api_server(
+    ) -> (oneshot::Sender<()>, HttpServiceConfig, Arc<ConstraintsApi<MockAuctioneer>>, Receiver<Sender<ChainUpdate>>, Arc<MockAuctioneer>) {
         let (tx, rx) = oneshot::channel();
         let http_config = HttpServiceConfig::new(ADDRESS, PORT);
         let bind_address = http_config.bind_address();
@@ -112,31 +107,19 @@ mod constraint_api_tests {
         (tx, http_config, api, slot_update_receiver, auctioneer)
     }
 
-
     // +++ TESTS +++
 
     #[tokio::test]
     #[serial]
     async fn test_get_preconfer_with_slot() {
         // Start the server
-        let (tx, http_config, _api, mut _slot_update_receiver, _auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, mut _slot_update_receiver, _auctioneer) = start_api_server().await;
 
         // Prepare the request
-        let req_url = format!(
-            "{}{}/preconfer/{}",
-            http_config.base_url(),
-            PATH_CONSTRAINTS_API,
-            1,
-        );
+        let req_url = format!("{}{}/preconfer/{}", http_config.base_url(), PATH_CONSTRAINTS_API, 1,);
 
         // Send JSON encoded request
-        let resp = reqwest::Client::new()
-            .get(req_url.as_str())
-            .header("accept", "application/json")
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(req_url.as_str()).header("accept", "application/json").send().await.unwrap();
 
         println!("{:?}", resp);
 
@@ -148,26 +131,16 @@ mod constraint_api_tests {
     #[serial]
     async fn test_get_preconfers_for_epoch() {
         // Start the server
-        let (tx, http_config, _api, mut _slot_update_receiver, _auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, mut _slot_update_receiver, _auctioneer) = start_api_server().await;
 
         // Prepare the request
-        let req_url = format!(
-            "{}{}/preconfers",
-            http_config.base_url(),
-            PATH_CONSTRAINTS_API,
-        );
+        let req_url = format!("{}{}/preconfers", http_config.base_url(), PATH_CONSTRAINTS_API,);
 
         // Send JSON encoded request
-        let resp = reqwest::Client::new()
-            .get(req_url.as_str())
-            .header("accept", "application/json")
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(req_url.as_str()).header("accept", "application/json").send().await.unwrap();
 
-            // print body
-            println!("status: {:?}", resp.status());
+        // print body
+        println!("status: {:?}", resp.status());
         let body = resp.text().await.unwrap();
         println!("{:?}", body);
 

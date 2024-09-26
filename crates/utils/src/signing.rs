@@ -9,7 +9,7 @@ use ethereum_consensus::{
     Error, Fork,
 };
 
-pub fn verify_signed_consensus_message<T: Merkleized>(
+pub fn verify_signed_consensus_message<T: HashTreeRoot>(
     message: &mut T,
     signature: &BlsSignature,
     public_key: &BlsPublicKey,
@@ -23,13 +23,12 @@ pub fn verify_signed_consensus_message<T: Merkleized>(
         Fork::Deneb => context.deneb_fork_version,
         _ => unimplemented!("Fork {:?} is not supported", context.fork_for(slot)),
     });
-    let domain =
-        compute_domain(DomainType::BeaconProposer, fork_version, root_hint, context).unwrap();
+    let domain = compute_domain(DomainType::BeaconProposer, fork_version, root_hint, context).unwrap();
     verify_signed_data(message, signature, public_key, domain)?;
     Ok(())
 }
 
-pub fn verify_signed_builder_message<T: Merkleized>(
+pub fn verify_signed_builder_message<T: HashTreeRoot>(
     message: &mut T,
     signature: &BlsSignature,
     public_key: &BlsPublicKey,
@@ -40,7 +39,7 @@ pub fn verify_signed_builder_message<T: Merkleized>(
     Ok(())
 }
 
-pub fn compute_consensus_signing_root<T: Merkleized>(
+pub fn compute_consensus_signing_root<T: HashTreeRoot>(
     data: &mut T,
     slot: Slot,
     genesis_validators_root: &Root,
@@ -48,28 +47,16 @@ pub fn compute_consensus_signing_root<T: Merkleized>(
 ) -> Result<Root, Error> {
     let fork = context.fork_for(slot);
     let fork_version = context.fork_version_for(fork);
-    let domain = compute_domain(
-        DomainType::BeaconProposer,
-        Some(fork_version),
-        Some(*genesis_validators_root),
-        context,
-    )?;
+    let domain = compute_domain(DomainType::BeaconProposer, Some(fork_version), Some(*genesis_validators_root), context)?;
     compute_signing_root(data, domain)
 }
 
-pub fn sign_builder_message<T: Merkleized>(
-    message: &mut T,
-    signing_key: &SecretKey,
-    context: &Context,
-) -> Result<BlsSignature, Error> {
+pub fn sign_builder_message<T: HashTreeRoot>(message: &mut T, signing_key: &SecretKey, context: &Context) -> Result<BlsSignature, Error> {
     let domain = compute_builder_domain(context)?;
     sign_with_domain(message, signing_key, domain)
 }
 
-pub fn compute_builder_signing_root<T: Merkleized>(
-    data: &mut T,
-    context: &Context,
-) -> Result<Root, Error> {
+pub fn compute_builder_signing_root<T: HashTreeRoot>(data: &mut T, context: &Context) -> Result<Root, Error> {
     let domain = compute_builder_domain(context)?;
     compute_signing_root(data, domain)
 }

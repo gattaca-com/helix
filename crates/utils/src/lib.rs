@@ -1,10 +1,10 @@
 use ::serde::de;
 use ethereum_consensus::{
+    altair::{Bytes32, Slot},
     capella::Withdrawal,
     phase0::mainnet::SLOTS_PER_EPOCH,
     ssz::{self, prelude::SimpleSerialize},
 };
-use ethereum_consensus::altair::{Bytes32, Slot};
 use reth_primitives::{proofs, Address};
 
 pub mod request_encoding;
@@ -22,8 +22,7 @@ pub fn has_reached_fork(slot: u64, fork_epoch: u64) -> bool {
 
 // TODO: really need to fix the common here. Should probably just use reth common
 pub fn calculate_withdrawals_root(withdrawals: &[Withdrawal]) -> [u8; 32] {
-    let reth_withdrawals: Vec<reth_primitives::Withdrawal> =
-        withdrawals.iter().cloned().map(to_reth_withdrawal).collect();
+    let reth_withdrawals: Vec<reth_primitives::Withdrawal> = withdrawals.iter().cloned().map(to_reth_withdrawal).collect();
     proofs::calculate_withdrawals_root(&reth_withdrawals).0
 }
 

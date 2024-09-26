@@ -41,7 +41,7 @@ pub enum DatabaseError {
     FromHexError(#[from] hex::FromHexError),
 
     #[error("ethereum common error: {0}")]
-    EthereumTypesError(#[from] ethereum_consensus::crypto::Error),
+    EthereumTypesError(#[from] ethereum_consensus::Error),
 
     #[error("Block submission already exists")]
     BlockSubmissionAlreadyExists,
