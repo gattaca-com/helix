@@ -439,11 +439,11 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             Vec::with_capacity(proposer_duties.len());
 
         for duty in proposer_duties {
-            if let Some(reg) = signed_validator_registrations.remove(&duty.public_key) {
+            if let Some(reg) = signed_validator_registrations.get(&duty.public_key) {
                 formatted_proposer_duties.push(BuilderGetValidatorsResponseEntry {
                     slot: duty.slot,
                     validator_index: duty.validator_index,
-                    entry: reg.registration_info,
+                    entry: reg.registration_info.clone(),
                 });
             }
         }
