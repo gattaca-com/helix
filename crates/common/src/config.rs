@@ -1,6 +1,6 @@
-use crate::{api::*, ValidatorPreferences};
+use crate::{api::*, ValidatorPreferences, BuilderInfo};
 use clap::Parser;
-use ethereum_consensus::ssz::prelude::Node;
+use ethereum_consensus::{ssz::prelude::Node, primitives::BlsPublicKey};
 use helix_utils::request_encoding::Encoding;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs::File};
@@ -16,6 +16,8 @@ pub struct RelayConfig {
     pub beacon_clients: Vec<BeaconClientConfig>,
     #[serde(default)]
     pub relays: Vec<RelayGossipConfig>,
+    #[serde(default)]
+    pub builders: Vec<BuilderConfig>,
     #[serde(default)]
     pub network_config: NetworkConfig,
     #[serde(default)]
@@ -83,6 +85,12 @@ pub struct BeaconClientConfig {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RelayGossipConfig {
     pub url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BuilderConfig {
+    pub pub_key: BlsPublicKey,
+    pub builder_info: BuilderInfo,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
