@@ -1,6 +1,6 @@
-use crate::{api::*, ValidatorPreferences};
+use crate::{api::*, BuilderInfo, ValidatorPreferences};
 use clap::Parser;
-use ethereum_consensus::ssz::prelude::Node;
+use ethereum_consensus::{primitives::BlsPublicKey, ssz::prelude::Node};
 use helix_utils::{
     request_encoding::Encoding,
     serde::{default_bool, deserialize_url, serialize_url},
@@ -8,7 +8,6 @@ use helix_utils::{
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs::File};
-use ethereum_consensus::deneb::BlsPublicKey;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RelayConfig {
@@ -21,6 +20,8 @@ pub struct RelayConfig {
     pub beacon_clients: Vec<BeaconClientConfig>,
     #[serde(default)]
     pub relays: Vec<RelayGossipConfig>,
+    #[serde(default)]
+    pub builders: Vec<BuilderConfig>,
     #[serde(default)]
     pub network_config: NetworkConfig,
     #[serde(default)]
@@ -102,6 +103,12 @@ pub struct BeaconClientConfig {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RelayGossipConfig {
     pub url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BuilderConfig {
+    pub pub_key: BlsPublicKey,
+    pub builder_info: BuilderInfo,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -303,7 +310,7 @@ fn test_config() {
         filtering: Filtering::Regional,
         trusted_builders: None,
         header_delay: true,
-        gossip_blobs: false
+        gossip_blobs: false,
     };
     config.router_config = RouterConfig {
         enabled_routes: vec![
@@ -319,7 +326,8 @@ fn test_config() {
             RouteInfo { route: Route::ProposerPayloadDelivered, rate_limit: None },
             RouteInfo { route: Route::RegisterValidators, rate_limit: None },
             RouteInfo { route: Route::Status, rate_limit: None },
-        ].to_vec(),
+        ]
+        .to_vec(),
     };
     println!("{}", serde_yaml::to_string(&config).unwrap());
 }

@@ -156,7 +156,14 @@ impl DatabaseService for MockDatabaseService {
     async fn store_builder_info(
         &self,
         _builder_pub_key: &BlsPublicKey,
-        _builder_info: BuilderInfo,
+        _builder_info: &BuilderInfo,
+    ) -> Result<(), DatabaseError> {
+        Ok(())
+    }
+
+    async fn store_builders_info(
+        &self,
+        _builders: &Vec<BuilderInfoDocument>
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
