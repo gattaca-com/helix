@@ -19,6 +19,7 @@ use crate::{
         BidsCache, DataApi, DeliveredPayloadsCache, PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API
     }, service::API_REQUEST_TIMEOUT
 };
+use crate::constraints::api::ConstraintsApi;
 
 pub type BuilderApiProd = BuilderApi<
     RedisCache,
@@ -32,11 +33,14 @@ pub type ProposerApiProd =
 
 pub type DataApiProd = DataApi<PostgresDatabaseService>;
 
+pub type ConstraintsApiProd = ConstraintsApi<RedisCache>;
+
 pub fn build_router(
     router_config: &mut RouterConfig,
     builder_api: Arc<BuilderApiProd>,
     proposer_api: Arc<ProposerApiProd>,
     data_api: Arc<DataApiProd>,
+    constraints_api: Arc<ConstraintsApiProd>,
     bids_cache: Arc<BidsCache>,
     delivered_payloads_cache: Arc<DeliveredPayloadsCache>,
 ) -> Router {
@@ -116,6 +120,18 @@ pub fn build_router(
                         post(ProposerApiProd::get_payload),
                     );
             }
+            Route::SetConstraints => {
+                router = router.route(
+                    &route.path(),
+                    post(ProposerApiProd::set_constraints),
+                );
+            }
+            Route::ElectPreconfer => {
+                router = router.route(
+                    &route.path(),
+                    post(ProposerApiProd::elect_preconfer),
+                );
+            }
             Route::ProposerPayloadDelivered => {
                 router = router.route(
                     &route.path(),
@@ -134,6 +150,24 @@ pub fn build_router(
                     get(DataApiProd::validator_registration),
                 );
             }
+            Route::GetConstraints => {
+                router = router.route(
+                    &route.path(),
+                    get(ConstraintsApiProd::get_constraints),
+                );
+            },
+            Route::GetPreconfer => {
+                router = router.route(
+                    &route.path(),
+                    get(ConstraintsApiProd::get_preconfer),
+                );
+            },
+            Route::GetPreconfersForEpoch => {
+                router = router.route(
+                    &route.path(),
+                    get(ConstraintsApiProd::get_preconfers_for_epoch),
+                );
+            },
             _ => {
                 panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route);
             }
@@ -159,6 +193,7 @@ pub fn build_router(
         .layer(Extension(builder_api))
         .layer(Extension(proposer_api))
         .layer(Extension(data_api))
+        .layer(Extension(constraints_api))
         .layer(Extension(bids_cache))
         .layer(Extension(delivered_payloads_cache));
 

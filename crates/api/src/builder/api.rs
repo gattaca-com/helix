@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use std::collections::HashSet;
 
 use axum::{
     extract::ws::{WebSocket, WebSocketUpgrade, Message},
@@ -21,6 +22,7 @@ use ethereum_consensus::{
 use flate2::read::GzDecoder;
 use futures::StreamExt;
 use hyper::HeaderMap;
+use reth_primitives::alloy_primitives::private::alloy_rlp::Decodable;
 use tokio::{
     sync::{
         mpsc::{self, error::SendError, Receiver, Sender},
@@ -49,8 +51,10 @@ use helix_common::{
     BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace,
     SignedBuilderBid, SubmissionTrace,
 };
+use helix_common::api::constraints_api::ConstraintsMessage;
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
+use helix_datastore::constraints::ConstraintsAuctioneer;
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
 use helix_utils::{calculate_withdrawals_root, get_payload_attributes_key, has_reached_fork, try_decode_into};
 
@@ -66,7 +70,7 @@ pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
 #[derive(Clone)]
 pub struct BuilderApi<A, DB, S, G>
 where
-    A: Auctioneer + 'static,
+    A: Auctioneer + ConstraintsAuctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
@@ -89,7 +93,7 @@ where
 
 impl<A, DB, S, G> BuilderApi<A, DB, S, G>
 where
-    A: Auctioneer + 'static,
+    A: Auctioneer + ConstraintsAuctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
@@ -821,7 +825,7 @@ where
 // Handle Gossiped Payloads
 impl<A, DB, S, G> BuilderApi<A, DB, S, G>
 where
-    A: Auctioneer + 'static,
+    A: Auctioneer + ConstraintsAuctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
@@ -1100,15 +1104,14 @@ where
 // Helpers
 impl<A, DB, S, G> BuilderApi<A, DB, S, G>
 where
-    A: Auctioneer + 'static,
+    A: Auctioneer + ConstraintsAuctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
 {
-    /// This function verifies:
-    /// 1. Runs some basic sanity checks on the payload.
-    /// 2. Verifies the payload signature.
-    /// 3. Simulates the submission
+    /// This function:
+    /// 1. Verifies the payload signature.
+    /// 2. Simulates the submission
     ///
     /// Returns: the bid submission in an Arc.
     async fn verify_submitted_block(
@@ -1552,7 +1555,7 @@ where
 // STATE SYNC
 impl<A, DB, S, G> BuilderApi<A, DB, S, G>
 where
-    A: Auctioneer + 'static,
+    A: Auctioneer + ConstraintsAuctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,

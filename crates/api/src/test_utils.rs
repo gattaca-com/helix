@@ -24,22 +24,22 @@ use crate::{
     builder::{
         api::{BuilderApi, MAX_PAYLOAD_LENGTH},
         mock_simulator::MockSimulator,
-    },
-    gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
-    proposer::{
+    }, gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage}, proposer::{
         api::{ProposerApi, MAX_BLINDED_BLOCK_LENGTH, MAX_VAL_REGISTRATIONS_LENGTH},
         PATH_GET_HEADER, PATH_GET_PAYLOAD, PATH_PROPOSER_API, PATH_REGISTER_VALIDATORS,
         PATH_STATUS,
-    },
-    relay_data::{
+    }, relay_data::{
         DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API, PATH_PROPOSER_PAYLOAD_DELIVERED,
         PATH_VALIDATOR_REGISTRATION,
+    }, constraints::{
+        api::ConstraintsApi,
+        types::*,
     },
 };
 
 pub fn app() -> Router {
     let (slot_update_sender, _slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
-    let (gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
+    let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
 
     let api_service =
         Arc::new(ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient, MockGossiper>::new(
@@ -177,7 +177,7 @@ pub fn proposer_api_app() -> (
     Arc<MockAuctioneer>,
 ) {
     let (slot_update_sender, slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
-    let (gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
+    let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
     let auctioneer = Arc::new(MockAuctioneer::default());
     let proposer_api_service =
         Arc::new(ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient, MockGossiper>::new(
@@ -233,4 +233,38 @@ pub fn data_api_app() -> (Router, Arc<DataApi<MockDatabaseService>>, Arc<MockDat
         .layer(Extension(proposer_api_service.clone()));
 
     (router, proposer_api_service, mock_database)
+}
+
+pub fn constraints_api_app() -> (
+    Router,
+    Arc<ConstraintsApi<MockAuctioneer>>,
+    Receiver<Sender<ChainUpdate>>,
+    Arc<MockAuctioneer>,
+) {
+    let (slot_update_sender, slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
+    let auctioneer = Arc::new(MockAuctioneer::default());
+    let constraints_api_service =
+        Arc::new(ConstraintsApi::<MockAuctioneer>::new(
+            auctioneer.clone(),
+            Arc::new(ChainInfo::for_mainnet()),
+            slot_update_sender.clone(),
+        ));
+
+    let router = Router::new()
+        .route(
+            &format!("{PATH_CONSTRAINTS_API}{PATH_GET_CONSTRAINTS}"),
+            get(ConstraintsApi::<MockAuctioneer>::get_constraints),
+        )
+        .route(
+            &format!("{PATH_CONSTRAINTS_API}{PATH_GET_PRECONFER}"),
+            get(ConstraintsApi::<MockAuctioneer>::get_preconfer),
+        )
+        .route(
+            &format!("{PATH_CONSTRAINTS_API}{PATH_GET_PRECONFERS}"),
+            get(ConstraintsApi::<MockAuctioneer>::get_preconfers_for_epoch),
+        )        
+        .layer(RequestBodyLimitLayer::new(MAX_VAL_REGISTRATIONS_LENGTH))
+        .layer(Extension(constraints_api_service.clone()));
+
+    (router, constraints_api_service, slot_update_receiver, auctioneer)
 }

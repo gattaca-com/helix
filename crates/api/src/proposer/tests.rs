@@ -109,7 +109,7 @@ mod proposer_api_tests {
         }
     }
 
-    async fn send_request(req_url: &str, encoding: Encoding, req_payload: Vec<u8>) -> Response {
+    async fn _send_request(req_url: &str, encoding: Encoding, req_payload: Vec<u8>) -> Response {
         let client = Client::new();
         let request = client.post(req_url).header("accept", "*/*");
         let request = encoding.to_headers(request);
@@ -140,7 +140,7 @@ mod proposer_api_tests {
         ByteVector::try_from(bytes.as_ref()).unwrap()
     }
 
-    fn hex_to_byte_arr_32(hex: &str) -> [u8; 32] {
+    fn _hex_to_byte_arr_32(hex: &str) -> [u8; 32] {
         let bytes = hex::decode(&hex[2..]).unwrap();
         let mut arr = [0u8; 32];
         arr.copy_from_slice(&bytes);
@@ -1023,7 +1023,7 @@ mod proposer_api_tests {
             let req_payload_bytes =
                 load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
-            let mut decoded_submission: SignedBlindedBeaconBlock =
+            let decoded_submission: SignedBlindedBeaconBlock =
                 serde_json::from_slice(&req_payload_bytes).unwrap();
 
         let chain_info = ChainInfo::for_holesky();
