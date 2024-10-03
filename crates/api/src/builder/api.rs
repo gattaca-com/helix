@@ -13,7 +13,7 @@ use axum::{
     Extension,
 };
 use ethereum_consensus::{
-    configs::mainnet::{CAPELLA_FORK_EPOCH, SECONDS_PER_SLOT},
+    configs::mainnet::CAPELLA_FORK_EPOCH,
     phase0::mainnet::SLOTS_PER_EPOCH,
     primitives::{BlsPublicKey, Bytes32, Hash32},
     ssz::{self, prelude::*},
@@ -1887,7 +1887,7 @@ fn sanity_check_block_submission(
     payload_attributes: &PayloadAttributesUpdate,
     chain_info: &ChainInfo,
 ) -> Result<(), BuilderApiError> {
-    let expected_timestamp = chain_info.genesis_time_in_secs + (bid_trace.slot * SECONDS_PER_SLOT);
+    let expected_timestamp = chain_info.genesis_time_in_secs + (bid_trace.slot * chain_info.seconds_per_slot);
     if payload.timestamp() != expected_timestamp {
         return Err(BuilderApiError::IncorrectTimestamp {
             got: payload.timestamp(),
