@@ -1,6 +1,4 @@
-use ethereum_consensus::{
-    builder::SignedValidatorRegistration, types::mainnet::ExecutionPayload, Fork,
-};
+use ethereum_consensus::{builder::SignedValidatorRegistration, types::mainnet::ExecutionPayload, Fork};
 
 use crate::{validator_preferences::ValidatorPreferences, versioned_payload::PayloadAndBlobs};
 
@@ -18,12 +16,8 @@ pub enum GetPayloadResponse {
 impl GetPayloadResponse {
     pub fn try_from_execution_payload(exec_payload: &PayloadAndBlobs) -> Option<Self> {
         match exec_payload.execution_payload.version() {
-            Fork::Capella => {
-                Some(GetPayloadResponse::Capella(exec_payload.execution_payload.clone()))
-            }
-            Fork::Bellatrix => {
-                Some(GetPayloadResponse::Bellatrix(exec_payload.execution_payload.clone()))
-            }
+            Fork::Capella => Some(GetPayloadResponse::Capella(exec_payload.execution_payload.clone())),
+            Fork::Bellatrix => Some(GetPayloadResponse::Bellatrix(exec_payload.execution_payload.clone())),
             Fork::Deneb => Some(GetPayloadResponse::Deneb(exec_payload.clone())),
             _ => None,
         }
@@ -45,9 +39,7 @@ impl<'de> serde::Deserialize<'de> for GetPayloadResponse {
         if let Ok(inner) = <_ as serde::Deserialize>::deserialize(&value) {
             return Ok(Self::Bellatrix(inner))
         }
-        Err(serde::de::Error::custom(
-            "no variant could be deserialized from input for GetPayloadResponse",
-        ))
+        Err(serde::de::Error::custom("no variant could be deserialized from input for GetPayloadResponse"))
     }
 }
 

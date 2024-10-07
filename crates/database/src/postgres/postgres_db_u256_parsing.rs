@@ -1,6 +1,5 @@
 use bytes::BufMut;
 use ethereum_consensus::primitives::U256;
-
 use tokio_postgres::types::{FromSql, ToSql};
 
 #[derive(Debug, Clone)]
@@ -29,20 +28,14 @@ const NBASE: u64 = 10000;
 /// sign and dscale are still not used
 
 impl<'a> FromSql<'a> for PostgresNumeric {
-    fn from_sql(
-        _: &tokio_postgres::types::Type,
-        raw: &[u8],
-    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+    fn from_sql(_: &tokio_postgres::types::Type, raw: &[u8]) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         let n_base = U256::from(NBASE);
         let mut offset = 0;
 
         // Function to read two bytes and advance the offset
         let read_two_bytes = |raw: &[u8], offset: &mut usize| -> std::io::Result<u16> {
             if raw.len() < *offset + 2 {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::UnexpectedEof,
-                    "Not enough bytes to read",
-                ));
+                return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "Not enough bytes to read"));
             }
             let value = u16::from_be_bytes([raw[*offset], raw[*offset + 1]]);
             *offset += 2;
@@ -84,8 +77,7 @@ impl ToSql for PostgresNumeric {
         &self,
         _: &tokio_postgres::types::Type,
         out: &mut bytes::BytesMut,
-    ) -> std::result::Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>>
-    {
+    ) -> std::result::Result<tokio_postgres::types::IsNull, Box<dyn std::error::Error + Sync + Send>> {
         const MAX_GROUP_COUNT: usize = 32;
         let divisor = U256::from(NBASE);
         let mut temp = self.0;
@@ -131,12 +123,10 @@ impl ToSql for PostgresNumeric {
 }
 #[cfg(test)]
 mod tests {
+    use ethereum_consensus::primitives::U256;
+
     use super::*;
     use crate::postgres::postgres_db_u256_parsing::PostgresNumeric;
-    use bytes::BytesMut;
-    use ethereum_consensus::{primitives::U256, serde::as_str};
-    use serde::{Deserialize, Serialize};
-    use tokio_postgres::types::Type;
 
     fn get_values() -> Vec<U256> {
         vec![
@@ -147,11 +137,7 @@ mod tests {
             U256::from(u64::MAX),
             U256::from_str_radix("1000_000_000_000_000_000", 10).unwrap(),
             U256::from_str_radix("1000_000_000_000_000_000_000", 10).unwrap(),
-            U256::from_str_radix(
-                "1000_000_000_000_000_000_000_000_000_000_000_000_000_000_000",
-                10,
-            )
-            .unwrap(),
+            U256::from_str_radix("1000_000_000_000_000_000_000_000_000_000_000_000_000_000_000", 10).unwrap(),
             U256::MAX,
         ]
     }
@@ -160,17 +146,11 @@ mod tests {
     fn test_to_sql_manual_reconstruction() {
         for value in get_values().into_iter() {
             let mut bytes = bytes::BytesMut::new();
-            let result = PostgresNumeric::from(value)
-                .to_sql(&tokio_postgres::types::Type::NUMERIC, &mut bytes);
+            let result = PostgresNumeric::from(value).to_sql(&tokio_postgres::types::Type::NUMERIC, &mut bytes);
             assert!(result.is_ok());
-            let digits = &bytes[8..]
-                .chunks_exact(2)
-                .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
-                .collect::<Vec<u16>>();
+            let digits = &bytes[8..].chunks_exact(2).map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]])).collect::<Vec<u16>>();
 
-            let reconstructed_value = digits
-                .iter()
-                .fold(U256::from(0), |acc, digit| acc * U256::from(NBASE) + U256::from(*digit));
+            let reconstructed_value = digits.iter().fold(U256::from(0), |acc, digit| acc * U256::from(NBASE) + U256::from(*digit));
 
             assert_eq!(value, reconstructed_value);
         }
@@ -181,12 +161,9 @@ mod tests {
     fn test_to_sql_from_sql() {
         for value in get_values().into_iter() {
             let mut bytes = bytes::BytesMut::new();
-            let result = PostgresNumeric::from(value)
-                .to_sql(&tokio_postgres::types::Type::NUMERIC, &mut bytes);
+            let result = PostgresNumeric::from(value).to_sql(&tokio_postgres::types::Type::NUMERIC, &mut bytes);
             assert!(result.is_ok());
-            let reconstructed_value =
-                PostgresNumeric::from_sql(&tokio_postgres::types::Type::NUMERIC, &bytes[..])
-                    .unwrap();
+            let reconstructed_value = PostgresNumeric::from_sql(&tokio_postgres::types::Type::NUMERIC, &bytes[..]).unwrap();
 
             assert_eq!(value, reconstructed_value.0);
         }

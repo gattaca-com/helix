@@ -1,14 +1,13 @@
+#![allow(unused)]
 use async_trait::async_trait;
-use helix_common::BuilderInfo;
+use helix_common::{simulator::BlockSimError, BuilderInfo};
 use reqwest::{
     header::{HeaderMap, HeaderValue, CONTENT_TYPE},
     Client, Response, StatusCode,
 };
 use serde_json::json;
 use tokio::sync::mpsc::Sender;
-use tracing::{debug, error, info};
-
-use helix_common::simulator::BlockSimError;
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::builder::{traits::BlockSimulator, BlockSimRequest, DbInfo};
@@ -38,11 +37,7 @@ impl RpcSimulator {
 
     /// Sends an RPC request for block validation.
     /// If `is_top_bid` = true, then the X-High-Priority header is set as "true"
-    async fn send_rpc_request(
-        &self,
-        request: BlockSimRequest,
-        is_top_bid: bool,
-    ) -> Result<Response, reqwest::Error> {
+    async fn send_rpc_request(&self, request: BlockSimRequest, is_top_bid: bool) -> Result<Response, reqwest::Error> {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         if is_top_bid {

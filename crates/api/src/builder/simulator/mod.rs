@@ -5,10 +5,9 @@ pub mod rpc_simulator;
 mod simulator_tests;
 pub mod traits;
 
-use ethereum_consensus::{deneb::Bytes32, types::mainnet::ExecutionPayload};
 use std::sync::Arc;
 
-use ethereum_consensus::{primitives::BlsSignature, serde::as_str};
+use ethereum_consensus::{deneb::Bytes32, primitives::BlsSignature, serde::as_str, types::mainnet::ExecutionPayload};
 use helix_common::{
     bid_submission::{BidSubmission, BidTrace, SignedBidSubmission},
     deneb::BlobsBundle,
@@ -24,7 +23,7 @@ pub struct BlockSimRequest {
     pub signature: BlsSignature,
     pub proposer_preferences: ValidatorPreferences,
     pub blobs_bundle: Option<BlobsBundle>,
-    pub parent_beacon_block_root: Option<Bytes32>
+    pub parent_beacon_block_root: Option<Bytes32>,
 }
 
 impl BlockSimRequest {

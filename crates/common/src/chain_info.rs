@@ -1,6 +1,7 @@
 use ethereum_consensus::{
     clock::{
-        for_goerli, for_holesky, for_mainnet, for_sepolia, from_system_time, Clock, SystemTimeProvider, GOERLI_GENESIS_TIME, HOLESKY_GENESIS_TIME, MAINNET_GENESIS_TIME, SEPOLIA_GENESIS_TIME
+        for_goerli, for_holesky, for_mainnet, for_sepolia, from_system_time, Clock, SystemTimeProvider, GOERLI_GENESIS_TIME, HOLESKY_GENESIS_TIME,
+        MAINNET_GENESIS_TIME, SEPOLIA_GENESIS_TIME,
     },
     configs,
     primitives::Root,
@@ -9,21 +10,15 @@ use ethereum_consensus::{
     Error,
 };
 
-pub(crate) const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
-    75, 54, 61, 185, 78, 40, 97, 32, 215, 110, 185, 5, 52, 15, 221, 78, 84, 191, 233, 240, 107,
-    243, 63, 246, 207, 90, 210, 127, 81, 27, 254, 149,
-];
-pub(crate) const SEPOLIA_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
-    216, 234, 23, 31, 60, 148, 174, 162, 30, 188, 66, 161, 237, 97, 5, 42, 207, 63, 146, 9, 192,
-    14, 78, 251, 170, 221, 172, 9, 237, 155, 128, 120,
-];
-pub(crate) const GOERLI_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
-    4, 61, 176, 217, 168, 56, 19, 85, 30, 226, 243, 52, 80, 210, 55, 151, 117, 125, 67, 9, 17, 169,
-    50, 5, 48, 173, 138, 14, 171, 196, 62, 251,
-];
+pub(crate) const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] =
+    [75, 54, 61, 185, 78, 40, 97, 32, 215, 110, 185, 5, 52, 15, 221, 78, 84, 191, 233, 240, 107, 243, 63, 246, 207, 90, 210, 127, 81, 27, 254, 149];
+pub(crate) const SEPOLIA_GENESIS_VALIDATOR_ROOT: [u8; 32] =
+    [216, 234, 23, 31, 60, 148, 174, 162, 30, 188, 66, 161, 237, 97, 5, 42, 207, 63, 146, 9, 192, 14, 78, 251, 170, 221, 172, 9, 237, 155, 128, 120];
+pub(crate) const GOERLI_GENESIS_VALIDATOR_ROOT: [u8; 32] =
+    [4, 61, 176, 217, 168, 56, 19, 85, 30, 226, 243, 52, 80, 210, 55, 151, 117, 125, 67, 9, 17, 169, 50, 5, 48, 173, 138, 14, 171, 196, 62, 251];
 pub(crate) const HOLESKY_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
-    145, 67, 170, 124, 97, 90, 127, 113, 21, 226, 182, 170, 195, 25, 192, 53, 41, 223, 130, 66,
-    174, 112, 95, 186, 157, 243, 155, 121, 197, 159, 168, 177,
+    145, 67, 170, 124, 97, 90, 127, 113, 21, 226, 182, 170, 195, 25, 192, 53, 41, 223, 130, 66, 174, 112, 95, 186, 157, 243, 155, 121, 197, 159, 168,
+    177,
 ];
 
 #[derive(Default, Debug, Clone, serde::Deserialize, serde::Serialize)]
@@ -82,8 +77,7 @@ impl ChainInfo {
 
         Self {
             network: Network::Mainnet,
-            genesis_validators_root: Node::try_from(MAINNET_GENESIS_VALIDATOR_ROOT.as_ref())
-                .unwrap(),
+            genesis_validators_root: Node::try_from(MAINNET_GENESIS_VALIDATOR_ROOT.as_ref()).unwrap(),
             context: cxt,
             clock: for_mainnet(),
             genesis_time_in_secs: MAINNET_GENESIS_TIME,
@@ -94,8 +88,7 @@ impl ChainInfo {
     pub fn for_sepolia() -> Self {
         Self {
             network: Network::Sepolia,
-            genesis_validators_root: Node::try_from(SEPOLIA_GENESIS_VALIDATOR_ROOT.as_ref())
-                .unwrap(),
+            genesis_validators_root: Node::try_from(SEPOLIA_GENESIS_VALIDATOR_ROOT.as_ref()).unwrap(),
             context: Context::for_sepolia(),
             clock: for_sepolia(),
             genesis_time_in_secs: SEPOLIA_GENESIS_TIME,
@@ -106,8 +99,7 @@ impl ChainInfo {
     pub fn for_goerli() -> Self {
         Self {
             network: Network::Goerli,
-            genesis_validators_root: Node::try_from(GOERLI_GENESIS_VALIDATOR_ROOT.as_ref())
-                .unwrap(),
+            genesis_validators_root: Node::try_from(GOERLI_GENESIS_VALIDATOR_ROOT.as_ref()).unwrap(),
             context: Context::for_goerli(),
             clock: for_goerli(),
             genesis_time_in_secs: GOERLI_GENESIS_TIME,
@@ -124,8 +116,7 @@ impl ChainInfo {
 
         Self {
             network: Network::Holesky,
-            genesis_validators_root: Node::try_from(HOLESKY_GENESIS_VALIDATOR_ROOT.as_ref())
-                .unwrap(),
+            genesis_validators_root: Node::try_from(HOLESKY_GENESIS_VALIDATOR_ROOT.as_ref()).unwrap(),
             context: cxt,
             clock: for_holesky(),
             genesis_time_in_secs: HOLESKY_GENESIS_TIME,
@@ -140,13 +131,6 @@ impl ChainInfo {
         let genesis_time_in_secs = genesis_time_in_secs;
         let seconds_per_slot = context.seconds_per_slot;
 
-        Ok(Self {
-            network,
-            genesis_validators_root,
-            context,
-            clock,
-            genesis_time_in_secs,
-            seconds_per_slot,
-        })
+        Ok(Self { network, genesis_validators_root, context, clock, genesis_time_in_secs, seconds_per_slot })
     }
 }

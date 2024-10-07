@@ -5,7 +5,7 @@ use crate::{
     gossiper::{
         error::GossipError,
         traits::GossipClientTrait,
-        types::{BroadcastHeaderParams, BroadcastPayloadParams, BroadcastGetPayloadParams},
+        types::{BroadcastGetPayloadParams, BroadcastHeaderParams, BroadcastPayloadParams},
     },
     grpc::{self, gossip_service_server::GossipService},
 };
@@ -40,24 +40,15 @@ pub struct MockGossiperService {}
 
 #[tonic::async_trait]
 impl GossipService for MockGossiperService {
-    async fn broadcast_header(
-        &self,
-        _request: Request<grpc::BroadcastHeaderParams>,
-    ) -> Result<Response<()>, Status> {
+    async fn broadcast_header(&self, _request: Request<grpc::BroadcastHeaderParams>) -> Result<Response<()>, Status> {
         Ok(tonic::Response::new(()))
     }
 
-    async fn broadcast_payload(
-        &self,
-        _request: Request<grpc::BroadcastPayloadParams>,
-    ) -> Result<Response<()>, Status> {
+    async fn broadcast_payload(&self, _request: Request<grpc::BroadcastPayloadParams>) -> Result<Response<()>, Status> {
         Ok(tonic::Response::new(()))
     }
 
-    async fn broadcast_get_payload(
-        &self,
-        _request: Request<grpc::BroadcastGetPayloadParams>,
-    ) -> Result<Response<()>, Status> {
+    async fn broadcast_get_payload(&self, _request: Request<grpc::BroadcastGetPayloadParams>) -> Result<Response<()>, Status> {
         Ok(tonic::Response::new(()))
     }
 }

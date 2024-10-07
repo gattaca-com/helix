@@ -16,7 +16,7 @@ reqwest.workspace = true
 # Serialization and Data Format 
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml = "0.9.25"
+serde_yaml.workspace = true
 
 # Ethereum Types
 ethereum-consensus.workspace = true
@@ -30,6 +30,6 @@ tokio-postgres.workspace = true
 
 # Misc
 auto_impl.workspace = true
-clap = {version = "4.3", features = ["derive"]}
+clap = {workspace = true, features = ["derive"]}
 thiserror.workspace = true
 tracing.workspace = true

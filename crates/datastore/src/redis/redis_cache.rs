@@ -1,3 +1,4 @@
+#![allow(unused, dependency_on_unit_never_type_fallback)]
 use std::collections::HashMap;
 
 use async_trait::async_trait;
@@ -8,49 +9,46 @@ use ethereum_consensus::{
 };
 use futures_util::TryStreamExt;
 use helix_common::{
-    api::builder_api::TopBidUpdate, bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission}, pending_block::PendingBlock, versioned_payload::PayloadAndBlobs, ProposerInfo
+    api::{
+        builder_api::TopBidUpdate,
+        constraints_api::{ConstraintsMessage, SignedPreconferElection},
+    },
+    bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission},
+    eth::SignedBuilderBid,
+    pending_block::PendingBlock,
+    signing::RelaySigningContext,
+    versioned_payload::PayloadAndBlobs,
+    BuilderInfo, ProposerInfo,
 };
+use helix_database::types::BuilderInfoDocument;
 use redis::{AsyncCommands, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::broadcast;
+use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 use tracing::error;
 
-use helix_common::{
-    bid_submission::{BidTrace, SignedBidSubmission},
-    eth::SignedBuilderBid,
-    signing::RelaySigningContext,
-    BuilderInfo,
-};
-use helix_database::types::BuilderInfoDocument;
-
-
-use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
-use helix_common::api::constraints_api::{ConstraintsMessage, SignedPreconferElection};
-
+use super::utils::{get_hash_from_hex, get_pending_block_builder_block_hash_key, get_pending_block_builder_key, get_pubkey_from_hex};
 use crate::{
+    constraints::ConstraintsAuctioneer,
     error::AuctioneerError,
     redis::{
         error::RedisCacheError,
         utils::{
-            get_builder_latest_bid_time_key, get_builder_latest_bid_value_key,
-            get_cache_bid_trace_key, get_cache_get_header_response_key, get_execution_payload_key,
-            get_floor_bid_key, get_floor_bid_value_key, get_latest_bid_by_builder_key,
-            get_latest_bid_by_builder_key_str_builder_pub_key, get_seen_block_hashes_key,
-            get_top_bid_value_key,
+            get_builder_latest_bid_time_key, get_builder_latest_bid_value_key, get_cache_bid_trace_key, get_cache_get_header_response_key,
+            get_execution_payload_key, get_floor_bid_key, get_floor_bid_value_key, get_latest_bid_by_builder_key,
+            get_latest_bid_by_builder_key_str_builder_pub_key, get_seen_block_hashes_key, get_top_bid_value_key,
         },
     },
     types::{
         keys::{
-            BUILDER_INFO_KEY, HOUSEKEEPER_LOCK_KEY, LAST_HASH_DELIVERED_KEY,
-            LAST_SLOT_DELIVERED_KEY, PROPOSER_WHITELIST_KEY,
-        }, signed_builder_bid_wrapper::SignedBuilderBidWrapper, SaveBidAndUpdateTopBidResponse
+            BUILDER_INFO_KEY, CONSTRAINTS_KEY, ELECTED_GATEWAY_KEY, HOUSEKEEPER_LOCK_KEY, LAST_HASH_DELIVERED_KEY, LAST_SLOT_DELIVERED_KEY,
+            PROPOSER_WHITELIST_KEY,
+        },
+        signed_builder_bid_wrapper::SignedBuilderBidWrapper,
+        SaveBidAndUpdateTopBidResponse,
     },
     Auctioneer,
 };
-use crate::constraints::ConstraintsAuctioneer;
-use crate::types::keys::{CONSTRAINTS_KEY, ELECTED_GATEWAY_KEY};
-
-use super::utils::{get_hash_from_hex, get_pending_block_builder_block_hash_key, get_pending_block_builder_key, get_pubkey_from_hex};
 
 const BID_CACHE_EXPIRY_S: usize = 45;
 const PENDING_BLOCK_EXPIRY_S: usize = 45;
@@ -73,18 +71,13 @@ pub struct RedisCache {
 }
 
 impl RedisCache {
-    pub async fn new(
-        conn_str: &str,
-        builder_infos: Vec<BuilderInfoDocument>,
-    ) -> Result<Self, CreatePoolError> {
+    pub async fn new(conn_str: &str, builder_infos: Vec<BuilderInfoDocument>) -> Result<Self, CreatePoolError> {
         let cfg = Config::from_url(conn_str);
         let pool = cfg.create_pool(Some(Runtime::Tokio1))?;
         let (tx, mut rx) = broadcast::channel(1000);
-        
+
         // ensure at least one subscriber is running
-        tokio::spawn(async move {
-            while let Ok(_message) = rx.recv().await {}
-        });
+        tokio::spawn(async move { while let Ok(_message) = rx.recv().await {} });
 
         let cache = Self { pool, tx };
 
@@ -106,13 +99,12 @@ impl RedisCache {
         let mut conn = self.pool.get().await?;
 
         while let Some(message) = message_stream.next().await {
-            let payload : String = match message.get_payload(){
+            let payload: String = match message.get_payload() {
                 Ok(payload) => payload,
                 Err(err) => {
                     error!(err=%err, "Failed to get payload from message");
                     continue;
                 }
-            
             };
 
             let data: String = match conn.get(payload).await {
@@ -128,7 +120,6 @@ impl RedisCache {
                     error!(err=%err, "Failed to deserialize data");
                     continue;
                 }
-            
             };
 
             let top_bid_update: TopBidUpdate = sig_bid.into();
@@ -140,7 +131,7 @@ impl RedisCache {
                     continue;
                 }
             };
-            
+
             if let Err(err) = self.tx.send(serialized) {
                 error!(err=%err, "Failed to send top bid update");
                 continue;
@@ -149,7 +140,6 @@ impl RedisCache {
 
         Ok(())
     }
-    
 
     async fn get<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>, RedisCacheError> {
         let mut conn = self.pool.get().await?;
@@ -164,11 +154,7 @@ impl RedisCache {
         }
     }
 
-    async fn hget<T: DeserializeOwned>(
-        &self,
-        key: &str,
-        field: &str,
-    ) -> Result<Option<T>, RedisCacheError> {
+    async fn hget<T: DeserializeOwned>(&self, key: &str, field: &str) -> Result<Option<T>, RedisCacheError> {
         let mut conn = self.pool.get().await?;
         let value: redis::Value = conn.hget(key, field).await?;
         if let redis::Value::Nil = value {
@@ -181,10 +167,7 @@ impl RedisCache {
         }
     }
 
-    async fn hgetall<V: DeserializeOwned>(
-        &self,
-        key: &str,
-    ) -> Result<Option<HashMap<String, V>>, RedisCacheError> {
+    async fn hgetall<V: DeserializeOwned>(&self, key: &str) -> Result<Option<HashMap<String, V>>, RedisCacheError> {
         let mut conn = self.pool.get().await?;
         let entries: HashMap<String, Vec<u8>> = conn.hgetall(key).await?;
         if entries.is_empty() {
@@ -200,22 +183,14 @@ impl RedisCache {
         Ok(Some(deserialized_entries))
     }
 
-    async fn hgetall_raw(
-        &self,
-        key: &str,
-    ) -> Result<HashMap<String, Vec<u8>>, RedisCacheError> {
+    async fn hgetall_raw(&self, key: &str) -> Result<HashMap<String, Vec<u8>>, RedisCacheError> {
         let mut conn = self.pool.get().await?;
         let entries: HashMap<String, Vec<u8>> = conn.hgetall(key).await?;
         Ok(entries)
     }
 
     #[allow(dead_code)]
-    async fn lrange<T: DeserializeOwned>(
-        &self,
-        key: &str,
-        start: isize,
-        stop: isize,
-    ) -> Result<Vec<T>, RedisCacheError> {
+    async fn lrange<T: DeserializeOwned>(&self, key: &str, start: isize, stop: isize) -> Result<Vec<T>, RedisCacheError> {
         let mut conn = self.pool.get().await?;
         let values: Vec<Vec<u8>> = conn.lrange(key, start, stop).await?;
 
@@ -228,12 +203,7 @@ impl RedisCache {
         Ok(deserialized_values)
     }
 
-    async fn set(
-        &self,
-        key: &str,
-        value: &impl Serialize,
-        expiry: Option<usize>,
-    ) -> Result<(), RedisCacheError> {
+    async fn set(&self, key: &str, value: &impl Serialize, expiry: Option<usize>) -> Result<(), RedisCacheError> {
         let mut conn = self.pool.get().await?;
         let str_val = serde_json::to_string(value)?;
 
@@ -266,14 +236,7 @@ impl RedisCache {
             Err(_) => return false,
         };
 
-        let result: RedisResult<Value> = redis::cmd("SET")
-            .arg(key)
-            .arg(id)
-            .arg("NX")
-            .arg("PX")
-            .arg(expiry)
-            .query_async(&mut conn)
-            .await;
+        let result: RedisResult<Value> = redis::cmd("SET").arg(key).arg(id).arg("NX").arg("PX").arg(expiry).query_async(&mut conn).await;
 
         match result {
             Ok(Value::Okay) => true,
@@ -296,8 +259,7 @@ impl RedisCache {
         };
 
         let script = Script::new(RENEW_SCRIPT);
-        let result =
-            script.key(&[key]).arg(&[id, &expiry.to_string()]).invoke_async(&mut conn).await;
+        let result = script.key(&[key]).arg(&[id, &expiry.to_string()]).invoke_async(&mut conn).await;
 
         match result {
             Ok(Value::Okay) => true,
@@ -305,13 +267,7 @@ impl RedisCache {
         }
     }
 
-    async fn hset(
-        &self,
-        key: &str,
-        field: &str,
-        value: &impl Serialize,
-        expiry: Option<usize>,
-    ) -> Result<(), RedisCacheError> {
+    async fn hset(&self, key: &str, field: &str, value: &impl Serialize, expiry: Option<usize>) -> Result<(), RedisCacheError> {
         let mut conn = self.pool.get().await?;
         let mut pipeline = redis::pipe();
 
@@ -325,24 +281,19 @@ impl RedisCache {
         Ok(pipeline.query_async(&mut conn).await?)
     }
 
-    async fn hset_multiple<T: Serialize>(
-        &self,
-        key: &str,
-        entries: &[(&str, T)],
-        expiry: usize,
-    ) -> Result<(), RedisCacheError> {
+    async fn hset_multiple<T: Serialize>(&self, key: &str, entries: &[(&str, T)], expiry: usize) -> Result<(), RedisCacheError> {
         let mut conn = self.pool.get().await?;
         let mut pipeline = redis::pipe();
-    
+
         // Prepare a vector to hold serialized values
         let mut fields_and_values: Vec<(&str, String)> = Vec::new();
-    
+
         // Iterate over the entries to serialize each value
         for (field, value) in entries {
             let str_val = serde_json::to_string(value)?;
             fields_and_values.push((field, str_val));
         }
-    
+
         // Use hset_multiple for setting multiple fields at once
         pipeline.hset_multiple(key, &fields_and_values);
         pipeline.expire(key, expiry);
@@ -350,15 +301,10 @@ impl RedisCache {
         Ok(pipeline.query_async(&mut conn).await?)
     }
 
-    async fn hset_multiple_not_exists<T: Serialize>(
-        &self,
-        key: &str,
-        entries: &[(&str, T)],
-        expiry: usize,
-    ) -> Result<(), RedisCacheError> {
+    async fn hset_multiple_not_exists<T: Serialize>(&self, key: &str, entries: &[(&str, T)], expiry: usize) -> Result<(), RedisCacheError> {
         let mut conn = self.pool.get().await?;
         let mut pipeline = redis::pipe();
-    
+
         // Iterate over the entries to serialize each value
         for (field, value) in entries {
             let str_val = serde_json::to_string(value)?;
@@ -388,21 +334,12 @@ impl RedisCache {
         Ok(conn.del(key).await?)
     }
 
-    async fn copy(
-        &self,
-        from: &str,
-        to: &str,
-        expiry: Option<usize>,
-    ) -> Result<(), RedisCacheError> {
+    async fn copy(&self, from: &str, to: &str, expiry: Option<usize>) -> Result<(), RedisCacheError> {
         let mut conn = self.pool.get().await?;
-        let c: i16 =
-            redis::cmd("COPY").arg(from).arg(to).arg("REPLACE").query_async(&mut conn).await?;
+        let c: i16 = redis::cmd("COPY").arg(from).arg(to).arg("REPLACE").query_async(&mut conn).await?;
 
         if c == 0 {
-            return Err(RedisCacheError::RedisCopyError {
-                from: from.to_string(),
-                to: to.to_string(),
-            });
+            return Err(RedisCacheError::RedisCopyError { from: from.to_string(), to: to.to_string() });
         }
 
         // If an expiry is provided, set the expiry for the 'to' key
@@ -413,11 +350,7 @@ impl RedisCache {
         Ok(())
     }
 
-    async fn seen_or_add(
-        &self,
-        key: &str,
-        entry: &impl Serialize,
-    ) -> Result<bool, RedisCacheError> {
+    async fn seen_or_add(&self, key: &str, entry: &impl Serialize) -> Result<bool, RedisCacheError> {
         let mut conn = self.pool.get().await?;
 
         let entry = serde_json::to_string(entry)?;
@@ -431,31 +364,20 @@ impl RedisCache {
         Ok(seen)
     }
 
-    async fn add(
-        &self,
-        key: &str,
-        entry: String,
-    ) -> Result<(), RedisCacheError> {
+    async fn add(&self, key: &str, entry: String) -> Result<(), RedisCacheError> {
         let mut conn = self.pool.get().await?;
         conn.sadd(key, entry).await?;
 
         Ok(())
     }
 
-    async fn remove(
-        &self,
-        key: &str,
-        entries: Vec<String>,
-    ) -> Result<(), RedisCacheError> {
+    async fn remove(&self, key: &str, entries: Vec<String>) -> Result<(), RedisCacheError> {
         let mut conn = self.pool.get().await?;
         conn.srem(key, entries).await?;
         Ok(())
     }
 
-    async fn get_set_members(
-        &self,
-        key: &str,
-    ) -> Result<Vec<String>, RedisCacheError> {
+    async fn get_set_members(&self, key: &str) -> Result<Vec<String>, RedisCacheError> {
         let mut conn = self.pool.get().await?;
         let members: Vec<String> = conn.smembers(key).await?;
         Ok(members)
@@ -467,8 +389,7 @@ impl RedisCache {
         parent_hash: &Hash32,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<HashMap<String, U256>, RedisCacheError> {
-        let key_latest_bids_value =
-            get_builder_latest_bid_value_key(slot, parent_hash, proposer_pub_key);
+        let key_latest_bids_value = get_builder_latest_bid_value_key(slot, parent_hash, proposer_pub_key);
         Ok(self.hgetall(&key_latest_bids_value).await?.unwrap_or_default())
     }
 
@@ -487,22 +408,13 @@ impl RedisCache {
         }
 
         // Determine the current top bid.
-        let (top_bid_builder_pub_key, top_builder_bid_value) =
-            get_top_bid(builder_bids).ok_or(RedisCacheError::InternalError)?;
+        let (top_bid_builder_pub_key, top_builder_bid_value) = get_top_bid(builder_bids).ok_or(RedisCacheError::InternalError)?;
 
         // Use the floor value if it's greater than the top bid value.
         let (top_bid_value, top_bid_source_key) = if floor_value > top_builder_bid_value {
             (floor_value, get_floor_bid_key(slot, parent_hash, proposer_pub_key))
         } else {
-            (
-                top_builder_bid_value,
-                get_latest_bid_by_builder_key_str_builder_pub_key(
-                    slot,
-                    parent_hash,
-                    proposer_pub_key,
-                    &top_bid_builder_pub_key,
-                ),
-            )
+            (top_builder_bid_value, get_latest_bid_by_builder_key_str_builder_pub_key(slot, parent_hash, proposer_pub_key, &top_bid_builder_pub_key))
         };
         state.top_bid_value = top_bid_value;
 
@@ -535,8 +447,7 @@ impl RedisCache {
         proposer_pub_key: &BlsPublicKey,
         builder_pub_key: &BlsPublicKey,
     ) -> Result<(), RedisCacheError> {
-        let key_bid_source =
-            get_latest_bid_by_builder_key(slot, parent_hash, proposer_pub_key, builder_pub_key);
+        let key_bid_source = get_latest_bid_by_builder_key(slot, parent_hash, proposer_pub_key, builder_pub_key);
         let key_floor_bid = get_floor_bid_key(slot, parent_hash, proposer_pub_key);
         self.copy(&key_bid_source, &key_floor_bid, Some(BID_CACHE_EXPIRY_S)).await?;
 
@@ -551,11 +462,7 @@ impl Auctioneer for RedisCache {
         self.get(LAST_SLOT_DELIVERED_KEY).await.map_err(AuctioneerError::RedisError)
     }
 
-    async fn check_and_set_last_slot_and_hash_delivered(
-        &self,
-        slot: u64,
-        hash: &Hash32,
-    ) -> Result<(), AuctioneerError> {
+    async fn check_and_set_last_slot_and_hash_delivered(&self, slot: u64, hash: &Hash32) -> Result<(), AuctioneerError> {
         let last_slot_delivered_res = self.get_last_slot_delivered().await?;
 
         if let Some(last_slot_delivered) = last_slot_delivered_res {
@@ -583,8 +490,7 @@ impl Auctioneer for RedisCache {
 
         // Add the SET commands to the pipeline
         let slot_value = serde_json::to_string(&slot).map_err(RedisCacheError::from)?;
-        let hash_value =
-            serde_json::to_string(&format!("{hash:?}")).map_err(RedisCacheError::from)?;
+        let hash_value = serde_json::to_string(&format!("{hash:?}")).map_err(RedisCacheError::from)?;
         pipe.atomic()
             .cmd("SET")
             .arg(LAST_SLOT_DELIVERED_KEY)
@@ -611,8 +517,7 @@ impl Auctioneer for RedisCache {
 
     async fn get_best_bids(&self) -> Box<dyn Stream<Item = Result<Vec<u8>, AuctioneerError>> + Send + Unpin> {
         let rx = self.tx.subscribe();
-        let stream = BroadcastStream::new(rx)
-            .map_err(AuctioneerError::from);
+        let stream = BroadcastStream::new(rx).map_err(AuctioneerError::from);
         Box::new(stream)
     }
 
@@ -637,22 +542,13 @@ impl Auctioneer for RedisCache {
         Ok(self.get(&key).await?)
     }
 
-    async fn get_bid_trace(
-        &self,
-        slot: u64,
-        proposer_pub_key: &BlsPublicKey,
-        block_hash: &Hash32,
-    ) -> Result<Option<BidTrace>, AuctioneerError> {
+    async fn get_bid_trace(&self, slot: u64, proposer_pub_key: &BlsPublicKey, block_hash: &Hash32) -> Result<Option<BidTrace>, AuctioneerError> {
         let key = get_cache_bid_trace_key(slot, proposer_pub_key, block_hash);
         Ok(self.get(&key).await?)
     }
 
     async fn save_bid_trace(&self, bid_trace: &BidTrace) -> Result<(), AuctioneerError> {
-        let key = get_cache_bid_trace_key(
-            bid_trace.slot,
-            &bid_trace.proposer_public_key,
-            &bid_trace.block_hash,
-        );
+        let key = get_cache_bid_trace_key(bid_trace.slot, &bid_trace.proposer_public_key, &bid_trace.block_hash);
         Ok(self.set(&key, &bid_trace, Some(BID_CACHE_EXPIRY_S)).await?)
     }
 
@@ -686,15 +582,11 @@ impl Auctioneer for RedisCache {
         let wrapped_builder_bid = SignedBuilderBidWrapper::new(builder_bid.clone(), slot, builder_pub_key.clone(), received_at);
 
         let serialised_bid = serde_json::to_string(&wrapped_builder_bid).map_err(RedisCacheError::from)?;
-        let serialised_value =
-            serde_json::to_string(&builder_bid.value()).map_err(RedisCacheError::from)?;
+        let serialised_value = serde_json::to_string(&builder_bid.value()).map_err(RedisCacheError::from)?;
 
-        let key_latest_bid =
-            get_latest_bid_by_builder_key(slot, parent_hash, proposer_pub_key, builder_pub_key);
-        let key_latest_bids_time =
-            get_builder_latest_bid_time_key(slot, parent_hash, proposer_pub_key);
-        let key_latest_bids_value =
-            get_builder_latest_bid_value_key(slot, parent_hash, proposer_pub_key);
+        let key_latest_bid = get_latest_bid_by_builder_key(slot, parent_hash, proposer_pub_key, builder_pub_key);
+        let key_latest_bids_time = get_builder_latest_bid_time_key(slot, parent_hash, proposer_pub_key);
+        let key_latest_bids_value = get_builder_latest_bid_value_key(slot, parent_hash, proposer_pub_key);
         let builder_pub_key_str = format!("{:?}", builder_pub_key);
 
         pipe.atomic()
@@ -741,13 +633,8 @@ impl Auctioneer for RedisCache {
         }
 
         // Save the execution payload
-        self.save_execution_payload(
-            submission.slot(),
-            submission.proposer_public_key(),
-            submission.block_hash(),
-            &submission.payload_and_blobs(),
-        )
-        .await?;
+        self.save_execution_payload(submission.slot(), submission.proposer_public_key(), submission.block_hash(), &submission.payload_and_blobs())
+            .await?;
         state.set_latency_save_payload();
 
         // Sign builder bid with relay pubkey.
@@ -760,25 +647,13 @@ impl Auctioneer for RedisCache {
         )?;
 
         // Save builder bid and update top bid/ floor keys if possible.
-        self.save_signed_builder_bid_and_update_top_bid(
-            &builder_bid,
-            submission.message(),
-            received_at,
-            cancellations_enabled,
-            floor_value,
-            state,
-        )
-        .await?;
+        self.save_signed_builder_bid_and_update_top_bid(&builder_bid, submission.message(), received_at, cancellations_enabled, floor_value, state)
+            .await?;
 
         Ok(Some((builder_bid, cloned_submission.payload_and_blobs())))
     }
 
-    async fn get_top_bid_value(
-        &self,
-        slot: u64,
-        parent_hash: &Hash32,
-        proposer_pub_key: &BlsPublicKey,
-    ) -> Result<Option<U256>, AuctioneerError> {
+    async fn get_top_bid_value(&self, slot: u64, parent_hash: &Hash32, proposer_pub_key: &BlsPublicKey) -> Result<Option<U256>, AuctioneerError> {
         let key = get_top_bid_value_key(slot, parent_hash, proposer_pub_key);
         Ok(self.get(&key).await?)
     }
@@ -794,12 +669,7 @@ impl Auctioneer for RedisCache {
         Ok(self.hget(&key, &format!("{builder_pub_key:?}")).await?)
     }
 
-    async fn get_floor_bid_value(
-        &self,
-        slot: u64,
-        parent_hash: &Hash32,
-        proposer_pub_key: &BlsPublicKey,
-    ) -> Result<Option<U256>, AuctioneerError> {
+    async fn get_floor_bid_value(&self, slot: u64, parent_hash: &Hash32, proposer_pub_key: &BlsPublicKey) -> Result<Option<U256>, AuctioneerError> {
         let key = get_floor_bid_value_key(slot, parent_hash, proposer_pub_key);
         Ok(self.get(&key).await?)
     }
@@ -812,8 +682,7 @@ impl Auctioneer for RedisCache {
         builder_pub_key: &BlsPublicKey,
     ) -> Result<(), AuctioneerError> {
         // Delete the value
-        let key_latest_value =
-            get_builder_latest_bid_value_key(slot, parent_hash, proposer_pub_key);
+        let key_latest_value = get_builder_latest_bid_value_key(slot, parent_hash, proposer_pub_key);
         self.hdel(&key_latest_value, &format!("{builder_pub_key:?}")).await?;
 
         // Delete the time
@@ -824,27 +693,12 @@ impl Auctioneer for RedisCache {
         let mut state = SaveBidAndUpdateTopBidResponse::default();
 
         let builder_bids = self.get_new_builder_bids(slot, parent_hash, proposer_pub_key).await?;
-        let floor_value = self
-            .get_floor_bid_value(slot, parent_hash, proposer_pub_key)
-            .await?
-            .unwrap_or(U256::ZERO);
+        let floor_value = self.get_floor_bid_value(slot, parent_hash, proposer_pub_key).await?.unwrap_or(U256::ZERO);
 
-        Ok(self
-            .update_top_bid(
-                &mut state,
-                &builder_bids,
-                slot,
-                parent_hash,
-                proposer_pub_key,
-                floor_value,
-            )
-            .await?)
+        Ok(self.update_top_bid(&mut state, &builder_bids, slot, parent_hash, proposer_pub_key, floor_value).await?)
     }
 
-    async fn get_builder_info(
-        &self,
-        builder_pub_key: &BlsPublicKey,
-    ) -> Result<BuilderInfo, AuctioneerError> {
+    async fn get_builder_info(&self, builder_pub_key: &BlsPublicKey) -> Result<BuilderInfo, AuctioneerError> {
         self.hget(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"))
             .await?
             .ok_or(AuctioneerError::BuilderNotFound { pub_key: builder_pub_key.clone() })
@@ -859,29 +713,23 @@ impl Auctioneer for RedisCache {
         Ok(self.hset(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"), &builder_info, None).await?)
     }
 
-    async fn update_builder_infos(
-        &self,
-        builder_infos: Vec<BuilderInfoDocument>,
-    ) -> Result<(), AuctioneerError> {
+    async fn update_builder_infos(&self, builder_infos: Vec<BuilderInfoDocument>) -> Result<(), AuctioneerError> {
         if builder_infos.is_empty() {
             return Ok(());
         }
 
         // Fetch current builder info
-        let redis_builder_infos: HashMap<String, BuilderInfo> =
-            self.hgetall(BUILDER_INFO_KEY).await?.unwrap_or_default();
+        let redis_builder_infos: HashMap<String, BuilderInfo> = self.hgetall(BUILDER_INFO_KEY).await?.unwrap_or_default();
 
         // Update Redis value if the builder info has changed or it's a new builder
         for builder_info in builder_infos {
             let builder_pub_key_str = format!("{:?}", builder_info.pub_key);
             if let Some(redis_builder_info) = redis_builder_infos.get(&builder_pub_key_str) {
                 if builder_info.builder_info != *redis_builder_info {
-                    self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info, None)
-                        .await?;
+                    self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info, None).await?;
                 }
             } else {
-                self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info, None)
-                    .await?;
+                self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info, None).await?;
             }
         }
 
@@ -915,17 +763,10 @@ impl Auctioneer for RedisCache {
         }
 
         // Load the latest bids from all builders for the current slot, parent hash, and proposer
-        let mut builder_bids = self
-            .get_new_builder_bids(
-                bid_trace.slot,
-                &bid_trace.parent_hash,
-                &bid_trace.proposer_public_key,
-            )
-            .await?;
+        let mut builder_bids = self.get_new_builder_bids(bid_trace.slot, &bid_trace.parent_hash, &bid_trace.proposer_public_key).await?;
 
         // Get the current top bid. It will be the max of all builder bids and the current floor.
-        state.top_bid_value =
-            builder_bids.values().max().cloned().unwrap_or(U256::ZERO).max(floor_value);
+        state.top_bid_value = builder_bids.values().max().cloned().unwrap_or(U256::ZERO).max(floor_value);
 
         state.prev_top_bid_value = state.top_bid_value;
 
@@ -957,15 +798,7 @@ impl Auctioneer for RedisCache {
         }
 
         // Update the top bid
-        self.update_top_bid(
-            state,
-            &builder_bids,
-            bid_trace.slot,
-            &bid_trace.parent_hash,
-            &bid_trace.proposer_public_key,
-            floor_value,
-        )
-        .await?;
+        self.update_top_bid(state, &builder_bids, bid_trace.slot, &bid_trace.parent_hash, &bid_trace.proposer_public_key, floor_value).await?;
         state.is_new_top_bid = builder_bid.value() == state.top_bid_value;
         state.set_latency_update_top_bid();
 
@@ -1011,26 +844,15 @@ impl Auctioneer for RedisCache {
         )?;
 
         // Save builder bid and update top bid/ floor keys if possible.
-        self.save_signed_builder_bid_and_update_top_bid(
-            &builder_bid,
-            submission.bid_trace(),
-            received_at,
-            cancellations_enabled,
-            floor_value,
-            state,
-        )
-        .await?;
+        self.save_signed_builder_bid_and_update_top_bid(&builder_bid, submission.bid_trace(), received_at, cancellations_enabled, floor_value, state)
+            .await?;
 
         Ok(Some(builder_bid))
     }
 
-    async fn update_trusted_proposers(
-        &self,
-        proposer_whitelist: Vec<ProposerInfo>,
-    ) -> Result<(), AuctioneerError> {
+    async fn update_trusted_proposers(&self, proposer_whitelist: Vec<ProposerInfo>) -> Result<(), AuctioneerError> {
         // get keys
-        let proposer_keys: Vec<String> =
-            proposer_whitelist.iter().map(|proposer| format!("{:?}", proposer.pub_key)).collect();
+        let proposer_keys: Vec<String> = proposer_whitelist.iter().map(|proposer| format!("{:?}", proposer.pub_key)).collect();
 
         // add or update proposers
         for proposer in proposer_whitelist {
@@ -1039,8 +861,7 @@ impl Auctioneer for RedisCache {
         }
 
         // remove any proposers that are no longer in the list
-        let proposer_info: Option<HashMap<String, ProposerInfo>> =
-            self.hgetall(PROPOSER_WHITELIST_KEY).await?;
+        let proposer_info: Option<HashMap<String, ProposerInfo>> = self.hgetall(PROPOSER_WHITELIST_KEY).await?;
 
         if let Some(proposer_info) = proposer_info {
             for key in proposer_info.keys() {
@@ -1053,22 +874,16 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
-    async fn is_trusted_proposer(
-        &self,
-        proposer_pub_key: &BlsPublicKey,
-    ) -> Result<bool, AuctioneerError> {
+    async fn is_trusted_proposer(&self, proposer_pub_key: &BlsPublicKey) -> Result<bool, AuctioneerError> {
         let key_str = format!("{proposer_pub_key:?}");
-        let proposer_info: Option<ProposerInfo> =
-            self.hget(PROPOSER_WHITELIST_KEY, &key_str).await?;
+        let proposer_info: Option<ProposerInfo> = self.hget(PROPOSER_WHITELIST_KEY, &key_str).await?;
         Ok(proposer_info.is_some())
     }
 
     async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, AuctioneerError> {
-
         let mut pending_blocks: Vec<PendingBlock> = Vec::new();
 
-        let redis_builder_infos: Option<HashMap<String, BuilderInfo>> =
-            self.hgetall(BUILDER_INFO_KEY).await?;
+        let redis_builder_infos: Option<HashMap<String, BuilderInfo>> = self.hgetall(BUILDER_INFO_KEY).await?;
 
         if redis_builder_infos.is_none() {
             return Ok(pending_blocks);
@@ -1081,7 +896,6 @@ impl Auctioneer for RedisCache {
             let builder_key: String = get_pending_block_builder_key(&builder_pubkey);
 
             if builder_info.is_optimistic {
-
                 let block_hashes: Vec<String> = self.get_set_members(builder_key.as_str()).await?;
                 let builder_pubkey_clone = builder_pubkey.clone();
                 for block_hash_str in block_hashes {
@@ -1110,7 +924,7 @@ impl Auctioneer for RedisCache {
                     };
 
                     let pending_block = PendingBlock {
-                        slot: slot,
+                        slot,
                         block_hash,
                         builder_pubkey: builder_pubkey_clone.clone(),
                         header_receive_ms: header_received,
@@ -1135,15 +949,11 @@ impl Auctioneer for RedisCache {
         block_hash: &Hash32,
         timestamp_ms: u64,
     ) -> Result<(), AuctioneerError> {
-
         let builder_key = get_pending_block_builder_key(builder_pub_key);
         self.add(builder_key.as_str(), format!("{block_hash:?}")).await?;
 
         let key = get_pending_block_builder_block_hash_key(builder_pub_key, block_hash);
-        let entries = vec![
-            ("slot", slot),
-            ("header_received", timestamp_ms),
-        ];
+        let entries = vec![("slot", slot), ("header_received", timestamp_ms)];
         self.hset_multiple_not_exists(key.as_str(), &entries, PENDING_BLOCK_EXPIRY_S).await?;
 
         Ok(())
@@ -1156,15 +966,11 @@ impl Auctioneer for RedisCache {
         block_hash: &Hash32,
         timestamp_ms: u64,
     ) -> Result<(), AuctioneerError> {
-
         let builder_key = get_pending_block_builder_key(builder_pub_key);
         self.add(builder_key.as_str(), format!("{block_hash:?}")).await?;
 
         let key = get_pending_block_builder_block_hash_key(builder_pub_key, block_hash);
-        let entries = vec![
-            ("slot", slot),
-            ("payload_received", timestamp_ms),
-        ];
+        let entries = vec![("slot", slot), ("payload_received", timestamp_ms)];
         self.hset_multiple_not_exists(key.as_str(), &entries, PENDING_BLOCK_EXPIRY_S).await?;
 
         Ok(())
@@ -1188,8 +994,7 @@ impl Auctioneer for RedisCache {
     /// - `leader`: A unique id for this relay.
     ///
     /// Returns:
-    /// - `true` if the instance is the leader and successfully renews the lock, or if it
-    ///   successfully acquires the lock.
+    /// - `true` if the instance is the leader and successfully renews the lock, or if it successfully acquires the lock.
     /// - `false` if it fails to renew or acquire the lock.
     ///
     /// Note: This function assumes that the caller manages and passes the current leadership
@@ -1224,13 +1029,12 @@ impl ConstraintsAuctioneer for RedisCache {
                 }
 
                 self.hset(CONSTRAINTS_KEY, &key, &existing_constraints, Some(TWO_EPOCH_EXPIRY_S)).await?;
-                
             }
             None => {
                 self.hset(CONSTRAINTS_KEY, &key, &constraints, Some(TWO_EPOCH_EXPIRY_S)).await?;
             }
         }
-        
+
         Ok(())
     }
 
@@ -1246,19 +1050,19 @@ fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {
 #[cfg(test)]
 mod tests {
 
-    use super::*;
     use ethereum_consensus::clock::get_current_unix_time_in_nanos;
-    use helix_common::api::constraints_api::Constraint;
-    use helix_common::capella::{self, ExecutionPayloadHeader};
+    use helix_common::{
+        api::constraints_api::Constraint,
+        capella::{self, ExecutionPayloadHeader},
+    };
     use serde::{Deserialize, Serialize};
+
+    use super::*;
 
     impl RedisCache {
         async fn clear_cache(&self) -> Result<(), RedisCacheError> {
             let mut conn = self.pool.get().await?;
-            redis::cmd("FLUSHALL")
-                .query_async(&mut conn)
-                .await
-                .map_err(RedisCacheError::RedisError)?;
+            redis::cmd("FLUSHALL").query_async(&mut conn).await.map_err(RedisCacheError::RedisError)?;
             Ok(())
         }
     }
@@ -1320,13 +1124,8 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
-        let field_val_pairs: HashMap<String, String> = [
-            ("field1".to_string(), "value1".to_string()),
-            ("field2".to_string(), "value2".to_string()),
-        ]
-        .iter()
-        .cloned()
-        .collect();
+        let field_val_pairs: HashMap<String, String> =
+            [("field1".to_string(), "value1".to_string()), ("field2".to_string(), "value2".to_string())].iter().cloned().collect();
 
         // Hset all objects
         for (field, value) in &field_val_pairs {
@@ -1334,8 +1133,7 @@ mod tests {
         }
 
         // Test: Hgetall
-        let get_result: Result<Option<HashMap<String, String>>, _> =
-            cache.hgetall("test_hgetall_key").await;
+        let get_result: Result<Option<HashMap<String, String>>, _> = cache.hgetall("test_hgetall_key").await;
         assert!(get_result.is_ok(), "Failed to hgetall");
         assert!(get_result.as_ref().unwrap().is_some(), "Hgetall returned None");
         assert_eq!(get_result.unwrap().unwrap().len(), field_val_pairs.len(), "Hgetall mismatch");
@@ -1405,11 +1203,7 @@ mod tests {
         let pub_key_2 = BlsPublicKey::try_from([2u8; 48].as_ref()).unwrap();
         let pub_key_3 = BlsPublicKey::try_from([3u8; 48].as_ref()).unwrap();
 
-        let bids = vec![
-            (pub_key_1, U256::from(50)),
-            (pub_key_2, U256::from(51)),
-            (pub_key_3, U256::from(90)),
-        ];
+        let bids = vec![(pub_key_1, U256::from(50)), (pub_key_2, U256::from(51)), (pub_key_3, U256::from(90))];
         // Save all bids
         for (pub_key, value) in bids {
             let set_res = cache.hset(&key, &format!("{pub_key:?}"), &value, None).await;
@@ -1446,36 +1240,15 @@ mod tests {
             public_key: prev_builder_pubkey.clone(),
         };
 
-        let prev_best_bid = SignedBuilderBid::Capella(capella::SignedBuilderBid {
-            message: capella_builder_bid.clone(),
-            ..Default::default()
-        });
+        let prev_best_bid = SignedBuilderBid::Capella(capella::SignedBuilderBid { message: capella_builder_bid.clone(), ..Default::default() });
 
-        let res = cache
-            .save_builder_bid(
-                slot,
-                &parent_hash,
-                &proposer_pub_key,
-                &prev_builder_pubkey,
-                23,
-                &prev_best_bid,
-            )
-            .await;
+        let res = cache.save_builder_bid(slot, &parent_hash, &proposer_pub_key, &prev_builder_pubkey, 23, &prev_best_bid).await;
         assert!(res.is_ok(), "Failed to save prev best bid");
 
         // Test with empty builder_bids
         let empty_bids = HashMap::new();
         let floor_value = U256::from(40);
-        let res = cache
-            .update_top_bid(
-                &mut state,
-                &empty_bids,
-                slot,
-                &parent_hash,
-                &proposer_pub_key,
-                floor_value,
-            )
-            .await;
+        let res = cache.update_top_bid(&mut state, &empty_bids, slot, &parent_hash, &proposer_pub_key, floor_value).await;
         assert!(res.is_ok(), "Function should handle empty bids");
 
         // Populate builder_bids
@@ -1486,16 +1259,7 @@ mod tests {
         builder_bids.insert("builder3".to_string(), U256::from(40));
 
         // Test updating the top bid
-        let res = cache
-            .update_top_bid(
-                &mut state,
-                &builder_bids,
-                slot,
-                &parent_hash,
-                &proposer_pub_key,
-                floor_value,
-            )
-            .await;
+        let res = cache.update_top_bid(&mut state, &builder_bids, slot, &parent_hash, &proposer_pub_key, floor_value).await;
         assert!(res.is_ok(), "Failed to update top bid");
         assert_eq!(state.top_bid_value, U256::from(60), "Top bid value mismatch");
         assert!(state.was_top_bid_updated, "Top bid should be updated");
@@ -1504,39 +1268,25 @@ mod tests {
         let _key_top_bid = get_top_bid_value_key(slot, &parent_hash, &proposer_pub_key);
         let mut _conn = cache.pool.get().await.unwrap();
 
-        let cache_value =
-            cache.get_top_bid_value(slot, &parent_hash, &proposer_pub_key).await.unwrap();
+        let cache_value = cache.get_top_bid_value(slot, &parent_hash, &proposer_pub_key).await.unwrap();
         assert_eq!(cache_value, Some(U256::from(60)), "Cache value mismatch");
 
         // Test with floor_value greater than top_bid_value
         let higher_floor_value = U256::from(70);
         capella_builder_bid.value = higher_floor_value;
-        let floor_bid = SignedBuilderBid::Capella(capella::SignedBuilderBid {
-            message: capella_builder_bid.clone(),
-            ..Default::default()
-        });
+        let floor_bid = SignedBuilderBid::Capella(capella::SignedBuilderBid { message: capella_builder_bid.clone(), ..Default::default() });
 
         let key_floor_bid = get_floor_bid_key(slot, &parent_hash, &proposer_pub_key);
         let res = cache.set(&key_floor_bid, &floor_bid, None).await;
         assert!(res.is_ok(), "Failed to set floor bid");
 
-        let res = cache
-            .update_top_bid(
-                &mut state,
-                &builder_bids,
-                slot,
-                &parent_hash,
-                &proposer_pub_key,
-                higher_floor_value,
-            )
-            .await;
+        let res = cache.update_top_bid(&mut state, &builder_bids, slot, &parent_hash, &proposer_pub_key, higher_floor_value).await;
         assert!(res.is_ok(), "Failed to set top bid with higher floor_value");
         assert_eq!(state.top_bid_value, U256::from(70), "Top bid value should be floor_value");
         assert!(state.was_top_bid_updated, "Top bid should be updated with floor_value");
 
         // Test the Redis cache
-        let cache_value: Option<U256> =
-            cache.get_top_bid_value(slot, &parent_hash, &proposer_pub_key).await.unwrap();
+        let cache_value: Option<U256> = cache.get_top_bid_value(slot, &parent_hash, &proposer_pub_key).await.unwrap();
         assert_eq!(cache_value, Some(U256::from(70)), "Cache value mismatch with floor_value");
     }
 
@@ -1571,10 +1321,7 @@ mod tests {
         let block_hash = Hash32::try_from([4u8; 32].as_ref()).unwrap();
 
         // Set a future slot
-        assert!(cache
-            .check_and_set_last_slot_and_hash_delivered(slot + 1, &block_hash)
-            .await
-            .is_ok());
+        assert!(cache.check_and_set_last_slot_and_hash_delivered(slot + 1, &block_hash).await.is_ok());
 
         // Test: Try to set a past slot
         let set_result = cache.check_and_set_last_slot_and_hash_delivered(slot, &block_hash).await;
@@ -1633,8 +1380,7 @@ mod tests {
         assert!(set_result.is_ok(), "Failed to set best bid in cache");
 
         // Test: Get the best bid
-        let get_result: Result<Option<SignedBuilderBid>, _> =
-            cache.get_best_bid(slot, &parent_hash, &proposer_pub_key).await;
+        let get_result: Result<Option<SignedBuilderBid>, _> = cache.get_best_bid(slot, &parent_hash, &proposer_pub_key).await;
         assert!(get_result.is_ok(), "Failed to get the best bid");
         assert!(get_result.as_ref().unwrap().is_some(), "Best bid was None");
 
@@ -1653,36 +1399,20 @@ mod tests {
 
         let mut capella_payload = capella::ExecutionPayload::default();
         capella_payload.gas_limit = 999;
-        let versioned_execution_payload = PayloadAndBlobs {
-            execution_payload: ethereum_consensus::types::mainnet::ExecutionPayload::Capella(
-                capella_payload,
-            ),
-            blobs_bundle: None,
-        };
+        let versioned_execution_payload =
+            PayloadAndBlobs { execution_payload: ethereum_consensus::types::mainnet::ExecutionPayload::Capella(capella_payload), blobs_bundle: None };
 
         // Save the execution payload
-        let save_result = cache
-            .save_execution_payload(
-                slot,
-                &proposer_pub_key,
-                &block_hash,
-                &versioned_execution_payload,
-            )
-            .await;
+        let save_result = cache.save_execution_payload(slot, &proposer_pub_key, &block_hash, &versioned_execution_payload).await;
         assert!(save_result.is_ok(), "Failed to save the execution payload");
 
         // Test: Get the execution payload
-        let get_result: Result<Option<PayloadAndBlobs>, _> =
-            cache.get_execution_payload(slot, &proposer_pub_key, &block_hash).await;
+        let get_result: Result<Option<PayloadAndBlobs>, _> = cache.get_execution_payload(slot, &proposer_pub_key, &block_hash).await;
         assert!(get_result.is_ok(), "Failed to get the execution payload");
         assert!(get_result.as_ref().unwrap().is_some(), "Execution payload is None");
 
         let fetched_execution_payload = get_result.unwrap().unwrap();
-        assert_eq!(
-            fetched_execution_payload.execution_payload.gas_limit(),
-            999,
-            "Execution payload mismatch"
-        );
+        assert_eq!(fetched_execution_payload.execution_payload.gas_limit(), 999, "Execution payload mismatch");
     }
 
     #[tokio::test]
@@ -1699,55 +1429,30 @@ mod tests {
         let value = U256::from(100);
         let block_hash = Hash32::try_from([4u8; 32].as_ref()).unwrap();
 
-        let mut bid = capella::SignedBuilderBid {
-            message: helix_common::eth::capella::BuilderBid { value, ..Default::default() },
-            ..Default::default()
-        };
+        let mut bid =
+            capella::SignedBuilderBid { message: helix_common::eth::capella::BuilderBid { value, ..Default::default() }, ..Default::default() };
         bid.message.header.block_hash = block_hash;
         let builder_bid = SignedBuilderBid::Capella(bid);
 
         // Test: save_builder_bid
-        let res = cache
-            .save_builder_bid(
-                slot,
-                &parent_hash,
-                &proposer_pub_key,
-                &builder_pub_key,
-                received_at,
-                &builder_bid,
-            )
-            .await;
+        let res = cache.save_builder_bid(slot, &parent_hash, &proposer_pub_key, &builder_pub_key, received_at, &builder_bid).await;
         assert!(res.is_ok(), "Failed to execute save_builder_bid");
 
         // Validate: the SignedBuilderBid object is correctly set
-        let key_latest_bid =
-            get_latest_bid_by_builder_key(slot, &parent_hash, &proposer_pub_key, &builder_pub_key);
+        let key_latest_bid = get_latest_bid_by_builder_key(slot, &parent_hash, &proposer_pub_key, &builder_pub_key);
         let fetched_bid: Result<Option<SignedBuilderBid>, _> = cache.get(&key_latest_bid).await;
         assert!(fetched_bid.is_ok(), "Failed to fetch the latest bid");
-        assert_eq!(
-            fetched_bid.unwrap().unwrap().block_hash(),
-            builder_bid.block_hash(),
-            "Mismatch in saved builder bid"
-        );
+        assert_eq!(fetched_bid.unwrap().unwrap().block_hash(), builder_bid.block_hash(), "Mismatch in saved builder bid");
 
         // Test: get_builder_latest_payload_received_at
-        let fetched_time = cache
-            .get_builder_latest_payload_received_at(
-                slot,
-                &builder_pub_key,
-                &parent_hash,
-                &proposer_pub_key,
-            )
-            .await;
+        let fetched_time = cache.get_builder_latest_payload_received_at(slot, &builder_pub_key, &parent_hash, &proposer_pub_key).await;
         // Validate: Correct time was fetched
         assert!(fetched_time.is_ok(), "Failed to get_builder_latest_payload_received_at");
         assert_eq!(fetched_time.unwrap().unwrap(), received_at as u64, "Mismatch in saved time");
 
         // Validate the value is correctly set
-        let key_latest_bids_value =
-            get_builder_latest_bid_value_key(slot, &parent_hash, &proposer_pub_key);
-        let fetched_value: Result<Option<U256>, _> =
-            cache.hget(&key_latest_bids_value, &format!("{builder_pub_key:?}")).await;
+        let key_latest_bids_value = get_builder_latest_bid_value_key(slot, &parent_hash, &proposer_pub_key);
+        let fetched_value: Result<Option<U256>, _> = cache.hget(&key_latest_bids_value, &format!("{builder_pub_key:?}")).await;
         assert!(fetched_value.is_ok(), "Failed to fetch the latest bid value");
         assert_eq!(fetched_value.unwrap().unwrap(), value, "Mismatch in saved value");
     }
@@ -1768,8 +1473,7 @@ mod tests {
         assert!(set_result.is_ok(), "Failed to set the floor value");
 
         // Test: Get the floor value
-        let get_result: Result<Option<U256>, _> =
-            cache.get_floor_bid_value(slot, &parent_hash, &proposer_pub_key).await;
+        let get_result: Result<Option<U256>, _> = cache.get_floor_bid_value(slot, &parent_hash, &proposer_pub_key).await;
         assert!(get_result.is_ok(), "Failed to get the floor value");
         assert!(get_result.as_ref().unwrap().is_some(), "Floor value is None");
         assert_eq!(get_result.unwrap().unwrap(), floor_bid_value, "Floor value mismatch");
@@ -1788,14 +1492,11 @@ mod tests {
 
         // Set the latest value
         let key = get_builder_latest_bid_value_key(slot, &parent_hash, &proposer_pub_key);
-        let set_result: Result<(), RedisCacheError> =
-            cache.hset(&key, &format!("{builder_pub_key:?}"), &latest_value, None).await;
+        let set_result: Result<(), RedisCacheError> = cache.hset(&key, &format!("{builder_pub_key:?}"), &latest_value, None).await;
         assert!(set_result.is_ok(), "Failed to set the latest value");
 
         // Test: Get the latest value
-        let get_result: Result<Option<U256>, _> = cache
-            .get_builder_latest_value(slot, &parent_hash, &proposer_pub_key, &builder_pub_key)
-            .await;
+        let get_result: Result<Option<U256>, _> = cache.get_builder_latest_value(slot, &parent_hash, &proposer_pub_key, &builder_pub_key).await;
         assert!(get_result.is_ok(), "Failed to get the latest value");
         assert!(get_result.as_ref().unwrap().is_some(), "Latest value is None");
         assert_eq!(get_result.unwrap().unwrap(), latest_value, "Value mismatch");
@@ -1809,29 +1510,20 @@ mod tests {
         let builder_pub_key = BlsPublicKey::default();
         let unknown_builder_pub_key = BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap();
 
-        let builder_info =
-            BuilderInfo { collateral: U256::from(12), is_optimistic: true, builder_id: None };
+        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: true, builder_id: None };
 
         // Test case 1: Builder exists
-        let set_result =
-            cache.hset(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"), &builder_info, None).await;
+        let set_result = cache.hset(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"), &builder_info, None).await;
         assert!(set_result.is_ok(), "Failed to set builder info");
 
         let get_result = cache.get_builder_info(&builder_pub_key).await;
         assert!(get_result.is_ok(), "Failed to get builder info");
-        assert_eq!(
-            get_result.unwrap().collateral,
-            builder_info.collateral,
-            "Builder info mismatch"
-        );
+        assert_eq!(get_result.unwrap().collateral, builder_info.collateral, "Builder info mismatch");
 
         // Test case 2: Builder doesn't exist
         let result = cache.get_builder_info(&unknown_builder_pub_key).await;
         assert!(result.is_err(), "Fetched builder info for unknown builder");
-        assert!(
-            matches!(result.unwrap_err(), AuctioneerError::BuilderNotFound { .. }),
-            "Incorrect get builder info error"
-        );
+        assert!(matches!(result.unwrap_err(), AuctioneerError::BuilderNotFound { .. }), "Incorrect get builder info error");
     }
 
     #[tokio::test]
@@ -1843,46 +1535,31 @@ mod tests {
         assert!(!is_trusted, "Failed to check trusted proposer");
 
         cache
-            .update_trusted_proposers(vec![
-                ProposerInfo { name: "test".to_string(), pub_key: BlsPublicKey::default() },
-                ProposerInfo {
-                    name: "test2".to_string(),
-                    pub_key: BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap(),
-                },
-            ])
-            .await
-            .unwrap();
-
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
-        assert!(is_trusted, "Failed to check trusted proposer");
-
-        let is_trusted = cache
-            .is_trusted_proposer(&BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap())
-            .await
-            .unwrap();
-        assert!(is_trusted, "Failed to check trusted proposer");
-
-        let is_trusted = cache
-            .is_trusted_proposer(&BlsPublicKey::try_from([24u8; 48].as_ref()).unwrap())
-            .await
-            .unwrap();
-        assert!(!is_trusted, "Failed to check trusted proposer");
-
-        cache
-            .update_trusted_proposers(vec![ProposerInfo {
+            .update_trusted_proposers(vec![ProposerInfo { name: "test".to_string(), pub_key: BlsPublicKey::default() }, ProposerInfo {
                 name: "test2".to_string(),
-                pub_key: BlsPublicKey::try_from([25u8; 48].as_ref()).unwrap(),
+                pub_key: BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap(),
             }])
             .await
             .unwrap();
 
         let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
+        assert!(is_trusted, "Failed to check trusted proposer");
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap()).await.unwrap();
+        assert!(is_trusted, "Failed to check trusted proposer");
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::try_from([24u8; 48].as_ref()).unwrap()).await.unwrap();
         assert!(!is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache
-            .is_trusted_proposer(&BlsPublicKey::try_from([25u8; 48].as_ref()).unwrap())
+        cache
+            .update_trusted_proposers(vec![ProposerInfo { name: "test2".to_string(), pub_key: BlsPublicKey::try_from([25u8; 48].as_ref()).unwrap() }])
             .await
             .unwrap();
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
+        assert!(!is_trusted, "Failed to check trusted proposer");
+
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::try_from([25u8; 48].as_ref()).unwrap()).await.unwrap();
         assert!(is_trusted, "Failed to check trusted proposer");
     }
 
@@ -1892,12 +1569,10 @@ mod tests {
         cache.clear_cache().await.unwrap();
 
         let builder_pub_key = BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap();
-        let builder_info =
-            BuilderInfo { collateral: U256::from(12), is_optimistic: false, builder_id: None };
+        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: false, builder_id: None };
 
         // Set builder info in the cache
-        let set_result =
-            cache.hset(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"), &builder_info, None).await;
+        let set_result = cache.hset(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"), &builder_info, None).await;
         assert!(set_result.is_ok(), "Failed to set builder info");
 
         // Test: Demote builder
@@ -1911,18 +1586,12 @@ mod tests {
         cache.clear_cache().await.unwrap();
 
         let builder_pub_key_optimistic = BlsPublicKey::try_from([11u8; 48].as_ref()).unwrap();
-        let builder_info =
-            BuilderInfo { collateral: U256::from(12), is_optimistic: true, builder_id: None };
+        let builder_info = BuilderInfo { collateral: U256::from(12), is_optimistic: true, builder_id: None };
 
         // Set builder info in the cache
-        let set_result = cache
-            .hset(BUILDER_INFO_KEY, &format!("{builder_pub_key_optimistic:?}"), &builder_info, None)
-            .await;
+        let set_result = cache.hset(BUILDER_INFO_KEY, &format!("{builder_pub_key_optimistic:?}"), &builder_info, None).await;
         assert!(set_result.is_ok(), "Failed to set builder info");
-        assert!(
-            cache.get_builder_info(&builder_pub_key_optimistic).await.unwrap().is_optimistic,
-            "Builder is not optimistic after setting"
-        );
+        assert!(cache.get_builder_info(&builder_pub_key_optimistic).await.unwrap().is_optimistic, "Builder is not optimistic after setting");
 
         // Test: Demote builder
         let result = cache.demote_builder(&builder_pub_key_optimistic).await;
@@ -1946,67 +1615,29 @@ mod tests {
         // Save 2 builder bids. builder bid 1 > builder bid 2
         let builder_pub_key_1 = BlsPublicKey::try_from([1u8; 48].as_ref()).unwrap();
         let builder_bid_1 = SignedBuilderBid::Capella(capella::SignedBuilderBid {
-            message: helix_common::eth::capella::BuilderBid {
-                value: U256::from(100),
-                ..Default::default()
-            },
+            message: helix_common::eth::capella::BuilderBid { value: U256::from(100), ..Default::default() },
             ..Default::default()
         });
 
         let builder_pub_key_2 = BlsPublicKey::try_from([2u8; 48].as_ref()).unwrap();
         let builder_bid_2 = SignedBuilderBid::Capella(capella::SignedBuilderBid {
-            message: helix_common::eth::capella::BuilderBid {
-                value: U256::from(50),
-                ..Default::default()
-            },
+            message: helix_common::eth::capella::BuilderBid { value: U256::from(50), ..Default::default() },
             ..Default::default()
         });
 
         // Save both builder bids
-        let set_result = cache
-            .save_builder_bid(
-                slot,
-                &parent_hash,
-                &proposer_pub_key,
-                &builder_pub_key_1,
-                received_at,
-                &builder_bid_1,
-            )
-            .await;
+        let set_result = cache.save_builder_bid(slot, &parent_hash, &proposer_pub_key, &builder_pub_key_1, received_at, &builder_bid_1).await;
         assert!(set_result.is_ok(), "Failed to save builder bid 1");
 
-        let set_result = cache
-            .save_builder_bid(
-                slot,
-                &parent_hash,
-                &proposer_pub_key,
-                &builder_pub_key_2,
-                received_at,
-                &builder_bid_2,
-            )
-            .await;
+        let set_result = cache.save_builder_bid(slot, &parent_hash, &proposer_pub_key, &builder_pub_key_2, received_at, &builder_bid_2).await;
         assert!(set_result.is_ok(), "Failed to save builder bid 2");
 
         // Builder bid 1 should be the top bid
         let mut state = SaveBidAndUpdateTopBidResponse::default();
-        let builder_bids =
-            cache.get_new_builder_bids(slot, &parent_hash, &proposer_pub_key).await.unwrap();
-        let floor_value = cache
-            .get_floor_bid_value(slot, &parent_hash, &proposer_pub_key)
-            .await
-            .unwrap()
-            .unwrap_or(U256::ZERO);
+        let builder_bids = cache.get_new_builder_bids(slot, &parent_hash, &proposer_pub_key).await.unwrap();
+        let floor_value = cache.get_floor_bid_value(slot, &parent_hash, &proposer_pub_key).await.unwrap().unwrap_or(U256::ZERO);
 
-        let update_res = cache
-            .update_top_bid(
-                &mut state,
-                &builder_bids,
-                slot,
-                &parent_hash,
-                &proposer_pub_key,
-                floor_value,
-            )
-            .await;
+        let update_res = cache.update_top_bid(&mut state, &builder_bids, slot, &parent_hash, &proposer_pub_key, floor_value).await;
         assert!(update_res.is_ok(), "Failed to update top bid");
 
         let top_bid = cache.get_best_bid(slot, &parent_hash, &proposer_pub_key).await;
@@ -2014,9 +1645,7 @@ mod tests {
         assert_eq!(top_bid.unwrap().unwrap().value(), U256::from(100), "Top bid mismatch");
 
         // Test: Delete best builder bid
-        let delete_result = cache
-            .delete_builder_bid(slot, &parent_hash, &proposer_pub_key, &builder_pub_key_1)
-            .await;
+        let delete_result = cache.delete_builder_bid(slot, &parent_hash, &proposer_pub_key, &builder_pub_key_1).await;
         assert!(delete_result.is_ok(), "Failed to delete builder bid");
 
         // Validate: builder bid 2 is now the best bid
@@ -2030,16 +1659,8 @@ mod tests {
         let (cache, submission, floor_value, received_at) = setup_save_and_update_test().await;
         let mut state = SaveBidAndUpdateTopBidResponse::default();
 
-        let result = cache
-            .save_bid_and_update_top_bid(
-                &submission,
-                received_at,
-                false,
-                floor_value,
-                &mut state,
-                &RelaySigningContext::default(),
-            )
-            .await;
+        let result =
+            cache.save_bid_and_update_top_bid(&submission, received_at, false, floor_value, &mut state, &RelaySigningContext::default()).await;
         assert!(result.is_ok(), "Save failed");
         assert!(!state.was_bid_saved);
         assert!(!state.is_new_top_bid);
@@ -2051,27 +1672,15 @@ mod tests {
         let mut state = SaveBidAndUpdateTopBidResponse::default();
 
         submission.message_mut().value = floor_value + U256::from(1);
-        let result = cache
-            .save_bid_and_update_top_bid(
-                &submission,
-                received_at,
-                false,
-                floor_value,
-                &mut state,
-                &RelaySigningContext::default(),
-            )
-            .await;
+        let result =
+            cache.save_bid_and_update_top_bid(&submission, received_at, false, floor_value, &mut state, &RelaySigningContext::default()).await;
         assert!(result.is_ok(), "Save failed");
         assert!(state.was_bid_saved, "Bid should be saved");
         assert!(state.is_new_top_bid, "Bid should be new top bid");
 
         // Validate bid is new floor
         let new_floor_value = cache
-            .get_floor_bid_value(
-                submission.message().slot,
-                &submission.message().parent_hash,
-                &submission.message().proposer_public_key,
-            )
+            .get_floor_bid_value(submission.message().slot, &submission.message().parent_hash, &submission.message().proposer_public_key)
             .await
             .unwrap()
             .unwrap_or(U256::ZERO);
@@ -2084,27 +1693,15 @@ mod tests {
         let mut state = SaveBidAndUpdateTopBidResponse::default();
 
         submission.message_mut().value = floor_value.saturating_sub(U256::from(1));
-        let result = cache
-            .save_bid_and_update_top_bid(
-                &submission,
-                received_at,
-                true,
-                floor_value,
-                &mut state,
-                &RelaySigningContext::default(),
-            )
-            .await;
+        let result =
+            cache.save_bid_and_update_top_bid(&submission, received_at, true, floor_value, &mut state, &RelaySigningContext::default()).await;
         assert!(result.is_ok(), "Save failed");
         assert!(state.was_bid_saved, "Bid should be saved");
         assert!(!state.is_new_top_bid, "Bid should not be new top bid");
 
         // Validate floor is the same
         let new_floor_value = cache
-            .get_floor_bid_value(
-                submission.message().slot,
-                &submission.message().parent_hash,
-                &submission.message().proposer_public_key,
-            )
+            .get_floor_bid_value(submission.message().slot, &submission.message().parent_hash, &submission.message().proposer_public_key)
             .await
             .unwrap()
             .unwrap_or(U256::ZERO);
@@ -2117,27 +1714,15 @@ mod tests {
         let mut state = SaveBidAndUpdateTopBidResponse::default();
 
         submission.message_mut().value = floor_value + U256::from(1);
-        let result = cache
-            .save_bid_and_update_top_bid(
-                &submission,
-                received_at,
-                true,
-                floor_value,
-                &mut state,
-                &RelaySigningContext::default(),
-            )
-            .await;
+        let result =
+            cache.save_bid_and_update_top_bid(&submission, received_at, true, floor_value, &mut state, &RelaySigningContext::default()).await;
         assert!(result.is_ok(), "Failed to save bid");
         assert!(state.was_bid_saved, "Bid should be saved");
         assert!(state.is_new_top_bid, "Bid should be new top bid");
 
         // Validate bid is not new floor as this is a cancellable bid
         let new_floor_value = cache
-            .get_floor_bid_value(
-                submission.message().slot,
-                &submission.message().parent_hash,
-                &submission.message().proposer_public_key,
-            )
+            .get_floor_bid_value(submission.message().slot, &submission.message().parent_hash, &submission.message().proposer_public_key)
             .await
             .unwrap()
             .unwrap_or(U256::ZERO);
@@ -2149,20 +1734,11 @@ mod tests {
         let (cache, mut submission, floor_value, received_at) = setup_save_and_update_test().await;
 
         // Save top bid from different builder. Cancellations enabled so won't set new floor.
-        submission.message_mut().builder_public_key =
-            BlsPublicKey::try_from([53u8; 48].as_ref()).unwrap();
+        submission.message_mut().builder_public_key = BlsPublicKey::try_from([53u8; 48].as_ref()).unwrap();
         submission.message_mut().value = floor_value + U256::from(2);
         let mut state = SaveBidAndUpdateTopBidResponse::default();
-        let result = cache
-            .save_bid_and_update_top_bid(
-                &submission,
-                received_at,
-                true,
-                floor_value,
-                &mut state,
-                &RelaySigningContext::default(),
-            )
-            .await;
+        let result =
+            cache.save_bid_and_update_top_bid(&submission, received_at, true, floor_value, &mut state, &RelaySigningContext::default()).await;
         assert!(result.is_ok(), "Failed to save top bid");
 
         // Save bid below top bid but above floor.
@@ -2170,16 +1746,8 @@ mod tests {
         submission.message_mut().builder_public_key = BlsPublicKey::default();
         let mut state = SaveBidAndUpdateTopBidResponse::default();
 
-        let result = cache
-            .save_bid_and_update_top_bid(
-                &submission,
-                received_at,
-                false,
-                floor_value,
-                &mut state,
-                &RelaySigningContext::default(),
-            )
-            .await;
+        let result =
+            cache.save_bid_and_update_top_bid(&submission, received_at, false, floor_value, &mut state, &RelaySigningContext::default()).await;
         assert!(result.is_ok(), "Failed to save bid");
         assert!(state.was_bid_saved, "Bid should be saved");
         assert!(!state.is_new_top_bid, "Bid should not be the new top bid");
@@ -2197,20 +1765,9 @@ mod tests {
         submission.message_mut().slot = 1;
 
         // Save floor value
-        submission.message_mut().builder_public_key =
-            BlsPublicKey::try_from([12u8; 48].as_ref()).unwrap();
+        submission.message_mut().builder_public_key = BlsPublicKey::try_from([12u8; 48].as_ref()).unwrap();
         submission.message_mut().value = floor_value;
-        cache
-            .save_bid_and_update_top_bid(
-                &submission,
-                received_at,
-                false,
-                U256::ZERO,
-                &mut state,
-                &RelaySigningContext::default(),
-            )
-            .await
-            .unwrap();
+        cache.save_bid_and_update_top_bid(&submission, received_at, false, U256::ZERO, &mut state, &RelaySigningContext::default()).await.unwrap();
 
         // Reset submission values
         submission.message_mut().builder_public_key = BlsPublicKey::default();
@@ -2228,52 +1785,24 @@ mod tests {
         let block_hash = Hash32::try_from([5u8; 32].as_ref()).unwrap();
 
         // Test: Check if block hash has been seen before (should be false initially)
-        let seen_result = cache
-            .seen_or_insert_block_hash(
-                &block_hash,
-                slot,
-                &Hash32::default(),
-                &BlsPublicKey::default(),
-            )
-            .await;
+        let seen_result = cache.seen_or_insert_block_hash(&block_hash, slot, &Hash32::default(), &BlsPublicKey::default()).await;
         assert!(seen_result.is_ok(), "Failed to check if block hash was seen");
         assert!(!seen_result.unwrap(), "Block hash was incorrectly seen before");
 
         // Test: Insert the block hash and check again (should be true after insert)
-        let seen_result_again = cache
-            .seen_or_insert_block_hash(
-                &block_hash,
-                slot,
-                &Hash32::default(),
-                &BlsPublicKey::default(),
-            )
-            .await;
+        let seen_result_again = cache.seen_or_insert_block_hash(&block_hash, slot, &Hash32::default(), &BlsPublicKey::default()).await;
         assert!(seen_result_again.is_ok(), "Failed to check if block hash was seen after insert");
         assert!(seen_result_again.unwrap(), "Block hash was not seen after insert");
 
         // Test: Add a different new block hash (should be false initially)
         let block_hash_2 = Hash32::try_from([6u8; 32].as_ref()).unwrap();
-        let seen_result = cache
-            .seen_or_insert_block_hash(
-                &block_hash_2,
-                slot,
-                &Hash32::default(),
-                &BlsPublicKey::default(),
-            )
-            .await;
+        let seen_result = cache.seen_or_insert_block_hash(&block_hash_2, slot, &Hash32::default(), &BlsPublicKey::default()).await;
         assert!(seen_result.is_ok(), "Failed to check if block hash was seen");
         assert!(!seen_result.unwrap(), "Block hash was incorrectly seen before");
 
         // Test: Insert the original block hash again, ensure it wasn't overwritten (should be true
         // after insert)
-        let seen_result_again = cache
-            .seen_or_insert_block_hash(
-                &block_hash,
-                slot,
-                &Hash32::default(),
-                &BlsPublicKey::default(),
-            )
-            .await;
+        let seen_result_again = cache.seen_or_insert_block_hash(&block_hash, slot, &Hash32::default(), &BlsPublicKey::default()).await;
         assert!(seen_result_again.is_ok(), "Failed to check if block hash was seen after insert");
         assert!(seen_result_again.unwrap(), "Block hash was not seen after insert");
     }
@@ -2315,32 +1844,21 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
-        let builder_infos = vec![
-            BuilderInfoDocument {
-                builder_info: BuilderInfo{
-                    collateral: U256::from(100),
-                    is_optimistic: true,
-                    builder_id: None,
-                },
-                pub_key: BlsPublicKey::default(),
-            }
-        ];
+        let builder_infos = vec![BuilderInfoDocument {
+            builder_info: BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None },
+            pub_key: BlsPublicKey::default(),
+        }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
-        
 
         let slot = 42;
         let block_hash = Hash32::try_from([5u8; 32].as_ref()).unwrap();
         let builder_pub_key = BlsPublicKey::default();
         let time = 1616237123000u64;
 
-        cache.save_pending_block_header(slot, &builder_pub_key, &block_hash,  time)
-            .await
-            .unwrap();
+        cache.save_pending_block_header(slot, &builder_pub_key, &block_hash, time).await.unwrap();
 
-        cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash,  time)
-            .await
-            .unwrap();
+        cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash, time).await.unwrap();
 
         let pending_blocks = cache.get_pending_blocks().await.unwrap();
 
@@ -2358,34 +1876,24 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
-        let builder_infos = vec![
-            BuilderInfoDocument {
-                builder_info: BuilderInfo{
-                    collateral: U256::from(100),
-                    is_optimistic: true,
-                    builder_id: None,
-                },
-                pub_key: BlsPublicKey::default(),
-            }
-        ];
+        let builder_infos = vec![BuilderInfoDocument {
+            builder_info: BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None },
+            pub_key: BlsPublicKey::default(),
+        }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
 
         let mut expected_pending_blocks = Vec::new();
-        
+
         for i in 0..10 {
             let slot = i as u64;
             let block_hash = Hash32::try_from([i; 32].as_ref()).unwrap();
             let builder_pub_key = BlsPublicKey::default();
             let time = get_current_unix_time_in_nanos() as u64;
 
-            cache.save_pending_block_header(slot, &builder_pub_key, &block_hash,  time)
-                .await
-                .unwrap();
+            cache.save_pending_block_header(slot, &builder_pub_key, &block_hash, time).await.unwrap();
 
-            cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash,  time)
-                .await
-                .unwrap();
+            cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash, time).await.unwrap();
 
             expected_pending_blocks.push(PendingBlock {
                 slot,
@@ -2409,10 +1917,7 @@ mod tests {
 
         let mut pending_block_hashes = HashMap::new();
         for pending_block in pending_blocks {
-            pending_block_hashes
-                .entry(pending_block.builder_pubkey.clone())
-                .or_insert_with(Vec::new)
-                .push(pending_block.block_hash.clone());
+            pending_block_hashes.entry(pending_block.builder_pubkey.clone()).or_insert_with(Vec::new).push(pending_block.block_hash.clone());
         }
     }
 
@@ -2421,28 +1926,19 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
-        let builder_infos = vec![
-            BuilderInfoDocument {
-                builder_info: BuilderInfo{
-                    collateral: U256::from(100),
-                    is_optimistic: true,
-                    builder_id: None,
-                },
-                pub_key: BlsPublicKey::default(),
-            }
-        ];
+        let builder_infos = vec![BuilderInfoDocument {
+            builder_info: BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None },
+            pub_key: BlsPublicKey::default(),
+        }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
-        
 
         let slot = 42;
         let block_hash = Hash32::try_from([5u8; 32].as_ref()).unwrap();
         let builder_pub_key = BlsPublicKey::default();
         let time = 1616237123000u64;
 
-        cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash,  time)
-            .await
-            .unwrap();
+        cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash, time).await.unwrap();
 
         let pending_blocks = cache.get_pending_blocks().await.unwrap();
 
@@ -2460,28 +1956,19 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
-        let builder_infos = vec![
-            BuilderInfoDocument {
-                builder_info: BuilderInfo{
-                    collateral: U256::from(100),
-                    is_optimistic: true,
-                    builder_id: None,
-                },
-                pub_key: BlsPublicKey::default(),
-            }
-        ];
+        let builder_infos = vec![BuilderInfoDocument {
+            builder_info: BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None },
+            pub_key: BlsPublicKey::default(),
+        }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
-        
 
         let slot = 42;
         let block_hash = Hash32::try_from([5u8; 32].as_ref()).unwrap();
         let builder_pub_key = BlsPublicKey::default();
         let time = 1616237123000u64;
 
-        cache.save_pending_block_header(slot, &builder_pub_key, &block_hash,  time)
-            .await
-            .unwrap();
+        cache.save_pending_block_header(slot, &builder_pub_key, &block_hash, time).await.unwrap();
 
         let pending_blocks = cache.get_pending_blocks().await.unwrap();
 
@@ -2499,36 +1986,23 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
-        let builder_infos = vec![
-            BuilderInfoDocument {
-                builder_info: BuilderInfo{
-                    collateral: U256::from(100),
-                    is_optimistic: true,
-                    builder_id: None,
-                },
-                pub_key: BlsPublicKey::default(),
-            }
-        ];
+        let builder_infos = vec![BuilderInfoDocument {
+            builder_info: BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None },
+            pub_key: BlsPublicKey::default(),
+        }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
-        
 
         let slot = 42;
         let block_hash = Hash32::try_from([5u8; 32].as_ref()).unwrap();
         let builder_pub_key = BlsPublicKey::default();
         let time = 1616237123000u64;
 
-        cache.save_pending_block_header(slot, &builder_pub_key, &block_hash,  time)
-            .await
-            .unwrap();
+        cache.save_pending_block_header(slot, &builder_pub_key, &block_hash, time).await.unwrap();
 
-        cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash,  time)
-            .await
-            .unwrap();
+        cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash, time).await.unwrap();
 
-            cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash,  1716237123000u64)
-            .await
-            .unwrap();
+        cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash, 1716237123000u64).await.unwrap();
 
         let pending_blocks = cache.get_pending_blocks().await.unwrap();
 
@@ -2573,18 +2047,12 @@ mod tests {
         // Arrange
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
 
-        let constraints_array = vec![
-            Constraint::default(),
-            Constraint::default(),
-        ];
+        let constraints_array = vec![Constraint::default(), Constraint::default()];
         let constraints_list_a = List::try_from(constraints_array.clone()).unwrap();
         let constraints_list_b = List::try_from(constraints_array).unwrap();
         let list_of_lists = vec![constraints_list_a, constraints_list_b];
 
-        let constraints_message = ConstraintsMessage::new(
-            1, 
-            List::try_from(list_of_lists).unwrap(),
-        );
+        let constraints_message = ConstraintsMessage::new(1, List::try_from(list_of_lists).unwrap());
 
         // Act
         let result = cache.save_constraints(&constraints_message).await;
@@ -2608,30 +2076,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_multiple_constraints() {
-
         let slot = 0;
-        
+
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
 
-        let constraints_array = vec![
-            Constraint::default(),
-            Constraint::default(),
-        ];
+        let constraints_array = vec![Constraint::default(), Constraint::default()];
         let constraints_list_a = List::try_from(constraints_array.clone()).unwrap();
         let constraints_list_b = List::try_from(constraints_array).unwrap();
         let list_of_lists = vec![constraints_list_a, constraints_list_b];
 
-        let constraints_message_1 = ConstraintsMessage::new(
-            1, 
-            List::try_from(list_of_lists.clone()).unwrap(),
-        );
+        let constraints_message_1 = ConstraintsMessage::new(1, List::try_from(list_of_lists.clone()).unwrap());
 
-        let constraints_message_2 = ConstraintsMessage::new(
-            1, 
-            List::try_from(list_of_lists).unwrap(),
-        );
+        let constraints_message_2 = ConstraintsMessage::new(1, List::try_from(list_of_lists).unwrap());
 
-        
         let result = cache.save_constraints(&constraints_message_1).await;
         assert!(result.is_ok(), "Failed to save constraints");
         let result = cache.save_constraints(&constraints_message_2).await;
@@ -2639,7 +2096,7 @@ mod tests {
 
         let result = cache.get_constraints(slot).await;
         assert!(result.is_ok(), "Failed to get constraints");
-        
+
         assert!(result.unwrap().unwrap().constraints().len() > 1, "Failed to save constraints");
     }
 }

@@ -17,7 +17,7 @@ axum.workspace = true
 hyper.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
-futures-util = "0.3"
+futures-util.workspace = true
 
 # Serialization and Data Format 
 reth-primitives.workspace = true
@@ -29,8 +29,8 @@ hex.workspace = true
 ethereum-consensus.workspace = true
 
 # DB
-deadpool-redis.workspace = true
-redis.workspace = true
+deadpool-redis = { workspace = true, features = ["rt_tokio_1"] }
+redis = { workspace = true, features = ["aio", "tokio-comp"] }
 
 # Misc
 auto_impl.workspace = true

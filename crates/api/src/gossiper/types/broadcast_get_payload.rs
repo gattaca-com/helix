@@ -1,5 +1,3 @@
-
-
 use ethereum_consensus::{ssz, types::mainnet::SignedBlindedBeaconBlock};
 use uuid::Uuid;
 

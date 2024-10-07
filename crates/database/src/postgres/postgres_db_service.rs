@@ -1,3 +1,4 @@
+#![allow(unused)]
 use std::{
     collections::HashSet,
     ops::DerefMut,
@@ -9,15 +10,16 @@ use async_trait::async_trait;
 use dashmap::{DashMap, DashSet};
 use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
 use ethereum_consensus::{altair::Hash32, primitives::BlsPublicKey, ssz::prelude::ByteVector};
-
 use helix_common::{
-    api::{
-        self, builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters, proposer_api::ValidatorRegistrationInfo
-    }, bid_submission::{
-        v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission,
-    }, deneb::SignedValidatorRegistration, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
+    api::{builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters, proposer_api::ValidatorRegistrationInfo},
+    bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission},
+    deneb::SignedValidatorRegistration,
+    simulator::BlockSimError,
+    versioned_payload::PayloadAndBlobs,
+    BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo,
+    RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
 };
-use tokio_postgres::{row, types::ToSql, NoTls};
+use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{error, info};
 
 use crate::{
@@ -76,9 +78,7 @@ impl PostgresDatabaseService {
         })
     }
 
-    pub fn from_relay_config(
-        relay_config: &RelayConfig,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn from_relay_config(relay_config: &RelayConfig) -> Result<Self, Box<dyn std::error::Error>> {
         let mut cfg = Config::new();
         cfg.host = Some(relay_config.postgres.hostname.clone());
         cfg.port = Some(relay_config.postgres.port.clone());
@@ -154,17 +154,14 @@ impl PostgresDatabaseService {
                     _ => {
                         let mut entries = Vec::new();
                         for key in self_clone.pending_validator_registrations.iter() {
-                            if let Some(entry) = self_clone.validator_registration_cache.get(&*key)
-                            {
+                            if let Some(entry) = self_clone.validator_registration_cache.get(&*key) {
                                 entries.push(entry.clone());
                             }
                         }
                         match self_clone._save_validator_registrations(&entries).await {
                             Ok(_) => {
                                 for entry in entries.iter() {
-                                    self_clone
-                                        .pending_validator_registrations
-                                        .remove(&entry.registration_info.registration.message.public_key);
+                                    self_clone.pending_validator_registrations.remove(&entry.registration_info.registration.message.public_key);
                                 }
                                 info!("Saved {} validator registrations", entries.len());
                             }
@@ -178,24 +175,18 @@ impl PostgresDatabaseService {
         });
     }
 
-    async fn _save_validator_registrations(
-        &self,
-        entries: &[SignedValidatorRegistrationEntry],
-    ) -> Result<(), DatabaseError> {
+    async fn _save_validator_registrations(&self, entries: &[SignedValidatorRegistrationEntry]) -> Result<(), DatabaseError> {
         let mut client = self.pool.get().await?;
 
         let batch_size = 1000;
         for chunk in entries.chunks(batch_size) {
             let transaction = client.transaction().await?;
 
-            let mut structured_params_for_reg: Vec<RegistrationParams> =
-                Vec::with_capacity(chunk.len());
+            let mut structured_params_for_reg: Vec<RegistrationParams> = Vec::with_capacity(chunk.len());
 
-            let mut structured_params_for_pref: Vec<PreferenceParams> =
-                Vec::with_capacity(chunk.len());
-            
-            let mut structured_params_for_trusted: Vec<TrustedProposerParams> =
-                Vec::with_capacity(chunk.len());
+            let mut structured_params_for_pref: Vec<PreferenceParams> = Vec::with_capacity(chunk.len());
+
+            let mut structured_params_for_trusted: Vec<TrustedProposerParams> = Vec::with_capacity(chunk.len());
 
             for entry in chunk.iter() {
                 let registration = &entry.registration_info.registration.message;
@@ -223,12 +214,8 @@ impl PostgresDatabaseService {
                     header_delay: entry.registration_info.preferences.header_delay,
                 });
 
-
                 if name.is_some() {
-                    structured_params_for_trusted.push(TrustedProposerParams {
-                        public_key: public_key.as_ref(),
-                        name: name.clone(),
-                    });
+                    structured_params_for_trusted.push(TrustedProposerParams { public_key: public_key.as_ref(), name: name.clone() });
                 }
             }
 
@@ -248,13 +235,12 @@ impl PostgresDatabaseService {
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
-            let mut sql = String::from("INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at) VALUES ");
+            let mut sql =
+                String::from("INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at) VALUES ");
             let num_params_per_row = 6;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
-                    let placeholders: Vec<String> = (1..=num_params_per_row)
-                        .map(|n| format!("${}", row * num_params_per_row + n))
-                        .collect();
+                    let placeholders: Vec<String> = (1..=num_params_per_row).map(|n| format!("${}", row * num_params_per_row + n)).collect();
                     format!("({})", placeholders.join(", "))
                 })
                 .collect();
@@ -268,25 +254,15 @@ impl PostgresDatabaseService {
 
             let params: Vec<&(dyn ToSql + Sync)> = structured_params_for_pref
                 .iter()
-                .flat_map(|tuple| {
-                    vec![
-                        &tuple.public_key as &(dyn ToSql + Sync),
-                        &tuple.filtering,
-                        &tuple.trusted_builders,
-                        &tuple.header_delay,
-                    ]
-                })
+                .flat_map(|tuple| vec![&tuple.public_key as &(dyn ToSql + Sync), &tuple.filtering, &tuple.trusted_builders, &tuple.header_delay])
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
-            let mut sql =
-                String::from("INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay) VALUES ");
+            let mut sql = String::from("INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay) VALUES ");
             let num_params_per_row = 4;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
-                    let placeholders: Vec<String> = (1..=num_params_per_row)
-                        .map(|n| format!("${}", row * num_params_per_row + n))
-                        .collect();
+                    let placeholders: Vec<String> = (1..=num_params_per_row).map(|n| format!("${}", row * num_params_per_row + n)).collect();
                     format!("({})", placeholders.join(", "))
                 })
                 .collect();
@@ -303,25 +279,15 @@ impl PostgresDatabaseService {
                 continue;
             }
 
-            let params: Vec<&(dyn ToSql + Sync)> = structured_params_for_trusted
-                .iter()
-                .flat_map(|tuple| {
-                    vec![
-                        &tuple.public_key as &(dyn ToSql + Sync),
-                        &tuple.name,
-                    ]
-                })
-                .collect();
+            let params: Vec<&(dyn ToSql + Sync)> =
+                structured_params_for_trusted.iter().flat_map(|tuple| vec![&tuple.public_key as &(dyn ToSql + Sync), &tuple.name]).collect();
 
             // Construct the SQL statement with multiple VALUES clauses
-            let mut sql =
-                String::from("INSERT INTO trusted_proposers (pub_key, name) VALUES ");
+            let mut sql = String::from("INSERT INTO trusted_proposers (pub_key, name) VALUES ");
             let num_params_per_row = 2;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
-                    let placeholders: Vec<String> = (1..=num_params_per_row)
-                        .map(|n| format!("${}", row * num_params_per_row + n))
-                        .collect();
+                    let placeholders: Vec<String> = (1..=num_params_per_row).map(|n| format!("${}", row * num_params_per_row + n)).collect();
                     format!("({})", placeholders.join(", "))
                 })
                 .collect();
@@ -404,8 +370,9 @@ impl DatabaseService for PostgresDatabaseService {
             )
             .await?;
 
-        match transaction.execute(
-            "
+        match transaction
+            .execute(
+                "
                 INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at)
                 VALUES ($1, $2, $3, $4, $5,$6)
                 ON CONFLICT (public_key)
@@ -416,14 +383,17 @@ impl DatabaseService for PostgresDatabaseService {
                     signature = excluded.signature,
                     inserted_at = excluded.inserted_at
             ",
-            &[
-                &(fee_recipient.as_ref()),
-                &(registration.gas_limit as i32),
-                &(registration.timestamp as i64),
-                &(public_key.as_ref()),
-                &(signature.as_ref()),
-                &(inserted_at)],
-        ).await {
+                &[
+                    &(fee_recipient.as_ref()),
+                    &(registration.gas_limit as i32),
+                    &(registration.timestamp as i64),
+                    &(public_key.as_ref()),
+                    &(signature.as_ref()),
+                    &(inserted_at),
+                ],
+            )
+            .await
+        {
             Ok(_) => {
                 self.validator_registration_cache.insert(public_key.clone(), SignedValidatorRegistrationEntry {
                     registration_info,
@@ -431,9 +401,7 @@ impl DatabaseService for PostgresDatabaseService {
                     pool_name,
                 });
             }
-            Err(e) => {
-                return Err(DatabaseError::from(e))
-            },
+            Err(e) => return Err(DatabaseError::from(e)),
         };
 
         transaction.commit().await?;
@@ -447,12 +415,8 @@ impl DatabaseService for PostgresDatabaseService {
         pool_name: Option<String>,
     ) -> Result<(), DatabaseError> {
         entries.retain(|entry| {
-            if let Some(existing_entry) =
-                self.validator_registration_cache.get(&entry.registration.message.public_key)
-            {
-                if existing_entry.registration_info.registration.message.timestamp >=
-                    entry.registration.message.timestamp
-                {
+            if let Some(existing_entry) = self.validator_registration_cache.get(&entry.registration.message.public_key) {
+                if existing_entry.registration_info.registration.message.timestamp >= entry.registration.message.timestamp {
                     return false;
                 }
             }
@@ -460,37 +424,24 @@ impl DatabaseService for PostgresDatabaseService {
         });
 
         for entry in entries.iter() {
-            self.pending_validator_registrations
-                .insert(entry.registration.message.public_key.clone());
-            self.validator_registration_cache.insert(
-                entry.registration.message.public_key.clone(),
-                SignedValidatorRegistrationEntry::new(entry.clone(), pool_name.clone()),
-            );
+            self.pending_validator_registrations.insert(entry.registration.message.public_key.clone());
+            self.validator_registration_cache
+                .insert(entry.registration.message.public_key.clone(), SignedValidatorRegistrationEntry::new(entry.clone(), pool_name.clone()));
         }
 
         Ok(())
     }
 
-    async fn is_registration_update_required(
-        &self,
-        registration: &SignedValidatorRegistration,
-    ) -> Result<bool, DatabaseError> {
-        if let Some(existing_entry) = 
-            self.validator_registration_cache.get(&registration.message.public_key)
-        {
-            if existing_entry.registration_info.registration.message.timestamp >=
-                registration.message.timestamp
-            {
+    async fn is_registration_update_required(&self, registration: &SignedValidatorRegistration) -> Result<bool, DatabaseError> {
+        if let Some(existing_entry) = self.validator_registration_cache.get(&registration.message.public_key) {
+            if existing_entry.registration_info.registration.message.timestamp >= registration.message.timestamp {
                 return Ok(false);
             }
         }
         Ok(true)
     }
 
-    async fn get_validator_registration(
-        &self,
-        pub_key: BlsPublicKey,
-    ) -> Result<SignedValidatorRegistrationEntry, DatabaseError> {
+    async fn get_validator_registration(&self, pub_key: BlsPublicKey) -> Result<SignedValidatorRegistrationEntry, DatabaseError> {
         match self
             .pool
             .get()
@@ -539,28 +490,19 @@ impl DatabaseService for PostgresDatabaseService {
         // Preparing the query
         let stmt = client.prepare(&query).await.map_err(DatabaseError::from)?;
 
-        let params: Vec<Box<dyn ToSql + Sync + Send>> = pub_keys
-            .iter()
-            .map(|key: &BlsPublicKey| Box::new(key.as_ref()) as Box<dyn ToSql + Sync + Send>)
-            .collect();
+        let params: Vec<Box<dyn ToSql + Sync + Send>> =
+            pub_keys.iter().map(|key: &BlsPublicKey| Box::new(key.as_ref()) as Box<dyn ToSql + Sync + Send>).collect();
 
-        let params_slice: Vec<&(dyn ToSql + Sync)> =
-            params.iter().map(|b| b.as_ref() as &(dyn ToSql + Sync)).collect();
+        let params_slice: Vec<&(dyn ToSql + Sync)> = params.iter().map(|b| b.as_ref() as &(dyn ToSql + Sync)).collect();
 
         parse_rows(client.query(&stmt, &params_slice).await.map_err(DatabaseError::from)?)
     }
 
-    async fn get_validator_registration_timestamp(
-        &self,
-        pub_key: BlsPublicKey,
-    ) -> Result<u64, DatabaseError> {
+    async fn get_validator_registration_timestamp(&self, pub_key: BlsPublicKey) -> Result<u64, DatabaseError> {
         self.get_validator_registration(pub_key).await.map(|entry| entry.inserted_at)
     }
 
-    async fn set_proposer_duties(
-        &self,
-        proposer_duties: Vec<BuilderGetValidatorsResponseEntry>,
-    ) -> Result<(), DatabaseError> {
+    async fn set_proposer_duties(&self, proposer_duties: Vec<BuilderGetValidatorsResponseEntry>) -> Result<(), DatabaseError> {
         let mut client = self.pool.get().await?;
         let transaction = client.transaction().await?;
 
@@ -582,32 +524,21 @@ impl DatabaseService for PostgresDatabaseService {
             )
             .await?;
 
-        let mut structured_params: Vec<(i32, i32, &[u8])> =
-            Vec::with_capacity(proposer_duties.len());
+        let mut structured_params: Vec<(i32, i32, &[u8])> = Vec::with_capacity(proposer_duties.len());
         for entry in proposer_duties.iter() {
-            structured_params.push((
-                entry.slot as i32,
-                entry.validator_index as i32,
-                entry.entry.registration.message.public_key.as_ref(),
-            ));
+            structured_params.push((entry.slot as i32, entry.validator_index as i32, entry.entry.registration.message.public_key.as_ref()));
         }
 
         // Prepare the params vector from the structured parameters
-        let params: Vec<&(dyn ToSql + Sync)> = structured_params
-            .iter()
-            .flat_map(|tuple| vec![&tuple.0, &tuple.1, &tuple.2 as &(dyn ToSql + Sync)])
-            .collect();
+        let params: Vec<&(dyn ToSql + Sync)> =
+            structured_params.iter().flat_map(|tuple| vec![&tuple.0, &tuple.1, &tuple.2 as &(dyn ToSql + Sync)]).collect();
 
         // Construct the SQL statement with multiple VALUES clauses
-        let mut sql = String::from(
-            "INSERT INTO proposer_duties (slot_number, validator_index, public_key) VALUES ",
-        );
+        let mut sql = String::from("INSERT INTO proposer_duties (slot_number, validator_index, public_key) VALUES ");
         let num_params_per_row = 3;
         let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
             .map(|row| {
-                let placeholders: Vec<String> = (1..=num_params_per_row)
-                    .map(|n| format!("${}", row * num_params_per_row + n))
-                    .collect();
+                let placeholders: Vec<String> = (1..=num_params_per_row).map(|n| format!("${}", row * num_params_per_row + n)).collect();
                 format!("({})", placeholders.join(", "))
             })
             .collect();
@@ -624,9 +555,7 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(())
     }
 
-    async fn get_proposer_duties(
-        &self,
-    ) -> Result<Vec<BuilderGetValidatorsResponseEntry>, DatabaseError> {
+    async fn get_proposer_duties(&self) -> Result<Vec<BuilderGetValidatorsResponseEntry>, DatabaseError> {
         parse_rows(
             self.pool
                 .get()
@@ -645,27 +574,22 @@ impl DatabaseService for PostgresDatabaseService {
         )
     }
 
-    async fn set_known_validators(
-        &self,
-        known_validators: Vec<ValidatorSummary>,
-    ) -> Result<(), DatabaseError> {
-
+    async fn set_known_validators(&self, known_validators: Vec<ValidatorSummary>) -> Result<(), DatabaseError> {
         info!("Known validators: current cache size: {:?}", self.known_validators_cache.len());
 
         let mut client = self.pool.get().await?;
-    
-        let new_keys_set: HashSet<BlsPublicKey> = known_validators
+
+        let new_keys_set: HashSet<BlsPublicKey> = known_validators.iter().map(|validator| validator.validator.public_key.clone()).collect();
+
+        let old_keys_hash_set: HashSet<BlsPublicKey> = self
+            .known_validators_cache
             .iter()
-            .map(|validator| validator.validator.public_key.clone())
+            .map(|ref_multi| ref_multi.key().clone()) // Access and clone the key from RefMulti
             .collect();
 
-        let old_keys_hash_set: HashSet<BlsPublicKey> = self.known_validators_cache.iter()
-        .map(|ref_multi| ref_multi.key().clone()) // Access and clone the key from RefMulti
-        .collect();
-    
         let keys_to_add: Vec<BlsPublicKey> = new_keys_set.difference(&old_keys_hash_set).cloned().collect();
         let keys_to_remove: Vec<BlsPublicKey> = old_keys_hash_set.difference(&new_keys_set).cloned().collect();
-    
+
         for key in &keys_to_add {
             self.known_validators_cache.insert(key.clone());
         }
@@ -673,27 +597,25 @@ impl DatabaseService for PostgresDatabaseService {
             self.known_validators_cache.remove(key);
         }
 
-        
         info!("Known validators: added: {:?}", keys_to_add.len());
         info!("Known validators: removed: {:?}", keys_to_add.len());
 
         info!("Known validators: updated cache size: {:?}", self.known_validators_cache.len());
 
-
         let transaction = client.transaction().await?;
-    
+
         // Perform batch deletion
         for chunk in keys_to_remove.chunks(10000) {
             let sql = "DELETE FROM known_validators WHERE public_key = ANY($1::bytea[])";
             let byte_keys: Vec<&[u8]> = chunk.iter().map(|k| k.as_ref()).collect();
             transaction.execute(sql, &[&byte_keys]).await?;
         }
-    
+
         // Perform batch insertion
         for chunk in keys_to_add.chunks(10000) {
             let mut sql = String::from("INSERT INTO known_validators (public_key) VALUES ");
             let values_clauses: Vec<String> = (1..=chunk.len()).map(|i| format!("(${})", i)).collect();
-    
+
             sql.push_str(&values_clauses.join(", "));
             sql.push_str(" ON CONFLICT (public_key) DO NOTHING");
 
@@ -702,21 +624,17 @@ impl DatabaseService for PostgresDatabaseService {
                 structured_params.push(validator.as_ref());
             }
 
-            let params: Vec<&(dyn ToSql + Sync)> =
-                structured_params.iter().flat_map(|v| vec![v as &(dyn ToSql + Sync)]).collect();
+            let params: Vec<&(dyn ToSql + Sync)> = structured_params.iter().flat_map(|v| vec![v as &(dyn ToSql + Sync)]).collect();
 
             transaction.execute(&sql, &params[..]).await?;
         }
-    
+
         transaction.commit().await?;
-    
+
         Ok(())
     }
 
-    async fn check_known_validators(
-        &self,
-        public_keys: Vec<BlsPublicKey>,
-    ) -> Result<HashSet<BlsPublicKey>, DatabaseError> {
+    async fn check_known_validators(&self, public_keys: Vec<BlsPublicKey>) -> Result<HashSet<BlsPublicKey>, DatabaseError> {
         let client = self.pool.get().await?;
         let mut pub_keys = HashSet::new();
 
@@ -724,15 +642,9 @@ impl DatabaseService for PostgresDatabaseService {
             if self.known_validators_cache.contains(public_key) {
                 pub_keys.insert(public_key.clone());
             } else {
-                let rows = client
-                    .query(
-                        "SELECT * FROM known_validators WHERE public_key = $1",
-                        &[&(public_key.as_ref())],
-                    )
-                    .await?;
+                let rows = client.query("SELECT * FROM known_validators WHERE public_key = $1", &[&(public_key.as_ref())]).await?;
                 for row in rows {
-                    let public_key: BlsPublicKey =
-                        parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?;
+                    let public_key: BlsPublicKey = parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?;
                     self.known_validators_cache.insert(public_key.clone());
                     pub_keys.insert(public_key);
                 }
@@ -742,10 +654,7 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(pub_keys)
     }
 
-    async fn get_validator_pool_name(
-        &self,
-        api_key: &str,
-    ) -> Result<Option<String>, DatabaseError> {
+    async fn get_validator_pool_name(&self, api_key: &str) -> Result<Option<String>, DatabaseError> {
         let client = self.pool.get().await?;
 
         if self.validator_pool_cache.is_empty() {
@@ -757,19 +666,12 @@ impl DatabaseService for PostgresDatabaseService {
             }
         }
 
-
         if self.validator_pool_cache.contains_key(api_key) {
             return Ok(self.validator_pool_cache.get(api_key).map(|f| f.clone()));
         }
 
-
         let api_key = api_key.to_string();
-        let rows = match client
-            .query(
-                "SELECT * FROM validator_pools WHERE api_key = $1",
-                &[&api_key],
-            )
-            .await {
+        let rows = match client.query("SELECT * FROM validator_pools WHERE api_key = $1", &[&api_key]).await {
             Ok(rows) => rows,
             Err(e) => {
                 error!("Error querying validator_pools: {}", e);
@@ -854,8 +756,9 @@ impl DatabaseService for PostgresDatabaseService {
                 &(PostgresNumeric::from(*payload.execution_payload.base_fee_per_gas())),
             ],
             ).await?;
-        
-            transaction.execute(
+
+        transaction
+            .execute(
                 "
                     INSERT INTO delivered_payload_preferences (block_hash, filtering, trusted_builders)
                     SELECT $1::bytea, filtering, trusted_builders
@@ -863,11 +766,9 @@ impl DatabaseService for PostgresDatabaseService {
                     WHERE public_key = $2::bytea
                     ON CONFLICT (block_hash) DO NOTHING;                
                 ",
-                &[
-                    &(bid_trace.block_hash.as_ref()),
-                    &(bid_trace.proposer_public_key.as_ref()),
-                ],
-                ).await?;
+                &[&(bid_trace.block_hash.as_ref()), &(bid_trace.proposer_public_key.as_ref())],
+            )
+            .await?;
 
         transaction.execute(
             "
@@ -894,26 +795,19 @@ impl DatabaseService for PostgresDatabaseService {
             // Save the transactions
             let mut structured_params: Vec<(&[u8], &[u8])> = Vec::new();
             for entry in payload.execution_payload.transactions().iter() {
-                structured_params
-                    .push((payload.execution_payload.block_hash().as_ref(), entry.as_ref()));
+                structured_params.push((payload.execution_payload.block_hash().as_ref(), entry.as_ref()));
             }
 
             // Prepare the params vector from the structured parameters
-            let params: Vec<&(dyn ToSql + Sync)> = structured_params
-                .iter()
-                .flat_map(|tuple| {
-                    vec![&tuple.0 as &(dyn ToSql + Sync), &tuple.1 as &(dyn ToSql + Sync)]
-                })
-                .collect();
+            let params: Vec<&(dyn ToSql + Sync)> =
+                structured_params.iter().flat_map(|tuple| vec![&tuple.0 as &(dyn ToSql + Sync), &tuple.1 as &(dyn ToSql + Sync)]).collect();
 
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql = String::from("INSERT INTO transaction (block_hash, bytes) VALUES ");
             let num_params_per_row = 2;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
-                    let placeholders: Vec<String> = (1..=num_params_per_row)
-                        .map(|n| format!("${}", row * num_params_per_row + n))
-                        .collect();
+                    let placeholders: Vec<String> = (1..=num_params_per_row).map(|n| format!("${}", row * num_params_per_row + n)).collect();
                     format!("({})", placeholders.join(", "))
                 })
                 .collect();
@@ -925,9 +819,7 @@ impl DatabaseService for PostgresDatabaseService {
             transaction.execute(&sql, &params[..]).await?;
         }
 
-        if payload.execution_payload.withdrawals().is_some() &&
-            !payload.execution_payload.withdrawals().unwrap().is_empty()
-        {
+        if payload.execution_payload.withdrawals().is_some() && !payload.execution_payload.withdrawals().unwrap().is_empty() {
             // Save the withdrawals
             let mut structured_params: Vec<(i32, &[u8], i32, &[u8], i64)> = Vec::new();
             for entry in payload.execution_payload.withdrawals().unwrap().iter() {
@@ -943,27 +835,15 @@ impl DatabaseService for PostgresDatabaseService {
             // Prepare the params vector from the structured parameters
             let params: Vec<&(dyn ToSql + Sync)> = structured_params
                 .iter()
-                .flat_map(|tuple| {
-                    vec![
-                        &tuple.0,
-                        &tuple.1 as &(dyn ToSql + Sync),
-                        &tuple.2,
-                        &tuple.3 as &(dyn ToSql + Sync),
-                        &tuple.4,
-                    ]
-                })
+                .flat_map(|tuple| vec![&tuple.0, &tuple.1 as &(dyn ToSql + Sync), &tuple.2, &tuple.3 as &(dyn ToSql + Sync), &tuple.4])
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
-            let mut sql = String::from(
-                "INSERT INTO withdrawal (index, block_hash, validator_index, address, amount) VALUES ",
-            );
+            let mut sql = String::from("INSERT INTO withdrawal (index, block_hash, validator_index, address, amount) VALUES ");
             let num_params_per_row = 5;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
-                    let placeholders: Vec<String> = (1..=num_params_per_row)
-                        .map(|n| format!("${}", row * num_params_per_row + n))
-                        .collect();
+                    let placeholders: Vec<String> = (1..=num_params_per_row).map(|n| format!("${}", row * num_params_per_row + n)).collect();
                     format!("({})", placeholders.join(", "))
                 })
                 .collect();
@@ -1043,11 +923,7 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(())
     }
 
-    async fn store_builder_info(
-        &self,
-        builder_pub_key: &BlsPublicKey,
-        builder_info: BuilderInfo,
-    ) -> Result<(), DatabaseError> {
+    async fn store_builder_info(&self, builder_pub_key: &BlsPublicKey, builder_info: BuilderInfo) -> Result<(), DatabaseError> {
         self.pool
             .get()
             .await?
@@ -1072,10 +948,7 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(())
     }
 
-    async fn db_get_builder_info(
-        &self,
-        builder_pub_key: &BlsPublicKey,
-    ) -> Result<BuilderInfo, DatabaseError> {
+    async fn db_get_builder_info(&self, builder_pub_key: &BlsPublicKey) -> Result<BuilderInfo, DatabaseError> {
         match self
             .pool
             .get()
@@ -1089,9 +962,7 @@ impl DatabaseService for PostgresDatabaseService {
             )
             .await?
         {
-            rows if rows.is_empty() => {
-                Err(DatabaseError::BuilderInfoNotFound { public_key: builder_pub_key.clone() })
-            }
+            rows if rows.is_empty() => Err(DatabaseError::BuilderInfoNotFound { public_key: builder_pub_key.clone() }),
             rows => parse_row(rows.first().unwrap()),
         }
     }
@@ -1100,27 +971,14 @@ impl DatabaseService for PostgresDatabaseService {
         parse_rows(self.pool.get().await?.query("SELECT * FROM builder_info", &[]).await?)
     }
 
-    async fn check_builder_api_key(
-        &self,
-        api_key: &str,
-    ) -> Result<bool, DatabaseError> {
+    async fn check_builder_api_key(&self, api_key: &str) -> Result<bool, DatabaseError> {
         let client = self.pool.get().await?;
-        let rows = client
-            .query(
-                "SELECT * FROM builder_info WHERE api_key = $1",
-                &[&(api_key)],
-            )
-            .await?;
+        let rows = client.query("SELECT * FROM builder_info WHERE api_key = $1", &[&(api_key)]).await?;
 
         Ok(!rows.is_empty())
     }
 
-    async fn db_demote_builder(
-        &self,
-        builder_pub_key: &BlsPublicKey,
-        block_hash: &Hash32,
-        reason: String,
-    ) -> Result<(), DatabaseError> {
+    async fn db_demote_builder(&self, builder_pub_key: &BlsPublicKey, block_hash: &Hash32, reason: String) -> Result<(), DatabaseError> {
         let mut client = self.pool.get().await?;
         let transaction = client.transaction().await?;
         transaction
@@ -1141,12 +999,7 @@ impl DatabaseService for PostgresDatabaseService {
                     INSERT INTO demotions (public_key, block_hash, demotion_time, reason)
                     VALUES ($1, $2, $3, $4)
                 ",
-                &[
-                    &(builder_pub_key.as_ref()),
-                    &(block_hash.as_ref()),
-                    &(timestamp as i64),
-                    &(reason),
-                ],
+                &[&(builder_pub_key.as_ref()), &(block_hash.as_ref()), &(timestamp as i64), &(reason)],
             )
             .await?;
 
@@ -1155,11 +1008,7 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(())
     }
 
-    async fn save_simulation_result(
-        &self,
-        block_hash: ByteVector<32>,
-        block_sim_result: Result<(), BlockSimError>,
-    ) -> Result<(), DatabaseError> {
+    async fn save_simulation_result(&self, block_hash: ByteVector<32>, block_sim_result: Result<(), BlockSimError>) -> Result<(), DatabaseError> {
         if let Err(e) = block_sim_result {
             self.pool
                 .get()
@@ -1178,13 +1027,11 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(())
     }
 
-    async fn get_bids(
-        &self,
-        filters: &BidFilters,
-    ) -> Result<Vec<BidSubmissionDocument>, DatabaseError> {
+    async fn get_bids(&self, filters: &BidFilters) -> Result<Vec<BidSubmissionDocument>, DatabaseError> {
         let filters = PgBidFilters::from(filters);
-    
-        let mut query = String::from("
+
+        let mut query = String::from(
+            "
             SELECT
                 block_submission.block_number block_number,
                 block_submission.slot_number slot_number,
@@ -1203,50 +1050,45 @@ impl DatabaseService for PostgresDatabaseService {
             LEFT JOIN
                 header_submission ON block_submission.block_hash = header_submission.block_hash
             WHERE 1 = 1
-        ");
-    
+        ",
+        );
+
         let mut param_index = 1;
         let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
-    
+
         if let Some(slot) = filters.slot() {
             query.push_str(&format!(" AND block_submission.slot_number = ${}", param_index));
             params.push(Box::new(slot));
             param_index += 1;
         }
-        
+
         if let Some(block_number) = filters.block_number() {
             query.push_str(&format!(" AND block_submission.block_number = ${}", param_index));
             params.push(Box::new(block_number));
             param_index += 1;
         }
-    
+
         if let Some(proposer_pubkey) = filters.proposer_pubkey() {
             query.push_str(&format!(" AND block_submission.proposer_pubkey = ${}", param_index));
             params.push(Box::new(proposer_pubkey));
             param_index += 1;
         }
-    
+
         if let Some(builder_pubkey) = filters.builder_pubkey() {
             query.push_str(&format!(" AND block_submission.builder_pubkey = ${}", param_index));
             params.push(Box::new(builder_pubkey));
             param_index += 1;
         }
-    
+
         if let Some(block_hash) = filters.block_hash() {
             query.push_str(&format!(" AND block_submission.block_hash = ${}", param_index));
             params.push(Box::new(block_hash));
             param_index += 1;
         }
-    
+
         let params_refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect();
-    
-        parse_rows(
-            self.pool
-                .get()
-                .await?
-                .query(&query, &params_refs[..])
-                .await?,
-        )
+
+        parse_rows(self.pool.get().await?.query(&query, &params_refs[..]).await?)
     }
 
     async fn get_delivered_payloads(
@@ -1255,7 +1097,8 @@ impl DatabaseService for PostgresDatabaseService {
         validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
         let filters = PgBidFilters::from(filters);
-        let mut query = String::from("
+        let mut query = String::from(
+            "
             SELECT
                 block_submission.slot_number            slot_number,
                 block_submission.parent_hash            parent_hash,
@@ -1274,7 +1117,8 @@ impl DatabaseService for PostgresDatabaseService {
                 block_submission 
             ON 
                 block_submission.block_hash = delivered_payload.block_hash
-        ");
+        ",
+        );
 
         let filtering = match validator_preferences.filtering {
             Filtering::Regional => Some(1_i16),
@@ -1282,12 +1126,14 @@ impl DatabaseService for PostgresDatabaseService {
         };
 
         if validator_preferences.trusted_builders.is_some() || filtering.is_some() {
-            query.push_str("
+            query.push_str(
+                "
                 INNER JOIN
                     delivered_payload_preferences
                 ON
                     delivered_payload.block_hash = delivered_payload_preferences.block_hash
-            ");
+            ",
+            );
         }
 
         query.push_str(" WHERE 1 = 1");
@@ -1300,7 +1146,7 @@ impl DatabaseService for PostgresDatabaseService {
             params.push(Box::new(slot));
             param_index += 1;
         }
-        
+
         if let Some(cursor) = filters.cursor() {
             query.push_str(&format!(" AND block_submission.slot_number <= ${}", param_index));
             params.push(Box::new(cursor));
@@ -1357,13 +1203,7 @@ impl DatabaseService for PostgresDatabaseService {
 
         let params_refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect();
 
-        parse_rows(
-            self.pool
-                .get()
-                .await?
-                .query(&query, &params_refs[..])
-                .await?,
-        )
+        parse_rows(self.pool.get().await?.query(&query, &params_refs[..]).await?)
     }
 
     async fn save_get_header_call(
@@ -1387,13 +1227,7 @@ impl DatabaseService for PostgresDatabaseService {
                     VALUES
                         ($1, $2, $3, $4, $5)
                 ",
-                &[
-                    &(slot as i32),
-                    &(region_id),
-                    &(parent_hash.as_ref()),
-                    &(public_key.as_ref()),
-                    &(best_block_hash.as_ref()),
-                ],
+                &[&(slot as i32), &(region_id), &(parent_hash.as_ref()), &(public_key.as_ref()), &(best_block_hash.as_ref())],
             )
             .await?;
 
@@ -1470,11 +1304,7 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(())
     }
 
-    async fn store_header_submission(
-        &self,
-        submission: Arc<SignedHeaderSubmission>,
-        trace: Arc<HeaderSubmissionTrace>,
-    ) -> Result<(), DatabaseError> {
+    async fn store_header_submission(&self, submission: Arc<SignedHeaderSubmission>, trace: Arc<HeaderSubmissionTrace>) -> Result<(), DatabaseError> {
         let region_id = self.region;
         let mut client = self.pool.get().await?;
         let transaction = client.transaction().await?;
@@ -1530,54 +1360,48 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(())
     }
 
-    async fn save_gossiped_header_trace(
-        &self,
-        block_hash: ByteVector<32>,
-        trace: Arc<GossipedHeaderTrace>,
-    ) -> Result<(), DatabaseError> {
+    async fn save_gossiped_header_trace(&self, block_hash: ByteVector<32>, trace: Arc<GossipedHeaderTrace>) -> Result<(), DatabaseError> {
         let region_id = self.region;
 
-        self.pool.get().await?.execute(
-            "
+        self.pool
+            .get()
+            .await?
+            .execute(
+                "
                 INSERT INTO
                     gossiped_header_trace (block_hash, region_id, on_receive, on_gossip_receive, pre_checks, auctioneer_update)
                 VALUES
                     ($1, $2, $3, $4, $5, $6)
             ",
-            &[
-                &(block_hash.as_ref()),
-                &(region_id),
-                &(trace.on_receive as i64),
-                &(trace.on_gossip_receive as i64),
-                &(trace.pre_checks as i64),
-                &(trace.auctioneer_update as i64),
-            ],
-        ).await?;
+                &[
+                    &(block_hash.as_ref()),
+                    &(region_id),
+                    &(trace.on_receive as i64),
+                    &(trace.on_gossip_receive as i64),
+                    &(trace.pre_checks as i64),
+                    &(trace.auctioneer_update as i64),
+                ],
+            )
+            .await?;
         Ok(())
     }
 
-    async fn save_gossiped_payload_trace(
-        &self,
-        block_hash: ByteVector<32>,
-        trace: Arc<GossipedPayloadTrace>,
-    ) -> Result<(), DatabaseError> {
+    async fn save_gossiped_payload_trace(&self, block_hash: ByteVector<32>, trace: Arc<GossipedPayloadTrace>) -> Result<(), DatabaseError> {
         let region_id = self.region;
 
-        self.pool.get().await?.execute(
-            "
+        self.pool
+            .get()
+            .await?
+            .execute(
+                "
                 INSERT INTO
                     gossiped_payload_trace (block_hash, region_id, receive, pre_checks, auctioneer_update)
                 VALUES
                     ($1, $2, $3, $4, $5)
             ",
-            &[
-                &(block_hash.as_ref()),
-                &(region_id),
-                &(trace.receive as i64),
-                &(trace.pre_checks as i64),
-                &(trace.auctioneer_update as i64),
-            ],
-        ).await?;
+                &[&(block_hash.as_ref()), &(region_id), &(trace.receive as i64), &(trace.pre_checks as i64), &(trace.auctioneer_update as i64)],
+            )
+            .await?;
         Ok(())
     }
 

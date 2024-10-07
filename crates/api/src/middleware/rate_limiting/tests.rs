@@ -1,12 +1,11 @@
 #![cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::net::SocketAddr;
-    use std::time::Duration;
-    use axum::{middleware, Router};
-    use axum::routing::get;
+    use std::{collections::HashMap, net::SocketAddr, time::Duration};
+
+    use axum::{middleware, routing::get, Router};
     use serial_test::serial;
     use tokio::sync::oneshot;
+
     use crate::middleware::rate_limiting::rate_limit_by_ip::{rate_limit_by_ip, RateLimitState, RateLimitStateForRoute};
 
     const ROUTE_NO_LIMIT: &str = "/test_without_limit";
@@ -24,16 +23,15 @@ mod tests {
         let mut app = Router::new();
 
         app = app
-        .route(ROUTE_NO_LIMIT, get(|| async { NO_LIMIT_RESPONSE }))
-        .route(ROUTE_WITH_LIMIT, get(|| async { LIMIT_RESPONSE }))
-        .route(ROUTE_WITH_HIGH_LIMIT, get(|| async { HIGH_LIMIT_RESPONSE }))
-        .route_layer(middleware::from_fn_with_state(rate_limiting_state.clone(), rate_limit_by_ip));
-            
+            .route(ROUTE_NO_LIMIT, get(|| async { NO_LIMIT_RESPONSE }))
+            .route(ROUTE_WITH_LIMIT, get(|| async { LIMIT_RESPONSE }))
+            .route(ROUTE_WITH_HIGH_LIMIT, get(|| async { HIGH_LIMIT_RESPONSE }))
+            .route_layer(middleware::from_fn_with_state(rate_limiting_state.clone(), rate_limit_by_ip));
+
         app
     }
 
     async fn start_server() -> oneshot::Sender<()> {
-
         let (tx, rx) = oneshot::channel();
 
         tokio::spawn(async {
@@ -41,13 +39,14 @@ mod tests {
             // Start the server
             let listener: tokio::net::TcpListener = tokio::net::TcpListener::bind("0.0.0.0:4040").await.unwrap();
             axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
-            .with_graceful_shutdown(async {
-                rx.await.ok();
-            }).await.unwrap();
+                .with_graceful_shutdown(async {
+                    rx.await.ok();
+                })
+                .await
+                .unwrap();
         });
 
         tx
-        
     }
 
     #[tokio::test]
@@ -192,5 +191,4 @@ mod tests {
         // Shut down the server
         let _ = tx.send(());
     }
-
 }

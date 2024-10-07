@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use ethereum_consensus::primitives::Root;
+use ethereum_consensus::{primitives::Root, ssz::prelude::*};
+use helix_common::{ProposerDuty, ValidatorSummary};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::broadcast::Sender;
-
-use helix_common::{bellatrix::SimpleSerialize, ProposerDuty, ValidatorSummary};
 
 use crate::{
     error::BeaconClientError,
@@ -17,24 +16,12 @@ pub trait BeaconClientTrait: Send + Sync + Clone {
     async fn sync_status(&self) -> Result<SyncStatus, BeaconClientError>;
     async fn current_slot(&self) -> Result<u64, BeaconClientError>;
 
-    async fn subscribe_to_head_events(
-        &self,
-        chan: Sender<HeadEventData>,
-    ) -> Result<(), BeaconClientError>;
-    async fn subscribe_to_payload_attributes_events(
-        &self,
-        chan: Sender<PayloadAttributesEvent>,
-    ) -> Result<(), BeaconClientError>;
+    async fn subscribe_to_head_events(&self, chan: Sender<HeadEventData>) -> Result<(), BeaconClientError>;
+    async fn subscribe_to_payload_attributes_events(&self, chan: Sender<PayloadAttributesEvent>) -> Result<(), BeaconClientError>;
 
-    async fn get_state_validators(
-        &self,
-        state_id: StateId,
-    ) -> Result<Vec<ValidatorSummary>, BeaconClientError>;
-    async fn get_proposer_duties(
-        &self,
-        epoch: u64,
-    ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError>;
-    async fn publish_block<VersionedSignedProposal: Send + Sync + SimpleSerialize>(
+    async fn get_state_validators(&self, state_id: StateId) -> Result<Vec<ValidatorSummary>, BeaconClientError>;
+    async fn get_proposer_duties(&self, epoch: u64) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError>;
+    async fn publish_block<VersionedSignedProposal: Send + Sync + Serializable + HashTreeRoot>(
         &self,
         block: Arc<VersionedSignedProposal>,
         broadcast_validation: Option<BroadcastValidation>,
@@ -49,17 +36,9 @@ pub trait MultiBeaconClientTrait: Send + Sync + Clone {
     async fn best_sync_status(&self) -> Result<SyncStatus, BeaconClientError>;
     async fn subscribe_to_head_events(&self, chan: Sender<HeadEventData>);
     async fn subscribe_to_payload_attributes_events(&self, chan: Sender<PayloadAttributesEvent>);
-    async fn get_state_validators(
-        &self,
-        state_id: StateId,
-    ) -> Result<Vec<ValidatorSummary>, BeaconClientError>;
-    async fn get_proposer_duties(
-        &self,
-        epoch: u64,
-    ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError>;
-    async fn publish_block<
-        VersionedSignedProposal: Serialize + DeserializeOwned + Send + Sync + 'static + SimpleSerialize,
-    >(
+    async fn get_state_validators(&self, state_id: StateId) -> Result<Vec<ValidatorSummary>, BeaconClientError>;
+    async fn get_proposer_duties(&self, epoch: u64) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError>;
+    async fn publish_block<VersionedSignedProposal: Serialize + DeserializeOwned + Send + Sync + 'static + Serializable + HashTreeRoot>(
         &self,
         block: Arc<VersionedSignedProposal>,
         broadcast_validation: Option<BroadcastValidation>,

@@ -1,11 +1,16 @@
+use std::{collections::HashMap, sync::Arc, time::Duration};
+
 use axum::{
-    error_handling::HandleErrorLayer, http::StatusCode, middleware, routing::{get, post}, Extension, Router
+    error_handling::HandleErrorLayer,
+    http::StatusCode,
+    middleware,
+    routing::{get, post},
+    Extension, Router,
 };
 use helix_beacon_client::{beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient};
 use helix_common::{Route, RouterConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
-use std::{collections::HashMap, sync::Arc, time::Duration};
 use tower::{timeout::TimeoutLayer, BoxError, ServiceBuilder};
 use tower_http::limit::RequestBodyLimitLayer;
 
@@ -13,23 +18,19 @@ use crate::{
     builder::{
         api::{BuilderApi, MAX_PAYLOAD_LENGTH},
         optimistic_simulator::OptimisticSimulator,
-    }, gossiper::grpc_gossiper::GrpcGossiperClientManager, middleware::rate_limiting::rate_limit_by_ip::{rate_limit_by_ip, RateLimitState, RateLimitStateForRoute}, proposer::
-        api::ProposerApi
-    , relay_data::{
-        BidsCache, DataApi, DeliveredPayloadsCache, PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API
-    }, service::API_REQUEST_TIMEOUT
+    },
+    constraints::api::ConstraintsApi,
+    gossiper::grpc_gossiper::GrpcGossiperClientManager,
+    middleware::rate_limiting::rate_limit_by_ip::{rate_limit_by_ip, RateLimitState, RateLimitStateForRoute},
+    proposer::api::ProposerApi,
+    relay_data::{BidsCache, DataApi, DeliveredPayloadsCache, PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API},
+    service::API_REQUEST_TIMEOUT,
 };
-use crate::constraints::api::ConstraintsApi;
 
-pub type BuilderApiProd = BuilderApi<
-    RedisCache,
-    PostgresDatabaseService,
-    OptimisticSimulator<RedisCache, PostgresDatabaseService>,
-    GrpcGossiperClientManager,
->;
+pub type BuilderApiProd =
+    BuilderApi<RedisCache, PostgresDatabaseService, OptimisticSimulator<RedisCache, PostgresDatabaseService>, GrpcGossiperClientManager>;
 
-pub type ProposerApiProd =
-    ProposerApi<RedisCache, PostgresDatabaseService, MultiBeaconClient<BeaconClient>, GrpcGossiperClientManager>;
+pub type ProposerApiProd = ProposerApi<RedisCache, PostgresDatabaseService, MultiBeaconClient<BeaconClient>, GrpcGossiperClientManager>;
 
 pub type DataApiProd = DataApi<PostgresDatabaseService>;
 
@@ -49,10 +50,10 @@ pub fn build_router(
     let mut rate_limits_per_route = HashMap::new();
     for route_info in &router_config.enabled_routes {
         if let Some(rate_limit) = route_info.rate_limit.as_ref() {
-            rate_limits_per_route.insert(route_info.route.path(), RateLimitStateForRoute::new(
-                Duration::from_millis(rate_limit.limit_duration_ms),
-                rate_limit.max_requests,
-            ));
+            rate_limits_per_route.insert(
+                route_info.route.path(),
+                RateLimitStateForRoute::new(Duration::from_millis(rate_limit.limit_duration_ms), rate_limit.max_requests),
+            );
         }
     }
     let rate_limiting_state = RateLimitState::new(rate_limits_per_route);
@@ -61,113 +62,56 @@ pub fn build_router(
     for route in router_config.enabled_routes.iter().map(|route_info| route_info.route) {
         match route {
             Route::GetValidators => {
-                router = router.route(
-                    &route.path(),
-                    get(BuilderApiProd::get_validators),
-                );
+                router = router.route(&route.path(), get(BuilderApiProd::get_validators));
             }
             Route::SubmitBlock => {
-                router = router
-                    .route(
-                        &route.path(),
-                        post(BuilderApiProd::submit_block),
-                    );
+                router = router.route(&route.path(), post(BuilderApiProd::submit_block));
             }
             Route::SubmitBlockOptimistic => {
-                router = router
-                    .route(
-                        &route.path(),
-                        post(BuilderApiProd::submit_block_v2),
-                    );
+                router = router.route(&route.path(), post(BuilderApiProd::submit_block_v2));
             }
             Route::SubmitHeader => {
-                router = router
-                    .route(
-                        &route.path(),
-                        post(BuilderApiProd::submit_header),
-                    );
+                router = router.route(&route.path(), post(BuilderApiProd::submit_header));
             }
             Route::GetTopBid => {
-                router = router
-                    .route(
-                        &route.path(),
-                        get(BuilderApiProd::get_top_bid),
-                    );
+                router = router.route(&route.path(), get(BuilderApiProd::get_top_bid));
             }
             Route::Status => {
-                router = router.route(
-                    &route.path(),
-                    get(ProposerApiProd::status),
-                );
+                router = router.route(&route.path(), get(ProposerApiProd::status));
             }
             Route::RegisterValidators => {
-                router = router
-                    .route(
-                        &route.path(),
-                        post(ProposerApiProd::register_validators),
-                    );
+                router = router.route(&route.path(), post(ProposerApiProd::register_validators));
             }
             Route::GetHeader => {
-                router = router.route(
-                    &route.path(),
-                    get(ProposerApiProd::get_header),
-                );
+                router = router.route(&route.path(), get(ProposerApiProd::get_header));
             }
             Route::GetPayload => {
-                router = router
-                    .route(
-                        &route.path(),
-                        post(ProposerApiProd::get_payload),
-                    );
+                router = router.route(&route.path(), post(ProposerApiProd::get_payload));
             }
             Route::SetConstraints => {
-                router = router.route(
-                    &route.path(),
-                    post(ProposerApiProd::set_constraints),
-                );
+                router = router.route(&route.path(), post(ProposerApiProd::set_constraints));
             }
             Route::ElectPreconfer => {
-                router = router.route(
-                    &route.path(),
-                    post(ProposerApiProd::elect_preconfer),
-                );
+                router = router.route(&route.path(), post(ProposerApiProd::elect_preconfer));
             }
             Route::ProposerPayloadDelivered => {
-                router = router.route(
-                    &route.path(),
-                    get(DataApiProd::proposer_payload_delivered),
-                );
+                router = router.route(&route.path(), get(DataApiProd::proposer_payload_delivered));
             }
             Route::BuilderBidsReceived => {
-                router = router.route(
-                    &format!("{PATH_DATA_API}{PATH_BUILDER_BIDS_RECEIVED}"),
-                    get(DataApiProd::builder_bids_received),
-                );
+                router = router.route(&format!("{PATH_DATA_API}{PATH_BUILDER_BIDS_RECEIVED}"), get(DataApiProd::builder_bids_received));
             }
             Route::ValidatorRegistration => {
-                router = router.route(
-                    &route.path(),
-                    get(DataApiProd::validator_registration),
-                );
+                router = router.route(&route.path(), get(DataApiProd::validator_registration));
             }
             Route::GetConstraints => {
-                router = router.route(
-                    &route.path(),
-                    get(ConstraintsApiProd::get_constraints),
-                );
-            },
+                router = router.route(&route.path(), get(ConstraintsApiProd::get_constraints));
+            }
             Route::GetPreconfer => {
-                router = router.route(
-                    &route.path(),
-                    get(ConstraintsApiProd::get_preconfer),
-                );
-            },
+                router = router.route(&route.path(), get(ConstraintsApiProd::get_preconfer));
+            }
             Route::GetPreconfersForEpoch => {
-                router = router.route(
-                    &route.path(),
-                    get(ConstraintsApiProd::get_preconfers_for_epoch),
-                );
-            },
+                router = router.route(&route.path(), get(ConstraintsApiProd::get_preconfers_for_epoch));
+            }
             _ => {
                 panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route);
             }

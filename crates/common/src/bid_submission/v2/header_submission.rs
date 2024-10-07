@@ -1,44 +1,43 @@
-use std::default;
-
-use crate::{
-    bid_submission::{bid_trace, BidSubmission, BidTrace},
-    capella,
-    deneb::{self, BlobsBundle},
-    versioned_payload_header::VersionedExecutionPayloadHeader,
-};
 use ethereum_consensus::{
     altair::Bytes32,
     capella::Withdrawal,
-    deneb::{mainnet::{BYTES_PER_LOGS_BLOOM, MAX_BLOB_COMMITMENTS_PER_BLOCK, MAX_EXTRA_DATA_BYTES}, polynomial_commitments::KzgCommitment},
+    crypto::{kzg::KzgCommitment, verify_signature},
+    deneb::mainnet::{BYTES_PER_LOGS_BLOOM, MAX_BLOB_COMMITMENTS_PER_BLOCK, MAX_EXTRA_DATA_BYTES},
     primitives::{BlsPublicKey, BlsSignature, ExecutionAddress, Hash32, Slot, U256},
-    signing::verify_signature,
     ssz::prelude::*,
     types::mainnet::ExecutionPayloadHeader,
     Fork,
 };
 use helix_utils::signing::compute_builder_signing_root;
 
-#[derive(Default, Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+use crate::{
+    bid_submission::{BidSubmission, BidTrace},
+    capella,
+    deneb::{self, BlobsBundle},
+    versioned_payload_header::VersionedExecutionPayloadHeader,
+};
+
+#[derive(Default, Debug, Clone, Serializable, HashTreeRoot, serde::Serialize, serde::Deserialize)]
 pub struct HeaderSubmission {
     pub bid_trace: BidTrace,
     #[serde(flatten)]
     pub versioned_execution_payload: VersionedExecutionPayloadHeader,
 }
 
-#[derive(Default, Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Debug, Clone, Serializable, HashTreeRoot, serde::Serialize, serde::Deserialize)]
 pub struct HeaderSubmissionCapella {
     pub bid_trace: BidTrace,
     pub execution_payload_header: capella::ExecutionPayloadHeader,
 }
 
-#[derive(Default, Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Debug, Clone, Serializable, HashTreeRoot, serde::Serialize, serde::Deserialize)]
 pub struct HeaderSubmissionDeneb {
     pub bid_trace: BidTrace,
     pub execution_payload_header: deneb::ExecutionPayloadHeader,
     pub blobs_bundle: BlobsBundle,
 }
 
-#[derive(Default, Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Debug, Clone, Serializable, HashTreeRoot, serde::Serialize, serde::Deserialize)]
 pub struct HeaderSubmissionDenebV2 {
     pub bid_trace: BidTrace,
     pub execution_payload_header: deneb::ExecutionPayloadHeader,
@@ -46,7 +45,7 @@ pub struct HeaderSubmissionDenebV2 {
 }
 
 // TODO: remove HeaderSubmissionDeneb when we roll out with just commitments
-#[derive(Clone, Debug, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Serializable, HashTreeRoot, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
 #[ssz(transparent)]
 pub enum HeaderSubmissionMessage {
@@ -70,10 +69,8 @@ impl HeaderSubmissionMessage {
 
     pub fn execution_payload_header(&self) -> &deneb::ExecutionPayloadHeader {
         match self {
-            Self::V1(header_submission) => 
-                &header_submission.execution_payload_header,
-            Self::V2(header_submission) =>
-                &header_submission.execution_payload_header,
+            Self::V1(header_submission) => &header_submission.execution_payload_header,
+            Self::V2(header_submission) => &header_submission.execution_payload_header,
         }
     }
 
@@ -83,10 +80,9 @@ impl HeaderSubmissionMessage {
             Self::V2(header_submission) => Some(&header_submission.commitments),
         }
     }
-    
 }
 
-#[derive(Clone, Debug, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Serializable, HashTreeRoot, serde::Serialize, serde::Deserialize)]
 #[ssz(transparent)]
 #[serde(untagged)]
 pub enum SignedHeaderSubmission {
@@ -100,13 +96,13 @@ impl Default for SignedHeaderSubmission {
     }
 }
 
-#[derive(Clone, Debug, Default, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, Serializable, HashTreeRoot, serde::Serialize, serde::Deserialize)]
 pub struct SignedHeaderSubmissionCapella {
     pub message: HeaderSubmissionCapella,
     pub signature: BlsSignature,
 }
 
-#[derive(Clone, Debug, Default, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, Serializable, HashTreeRoot, serde::Serialize, serde::Deserialize)]
 pub struct SignedHeaderSubmissionDeneb {
     pub message: HeaderSubmissionMessage,
     pub signature: BlsSignature,
@@ -165,100 +161,64 @@ impl BidSubmission for SignedHeaderSubmission {
 
     fn fee_recipient(&self) -> &ExecutionAddress {
         match self {
-            Self::Capella(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header.fee_recipient
-            }
-            Self::Deneb(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header().fee_recipient
-            }
+            Self::Capella(signed_header_submission) => &signed_header_submission.message.execution_payload_header.fee_recipient,
+            Self::Deneb(signed_header_submission) => &signed_header_submission.message.execution_payload_header().fee_recipient,
         }
     }
 
     fn state_root(&self) -> &Bytes32 {
         match self {
-            Self::Capella(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header.state_root
-            }
-            Self::Deneb(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header().state_root
-            }
+            Self::Capella(signed_header_submission) => &signed_header_submission.message.execution_payload_header.state_root,
+            Self::Deneb(signed_header_submission) => &signed_header_submission.message.execution_payload_header().state_root,
         }
     }
 
     fn receipts_root(&self) -> &Bytes32 {
         match self {
-            Self::Capella(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header.receipts_root
-            }
-            Self::Deneb(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header().receipts_root
-            }
+            Self::Capella(signed_header_submission) => &signed_header_submission.message.execution_payload_header.receipts_root,
+            Self::Deneb(signed_header_submission) => &signed_header_submission.message.execution_payload_header().receipts_root,
         }
     }
 
     fn logs_bloom(&self) -> &ByteVector<BYTES_PER_LOGS_BLOOM> {
         match self {
-            Self::Capella(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header.logs_bloom
-            }
-            Self::Deneb(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header().logs_bloom
-            }
+            Self::Capella(signed_header_submission) => &signed_header_submission.message.execution_payload_header.logs_bloom,
+            Self::Deneb(signed_header_submission) => &signed_header_submission.message.execution_payload_header().logs_bloom,
         }
     }
 
     fn prev_randao(&self) -> &Bytes32 {
         match self {
-            Self::Capella(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header.prev_randao
-            }
-            Self::Deneb(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header().prev_randao
-            }
+            Self::Capella(signed_header_submission) => &signed_header_submission.message.execution_payload_header.prev_randao,
+            Self::Deneb(signed_header_submission) => &signed_header_submission.message.execution_payload_header().prev_randao,
         }
     }
 
     fn block_number(&self) -> u64 {
         match self {
-            Self::Capella(signed_header_submission) => {
-                signed_header_submission.message.execution_payload_header.block_number
-            }
-            Self::Deneb(signed_header_submission) => {
-                signed_header_submission.message.execution_payload_header().block_number
-            }
+            Self::Capella(signed_header_submission) => signed_header_submission.message.execution_payload_header.block_number,
+            Self::Deneb(signed_header_submission) => signed_header_submission.message.execution_payload_header().block_number,
         }
     }
 
     fn timestamp(&self) -> u64 {
         match self {
-            Self::Capella(signed_header_submission) => {
-                signed_header_submission.message.execution_payload_header.timestamp
-            }
-            Self::Deneb(signed_header_submission) => {
-                signed_header_submission.message.execution_payload_header().timestamp
-            }
+            Self::Capella(signed_header_submission) => signed_header_submission.message.execution_payload_header.timestamp,
+            Self::Deneb(signed_header_submission) => signed_header_submission.message.execution_payload_header().timestamp,
         }
     }
 
     fn extra_data(&self) -> &ByteList<MAX_EXTRA_DATA_BYTES> {
         match self {
-            Self::Capella(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header.extra_data
-            }
-            Self::Deneb(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header().extra_data
-            }
+            Self::Capella(signed_header_submission) => &signed_header_submission.message.execution_payload_header.extra_data,
+            Self::Deneb(signed_header_submission) => &signed_header_submission.message.execution_payload_header().extra_data,
         }
     }
 
     fn base_fee_per_gas(&self) -> U256 {
         match self {
-            Self::Capella(signed_header_submission) => {
-                signed_header_submission.message.execution_payload_header.base_fee_per_gas
-            }
-            Self::Deneb(signed_header_submission) => {
-                signed_header_submission.message.execution_payload_header().base_fee_per_gas
-            }
+            Self::Capella(signed_header_submission) => signed_header_submission.message.execution_payload_header.base_fee_per_gas,
+            Self::Deneb(signed_header_submission) => signed_header_submission.message.execution_payload_header().base_fee_per_gas,
         }
     }
 
@@ -279,44 +239,35 @@ impl BidSubmission for SignedHeaderSubmission {
 }
 
 impl SignedHeaderSubmission {
-    pub fn verify_signature(
-        &mut self,
-        context: &ethereum_consensus::state_transition::Context,
-    ) -> Result<(), ethereum_consensus::Error> {
+    pub fn verify_signature(&mut self, context: &ethereum_consensus::state_transition::Context) -> Result<(), ethereum_consensus::Error> {
         let mut bid_trace = self.bid_trace().clone();
         let signing_root = compute_builder_signing_root(&mut bid_trace, context)?;
         let public_key = &self.bid_trace().builder_public_key;
-        verify_signature(public_key, signing_root.as_ref(), self.signature())
+        verify_signature(public_key, signing_root.as_ref(), self.signature()).map_err(Into::into)
     }
 
     pub fn execution_payload_header(&self) -> ExecutionPayloadHeader {
         match self {
-            Self::Capella(signed_header_submission) => ExecutionPayloadHeader::Capella(
-                signed_header_submission.message.execution_payload_header.clone(),
-            ),
-            Self::Deneb(signed_header_submission) => ExecutionPayloadHeader::Deneb(
-                signed_header_submission.message.execution_payload_header().clone(),
-            ),
+            Self::Capella(signed_header_submission) => {
+                ExecutionPayloadHeader::Capella(signed_header_submission.message.execution_payload_header.clone())
+            }
+            Self::Deneb(signed_header_submission) => {
+                ExecutionPayloadHeader::Deneb(signed_header_submission.message.execution_payload_header().clone())
+            }
         }
     }
 
     pub fn commitments(&self) -> Option<&List<KzgCommitment, MAX_BLOB_COMMITMENTS_PER_BLOCK>> {
         match self {
             Self::Capella(_) => None,
-            Self::Deneb(signed_header_submission) => {
-                signed_header_submission.message.commitments()
-            }
+            Self::Deneb(signed_header_submission) => signed_header_submission.message.commitments(),
         }
     }
 
     pub fn bid_trace(&self) -> &BidTrace {
         match self {
-            Self::Capella(signed_header_submission) => {
-                &signed_header_submission.message.bid_trace
-            }
-            Self::Deneb(signed_header_submission) => {
-                &signed_header_submission.message.bid_trace()
-            }
+            Self::Capella(signed_header_submission) => &signed_header_submission.message.bid_trace,
+            Self::Deneb(signed_header_submission) => &signed_header_submission.message.bid_trace(),
         }
     }
 }
@@ -327,7 +278,30 @@ mod tests {
 
     #[test]
     fn test_deserialise_signed_header_submission() {
-        let bytes: Vec<u8> = vec![100,0,0,0,93,31,4,4,6,1,1,24,145,34,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,244,0,0,0,63,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,134,1,2,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,44,66,11,77,22,88,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,2,4,5,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,167,1,0,0,0,0,0,0,37,91,0,0,0,0,0,0,29,2,0,0,0,0,0,0,72,2,0,0,1,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,22,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,35,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,86,1,0,0,0,0,0,0,18,9,0,0,0,0,0,0,4,5,6,1,2,4,56,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+        let bytes: Vec<u8> = vec![
+            100, 0, 0, 0, 93, 31, 4, 4, 6, 1, 1, 24, 145, 34, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0,
+            0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 244, 0, 0, 0, 63, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 134, 1, 2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 44, 66, 11, 77, 22, 88, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 5, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 167, 1, 0, 0, 0, 0, 0, 0, 37, 91, 0, 0, 0, 0, 0, 0, 29,
+            2, 0, 0, 0, 0, 0, 0, 72, 2, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 22, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 35, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 86, 1, 0, 0, 0, 0, 0, 0, 18, 9, 0, 0, 0, 0, 0, 0, 4, 5, 6, 1, 2, 4, 56, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ];
 
         let result = SignedHeaderSubmission::deserialize(&bytes);
         assert!(result.is_ok());

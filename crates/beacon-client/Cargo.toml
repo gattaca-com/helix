@@ -16,7 +16,7 @@ async-trait.workspace = true
 futures = { workspace = true }
 http.workspace = true
 reqwest.workspace = true
-reqwest-eventsource = "0.5"
+reqwest-eventsource = { workspace = true }
 tokio.workspace = true
 url.workspace = true
 
@@ -37,7 +37,7 @@ mockito.workspace = true
 
 # Misc
 auto_impl.workspace = true
-flate2 = "1.0"
+flate2 = { workspace = true }
 thiserror.workspace = true
 
 # Broadcasting

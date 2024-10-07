@@ -1,24 +1,23 @@
+#![allow(unused)]
 #[cfg(test)]
 mod data_api_tests {
     // *** IMPORTS ***
-    use crate::{
-        relay_data::{
-            DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API, PATH_PROPOSER_PAYLOAD_DELIVERED,
-            PATH_VALIDATOR_REGISTRATION,
-        },
-        test_utils::data_api_app,
-    };
+    use std::{sync::Arc, time::Duration};
+
     use ethereum_consensus::{builder::SignedValidatorRegistration, primitives::BlsPublicKey};
     use helix_common::api::data_api::{
-        BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
-        ReceivedBlocksResponse, ValidatorRegistrationParams,
+        BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams, ReceivedBlocksResponse, ValidatorRegistrationParams,
     };
     use helix_database::MockDatabaseService;
     use helix_utils::request_encoding::Encoding;
     use reqwest::{Client, Response, StatusCode};
     use serial_test::serial;
-    use std::{sync::Arc, time::Duration};
     use tokio::sync::oneshot;
+
+    use crate::{
+        relay_data::{DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API, PATH_PROPOSER_PAYLOAD_DELIVERED, PATH_VALIDATOR_REGISTRATION},
+        test_utils::data_api_app,
+    };
 
     // +++ HELPER VARIABLES +++
     const ADDRESS: &str = "0.0.0.0";
@@ -54,12 +53,7 @@ mod data_api_tests {
         request.body(req_payload).send().await.unwrap()
     }
 
-    async fn start_api_server() -> (
-        oneshot::Sender<()>,
-        HttpServiceConfig,
-        Arc<DataApi<MockDatabaseService>>,
-        Arc<MockDatabaseService>,
-    ) {
+    async fn start_api_server() -> (oneshot::Sender<()>, HttpServiceConfig, Arc<DataApi<MockDatabaseService>>, Arc<MockDatabaseService>) {
         let (tx, rx) = oneshot::channel();
         let http_config = HttpServiceConfig::new(ADDRESS, PORT);
         let bind_address = http_config.bind_address();
@@ -97,13 +91,7 @@ mod data_api_tests {
     }
 
     fn get_test_builder_blocks_received_params() -> BuilderBlocksReceivedParams {
-        BuilderBlocksReceivedParams {
-            slot: Some(HEAD_SLOT),
-            block_hash: None,
-            block_number: None,
-            builder_pubkey: None,
-            limit: None,
-        }
+        BuilderBlocksReceivedParams { slot: Some(HEAD_SLOT), block_hash: None, block_number: None, builder_pubkey: None, limit: None }
     }
 
     fn get_test_validator_registration_params() -> ValidatorRegistrationParams {
@@ -118,24 +106,13 @@ mod data_api_tests {
         let (tx, http_config, _api, _database) = start_api_server().await;
 
         // Prepare the request
-        let req_url = format!(
-            "{}{}{}",
-            http_config.base_url(),
-            PATH_DATA_API,
-            PATH_PROPOSER_PAYLOAD_DELIVERED,
-        );
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_PROPOSER_PAYLOAD_DELIVERED,);
 
         let mut query_params = get_test_proposer_payload_delivered_params();
         query_params.cursor = Some(HEAD_SLOT);
 
         // Send JSON encoded request
-        let resp = reqwest::Client::new()
-            .get(req_url.as_str())
-            .header("accept", "application/json")
-            .query(&query_params)
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(req_url.as_str()).header("accept", "application/json").query(&query_params).send().await.unwrap();
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "cannot specify both slot and cursor");
@@ -151,23 +128,12 @@ mod data_api_tests {
         let (tx, http_config, _api, _database) = start_api_server().await;
 
         // Prepare the request
-        let req_url = format!(
-            "{}{}{}",
-            http_config.base_url(),
-            PATH_DATA_API,
-            PATH_PROPOSER_PAYLOAD_DELIVERED,
-        );
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_PROPOSER_PAYLOAD_DELIVERED,);
 
         let query_params = get_test_proposer_payload_delivered_params();
 
         // Send JSON encoded request
-        let resp = reqwest::Client::new()
-            .get(req_url.as_str())
-            .header("accept", "application/json")
-            .query(&query_params)
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(req_url.as_str()).header("accept", "application/json").query(&query_params).send().await.unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
         // Deserialize the response into a Vec<DeliveredPayloadsResponse>
@@ -186,26 +152,16 @@ mod data_api_tests {
         let (tx, http_config, _api, _database) = start_api_server().await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_BUILDER_BIDS_RECEIVED,);
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_BUILDER_BIDS_RECEIVED,);
 
         let mut query_params = get_test_builder_blocks_received_params();
         query_params.slot = None;
 
         // Send JSON encoded request
-        let resp = reqwest::Client::new()
-            .get(req_url.as_str())
-            .header("accept", "application/json")
-            .query(&query_params)
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(req_url.as_str()).header("accept", "application/json").query(&query_params).send().await.unwrap();
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            resp.text().await.unwrap(),
-            "need to query for specific slot or block_hash or block_number or builder_pubkey"
-        );
+        assert_eq!(resp.text().await.unwrap(), "need to query for specific slot or block_hash or block_number or builder_pubkey");
 
         // Shut down the server
         let _ = tx.send(());
@@ -219,20 +175,13 @@ mod data_api_tests {
         let (tx, http_config, _api, _database) = start_api_server().await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_BUILDER_BIDS_RECEIVED,);
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_BUILDER_BIDS_RECEIVED,);
 
         let mut query_params = get_test_builder_blocks_received_params();
         query_params.limit = Some(501);
 
         // Send JSON encoded request
-        let resp = reqwest::Client::new()
-            .get(req_url.as_str())
-            .header("accept", "application/json")
-            .query(&query_params)
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(req_url.as_str()).header("accept", "application/json").query(&query_params).send().await.unwrap();
 
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "maximum limit is 500");
@@ -248,19 +197,12 @@ mod data_api_tests {
         let (tx, http_config, _api, _database) = start_api_server().await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_BUILDER_BIDS_RECEIVED,);
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_BUILDER_BIDS_RECEIVED,);
 
         let query_params = get_test_builder_blocks_received_params();
 
         // Send JSON encoded request
-        let resp = reqwest::Client::new()
-            .get(req_url.as_str())
-            .header("accept", "application/json")
-            .query(&query_params)
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(req_url.as_str()).header("accept", "application/json").query(&query_params).send().await.unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
         // Deserialize the response into a Vec<ReceivedBlocksResponse>
@@ -278,19 +220,12 @@ mod data_api_tests {
         let (tx, http_config, _api, _database) = start_api_server().await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_VALIDATOR_REGISTRATION,);
+        let req_url = format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_VALIDATOR_REGISTRATION,);
 
         let query_params = get_test_validator_registration_params();
 
         // Send JSON encoded request
-        let resp = reqwest::Client::new()
-            .get(req_url.as_str())
-            .header("accept", "application/json")
-            .query(&query_params)
-            .send()
-            .await
-            .unwrap();
+        let resp = reqwest::Client::new().get(req_url.as_str()).header("accept", "application/json").query(&query_params).send().await.unwrap();
 
         assert_eq!(resp.status(), StatusCode::OK);
         // Deserialize the response into a SignedValidatorRegistration

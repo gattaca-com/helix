@@ -1,11 +1,11 @@
-use axum::http::request::Builder;
-use ethereum_consensus::serde::try_bytes_from_hex_str;
-use ethereum_consensus::ssz::prelude::*;
-use ethereum_consensus::{builder::SignedValidatorRegistration, primitives::Slot, serde::as_str};
-use ethereum_consensus::primitives::{BlsPublicKey, ExecutionAddress, Hash32, U256};
+use ethereum_consensus::{
+    builder::SignedValidatorRegistration,
+    primitives::{BlsPublicKey, ExecutionAddress, Hash32, Slot, U256},
+    serde::as_str,
+    ssz::prelude::*,
+};
 
-use crate::{BuilderValidatorPreferences, SignedBuilderBid};
-use crate::{api::proposer_api::ValidatorRegistrationInfo, ValidatorPreferences};
+use crate::{api::proposer_api::ValidatorRegistrationInfo, BuilderValidatorPreferences};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 pub struct BuilderGetValidatorsResponseEntry {

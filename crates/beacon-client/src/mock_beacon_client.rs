@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use ethereum_consensus::{primitives::Root, ssz::prelude::*};
-use tokio::sync::broadcast::Sender;
-
 use helix_common::{ProposerDuty, ValidatorSummary};
+use tokio::sync::broadcast::Sender;
 
 use crate::{
     error::BeaconClientError,
@@ -61,31 +60,19 @@ impl BeaconClientTrait for MockBeaconClient {
         Ok(self.sync_status.head_slot)
     }
 
-    async fn subscribe_to_head_events(
-        &self,
-        _chan: Sender<HeadEventData>,
-    ) -> Result<(), BeaconClientError> {
+    async fn subscribe_to_head_events(&self, _chan: Sender<HeadEventData>) -> Result<(), BeaconClientError> {
         Ok(())
     }
 
-    async fn subscribe_to_payload_attributes_events(
-        &self,
-        _chan: Sender<PayloadAttributesEvent>,
-    ) -> Result<(), BeaconClientError> {
+    async fn subscribe_to_payload_attributes_events(&self, _chan: Sender<PayloadAttributesEvent>) -> Result<(), BeaconClientError> {
         Ok(())
     }
 
-    async fn get_state_validators(
-        &self,
-        _state_id: StateId,
-    ) -> Result<Vec<ValidatorSummary>, BeaconClientError> {
+    async fn get_state_validators(&self, _state_id: StateId) -> Result<Vec<ValidatorSummary>, BeaconClientError> {
         Ok(self.state_validators.clone())
     }
 
-    async fn get_proposer_duties(
-        &self,
-        _epoch: u64,
-    ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError> {
+    async fn get_proposer_duties(&self, _epoch: u64) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError> {
         Ok(self.proposer_duties.clone())
     }
 
@@ -93,7 +80,7 @@ impl BeaconClientTrait for MockBeaconClient {
         "test_uri".to_string()
     }
 
-    async fn publish_block<SignedBeaconBlock: Send + Sync + SimpleSerialize>(
+    async fn publish_block<SignedBeaconBlock: Send + Sync + Serializable + HashTreeRoot>(
         &self,
         _block: Arc<SignedBeaconBlock>,
         _broadcast_validation: Option<BroadcastValidation>,

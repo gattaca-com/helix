@@ -1,10 +1,11 @@
+#![allow(unused)]
 use ethereum_consensus::{
     bellatrix, capella, deneb,
     primitives::{BlsPublicKey, Hash32},
     types::mainnet::{SignedBeaconBlock, SignedBlindedBeaconBlock},
 };
 use helix_common::{
-    deneb::SignedBlockContents, signed_proposal::VersionedSignedProposal, versioned_payload::PayloadAndBlobs, Filtering, ValidatorPreferences
+    deneb::SignedBlockContents, signed_proposal::VersionedSignedProposal, versioned_payload::PayloadAndBlobs, Filtering, ValidatorPreferences,
 };
 use serde::Deserialize;
 
@@ -36,10 +37,7 @@ pub fn unblind_beacon_block(
             let signature = blinded_block.signature.clone();
             let block = &blinded_block.message;
             let body = &block.body;
-            let execution_payload = versioned_execution_payload
-                .execution_payload
-                .bellatrix()
-                .ok_or(ProposerApiError::PayloadTypeMismatch)?;
+            let execution_payload = versioned_execution_payload.execution_payload.bellatrix().ok_or(ProposerApiError::PayloadTypeMismatch)?;
 
             let inner = bellatrix::SignedBeaconBlock {
                 message: bellatrix::BeaconBlock {
@@ -68,10 +66,7 @@ pub fn unblind_beacon_block(
             let signature = blinded_block.signature.clone();
             let block = &blinded_block.message;
             let body = &block.body;
-            let execution_payload = versioned_execution_payload
-                .execution_payload
-                .capella()
-                .ok_or(ProposerApiError::PayloadTypeMismatch)?;
+            let execution_payload = versioned_execution_payload.execution_payload.capella().ok_or(ProposerApiError::PayloadTypeMismatch)?;
 
             let inner = capella::SignedBeaconBlock {
                 message: capella::BeaconBlock {
@@ -101,14 +96,8 @@ pub fn unblind_beacon_block(
             let signature = blinded_block.signature.clone();
             let block = &blinded_block.message;
             let body = &block.body;
-            let execution_payload = versioned_execution_payload
-                .execution_payload
-                .deneb()
-                .ok_or(ProposerApiError::PayloadTypeMismatch)?;
-            let blobs_bundle = versioned_execution_payload
-                .blobs_bundle
-                .clone()
-                .ok_or(ProposerApiError::PayloadTypeMismatch)?;
+            let execution_payload = versioned_execution_payload.execution_payload.deneb().ok_or(ProposerApiError::PayloadTypeMismatch)?;
+            let blobs_bundle = versioned_execution_payload.blobs_bundle.clone().ok_or(ProposerApiError::PayloadTypeMismatch)?;
 
             if body.blob_kzg_commitments.len() != blobs_bundle.blobs.len() {
                 return Err(ProposerApiError::BlindedBlobsBundleLengthMismatch);

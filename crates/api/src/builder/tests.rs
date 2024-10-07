@@ -2,18 +2,10 @@
 mod tests {
 
     // +++ IMPORTS +++
-    use crate::{
-        builder::{
-            api::{decode_header_submission, decode_payload, BuilderApi, MAX_PAYLOAD_LENGTH},
-            mock_simulator::MockSimulator,
-        },
-        gossiper::mock_gossiper::MockGossiper,
-        service::API_REQUEST_TIMEOUT,
-        test_utils::builder_api_app,
-    };
-    use axum::{ http::{header, Method, Request, Uri}};
-    use tokio_tungstenite::{connect_async, tungstenite::{self, Message}};
     use core::panic;
+    use std::{convert::Infallible, future::pending, io::Write, pin::Pin, str::FromStr, sync::Arc, time::Duration};
+
+    use axum::http::{header, Method, Request, Uri};
     use ethereum_consensus::{
         builder::{SignedValidatorRegistration, ValidatorRegistration},
         configs::mainnet::CAPELLA_FORK_EPOCH,
@@ -29,12 +21,12 @@ mod tests {
         api::{
             builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry, TopBidUpdate},
             proposer_api::ValidatorRegistrationInfo,
-        }, bid_submission::{
-            v2::header_submission::{
-                SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb,
-            },
+        },
+        bid_submission::{
+            v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb},
             BidSubmission, SignedBidSubmission,
-        }, HeaderSubmissionTrace, Route, SubmissionTrace, ValidatorPreferences
+        },
+        HeaderSubmissionTrace, Route, SubmissionTrace, ValidatorPreferences,
     };
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
@@ -45,14 +37,24 @@ mod tests {
     use reth_primitives::hex;
     use serde_json::json;
     use serial_test::serial;
-    use std::{
-        convert::Infallible, future::pending, io::Write, net::IpAddr, pin::Pin, str::FromStr, sync::Arc, time::Duration
-    };
     use tokio::sync::{
         mpsc::{Receiver, Sender},
         oneshot,
     };
-    use tonic::transport::Body;
+    use tokio_tungstenite::{
+        connect_async,
+        tungstenite::{self, Message},
+    };
+
+    use crate::{
+        builder::{
+            api::{decode_header_submission, decode_payload, BuilderApi, MAX_PAYLOAD_LENGTH},
+            mock_simulator::MockSimulator,
+        },
+        gossiper::mock_gossiper::MockGossiper,
+        service::API_REQUEST_TIMEOUT,
+        test_utils::builder_api_app,
+    };
 
     // +++ HELPER VARIABLES +++
     const ADDRESS: &str = "0.0.0.0";
@@ -123,9 +125,7 @@ mod tests {
         arr
     }
 
-    fn get_valid_payload_register_validator(
-        submission_slot: Option<u64>,
-    ) -> BuilderGetValidatorsResponseEntry {
+    fn get_valid_payload_register_validator(submission_slot: Option<u64>) -> BuilderGetValidatorsResponseEntry {
         BuilderGetValidatorsResponseEntry {
             slot: submission_slot.unwrap_or(SUBMISSION_SLOT),
             validator_index: VALIDATOR_INDEX,
@@ -155,50 +155,32 @@ mod tests {
     fn get_dummy_payload_attributes() -> PayloadAttributes {
         PayloadAttributes {
             timestamp: SUBMISSION_TIMESTAMP,
-            prev_randao: get_byte_vector_32_for_hex(
-                "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e4",
-            ),
+            prev_randao: get_byte_vector_32_for_hex("0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e4"),
             suggested_fee_recipient: "0x5cc0dde14e7256340cc820415a6022a7d1c93a35".to_string(),
             withdrawals: vec![],
             parent_beacon_block_root: None,
         }
     }
 
-    fn get_dummy_payload_attributes_update(
-        submission_slot: Option<u64>,
-    ) -> PayloadAttributesUpdate {
+    fn get_dummy_payload_attributes_update(submission_slot: Option<u64>) -> PayloadAttributesUpdate {
         PayloadAttributesUpdate {
             slot: submission_slot.unwrap_or(SUBMISSION_SLOT),
-            parent_hash: get_byte_vector_32_for_hex(
-                "0xbd3291854dc822b7ec585925cda0e18f06af28fa2886e15f52d52dd4b6f94ed6",
-            ),
-            withdrawals_root: Some(hex_to_byte_arr_32(
-                "0xb15ed76298ff84a586b1d875df08b6676c98dfe9c7cd73fab88450348d8e70c8",
-            )),
+            parent_hash: get_byte_vector_32_for_hex("0xbd3291854dc822b7ec585925cda0e18f06af28fa2886e15f52d52dd4b6f94ed6"),
+            withdrawals_root: Some(hex_to_byte_arr_32("0xb15ed76298ff84a586b1d875df08b6676c98dfe9c7cd73fab88450348d8e70c8")),
             payload_attributes: get_dummy_payload_attributes(),
         }
     }
 
-    async fn send_dummy_slot_update(
-        slot_update_sender: Sender<ChainUpdate>,
-        head_slot: Option<u64>,
-        submission_slot: Option<u64>,
-    ) {
-        let chain_update =
-            ChainUpdate::SlotUpdate(get_dummy_slot_update(head_slot, submission_slot));
+    async fn send_dummy_slot_update(slot_update_sender: Sender<ChainUpdate>, head_slot: Option<u64>, submission_slot: Option<u64>) {
+        let chain_update = ChainUpdate::SlotUpdate(get_dummy_slot_update(head_slot, submission_slot));
         slot_update_sender.send(chain_update).await.unwrap();
 
         // sleep for a bit to allow the api to process the slot update
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    async fn send_dummy_payload_attributes_update(
-        slot_update_sender: Sender<ChainUpdate>,
-        submission_slot: Option<u64>,
-    ) {
-        let chain_update = ChainUpdate::PayloadAttributesUpdate(
-            get_dummy_payload_attributes_update(submission_slot),
-        );
+    async fn send_dummy_payload_attributes_update(slot_update_sender: Sender<ChainUpdate>, submission_slot: Option<u64>) {
+        let chain_update = ChainUpdate::PayloadAttributesUpdate(get_dummy_payload_attributes_update(submission_slot));
         slot_update_sender.send(chain_update).await.unwrap();
 
         // sleep for a bit to allow the api to process the slot update
@@ -211,10 +193,8 @@ mod tests {
             current_dir.push("crates/api/");
         }
         current_dir.push("test_data/submitBlockPayloadCapella_Goerli.json.gz");
-        let req_payload_bytes =
-            load_gzipped_bytes(current_dir.to_str().expect("Failed to convert path to string"));
-        let mut signed_bid_submission: SignedBidSubmission =
-            serde_json::from_slice(&req_payload_bytes).unwrap();
+        let req_payload_bytes = load_gzipped_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+        let mut signed_bid_submission: SignedBidSubmission = serde_json::from_slice(&req_payload_bytes).unwrap();
 
         // set the slot and timestamp
         signed_bid_submission.message_mut().slot = SUBMISSION_SLOT;
@@ -231,21 +211,15 @@ mod tests {
         signed_bid_submission
     }
 
-    fn load_bid_submission_from_file(
-        filename: &str,
-        submission_slot: Option<u64>,
-        submission_timestamp: Option<u64>,
-    ) -> SignedBidSubmission {
+    fn load_bid_submission_from_file(filename: &str, submission_slot: Option<u64>, submission_timestamp: Option<u64>) -> SignedBidSubmission {
         let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
         if !current_dir.ends_with("api") {
             current_dir.push("crates/api/");
         }
         current_dir.push("test_data/");
         current_dir.push(filename);
-        let req_payload_bytes =
-            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
-        let mut signed_bid_submission: SignedBidSubmission =
-            serde_json::from_slice(&req_payload_bytes).unwrap();
+        let req_payload_bytes = load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+        let mut signed_bid_submission: SignedBidSubmission = serde_json::from_slice(&req_payload_bytes).unwrap();
 
         // set the slot and timestamp
         signed_bid_submission.message_mut().slot = submission_slot.unwrap_or(SUBMISSION_SLOT);
@@ -263,8 +237,9 @@ mod tests {
     }
 
     fn load_gzipped_bytes(filename: &str) -> Vec<u8> {
-        use flate2::read::GzDecoder;
         use std::io::Read;
+
+        use flate2::read::GzDecoder;
 
         let mut file = std::fs::File::open(filename).unwrap();
         let mut buffer = Vec::new();
@@ -358,18 +333,9 @@ mod tests {
         })
     }
 
-    pub fn generate_request(
-        cancellations_enabled: bool,
-        gzip_encoding: bool,
-        ssz_content_type: bool,
-        payload: &[u8],
-    ) -> Request<axum::body::Body> {
+    pub fn generate_request(cancellations_enabled: bool, gzip_encoding: bool, ssz_content_type: bool, payload: &[u8]) -> Request<axum::body::Body> {
         // Construct the URI with cancellations query parameter
-        let uri_str = if cancellations_enabled {
-            "http://example.com?cancellations=1"
-        } else {
-            "http://example.com"
-        };
+        let uri_str = if cancellations_enabled { "http://example.com?cancellations=1" } else { "http://example.com" };
         let uri = Uri::from_str(uri_str).unwrap();
 
         // Construct the request method and body
@@ -384,8 +350,7 @@ mod tests {
             request_builder = request_builder.header(header::CONTENT_ENCODING, "gzip");
         }
         if ssz_content_type {
-            request_builder =
-                request_builder.header(header::CONTENT_TYPE, "application/octet-stream");
+            request_builder = request_builder.header(header::CONTENT_TYPE, "application/octet-stream");
         } else {
             request_builder = request_builder.header(header::CONTENT_TYPE, "application/json");
         }
@@ -403,20 +368,15 @@ mod tests {
             current_dir.push("crates/api/");
         }
         current_dir.push("test_data/submitBlockPayloadHeaderCapella.json");
-        let req_payload_bytes =
-            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+        let req_payload_bytes = load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
         let mut header_submission_trace = HeaderSubmissionTrace::default();
         let uuid = uuid::Uuid::new_v4();
         let request = generate_request(false, false, false, &req_payload_bytes);
-        let decoded_submission =
-            decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
+        let decoded_submission = decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
 
         assert_eq!(decoded_submission.0.slot(), 5552306);
-        assert!(matches!(
-            decoded_submission.0.execution_payload_header(),
-            ExecutionPayloadHeader::Capella(_)
-        ));
+        assert!(matches!(decoded_submission.0.execution_payload_header(), ExecutionPayloadHeader::Capella(_)));
         assert!(decoded_submission.0.commitments().is_none());
     }
 
@@ -427,11 +387,9 @@ mod tests {
             current_dir.push("crates/api/");
         }
         current_dir.push("test_data/submitBlockPayloadHeaderDeneb.json");
-        let req_payload_bytes =
-            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+        let req_payload_bytes = load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
-        let decoded_submission: SignedHeaderSubmissionDeneb =
-            serde_json::from_slice(&req_payload_bytes).unwrap();
+        let decoded_submission: SignedHeaderSubmissionDeneb = serde_json::from_slice(&req_payload_bytes).unwrap();
 
         assert_eq!(decoded_submission.message.bid_trace().slot, 5552306);
     }
@@ -443,20 +401,17 @@ mod tests {
             current_dir.push("crates/api/");
         }
         current_dir.push("test_data/header_submission_capella_ssz_bytes");
-        let req_payload_bytes =
-            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+        let req_payload_bytes = load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
         let mut header_submission_trace = HeaderSubmissionTrace::default();
         let uuid = uuid::Uuid::new_v4();
         let request = generate_request(false, false, true, &req_payload_bytes);
-        let decoded_submission =
-            decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
+        let decoded_submission = decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
 
         assert!(matches!(decoded_submission.0, SignedHeaderSubmission::Capella(_)));
         assert!(decoded_submission.0.commitments().is_none());
 
-        let header: SignedHeaderSubmissionCapella =
-            ssz::prelude::deserialize(&req_payload_bytes).unwrap();
+        let header: SignedHeaderSubmissionCapella = ssz::prelude::deserialize(&req_payload_bytes).unwrap();
         println!("{:?}", header);
     }
 
@@ -467,20 +422,17 @@ mod tests {
             current_dir.push("crates/api/");
         }
         current_dir.push("test_data/header_submission_deneb_ssz_bytes");
-        let req_payload_bytes =
-            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+        let req_payload_bytes = load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
         let mut header_submission_trace = HeaderSubmissionTrace::default();
         let uuid = uuid::Uuid::new_v4();
         let request = generate_request(false, false, true, &req_payload_bytes);
-        let decoded_submission =
-            decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
+        let decoded_submission = decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
 
         assert!(matches!(decoded_submission.0, SignedHeaderSubmission::Deneb(_)));
         assert!(decoded_submission.0.commitments().is_some());
 
-        let header: SignedHeaderSubmissionDeneb =
-            ssz::prelude::deserialize(&req_payload_bytes).unwrap();
+        let header: SignedHeaderSubmissionDeneb = ssz::prelude::deserialize(&req_payload_bytes).unwrap();
         println!("{:?}", header);
     }
 
@@ -491,14 +443,12 @@ mod tests {
             current_dir.push("crates/api/");
         }
         current_dir.push("test_data/submitBlockPayloadCapella_Goerli.json");
-        let req_payload_bytes =
-            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+        let req_payload_bytes = load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
         let mut submission_trace = SubmissionTrace::default();
         let uuid = uuid::Uuid::new_v4();
         let request = generate_request(false, false, false, &req_payload_bytes);
-        let decoded_submission =
-            decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
+        let decoded_submission = decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
 
         assert_eq!(decoded_submission.0.message().slot, 5552306);
         assert!(matches!(decoded_submission.0.execution_payload(), ExecutionPayload::Capella(_)));
@@ -513,14 +463,12 @@ mod tests {
             current_dir.push("crates/api/");
         }
         current_dir.push("test_data/submitBlockPayloadCapella_Goerli.json.gz");
-        let req_payload_bytes =
-            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+        let req_payload_bytes = load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
         let mut submission_trace = SubmissionTrace::default();
         let uuid = uuid::Uuid::new_v4();
         let request = generate_request(false, true, false, &req_payload_bytes);
-        let decoded_submission =
-            decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
+        let decoded_submission = decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
 
         assert_eq!(decoded_submission.0.message().slot, 5552306);
         assert!(matches!(decoded_submission.0.execution_payload(), ExecutionPayload::Capella(_)));
@@ -535,14 +483,12 @@ mod tests {
             current_dir.push("crates/api/");
         }
         current_dir.push("test_data/submitBlockPayloadDeneb.json");
-        let req_payload_bytes =
-            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+        let req_payload_bytes = load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
         let mut submission_trace = SubmissionTrace::default();
         let uuid = uuid::Uuid::new_v4();
         let request = generate_request(false, false, false, &req_payload_bytes);
-        let (decoded_submission, _) =
-            decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
+        let (decoded_submission, _) = decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
 
         assert_eq!(decoded_submission.message().slot, 5552306);
         assert!(matches!(decoded_submission.execution_payload(), ExecutionPayload::Deneb(_)));
@@ -559,8 +505,7 @@ mod tests {
         let (tx, http_config, _api, _slot_update_receiver) = start_api_server().await;
 
         // GET validators
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::GetValidators.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::GetValidators.path());
         let resp = reqwest::Client::new().get(req_url.as_str()).send().await.unwrap();
 
         // Check the response
@@ -581,8 +526,7 @@ mod tests {
         send_dummy_slot_update(slot_update_sender, None, None).await;
 
         // GET validators
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::GetValidators.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::GetValidators.path());
         let resp = reqwest::Client::new().get(req_url.as_str()).send().await.unwrap();
 
         // Check the response
@@ -592,8 +536,7 @@ mod tests {
         let body = resp.bytes().await.unwrap();
 
         let expected_response = get_dummy_slot_update(None, None).new_duties.unwrap();
-        let expected_response: Vec<BuilderGetValidatorsResponse> =
-            expected_response.into_iter().map(|item| item.into()).collect();
+        let expected_response: Vec<BuilderGetValidatorsResponse> = expected_response.into_iter().map(|item| item.into()).collect();
 
         let expected_json_bytes = serde_json::to_string(&expected_response).unwrap();
 
@@ -616,34 +559,19 @@ mod tests {
 
         // Prepare the request
         let cancellations_enabled = false;
-        let req_url = format!(
-            "{}{}{}",
-            http_config.base_url(),
-            Route::SubmitBlock.path(),
-            if cancellations_enabled { "?cancellations=1" } else { "" }
-        );
+        let req_url =
+            format!("{}{}{}", http_config.base_url(), Route::SubmitBlock.path(), if cancellations_enabled { "?cancellations=1" } else { "" });
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
-        signed_bid_submission.message_mut().proposer_public_key =
-            get_valid_payload_register_validator(None).entry.registration.message.public_key;
+        signed_bid_submission.message_mut().proposer_public_key = get_valid_payload_register_validator(None).entry.registration.message.public_key;
 
         // Send JSON encoded request
-        let resp = send_request(
-            &req_url,
-            Encoding::Json,
-            serde_json::to_vec(&signed_bid_submission).unwrap(),
-        )
-        .await;
+        let resp = send_request(&req_url, Encoding::Json, serde_json::to_vec(&signed_bid_submission).unwrap()).await;
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Signature verification failed");
 
         // Send SSZ encoded request
-        let resp = send_request(
-            &req_url,
-            Encoding::Ssz,
-            ssz::prelude::serialize(&signed_bid_submission).unwrap(),
-        )
-        .await;
+        let resp = send_request(&req_url, Encoding::Ssz, ssz::prelude::serialize(&signed_bid_submission).unwrap()).await;
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
         assert_eq!(resp.text().await.unwrap(), "Signature verification failed");
 
@@ -682,18 +610,13 @@ mod tests {
 
         // Prepare the request
         let cancellations_enabled = false;
-        let req_url = format!(
-            "{}{}{}",
-            http_config.base_url(),
-            Route::SubmitBlock.path(),
-            if cancellations_enabled { "?cancellations=1" } else { "" }
-        );
+        let req_url =
+            format!("{}{}{}", http_config.base_url(), Route::SubmitBlock.path(), if cancellations_enabled { "?cancellations=1" } else { "" });
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
 
         // Set incorrect fee recipient
-        signed_bid_submission.message_mut().proposer_fee_recipient =
-            get_byte_vector_20_for_hex("0x1230dde14e7256340cc820415a6022a7d1c93a35");
+        signed_bid_submission.message_mut().proposer_fee_recipient = get_byte_vector_20_for_hex("0x1230dde14e7256340cc820415a6022a7d1c93a35");
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
@@ -706,7 +629,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
-        assert_eq!(resp.text().await.unwrap(), "Fee recipient mismatch. got: 0x1230dde14e7256340cc820415a6022a7d1c93a35, expected: 0x5cc0dde14e7256340cc820415a6022a7d1c93a35");
+        assert_eq!(
+            resp.text().await.unwrap(),
+            "Fee recipient mismatch. got: 0x1230dde14e7256340cc820415a6022a7d1c93a35, expected: 0x5cc0dde14e7256340cc820415a6022a7d1c93a35"
+        );
 
         // Shut down the server
         let _ = tx.send(());
@@ -724,8 +650,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let signed_bid_submission: SignedBidSubmission = load_bid_submission();
 
@@ -740,10 +665,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
-        assert_eq!(
-            resp.text().await.unwrap(),
-            "Submission for past slot. current slot: 100, submission slot: 33"
-        );
+        assert_eq!(resp.text().await.unwrap(), "Submission for past slot. current slot: 100, submission slot: 33");
 
         // Shut down the server
         let _ = tx.send(());
@@ -764,8 +686,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
         signed_bid_submission.message_mut().slot = 1;
@@ -799,8 +720,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
         match signed_bid_submission.execution_payload_mut() {
@@ -843,8 +763,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let signed_bid_submission: SignedBidSubmission = load_bid_submission();
 
@@ -877,25 +796,19 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-        format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
         match signed_bid_submission.execution_payload_mut() {
             ExecutionPayload::Capella(ref mut payload) => {
-                payload.prev_randao = get_byte_vector_32_for_hex(
-                    "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
-                );
+                payload.prev_randao = get_byte_vector_32_for_hex("0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5");
             }
             ExecutionPayload::Bellatrix(ref mut payload) => {
-                payload.prev_randao = get_byte_vector_32_for_hex(
-                    "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
-                );
+                payload.prev_randao = get_byte_vector_32_for_hex("0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5");
             }
             _ => panic!("unexpected execution payload type"),
         }
-        signed_bid_submission.message_mut().proposer_public_key =
-            get_valid_payload_register_validator(None).entry.registration.message.public_key;
+        signed_bid_submission.message_mut().proposer_public_key = get_valid_payload_register_validator(None).entry.registration.message.public_key;
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
@@ -928,23 +841,17 @@ mod tests {
             Some(CAPELLA_FORK_EPOCH * SLOTS_PER_EPOCH + 1),
         )
         .await;
-        send_dummy_payload_attributes_update(
-            slot_update_sender,
-            Some(CAPELLA_FORK_EPOCH * SLOTS_PER_EPOCH + 1),
-        )
-        .await;
+        send_dummy_payload_attributes_update(slot_update_sender, Some(CAPELLA_FORK_EPOCH * SLOTS_PER_EPOCH + 1)).await;
 
         // Prepare the request
-        let req_url =
-        format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
             "submitBlockPayloadCapella_Goerli_incorrect_withdrawal_root.json",
             Some(CAPELLA_FORK_EPOCH * SLOTS_PER_EPOCH + 1),
             Some(1681338467),
         );
-        signed_bid_submission.message_mut().proposer_public_key =
-            get_valid_payload_register_validator(None).entry.registration.message.public_key;
+        signed_bid_submission.message_mut().proposer_public_key = get_valid_payload_register_validator(None).entry.registration.message.public_key;
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
@@ -970,8 +877,7 @@ mod tests {
         let (tx, http_config, _api, _slot_update_receiver) = start_api_server().await;
 
         // Prepare the request
-        let req_url =
-        format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let my_vec = vec![0u8; MAX_PAYLOAD_LENGTH + 1];
 
@@ -1007,14 +913,10 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-        let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
-            "submitBlockPayloadCapella_Goerli_zero_value.json",
-            None,
-            None,
-        );
+        let signed_bid_submission: SignedBidSubmission =
+            load_bid_submission_from_file("submitBlockPayloadCapella_Goerli_zero_value.json", None, None);
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
@@ -1048,14 +950,10 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-        let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
-            "submitBlockPayloadCapella_Goerli_empty_transactions.json",
-            None,
-            None,
-        );
+        let signed_bid_submission: SignedBidSubmission =
+            load_bid_submission_from_file("submitBlockPayloadCapella_Goerli_empty_transactions.json", None, None);
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
@@ -1089,14 +987,10 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-        let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
-            "submitBlockPayloadCapella_Goerli_incorrect_block_hash.json",
-            None,
-            None,
-        );
+        let signed_bid_submission: SignedBidSubmission =
+            load_bid_submission_from_file("submitBlockPayloadCapella_Goerli_incorrect_block_hash.json", None, None);
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
@@ -1130,14 +1024,10 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-        let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
-            "submitBlockPayloadCapella_Goerli_incorrect_parent_hash.json",
-            None,
-            None,
-        );
+        let signed_bid_submission: SignedBidSubmission =
+            load_bid_submission_from_file("submitBlockPayloadCapella_Goerli_incorrect_parent_hash.json", None, None);
 
         // Send JSON encoded request
         let resp = reqwest::Client::new()
@@ -1168,8 +1058,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // GET validators
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::GetValidators.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::GetValidators.path());
         let resp = reqwest::Client::new().get(req_url.as_str()).send().await.unwrap();
 
         // Check the response
@@ -1178,27 +1067,21 @@ mod tests {
         // assert the body is the bytes of the new duties
         let body = resp.bytes().await.unwrap();
         let expected_response = get_dummy_slot_update(None, None).new_duties.unwrap();
-        let expected_response: Vec<BuilderGetValidatorsResponse> =
-            expected_response.into_iter().map(|item| item.into()).collect();
+        let expected_response: Vec<BuilderGetValidatorsResponse> = expected_response.into_iter().map(|item| item.into()).collect();
 
         let expected_json_bytes = serde_json::to_string(&expected_response).unwrap();
 
         assert_eq!(body, expected_json_bytes);
 
         // Test payload attributes is updated
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
         match signed_bid_submission.execution_payload_mut() {
             ExecutionPayload::Capella(ref mut payload) => {
-                payload.prev_randao = get_byte_vector_32_for_hex(
-                    "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
-                );
+                payload.prev_randao = get_byte_vector_32_for_hex("0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5");
             }
             ExecutionPayload::Bellatrix(ref mut payload) => {
-                payload.prev_randao = get_byte_vector_32_for_hex(
-                    "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
-                );
+                payload.prev_randao = get_byte_vector_32_for_hex("0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5");
             }
             _ => panic!("unexpected execution payload type"),
         }
@@ -1233,16 +1116,10 @@ mod tests {
 
         // Prepare the request
         let cancellations_enabled = false;
-        let req_url = format!(
-            "{}{}{}",
-            http_config.base_url(),
-            Route::SubmitBlock.path(),
-            if cancellations_enabled { "?cancellations=1" } else { "" }
-        );
+        let req_url =
+            format!("{}{}{}", http_config.base_url(), Route::SubmitBlock.path(), if cancellations_enabled { "?cancellations=1" } else { "" });
 
-        let mut body: FuturesOrdered<
-            Pin<Box<dyn Future<Output = Result<Vec<u8>, Infallible>> + Send>>,
-        > = FuturesOrdered::new();
+        let mut body: FuturesOrdered<Pin<Box<dyn Future<Output = Result<Vec<u8>, Infallible>> + Send>>> = FuturesOrdered::new();
         body.push_back(Box::pin(async move {
             // Stream max allowed payload length bytes
             Ok::<_, Infallible>(vec![0u8; MAX_PAYLOAD_LENGTH])
@@ -1252,7 +1129,17 @@ mod tests {
             pending::<()>().await;
             Ok::<_, Infallible>(vec![])
         }));
-        let body = Body::wrap_stream(body);
+        // let body = Body::wrap_stream(body);
+        let results: Vec<Result<Vec<u8>, Infallible>> = body.collect().await;
+        let mut data: Vec<u8> = Vec::new();
+        for result in results {
+            match result {
+                Ok(bytes) => data.extend(bytes),
+                Err(_) => {
+                    unreachable!()
+                }
+            }
+        }
 
         let test_timeout = API_REQUEST_TIMEOUT + Duration::from_secs(3);
         let timeout_result = tokio::time::timeout(test_timeout, async {
@@ -1261,7 +1148,7 @@ mod tests {
                 .post(req_url.as_str())
                 .header("accept", "*/*")
                 .header("Content-Type", "application/json")
-                .body(body)
+                .body(data)
                 .send()
                 .await
                 .unwrap();
@@ -1281,8 +1168,7 @@ mod tests {
 
     #[tokio::test]
     async fn websocket_test() {
-
-        let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+        let (tx, _http_config, _api, mut slot_update_receiver) = start_api_server().await;
 
         // Send a slot update
         // wait for the slot update to be received
@@ -1293,17 +1179,9 @@ mod tests {
         //let req_url = "ws://relay.ultrasound.money/ws/v1/top_bid";
         //let req_url = "ws://holesky.titanrelay.xyz/relay/v1/builder/top_bid";
 
-        let req_url = format!(
-            "{}{}",
-            "ws://localhost:3000",
-            Route::GetTopBid.path(),
-        );
+        let req_url = format!("{}{}", "ws://localhost:3000", Route::GetTopBid.path(),);
 
-        let request = tungstenite::http::Request::builder()
-        .uri(req_url)
-        .header("X-api-key", "valid")
-        .body(())
-        .unwrap();
+        let request = tungstenite::http::Request::builder().uri(req_url).header("X-api-key", "valid").body(()).unwrap();
 
         // Connect to the server
         let (mut ws_stream, _) = connect_async(request).await.expect("Failed to connect");
@@ -1314,23 +1192,23 @@ mod tests {
             match message {
                 Ok(msg) => {
                     match msg {
-                        Message::Binary(msg)=>{
+                        Message::Binary(msg) => {
                             let payload: TopBidUpdate = ethereum_consensus::ssz::prelude::deserialize(&msg).unwrap();
                             assert_eq!(payload.slot, 0);
-                        },
-                        Message::Text(msg)=>{},
+                        }
+                        Message::Text(_auto_implmsg) => {}
                         Message::Ping(_) => {
                             ws_stream.send(Message::Pong(vec![])).await.unwrap();
-                        },
-                        Message::Pong(_) => {},
-                        Message::Close(_) => {},
+                        }
+                        Message::Pong(_) => {}
+                        Message::Close(_) => {}
                     }
 
                     message_count += 1;
                     if message_count >= 3 {
                         break;
                     }
-                },
+                }
                 Err(e) => {
                     println!("Error: {}", e);
                     break;
@@ -1339,13 +1217,11 @@ mod tests {
         }
 
         let _ = tx.send(());
-
     }
 
     #[tokio::test]
     async fn websocket_test_auth_fails() {
-
-        let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+        let (tx, _http_config, _api, mut slot_update_receiver) = start_api_server().await;
 
         // Send a slot update
         // wait for the slot update to be received
@@ -1356,17 +1232,9 @@ mod tests {
         //let req_url = "ws://relay.ultrasound.money/ws/v1/top_bid";
         //let req_url = "ws://holesky.titanrelay.xyz/relay/v1/builder/top_bid";
 
-        let req_url = format!(
-            "{}{}",
-            "ws://localhost:3000",
-            Route::GetTopBid.path(),
-        );
+        let req_url = format!("{}{}", "ws://localhost:3000", Route::GetTopBid.path(),);
 
-        let request = tungstenite::http::Request::builder()
-        .uri(req_url)
-        .header("X-api-key", "invalid")
-        .body(())
-        .unwrap();
+        let request = tungstenite::http::Request::builder().uri(req_url).header("X-api-key", "invalid").body(()).unwrap();
 
         // Connect to the server
         let result = connect_async(request).await;
@@ -1374,7 +1242,5 @@ mod tests {
         assert_eq!(result.err().unwrap().to_string(), "HTTP error: 401 Unauthorized");
 
         let _ = tx.send(());
-
     }
-
 }

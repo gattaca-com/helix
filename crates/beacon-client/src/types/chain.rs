@@ -64,7 +64,8 @@ impl std::str::FromStr for StateId {
                 Ok(slot) => Ok(Self::Slot(slot)),
                 Err(_) => match try_bytes_from_hex_str(s) {
                     Ok(root_data) => {
-                        let root = Root::try_from(root_data.as_ref()).map_err(|err| format!("could not parse state identifier by root from the provided argument {s}: {err}"))?;
+                        let root = Root::try_from(root_data.as_ref() as &[u8])
+                            .map_err(|err| format!("could not parse state identifier by root from the provided argument {s}: {err}"))?;
                         Ok(Self::Root(root))
                     }
                     Err(err) => {
@@ -87,7 +88,10 @@ pub struct SyncStatus {
 }
 
 // HeadEventData represents the data of a head event
-// {"slot":"827256","block":"0x56b683afa68170c775f3c9debc18a6a72caea9055584d037333a6fe43c8ceb83","state":"0x419e2965320d69c4213782dae73941de802a4f436408fddd6f68b671b3ff4e55","epoch_transition":false,"execution_optimistic":false,"previous_duty_dependent_root":"0x5b81a526839b7fb67c3896f1125451755088fb578ad27c2690b3209f3d7c6b54","current_duty_dependent_root":"0x5f3232c0d5741e27e13754e1d88285c603b07dd6164b35ca57e94344a9e42942"}
+// {"slot":"827256","block":"0x56b683afa68170c775f3c9debc18a6a72caea9055584d037333a6fe43c8ceb83","state":"
+// 0x419e2965320d69c4213782dae73941de802a4f436408fddd6f68b671b3ff4e55","epoch_transition":false,"execution_optimistic":false,"
+// previous_duty_dependent_root":"0x5b81a526839b7fb67c3896f1125451755088fb578ad27c2690b3209f3d7c6b54","current_duty_dependent_root":"
+// 0x5f3232c0d5741e27e13754e1d88285c603b07dd6164b35ca57e94344a9e42942"}
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct HeadEventData {
     #[serde(with = "as_str")]

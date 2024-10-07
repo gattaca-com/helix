@@ -15,8 +15,7 @@ impl BroadcastPayloadParams {
         Self {
             execution_payload: ssz::prelude::deserialize(&proto_params.execution_payload).unwrap(),
             slot: proto_params.slot,
-            proposer_pub_key: BlsPublicKey::try_from(proto_params.proposer_pub_key.as_slice())
-                .unwrap(),
+            proposer_pub_key: BlsPublicKey::try_from(proto_params.proposer_pub_key.as_slice()).unwrap(),
         }
     }
     pub fn to_proto(&self) -> grpc::BroadcastPayloadParams {

@@ -1,7 +1,11 @@
 use std::fmt::Debug;
+
 use ethereum_consensus::{
-    deneb::{minimal::MAX_BYTES_PER_TRANSACTION, Transaction}, primitives::{BlsPublicKey, BlsSignature}, ssz::prelude::*
+    deneb::{minimal::MAX_BYTES_PER_TRANSACTION, Transaction},
+    primitives::{BlsPublicKey, BlsSignature},
+    ssz::prelude::*,
 };
+
 use crate::builder_api::BuilderGetValidatorsResponseEntry;
 
 pub const MAX_TRANSACTIONS_PER_BLOCK: usize = 10_000;
@@ -33,10 +37,7 @@ impl SignedPreconferElection {
 
 impl SignedPreconferElection {
     pub fn from_proposer_duty(duty: &BuilderGetValidatorsResponseEntry, chain_id: u64) -> Self {
-        Self {
-            message: PreconferElection::from_proposer_duty(duty, chain_id),
-            signature: Default::default(),
-        }
+        Self { message: PreconferElection::from_proposer_duty(duty, chain_id), signature: Default::default() }
     }
 }
 
@@ -116,10 +117,7 @@ pub struct ConstraintsMessage {
 
 impl ConstraintsMessage {
     pub fn new(slot: u64, constraints: List<List<Constraint, MAX_TRANSACTIONS_PER_BLOCK>, MAX_TRANSACTIONS_PER_BLOCK>) -> Self {
-        Self {
-            slot,
-            constraints,
-        }
+        Self { slot, constraints }
     }
 
     pub fn slot(&self) -> u64 {
@@ -153,10 +151,8 @@ mod tests {
 
     use super::*;
 
-    const RHEA_BUILDER_DOMAIN: [u8; 32] = [
-        0, 0, 0, 1, 11, 65, 190, 76, 219, 52, 209, 131, 221, 220, 165, 57, 131, 55, 98, 109, 205, 207,
-        175, 23, 32, 193, 32, 45, 59, 149, 248, 78,
-    ];
+    const RHEA_BUILDER_DOMAIN: [u8; 32] =
+        [0, 0, 0, 1, 11, 65, 190, 76, 219, 52, 209, 131, 221, 220, 165, 57, 131, 55, 98, 109, 205, 207, 175, 23, 32, 193, 32, 45, 59, 149, 248, 78];
 
     #[test]
     fn test_deserialise_signed_constraints() {
@@ -180,12 +176,7 @@ mod tests {
         let mut signed_election = serde_json::from_slice::<SignedPreconferElection>(&hex::decode(hex_str).unwrap()).unwrap();
 
         let pub_key = signed_election.message.preconfer_pubkey.clone();
-        let res = verify_signed_data(
-            &mut signed_election.message,
-            &signed_election.signature,
-            &pub_key,
-            RHEA_BUILDER_DOMAIN,
-        );
+        let res = verify_signed_data(&mut signed_election.message, &signed_election.signature, &pub_key, RHEA_BUILDER_DOMAIN);
         assert!(res.is_ok());
     }
 
@@ -195,39 +186,23 @@ mod tests {
         let mut signed_constraints = serde_json::from_slice::<SignedConstraintsMessage>(&hex::decode(hex_str).unwrap()).unwrap();
 
         let pub_key = Default::default();
-        let res = verify_signed_data(
-            &mut signed_constraints.message,
-            &signed_constraints.signature,
-            &pub_key,
-            RHEA_BUILDER_DOMAIN,
-        );
+        let res = verify_signed_data(&mut signed_constraints.message, &signed_constraints.signature, &pub_key, RHEA_BUILDER_DOMAIN);
         assert!(res.is_ok());
     }
 
     #[test]
     fn test_serialise() {
-        let constraints_array = vec![
-            Constraint {
-                tx: Default::default(),
-            },
-            Constraint {
-                tx: Default::default(),
-            },
-        ];
+        let constraints_array = vec![Constraint { tx: Default::default() }, Constraint { tx: Default::default() }];
         let constraints_list_a = List::try_from(constraints_array.clone()).unwrap();
         let constraints_list_b = List::try_from(constraints_array).unwrap();
         let list_of_lists = vec![constraints_list_a, constraints_list_b];
 
-        let constraint_message = ConstraintsMessage {
-            slot: 88,
-            constraints: List::try_from(list_of_lists).unwrap(),
-        };
+        let constraint_message = ConstraintsMessage { slot: 88, constraints: List::try_from(list_of_lists).unwrap() };
 
         let json_serialised = serde_json::to_string_pretty(&constraint_message).unwrap();
         println!("{}", json_serialised);
 
         let json_to_vec = serde_json::to_vec(&constraint_message).unwrap();
         println!("{:?}", json_to_vec);
-
     }
 }

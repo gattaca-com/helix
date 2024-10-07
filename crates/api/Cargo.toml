@@ -26,11 +26,11 @@ tokio = { workspace = true }
 tokio-tungstenite = "0.16"
 tower-http = { workspace = true }
 url = { workspace = true }
-tonic = "0.10"
-prost = "0.12"
+tonic = { workspace = true }
+prost = { workspace = true }
 
 # Serialization and Data Format 
-flate2 = "1.0"
+flate2 = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 
@@ -47,12 +47,12 @@ mockito.workspace = true
 
 # Misc
 auto_impl.workspace = true
-rand = "0.8"
+rand = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-uuid = { workspace = true }
-bytes = "1.5"
-moka = "0.9"
+uuid = { workspace = true, features = ["fast-rng", "v4"] }
+bytes = { workspace = true }
+moka = { workspace = true, features = ["sync"]}
 
 [build-dependencies]
-tonic-build = "0.10"
+tonic-build = { workspace = true }

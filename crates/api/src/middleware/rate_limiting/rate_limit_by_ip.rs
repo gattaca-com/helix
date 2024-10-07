@@ -1,8 +1,16 @@
-use std::{collections::HashMap, net::{IpAddr, SocketAddr}, sync::{Arc, Mutex}, time::{Duration, Instant}};
-use axum::{
-    body::Body, extract::{connect_info, Request, State}, middleware::Next, response::{IntoResponse, Response}
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
-use tracing::info;
+
+use axum::{
+    body::Body,
+    extract::{connect_info, Request, State},
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
 
 use super::error::RateLimitExceeded;
 
@@ -13,9 +21,7 @@ pub struct RateLimitState {
 
 impl RateLimitState {
     pub fn new(rate_limits: HashMap<String, RateLimitStateForRoute>) -> Self {
-        RateLimitState {
-            state_per_route: Arc::new(rate_limits),
-        }
+        RateLimitState { state_per_route: Arc::new(rate_limits) }
     }
 
     pub fn check_rate_limit(&self, ip: IpAddr, route: &str) -> bool {
@@ -46,10 +52,7 @@ struct RateLimitEntry {
 
 impl Default for RateLimitEntry {
     fn default() -> Self {
-        RateLimitEntry {
-            request_count: 0,
-            last_access: Instant::now(),
-        }
+        RateLimitEntry { request_count: 0, last_access: Instant::now() }
     }
 }
 
@@ -65,12 +68,7 @@ pub struct RateLimitStateForRoute {
 impl RateLimitStateForRoute {
     /// Create a new rate limiting state.
     pub fn new(limit_duration: Duration, max_requests: usize) -> Self {
-        RateLimitStateForRoute {
-            ip_counts: Arc::new(Mutex::new(HashMap::new())),
-            limit_duration,
-            max_requests,
-            max_entries: 100_000,
-        }
+        RateLimitStateForRoute { ip_counts: Arc::new(Mutex::new(HashMap::new())), limit_duration, max_requests, max_entries: 100_000 }
     }
 
     /// Checks if the IP address is within the rate limit.
@@ -116,16 +114,14 @@ impl RateLimitStateForRoute {
     }
 }
 
-
 pub async fn rate_limit_by_ip(
     State(state): State<RateLimitState>,
-    connect_info: connect_info::ConnectInfo::<SocketAddr>,
+    connect_info: connect_info::ConnectInfo<SocketAddr>,
     request: Request,
     next: Next,
 ) -> Response {
-
     let ip = connect_info.0.ip();
-    
+
     // Extract the real IP address from the request headers in case of reverse proxy
     let real_ip = extract_ip_from_request(&request).unwrap_or(ip);
 
@@ -147,11 +143,7 @@ fn extract_ip_from_request(req: &Request<Body>) -> Option<IpAddr> {
         if let Some(header_value) = req.headers().get(header_name) {
             if let Ok(header_str) = header_value.to_str() {
                 // For "X-Forwarded-For", consider only the first IP if multiple are listed
-                let first_ip = if header_name == "X-Forwarded-For" {
-                    header_str.split(',').next().unwrap_or("").trim()
-                } else {
-                    header_str.trim()
-                };
+                let first_ip = if header_name == "X-Forwarded-For" { header_str.split(',').next().unwrap_or("").trim() } else { header_str.trim() };
 
                 // Attempt to parse the IP address
                 if let Ok(ip_addr) = first_ip.parse::<IpAddr>() {
