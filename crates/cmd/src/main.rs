@@ -15,7 +15,11 @@ async fn run() {
 
     match &config.logging {
         LoggingConfig::Console => {
-            tracing_subscriber::fmt().init();
+            let filter_layer = tracing_subscriber::EnvFilter::from_default_env();
+
+            tracing_subscriber::fmt()
+                .with_env_filter(filter_layer)
+                .init();
         }
         LoggingConfig::File { dir_path, file_name } => {
             let file_appender = tracing_appender::rolling::daily(dir_path, file_name);
