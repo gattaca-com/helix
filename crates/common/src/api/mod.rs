@@ -7,6 +7,7 @@ pub(crate) const PATH_BUILDER_API: &str = "/relay/v1/builder";
 pub(crate) const PATH_GET_VALIDATORS: &str = "/validators";
 pub(crate) const PATH_SUBMIT_BLOCK: &str = "/blocks";
 pub(crate) const PATH_SUBMIT_BLOCK_OPTIMISTIC_V2: &str = "/blocks_optimistic_v2";
+pub(crate) const PATH_CANCEL_BID: &str = "/cancel_bid";
 pub(crate) const PATH_SUBMIT_HEADER: &str = "/headers";
 pub(crate) const PATH_GET_TOP_BID: &str = "/top_bid";
 
@@ -16,7 +17,6 @@ pub(crate) const PATH_STATUS: &str = "/status";
 pub(crate) const PATH_REGISTER_VALIDATORS: &str = "/validators";
 pub(crate) const PATH_GET_HEADER: &str = "/header/:slot/:parent_hash/:pubkey";
 pub(crate) const PATH_GET_PAYLOAD: &str = "/blinded_blocks";
-
 
 pub(crate) const PATH_DATA_API: &str = "/relay/v1/data";
 

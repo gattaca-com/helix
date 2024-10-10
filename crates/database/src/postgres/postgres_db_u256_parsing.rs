@@ -133,10 +133,10 @@ impl ToSql for PostgresNumeric {
 mod tests {
     use super::*;
     use crate::postgres::postgres_db_u256_parsing::PostgresNumeric;
-    use bytes::BytesMut;
-    use ethereum_consensus::{primitives::U256, serde::as_str};
-    use serde::{Deserialize, Serialize};
-    use tokio_postgres::types::Type;
+    
+    use ethereum_consensus::{primitives::U256};
+    
+    
 
     fn get_values() -> Vec<U256> {
         vec![

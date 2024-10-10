@@ -11,12 +11,12 @@ mod tests {
         service::API_REQUEST_TIMEOUT,
         test_utils::builder_api_app,
     };
-    use axum::{ http::{header, Method, Request, Uri}};
-    use tokio_tungstenite::{connect_async, tungstenite::{self, Message}};
+    use axum::http::{header, Method, Request, Uri};
     use core::panic;
     use ethereum_consensus::{
         builder::{SignedValidatorRegistration, ValidatorRegistration},
         configs::mainnet::CAPELLA_FORK_EPOCH,
+        deneb::{Withdrawal},
         phase0::mainnet::SLOTS_PER_EPOCH,
         primitives::{BlsPublicKey, BlsSignature},
         ssz::{self, prelude::*},
@@ -27,30 +27,39 @@ mod tests {
     use helix_beacon_client::types::PayloadAttributes;
     use helix_common::{
         api::{
-            builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry, TopBidUpdate},
+            builder_api::{
+                BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry, TopBidUpdate,
+            },
             proposer_api::ValidatorRegistrationInfo,
-        }, bid_submission::{
+        },
+        bid_submission::{
             v2::header_submission::{
                 SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb,
             },
             BidSubmission, SignedBidSubmission,
-        }, HeaderSubmissionTrace, Route, SubmissionTrace, ValidatorPreferences
+        },
+        HeaderSubmissionTrace, Route, SubmissionTrace, ValidatorPreferences,
     };
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-    use helix_utils::request_encoding::Encoding;
+    use helix_utils::{calculate_withdrawals_root, request_encoding::Encoding};
     use rand::Rng;
     use reqwest::{Client, Response};
     use reth_primitives::hex;
     use serde_json::json;
     use serial_test::serial;
     use std::{
-        convert::Infallible, future::pending, io::Write, net::IpAddr, pin::Pin, str::FromStr, sync::Arc, time::Duration
+        convert::Infallible, future::pending, io::Write, ops::Deref, pin::Pin,
+        str::FromStr, sync::Arc, time::Duration,
     };
     use tokio::sync::{
         mpsc::{Receiver, Sender},
         oneshot,
+    };
+    use tokio_tungstenite::{
+        connect_async,
+        tungstenite::{self, Message},
     };
     use tonic::transport::Body;
 
@@ -172,9 +181,7 @@ mod tests {
             parent_hash: get_byte_vector_32_for_hex(
                 "0xbd3291854dc822b7ec585925cda0e18f06af28fa2886e15f52d52dd4b6f94ed6",
             ),
-            withdrawals_root: Some(hex_to_byte_arr_32(
-                "0xb15ed76298ff84a586b1d875df08b6676c98dfe9c7cd73fab88450348d8e70c8",
-            )),
+            withdrawals_root: None,
             payload_attributes: get_dummy_payload_attributes(),
         }
     }
@@ -559,8 +566,7 @@ mod tests {
         let (tx, http_config, _api, _slot_update_receiver) = start_api_server().await;
 
         // GET validators
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::GetValidators.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::GetValidators.path());
         let resp = reqwest::Client::new().get(req_url.as_str()).send().await.unwrap();
 
         // Check the response
@@ -581,8 +587,7 @@ mod tests {
         send_dummy_slot_update(slot_update_sender, None, None).await;
 
         // GET validators
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::GetValidators.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::GetValidators.path());
         let resp = reqwest::Client::new().get(req_url.as_str()).send().await.unwrap();
 
         // Check the response
@@ -724,8 +729,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let signed_bid_submission: SignedBidSubmission = load_bid_submission();
 
@@ -764,8 +768,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
         signed_bid_submission.message_mut().slot = 1;
@@ -799,8 +802,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
         match signed_bid_submission.execution_payload_mut() {
@@ -843,8 +845,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let signed_bid_submission: SignedBidSubmission = load_bid_submission();
 
@@ -877,8 +878,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-        format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
         match signed_bid_submission.execution_payload_mut() {
@@ -935,8 +935,7 @@ mod tests {
         .await;
 
         // Prepare the request
-        let req_url =
-        format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
             "submitBlockPayloadCapella_Goerli_incorrect_withdrawal_root.json",
@@ -970,8 +969,7 @@ mod tests {
         let (tx, http_config, _api, _slot_update_receiver) = start_api_server().await;
 
         // Prepare the request
-        let req_url =
-        format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let my_vec = vec![0u8; MAX_PAYLOAD_LENGTH + 1];
 
@@ -1007,8 +1005,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
             "submitBlockPayloadCapella_Goerli_zero_value.json",
@@ -1048,8 +1045,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
             "submitBlockPayloadCapella_Goerli_empty_transactions.json",
@@ -1089,8 +1085,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
             "submitBlockPayloadCapella_Goerli_incorrect_block_hash.json",
@@ -1130,8 +1125,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // Prepare the request
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
         let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
             "submitBlockPayloadCapella_Goerli_incorrect_parent_hash.json",
@@ -1168,8 +1162,7 @@ mod tests {
         send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
         // GET validators
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::GetValidators.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::GetValidators.path());
         let resp = reqwest::Client::new().get(req_url.as_str()).send().await.unwrap();
 
         // Check the response
@@ -1186,8 +1179,7 @@ mod tests {
         assert_eq!(body, expected_json_bytes);
 
         // Test payload attributes is updated
-        let req_url =
-            format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
+        let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
         let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
         match signed_bid_submission.execution_payload_mut() {
             ExecutionPayload::Capella(ref mut payload) => {
@@ -1281,8 +1273,7 @@ mod tests {
 
     #[tokio::test]
     async fn websocket_test() {
-
-        let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+        let (tx, _http_config, _api, mut slot_update_receiver) = start_api_server().await;
 
         // Send a slot update
         // wait for the slot update to be received
@@ -1293,17 +1284,13 @@ mod tests {
         //let req_url = "ws://relay.ultrasound.money/ws/v1/top_bid";
         //let req_url = "ws://holesky.titanrelay.xyz/relay/v1/builder/top_bid";
 
-        let req_url = format!(
-            "{}{}",
-            "ws://localhost:3000",
-            Route::GetTopBid.path(),
-        );
+        let req_url = format!("{}{}", "ws://localhost:3000", Route::GetTopBid.path(),);
 
         let request = tungstenite::http::Request::builder()
-        .uri(req_url)
-        .header("X-api-key", "valid")
-        .body(())
-        .unwrap();
+            .uri(req_url)
+            .header("X-api-key", "valid")
+            .body(())
+            .unwrap();
 
         // Connect to the server
         let (mut ws_stream, _) = connect_async(request).await.expect("Failed to connect");
@@ -1314,23 +1301,24 @@ mod tests {
             match message {
                 Ok(msg) => {
                     match msg {
-                        Message::Binary(msg)=>{
-                            let payload: TopBidUpdate = ethereum_consensus::ssz::prelude::deserialize(&msg).unwrap();
+                        Message::Binary(msg) => {
+                            let payload: TopBidUpdate =
+                                ethereum_consensus::ssz::prelude::deserialize(&msg).unwrap();
                             assert_eq!(payload.slot, 0);
-                        },
-                        Message::Text(msg)=>{},
+                        }
+                        Message::Text(_msg) => {}
                         Message::Ping(_) => {
                             ws_stream.send(Message::Pong(vec![])).await.unwrap();
-                        },
-                        Message::Pong(_) => {},
-                        Message::Close(_) => {},
+                        }
+                        Message::Pong(_) => {}
+                        Message::Close(_) => {}
                     }
 
                     message_count += 1;
                     if message_count >= 3 {
                         break;
                     }
-                },
+                }
                 Err(e) => {
                     println!("Error: {}", e);
                     break;
@@ -1339,13 +1327,11 @@ mod tests {
         }
 
         let _ = tx.send(());
-
     }
 
     #[tokio::test]
     async fn websocket_test_auth_fails() {
-
-        let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+        let (tx, _http_config, _api, mut slot_update_receiver) = start_api_server().await;
 
         // Send a slot update
         // wait for the slot update to be received
@@ -1356,17 +1342,13 @@ mod tests {
         //let req_url = "ws://relay.ultrasound.money/ws/v1/top_bid";
         //let req_url = "ws://holesky.titanrelay.xyz/relay/v1/builder/top_bid";
 
-        let req_url = format!(
-            "{}{}",
-            "ws://localhost:3000",
-            Route::GetTopBid.path(),
-        );
+        let req_url = format!("{}{}", "ws://localhost:3000", Route::GetTopBid.path(),);
 
         let request = tungstenite::http::Request::builder()
-        .uri(req_url)
-        .header("X-api-key", "invalid")
-        .body(())
-        .unwrap();
+            .uri(req_url)
+            .header("X-api-key", "invalid")
+            .body(())
+            .unwrap();
 
         // Connect to the server
         let result = connect_async(request).await;
@@ -1374,7 +1356,62 @@ mod tests {
         assert_eq!(result.err().unwrap().to_string(), "HTTP error: 401 Unauthorized");
 
         let _ = tx.send(());
-
     }
 
+    #[tokio::test]
+    async fn test_calculate_withdrawals_root() {
+        let json_str = r#"
+        [
+            {"index": "53516667", "validator_index": "226593", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18829431"},
+            {"index": "53516668", "validator_index": "226594", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18895995"},
+            {"index": "53516669", "validator_index": "226595", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18921948"},
+            {"index": "53516670", "validator_index": "226596", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18879996"},
+            {"index": "53516671", "validator_index": "226597", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18862058"},
+            {"index": "53516672", "validator_index": "226598", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18877682"},
+            {"index": "53516673", "validator_index": "226599", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18876362"},
+            {"index": "53516674", "validator_index": "226600", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18905370"},
+            {"index": "53516675", "validator_index": "226601", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18911572"},
+            {"index": "53516676", "validator_index": "226602", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18908681"},
+            {"index": "53516677", "validator_index": "226603", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18904531"},
+            {"index": "53516678", "validator_index": "226604", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18829228"},
+            {"index": "53516679", "validator_index": "226605", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18883181"},
+            {"index": "53516680", "validator_index": "226606", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "63784192"},
+            {"index": "53516681", "validator_index": "226607", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18875686"},
+            {"index": "53516682", "validator_index": "226608", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18924753"}
+        ]
+    "#;
+
+        let withdrawals: Vec<Withdrawal> = serde_json::from_str(json_str).unwrap();
+
+        let withdrawals_root = calculate_withdrawals_root(&withdrawals);
+
+        // calculate_withdrawals_root use MPT to calculate the root
+        assert_eq!(
+            hex::encode(withdrawals_root),
+            "25068b16d9a849006edff1fbe9bf96799ef524f0ba87199559d1f714719a8202"
+        );
+
+        let mut wlist: List<Withdrawal, 16> = withdrawals.try_into().unwrap();
+        let root = wlist.hash_tree_root().unwrap();
+
+        // hash_tree_root use SSZ to calculate the root
+        assert_eq!(
+            hex::encode(root.deref()),
+            "c4726ded906a1d6775eec5e83fa867cffb9f77c6da58b3ceb2e412df971b07f1"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_calculate_tx_root() {
+        let txs = [vec![0_u8, 1, 2, 5], vec![0, 1, 2, 5], vec![0, 1, 2, 5]];
+
+        let a: ByteList<1073741824> = txs[0].as_slice().try_into().unwrap();
+        let b: ByteList<1073741824> = txs[1].as_slice().try_into().unwrap();
+        let c: ByteList<1073741824> = txs[2].as_slice().try_into().unwrap();
+        let x = vec![a, b, c];
+        let mut txs_list: List<ByteList<1073741824>, 1048576> = x.try_into().unwrap();
+        let root = txs_list.hash_tree_root().unwrap();
+
+        println!("{:?}", hex::encode(root.deref()));
+    }
 }

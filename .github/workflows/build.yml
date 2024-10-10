@@ -23,7 +23,13 @@ jobs:
         ref: ${{ github.ref }}
 
     - name: Set Image Name
-      run: echo "IMAGE_NAME=$(if [ ${{ github.ref }} == 'refs/heads/main' ]; then echo 'latest'; else echo 'develop'; fi)" >> $GITHUB_ENV
+      run: |
+        if [ ${{ github.ref }} == 'refs/heads/main' ]; then
+          echo "IMAGE_NAME=latest" >> $GITHUB_ENV;
+        else
+          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's:.*/::');
+          echo "IMAGE_NAME=$BRANCH_NAME" >> $GITHUB_ENV;
+        fi
 
     - name: Run Dockerfile
       env:

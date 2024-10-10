@@ -8,10 +8,12 @@ use axum::{
 use moka::sync::Cache;
 use tracing::warn;
 
-use helix_common::{api::data_api::{
-    BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
-    ReceivedBlocksResponse, ValidatorRegistrationParams,
-}, validator_preferences, ValidatorPreferences};
+use helix_common::{
+    api::data_api::{
+        BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
+        ReceivedBlocksResponse, ValidatorRegistrationParams,
+    }, ValidatorPreferences,
+};
 use helix_database::DatabaseService;
 
 use crate::relay_data::error::DataApiError;
@@ -32,14 +34,8 @@ pub struct DataApi<DB: DatabaseService> {
 }
 
 impl<DB: DatabaseService + 'static> DataApi<DB> {
-    pub fn new(
-        validator_preferences: Arc<ValidatorPreferences>,
-        db: Arc<DB>
-    ) -> Self {
-        Self {
-            validator_preferences,
-            db
-        }
+    pub fn new(validator_preferences: Arc<ValidatorPreferences>, db: Arc<DB>) -> Self {
+        Self { validator_preferences, db }
     }
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getDeliveredPayloads>
@@ -58,7 +54,11 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
             return Ok(Json(cached_result));
         }
 
-        match data_api.db.get_delivered_payloads(&params.into(), data_api.validator_preferences.clone()).await {
+        match data_api
+            .db
+            .get_delivered_payloads(&params.into(), data_api.validator_preferences.clone())
+            .await
+        {
             Ok(result) => {
                 let response = result
                     .into_iter()
@@ -95,7 +95,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         }
 
         let cache_key = format!("{:?}", params);
-        
+
         if let Some(cached_result) = cache.get(&cache_key) {
             return Ok(Json(cached_result));
         }
@@ -104,7 +104,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
             Ok(result) => {
                 let response =
                     result.into_iter().map(|b| b.into()).collect::<Vec<ReceivedBlocksResponse>>();
-                
+
                 cache.insert(cache_key, response.clone());
 
                 Ok(Json(response))

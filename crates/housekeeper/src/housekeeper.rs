@@ -5,10 +5,17 @@ use std::{
 };
 
 use ethereum_consensus::primitives::BlsPublicKey;
+use ethers::{
+    abi::{Abi, AbiParser, Address, Bytes},
+    contract::{Contract, EthEvent},
+    providers::{Http, Middleware, Provider},
+    types::{U256},
+};
 use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
+use std::convert::TryFrom;
 use tokio::{
     sync::{broadcast, Mutex},
-    time::{sleep, Instant},
+    time::{interval_at, sleep, Instant},
 };
 use tracing::{debug, error, info, warn};
 
@@ -18,7 +25,7 @@ use helix_beacon_client::{
     MultiBeaconClientTrait,
 };
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, pending_block::PendingBlock, ProposerDuty, RelayConfig, Route, SignedValidatorRegistrationEntry
+    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, pending_block::PendingBlock, BuilderInfo, PrimevConfig, ProposerDuty, RelayConfig, Route, SignedValidatorRegistrationEntry
 };
 use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
@@ -26,9 +33,11 @@ use helix_datastore::Auctioneer;
 use crate::error::HousekeeperError;
 use uuid::Uuid;
 
-const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 8;
+const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 1;
 
 const TRUSTED_PROPOSERS_UPDATE_FREQ: u64 = 5;
+
+const CUTT_OFF_TIME: u64 = 4;
 
 // Constants for known validators refresh logic.
 const MIN_SLOTS_BETWEEN_UPDATES: u64 = 6;
@@ -77,12 +86,20 @@ pub struct Housekeeper<
     leader_id: String,
 
     config: RelayConfig,
+
+    chain_info: Arc<ChainInfo>,
 }
 
 impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     Housekeeper<DB, BeaconClient, A>
 {
-    pub fn new(db: Arc<DB>, beacon_client: BeaconClient, auctioneer: A, config: RelayConfig) -> Arc<Self> {
+    pub fn new(
+        db: Arc<DB>,
+        beacon_client: BeaconClient,
+        auctioneer: A,
+        config: RelayConfig,
+        chain_info: Arc<ChainInfo>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             db,
             beacon_client,
@@ -98,6 +115,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             refresh_trusted_proposers_lock: Mutex::new(()),
             leader_id: Uuid::new_v4().to_string(),
             config,
+            chain_info,
         })
     }
 
@@ -110,16 +128,31 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
         self.process_new_slot(best_sync_status.head_slot).await;
         loop {
-            match head_event_receiver.recv().await {
-                Ok(head_event) => {
-                    self.process_new_slot(head_event.slot).await;
+            let start_instant = Instant::now() + self.chain_info.clock.duration_until_next_slot() + Duration::from_secs(CUTT_OFF_TIME);
+            let mut timer = interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
+            
+            tokio::select! {
+                head_event_result = head_event_receiver.recv() => {
+                    match head_event_result {
+                        Ok(head_event) => {
+                            self.process_new_slot(head_event.slot).await;
+                        }
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("head events lagged by {n} events");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            error!("head event channel closed");
+                            break;
+                        }
+                    }
                 }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    warn!("head events lagged by {n} events");
-                }
-                Err(broadcast::error::RecvError::Closed) => {
-                    error!("head event channel closed");
-                    break;
+                _ = timer.tick() => {
+                    match self.chain_info.clock.current_slot() {
+                        Some(slot) => self.process_new_slot(slot).await,
+                        None => {
+                            error!("could not get current slot");
+                        }
+                    }
                 }
             }
         }
@@ -175,6 +208,13 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         tokio::spawn(async move {
             let _ = cloned_self.sync_builder_info_changes(head_slot).await;
         });
+
+        if self.config.primev_config.is_some() {
+            let cloned_self = self.clone();
+            tokio::spawn(async move {
+                let _ = cloned_self.primev_update().await;
+            });
+        }
 
         // Spawn a task to asynchronously update the trusted proposers.
         if self.should_update_trusted_proposers(head_slot).await {
@@ -347,7 +387,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
                 demoted_builders.insert(pending_block.builder_pubkey);
             }
         }
-        
+
         Ok(())
     }
 
@@ -408,6 +448,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
                 }
             };
 
+        // Format duties and save to the database
         if signed_validator_registrations.is_empty() {
             warn!("No signed validator registrations found for proposer duties");
         } else {
@@ -433,13 +474,17 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     pub async fn format_and_store_duties(
         &self,
         proposer_duties: Vec<ProposerDuty>,
-        mut signed_validator_registrations: HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>,
+        signed_validator_registrations: HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>,
     ) -> Result<usize, DatabaseError> {
         let mut formatted_proposer_duties: Vec<BuilderGetValidatorsResponseEntry> =
             Vec::with_capacity(proposer_duties.len());
 
         for duty in proposer_duties {
             if let Some(reg) = signed_validator_registrations.get(&duty.public_key) {
+                if duty.public_key != reg.registration_info.registration.message.public_key {
+                    error!(?duty, ?reg, "mismatch in duty vs registration")
+                }
+
                 formatted_proposer_duties.push(BuilderGetValidatorsResponseEntry {
                     slot: duty.slot,
                     validator_index: duty.validator_index,
@@ -457,20 +502,42 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
     /// Determine if proposer duties should be updated for the given slot.
     ///
-    /// This function checks two conditions:
-    /// 1. If the `head_slot` is exactly divisible by PROPOSER_DUTIES_UPDATE_FREQ, it will return
-    ///    `true` to trigger a proposer duties update.
-    /// 2. If the distance between the current `head_slot` and the last slot for which proposer
-    ///    duties were fetched (`proposer_duties_slot`) is greater than or equal to
-    ///    PROPOSER_DUTIES_UPDATE_FREQ, it will also return `true`.
+    /// This function checks:
+    /// If the distance between the current `head_slot` and the last slot for which proposer
+    /// duties were fetched (`proposer_duties_slot`) is greater than or equal to
+    /// PROPOSER_DUTIES_UPDATE_FREQ, it will also return `true`.
     async fn should_update_duties(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
         head_slot: u64,
     ) -> bool {
         let proposer_duties_slot = *self.proposer_duties_slot.lock().await;
         let last_proposer_duty_distance = head_slot.saturating_sub(proposer_duties_slot);
-        head_slot % PROPOSER_DUTIES_UPDATE_FREQ == 0 ||
-            last_proposer_duty_distance >= PROPOSER_DUTIES_UPDATE_FREQ
+        last_proposer_duty_distance >= PROPOSER_DUTIES_UPDATE_FREQ
+    }
+
+    async fn primev_update(&self) -> Result<(), HousekeeperError> {
+        let primev_config = self.config.primev_config.as_ref().unwrap();
+        let primev_builders = get_registered_primev_builders(primev_config).await;
+        for builder_pubkey in primev_builders {
+            self.db
+                .store_builder_info(
+                    &builder_pubkey,
+                    BuilderInfo {
+                        collateral: ethereum_consensus::primitives::U256::from(0),
+                        is_optimistic: false,
+                        builder_id: Some("PrimevBuilder".to_string()),
+                    },
+                )
+                .await?;
+        }
+
+        let primev_validators = get_registered_primev_validators(primev_config).await;
+        self.auctioneer.update_primev_proposers(&primev_validators).await?;
+
+        let primev_builder_pref = vec!["PrimevBuilder".to_string()];
+        self.db.update_trusted_builders(&primev_validators, &primev_builder_pref).await?;
+
+        Ok(())
     }
 
     /// Determine if the trusted proposers should be refreshed for the given slot.
@@ -572,4 +639,179 @@ fn v2_submission_late(pending_block: &PendingBlock, current_time: u64) -> bool {
                 MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
         }
     }
+}
+
+#[derive(Debug, EthEvent)]
+#[ethevent(
+    abi = "ProviderRegistered(address indexed provider, uint256 stakedAmount, bytes blsPublicKey)"
+)]
+pub struct ValueChanged {
+    #[ethevent(indexed, name = "provider")]
+    pub provider: Address,
+    #[ethevent(name = "stakedAmount")]
+    pub staked_amount: U256,
+    #[ethevent(name = "blsPublicKey")]
+    pub bls_public_key: Vec<u8>,
+}
+
+/// Fetches the registered primev builders from the provider registry contract.
+/// Returns a list of builder pubkeys.
+/// Currently returns the wrong type, need to fix. Primev working on this.
+pub async fn get_registered_primev_builders(config: &PrimevConfig) -> Vec<BlsPublicKey> {
+    let provider = Provider::<Http>::try_from(config.builder_url.as_str()).unwrap();
+    let provider = Arc::new(provider);
+
+    // Define the contract address and ABI
+    let provider_registry_address: Address = config.builder_contract.as_str().parse().unwrap();
+    // let abi: Abi =
+    // serde_json::from_str(r#"[{"anonymous":false,"inputs":[{"indexed":true,"internalType":"
+    // address","name":"provider","type":"address"},{"indexed":false,"internalType":"uint256","name"
+    // :"stakedAmount","type":"uint256"}],"name":"ProviderRegistered","type":"event"}]"#).unwrap();
+
+    let abi_human_readable = r#"
+    [
+        "event ProviderRegistered(address indexed provider, uint256 stakedAmount, bytes blsPublicKey)"
+    ]
+    "#;
+
+    // Parse the ABI
+    let abi: Abi = AbiParser::default().parse_str(abi_human_readable).unwrap();
+
+    // Create a new contract instance
+    let contract = Contract::new(provider_registry_address, abi, provider.clone());
+
+    let event = contract
+        .event_for_name("ProviderRegistered")
+        .unwrap()
+        .from_block(0)
+        .address(provider_registry_address.into());
+
+    let providers: Vec<ValueChanged> = match event.query().await {
+        Ok(providers) => providers,
+        Err(err) => {
+            println!("{:?}", err);
+            Vec::new()
+        }
+    };
+
+    let mut bls_public_keys = Vec::new();
+    for i in providers.iter() {
+        bls_public_keys.push(BlsPublicKey::try_from(i.bls_public_key.as_slice()).unwrap());
+    }
+    bls_public_keys
+}
+
+/// Fetches the registered primev validators from the validators registry contract.
+pub async fn get_registered_primev_validators(config: &PrimevConfig) -> Vec<BlsPublicKey> {
+    let provider = Provider::<Http>::try_from(config.validator_url.as_str()).unwrap();
+    let provider = Arc::new(provider);
+
+    // Define the contract address and ABI
+    let provider_registry_address: Address = config.validator_contract.as_str().parse().unwrap();
+
+    let abi_str = r#"
+    [
+        {
+            "type": "function",
+            "name": "getStakedValidators",
+            "inputs": [
+                {
+                    "name": "start",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                },
+                {
+                    "name": "end",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "",
+                    "type": "bytes[]",
+                    "internalType": "bytes[]"
+                },
+                {
+                    "name": "",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                }
+            ],
+            "stateMutability": "view"
+        },
+        {
+            "type": "function",
+            "name": "getNumberOfStakedValidators",
+            "inputs": [],
+            "outputs": [
+                {
+                    "name": "",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                },
+                {
+                    "name": "",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                }
+            ],
+            "stateMutability": "view"
+        }
+    ]
+    "#;
+
+    let abi: Abi = serde_json::from_str(abi_str).unwrap();
+
+    // Create a new contract instance
+    let contract = Contract::new(provider_registry_address, abi, provider.clone());
+
+    let num_validators =
+        match contract.method::<(), (U256, U256)>("getNumberOfStakedValidators", ()) {
+            Ok(method) => match method.call().await {
+                Ok((num_validators, _version)) => num_validators,
+                Err(e) => {
+                    error!("Error calling method: {:?}", e);
+                    U256::from(0)
+                }
+            },
+            Err(e) => {
+                error!("Error calling method: {:?}", e);
+                U256::from(0)
+            }
+        };
+
+    let batch_size: U256 = U256::from(500);
+    let mut start: U256 = U256::from(0);
+    let mut total_validators: Vec<Bytes> = Vec::new();
+
+    while start < num_validators {
+        let end =
+            if start + batch_size > num_validators { num_validators } else { start + batch_size };
+
+        match contract
+            .method::<(U256, U256), (Vec<Bytes>, U256)>("getStakedValidators", (start, end))
+        {
+            Ok(method) => match method.call().await {
+                Ok(result) => {
+                    if result.0.is_empty() {
+                        break; // No more validators to fetch
+                    }
+                    total_validators.extend(result.0);
+                }
+                Err(e) => {
+                    eprintln!("Error calling method: {:?}", e);
+                    break;
+                }
+            },
+            Err(e) => {
+                eprintln!("Error creating method: {:?}", e);
+                break;
+            }
+        }
+
+        start = end;
+    }
+
+    total_validators.iter().map(|bytes| BlsPublicKey::try_from(bytes.as_slice()).unwrap()).collect()
 }

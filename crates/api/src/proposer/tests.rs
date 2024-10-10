@@ -32,10 +32,12 @@ pub fn gen_signed_vr() -> SignedValidatorRegistration {
 mod proposer_api_tests {
     // +++ IMPORTS +++
     use crate::{
-        gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage}, proposer::{
+        gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
+        proposer::{
             api::{get_nanos_timestamp, ProposerApi},
             PATH_GET_PAYLOAD, PATH_PROPOSER_API,
-        }, test_utils::proposer_api_app
+        },
+        test_utils::proposer_api_app,
     };
 
     use ethereum_consensus::{
@@ -59,8 +61,8 @@ mod proposer_api_tests {
             builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
         },
         capella::{self},
-        deneb::{self},
         chain_info::ChainInfo,
+        deneb::{self},
         versioned_payload::PayloadAndBlobs,
         SignedBuilderBid, ValidatorPreferences,
     };
@@ -993,19 +995,23 @@ mod proposer_api_tests {
         let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
         let auctioneer = Arc::new(MockAuctioneer::default());
 
-        let prop_api =
-            ProposerApi::<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient, MockGossiper>::new(
-                auctioneer.clone(),
-                Arc::new(MockDatabaseService::default()),
-                Arc::new(MockGossiper::new().unwrap()),
-                vec![],
-                Arc::new(MockMultiBeaconClient::default()),
-                Arc::new(ChainInfo::for_holesky()),
-                slot_update_sender.clone(),
-                Arc::new(ValidatorPreferences::default()),
-                0,
-                gossip_receiver,
-            );
+        let prop_api = ProposerApi::<
+            MockAuctioneer,
+            MockDatabaseService,
+            MockMultiBeaconClient,
+            MockGossiper,
+        >::new(
+            auctioneer.clone(),
+            Arc::new(MockDatabaseService::default()),
+            Arc::new(MockGossiper::new().unwrap()),
+            vec![],
+            Arc::new(MockMultiBeaconClient::default()),
+            Arc::new(ChainInfo::for_holesky()),
+            slot_update_sender.clone(),
+            Arc::new(ValidatorPreferences::default()),
+            0,
+            gossip_receiver,
+        );
 
         let mut x = gen_signed_vr();
 
@@ -1014,47 +1020,38 @@ mod proposer_api_tests {
 
     #[test]
     fn test_verify_signed_blinded_block_signature_from_file_deneb() {
-
         let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
-            if !current_dir.ends_with("api") {
-                current_dir.push("crates/api/");
-            }
-            current_dir.push("test_data/signed_blinded_beacon_block_deneb.json");
-            let req_payload_bytes =
-                load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+        if !current_dir.ends_with("api") {
+            current_dir.push("crates/api/");
+        }
+        current_dir.push("test_data/signed_blinded_beacon_block_deneb.json");
+        let req_payload_bytes =
+            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
-            let mut decoded_submission: SignedBlindedBeaconBlock =
-                serde_json::from_slice(&req_payload_bytes).unwrap();
+        let decoded_submission: SignedBlindedBeaconBlock =
+            serde_json::from_slice(&req_payload_bytes).unwrap();
 
         let chain_info = ChainInfo::for_holesky();
         let slot = decoded_submission.message().slot();
 
         let public_key = BlsPublicKey::try_from(hex::decode("0xb74ed6ac039a55136d5493333c32ce5b2e0152e4121b5b850830383ab836e22fb5f4f8568c61f12d0646dc0eb0c6d861" ).unwrap().as_slice()).unwrap();
 
-        match decoded_submission {
-            SignedBlindedBeaconBlock::Deneb(mut block) => {
-                let result = verify_signed_consensus_message(
-                    &mut block.message,
-                    &block.signature,
-                    &public_key,
-                    &chain_info.context,
-                    Some(slot),
-                    Some(chain_info.genesis_validators_root),
-                );
+        if let SignedBlindedBeaconBlock::Deneb(mut block) = decoded_submission {
+            let result = verify_signed_consensus_message(
+                &mut block.message,
+                &block.signature,
+                &public_key,
+                &chain_info.context,
+                Some(slot),
+                Some(chain_info.genesis_validators_root),
+            );
 
-                match result {
-                    Ok(_) => {
-                        
-                    }
-                    Err(e) => {
-                        println!("Error: {:?}", e);
-                    }
-                    
+            match result {
+                Ok(_) => {}
+                Err(e) => {
+                    println!("Error: {:?}", e);
                 }
             }
-            _ => {}
-            
         }
-        
     }
 }

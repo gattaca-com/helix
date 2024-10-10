@@ -54,5 +54,8 @@ uuid = { workspace = true }
 bytes = "1.5"
 moka = "0.9"
 
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
 [build-dependencies]
 tonic-build = "0.10"

@@ -1,7 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ethereum_consensus::{
-    builder::{SignedValidatorRegistration, ValidatorRegistration},
     crypto::Signature,
     phase0::Validator,
     primitives::{BlsPublicKey, ExecutionAddress, Gwei, ValidatorIndex},
@@ -9,9 +8,8 @@ use ethereum_consensus::{
 };
 use reth_primitives::hex;
 use serde::{Deserialize, Serialize};
-use tokio_postgres::Row;
 
-use crate::{api::proposer_api::ValidatorRegistrationInfo, ValidatorPreferences};
+use crate::{api::proposer_api::ValidatorRegistrationInfo};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ValidatorSummary {
@@ -49,7 +47,10 @@ pub struct SignedValidatorRegistrationEntry {
 }
 
 impl SignedValidatorRegistrationEntry {
-    pub fn new(registration_info: ValidatorRegistrationInfo, pool_name: Option<String>) -> Self {
+    pub fn new(
+        registration_info: ValidatorRegistrationInfo,
+        pool_name: Option<String>,
+    ) -> Self {
         Self {
             registration_info,
             inserted_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,

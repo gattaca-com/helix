@@ -78,7 +78,12 @@ mod simulator_tests {
             signature: BlsSignature::default(),
         });
 
-        BlockSimRequest::new(0, Arc::new(signed_bid_submission), ValidatorPreferences::default(), None)
+        BlockSimRequest::new(
+            0,
+            Arc::new(signed_bid_submission),
+            ValidatorPreferences::default(),
+            None,
+        )
     }
 
     // ++++ TESTS ++++
@@ -93,8 +98,11 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info =
-            BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None };
+        let builder_info = BuilderInfo {
+            collateral: U256::from(100),
+            is_optimistic: true,
+            builder_id: None,
+        };
         let simulator = get_optimistic_simulator(
             &server.url(),
             Some(builder_info.clone()),
@@ -124,8 +132,11 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info =
-            BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None };
+        let builder_info = BuilderInfo {
+            collateral: U256::from(100),
+            is_optimistic: true,
+            builder_id: None,
+        };
         let simulator = get_optimistic_simulator(
             &server.url(),
             Some(builder_info.clone()),
@@ -155,8 +166,11 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info =
-            BuilderInfo { collateral: U256::from(100), is_optimistic: false, builder_id: None };
+        let builder_info = BuilderInfo {
+            collateral: U256::from(100),
+            is_optimistic: false,
+            builder_id: None,
+        };
         let simulator = get_optimistic_simulator(
             &server.url(),
             Some(builder_info.clone()),
@@ -186,8 +200,11 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info =
-            BuilderInfo { collateral: U256::from(100), is_optimistic: false, builder_id: None };
+        let builder_info = BuilderInfo {
+            collateral: U256::from(100),
+            is_optimistic: false,
+            builder_id: None,
+        };
         let simulator = get_optimistic_simulator(
             &server.url(),
             Some(builder_info.clone()),

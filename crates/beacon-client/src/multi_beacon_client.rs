@@ -7,11 +7,12 @@ use async_trait::async_trait;
 use ethereum_consensus::primitives::Root;
 use futures::future::join_all;
 use helix_common::{
-    bellatrix::SimpleSerialize, signed_proposal::VersionedSignedProposal, ProposerDuty,
-    ValidatorSummary,
+    bellatrix::SimpleSerialize, signed_proposal::VersionedSignedProposal,
+    ProposerDuty, ValidatorSummary,
 };
 use tokio::{sync::broadcast::Sender, task::JoinError};
 use tracing::{error, warn};
+use helix_common::beacon_api::PublishBlobsRequest;
 
 use crate::{
     error::BeaconClientError,
@@ -240,6 +241,25 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
         }
 
         Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
+    }
+
+    async fn publish_blobs(&self, blob_sidecars: PublishBlobsRequest) -> Result<u16, BeaconClientError> {
+        let clients = self.beacon_clients_by_last_response();
+        clients.into_iter().for_each(|(_i, client)| {
+            let sidecars = blob_sidecars.clone();
+
+            tokio::spawn(async move {
+                let res = client.publish_blobs(sidecars).await;
+                if let Err(err) = res {
+                    match err {
+                        BeaconClientError::RequestNotSupported => {}
+                        error => warn!(?error, "failed to publish blobs"),
+                    }
+                }
+            });
+        });
+
+        Ok(200)
     }
 }
 

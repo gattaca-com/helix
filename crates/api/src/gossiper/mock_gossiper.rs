@@ -5,10 +5,12 @@ use crate::{
     gossiper::{
         error::GossipError,
         traits::GossipClientTrait,
-        types::{BroadcastHeaderParams, BroadcastPayloadParams, BroadcastGetPayloadParams},
+        types::{BroadcastGetPayloadParams, BroadcastHeaderParams, BroadcastPayloadParams},
     },
     grpc::{self, gossip_service_server::GossipService},
 };
+
+use super::types::broadcast_cancellation::BroadcastCancellationParams;
 
 #[derive(Clone)]
 pub struct MockGossiper {}
@@ -31,7 +33,16 @@ impl GossipClientTrait for MockGossiper {
     async fn broadcast_payload(&self, _request: BroadcastPayloadParams) -> Result<(), GossipError> {
         Ok(())
     }
-    async fn broadcast_get_payload(&self, _request: BroadcastGetPayloadParams) -> Result<(), GossipError> {
+    async fn broadcast_get_payload(
+        &self,
+        _request: BroadcastGetPayloadParams,
+    ) -> Result<(), GossipError> {
+        Ok(())
+    }
+    async fn broadcast_cancellation(
+        &self,
+        _request: BroadcastCancellationParams,
+    ) -> Result<(), GossipError> {
         Ok(())
     }
 }
@@ -57,6 +68,13 @@ impl GossipService for MockGossiperService {
     async fn broadcast_get_payload(
         &self,
         _request: Request<grpc::BroadcastGetPayloadParams>,
+    ) -> Result<Response<()>, Status> {
+        Ok(tonic::Response::new(()))
+    }
+
+    async fn broadcast_cancellation(
+        &self,
+        _request: Request<grpc::BroadcastCancellationParams>,
     ) -> Result<Response<()>, Status> {
         Ok(tonic::Response::new(()))
     }

@@ -19,6 +19,10 @@ axum.workspace = true
 hyper.workspace = true
 tokio.workspace = true
 
+tokio-ping = "0.2.0"
+socket2 = "0.4"
+futures-util = { version = "0.3", features = ["compat"] }
+
 # Serialization and Data Format
 reth-primitives.workspace = true
 serde.workspace = true
@@ -35,5 +39,8 @@ redis.workspace = true
 auto_impl.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
 uuid.workspace = true
+
+ethers = "2.0.14"
 

@@ -30,11 +30,10 @@ jobs:
 
     # Install nightly toolchain and rustfmt
     - name: Install nightly toolchain and components
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@master
       with:
-        toolchain: nightly-2024-02-05
+        toolchain: nightly-2023-06-01
         components: clippy, rustfmt
-        override: true
 
     # Rust Linting with Clippy
     - uses: dtolnay/rust-toolchain@clippy

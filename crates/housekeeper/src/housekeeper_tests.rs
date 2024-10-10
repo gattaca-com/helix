@@ -11,10 +11,13 @@ mod housekeeper_tests {
 
     // ++++ IMPORTS ++++
     use crate::housekeeper::{Housekeeper, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS};
+    
     use helix_beacon_client::{
         mock_multi_beacon_client::MockMultiBeaconClient, MultiBeaconClientTrait,
     };
-    use helix_common::{api::builder_api::BuilderGetValidatorsResponseEntry, RelayConfig, ValidatorSummary};
+    use helix_common::{
+        api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, RelayConfig, ValidatorSummary
+    };
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use tokio::{sync::broadcast, task};
@@ -38,7 +41,13 @@ mod housekeeper_tests {
             proposer_duties_has_been_read.clone(),
         );
         let auctioneer = MockAuctioneer::new();
-        let housekeeper = Housekeeper::new(Arc::new(db), beacon_client.clone(), auctioneer, RelayConfig::default());
+        let housekeeper = Housekeeper::new(
+            Arc::new(db),
+            beacon_client.clone(),
+            auctioneer,
+            RelayConfig::default(),
+            Arc::new(ChainInfo::for_mainnet()),
+        );
 
         HelperVars {
             housekeeper,

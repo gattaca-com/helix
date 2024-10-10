@@ -1,8 +1,15 @@
-use std::{collections::HashMap, net::{IpAddr, SocketAddr}, sync::{Arc, Mutex}, time::{Duration, Instant}};
 use axum::{
-    body::Body, extract::{connect_info, Request, State}, middleware::Next, response::{IntoResponse, Response}
+    body::Body,
+    extract::{connect_info, Request, State},
+    middleware::Next,
+    response::{IntoResponse, Response},
 };
-use tracing::info;
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use super::error::RateLimitExceeded;
 
@@ -13,9 +20,7 @@ pub struct RateLimitState {
 
 impl RateLimitState {
     pub fn new(rate_limits: HashMap<String, RateLimitStateForRoute>) -> Self {
-        RateLimitState {
-            state_per_route: Arc::new(rate_limits),
-        }
+        RateLimitState { state_per_route: Arc::new(rate_limits) }
     }
 
     pub fn check_rate_limit(&self, ip: IpAddr, route: &str) -> bool {
@@ -46,10 +51,7 @@ struct RateLimitEntry {
 
 impl Default for RateLimitEntry {
     fn default() -> Self {
-        RateLimitEntry {
-            request_count: 0,
-            last_access: Instant::now(),
-        }
+        RateLimitEntry { request_count: 0, last_access: Instant::now() }
     }
 }
 
@@ -84,7 +86,7 @@ impl RateLimitStateForRoute {
         }
 
         // Get or insert the IP address entry in the hashmap
-        let entry = ip_counts.entry(ip).or_insert_with(|| RateLimitEntry::default());
+        let entry = ip_counts.entry(ip).or_default();
 
         // Update the access time and request count for the IP address
         let elapsed = entry.last_access.elapsed();
@@ -111,21 +113,20 @@ impl RateLimitStateForRoute {
         entries.truncate(100); // Limit the number of entries to 100
 
         // Reconstruct the HashMap with pruned entries
-        let pruned_ip_counts: HashMap<_, _> = entries.into_iter().map(|(&ip, entry)| (ip, entry.clone())).collect();
+        let pruned_ip_counts: HashMap<_, _> =
+            entries.into_iter().map(|(&ip, entry)| (ip, entry.clone())).collect();
         *ip_counts = pruned_ip_counts;
     }
 }
 
-
 pub async fn rate_limit_by_ip(
     State(state): State<RateLimitState>,
-    connect_info: connect_info::ConnectInfo::<SocketAddr>,
+    connect_info: connect_info::ConnectInfo<SocketAddr>,
     request: Request,
     next: Next,
 ) -> Response {
-
     let ip = connect_info.0.ip();
-    
+
     // Extract the real IP address from the request headers in case of reverse proxy
     let real_ip = extract_ip_from_request(&request).unwrap_or(ip);
 
