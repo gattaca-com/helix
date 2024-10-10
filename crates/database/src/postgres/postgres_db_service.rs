@@ -94,7 +94,12 @@ impl PostgresDatabaseService {
             None => None,
         };
         cfg.manager = Some(ManagerConfig { recycling_method: RecyclingMethod::Fast });
-        let pool = cfg.create_pool(None, NoTls)?;
+        let rustls_config = rustls::ClientConfig::builder().with_root_certificates(root_certs()).with_no_client_auth();
+        let tls = tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config);
+        let pool = match cfg.ssl_mode {
+            Some(SslMode::Prefer) | Some(SslMode::Require) => cfg.create_pool(None, tls)?,
+            _ => cfg.create_pool(None, NoTls)?,
+        };
         Ok(PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
@@ -1427,4 +1432,12 @@ impl DatabaseService for PostgresDatabaseService {
                 .await?,
         )
     }
+}
+
+fn root_certs() -> rustls::RootCertStore {
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in rustls_native_certs::load_native_certs().expect("could not load platform certs") {
+        roots.add(cert).unwrap();
+    }
+    roots
 }
