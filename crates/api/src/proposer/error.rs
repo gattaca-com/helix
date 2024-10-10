@@ -155,6 +155,9 @@ pub enum ProposerApiError {
     #[error("internal server error")]
     InternalServerError,
 
+    #[error("service unavailable")]
+    ServiceUnavailableError,
+
     #[error("number of blinded blobs does not match blobs bundle length")]
     BlindedBlobsBundleLengthMismatch,
 
@@ -174,6 +177,9 @@ pub enum ProposerApiError {
 
     #[error("parent hash unknown for slot: {slot}")]
     ParentHashUnknownForSlot { slot: u64 },
+
+    #[error("not serving headers")]
+    NotServingHeaders,
 }
 
 impl IntoResponse for ProposerApiError {
@@ -317,6 +323,9 @@ impl IntoResponse for ProposerApiError {
             ProposerApiError::InternalServerError => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
             },
+            ProposerApiError::ServiceUnavailableError => {
+                (StatusCode::SERVICE_UNAVAILABLE, "Service unavailable").into_response()
+            },
             ProposerApiError::BlindedBlobsBundleLengthMismatch => {
                 (StatusCode::BAD_REQUEST, "number of blinded blobs does not match blobs bundle length").into_response()
             },
@@ -341,6 +350,9 @@ impl IntoResponse for ProposerApiError {
             ProposerApiError::ParentHashUnknownForSlot {slot} => {
                 (StatusCode::BAD_REQUEST, format!("parent hash unknown for slot: {slot}")).into_response()
             },
+            ProposerApiError::NotServingHeaders => {
+                (StatusCode::NO_CONTENT, ProposerApiError::NotServingHeaders.to_string()).into_response()
+            }
         }
     }
 }

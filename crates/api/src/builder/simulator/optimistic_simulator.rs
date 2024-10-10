@@ -142,9 +142,6 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         request: &BlockSimRequest,
         builder_info: &BuilderInfo,
     ) -> bool {
-        if request.proposer_preferences.filtering.is_regional() {
-            return false;
-        }
 
         if builder_info.is_optimistic && request.message.value <= builder_info.collateral {
             if *self.failsafe_triggered.read().await {

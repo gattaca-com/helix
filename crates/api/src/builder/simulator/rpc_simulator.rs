@@ -6,7 +6,7 @@ use reqwest::{
 };
 use serde_json::json;
 use tokio::sync::mpsc::Sender;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 use helix_common::simulator::BlockSimError;
 use uuid::Uuid;

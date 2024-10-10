@@ -9,9 +9,13 @@ pub struct ValidatorPreferences {
     #[serde(default)]
     pub trusted_builders: Option<Vec<String>>,
 
-    /// Allows validators to express a preference for whether a delay should be applied to get headers or not.
+    /// Allows validators to express a preference for whether a delay should be applied to get
+    /// headers or not.
     #[serde(default = "default_header_delay")]
     pub header_delay: bool,
+
+    #[serde(default)]
+    pub gossip_blobs: bool,
 }
 
 fn default_filtering() -> Filtering {
@@ -64,4 +68,19 @@ impl From<ValidatorPreferences> for BuilderValidatorPreferences {
             trusted_builders: preferences.trusted_builders.clone(),
         }
     }
+}
+
+#[test]
+fn test_validator_preferences_serde() {
+    let preferences = ValidatorPreferences {
+        filtering: Filtering::Regional,
+        trusted_builders: Some(vec!["builder1".to_string(), "builder2".to_string()]),
+        header_delay: false,
+        gossip_blobs: true,
+    };
+
+    let json = serde_json::to_string(&preferences).unwrap();
+    let _deserialized: ValidatorPreferences = serde_json::from_str(&json).unwrap();
+
+    println!("{}", json);
 }

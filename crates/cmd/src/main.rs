@@ -1,6 +1,13 @@
 use helix_api::service::ApiService;
 use helix_common::{LoggingConfig, RelayConfig};
+use helix_utils::set_panic_hook;
 use tokio::runtime::Builder;
+use tracing_appender::rolling::Rotation;
+
+use tikv_jemallocator::Jemalloc;
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 async fn run() {
     let config = match RelayConfig::load() {
@@ -15,6 +22,7 @@ async fn run() {
 
     match &config.logging {
         LoggingConfig::Console => {
+            set_panic_hook(config.postgres.region_name.clone(), config.discord_webhook_url.clone(), None);
             let filter_layer = tracing_subscriber::EnvFilter::from_default_env();
 
             tracing_subscriber::fmt()
@@ -22,7 +30,14 @@ async fn run() {
                 .init();
         }
         LoggingConfig::File { dir_path, file_name } => {
-            let file_appender = tracing_appender::rolling::daily(dir_path, file_name);
+            set_panic_hook(config.postgres.region_name.clone(), config.discord_webhook_url.clone(), Some(format!("{}/crash.log", dir_path.clone())));
+            let file_appender = tracing_appender::rolling::Builder::new()
+                .filename_prefix(file_name)
+                .max_log_files(14)
+                .rotation(Rotation::DAILY)
+                .build(dir_path)
+                .expect("failed to create log appender!");
+            
             let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
             let filter_layer = tracing_subscriber::EnvFilter::from_default_env();

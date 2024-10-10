@@ -1,9 +1,14 @@
 use crate::{api::*, ValidatorPreferences};
 use clap::Parser;
 use ethereum_consensus::ssz::prelude::Node;
-use helix_utils::request_encoding::Encoding;
+use helix_utils::{
+    request_encoding::Encoding,
+    serde::{default_bool, deserialize_url, serialize_url},
+};
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs::File};
+use ethereum_consensus::deneb::BlsPublicKey;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RelayConfig {
@@ -25,6 +30,15 @@ pub struct RelayConfig {
     pub router_config: RouterConfig,
     #[serde(default = "default_duration")]
     pub target_get_payload_propagation_duration_ms: u64,
+    #[serde(default)]
+    pub primev_config: Option<PrimevConfig>,
+    /// Submissions from these builder pubkeys will never be dropped early
+    /// for having a low bid. They will always be simulated and fully verified.
+    /// This is useful when testing builder strategies.
+    #[serde(default)]
+    pub skip_floor_bid_builder_pubkeys: Vec<BlsPublicKey>,
+    #[serde(default)]
+    pub discord_webhook_url: Option<String>,
 }
 
 impl RelayConfig {
@@ -77,7 +91,12 @@ pub struct SimulatorConfig {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BeaconClientConfig {
-    pub url: String,
+    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
+    pub url: Url,
+    /// Bool representing if this beacon client is configured to
+    /// handle async blob gossiping.
+    #[serde(default = "default_bool::<false>")]
+    pub gossip_blobs_enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -97,6 +116,14 @@ pub enum NetworkConfig {
         genesis_validator_root: Node,
         genesis_time: u64,
     },
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct PrimevConfig {
+    pub builder_url: String,
+    pub builder_contract: String,
+    pub validator_url: String,
+    pub validator_contract: String,
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
@@ -122,7 +149,6 @@ pub struct RouterConfig {
 }
 
 impl RouterConfig {
-
     // Function to resolve condensed variants and replace them with real routes
     pub fn resolve_condensed_routes(&mut self) {
         if self.contains(Route::All) {
@@ -139,6 +165,7 @@ impl RouterConfig {
                 Route::SubmitBlock,
                 Route::SubmitBlockOptimistic,
                 Route::SubmitHeader,
+                Route::CancelBid,
                 Route::GetTopBid,
             ],
         );
@@ -182,7 +209,6 @@ impl RouterConfig {
     }
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteInfo {
     pub route: Route,
@@ -207,6 +233,7 @@ pub enum Route {
     SubmitBlock,
     SubmitBlockOptimistic,
     SubmitHeader,
+    CancelBid,
     GetTopBid,
     Status,
     RegisterValidators,
@@ -222,14 +249,19 @@ impl Route {
         match self {
             Route::GetValidators => format!("{PATH_BUILDER_API}{PATH_GET_VALIDATORS}"),
             Route::SubmitBlock => format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK}"),
-            Route::SubmitBlockOptimistic => format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC_V2}"),
+            Route::SubmitBlockOptimistic => {
+                format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC_V2}")
+            }
             Route::SubmitHeader => format!("{PATH_BUILDER_API}{PATH_SUBMIT_HEADER}"),
+            Route::CancelBid => format!("{PATH_BUILDER_API}{PATH_CANCEL_BID}"),
             Route::GetTopBid => format!("{PATH_BUILDER_API}{PATH_GET_TOP_BID}"),
             Route::Status => format!("{PATH_PROPOSER_API}{PATH_STATUS}"),
             Route::RegisterValidators => format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
             Route::GetHeader => format!("{PATH_PROPOSER_API}{PATH_GET_HEADER}"),
             Route::GetPayload => format!("{PATH_PROPOSER_API}{PATH_GET_PAYLOAD}"),
-            Route::ProposerPayloadDelivered => format!("{PATH_DATA_API}{PATH_PROPOSER_PAYLOAD_DELIVERED}"),
+            Route::ProposerPayloadDelivered => {
+                format!("{PATH_DATA_API}{PATH_PROPOSER_PAYLOAD_DELIVERED}")
+            }
             Route::BuilderBidsReceived => format!("{PATH_DATA_API}{PATH_BUILDER_BIDS_RECEIVED}"),
             Route::ValidatorRegistration => format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),
             Route::All => panic!("All is not a real route"),
@@ -238,7 +270,6 @@ impl Route {
             Route::DataApi => panic!("DataApi is not a real route"),
         }
     }
-    
 }
 
 fn default_duration() -> u64 {
@@ -253,29 +284,42 @@ fn test_config() {
     let mut config = RelayConfig::default();
     config.redis.url = "redis://localhost:6379".to_string();
     config.simulator.url = "http://localhost:8080".to_string();
-    config.beacon_clients.push(BeaconClientConfig { url: "http://localhost:8080".to_string() });
+    config.beacon_clients.push(BeaconClientConfig {
+        url: Url::parse("http://localhost:8080").unwrap(),
+        gossip_blobs_enabled: false,
+    });
     config.broadcasters.push(BroadcasterConfig::BeaconClient(BeaconClientConfig {
-        url: "http://localhost:8080".to_string(),
+        url: Url::parse("http://localhost:8080").unwrap(),
+        gossip_blobs_enabled: false,
     }));
-    config.network_config = NetworkConfig::Custom { dir_path: "test".to_string(), genesis_validator_root: Default::default(), genesis_time: 1 };
+    config.network_config = NetworkConfig::Custom {
+        dir_path: "test".to_string(),
+        genesis_validator_root: Default::default(),
+        genesis_time: 1,
+    };
     config.logging =
         LoggingConfig::File { dir_path: "hello".to_string(), file_name: "test".to_string() };
-    config.validator_preferences = ValidatorPreferences { filtering: Filtering::Regional, trusted_builders: None, header_delay: true};
+    config.validator_preferences = ValidatorPreferences {
+        filtering: Filtering::Regional,
+        trusted_builders: None,
+        header_delay: true,
+        gossip_blobs: false
+    };
     config.router_config = RouterConfig {
         enabled_routes: vec![
             RouteInfo { route: Route::GetValidators, rate_limit: None },
             RouteInfo { route: Route::SubmitBlock, rate_limit: None },
             RouteInfo { route: Route::SubmitBlockOptimistic, rate_limit: None },
             RouteInfo { route: Route::ValidatorRegistration, rate_limit: None },
-            RouteInfo { route: Route::GetHeader, rate_limit: Some(RateLimitInfo { limit_duration_ms: 12, max_requests: 3 }) },
+            RouteInfo {
+                route: Route::GetHeader,
+                rate_limit: Some(RateLimitInfo { limit_duration_ms: 12, max_requests: 3 }),
+            },
             RouteInfo { route: Route::GetPayload, rate_limit: None },
             RouteInfo { route: Route::ProposerPayloadDelivered, rate_limit: None },
             RouteInfo { route: Route::RegisterValidators, rate_limit: None },
             RouteInfo { route: Route::Status, rate_limit: None },
-        ]
-        .iter()
-        .cloned()
-        .collect(),
+        ].to_vec(),
     };
     println!("{}", serde_yaml::to_string(&config).unwrap());
 }

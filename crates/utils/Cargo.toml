@@ -19,3 +19,6 @@ reth-primitives.workspace = true
 http.workspace = true
 reqwest.workspace = true
 axum.workspace = true
+
+backtrace.workspace = true
+tracing.workspace = true

@@ -24,7 +24,7 @@ pub struct BlockSimRequest {
     pub signature: BlsSignature,
     pub proposer_preferences: ValidatorPreferences,
     pub blobs_bundle: Option<BlobsBundle>,
-    pub parent_beacon_block_root: Option<Bytes32>
+    pub parent_beacon_block_root: Option<Bytes32>,
 }
 
 impl BlockSimRequest {

@@ -4,7 +4,8 @@ use ethereum_consensus::{
     types::mainnet::{SignedBeaconBlock, SignedBlindedBeaconBlock},
 };
 use helix_common::{
-    deneb::SignedBlockContents, signed_proposal::VersionedSignedProposal, versioned_payload::PayloadAndBlobs, Filtering, ValidatorPreferences
+    deneb::SignedBlockContents, signed_proposal::VersionedSignedProposal,
+    versioned_payload::PayloadAndBlobs, Filtering,
 };
 use serde::Deserialize;
 
@@ -159,6 +160,9 @@ pub struct PreferencesHeader {
     /// This allows for limiting submissions to a trusted set of builders.
     pub trusted_builders: Option<Vec<String>>,
 
-    /// Allows validators to express a preference for whether a delay should be applied to get headers or not.
+    /// Allows validators to express a preference for whether a delay should be applied to get
+    /// headers or not.
     pub header_delay: Option<bool>,
+
+    pub gossip_blobs: Option<bool>,
 }

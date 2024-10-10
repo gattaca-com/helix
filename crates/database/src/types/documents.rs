@@ -1,5 +1,3 @@
-
-
 use ethereum_consensus::{
     primitives::{BlsPublicKey, Hash32},
     ssz::prelude::*,
@@ -13,7 +11,8 @@ use helix_common::{
     },
     bid_submission::BidTrace,
     builder_info::BuilderInfo,
-    simulator::BlockSimError, SubmissionTrace,
+    simulator::BlockSimError,
+    SubmissionTrace,
 };
 
 #[derive(Serialize, Deserialize)]

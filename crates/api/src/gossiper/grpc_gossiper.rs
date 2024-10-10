@@ -3,13 +3,16 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use tokio::{sync::mpsc::Sender, time::sleep};
 use tonic::{transport::Channel, Request, Response, Status};
-use tracing::{error, info};
+use tracing::{error};
 
 use crate::{
     gossiper::{
         error::GossipError,
         traits::GossipClientTrait,
-        types::{BroadcastHeaderParams, BroadcastPayloadParams, BroadcastGetPayloadParams, GossipedMessage},
+        types::{
+            BroadcastGetPayloadParams, BroadcastHeaderParams, BroadcastPayloadParams,
+            GossipedMessage,
+        },
     },
     grpc::{
         self,
@@ -17,6 +20,8 @@ use crate::{
         gossip_service_server::{GossipService, GossipServiceServer},
     },
 };
+
+use super::types::broadcast_cancellation::BroadcastCancellationParams;
 
 #[derive(Clone)]
 pub struct GrpcGossiperClient {
@@ -68,15 +73,7 @@ impl GrpcGossiperClient {
 
         if let Some(mut client) = client {
             if let Err(err) = client.broadcast_header(request).await {
-                return match err.code() {
-                    tonic::Code::Unavailable => {
-                        error!(err = %err, "failed to broadcast header");
-                        // Reconnect
-                        self.connect().await;
-                        Err(GossipError::BroadcastError(err))
-                    }
-                    _ => Err(GossipError::BroadcastError(err)),
-                }
+                return Err(GossipError::BroadcastError(err));
             }
         } else {
             return Err(GossipError::ClientNotConnected);
@@ -96,15 +93,7 @@ impl GrpcGossiperClient {
 
         if let Some(mut client) = client {
             if let Err(err) = client.broadcast_payload(request).await {
-                return match err.code() {
-                    tonic::Code::Unavailable => {
-                        error!(err = %err, "failed to broadcast payload");
-                        // Reconnect
-                        self.connect().await;
-                        Err(GossipError::BroadcastError(err))
-                    }
-                    _ => Err(GossipError::BroadcastError(err)),
-                }
+                return Err(GossipError::BroadcastError(err));
             }
         } else {
             return Err(GossipError::ClientNotConnected);
@@ -124,15 +113,27 @@ impl GrpcGossiperClient {
 
         if let Some(mut client) = client {
             if let Err(err) = client.broadcast_get_payload(request).await {
-                return match err.code() {
-                    tonic::Code::Unavailable => {
-                        error!(err = %err, "failed to broadcast get payload");
-                        // Reconnect
-                        self.connect().await;
-                        Err(GossipError::BroadcastError(err))
-                    }
-                    _ => Err(GossipError::BroadcastError(err)),
-                }
+                return Err(GossipError::BroadcastError(err));
+            }
+        } else {
+            return Err(GossipError::ClientNotConnected);
+        }
+        Ok(())
+    }
+
+    pub async fn broadcast_cancellation(
+        &self,
+        request: grpc::BroadcastCancellationParams,
+    ) -> Result<(), GossipError> {
+        let request = Request::new(request);
+        let client = {
+            let client_guard = self.client.read().await;
+            client_guard.clone()
+        };
+
+        if let Some(mut client) = client {
+            if let Err(err) = client.broadcast_cancellation(request).await {
+                return Err(GossipError::BroadcastError(err));
             }
         } else {
             return Err(GossipError::ClientNotConnected);
@@ -161,7 +162,11 @@ impl GrpcGossiperClientManager {
 
     /// Starts the gRPC server to listen for gossip requests on the 50051 port.
     /// Will panic if the server can't be started.
-    pub async fn start_server(&self, builder_api_sender: Sender<GossipedMessage>, proposer_api_sender: Sender<GossipedMessage>) {
+    pub async fn start_server(
+        &self,
+        builder_api_sender: Sender<GossipedMessage>,
+        proposer_api_sender: Sender<GossipedMessage>,
+    ) {
         let service = GrpcGossiperService { builder_api_sender, proposer_api_sender };
 
         let addr = "0.0.0.0:50051".parse().unwrap();
@@ -207,7 +212,10 @@ impl GossipClientTrait for GrpcGossiperClientManager {
         Ok(())
     }
 
-    async fn broadcast_get_payload(&self, request: BroadcastGetPayloadParams) -> Result<(), GossipError> {
+    async fn broadcast_get_payload(
+        &self,
+        request: BroadcastGetPayloadParams,
+    ) -> Result<(), GossipError> {
         let request = request.to_proto();
 
         for client in self.clients.iter() {
@@ -216,6 +224,24 @@ impl GossipClientTrait for GrpcGossiperClientManager {
             tokio::spawn(async move {
                 if let Err(err) = client.broadcast_get_payload(request).await {
                     error!(err = %err, "failed to broadcast get payload");
+                }
+            });
+        }
+        Ok(())
+    }
+
+    async fn broadcast_cancellation(
+        &self,
+        request: BroadcastCancellationParams,
+    ) -> Result<(), GossipError> {
+        let request = request.to_proto();
+
+        for client in self.clients.iter() {
+            let client = client.clone();
+            let request = request.clone();
+            tokio::spawn(async move {
+                if let Err(err) = client.broadcast_cancellation(request).await {
+                    error!(err = %err, "failed to broadcast header");
                 }
             });
         }
@@ -267,6 +293,19 @@ impl GossipService for GrpcGossiperService {
             self.proposer_api_sender.send(GossipedMessage::GetPayload(Box::new(request))).await
         {
             error!(err = %err, "failed to send get payload to builder");
+        }
+        Ok(Response::new(()))
+    }
+
+    async fn broadcast_cancellation(
+        &self,
+        request: Request<grpc::BroadcastCancellationParams>,
+    ) -> Result<Response<()>, Status> {
+        let request = BroadcastCancellationParams::from_proto(request.into_inner());
+        if let Err(err) =
+            self.builder_api_sender.send(GossipedMessage::Cancellation(Box::new(request))).await
+        {
+            error!(err = %err, "failed to send cancellation to builder");
         }
         Ok(Response::new(()))
     }

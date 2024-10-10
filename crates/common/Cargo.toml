@@ -21,6 +21,9 @@ serde_yaml = "0.9.25"
 # Ethereum Types
 ethereum-consensus.workspace = true
 reth-primitives.workspace = true
+merkle_proof = { git = "https://github.com/sigp/lighthouse.git", tag = "v5.3.0" }
+ethereum-types = "0.14.1"
+ssz_types = "0.5.4"
 
 # DB
 deadpool-redis.workspace = true

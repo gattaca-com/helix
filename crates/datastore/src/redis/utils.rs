@@ -1,8 +1,14 @@
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32};
 
-use crate::{error::AuctioneerError, types::keys::{
-    BID_FLOOR_KEY, BID_FLOOR_VALUE_KEY, BID_TRACE_KEY, BLOCK_BUILDER_LATEST_BID_KEY, BLOCK_BUILDER_LATEST_BID_TIME_KEY, BLOCK_BUILDER_LATEST_BID_VALUE_KEY, EXEC_PAYLOAD_KEY, GET_HEADER_RESPONSE_KEY, PENDING_BLOCK_KEY, SEEN_BLOCK_HASHES_KEY, TOP_BID_VALUE_KEY
-}};
+use crate::{
+    error::AuctioneerError,
+    types::keys::{
+        BID_FLOOR_KEY, BID_FLOOR_VALUE_KEY, BID_TRACE_KEY, BLOCK_BUILDER_LATEST_BID_KEY,
+        BLOCK_BUILDER_LATEST_BID_TIME_KEY, BLOCK_BUILDER_LATEST_BID_VALUE_KEY, EXEC_PAYLOAD_KEY,
+        GET_HEADER_RESPONSE_KEY, HEADER_TX_ROOT, PENDING_BLOCK_KEY,
+        SEEN_BLOCK_HASHES_KEY, TOP_BID_VALUE_KEY,
+    },
+};
 
 pub fn get_cache_get_header_response_key(
     slot: u64,
@@ -109,7 +115,9 @@ pub fn get_pending_block_builder_block_hash_key(
     format!("{PENDING_BLOCK_KEY}:{builder_pub_key:?}_{block_hash:?}")
 }
 
-pub fn get_pubkey_from_hex(pubkey: &str) -> Result<BlsPublicKey, ethereum_consensus::crypto::Error> {
+pub fn get_pubkey_from_hex(
+    pubkey: &str,
+) -> Result<BlsPublicKey, ethereum_consensus::crypto::Error> {
     // strip 0x prefix if present
     let hex_str = pubkey.trim_start_matches("0x");
     let bytes = hex::decode(hex_str)?;
@@ -119,6 +127,10 @@ pub fn get_pubkey_from_hex(pubkey: &str) -> Result<BlsPublicKey, ethereum_consen
 pub fn get_hash_from_hex(hash: &str) -> Result<Hash32, AuctioneerError> {
     // strip 0x prefix if present
     let hex_str = hash.trim_start_matches("0x");
-    let bytes = hex::decode(hex_str).map_err(|e| ethereum_consensus::crypto::Error::Hex(e))?;
+    let bytes = hex::decode(hex_str).map_err(ethereum_consensus::crypto::Error::Hex)?;
     Ok(Hash32::try_from(bytes.as_slice())?)
+}
+
+pub fn get_header_tx_root_key(hash: &Hash32) -> String {
+    format!("{HEADER_TX_ROOT}:{hash:?}")
 }

@@ -1,18 +1,22 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use ethereum_consensus::{
     builder::SignedValidatorRegistration,
     primitives::{BlsPublicKey, Slot},
     serde::as_str,
 };
-use helix_beacon_client::BeaconClientTrait;
-use reqwest::Error;
+use helix_beacon_client::{beacon_client::BeaconClient, BeaconClientTrait};
+use reqwest::{Error, Response};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::channel;
+use tokio::time::sleep;
+use tracing::{info, error};
 
-use helix_common::api::{
+use helix_common::{api::{
     builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
-};
+}, BeaconClientConfig};
+use url::Url;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct BuilderGetValidatorsResponseEntryExternal {
@@ -34,7 +38,7 @@ async fn fetch_validators_from_endpoint(
 
 #[allow(unused)]
 async fn fetch_and_aggregate_validators(
-    endpoints: &Vec<&str>,
+    endpoints: &[&str],
 ) -> Result<Vec<ValidatorRegistrationInfo>, Error> {
     let mut all_validators: HashMap<BlsPublicKey, ValidatorRegistrationInfo> = HashMap::new();
     let (tx, mut rx) =
@@ -96,69 +100,75 @@ async fn register_validators(
 ) -> Result<(), Error> {
     let client = reqwest::Client::new();
     let resp = client.post(endpoint).json(&validators).send().await?;
-    println!("{:?}", resp);
+    info!("{:?}", resp);
 
     Ok(())
 }
 
 #[allow(unused)]
-async fn get_status(endpoint: &str) -> Result<(), Error> {
+async fn get_status(endpoint: &str) -> Result<Response, Error> {
     let client = reqwest::Client::new();
     let resp = client.get(endpoint).send().await?;
-    println!("{:?}", resp.status());
-    Ok(())
+    Ok(resp)
 }
 
 #[tokio::test]
 #[ignore]
 async fn run() {
-    let endpoints = vec![
-        "https://localhost/relay/v1/builder/validators",
-        "https://localhost/relay/v1/builder/validators",
-        "https://localhost/relay/v1/builder/validators",
-    ];
+    tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
 
-    let helix_register_endpoint = "http://localhost:4040/eth/v1/builder/validators";
-    let beacon_client = helix_beacon_client::beacon_client::BeaconClient::from_endpoint_str(
-        "http://localhost:5052",
-    );
+    let endpoints = vec![
+        // TODO: add
+    ];
+    let helix_register_endpoint = "";  // TODO: add
+    let register_endpoint_status = get_status(helix_register_endpoint).await;
+    info!(?endpoints, helix_register_endpoint, ?register_endpoint_status, "running registration replays...");
+
+    let beacon_client = BeaconClient::from_config(BeaconClientConfig{
+        url: Url::parse("http://localhost:5052").unwrap(),
+        gossip_blobs_enabled: false,
+    });
 
     let (head_event_sender, mut head_event_receiver) =
         tokio::sync::broadcast::channel::<helix_beacon_client::types::HeadEventData>(100);
 
     tokio::spawn(async move {
         if let Err(err) = beacon_client.subscribe_to_head_events(head_event_sender).await {
-            println!("Error subscribing to head events: {err}");
+            error!("Error subscribing to head events: {err}");
         }
     });
 
     let mut first_fetch_complete = false;
     // Process registrations each half epoch
     while let Ok(head_event) = head_event_receiver.recv().await {
-        println!("New head event: {}", head_event.slot);
+        info!("New head event: {}", head_event.slot);
         if head_event.slot % 5 != 0 && first_fetch_complete {
             continue;
         }
         first_fetch_complete = true;
 
-        println!("Replaying validator registrations");
+        info!("Replaying validator registrations");
 
         match fetch_and_aggregate_validators(&endpoints).await {
             Ok(validators) => {
-                println!("Num validators fetched: {:?}", validators.len());
+                let pubkeys: Vec<BlsPublicKey> = validators.iter().map(|v| v.registration.message.public_key.clone()).collect();
+                info!(?pubkeys, "{} validators fetched", validators.len());
+
+                sleep(Duration::from_secs(60)).await;
+
                 if let Err(err) = register_validators(
                     validators.into_iter().map(|v| v.registration).collect(),
                     helix_register_endpoint,
                 )
                 .await
                 {
-                    println!("Error registering validators to our relay: {err}");
+                    error!("Error registering validators to our relay: {err}");
                 } else {
-                    println!("Success!");
+                    info!("Successfully registered validators!");
                 }
             }
             Err(err) => {
-                println!("Error fetching validators: {err}");
+                error!("Error fetching validators: {err}");
             }
         }
     }

@@ -1,5 +1,3 @@
-
-
 use ethereum_consensus::{
     builder::{SignedValidatorRegistration, ValidatorRegistration},
     primitives::{BlsPublicKey, BlsSignature, U256},
@@ -7,7 +5,11 @@ use ethereum_consensus::{
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
-    }, bellatrix::{ByteList, ByteVector, List}, bid_submission::BidTrace, BuilderInfo, Filtering, GetPayloadTrace, ProposerInfo, SignedValidatorRegistrationEntry, ValidatorPreferences
+    },
+    bellatrix::{ByteList, ByteVector, List},
+    bid_submission::BidTrace,
+    BuilderInfo, Filtering, GetPayloadTrace, ProposerInfo, SignedValidatorRegistrationEntry,
+    ValidatorPreferences,
 };
 use thiserror::Error;
 
@@ -183,6 +185,7 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                         },
                     ),
                     header_delay: row.get::<&str, bool>("header_delay"),
+                    gossip_blobs: row.get::<&str, bool>("gossip_blobs"),
                 },
             },
         })
@@ -251,12 +254,13 @@ impl FromRow for SignedValidatorRegistrationEntry {
                         },
                     ),
                     header_delay: row.get::<&str, bool>("header_delay"),
+                    gossip_blobs: row.get::<&str, bool>("gossip_blobs"),
                 },
             },
             inserted_at: parse_timestamptz_to_u64(
                 row.get::<&str, std::time::SystemTime>("inserted_at"),
             )?,
-            pool_name: None, //TODO: maybe fetch pool name? but not currently needed here
+            pool_name: None,
         })
     }
 }
