@@ -8,7 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use dashmap::{DashMap, DashSet};
-use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
+use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod, SslMode};
 use ethereum_consensus::{altair::Hash32, primitives::BlsPublicKey, ssz::prelude::ByteVector};
 use helix_common::{
     api::{builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters, proposer_api::ValidatorRegistrationInfo},
@@ -85,6 +85,14 @@ impl PostgresDatabaseService {
         cfg.dbname = Some(relay_config.postgres.db_name.clone());
         cfg.user = Some(relay_config.postgres.user.clone());
         cfg.password = Some(relay_config.postgres.password.clone());
+        cfg.ssl_mode = match &relay_config.postgres.ssl_mode {
+            Some(ssl_mode) => match ssl_mode.as_str() {
+                "prefer" => Some(SslMode::Prefer),
+                "require" => Some(SslMode::Require),
+                &_ => None,
+            },
+            None => None,
+        };
         cfg.manager = Some(ManagerConfig { recycling_method: RecyclingMethod::Fast });
         let pool = cfg.create_pool(None, NoTls)?;
         Ok(PostgresDatabaseService {
