@@ -48,6 +48,7 @@ pub struct PostgresConfig {
     pub password: String,
     pub region: i16,
     pub region_name: String,
+    pub ssl_mode: Option<String>,
 }
 
 fn default_port() -> u16 {

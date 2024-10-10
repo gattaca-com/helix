@@ -40,3 +40,6 @@ rand.workspace = true
 dashmap.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+tokio-postgres-rustls.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true

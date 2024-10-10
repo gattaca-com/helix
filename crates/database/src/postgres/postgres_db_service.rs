@@ -8,7 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use dashmap::{DashMap, DashSet};
-use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
+use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod, SslMode};
 use ethereum_consensus::{altair::Hash32, primitives::BlsPublicKey, ssz::prelude::ByteVector};
 use helix_common::{
     api::{builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters, proposer_api::ValidatorRegistrationInfo},
@@ -85,8 +85,21 @@ impl PostgresDatabaseService {
         cfg.dbname = Some(relay_config.postgres.db_name.clone());
         cfg.user = Some(relay_config.postgres.user.clone());
         cfg.password = Some(relay_config.postgres.password.clone());
+        cfg.ssl_mode = match &relay_config.postgres.ssl_mode {
+            Some(ssl_mode) => match ssl_mode.as_str() {
+                "prefer" => Some(SslMode::Prefer),
+                "require" => Some(SslMode::Require),
+                &_ => None,
+            },
+            None => None,
+        };
         cfg.manager = Some(ManagerConfig { recycling_method: RecyclingMethod::Fast });
-        let pool = cfg.create_pool(None, NoTls)?;
+        let rustls_config = rustls::ClientConfig::builder().with_root_certificates(root_certs()).with_no_client_auth();
+        let tls = tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config);
+        let pool = match cfg.ssl_mode {
+            Some(SslMode::Prefer) | Some(SslMode::Require) => cfg.create_pool(None, tls)?,
+            _ => cfg.create_pool(None, NoTls)?,
+        };
         Ok(PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
@@ -1419,4 +1432,12 @@ impl DatabaseService for PostgresDatabaseService {
                 .await?,
         )
     }
+}
+
+fn root_certs() -> rustls::RootCertStore {
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in rustls_native_certs::load_native_certs().expect("could not load platform certs") {
+        roots.add(cert).unwrap();
+    }
+    roots
 }
