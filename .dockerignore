@@ -1,0 +1,6 @@
+.env*
+.git/
+.github/
+audits/
+images/
+**/target/
