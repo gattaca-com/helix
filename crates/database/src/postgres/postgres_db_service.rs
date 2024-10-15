@@ -209,8 +209,11 @@ impl PostgresDatabaseService {
     ) -> Result<(), DatabaseError> {
         let mut client = self.pool.get().await?;
 
+        let mut sorted_entries = entries.to_vec();
+        sorted_entries.sort_by(|a, b| a.registration_info.registration.message.public_key.cmp(&b.registration_info.registration.message.public_key));
+
         let batch_size = 10;
-        for chunk in entries.chunks(batch_size) {
+        for chunk in sorted_entries.chunks(batch_size) {
             let transaction = client.transaction().await?;
 
             let mut structured_params_for_reg: Vec<RegistrationParams> =
