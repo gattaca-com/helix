@@ -170,6 +170,10 @@ where
             return Err(ProposerApiError::EmptyRequest)
         }
 
+        let request_id = Uuid::new_v4();
+        let mut trace =
+            RegisterValidatorsTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+
         // Get optional api key from headers
         let api_key = headers.get("x-api-key").and_then(|key| key.to_str().ok());
 
@@ -226,10 +230,6 @@ where
                 validator_preferences.gossip_blobs = gossip_blobs;
             }
         }
-
-        let request_id = Uuid::new_v4();
-        let mut trace =
-            RegisterValidatorsTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
         let (head_slot, _) = *proposer_api.curr_slot_info.read().await;
         let num_registrations = registrations.len();
@@ -314,7 +314,6 @@ where
                 valid_registrations.push(reg);
             }
         }
-        trace.registrations_complete = get_nanos_timestamp()?;
 
         let successful_registrations = valid_registrations.len();
 
@@ -346,6 +345,8 @@ where
                 );
             }
         });
+
+        trace.registrations_complete = get_nanos_timestamp()?;
 
         info!(
             request_id = %request_id,
