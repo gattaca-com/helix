@@ -12,7 +12,7 @@ use helix_common::{
     bid_submission::BidTrace,
     builder_info::BuilderInfo,
     simulator::BlockSimError,
-    SubmissionTrace,
+    BuilderConfig, SubmissionTrace,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -78,11 +78,7 @@ impl DemotionDocument {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BuilderInfoDocument {
-    pub pub_key: BlsPublicKey,
-    pub builder_info: BuilderInfo,
-}
+pub type BuilderInfoDocument = BuilderConfig;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BlockSimErrorDocument {

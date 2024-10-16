@@ -416,7 +416,7 @@ mod tests {
             builder_id: None,
         };
 
-        let result = db_service.store_builder_info(&public_key, builder_info).await;
+        let result = db_service.store_builder_info(&public_key, &builder_info).await;
         assert!(result.is_ok());
 
         let result = db_service.db_get_builder_info(&public_key).await;
@@ -440,7 +440,7 @@ mod tests {
             builder_id: None,
         };
 
-        let result = db_service.store_builder_info(&public_key, builder_info).await;
+        let result = db_service.store_builder_info(&public_key, &builder_info).await;
         assert!(result.is_ok());
 
         let result =

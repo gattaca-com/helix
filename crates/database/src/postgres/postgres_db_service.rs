@@ -1111,7 +1111,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn store_builder_info(
         &self,
         builder_pub_key: &BlsPublicKey,
-        builder_info: BuilderInfo,
+        builder_info: &BuilderInfo,
     ) -> Result<(), DatabaseError> {
         self.pool
             .get()
@@ -1133,6 +1133,19 @@ impl DatabaseService for PostgresDatabaseService {
                 ],
             )
             .await?;
+
+        Ok(())
+    }
+
+    async fn store_builders_info(
+        &self,
+        builders: &Vec<BuilderInfoDocument>,
+    ) -> Result<(), DatabaseError> {
+        // PERF: this is not the most performant approach but it is expected
+        // to add just a few builders only at startup
+        for builder in builders {
+            self.store_builder_info(&builder.pub_key, &builder.builder_info).await?;
+        }
 
         Ok(())
     }
