@@ -34,12 +34,14 @@ pub trait DatabaseService: Send + Sync + Clone {
         &self,
         entry: ValidatorRegistrationInfo,
         pool_name: Option<String>,
+        user_agent: Option<String>,
     ) -> Result<(), DatabaseError>;
 
     async fn save_validator_registrations(
         &self,
         entries: Vec<ValidatorRegistrationInfo>,
         pool_name: Option<String>,
+        user_agent: Option<String>,
     ) -> Result<(), DatabaseError>;
 
     async fn is_registration_update_required(
@@ -97,6 +99,7 @@ pub trait DatabaseService: Send + Sync + Clone {
         bid_trace: &BidTrace,
         payload: Arc<PayloadAndBlobs>,
         latency_trace: &GetPayloadTrace,
+        user_agent: Option<String>,
     ) -> Result<(), DatabaseError>;
 
     async fn store_block_submission(

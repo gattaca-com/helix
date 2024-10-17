@@ -50,6 +50,7 @@ impl DatabaseService for MockDatabaseService {
         &self,
         _entry: ValidatorRegistrationInfo,
         _pool_name: Option<String>,
+        _user_agent: Option<String>,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -57,6 +58,7 @@ impl DatabaseService for MockDatabaseService {
         &self,
         _entries: Vec<ValidatorRegistrationInfo>,
         _pool_name: Option<String>,
+        _user_agent: Option<String>,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -140,6 +142,7 @@ impl DatabaseService for MockDatabaseService {
         _bid_trace: &BidTrace,
         _payload: Arc<PayloadAndBlobs>,
         _latency_trace: &GetPayloadTrace,
+        _user_agent: Option<String>,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }

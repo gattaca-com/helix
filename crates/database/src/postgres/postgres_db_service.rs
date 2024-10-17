@@ -47,6 +47,7 @@ struct RegistrationParams<'a> {
     public_key: &'a [u8],
     signature: &'a [u8],
     inserted_at: SystemTime,
+    user_agent: Option<String>,
 }
 
 struct PreferenceParams<'a> {
@@ -259,6 +260,7 @@ impl PostgresDatabaseService {
                     public_key: public_key.as_ref(),
                     signature: signature.as_ref(),
                     inserted_at,
+                    user_agent: entry.user_agent.clone(),
                 });
 
                 structured_params_for_pref.push(PreferenceParams {
@@ -288,13 +290,14 @@ impl PostgresDatabaseService {
                         &tuple.public_key,
                         &tuple.signature,
                         &tuple.inserted_at,
+                        &tuple.user_agent,
                     ]
                 })
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
-            let mut sql = String::from("INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at) VALUES ");
-            let num_params_per_row = 6;
+            let mut sql = String::from("INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at, user_agent) VALUES ");
+            let num_params_per_row = 7;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -306,7 +309,7 @@ impl PostgresDatabaseService {
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
-            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET fee_recipient = excluded.fee_recipient, gas_limit = excluded.gas_limit, timestamp = excluded.timestamp, signature = excluded.signature, inserted_at = excluded.inserted_at");
+            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET fee_recipient = excluded.fee_recipient, gas_limit = excluded.gas_limit, timestamp = excluded.timestamp, signature = excluded.signature, inserted_at = excluded.inserted_at, user_agent = excluded.user_agent");
 
             // Execute the query
             transaction.execute(&sql, &params[..]).await?;
@@ -409,6 +412,7 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         registration_info: ValidatorRegistrationInfo,
         pool_name: Option<String>,
+        user_agent: Option<String>,
     ) -> Result<(), DatabaseError> {
         let registration = registration_info.registration.message.clone();
 
@@ -447,8 +451,8 @@ impl DatabaseService for PostgresDatabaseService {
 
         match transaction.execute(
             "
-                INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at)
-                VALUES ($1, $2, $3, $4, $5,$6)
+                INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at, user_agent)
+                VALUES ($1, $2, $3, $4, $5,$6,$7)
                 ON CONFLICT (public_key)
                 DO UPDATE SET
                     fee_recipient = excluded.fee_recipient,
@@ -464,6 +468,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(public_key.as_ref()),
                 &(signature.as_ref()),
                 &(inserted_at),
+                &(user_agent)
             ],
         ).await {
             Ok(_) => {
@@ -471,6 +476,7 @@ impl DatabaseService for PostgresDatabaseService {
                     registration_info,
                     inserted_at: inserted_at.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
                     pool_name,
+                    user_agent,
                 });
             }
             Err(e) => {
@@ -487,6 +493,7 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         mut entries: Vec<ValidatorRegistrationInfo>,
         pool_name: Option<String>,
+        user_agent: Option<String>,
     ) -> Result<(), DatabaseError> {
         entries.retain(|entry| {
             if let Some(existing_entry) =
@@ -506,7 +513,11 @@ impl DatabaseService for PostgresDatabaseService {
                 .insert(entry.registration.message.public_key.clone());
             self.validator_registration_cache.insert(
                 entry.registration.message.public_key.clone(),
-                SignedValidatorRegistrationEntry::new(entry.clone(), pool_name.clone()),
+                SignedValidatorRegistrationEntry::new(
+                    entry.clone(),
+                    pool_name.clone(),
+                    user_agent.clone(),
+                ),
             );
         }
 
@@ -904,6 +915,7 @@ impl DatabaseService for PostgresDatabaseService {
         bid_trace: &BidTrace,
         payload: Arc<PayloadAndBlobs>,
         latency_trace: &GetPayloadTrace,
+        user_agent: Option<String>,
     ) -> Result<(), DatabaseError> {
         let region_id = self.region;
         let mut client = self.pool.get().await?;
@@ -911,9 +923,9 @@ impl DatabaseService for PostgresDatabaseService {
         transaction.execute(
             "
                 INSERT INTO delivered_payload 
-                    (block_hash, payload_parent_hash, fee_recipient, state_root, receipts_root, logs_bloom, prev_randao, timestamp, block_number, gas_limit, gas_used, extra_data, base_fee_per_gas)
+                    (block_hash, payload_parent_hash, fee_recipient, state_root, receipts_root, logs_bloom, prev_randao, timestamp, block_number, gas_limit, gas_used, extra_data, base_fee_per_gas, user_agent)
                 VALUES 
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                 ON CONFLICT (block_hash)
                 DO NOTHING
             ",
@@ -931,6 +943,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(payload.execution_payload.gas_used() as i32),
                 &(payload.execution_payload.extra_data().as_ref()),
                 &(PostgresNumeric::from(*payload.execution_payload.base_fee_per_gas())),
+                &(user_agent),
             ],
             ).await?;
 

@@ -231,6 +231,9 @@ where
             }
         }
 
+        let user_agent =
+            headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|v| v.to_string());
+
         let (head_slot, _) = *proposer_api.curr_slot_info.read().await;
         let num_registrations = registrations.len();
         trace!(
@@ -335,7 +338,7 @@ where
         tokio::spawn(async move {
             if let Err(err) = proposer_api
                 .db
-                .save_validator_registrations(valid_registrations_infos, pool_name)
+                .save_validator_registrations(valid_registrations_infos, pool_name, user_agent)
                 .await
             {
                 error!(
@@ -635,11 +638,14 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlock>
     pub async fn get_payload(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
-        _headers: HeaderMap,
+        headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         let mut trace = GetPayloadTrace { receive: get_nanos_timestamp()?, ..Default::default() };
         let request_id = Uuid::new_v4();
+
+        let user_agent =
+            headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|v| v.to_string());
 
         let signed_blinded_block: SignedBlindedBeaconBlock =
             match deserialize_get_payload_bytes(req).await {
@@ -671,7 +677,10 @@ where
             error!(request_id = %request_id, error = %e, "failed to broadcast get payload");
         };
 
-        match proposer_api._get_payload(signed_blinded_block, &mut trace, &request_id).await {
+        match proposer_api
+            ._get_payload(signed_blinded_block, &mut trace, &request_id, user_agent)
+            .await
+        {
             Ok(get_payload_response) => Ok(axum::Json(get_payload_response)),
             Err(err) => {
                 // Save error to DB
@@ -693,6 +702,7 @@ where
         mut signed_blinded_block: SignedBlindedBeaconBlock,
         trace: &mut GetPayloadTrace,
         request_id: &Uuid,
+        user_agent: Option<String>,
     ) -> Result<GetPayloadResponse, ProposerApiError> {
         let block_hash =
             signed_blinded_block.message().body().execution_payload_header().block_hash().clone();
@@ -910,6 +920,7 @@ where
                         &proposer_public_key,
                         &trace_clone,
                         &request_id_clone,
+                        user_agent,
                     )
                     .await;
             });
@@ -945,6 +956,7 @@ where
                 &proposer_public_key,
                 trace,
                 request_id,
+                user_agent,
             )
             .await;
 
@@ -1265,6 +1277,7 @@ where
                             payload.signed_blinded_beacon_block,
                             &mut trace,
                             &payload.request_id,
+                            None,
                         )
                         .await
                     {
@@ -1349,6 +1362,7 @@ where
         proposer_public_key: &BlsPublicKey,
         trace: &GetPayloadTrace,
         request_id: &Uuid,
+        user_agent: Option<String>,
     ) {
         let bid_trace = match self
             .auctioneer
@@ -1374,7 +1388,9 @@ where
         let trace = trace.clone();
         let request_id = *request_id;
         tokio::spawn(async move {
-            if let Err(err) = db.save_delivered_payload(&bid_trace, payload, &trace).await {
+            if let Err(err) =
+                db.save_delivered_payload(&bid_trace, payload, &trace, user_agent).await
+            {
                 error!(request_id = %request_id, error = %err, "error saving payload to database");
             }
         });
