@@ -1361,12 +1361,12 @@ impl DatabaseService for PostgresDatabaseService {
                 block_submission.gas_used               gas_used,
                 block_submission.block_number           block_number,
                 block_submission.num_txs                num_txs
-            FROM 
-                delivered_payload 
+            FROM
+                block_submission
             INNER JOIN
-                block_submission 
-            ON 
-                block_submission.block_hash = delivered_payload.block_hash
+                delivered_payload
+            ON
+                block_submission.block_number = delivered_payload.block_number and block_submission.block_hash = delivered_payload.block_hash
         ",
         );
 
