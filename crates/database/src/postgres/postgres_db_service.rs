@@ -659,7 +659,7 @@ impl DatabaseService for PostgresDatabaseService {
         transaction
             .execute(
                 "
-                INSERT INTO proposer_duties_archive SELECT * FROM proposer_duties ON CONFLICT (slot_number) DO UPDATE SET public_key = excluded.public_key, validator_index = excluded.validator_index;
+                INSERT INTO proposer_duties_archive SELECT * FROM proposer_duties order by slot_number ON CONFLICT (slot_number) DO UPDATE SET public_key = excluded.public_key, validator_index = excluded.validator_index;
             ",
                 &[],
             )
