@@ -43,10 +43,26 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
     pub async fn proposer_payload_delivered(
         Extension(data_api): Extension<Arc<DataApi<DB>>>,
         Extension(cache): Extension<Arc<DeliveredPayloadsCache>>,
-        Query(params): Query<ProposerPayloadDeliveredParams>,
+        Query(mut params): Query<ProposerPayloadDeliveredParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         if params.slot.is_some() && params.cursor.is_some() {
             return Err(DataApiError::SlotAndCursor)
+        }
+
+        if params.limit.is_some() && params.limit.unwrap() > 200 {
+            return Err(DataApiError::LimitReached{limit: 200});
+        }
+
+        if params.limit.is_none() {
+            params.limit = Some(200);
+        }
+
+        if params.limit.is_some() && params.limit.unwrap() > 200 {
+            return Err(DataApiError::LimitReached{limit: 200});
+        }
+
+        if params.limit.is_none() {
+            params.limit = Some(200);
         }
 
         let cache_key = format!("{:?}", params);
@@ -81,7 +97,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
     pub async fn builder_bids_received(
         Extension(data_api): Extension<Arc<DataApi<DB>>>,
         Extension(cache): Extension<Arc<BidsCache>>,
-        Query(params): Query<BuilderBlocksReceivedParams>,
+        Query(mut params): Query<BuilderBlocksReceivedParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         if params.slot.is_none() &&
             params.block_hash.is_none() &&
@@ -92,7 +108,11 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         }
 
         if params.limit.is_some() && params.limit.unwrap() > 500 {
-            return Err(DataApiError::LimitReached)
+            return Err(DataApiError::LimitReached{limit: 500});
+        }
+
+        if params.limit.is_none() {
+            params.limit = Some(500);
         }
 
         let cache_key = format!("{:?}", params);
