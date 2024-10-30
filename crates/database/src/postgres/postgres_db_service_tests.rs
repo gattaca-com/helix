@@ -532,7 +532,8 @@ mod tests {
             builder_pubkey: None,
             order_by: None,
         };
-        let bids = db_service.get_bids(&filter).await?;
+        let validator_preferences = ValidatorPreferences::default();
+        let bids = db_service.get_bids(&filter, Arc::new(validator_preferences)).await?;
         println!("Bids: {:?}", bids);
         Ok(())
     }

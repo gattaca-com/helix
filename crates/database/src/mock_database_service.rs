@@ -210,6 +210,7 @@ impl DatabaseService for MockDatabaseService {
     async fn get_bids(
         &self,
         _filters: &BidFilters,
+        _validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<BidSubmissionDocument>, DatabaseError> {
         let mut bid = BidSubmissionDocument::default();
         bid.bid_trace.value = U256::from(1000);

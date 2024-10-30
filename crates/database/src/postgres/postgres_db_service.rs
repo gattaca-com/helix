@@ -1130,6 +1130,20 @@ impl DatabaseService for PostgresDatabaseService {
             ],
         ).await?;
 
+        transaction.execute(
+            "
+                INSERT INTO slot_preferences (slot_number, proposer_pubkey, filtering, trusted_builders, header_delay, gossip_blobs)
+                SELECT $1::bytea, $2, filtering, trusted_builders, header_delay, gossip_blobs
+                FROM validator_preferences
+                WHERE public_key = $1::bytea
+                ON CONFLICT (slot_number) DO NOTHING;                
+            ",
+            &[
+                &(submission.slot() as i32),
+                &(submission.proposer_public_key().as_ref()),
+            ],
+            ).await?;
+
         transaction.commit().await?;
 
         Ok(())
@@ -1279,6 +1293,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn get_bids(
         &self,
         filters: &BidFilters,
+        validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<BidSubmissionDocument>, DatabaseError> {
         let filters = PgBidFilters::from(filters);
 
@@ -1300,8 +1315,25 @@ impl DatabaseService for PostgresDatabaseService {
                 block_submission
             LEFT JOIN
                 header_submission ON block_submission.block_hash = header_submission.block_hash
-            WHERE 1 = 1
         ");
+
+        let filtering = match validator_preferences.filtering {
+            Filtering::Regional => Some(1_i16),
+            Filtering::Global => None,
+        };
+
+        if filtering.is_some() {
+            query.push_str(
+                "
+                LEFT JOIN
+                    slot_preferences
+                ON
+                    block_submission.slot_number = slot_preferences.slot_number
+            ",
+            );
+        }
+
+        query.push_str(" WHERE 1 = 1");
 
         let mut param_index = 1;
         let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
@@ -1334,6 +1366,15 @@ impl DatabaseService for PostgresDatabaseService {
             query.push_str(&format!(" AND block_submission.block_hash = ${}", param_index));
             params.push(Box::new(block_hash));
         }
+
+        if let Some(filtering) = filtering {
+            query.push_str(&format!(
+                " AND (slot_preferences.filtering = ${} OR slot_preferences.filtering IS NULL)",
+                param_index
+            ));
+            params.push(Box::new(filtering));
+            param_index += 1;
+        }        
 
         let params_refs: Vec<&(dyn ToSql + Sync)> =
             params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect();

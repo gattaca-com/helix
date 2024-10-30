@@ -145,6 +145,7 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn get_bids(
         &self,
         filters: &BidFilters,
+        validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<BidSubmissionDocument>, DatabaseError>;
 
     async fn get_delivered_payloads(

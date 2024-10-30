@@ -121,7 +121,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
             return Ok(Json(cached_result))
         }
 
-        match data_api.db.get_bids(&params.into()).await {
+        match data_api.db.get_bids(&params.into(), data_api.validator_preferences.clone()).await {
             Ok(result) => {
                 let response =
                     result.into_iter().map(|b| b.into()).collect::<Vec<ReceivedBlocksResponse>>();
