@@ -322,6 +322,18 @@ where
             decode_payload(req, &mut trace, &request_id).await?;
         let block_hash = payload.message().block_hash.clone();
 
+        // Verify the payload is for the current slot
+        if payload.slot() <= head_slot {
+            warn!(
+                request_id = %request_id,
+                "submission is for a past slot",
+            );
+            return Err(BuilderApiError::SubmissionForPastSlot {
+                current_slot: head_slot,
+                submission_slot: payload.slot(),
+            });
+        }
+
         // Verify that we have a validator connected for this slot
         if next_duty.is_none() {
             warn!(request_id = %request_id, "could not find slot duty");
@@ -336,18 +348,6 @@ where
             block_hash = ?block_hash,
             "payload decoded",
         );
-
-        // Verify the payload is for the current slot
-        if payload.slot() <= head_slot {
-            warn!(
-                request_id = %request_id,
-                "submission is for a past slot",
-            );
-            return Err(BuilderApiError::SubmissionForPastSlot {
-                current_slot: head_slot,
-                submission_slot: payload.slot(),
-            })
-        }
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes = api
@@ -575,6 +575,18 @@ where
             decode_header_submission(req, &mut trace, &request_id).await?;
         let block_hash = payload.block_hash().clone();
 
+        // Verify the payload is for the current slot
+        if payload.slot() <= head_slot {
+            warn!(
+                request_id = %request_id,
+                "submission is for a past slot",
+            );
+            return Err(BuilderApiError::SubmissionForPastSlot {
+                current_slot: head_slot,
+                submission_slot: payload.slot(),
+            });
+        }
+
         // Verify that we have a validator connected for this slot
         if next_duty.is_none() {
             warn!(request_id = %request_id, "could not find slot duty");
@@ -589,18 +601,6 @@ where
             block_hash = ?block_hash,
             "header submission decoded",
         );
-
-        // Verify the payload is for the current slot
-        if payload.slot() <= head_slot {
-            warn!(
-                request_id = %request_id,
-                "submission is for a past slot",
-            );
-            return Err(BuilderApiError::SubmissionForPastSlot {
-                current_slot: head_slot,
-                submission_slot: payload.slot(),
-            })
-        }
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes = api
