@@ -40,6 +40,7 @@ impl ApiService {
         let postgres_db = PostgresDatabaseService::from_relay_config(&config).unwrap();
         postgres_db.run_migrations().await;
         postgres_db.init_region(&config).await;
+        postgres_db.store_builders_info(&config.builders).await.expect("failed to store builders info from config");
         postgres_db.load_known_validators().await;
         postgres_db.start_registration_processor().await;
 
