@@ -189,7 +189,7 @@ pub trait Auctioneer: Send + Sync + Clone {
 
     async fn update_primev_proposers(
         &self,
-        proposer_whitelist: &Vec<BlsPublicKey>,
+        proposer_whitelist: &[BlsPublicKey],
     ) -> Result<(), AuctioneerError>;
 
     async fn is_primev_proposer(

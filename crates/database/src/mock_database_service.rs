@@ -163,7 +163,7 @@ impl DatabaseService for MockDatabaseService {
 
     async fn store_builders_info(
         &self,
-        _builders: &Vec<BuilderInfoDocument>,
+        _builders: &[BuilderInfoDocument],
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -286,8 +286,8 @@ impl DatabaseService for MockDatabaseService {
 
     async fn update_trusted_builders(
         &self,
-        validator_keys: &Vec<BlsPublicKey>,
-        _trusted_builders: &Vec<String>,
+        validator_keys: &[BlsPublicKey],
+        _trusted_builders: &[String],
     ) -> Result<(), DatabaseError> {
         println!("updating trusted builders: {:?}", validator_keys);
         Ok(())

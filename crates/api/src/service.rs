@@ -168,7 +168,6 @@ impl ApiService {
             config.clone(),
             slot_update_sender.clone(),
             builder_gossip_receiver,
-            validator_preferences.clone(),
         ));
 
         gossiper.start_server(builder_gossip_sender, proposer_gossip_sender).await;

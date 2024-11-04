@@ -268,7 +268,7 @@ impl Auctioneer for MockAuctioneer {
 
     async fn update_primev_proposers(
         &self,
-        _proposer_whitelist: &Vec<BlsPublicKey>,
+        _proposer_whitelist: &[BlsPublicKey],
     ) -> Result<(), AuctioneerError> {
         Ok(())
     }

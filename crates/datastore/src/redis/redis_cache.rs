@@ -312,31 +312,6 @@ impl RedisCache {
         Ok(conn.hset(key, field, str_val).await?)
     }
 
-    async fn hset_multiple<T: Serialize>(
-        &self,
-        key: &str,
-        entries: &[(&str, T)],
-        expiry: usize,
-    ) -> Result<(), RedisCacheError> {
-        let mut conn = self.pool.get().await?;
-        let mut pipeline = redis::pipe();
-
-        // Prepare a vector to hold serialized values
-        let mut fields_and_values: Vec<(&str, String)> = Vec::new();
-
-        // Iterate over the entries to serialize each value
-        for (field, value) in entries {
-            let str_val = serde_json::to_string(value)?;
-            fields_and_values.push((field, str_val));
-        }
-
-        // Use hset_multiple for setting multiple fields at once
-        pipeline.hset_multiple(key, &fields_and_values);
-        pipeline.expire(key, expiry);
-
-        Ok(pipeline.query_async(&mut conn).await?)
-    }
-
     async fn hset_multiple_not_exists<T: Serialize>(
         &self,
         key: &str,
@@ -1060,7 +1035,7 @@ impl Auctioneer for RedisCache {
 
     async fn update_primev_proposers(
         &self,
-        primev_proposers: &Vec<BlsPublicKey>,
+        primev_proposers: &[BlsPublicKey],
     ) -> Result<(), AuctioneerError> {
         // get keys
         let proposer_keys: Vec<String> =
@@ -1656,8 +1631,7 @@ mod tests {
         let proposer_pub_key = BlsPublicKey::default();
         let block_hash = Hash32::default();
 
-        let mut capella_payload = capella::ExecutionPayload::default();
-        capella_payload.gas_limit = 999;
+        let capella_payload = capella::ExecutionPayload { gas_limit: 999, ..Default::default() };
         let versioned_execution_payload = PayloadAndBlobs {
             execution_payload: ethereum_consensus::types::mainnet::ExecutionPayload::Capella(
                 capella_payload,

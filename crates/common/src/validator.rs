@@ -1,12 +1,10 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ethereum_consensus::{
-    crypto::Signature,
     phase0::Validator,
-    primitives::{BlsPublicKey, ExecutionAddress, Gwei, ValidatorIndex},
+    primitives::{BlsPublicKey, Gwei, ValidatorIndex},
     serde::as_str,
 };
-use reth_primitives::hex;
 use serde::{Deserialize, Serialize};
 
 use crate::api::proposer_api::ValidatorRegistrationInfo;
@@ -58,19 +56,4 @@ impl SignedValidatorRegistrationEntry {
     pub fn public_key(&self) -> &BlsPublicKey {
         &self.registration_info.registration.message.public_key
     }
-}
-
-fn string_to_execution_address(s: String) -> ExecutionAddress {
-    let bytes = hex::decode(s).unwrap();
-    ExecutionAddress::try_from(bytes.as_slice()).unwrap()
-}
-
-fn string_to_bls_public_key(s: String) -> BlsPublicKey {
-    let bytes = hex::decode(s).unwrap();
-    BlsPublicKey::try_from(bytes.as_slice()).unwrap()
-}
-
-fn string_to_signature(s: String) -> Signature {
-    let bytes = hex::decode(s).unwrap();
-    Signature::try_from(bytes.as_slice()).unwrap()
 }

@@ -507,8 +507,8 @@ impl DatabaseService for PostgresDatabaseService {
 
     async fn update_trusted_builders(
         &self,
-        validator_keys: &Vec<BlsPublicKey>,
-        trusted_builders: &Vec<String>,
+        validator_keys: &[BlsPublicKey],
+        trusted_builders: &[String],
     ) -> Result<(), DatabaseError> {
         let client = self.pool.get().await?;
         client
@@ -1145,7 +1145,7 @@ impl DatabaseService for PostgresDatabaseService {
 
     async fn store_builders_info(
         &self,
-        builders: &Vec<BuilderInfoDocument>,
+        builders: &[BuilderInfoDocument],
     ) -> Result<(), DatabaseError> {
         // PERF: this is not the most performant approach but it is expected
         // to add just a few builders only at startup
@@ -1312,7 +1312,6 @@ impl DatabaseService for PostgresDatabaseService {
         if let Some(block_hash) = filters.block_hash() {
             query.push_str(&format!(" AND block_submission.block_hash = ${}", param_index));
             params.push(Box::new(block_hash));
-            param_index += 1;
         }
 
         let params_refs: Vec<&(dyn ToSql + Sync)> =

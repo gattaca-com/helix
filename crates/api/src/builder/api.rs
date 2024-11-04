@@ -45,7 +45,7 @@ use helix_common::{
     simulator::BlockSimError,
     versioned_payload::PayloadAndBlobs,
     BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, RelayConfig,
-    SignedBuilderBid, SubmissionTrace, ValidatorPreferences,
+    SignedBuilderBid, SubmissionTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
@@ -82,8 +82,6 @@ where
     gossiper: Arc<G>,
     signing_context: Arc<RelaySigningContext>,
     relay_config: Arc<RelayConfig>,
-    validator_preferences: Arc<ValidatorPreferences>,
-
     db_sender: Sender<DbInfo>,
 
     /// Information about the current head slot and next proposer duty
@@ -110,7 +108,6 @@ where
         relay_config: RelayConfig,
         slot_update_subscription: Sender<Sender<ChainUpdate>>,
         gossip_receiver: Receiver<GossipedMessage>,
-        validator_preferences: Arc<ValidatorPreferences>,
     ) -> Self {
         let (db_sender, db_receiver) = mpsc::channel::<DbInfo>(10_000);
 
@@ -134,7 +131,6 @@ where
             curr_slot_info: Arc::new(RwLock::new((0, None))),
             proposer_duties_response: Arc::new(RwLock::new(None)),
             payload_attributes: Arc::new(RwLock::new(HashMap::new())),
-            validator_preferences,
         };
 
         // Spin up gossip processing task

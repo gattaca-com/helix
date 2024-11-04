@@ -61,17 +61,20 @@ mod simulator_tests {
     }
 
     fn get_sim_req() -> BlockSimRequest {
-        let mut capella_exec_payload = ethereum_consensus::capella::ExecutionPayload::default();
-        capella_exec_payload.block_hash = get_byte_vector_32_for_hex(
-            "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
-        );
+        let capella_exec_payload = ethereum_consensus::capella::ExecutionPayload {
+            block_hash: get_byte_vector_32_for_hex(
+                "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
+            ),
+            ..Default::default()
+        };
         let execution_payload = ExecutionPayload::Capella(capella_exec_payload);
-        let mut bid_trace = BidTrace::default();
-        bid_trace.builder_public_key =
-            BlsPublicKey::try_from(&get_test_pub_key_bytes(false)[..]).unwrap();
-        bid_trace.block_hash = get_byte_vector_32_for_hex(
-            "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
-        );
+        let bid_trace = BidTrace {
+            builder_public_key: BlsPublicKey::try_from(&get_test_pub_key_bytes(false)[..]).unwrap(),
+            block_hash: get_byte_vector_32_for_hex(
+                "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
+            ),
+            ..Default::default()
+        };
         let signed_bid_submission = SignedBidSubmission::Capella(SignedBidSubmissionCapella {
             message: bid_trace,
             execution_payload,

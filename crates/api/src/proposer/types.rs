@@ -11,12 +11,12 @@ use serde::Deserialize;
 
 use crate::proposer::error::ProposerApiError;
 
-pub(crate) const PATH_PROPOSER_API: &str = "/eth/v1/builder";
+pub const PATH_PROPOSER_API: &str = "/eth/v1/builder";
 
-pub(crate) const PATH_STATUS: &str = "/status";
-pub(crate) const PATH_REGISTER_VALIDATORS: &str = "/validators";
-pub(crate) const PATH_GET_HEADER: &str = "/header/:slot/:parent_hash/:pubkey";
-pub(crate) const PATH_GET_PAYLOAD: &str = "/blinded_blocks";
+pub const PATH_STATUS: &str = "/status";
+pub const PATH_REGISTER_VALIDATORS: &str = "/validators";
+pub const PATH_GET_HEADER: &str = "/header/:slot/:parent_hash/:pubkey";
+pub const PATH_GET_PAYLOAD: &str = "/blinded_blocks";
 
 pub(crate) const GET_HEADER_REQUEST_CUTOFF_MS: i64 = 3000;
 

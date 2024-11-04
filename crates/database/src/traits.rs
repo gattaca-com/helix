@@ -114,7 +114,7 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn store_builders_info(
         &self,
-        builders: &Vec<BuilderInfoDocument>,
+        builders: &[BuilderInfoDocument],
     ) -> Result<(), DatabaseError>;
 
     async fn db_get_builder_info(
@@ -193,8 +193,8 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn update_trusted_builders(
         &self,
-        validator_keys: &Vec<BlsPublicKey>,
-        trusted_builders: &Vec<String>,
+        validator_keys: &[BlsPublicKey],
+        trusted_builders: &[String],
     ) -> Result<(), DatabaseError>;
 
     async fn get_validator_registrations(

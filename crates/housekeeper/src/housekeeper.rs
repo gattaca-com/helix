@@ -8,7 +8,7 @@ use ethereum_consensus::primitives::BlsPublicKey;
 use ethers::{
     abi::{Abi, AbiParser, Address, Bytes},
     contract::{Contract, EthEvent},
-    providers::{Http, Middleware, Provider},
+    providers::{Http, Provider},
     types::U256,
 };
 use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
@@ -527,7 +527,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             self.db
                 .store_builder_info(
                     &builder_pubkey,
-                    BuilderInfo {
+                    &BuilderInfo {
                         collateral: ethereum_consensus::primitives::U256::from(0),
                         is_optimistic: false,
                         builder_id: Some("PrimevBuilder".to_string()),
