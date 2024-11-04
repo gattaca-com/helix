@@ -1,4 +1,5 @@
 pub mod api;
+pub mod beacon_api;
 pub mod bid_submission;
 pub mod builder_info;
 pub mod chain_info;
@@ -11,7 +12,6 @@ pub mod simulator;
 pub mod traces;
 pub mod validator;
 pub mod validator_preferences;
-pub mod beacon_api;
 
 pub use builder_info::*;
 pub use config::*;

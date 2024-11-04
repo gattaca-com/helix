@@ -9,11 +9,10 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Root},
 };
 use helix_common::{
-    bellatrix::SimpleSerialize, ProposerDuty, ValidatorStatus,
+    beacon_api::PublishBlobsRequest, bellatrix::SimpleSerialize, ProposerDuty, ValidatorStatus,
     ValidatorSummary,
 };
 use tokio::sync::broadcast::Sender;
-use helix_common::beacon_api::PublishBlobsRequest;
 
 use crate::{
     error::BeaconClientError,
@@ -110,7 +109,10 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
         Ok(())
     }
 
-    async fn publish_blobs(&self, _blob_sidecars: PublishBlobsRequest) -> Result<u16, BeaconClientError> {
+    async fn publish_blobs(
+        &self,
+        _blob_sidecars: PublishBlobsRequest,
+    ) -> Result<u16, BeaconClientError> {
         Ok(0)
     }
 }

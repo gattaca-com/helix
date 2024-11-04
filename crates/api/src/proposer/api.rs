@@ -13,11 +13,9 @@ use axum::{
 use ethereum_consensus::{
     builder::SignedValidatorRegistration,
     clock::get_current_unix_time_in_nanos,
-    deneb::{
-        Context, Root,
-    },
+    deneb::{Context, Root},
     phase0::mainnet::SLOTS_PER_EPOCH,
-    primitives::{BlsPublicKey},
+    primitives::BlsPublicKey,
     ssz::prelude::*,
     types::mainnet::{
         ExecutionPayloadHeader, ExecutionPayloadHeaderRef, SignedBeaconBlock,
@@ -41,17 +39,15 @@ use helix_common::{
         builder_api::BuilderGetValidatorsResponseEntry,
         proposer_api::{GetPayloadResponse, ValidatorRegistrationInfo},
     },
+    beacon_api::PublishBlobsRequest,
     chain_info::{ChainInfo, Network},
-    deneb::{
-        BlobSidecars, BuildBlobSidecarError,
-    },
+    deneb::{BlobSidecars, BuildBlobSidecarError},
     signed_proposal::VersionedSignedProposal,
     try_execution_header_from_payload,
     versioned_payload::PayloadAndBlobs,
     BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace,
     ValidatorPreferences,
 };
-use helix_common::beacon_api::PublishBlobsRequest;
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
 use helix_housekeeper::{ChainUpdate, SlotUpdate};
@@ -171,7 +167,7 @@ where
         Json(registrations): Json<Vec<SignedValidatorRegistration>>,
     ) -> Result<StatusCode, ProposerApiError> {
         if registrations.is_empty() {
-            return Err(ProposerApiError::EmptyRequest);
+            return Err(ProposerApiError::EmptyRequest)
         }
 
         // Get optional api key from headers
@@ -182,7 +178,7 @@ where
                 Some(pool_name) => Some(pool_name),
                 None => {
                     warn!("Invalid api key provided");
-                    return Err(ProposerApiError::InvalidApiKey);
+                    return Err(ProposerApiError::InvalidApiKey)
                 }
             },
             None => None,
@@ -274,7 +270,7 @@ where
                     pub_key = ?pub_key,
                     "Registration for unknown validator",
                 );
-                continue;
+                continue
             }
 
             if !proposer_api_clone.db.is_registration_update_required(&registration).await? {
@@ -284,7 +280,7 @@ where
                     "Registration update not required",
                 );
                 valid_registrations.push(registration);
-                continue;
+                continue
             }
 
             let handle = tokio::task::spawn_blocking(move || {
@@ -377,7 +373,7 @@ where
         Path(GetHeaderParams { slot, parent_hash, public_key }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         if proposer_api.auctioneer.kill_switch_enabled().await? {
-            return Err(ProposerApiError::ServiceUnavailableError);
+            return Err(ProposerApiError::ServiceUnavailableError)
         }
 
         let request_id = Uuid::new_v4();
@@ -402,13 +398,13 @@ where
             return Err(ProposerApiError::RequestForPastSlot {
                 request_slot: bid_request.slot,
                 head_slot,
-            });
+            })
         }
 
         // Only return a bid if there is a proposer connected this slot.
         if duty.is_none() {
             debug!(%request_id, "proposer duty not found");
-            return Err(ProposerApiError::ProposerNotRegistered);
+            return Err(ProposerApiError::ProposerNotRegistered)
         }
         let _duty = duty.unwrap();
 
@@ -416,7 +412,7 @@ where
             Ok(ms_into_slot) => ms_into_slot,
             Err(err) => {
                 warn!(request_id = %request_id, err = %err, "invalid bid request time");
-                return Err(err);
+                return Err(err)
             }
         };
         trace.validation_complete = get_nanos_timestamp()?;
@@ -436,7 +432,7 @@ where
             Ok(Some(bid)) => {
                 if bid.value() == U256::ZERO {
                     warn!(request_id = %request_id, "best bid value is 0");
-                    return Err(ProposerApiError::BidValueZero);
+                    return Err(ProposerApiError::BidValueZero)
                 }
 
                 info!(
@@ -502,7 +498,7 @@ where
                         error = %err,
                         "failed to deserialize signed block",
                     );
-                    return Err(err);
+                    return Err(err)
                 }
             };
         let block_hash =
@@ -522,10 +518,7 @@ where
             error!(request_id = %request_id, error = %e, "failed to broadcast get payload");
         };
 
-        match proposer_api
-            ._get_payload(signed_blinded_block, &mut trace, &request_id)
-            .await
-        {
+        match proposer_api._get_payload(signed_blinded_block, &mut trace, &request_id).await {
             Ok(get_payload_response) => Ok(axum::Json(get_payload_response)),
             Err(err) => {
                 // Save error to DB
@@ -567,13 +560,13 @@ where
             return Err(ProposerApiError::RequestForPastSlot {
                 request_slot: signed_blinded_block.message().slot(),
                 head_slot,
-            });
+            })
         }
 
         // Verify that we have a proposer connected for the current proposal
         if slot_duty.is_none() {
             warn!(request_id = %request_id, "no slot proposer duty");
-            return Err(ProposerApiError::ProposerNotRegistered);
+            return Err(ProposerApiError::ProposerNotRegistered)
         }
         let slot_duty = slot_duty.unwrap();
 
@@ -581,7 +574,7 @@ where
             self.validate_proposal_coordinate(&signed_blinded_block, &slot_duty, head_slot).await
         {
             warn!(request_id = %request_id, error = %err, "invalid proposal coordinate");
-            return Err(err);
+            return Err(err)
         }
         trace.proposer_index_validated = get_nanos_timestamp()?;
 
@@ -593,7 +586,7 @@ where
             &self.chain_info.context,
         ) {
             warn!(request_id = %request_id, error = %err, "invalid signature");
-            return Err(ProposerApiError::InvalidSignature(err));
+            return Err(ProposerApiError::InvalidSignature(err))
         }
         trace.signature_validated = get_nanos_timestamp()?;
 
@@ -618,7 +611,7 @@ where
                     error = %err,
                     "No payload found for slot"
                 );
-                return Err(ProposerApiError::NoExecutionPayloadFound);
+                return Err(ProposerApiError::NoExecutionPayloadFound)
             }
         };
         info!(request_id = %request_id, "found payload for blinded signed block");
@@ -636,11 +629,11 @@ where
             match err {
                 AuctioneerError::AnotherPayloadAlreadyDeliveredForSlot => {
                     warn!(request_id = %request_id, "validator called get_payload twice for different block hashes");
-                    return Err(ProposerApiError::AuctioneerError(err));
+                    return Err(ProposerApiError::AuctioneerError(err))
                 }
                 AuctioneerError::PastSlotAlreadyDelivered => {
                     warn!(request_id = %request_id, "validator called get_payload for past slot");
-                    return Err(ProposerApiError::AuctioneerError(err));
+                    return Err(ProposerApiError::AuctioneerError(err))
                 }
                 _ => {
                     // If error was internal carry on
@@ -671,7 +664,7 @@ where
                 error!(request_id = %request_id, error = %db_err, "failed to save too late get payload");
             }
 
-            return Err(err);
+            return Err(err)
         }
 
         let message = signed_blinded_block.message();
@@ -686,7 +679,7 @@ where
                         error = %err,
                         "error converting execution payload to header",
                     );
-                    return Err(err.into());
+                    return Err(err.into())
                 }
             };
         if let Err(err) = self.validate_header_equality(&local_header, provided_header) {
@@ -695,7 +688,7 @@ where
                 error = %err,
                 "execution payload header invalid, does not match known ExecutionPayload",
             );
-            return Err(err);
+            return Err(err)
         }
         trace.validation_complete = get_nanos_timestamp()?;
 
@@ -704,12 +697,14 @@ where
                 Ok(unblinded_payload) => Arc::new(unblinded_payload),
                 Err(err) => {
                     warn!(request_id = %request_id, error = %err, "payload type mismatch");
-                    return Err(ProposerApiError::PayloadTypeMismatch);
+                    return Err(ProposerApiError::PayloadTypeMismatch)
                 }
             };
         let payload = Arc::new(versioned_payload);
 
-        if self.validator_preferences.gossip_blobs || !matches!(self.chain_info.network, Network::Mainnet) {
+        if self.validator_preferences.gossip_blobs ||
+            !matches!(self.chain_info.network, Network::Mainnet)
+        {
             info!(?request_id, "gossip blobs: about to gossip blobs");
             let self_clone = self.clone();
             let unblinded_payload_clone = unblinded_payload.clone();
@@ -776,7 +771,7 @@ where
                 .await
             {
                 error!(request_id = %request_id, error = %err, "error publishing block");
-                return Err(err.into());
+                return Err(err.into())
             }
 
             trace.beacon_client_broadcast = get_nanos_timestamp()?;
@@ -822,7 +817,7 @@ where
                     "payload type mismatch getting payload response from execution payload.
                     All previous validation steps have passed, this should not happen",
                 );
-                return Err(ProposerApiError::PayloadTypeMismatch);
+                return Err(ProposerApiError::PayloadTypeMismatch)
             }
         };
 
@@ -857,7 +852,7 @@ where
             public_key,
             &self.chain_info.context,
         ) {
-            return Err(ProposerApiError::InvalidSignature(err));
+            return Err(ProposerApiError::InvalidSignature(err))
         }
 
         Ok(())
@@ -879,12 +874,12 @@ where
             return Err(ProposerApiError::TimestampTooEarly {
                 timestamp: registration_timestamp as u64,
                 min_timestamp: self.chain_info.genesis_time_in_secs,
-            });
+            })
         } else if registration_timestamp > registration_timestamp_upper_bound {
             return Err(ProposerApiError::TimestampTooFarInTheFuture {
                 timestamp: registration_timestamp as u64,
                 max_timestamp: registration_timestamp_upper_bound as u64,
-            });
+            })
         }
 
         Ok(())
@@ -907,7 +902,7 @@ where
             return Err(ProposerApiError::GetHeaderRequestTooLate {
                 ms_into_slot: ms_into_slot as u64,
                 cutoff: GET_HEADER_REQUEST_CUTOFF_MS as u64,
-            });
+            })
         }
 
         Ok(ms_into_slot.max(0) as u64)
@@ -931,21 +926,21 @@ where
             return Err(ProposerApiError::UnexpectedProposerIndex {
                 expected: expected_index,
                 actual: actual_index,
-            });
+            })
         }
 
         if head_slot + 1 != slot_duty.slot {
             return Err(ProposerApiError::InternalSlotMismatchesWithSlotDuty {
                 internal_slot: head_slot,
                 slot_duty_slot: slot_duty.slot,
-            });
+            })
         }
 
         if slot_duty.slot != signed_blinded_block.message().slot() {
             return Err(ProposerApiError::InvalidBlindedBlockSlot {
                 internal_slot: slot_duty.slot,
                 blinded_block_slot: signed_blinded_block.message().slot(),
-            });
+            })
         }
 
         Ok(())
@@ -968,21 +963,21 @@ where
                 let provided_header =
                     provided_header.bellatrix().ok_or(ProposerApiError::PayloadTypeMismatch)?;
                 if local_header != provided_header {
-                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
+                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch)
                 }
             }
             ExecutionPayloadHeader::Capella(local_header) => {
                 let provided_header =
                     provided_header.capella().ok_or(ProposerApiError::PayloadTypeMismatch)?;
                 if local_header != provided_header {
-                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
+                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch)
                 }
             }
             ExecutionPayloadHeader::Deneb(local_header) => {
                 let provided_header =
                     provided_header.deneb().ok_or(ProposerApiError::PayloadTypeMismatch)?;
                 if local_header != provided_header {
-                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
+                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch)
                 }
             }
         }
@@ -1037,7 +1032,7 @@ where
 
         if self.broadcasters.is_empty() {
             warn!("no broadcasters registered");
-            return;
+            return
         }
 
         for broadcaster in self.broadcasters.iter() {
@@ -1071,16 +1066,19 @@ where
         unblinded_payload: Arc<VersionedSignedProposal>,
         request_id: Uuid,
     ) {
-        let blob_sidecars = match BlobSidecars::try_from_unblinded_payload(unblinded_payload.clone()) {
+        let blob_sidecars = match BlobSidecars::try_from_unblinded_payload(
+            unblinded_payload.clone(),
+        ) {
             Ok(blob_sidecars) => blob_sidecars,
             Err(err) => {
                 match err {
-                    BuildBlobSidecarError::NoBlobsInPayload | BuildBlobSidecarError::PayloadVersionBeforeBlobs=> {}
+                    BuildBlobSidecarError::NoBlobsInPayload |
+                    BuildBlobSidecarError::PayloadVersionBeforeBlobs => {}
                     error => {
                         error!(%request_id, ?error, "gossip blobs: failed to build blob sidecars for async gossiping");
                     }
                 }
-                return;
+                return
             }
         };
 
@@ -1185,7 +1183,7 @@ where
             return Err(ProposerApiError::GetPayloadRequestTooLate {
                 cutoff: GET_PAYLOAD_REQUEST_CUTOFF_MS as u64,
                 request_time: ms_into_slot as u64,
-            });
+            })
         }
         Ok(())
     }
@@ -1210,11 +1208,11 @@ where
             Ok(Some(bt)) => bt,
             Ok(None) => {
                 error!(request_id = %request_id, "bid trace not found");
-                return;
+                return
             }
             Err(err) => {
                 error!(request_id = %request_id, error = %err, "error fetching bid trace from auctioneer");
-                return;
+                return
             }
         };
 
@@ -1222,9 +1220,7 @@ where
         let trace = trace.clone();
         let request_id = *request_id;
         tokio::spawn(async move {
-            if let Err(err) =
-                db.save_delivered_payload(&bid_trace, payload, &trace).await
-            {
+            if let Err(err) = db.save_delivered_payload(&bid_trace, payload, &trace).await {
                 error!(request_id = %request_id, error = %err, "error saving payload to database");
             }
         });

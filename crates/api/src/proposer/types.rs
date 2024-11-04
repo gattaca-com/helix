@@ -112,7 +112,7 @@ pub fn unblind_beacon_block(
                 .ok_or(ProposerApiError::PayloadTypeMismatch)?;
 
             if body.blob_kzg_commitments.len() != blobs_bundle.blobs.len() {
-                return Err(ProposerApiError::BlindedBlobsBundleLengthMismatch);
+                return Err(ProposerApiError::BlindedBlobsBundleLengthMismatch)
             }
 
             let inner = deneb::SignedBeaconBlock {

@@ -98,7 +98,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
                     }
                 }
             }
-            return Err(err);
+            return Err(err)
         }
 
         Ok(())
@@ -142,7 +142,6 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         request: &BlockSimRequest,
         builder_info: &BuilderInfo,
     ) -> bool {
-
         if builder_info.is_optimistic && request.message.value <= builder_info.collateral {
             if *self.failsafe_triggered.read().await {
                 warn!(
@@ -150,9 +149,9 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
                     block_hash=%request.execution_payload.block_hash(),
                     "Failsafe triggered. Skipping optimistic simulation"
                 );
-                return false;
+                return false
             }
-            return true;
+            return true
         }
 
         false

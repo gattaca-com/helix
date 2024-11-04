@@ -6,9 +6,8 @@ use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::broadcast::Sender;
 
 use helix_common::{
-    bellatrix::SimpleSerialize, ProposerDuty, ValidatorSummary,
+    beacon_api::PublishBlobsRequest, bellatrix::SimpleSerialize, ProposerDuty, ValidatorSummary,
 };
-use helix_common::beacon_api::PublishBlobsRequest;
 
 use crate::{
     error::BeaconClientError,
@@ -43,7 +42,10 @@ pub trait BeaconClientTrait: Send + Sync + Clone {
         broadcast_validation: Option<BroadcastValidation>,
         fork: ethereum_consensus::Fork,
     ) -> Result<u16, BeaconClientError>;
-    async fn publish_blobs(&self, blob_sidecars: PublishBlobsRequest) -> Result<u16, BeaconClientError>;
+    async fn publish_blobs(
+        &self,
+        blob_sidecars: PublishBlobsRequest,
+    ) -> Result<u16, BeaconClientError>;
     fn get_uri(&self) -> String;
 }
 
@@ -69,5 +71,8 @@ pub trait MultiBeaconClientTrait: Send + Sync + Clone {
         broadcast_validation: Option<BroadcastValidation>,
         fork: ethereum_consensus::Fork,
     ) -> Result<(), BeaconClientError>;
-    async fn publish_blobs(&self, blob_sidecars: PublishBlobsRequest) -> Result<u16, BeaconClientError>;
+    async fn publish_blobs(
+        &self,
+        blob_sidecars: PublishBlobsRequest,
+    ) -> Result<u16, BeaconClientError>;
 }

@@ -114,7 +114,7 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn store_builders_info(
         &self,
-        builders: &Vec<BuilderInfoDocument>
+        builders: &Vec<BuilderInfoDocument>,
     ) -> Result<(), DatabaseError>;
 
     async fn db_get_builder_info(

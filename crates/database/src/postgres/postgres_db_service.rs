@@ -154,11 +154,14 @@ impl PostgresDatabaseService {
     }
 
     pub async fn load_validator_registrations(&self) {
-        match self.get_validator_registrations().await{
+        match self.get_validator_registrations().await {
             Ok(entries) => {
                 let num_entries = entries.len();
                 entries.into_iter().for_each(|entry| {
-                    self.validator_registration_cache.insert(entry.registration_info.registration.message.public_key.clone(), entry);
+                    self.validator_registration_cache.insert(
+                        entry.registration_info.registration.message.public_key.clone(),
+                        entry,
+                    );
                 });
                 info!("Loaded {} validator registrations", num_entries);
             }
@@ -210,7 +213,13 @@ impl PostgresDatabaseService {
         let mut client = self.pool.get().await?;
 
         let mut sorted_entries = entries.to_vec();
-        sorted_entries.sort_by(|a, b| a.registration_info.registration.message.public_key.cmp(&b.registration_info.registration.message.public_key));
+        sorted_entries.sort_by(|a, b| {
+            a.registration_info
+                .registration
+                .message
+                .public_key
+                .cmp(&b.registration_info.registration.message.public_key)
+        });
 
         let batch_size = 10;
         for chunk in sorted_entries.chunks(batch_size) {
@@ -329,7 +338,7 @@ impl PostgresDatabaseService {
 
             if structured_params_for_trusted.is_empty() {
                 transaction.commit().await?;
-                continue;
+                continue
             }
 
             let params: Vec<&(dyn ToSql + Sync)> = structured_params_for_trusted
@@ -397,7 +406,7 @@ impl DatabaseService for PostgresDatabaseService {
 
         if let Some(entry) = self.validator_registration_cache.get(&registration.public_key) {
             if entry.registration_info.registration.message.timestamp >= registration.timestamp {
-                return Ok(());
+                return Ok(())
             }
         }
 
@@ -478,7 +487,7 @@ impl DatabaseService for PostgresDatabaseService {
                 if existing_entry.registration_info.registration.message.timestamp >=
                     entry.registration.message.timestamp
                 {
-                    return false;
+                    return false
                 }
             }
             true
@@ -489,10 +498,7 @@ impl DatabaseService for PostgresDatabaseService {
                 .insert(entry.registration.message.public_key.clone());
             self.validator_registration_cache.insert(
                 entry.registration.message.public_key.clone(),
-                SignedValidatorRegistrationEntry::new(
-                    entry.clone(),
-                    pool_name.clone(),
-                ),
+                SignedValidatorRegistrationEntry::new(entry.clone(), pool_name.clone()),
             );
         }
 
@@ -528,7 +534,7 @@ impl DatabaseService for PostgresDatabaseService {
             if existing_entry.registration_info.registration.message.timestamp >=
                 registration.message.timestamp
             {
-                return Ok(false);
+                return Ok(false)
             }
         }
         Ok(true)
@@ -827,7 +833,7 @@ impl DatabaseService for PostgresDatabaseService {
         }
 
         if self.validator_pool_cache.contains_key(api_key) {
-            return Ok(self.validator_pool_cache.get(api_key).map(|f| f.clone()));
+            return Ok(self.validator_pool_cache.get(api_key).map(|f| f.clone()))
         }
 
         let api_key = api_key.to_string();
@@ -838,12 +844,12 @@ impl DatabaseService for PostgresDatabaseService {
             Ok(rows) => rows,
             Err(e) => {
                 error!("Error querying validator_pools: {}", e);
-                return Err(DatabaseError::from(e));
+                return Err(DatabaseError::from(e))
             }
         };
 
         if rows.is_empty() {
-            return Ok(None);
+            return Ok(None)
         }
 
         let name: String = rows[0].get("name");

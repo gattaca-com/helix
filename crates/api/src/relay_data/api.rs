@@ -12,7 +12,8 @@ use helix_common::{
     api::data_api::{
         BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
         ReceivedBlocksResponse, ValidatorRegistrationParams,
-    }, ValidatorPreferences,
+    },
+    ValidatorPreferences,
 };
 use helix_database::DatabaseService;
 
@@ -45,13 +46,13 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         Query(params): Query<ProposerPayloadDeliveredParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         if params.slot.is_some() && params.cursor.is_some() {
-            return Err(DataApiError::SlotAndCursor);
+            return Err(DataApiError::SlotAndCursor)
         }
 
         let cache_key = format!("{:?}", params);
 
         if let Some(cached_result) = cache.get(&cache_key) {
-            return Ok(Json(cached_result));
+            return Ok(Json(cached_result))
         }
 
         match data_api
@@ -87,17 +88,17 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
             params.block_number.is_none() &&
             params.builder_pubkey.is_none()
         {
-            return Err(DataApiError::MissingFilter);
+            return Err(DataApiError::MissingFilter)
         }
 
         if params.limit.is_some() && params.limit.unwrap() > 500 {
-            return Err(DataApiError::LimitReached);
+            return Err(DataApiError::LimitReached)
         }
 
         let cache_key = format!("{:?}", params);
 
         if let Some(cached_result) = cache.get(&cache_key) {
-            return Ok(Json(cached_result));
+            return Ok(Json(cached_result))
         }
 
         match data_api.db.get_bids(&params.into()).await {

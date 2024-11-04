@@ -163,7 +163,7 @@ impl DatabaseService for MockDatabaseService {
 
     async fn store_builders_info(
         &self,
-        _builders: &Vec<BuilderInfoDocument>
+        _builders: &Vec<BuilderInfoDocument>,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }

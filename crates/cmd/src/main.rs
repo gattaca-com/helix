@@ -22,22 +22,28 @@ async fn run() {
 
     match &config.logging {
         LoggingConfig::Console => {
-            set_panic_hook(config.postgres.region_name.clone(), config.discord_webhook_url.clone(), None);
+            set_panic_hook(
+                config.postgres.region_name.clone(),
+                config.discord_webhook_url.clone(),
+                None,
+            );
             let filter_layer = tracing_subscriber::EnvFilter::from_default_env();
 
-            tracing_subscriber::fmt()
-                .with_env_filter(filter_layer)
-                .init();
+            tracing_subscriber::fmt().with_env_filter(filter_layer).init();
         }
         LoggingConfig::File { dir_path, file_name } => {
-            set_panic_hook(config.postgres.region_name.clone(), config.discord_webhook_url.clone(), Some(format!("{}/crash.log", dir_path.clone())));
+            set_panic_hook(
+                config.postgres.region_name.clone(),
+                config.discord_webhook_url.clone(),
+                Some(format!("{}/crash.log", dir_path.clone())),
+            );
             let file_appender = tracing_appender::rolling::Builder::new()
                 .filename_prefix(file_name)
                 .max_log_files(14)
                 .rotation(Rotation::DAILY)
                 .build(dir_path)
                 .expect("failed to create log appender!");
-            
+
             let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
             let filter_layer = tracing_subscriber::EnvFilter::from_default_env();

@@ -11,12 +11,13 @@ mod housekeeper_tests {
 
     // ++++ IMPORTS ++++
     use crate::housekeeper::{Housekeeper, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS};
-    
+
     use helix_beacon_client::{
         mock_multi_beacon_client::MockMultiBeaconClient, MultiBeaconClientTrait,
     };
     use helix_common::{
-        api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, RelayConfig, ValidatorSummary
+        api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, RelayConfig,
+        ValidatorSummary,
     };
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;

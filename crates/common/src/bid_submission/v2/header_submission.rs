@@ -1,4 +1,3 @@
-
 use crate::{
     bid_submission::{BidSubmission, BidTrace},
     capella,
@@ -278,15 +277,12 @@ impl BidSubmission for SignedHeaderSubmission {
 
     fn transactions_root(&self) -> Option<Node> {
         match self {
-            Self::Capella(signed_header_submission) => Some(
-                signed_header_submission.message.execution_payload_header.transactions_root,
-            ),
-            Self::Deneb(signed_header_submission) => Some(
-                signed_header_submission
-                    .message
-                    .execution_payload_header()
-                    .transactions_root,
-            ),
+            Self::Capella(signed_header_submission) => {
+                Some(signed_header_submission.message.execution_payload_header.transactions_root)
+            }
+            Self::Deneb(signed_header_submission) => {
+                Some(signed_header_submission.message.execution_payload_header().transactions_root)
+            }
         }
     }
 

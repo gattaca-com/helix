@@ -1,13 +1,11 @@
 use ethereum_consensus::{
     builder::SignedValidatorRegistration,
     primitives::{BlsPublicKey, ExecutionAddress, Hash32, Slot, U256},
-    serde::{as_str},
+    serde::as_str,
     ssz::prelude::*,
 };
 
-use crate::{
-    api::proposer_api::ValidatorRegistrationInfo, BuilderValidatorPreferences,
-};
+use crate::{api::proposer_api::ValidatorRegistrationInfo, BuilderValidatorPreferences};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 pub struct BuilderGetValidatorsResponseEntry {

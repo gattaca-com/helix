@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use ethereum_consensus::{
     builder::SignedValidatorRegistration,
@@ -9,13 +8,15 @@ use ethereum_consensus::{
 use helix_beacon_client::{beacon_client::BeaconClient, BeaconClientTrait};
 use reqwest::{Error, Response};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::channel;
-use tokio::time::sleep;
-use tracing::{info, error};
+use tokio::{sync::mpsc::channel, time::sleep};
+use tracing::{error, info};
 
-use helix_common::{api::{
-    builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
-}, BeaconClientConfig};
+use helix_common::{
+    api::{
+        builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
+    },
+    BeaconClientConfig,
+};
 use url::Url;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -120,11 +121,16 @@ async fn run() {
     let endpoints = vec![
         // TODO: add
     ];
-    let helix_register_endpoint = "";  // TODO: add
+    let helix_register_endpoint = ""; // TODO: add
     let register_endpoint_status = get_status(helix_register_endpoint).await;
-    info!(?endpoints, helix_register_endpoint, ?register_endpoint_status, "running registration replays...");
+    info!(
+        ?endpoints,
+        helix_register_endpoint,
+        ?register_endpoint_status,
+        "running registration replays..."
+    );
 
-    let beacon_client = BeaconClient::from_config(BeaconClientConfig{
+    let beacon_client = BeaconClient::from_config(BeaconClientConfig {
         url: Url::parse("http://localhost:5052").unwrap(),
         gossip_blobs_enabled: false,
     });
@@ -143,7 +149,7 @@ async fn run() {
     while let Ok(head_event) = head_event_receiver.recv().await {
         info!("New head event: {}", head_event.slot);
         if head_event.slot % 5 != 0 && first_fetch_complete {
-            continue;
+            continue
         }
         first_fetch_complete = true;
 
@@ -151,7 +157,8 @@ async fn run() {
 
         match fetch_and_aggregate_validators(&endpoints).await {
             Ok(validators) => {
-                let pubkeys: Vec<BlsPublicKey> = validators.iter().map(|v| v.registration.message.public_key.clone()).collect();
+                let pubkeys: Vec<BlsPublicKey> =
+                    validators.iter().map(|v| v.registration.message.public_key.clone()).collect();
                 info!(?pubkeys, "{} validators fetched", validators.len());
 
                 sleep(Duration::from_secs(60)).await;

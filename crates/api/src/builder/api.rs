@@ -35,25 +35,26 @@ use helix_common::{
     api::{
         builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
         proposer_api::ValidatorRegistrationInfo,
-    }, bid_submission::{
-        cancellation::SignedCancellation,
-        v2::header_submission::{
-            SignedHeaderSubmission,
-        },
+    },
+    bid_submission::{
+        cancellation::SignedCancellation, v2::header_submission::SignedHeaderSubmission,
         BidSubmission, BidTrace, SignedBidSubmission,
-    }, chain_info::ChainInfo, signing::RelaySigningContext, simulator::BlockSimError, versioned_payload::PayloadAndBlobs, BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, RelayConfig, SignedBuilderBid, SubmissionTrace, ValidatorPreferences
+    },
+    chain_info::ChainInfo,
+    signing::RelaySigningContext,
+    simulator::BlockSimError,
+    versioned_payload::PayloadAndBlobs,
+    BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, RelayConfig,
+    SignedBuilderBid, SubmissionTrace, ValidatorPreferences,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-use helix_utils::{
-    get_payload_attributes_key, has_reached_fork,
-};
+use helix_utils::{get_payload_attributes_key, has_reached_fork};
 
 use crate::{
     builder::{
-        error::BuilderApiError, traits::BlockSimulator, BlockSimRequest, DbInfo,
-        OptimisticVersion,
+        error::BuilderApiError, traits::BlockSimulator, BlockSimRequest, DbInfo, OptimisticVersion,
     },
     gossiper::{
         traits::GossipClientTrait,
@@ -206,7 +207,7 @@ where
         // Verify that we have a validator connected for this slot
         if next_duty.is_none() {
             warn!(request_id = %request_id, "could not find slot duty");
-            return Err(BuilderApiError::ProposerDutyNotFound);
+            return Err(BuilderApiError::ProposerDutyNotFound)
         }
         let next_duty = next_duty.unwrap();
 
@@ -227,7 +228,7 @@ where
             return Err(BuilderApiError::SubmissionForPastSlot {
                 current_slot: head_slot,
                 submission_slot: payload.slot(),
-            });
+            })
         }
 
         // Fetch the next payload attributes and validate basic information
@@ -291,7 +292,7 @@ where
             );
             return Err(BuilderApiError::BuilderNotInProposersTrustedList {
                 proposer_trusted_builders,
-            });
+            })
         }
 
         // Verify payload has not already been delivered
@@ -299,7 +300,7 @@ where
             Ok(Some(slot)) => {
                 if payload.slot() <= slot {
                     warn!(request_id = %request_id, "payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
+                    return Err(BuilderApiError::PayloadAlreadyDelivered)
                 }
             }
             Ok(None) => {}
@@ -317,7 +318,7 @@ where
             &api.chain_info,
         ) {
             warn!(request_id = %request_id, error = %err, "failed sanity check");
-            return Err(err);
+            return Err(err)
         }
         trace.pre_checks = get_nanos_timestamp()?;
 
@@ -338,7 +339,7 @@ where
                 api.check_for_later_submissions(&payload, trace.receive, &request_id).await
             {
                 warn!(request_id = %request_id, error = %err, "already processing later submission");
-                return Err(err);
+                return Err(err)
             }
         }
 
@@ -427,7 +428,7 @@ where
         // Verify that we have a validator connected for this slot
         if next_duty.is_none() {
             warn!(request_id = %request_id, "could not find slot duty");
-            return Err(BuilderApiError::ProposerDutyNotFound);
+            return Err(BuilderApiError::ProposerDutyNotFound)
         }
         let next_duty = next_duty.unwrap();
 
@@ -448,7 +449,7 @@ where
             return Err(BuilderApiError::SubmissionForPastSlot {
                 current_slot: head_slot,
                 submission_slot: payload.slot(),
-            });
+            })
         }
 
         // Fetch the next payload attributes and validate basic information
@@ -463,7 +464,7 @@ where
         // Make sure that the builder has enough collateral to cover the submission.
         if let Err(err) = api.check_builder_collateral(&payload, &builder_info, &request_id).await {
             warn!(request_id = %request_id, error = %err, "builder has insufficient collateral");
-            return Err(err);
+            return Err(err)
         }
 
         // Handle duplicates.
@@ -497,7 +498,7 @@ where
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         if next_duty.entry.preferences.filtering.is_regional() {
             warn!(request_id = %request_id, "proposer has regional filtering, discarding optimistic v2 submission");
-            return Err(BuilderApiError::V2SubmissionsInvalidIfProposerRequiresRegionalFiltering);
+            return Err(BuilderApiError::V2SubmissionsInvalidIfProposerRequiresRegionalFiltering)
         }
 
         // Validate basic information about the payload
@@ -509,7 +510,7 @@ where
             &api.chain_info,
         ) {
             warn!(request_id = %request_id, error = %err, "failed sanity check");
-            return Err(err);
+            return Err(err)
         }
 
         // Handle trusted builders check
@@ -523,7 +524,7 @@ where
             );
             return Err(BuilderApiError::BuilderNotInProposersTrustedList {
                 proposer_trusted_builders,
-            });
+            })
         }
 
         trace.pre_checks = get_nanos_timestamp()?;
@@ -531,7 +532,7 @@ where
         // Verify the payload signature
         if let Err(err) = payload.verify_signature(&api.chain_info.context) {
             warn!(request_id = %request_id, error = %err, "failed to verify signature");
-            return Err(BuilderApiError::SignatureVerificationFailed);
+            return Err(BuilderApiError::SignatureVerificationFailed)
         }
         trace.signature = get_nanos_timestamp()?;
 
@@ -540,7 +541,7 @@ where
             Ok(Some(slot)) => {
                 if payload.slot() <= slot {
                     warn!(request_id = %request_id, "payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
+                    return Err(BuilderApiError::PayloadAlreadyDelivered)
                 }
             }
             Ok(None) => {}
@@ -687,7 +688,7 @@ where
             return Err(BuilderApiError::SubmissionForPastSlot {
                 current_slot: head_slot,
                 submission_slot: payload.slot(),
-            });
+            })
         }
 
         // Verify that we have a validator connected for this slot
@@ -695,7 +696,7 @@ where
         // so we can send a `PayloadReceived` message.
         if next_duty.is_none() {
             warn!(request_id = %request_id, "could not find slot duty");
-            return Err(BuilderApiError::ProposerDutyNotFound);
+            return Err(BuilderApiError::ProposerDutyNotFound)
         }
         let next_duty = next_duty.unwrap();
 
@@ -711,13 +712,13 @@ where
         // Make sure that the builder has enough collateral to cover the submission.
         if let Err(err) = api.check_builder_collateral(&payload, &builder_info, &request_id).await {
             warn!(request_id = %request_id, error = %err, "builder has insufficient collateral");
-            return Err(err);
+            return Err(err)
         }
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         if next_duty.entry.preferences.filtering.is_regional() {
             warn!(request_id = %request_id, "proposer has regional filtering enabled, discarding optimistic v2 submission");
-            return Err(BuilderApiError::V2SubmissionsInvalidIfProposerRequiresRegionalFiltering);
+            return Err(BuilderApiError::V2SubmissionsInvalidIfProposerRequiresRegionalFiltering)
         }
 
         // Handle trusted builders check
@@ -731,7 +732,7 @@ where
             );
             return Err(BuilderApiError::BuilderNotInProposersTrustedList {
                 proposer_trusted_builders,
-            });
+            })
         }
 
         // Verify payload has not already been delivered
@@ -739,7 +740,7 @@ where
             Ok(Some(slot)) => {
                 if payload.slot() <= slot {
                     warn!(request_id = %request_id, "payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
+                    return Err(BuilderApiError::PayloadAlreadyDelivered)
                 }
             }
             Ok(None) => {}
@@ -755,11 +756,11 @@ where
                 BuilderApiError::MissingTransactionsRoot => {}
                 // Nothing the builder can do about this error
                 BuilderApiError::AuctioneerError(err) => {
-                    return Err(BuilderApiError::AuctioneerError(err));
+                    return Err(BuilderApiError::AuctioneerError(err))
                 }
                 _ => {
                     api.demote_builder(&builder_pub_key, &block_hash, &err, &request_id).await;
-                    return Err(err);
+                    return Err(err)
                 }
             }
         }
@@ -773,7 +774,7 @@ where
             &api.chain_info,
         ) {
             warn!(request_id = %request_id, error = %err, "failed sanity check");
-            return Err(err);
+            return Err(err)
         }
         trace.pre_checks = get_nanos_timestamp()?;
 
@@ -792,7 +793,7 @@ where
             Err(err) => {
                 // Any invalid submission for optimistic v2 results in a demotion.
                 api.demote_builder(&builder_pub_key, &block_hash, &err, &request_id).await;
-                return Err(err);
+                return Err(err)
             }
         };
 
@@ -808,7 +809,7 @@ where
             .await
         {
             error!(request_id = %request_id, error = %err, "failed to save execution payload");
-            return Err(BuilderApiError::AuctioneerError(err));
+            return Err(BuilderApiError::AuctioneerError(err))
         }
         trace.auctioneer_update = get_nanos_timestamp()?;
 
@@ -870,7 +871,7 @@ where
         // Verify the payload signature
         if let Err(err) = signed_cancellation.verify_signature(&api.chain_info.context) {
             warn!(request_id = %request_id, error = %err, "failed to verify signature");
-            return Err(BuilderApiError::SignatureVerificationFailed);
+            return Err(BuilderApiError::SignatureVerificationFailed)
         }
 
         // Verify payload has not already been delivered
@@ -878,7 +879,7 @@ where
             Ok(Some(del_slot)) => {
                 if slot <= del_slot {
                     warn!(request_id = %request_id, "payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
+                    return Err(BuilderApiError::PayloadAlreadyDelivered)
                 }
             }
             Ok(None) => {}
@@ -902,7 +903,7 @@ where
                 error = %err,
                 "Failed processing cancellable bid below floor. Could not delete builder bid.",
             );
-            return Err(BuilderApiError::InternalError);
+            return Err(BuilderApiError::InternalError)
         }
 
         api.gossip_cancellation(signed_cancellation, &request_id).await;
@@ -961,7 +962,7 @@ where
                 request_id = %request_id,
                 "received gossiped header for a past slot",
             );
-            return;
+            return
         }
 
         // Handle duplicates.
@@ -976,7 +977,7 @@ where
             .await
             .is_err()
         {
-            return;
+            return
         }
 
         // Verify payload has not already been delivered
@@ -984,7 +985,7 @@ where
             Ok(Some(slot)) => {
                 if req.slot <= slot {
                     warn!(request_id = %request_id, "payload already delivered");
-                    return;
+                    return
                 }
             }
             Ok(None) => {}
@@ -1009,7 +1010,7 @@ where
             Ok(floor_bid_value) => floor_bid_value,
             Err(err) => {
                 warn!(request_id = %request_id, error = %err, "bid is below floor");
-                return;
+                return
             }
         };
 
@@ -1030,7 +1031,7 @@ where
             .await
         {
             warn!(request_id = %request_id, error = %err, "failed to save header bid");
-            return;
+            return
         }
 
         trace.auctioneer_update = get_nanos_timestamp().unwrap_or_default();
@@ -1086,7 +1087,7 @@ where
                 request_id = %request_id,
                 "received gossiped payload for a past slot",
             );
-            return;
+            return
         }
 
         // Verify payload has not already been delivered
@@ -1094,7 +1095,7 @@ where
             Ok(Some(slot)) => {
                 if req.slot <= slot {
                     warn!(request_id = %request_id, "payload already delivered");
-                    return;
+                    return
                 }
             }
             Ok(None) => {}
@@ -1117,7 +1118,7 @@ where
             .await
         {
             error!(request_id = %request_id, error = %err, "failed to save execution payload");
-            return;
+            return
         }
 
         trace.auctioneer_update = get_nanos_timestamp().unwrap_or_default();
@@ -1285,8 +1286,7 @@ where
         signed_cancellation: SignedCancellation,
         request_id: &Uuid,
     ) {
-        let params =
-            BroadcastCancellationParams { signed_cancellation, request_id: *request_id };
+        let params = BroadcastCancellationParams { signed_cancellation, request_id: *request_id };
         if let Err(err) = self.gossiper.broadcast_cancellation(params).await {
             error!(request_id = %request_id, error = %err, "failed to broadcast header");
         }
@@ -1319,7 +1319,7 @@ where
         // Verify the payload signature
         if let Err(err) = payload.verify_signature(&self.chain_info.context) {
             warn!(request_id = %request_id, error = %err, "failed to verify signature");
-            return Err(BuilderApiError::SignatureVerificationFailed);
+            return Err(BuilderApiError::SignatureVerificationFailed)
         }
         trace.signature = get_nanos_timestamp()?;
 
@@ -1379,7 +1379,7 @@ where
                     Some(tx_root) => tx_root,
                     None => {
                         warn!(request_id = %request_id, "no tx root found in payload");
-                        return Err(BuilderApiError::MissingTransactions);
+                        return Err(BuilderApiError::MissingTransactions)
                     }
                 };
 
@@ -1388,16 +1388,16 @@ where
                     return Err(BuilderApiError::TransactionsRootMismatch {
                         got: Hash32::try_from(tx_root.as_ref()).unwrap(),
                         expected: Hash32::try_from(expected_tx_root.as_ref()).unwrap(),
-                    });
+                    })
                 }
             }
             Ok(None) => {
                 warn!(request_id = %request_id, "no tx root found for block hash");
-                return Err(BuilderApiError::MissingTransactionsRoot);
+                return Err(BuilderApiError::MissingTransactionsRoot)
             }
             Err(err) => {
                 error!(request_id = %request_id, error = %err, "failed to get tx root");
-                return Err(BuilderApiError::AuctioneerError(err));
+                return Err(BuilderApiError::AuctioneerError(err))
             }
         };
         Ok(())
@@ -1426,14 +1426,15 @@ where
                 Ok(floor_value) => floor_value.unwrap_or(U256::ZERO),
                 Err(err) => {
                     error!(request_id = %request_id, error = %err, "Failed to get floor bid value");
-                    return Err(BuilderApiError::InternalError);
+                    return Err(BuilderApiError::InternalError)
                 }
             };
 
-        // Ignore floor bid checks if this builder pubkey is part of the `skip_floor_bid_builder_pubkeys` config.
+        // Ignore floor bid checks if this builder pubkey is part of the
+        // `skip_floor_bid_builder_pubkeys` config.
         if self.relay_config.skip_floor_bid_builder_pubkeys.contains(builder_public_key) {
             debug!(%request_id, ?builder_public_key, "skipping floor bid checks for submission");
-            return Ok(floor_bid_value);
+            return Ok(floor_bid_value)
         }
 
         let is_bid_below_floor = value < floor_bid_value;
@@ -1451,12 +1452,12 @@ where
                     error = %err,
                     "Failed processing cancellable bid below floor. Could not delete builder bid.",
                 );
-                return Err(BuilderApiError::InternalError);
+                return Err(BuilderApiError::InternalError)
             }
-            return Err(BuilderApiError::BidBelowFloor);
+            return Err(BuilderApiError::BidBelowFloor)
         } else if !is_cancellations_enabled && is_bid_at_or_below_floor {
             debug!(request_id = %request_id, "submission at or below floor bid value, without cancellation");
-            return Err(BuilderApiError::BidBelowFloor);
+            return Err(BuilderApiError::BidBelowFloor)
         }
         Ok(floor_bid_value)
     }
@@ -1478,7 +1479,7 @@ where
         if let Some(trusted_builders) = &next_duty.entry.preferences.trusted_builders {
             // Handle case where proposer specifies an empty list.
             if trusted_builders.is_empty() {
-                return true;
+                return true
             }
 
             if let Some(builder_id) = &builder_info.builder_id {
@@ -1664,7 +1665,7 @@ where
             return Err(BuilderApiError::PayloadSlotMismatchWithPayloadAttributes {
                 got: slot,
                 expected: payload_attributes.slot,
-            });
+            })
         }
 
         Ok(payload_attributes)
@@ -1693,7 +1694,7 @@ where
         {
             Ok(Some(latest_payload_received_at)) => {
                 if on_receive < latest_payload_received_at {
-                    return Err(BuilderApiError::AlreadyProcessingNewerPayload);
+                    return Err(BuilderApiError::AlreadyProcessingNewerPayload)
                 }
             }
             Ok(None) => {}
@@ -1723,7 +1724,7 @@ where
             );
             return Err(BuilderApiError::BuilderNotOptimistic {
                 builder_pub_key: payload.builder_public_key().clone(),
-            });
+            })
         } else if builder_info.collateral < payload.value() {
             warn!(
                 request_id = %request_id,
@@ -1737,7 +1738,7 @@ where
                 collateral: builder_info.collateral,
                 collateral_required: payload.value(),
                 is_optimistic: builder_info.is_optimistic,
-            });
+            })
         }
 
         // Builder has enough collateral
@@ -1754,11 +1755,7 @@ where
                     err=%err,
                     "Failed to retrieve builder info"
                 );
-                BuilderInfo {
-                    collateral: U256::ZERO,
-                    is_optimistic: false,
-                    builder_id: None,
-                }
+                BuilderInfo { collateral: U256::ZERO, is_optimistic: false, builder_id: None }
             }
         }
     }
@@ -1861,7 +1858,7 @@ where
         let (head_slot, _) = *self.curr_slot_info.read().await;
 
         if payload_attributes.slot <= head_slot {
-            return;
+            return
         }
 
         debug!(
@@ -1874,7 +1871,7 @@ where
             get_payload_attributes_key(&payload_attributes.parent_hash, payload_attributes.slot);
         let mut all_payload_attributes = self.payload_attributes.write().await;
         if all_payload_attributes.contains_key(&payload_attributes_key) {
-            return;
+            return
         }
 
         // Clean up old payload attributes
@@ -1933,7 +1930,7 @@ pub async fn decode_payload(
         return Err(BuilderApiError::PayloadTooLarge {
             max_size: MAX_PAYLOAD_LENGTH,
             size: body_bytes.len(),
-        });
+        })
     }
 
     // Decompress if necessary
@@ -2097,7 +2094,7 @@ pub async fn decode_header_submission(
         return Err(BuilderApiError::PayloadTooLarge {
             max_size: MAX_PAYLOAD_LENGTH,
             size: body_bytes.len(),
-        });
+        })
     }
 
     // Decode header
@@ -2146,7 +2143,7 @@ fn sanity_check_block_submission(
         return Err(BuilderApiError::IncorrectTimestamp {
             got: payload.timestamp(),
             expected: expected_timestamp,
-        });
+        })
     }
 
     // Check duty
@@ -2154,18 +2151,18 @@ fn sanity_check_block_submission(
         return Err(BuilderApiError::FeeRecipientMismatch {
             got: payload.proposer_fee_recipient().clone(),
             expected: next_duty.entry.registration.message.fee_recipient.clone(),
-        });
+        })
     }
 
     if payload.slot() != next_duty.slot {
-        return Err(BuilderApiError::SlotMismatch { got: payload.slot(), expected: next_duty.slot });
+        return Err(BuilderApiError::SlotMismatch { got: payload.slot(), expected: next_duty.slot })
     }
 
     if next_duty.entry.registration.message.public_key != bid_trace.proposer_public_key {
         return Err(BuilderApiError::ProposerPublicKeyMismatch {
             got: bid_trace.proposer_public_key.clone(),
             expected: next_duty.entry.registration.message.public_key.clone(),
-        });
+        })
     }
 
     // Check payload attrs
@@ -2173,7 +2170,7 @@ fn sanity_check_block_submission(
         return Err(BuilderApiError::PrevRandaoMismatch {
             got: payload.prev_randao().clone(),
             expected: payload_attributes.payload_attributes.prev_randao.clone(),
-        });
+        })
     }
 
     if has_reached_fork(payload.slot(), CAPELLA_FORK_EPOCH) {
@@ -2192,7 +2189,7 @@ fn sanity_check_block_submission(
                 return Err(BuilderApiError::WithdrawalsRootMismatch {
                     got: Hash32::try_from(withdrawals_root.as_ref()).unwrap(),
                     expected: Hash32::try_from(expected_withdrawals_root.as_ref()).unwrap(),
-                });
+                })
             }
         } else {
             let expected_withdrawals_root = match payload_attributes.withdrawals_root {
@@ -2209,28 +2206,28 @@ fn sanity_check_block_submission(
                 return Err(BuilderApiError::WithdrawalsRootMismatch {
                     got: Hash32::try_from(payload_withdrawals_root.as_ref()).unwrap(),
                     expected: Hash32::try_from(expected_withdrawals_root.as_ref()).unwrap(),
-                });
+                })
             }
         }
     }
 
     // Misc. sanity checks
     if payload.value() == U256::ZERO {
-        return Err(BuilderApiError::ZeroValueBlock);
+        return Err(BuilderApiError::ZeroValueBlock)
     }
 
     if bid_trace.block_hash != *payload.block_hash() {
         return Err(BuilderApiError::BlockHashMismatch {
             message: bid_trace.block_hash.clone(),
             payload: payload.block_hash().clone(),
-        });
+        })
     }
 
     if bid_trace.parent_hash != *payload.parent_hash() {
         return Err(BuilderApiError::ParentHashMismatch {
             message: bid_trace.parent_hash.clone(),
             payload: payload.parent_hash().clone(),
-        });
+        })
     }
 
     Ok(())

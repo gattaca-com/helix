@@ -40,7 +40,10 @@ impl ApiService {
         let postgres_db = PostgresDatabaseService::from_relay_config(&config).unwrap();
         postgres_db.run_migrations().await;
         postgres_db.init_region(&config).await;
-        postgres_db.store_builders_info(&config.builders).await.expect("failed to store builders info from config");
+        postgres_db
+            .store_builders_info(&config.builders)
+            .await
+            .expect("failed to store builders info from config");
         postgres_db.load_known_validators().await;
         postgres_db.start_registration_processor().await;
 
@@ -81,11 +84,8 @@ impl ApiService {
             NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
             NetworkConfig::Holesky => ChainInfo::for_holesky(),
             NetworkConfig::Custom { ref dir_path, ref genesis_validator_root, genesis_time } => {
-                match ChainInfo::for_custom(
-                    dir_path.clone(),
-                    *genesis_validator_root,
-                    genesis_time,
-                ) {
+                match ChainInfo::for_custom(dir_path.clone(), *genesis_validator_root, genesis_time)
+                {
                     Ok(chain_info) => chain_info,
                     Err(err) => {
                         error!("Failed to load custom chain info: {:?}", err);

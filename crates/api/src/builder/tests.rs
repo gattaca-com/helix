@@ -16,7 +16,7 @@ mod tests {
     use ethereum_consensus::{
         builder::{SignedValidatorRegistration, ValidatorRegistration},
         configs::mainnet::CAPELLA_FORK_EPOCH,
-        deneb::{Withdrawal},
+        deneb::Withdrawal,
         phase0::mainnet::SLOTS_PER_EPOCH,
         primitives::{BlsPublicKey, BlsSignature},
         ssz::{self, prelude::*},
@@ -50,8 +50,8 @@ mod tests {
     use serde_json::json;
     use serial_test::serial;
     use std::{
-        convert::Infallible, future::pending, io::Write, ops::Deref, pin::Pin,
-        str::FromStr, sync::Arc, time::Duration,
+        convert::Infallible, future::pending, io::Write, ops::Deref, pin::Pin, str::FromStr,
+        sync::Arc, time::Duration,
     };
     use tokio::sync::{
         mpsc::{Receiver, Sender},
@@ -1316,12 +1316,12 @@ mod tests {
 
                     message_count += 1;
                     if message_count >= 3 {
-                        break;
+                        break
                     }
                 }
                 Err(e) => {
                     println!("Error: {}", e);
-                    break;
+                    break
                 }
             }
         }

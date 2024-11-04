@@ -9,7 +9,7 @@ use ethers::{
     abi::{Abi, AbiParser, Address, Bytes},
     contract::{Contract, EthEvent},
     providers::{Http, Middleware, Provider},
-    types::{U256},
+    types::U256,
 };
 use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
 use std::convert::TryFrom;
@@ -25,7 +25,9 @@ use helix_beacon_client::{
     MultiBeaconClientTrait,
 };
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, pending_block::PendingBlock, BuilderInfo, PrimevConfig, ProposerDuty, RelayConfig, Route, SignedValidatorRegistrationEntry
+    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
+    pending_block::PendingBlock, BuilderInfo, PrimevConfig, ProposerDuty, RelayConfig, Route,
+    SignedValidatorRegistrationEntry,
 };
 use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
@@ -128,9 +130,12 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
         self.process_new_slot(best_sync_status.head_slot).await;
         loop {
-            let start_instant = Instant::now() + self.chain_info.clock.duration_until_next_slot() + Duration::from_secs(CUTT_OFF_TIME);
-            let mut timer = interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
-            
+            let start_instant = Instant::now() +
+                self.chain_info.clock.duration_until_next_slot() +
+                Duration::from_secs(CUTT_OFF_TIME);
+            let mut timer =
+                interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
+
             tokio::select! {
                 head_event_result = head_event_receiver.recv() => {
                     match head_event_result {
@@ -166,17 +171,17 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     async fn process_new_slot(self: &SharedHousekeeper<DB, BeaconClient, A>, head_slot: u64) {
         let (is_new_block, prev_head_slot) = self.update_head_slot(head_slot).await;
         if !is_new_block {
-            return;
+            return
         }
 
         // Skip processing if the GetPayload route is enabled.
         if self.config.router_config.enabled_routes.iter().any(|r| r.route == Route::GetPayload) {
-            return;
+            return
         }
 
         // Only allow one housekeeper task to run at a time.
         if !self.auctioneer.try_acquire_or_renew_leadership(&self.leader_id).await {
-            return;
+            return
         }
 
         // Demote builders with expired pending blocks
@@ -293,7 +298,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             Ok(validators) => validators,
             Err(err) => {
                 error!(err = %err, "failed to fetch validators");
-                return Err(HousekeeperError::BeaconClientError(err));
+                return Err(HousekeeperError::BeaconClientError(err))
             }
         };
 
@@ -305,7 +310,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
         if let Err(err) = self.db.set_known_validators(validators).await {
             error!(err = %err, "failed to set known validators");
-            return Err(HousekeeperError::DatabaseError(err));
+            return Err(HousekeeperError::DatabaseError(err))
         }
 
         *self.refreshed_validators_slot.lock().await = head_slot;
@@ -332,13 +337,13 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             Ok(builder_infos) => builder_infos,
             Err(err) => {
                 error!(err = %err, "failed to fetch builder infos");
-                return Err(HousekeeperError::DatabaseError(err));
+                return Err(HousekeeperError::DatabaseError(err))
             }
         };
 
         if let Err(err) = self.auctioneer.update_builder_infos(builder_infos).await {
             error!(err = %err, "failed to update builder infos in auctioneer");
-            return Err(HousekeeperError::AuctioneerError(err));
+            return Err(HousekeeperError::AuctioneerError(err))
         }
 
         *self.re_sync_builder_info_slot.lock().await = head_slot;
@@ -369,7 +374,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
                 .push(pending_block.block_hash.clone());
 
             if demoted_builders.contains(&pending_block.builder_pubkey) {
-                continue;
+                continue
             }
 
             if v2_submission_late(&pending_block, current_time) {
@@ -399,17 +404,17 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         let last_refreshed_slot = *self.refreshed_validators_slot.lock().await;
 
         if head_slot <= last_refreshed_slot {
-            return false;
+            return false
         }
 
         let slots_since_last_update = head_slot - last_refreshed_slot;
         if slots_since_last_update < MIN_SLOTS_BETWEEN_UPDATES {
-            return false;
+            return false
         }
 
         let force_update = slots_since_last_update > MAX_SLOTS_BEFORE_FORCED_UPDATE;
         if force_update {
-            return true;
+            return true
         }
 
         let head_slot_pos = (head_slot % EPOCH_SLOTS) + 1; // position in epoch.
@@ -432,7 +437,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             Ok(proposer_duties) => proposer_duties,
             Err(err) => {
                 error!(err = %err, "failed to fetch proposer duties");
-                return Err(HousekeeperError::BeaconClientError(err));
+                return Err(HousekeeperError::BeaconClientError(err))
             }
         };
 
@@ -444,7 +449,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
                 Ok(signed_validator_registrations) => signed_validator_registrations,
                 Err(err) => {
                     error!(err = %err, "failed to fetch signed validator registrations");
-                    return Err(HousekeeperError::DatabaseError(err));
+                    return Err(HousekeeperError::DatabaseError(err))
                 }
             };
 
@@ -795,18 +800,18 @@ pub async fn get_registered_primev_validators(config: &PrimevConfig) -> Vec<BlsP
             Ok(method) => match method.call().await {
                 Ok(result) => {
                     if result.0.is_empty() {
-                        break; // No more validators to fetch
+                        break // No more validators to fetch
                     }
                     total_validators.extend(result.0);
                 }
                 Err(e) => {
                     eprintln!("Error calling method: {:?}", e);
-                    break;
+                    break
                 }
             },
             Err(e) => {
                 eprintln!("Error creating method: {:?}", e);
-                break;
+                break
             }
         }
 

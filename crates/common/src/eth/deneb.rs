@@ -6,10 +6,7 @@ use ethereum_consensus::{
     altair::{BeaconBlockHeader, Bytes32, SignedBeaconBlockHeader},
     deneb,
     deneb::{
-        mainnet::{
-            BlobSidecar, MAX_BLOBS_PER_BLOCK,
-            MAX_BLOB_COMMITMENTS_PER_BLOCK,
-        },
+        mainnet::{BlobSidecar, MAX_BLOBS_PER_BLOCK, MAX_BLOB_COMMITMENTS_PER_BLOCK},
         polynomial_commitments::{KzgCommitment, KzgProof},
     },
     primitives::{BlsPublicKey, BlsSignature, Root, U256},
@@ -19,8 +16,7 @@ use ethereum_consensus::{
 };
 use ethereum_types::H256;
 use merkle_proof::MerkleTreeError;
-use ssz_types::FixedVector;
-use ssz_types::typenum::U17;
+use ssz_types::{typenum::U17, FixedVector};
 use thiserror::Error;
 use tracing::error;
 
@@ -73,7 +69,9 @@ pub struct SignedBlockContents {
     pub blobs: List<Blob, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
 }
 
-#[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(
+    Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize, PartialEq, Eq,
+)]
 pub struct BlobSidecars {
     pub sidecars: List<BlobSidecar, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
 }
@@ -103,7 +101,7 @@ impl BlobSidecars {
         let payload = match unblinded_payload.as_ref() {
             VersionedSignedProposal::Deneb(payload) => {
                 if payload.blobs.is_empty() {
-                    return Err(BuildBlobSidecarError::NoBlobsInPayload);
+                    return Err(BuildBlobSidecarError::NoBlobsInPayload)
                 }
                 payload
             }
@@ -150,7 +148,8 @@ pub fn new_blob_sidecar(
         .into_iter()
         .map(|x| Bytes32::try_from(x.as_bytes()).unwrap())
         .collect();
-    let kzg_commitment_inclusion_proof = kzg_commitment_inclusion_proof.try_into()
+    let kzg_commitment_inclusion_proof = kzg_commitment_inclusion_proof
+        .try_into()
         .map_err(|_| BuildBlobSidecarError::FailedToFormatInclusionProof)?;
 
     let signed_block_header = SignedBeaconBlockHeader {
@@ -200,9 +199,8 @@ fn kzg_commitment_merkle_proof(
     let depth = MAX_BLOB_COMMITMENTS_PER_BLOCK.next_power_of_two().ilog2() as usize;
 
     let tree = merkle_proof::MerkleTree::create(&leaves, depth);
-    let (_, mut proof) = tree
-        .generate_proof(index, depth)
-        .map_err(BuildBlobSidecarError::MerkleTreeError)?;
+    let (_, mut proof) =
+        tree.generate_proof(index, depth).map_err(BuildBlobSidecarError::MerkleTreeError)?;
 
     // Add the branch corresponding to the length mix-in.
     let length = signed_block.message.body.blob_kzg_commitments.len();

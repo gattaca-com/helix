@@ -43,8 +43,8 @@ pub mod axum_as_u16 {
 
 /// Custom deserializer to convert a string to a url::Url
 pub fn deserialize_url<'de, D>(deserializer: D) -> Result<Url, D::Error>
-    where
-        D: Deserializer<'de>,
+where
+    D: Deserializer<'de>,
 {
     let url_str: String = Deserialize::deserialize(deserializer)?;
     Url::parse(&url_str).map_err(serde::de::Error::custom)
