@@ -1258,6 +1258,7 @@ async fn test_submit_block_timeout_triggered() {
 }
 
 #[tokio::test]
+#[serial]
 async fn websocket_test() {
     let (tx, _http_config, _api, mut slot_update_receiver) = start_api_server().await;
 
@@ -1316,6 +1317,7 @@ async fn websocket_test() {
 }
 
 #[tokio::test]
+#[serial]
 async fn websocket_test_auth_fails() {
     let (tx, _http_config, _api, mut slot_update_receiver) = start_api_server().await;
 
