@@ -118,7 +118,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_and_get_validator_registration() {
-        env_logger::builder().is_test(true).try_init().unwrap();
+        let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         db_service.start_registration_processor().await;
 
@@ -142,7 +142,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_and_get_validator_registrations() {
-        env_logger::builder().is_test(true).try_init().unwrap();
+        let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         db_service.start_registration_processor().await;
 
@@ -172,7 +172,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_and_get_validator_registrations_for_pub_keys() {
-        env_logger::builder().is_test(true).try_init().unwrap();
+        let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         db_service.start_registration_processor().await;
 
@@ -216,7 +216,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_and_get_validator_registration_timestamp() {
-        env_logger::builder().is_test(true).try_init().unwrap();
+        let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         db_service.start_registration_processor().await;
 
@@ -236,7 +236,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_and_get_proposer_duties() {
-        env_logger::builder().is_test(true).try_init().unwrap();
+        let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         let mut proposer_duties = Vec::new();
         for i in 0..10 {
@@ -262,7 +262,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_and_get_known_validators() {
-        env_logger::builder().is_test(true).try_init().unwrap();
+        let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
         let mut validator_summaries = Vec::new();
@@ -354,7 +354,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_large_batch() {
-        env_logger::builder().is_test(true).try_init().unwrap();
+        let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
         let mut rng = rand::thread_rng();
@@ -389,7 +389,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_and_get_builder_info() {
-        env_logger::builder().is_test(true).try_init().unwrap();
+        let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
         let public_key = PublicKey::try_from(hex::decode("8C266FD5CB50B5D9431DAA69C4BE17BC9A79A85D172112DA09E0AC3E2D0DCF785021D49B6DF57827D6BC61EBA086A507").unwrap().as_ref()).unwrap();
@@ -411,7 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_demotion() {
-        env_logger::builder().is_test(true).try_init().unwrap();
+        let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         let mut rng = rand::thread_rng();
         let key = SecretKey::random(&mut rng).unwrap();
@@ -433,7 +433,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_save_simulation_result() {
-        env_logger::builder().is_test(true).try_init().unwrap();
+        let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         let block_hash = Default::default();
         let block_sim_result = Err(BlockSimError::Timeout);
