@@ -14,6 +14,29 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg16
+        env:
+          POSTGRES_PASSWORD: password
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:latest
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,7 +51,17 @@ jobs:
       - name: Change to project directory
         run: cd ./repos/${{ secrets.REPO_NAME }}
 
+      # Set up the nightly Rust toolchain
+      - name: Set up Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly-2023-06-01
+          override: true
+          components: rustfmt, clippy
+
       # Run unit tests
       - name: Run unit tests
+        env:
+          DATABASE_URL: "postgres://postgres:password@localhost:5433/postgres"
         run: cargo test --workspace --all-features
         working-directory: ./repos/${{ secrets.REPO_NAME }}
