@@ -275,18 +275,13 @@ mod test {
 
     #[tokio::test]
     async fn test_init_broadcasters_timeout_triggered() {
-        let mut config = RelayConfig::default();
-        config.broadcasters = vec![
-            BroadcasterConfig::Fiber(FiberConfig {
-                url: "http://localhost:4040".to_string(),
-                api_key: "123".to_string(),
-                encoding: Encoding::Json,
-            }),
-            BroadcasterConfig::BeaconClient(BeaconClientConfig {
+        let config = RelayConfig {
+            broadcasters: vec![BroadcasterConfig::BeaconClient(BeaconClientConfig {
                 url: Url::parse("http://localhost:4040").unwrap(),
                 gossip_blobs_enabled: false,
-            }),
-        ];
+            })],
+            ..Default::default()
+        };
         let broadcasters = init_broadcasters(&config).await;
         assert_eq!(broadcasters.len(), 1);
     }
