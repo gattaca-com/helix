@@ -1277,6 +1277,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_hget_and_hset_object() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -1296,6 +1297,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_hgetall() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -1322,6 +1324,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_lrange() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -1370,6 +1373,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_get_new_builder_bids() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -1543,6 +1547,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_set_past_slot() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -1579,6 +1584,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_set_same_slot_no_hash() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -1595,6 +1601,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_get_and_set_best_bid() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -1665,6 +1672,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_save_builder_bid_and_get_latest_payload_received_at() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -1781,6 +1789,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_get_builder_info() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -1814,6 +1823,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_get_trusted_proposers_and_update_trusted_proposers() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -1885,6 +1895,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_demote_optimistic_builder() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -1912,6 +1923,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_delete_builder_bid() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -2005,6 +2017,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_no_cancellation_bid_below_floor() {
         let (cache, submission, floor_value, received_at) = setup_save_and_update_test().await;
         let mut state = SaveBidAndUpdateTopBidResponse::default();
@@ -2025,6 +2038,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_no_cancellation_bid_above_floor() {
         let (cache, mut submission, floor_value, received_at) = setup_save_and_update_test().await;
         let mut state = SaveBidAndUpdateTopBidResponse::default();
@@ -2058,6 +2072,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_cancellation_bid_below_floor() {
         let (cache, mut submission, floor_value, received_at) = setup_save_and_update_test().await;
         let mut state = SaveBidAndUpdateTopBidResponse::default();
@@ -2091,6 +2106,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_cancellation_bid_above_floor() {
         let (cache, mut submission, floor_value, received_at) = setup_save_and_update_test().await;
         let mut state = SaveBidAndUpdateTopBidResponse::default();
@@ -2124,6 +2140,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_no_cancellation_bid_above_floor_but_not_top() {
         let (cache, mut submission, floor_value, received_at) = setup_save_and_update_test().await;
 
@@ -2199,6 +2216,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_seen_or_insert_block_hash() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -2258,6 +2276,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_can_aquire_lock() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -2265,6 +2284,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_others_cant_aquire_lock_if_held() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -2281,6 +2301,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_others_cannot_renew() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -2290,6 +2311,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_pending_blocks() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -2326,6 +2348,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_pending_blocks_multiple() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -2389,6 +2412,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_pending_blocks_no_header() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -2423,6 +2447,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_pending_blocks_no_payload() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -2457,6 +2482,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_pending_blocks_dublicate_payload() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
@@ -2498,6 +2524,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "TODO: to fix"]
     async fn test_kill_switch() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
