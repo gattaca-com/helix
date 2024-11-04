@@ -2,9 +2,9 @@ name: Linting
 
 on:
   push:
-    branches: [ main, develop, "release/**" ]
+    branches: [main, develop, "release/**"]
   pull_request:
-    branches: [ main, develop, "release/**" ]
+    branches: [main, develop, "release/**"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,47 +15,47 @@ jobs:
     timeout-minutes: 30
 
     steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: '0'
-        path: ./repos/${{ secrets.REPO_NAME }}
-        ref: ${{ github.ref }}
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: "0"
+          path: ./repos/${{ secrets.REPO_NAME }}
+          ref: ${{ github.ref }}
 
-    # Install Protocol Buffers Compiler
-    - name: Install Protobuf Compiler (protoc)
-      run: sudo apt-get install -y protobuf-compiler
+      # Install Protocol Buffers Compiler
+      - name: Install Protobuf Compiler (protoc)
+        run: sudo apt-get install -y protobuf-compiler
 
-    - name: Change to project directory
-      run: cd ./repos/${{ secrets.REPO_NAME }}
+      - name: Change to project directory
+        run: cd ./repos/${{ secrets.REPO_NAME }}
 
-    # Install nightly toolchain and rustfmt
-    - name: Install nightly toolchain and components
-      uses: dtolnay/rust-toolchain@master
-      with:
-        toolchain: nightly-2023-06-01
-        components: clippy, rustfmt
+      # Install nightly toolchain and rustfmt
+      - name: Install nightly toolchain and components
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2023-06-01
+          components: clippy, rustfmt
 
-    # Rust Linting with Clippy
-    - uses: dtolnay/rust-toolchain@clippy
-    - uses: Swatinem/rust-cache@v2
-      with:
-        cache-on-failure: true
+      # Rust Linting with Clippy
+      - uses: dtolnay/rust-toolchain@clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
 
-    # Run General Clippy Linting
-    - name: Clippy
-      run: cargo clippy --all-features --no-deps
-      env:
-        RUSTFLAGS: -D warnings
-      working-directory: ./repos/${{ secrets.REPO_NAME }}
+      # Run General Clippy Linting
+      - name: Clippy
+        run: cargo clippy --all-features --no-deps
+        env:
+          RUSTFLAGS: -D warnings
+        working-directory: ./repos/${{ secrets.REPO_NAME }}
 
-    # Check Code Formatting
-    - name: Rustfmt
-      run: cargo +nightly fmt --all --check
-      working-directory: ./repos/${{ secrets.REPO_NAME }}
+      # Check Code Formatting
+      - name: Rustfmt
+        run: cargo +nightly-2023-06-01 fmt --all --check
+        working-directory: ./repos/${{ secrets.REPO_NAME }}
 
-    # Check Documentation
-    - name: Docs
-      run: cargo doc --workspace --all-features --no-deps  
-      env:
-        RUSTDOCFLAGS: --cfg docsrs --show-type-layout --generate-link-to-definition --enable-index-page -Zunstable-options -D warnings
-      working-directory: ./repos/${{ secrets.REPO_NAME }}
+      # Check Documentation
+      - name: Docs
+        run: cargo doc --workspace --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: --cfg docsrs --show-type-layout --generate-link-to-definition --enable-index-page -Zunstable-options -D warnings
+        working-directory: ./repos/${{ secrets.REPO_NAME }}

@@ -2,9 +2,9 @@ name: Unit Tests
 
 on:
   push:
-    branches: [ main, develop, "release/**" ]
+    branches: [main, develop, "release/**"]
   pull_request:
-    branches: [ main, develop, "release/**" ]
+    branches: [main, develop, "release/**"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,20 +15,20 @@ jobs:
     timeout-minutes: 30
 
     steps:
-        - uses: actions/checkout@v4
-          with:
-            fetch-depth: '0'
-            path: ./repos/${{ secrets.REPO_NAME }}
-            ref: ${{ github.ref }}
-    
-        # Install Protocol Buffers Compiler
-        - name: Install Protobuf Compiler (protoc)
-          run: sudo apt-get install -y protobuf-compiler
-    
-        - name: Change to project directory
-          run: cd ./repos/${{ secrets.REPO_NAME }}
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: "0"
+          path: ./repos/${{ secrets.REPO_NAME }}
+          ref: ${{ github.ref }}
 
-        # Run unit tests
-        - name: Run unit tests
-          run: cargo test --workspace --all-features
-          working-directory: ./repos/${{ secrets.REPO_NAME }}
+      # Install Protocol Buffers Compiler
+      - name: Install Protobuf Compiler (protoc)
+        run: sudo apt-get install -y protobuf-compiler
+
+      - name: Change to project directory
+        run: cd ./repos/${{ secrets.REPO_NAME }}
+
+      # Run unit tests
+      - name: Run unit tests
+        run: cargo test --workspace --all-features
+        working-directory: ./repos/${{ secrets.REPO_NAME }}
