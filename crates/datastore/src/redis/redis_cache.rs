@@ -1246,6 +1246,14 @@ mod tests {
     /// #######################################################################
     /// ########################### RedisCache tests ##########################
     /// #######################################################################
+    ///
+    /// Note: These tests require a running Redis server. You can run a Redis server using Docker:
+    /// ```
+    /// docker pull redis/redis-stack-server:latest
+    /// docker run -d --name redis-stack-server -p 6379:6379 redis/redis-stack-server:latest
+    /// ```
+    ///
+    /// Reference: https://redis.io/kb/doc/1hcec8xg9w/how-can-i-install-redis-on-docker
 
     #[tokio::test]
     async fn test_new() {
