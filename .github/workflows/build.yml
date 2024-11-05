@@ -2,45 +2,44 @@ name: Build
 
 on:
   push:
-    branches: [ main, develop, "release/**" ]
+    branches: [main, develop, "release/**"]
   pull_request:
-    branches: [ main, develop, "release/**" ]
+    branches: [main, develop, "release/**"]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-
   build:
     runs-on: self-hosted
 
     steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: "0"
+          path: ./repos/${{ secrets.REPO_NAME }}
+          ref: ${{ github.ref }}
 
-    - uses: actions/checkout@v2
-      with:
-        fetch-depth: '0'
-        path: ./repos/${{ secrets.REPO_NAME }}
-        ref: ${{ github.ref }}
+      - name: Set Image Name
+        run: |
+          if [ ${{ github.ref }} == 'refs/heads/main' ]; then
+            echo "IMAGE_NAME=latest" >> $GITHUB_ENV;
+          else
+            BRANCH_NAME=$(echo ${{ github.ref }} | sed 's:.*/::');
+            echo "IMAGE_NAME=$BRANCH_NAME" >> $GITHUB_ENV;
+          fi
 
-    - name: Set Image Name
-      run: |
-        if [ ${{ github.ref }} == 'refs/heads/main' ]; then
-          echo "IMAGE_NAME=latest" >> $GITHUB_ENV;
-        else
-          BRANCH_NAME=$(echo ${{ github.ref }} | sed 's:.*/::');
-          echo "IMAGE_NAME=$BRANCH_NAME" >> $GITHUB_ENV;
-        fi
+      - name: Run Dockerfile
+        env:
+          DOCKER_REG_USR: ${{ secrets.DOCKER_REG_USR }}
+          DOCKER_REG_PW: ${{ secrets.DOCKER_REG_PW }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
+          REPO_NAME: ${{ secrets.REPO_NAME }}
+        run: |
+          DOCKER_BUILDKIT=1 docker build -t helix:${{ env.IMAGE_NAME }} --build-arg AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID --build-arg AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY --build-arg REPO_NAME=$REPO_NAME -f ./repos/$REPO_NAME/Dockerfile .
+          DOCKER_BUILDKIT=1 docker tag helix:${{ env.IMAGE_NAME }} $REGISTRY_URL/helix:${{ env.IMAGE_NAME }}
+          DOCKER_BUILDKIT=1 docker login https://$REGISTRY_URL/ -u "$DOCKER_REG_USR" -p "$DOCKER_REG_PW"
+          DOCKER_BUILDKIT=1 docker push $REGISTRY_URL/helix:${{ env.IMAGE_NAME }}
 
-    - name: Run Dockerfile
-      env:
-        DOCKER_REG_USR: ${{ secrets.DOCKER_REG_USR }}
-        DOCKER_REG_PW: ${{ secrets.DOCKER_REG_PW }}     
-        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        REGISTRY_URL: ${{ secrets.REGISTRY_URL }}
-        REPO_NAME: ${{ secrets.REPO_NAME }}        
-      run: |
-        DOCKER_BUILDKIT=1 docker build -t helix:${{ env.IMAGE_NAME }} --build-arg AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID --build-arg AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY --build-arg REPO_NAME=$REPO_NAME -f ./repos/$REPO_NAME/Dockerfile .
-        DOCKER_BUILDKIT=1 docker tag helix:${{ env.IMAGE_NAME }} $REGISTRY_URL/helix:${{ env.IMAGE_NAME }}
-        DOCKER_BUILDKIT=1 docker login https://$REGISTRY_URL/ -u "$DOCKER_REG_USR" -p "$DOCKER_REG_PW"
-        DOCKER_BUILDKIT=1 docker push $REGISTRY_URL/helix:${{ env.IMAGE_NAME }}

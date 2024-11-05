@@ -134,7 +134,7 @@ pub async fn rate_limit_by_ip(
 
     // Check if the IP address is within the rate limit
     if !state.check_rate_limit(real_ip, route) {
-        return RateLimitExceeded::new().into_response();
+        return RateLimitExceeded::new().into_response()
     }
 
     // Execute the remaining middleware stack.
@@ -156,7 +156,7 @@ fn extract_ip_from_request(req: &Request<Body>) -> Option<IpAddr> {
 
                 // Attempt to parse the IP address
                 if let Ok(ip_addr) = first_ip.parse::<IpAddr>() {
-                    return Some(ip_addr); // Return the first successfully parsed IP address
+                    return Some(ip_addr) // Return the first successfully parsed IP address
                 }
             }
         }

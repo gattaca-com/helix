@@ -1,15 +1,13 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ethereum_consensus::{
-    crypto::Signature,
     phase0::Validator,
-    primitives::{BlsPublicKey, ExecutionAddress, Gwei, ValidatorIndex},
+    primitives::{BlsPublicKey, Gwei, ValidatorIndex},
     serde::as_str,
 };
-use reth_primitives::hex;
 use serde::{Deserialize, Serialize};
 
-use crate::{api::proposer_api::ValidatorRegistrationInfo};
+use crate::api::proposer_api::ValidatorRegistrationInfo;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ValidatorSummary {
@@ -47,10 +45,7 @@ pub struct SignedValidatorRegistrationEntry {
 }
 
 impl SignedValidatorRegistrationEntry {
-    pub fn new(
-        registration_info: ValidatorRegistrationInfo,
-        pool_name: Option<String>,
-    ) -> Self {
+    pub fn new(registration_info: ValidatorRegistrationInfo, pool_name: Option<String>) -> Self {
         Self {
             registration_info,
             inserted_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
@@ -61,19 +56,4 @@ impl SignedValidatorRegistrationEntry {
     pub fn public_key(&self) -> &BlsPublicKey {
         &self.registration_info.registration.message.public_key
     }
-}
-
-fn string_to_execution_address(s: String) -> ExecutionAddress {
-    let bytes = hex::decode(s).unwrap();
-    ExecutionAddress::try_from(bytes.as_slice()).unwrap()
-}
-
-fn string_to_bls_public_key(s: String) -> BlsPublicKey {
-    let bytes = hex::decode(s).unwrap();
-    BlsPublicKey::try_from(bytes.as_slice()).unwrap()
-}
-
-fn string_to_signature(s: String) -> Signature {
-    let bytes = hex::decode(s).unwrap();
-    Signature::try_from(bytes.as_slice()).unwrap()
 }

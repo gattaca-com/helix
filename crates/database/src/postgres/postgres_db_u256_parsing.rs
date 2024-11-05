@@ -42,7 +42,7 @@ impl<'a> FromSql<'a> for PostgresNumeric {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
                     "Not enough bytes to read",
-                ));
+                ))
             }
             let value = u16::from_be_bytes([raw[*offset], raw[*offset + 1]]);
             *offset += 2;
@@ -133,10 +133,8 @@ impl ToSql for PostgresNumeric {
 mod tests {
     use super::*;
     use crate::postgres::postgres_db_u256_parsing::PostgresNumeric;
-    
-    use ethereum_consensus::{primitives::U256};
-    
-    
+
+    use ethereum_consensus::primitives::U256;
 
     fn get_values() -> Vec<U256> {
         vec![

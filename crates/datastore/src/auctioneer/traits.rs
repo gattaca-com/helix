@@ -1,4 +1,3 @@
-
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 use helix_common::{
@@ -16,7 +15,7 @@ use helix_common::{
 use helix_database::BuilderInfoDocument;
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse};
-use tokio_stream::{Stream};
+use tokio_stream::Stream;
 
 #[async_trait]
 #[auto_impl::auto_impl(Arc)]
@@ -190,7 +189,7 @@ pub trait Auctioneer: Send + Sync + Clone {
 
     async fn update_primev_proposers(
         &self,
-        proposer_whitelist: &Vec<BlsPublicKey>,
+        proposer_whitelist: &[BlsPublicKey],
     ) -> Result<(), AuctioneerError>;
 
     async fn is_primev_proposer(

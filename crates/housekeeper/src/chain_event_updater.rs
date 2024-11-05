@@ -9,7 +9,10 @@ use ethereum_consensus::{
     deneb::Withdrawal,
     primitives::Bytes32,
 };
-use tokio::{sync::{broadcast, mpsc}, time::{interval_at, sleep, Instant}};
+use tokio::{
+    sync::{broadcast, mpsc},
+    time::{interval_at, sleep, Instant},
+};
 use tracing::{error, info, warn};
 
 use helix_beacon_client::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
@@ -94,8 +97,11 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         mut head_event_rx: broadcast::Receiver<HeadEventData>,
         mut payload_attributes_rx: broadcast::Receiver<PayloadAttributesEvent>,
     ) {
-        let start_instant = Instant::now() + self.chain_info.clock.duration_until_next_slot() + Duration::from_secs(CUTT_OFF_TIME);
-        let mut timer = interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
+        let start_instant = Instant::now() +
+            self.chain_info.clock.duration_until_next_slot() +
+            Duration::from_secs(CUTT_OFF_TIME);
+        let mut timer =
+            interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
         loop {
             tokio::select! {
                 head_event_result = head_event_rx.recv() => {
@@ -144,18 +150,17 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
     /// Handles a new slot.
     async fn process_slot(&mut self, slot: u64) {
         if self.head_slot >= slot {
-            return;
+            return
         }
 
         info!(head_slot = slot, "Processing slot",);
 
         // Validate this isn't a faulty head slot
         if let Ok(current_timestamp) = SystemTime::now().duration_since(UNIX_EPOCH) {
-            let slot_timestamp =
-                self.chain_info.genesis_time_in_secs + (slot * SECONDS_PER_SLOT);
+            let slot_timestamp = self.chain_info.genesis_time_in_secs + (slot * SECONDS_PER_SLOT);
             if slot_timestamp > current_timestamp.as_secs() + MAX_DISTANCE_FOR_FUTURE_SLOT {
                 warn!(head_slot = slot, "slot is too far in the future",);
-                return;
+                return
             }
         }
 
@@ -178,7 +183,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
                     "Fetched proposer duties from db",
                 );
                 Some(new_duties)
-            },
+            }
             Err(err) => {
                 error!(error = %err, "Failed to get proposer duties from db");
                 None
@@ -191,11 +196,9 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         }
 
         // Get the next proposer duty for the new slot.
-        let next_duty =
-            self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
+        let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
 
-        let update =
-            ChainUpdate::SlotUpdate(SlotUpdate { slot, new_duties, next_duty });
+        let update = ChainUpdate::SlotUpdate(SlotUpdate { slot, new_duties, next_duty });
         self.send_update_to_subscribers(update).await;
     }
 
@@ -203,14 +206,14 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
     async fn process_payload_attributes(&mut self, event: PayloadAttributesEvent) {
         // require new proposal slot in the future
         if self.head_slot >= event.data.proposal_slot {
-            return;
+            return
         }
 
         // Discard payload attributes if already known
         let payload_attributes_key =
             get_payload_attributes_key(&event.data.parent_block_hash, event.data.proposal_slot);
         if self.known_payload_attributes.contains_key(&payload_attributes_key) {
-            return;
+            return
         }
 
         // Clean up old payload attributes

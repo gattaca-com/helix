@@ -10,7 +10,6 @@ use helix_common::{
         data_api::{DeliveredPayloadsResponse, ReceivedBlocksResponse},
     },
     bid_submission::BidTrace,
-    builder_info::BuilderInfo,
     simulator::BlockSimError,
     BuilderConfig, SubmissionTrace,
 };

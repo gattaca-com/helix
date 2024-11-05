@@ -71,13 +71,13 @@ impl RpcSimulator {
     /// Processes the response from the RPC call.
     async fn process_rpc_response(response: Response) -> Result<(), BlockSimError> {
         if response.status() != StatusCode::OK {
-            return Err(BlockSimError::RpcError(response.status().to_string()));
+            return Err(BlockSimError::RpcError(response.status().to_string()))
         }
 
         match response.json::<BlockSimRpcResponse>().await {
             Ok(rpc_response) => {
                 if let Some(error) = rpc_response.error {
-                    return Err(BlockSimError::BlockValidationFailed(error.message));
+                    return Err(BlockSimError::BlockValidationFailed(error.message))
                 }
                 Ok(())
             }

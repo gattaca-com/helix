@@ -1,6 +1,4 @@
-use std::{
-    sync::{atomic::AtomicBool, Arc, Mutex},
-};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
@@ -62,7 +60,7 @@ impl Auctioneer for MockAuctioneer {
         // check if the value is 9999 and than return an error for testing
         if let Some(bid) = self.best_bid.lock().unwrap().clone() {
             if bid.value() == U256::from(9999) {
-                return Err(AuctioneerError::UnexpectedValueType);
+                return Err(AuctioneerError::UnexpectedValueType)
             }
         }
         Ok(self.best_bid.lock().unwrap().clone())
@@ -70,9 +68,7 @@ impl Auctioneer for MockAuctioneer {
     async fn get_best_bids(
         &self,
     ) -> Box<dyn Stream<Item = Result<Vec<u8>, AuctioneerError>> + Send + Unpin> {
-        Box::new(tokio_stream::iter(
-            vec![Ok(vec![0; 188]), Ok(vec![0; 188]), Ok(vec![0; 188])],
-        ))
+        Box::new(tokio_stream::iter(vec![Ok(vec![0; 188]), Ok(vec![0; 188]), Ok(vec![0; 188])]))
     }
 
     async fn save_execution_payload(
@@ -272,7 +268,7 @@ impl Auctioneer for MockAuctioneer {
 
     async fn update_primev_proposers(
         &self,
-        _proposer_whitelist: &Vec<BlsPublicKey>,
+        _proposer_whitelist: &[BlsPublicKey],
     ) -> Result<(), AuctioneerError> {
         Ok(())
     }

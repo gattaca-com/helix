@@ -121,6 +121,7 @@ pub fn app() -> Router {
         .layer(Extension(data_api))
 }
 
+#[allow(clippy::type_complexity)]
 pub fn builder_api_app() -> (
     Router,
     Arc<BuilderApi<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>>,
@@ -141,7 +142,6 @@ pub fn builder_api_app() -> (
                 RelayConfig::default(),
                 slot_update_sender.clone(),
                 gossip_receiver,
-                Arc::new(ValidatorPreferences::default()),
             ),
         );
 
@@ -178,6 +178,7 @@ pub fn builder_api_app() -> (
     (router, builder_api_service, slot_update_receiver)
 }
 
+#[allow(clippy::type_complexity)]
 pub fn proposer_api_app() -> (
     Router,
     Arc<ProposerApi<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient, MockGossiper>>,

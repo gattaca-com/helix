@@ -1,4 +1,10 @@
-use std::{collections::HashMap, fs::{self, File}, io::Write, panic, path::Path};
+use std::{
+    collections::HashMap,
+    fs::{self, File},
+    io::Write,
+    panic,
+    path::Path,
+};
 
 use ::serde::de;
 use ethereum_consensus::{
@@ -16,7 +22,7 @@ pub mod signing;
 
 pub fn has_reached_fork(slot: u64, fork_epoch: u64) -> bool {
     if fork_epoch == 0 {
-        return false;
+        return false
     }
 
     let current_epoch = slot / SLOTS_PER_EPOCH;
@@ -63,7 +69,11 @@ pub fn get_payload_attributes_key(parent_hash: &Bytes32, slot: Slot) -> String {
     format!("{parent_hash:?}:{slot}")
 }
 
-pub fn set_panic_hook(instance_id: String, discord_web_hook: Option<String>, crash_log_path: Option<String>) {
+pub fn set_panic_hook(
+    instance_id: String,
+    discord_web_hook: Option<String>,
+    crash_log_path: Option<String>,
+) {
     info!("setting panic hook...");
     panic::set_hook(Box::new(move |info| {
         let backtrace = backtrace::Backtrace::new();
@@ -77,10 +87,11 @@ pub fn set_panic_hook(instance_id: String, discord_web_hook: Option<String>, cra
             save_to_file(crash_log_path, crash_log.clone());
         }
         if let Some(discord_web_hook) = discord_web_hook.clone() {
-            alert_discord(discord_web_hook,&format!(
-                "Relay: {} crashed! Please see the console log for details!",
-                instance_id
-            ), &instance_id);
+            alert_discord(
+                discord_web_hook,
+                &format!("Relay: {} crashed! Please see the console log for details!", instance_id),
+                &instance_id,
+            );
         }
     }));
 }

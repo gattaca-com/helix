@@ -40,7 +40,10 @@ impl ApiService {
         let postgres_db = PostgresDatabaseService::from_relay_config(&config).unwrap();
         postgres_db.run_migrations().await;
         postgres_db.init_region(&config).await;
-        postgres_db.store_builders_info(&config.builders).await.expect("failed to store builders info from config");
+        postgres_db
+            .store_builders_info(&config.builders)
+            .await
+            .expect("failed to store builders info from config");
         postgres_db.load_known_validators().await;
         postgres_db.start_registration_processor().await;
 
@@ -81,11 +84,8 @@ impl ApiService {
             NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
             NetworkConfig::Holesky => ChainInfo::for_holesky(),
             NetworkConfig::Custom { ref dir_path, ref genesis_validator_root, genesis_time } => {
-                match ChainInfo::for_custom(
-                    dir_path.clone(),
-                    *genesis_validator_root,
-                    genesis_time,
-                ) {
+                match ChainInfo::for_custom(dir_path.clone(), *genesis_validator_root, genesis_time)
+                {
                     Ok(chain_info) => chain_info,
                     Err(err) => {
                         error!("Failed to load custom chain info: {:?}", err);
@@ -168,7 +168,6 @@ impl ApiService {
             config.clone(),
             slot_update_sender.clone(),
             builder_gossip_receiver,
-            validator_preferences.clone(),
         ));
 
         gossiper.start_server(builder_gossip_sender, proposer_gossip_sender).await;
@@ -276,18 +275,13 @@ mod test {
 
     #[tokio::test]
     async fn test_init_broadcasters_timeout_triggered() {
-        let mut config = RelayConfig::default();
-        config.broadcasters = vec![
-            BroadcasterConfig::Fiber(FiberConfig {
-                url: "http://localhost:4040".to_string(),
-                api_key: "123".to_string(),
-                encoding: Encoding::Json,
-            }),
-            BroadcasterConfig::BeaconClient(BeaconClientConfig {
+        let config = RelayConfig {
+            broadcasters: vec![BroadcasterConfig::BeaconClient(BeaconClientConfig {
                 url: Url::parse("http://localhost:4040").unwrap(),
                 gossip_blobs_enabled: false,
-            }),
-        ];
+            })],
+            ..Default::default()
+        };
         let broadcasters = init_broadcasters(&config).await;
         assert_eq!(broadcasters.len(), 1);
     }

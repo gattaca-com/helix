@@ -4,8 +4,7 @@ use helix_common::{
     bellatrix::ByteVector,
     bid_submission::{v2::header_submission::SignedHeaderSubmission, SignedBidSubmission},
     simulator::BlockSimError,
-    GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace,
-    SubmissionTrace,
+    GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, SubmissionTrace,
 };
 
 #[derive(Clone)]

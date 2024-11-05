@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use tokio::{sync::mpsc::Sender, time::sleep};
 use tonic::{transport::Channel, Request, Response, Status};
-use tracing::{error};
+use tracing::error;
 
 use crate::{
     gossiper::{
@@ -47,7 +47,7 @@ impl GrpcGossiperClient {
                     Ok(c) => {
                         let mut client_with_lock = client.write().await;
                         *client_with_lock = Some(c);
-                        break;
+                        break
                     }
                     Err(err) => {
                         error!(err = %err, "failed to connect to {}", endpoint);
@@ -73,10 +73,10 @@ impl GrpcGossiperClient {
 
         if let Some(mut client) = client {
             if let Err(err) = client.broadcast_header(request).await {
-                return Err(GossipError::BroadcastError(err));
+                return Err(GossipError::BroadcastError(err))
             }
         } else {
-            return Err(GossipError::ClientNotConnected);
+            return Err(GossipError::ClientNotConnected)
         }
         Ok(())
     }
@@ -93,10 +93,10 @@ impl GrpcGossiperClient {
 
         if let Some(mut client) = client {
             if let Err(err) = client.broadcast_payload(request).await {
-                return Err(GossipError::BroadcastError(err));
+                return Err(GossipError::BroadcastError(err))
             }
         } else {
-            return Err(GossipError::ClientNotConnected);
+            return Err(GossipError::ClientNotConnected)
         }
         Ok(())
     }
@@ -113,10 +113,10 @@ impl GrpcGossiperClient {
 
         if let Some(mut client) = client {
             if let Err(err) = client.broadcast_get_payload(request).await {
-                return Err(GossipError::BroadcastError(err));
+                return Err(GossipError::BroadcastError(err))
             }
         } else {
-            return Err(GossipError::ClientNotConnected);
+            return Err(GossipError::ClientNotConnected)
         }
         Ok(())
     }
@@ -133,10 +133,10 @@ impl GrpcGossiperClient {
 
         if let Some(mut client) = client {
             if let Err(err) = client.broadcast_cancellation(request).await {
-                return Err(GossipError::BroadcastError(err));
+                return Err(GossipError::BroadcastError(err))
             }
         } else {
-            return Err(GossipError::ClientNotConnected);
+            return Err(GossipError::ClientNotConnected)
         }
         Ok(())
     }

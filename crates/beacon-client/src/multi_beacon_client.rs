@@ -7,12 +7,11 @@ use async_trait::async_trait;
 use ethereum_consensus::primitives::Root;
 use futures::future::join_all;
 use helix_common::{
-    bellatrix::SimpleSerialize, signed_proposal::VersionedSignedProposal,
-    ProposerDuty, ValidatorSummary,
+    beacon_api::PublishBlobsRequest, bellatrix::SimpleSerialize,
+    signed_proposal::VersionedSignedProposal, ProposerDuty, ValidatorSummary,
 };
 use tokio::{sync::broadcast::Sender, task::JoinError};
 use tracing::{error, warn};
-use helix_common::beacon_api::PublishBlobsRequest;
 
 use crate::{
     error::BeaconClientError,
@@ -152,7 +151,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
             match client.get_state_validators(state_id.clone()).await {
                 Ok(state_validators) => {
                     self.best_beacon_instance.store(i, Ordering::Relaxed);
-                    return Ok(state_validators);
+                    return Ok(state_validators)
                 }
                 Err(err) => {
                     last_error = Some(err);
@@ -174,7 +173,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
             match client.get_proposer_duties(epoch).await {
                 Ok(proposer_duties) => {
                     self.best_beacon_instance.store(i, Ordering::Relaxed);
-                    return Ok(proposer_duties);
+                    return Ok(proposer_duties)
                 }
                 Err(err) => {
                     last_error = Some(err);
@@ -229,7 +228,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
                     }
                     Ok(_) => {
                         self.best_beacon_instance.store(i, Ordering::Relaxed);
-                        return Ok(());
+                        return Ok(())
                     }
                     Err(err) => {
                         last_error = Some(err);
@@ -243,7 +242,10 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
         Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
     }
 
-    async fn publish_blobs(&self, blob_sidecars: PublishBlobsRequest) -> Result<u16, BeaconClientError> {
+    async fn publish_blobs(
+        &self,
+        blob_sidecars: PublishBlobsRequest,
+    ) -> Result<u16, BeaconClientError> {
         let clients = self.beacon_clients_by_last_response();
         clients.into_iter().for_each(|(_i, client)| {
             let sidecars = blob_sidecars.clone();
