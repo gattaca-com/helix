@@ -10,6 +10,8 @@ license.workspace = true
 # Serialization and Data Format 
 serde.workspace = true
 serde_json.workspace = true
+tree_hash = "0.6.0"
+tree_hash_derive = "0.6.0"
 
 # Ethereum Types
 ethereum-consensus.workspace = true

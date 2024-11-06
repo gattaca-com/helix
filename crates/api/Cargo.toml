@@ -22,8 +22,10 @@ tower = { workspace = true }
 futures = { workspace = true }
 hyper = { workspace = true }
 reqwest = { workspace = true }
+reqwest-eventsource = "0.5"
 tokio = { workspace = true }
 tokio-tungstenite = "0.16"
+tokio-stream = { workspace = true }
 tower-http = { workspace = true }
 url = { workspace = true }
 tonic = "0.10"
@@ -50,6 +52,7 @@ auto_impl.workspace = true
 rand = "0.8"
 thiserror = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 uuid = { workspace = true }
 bytes = "1.5"
 moka = "0.9"

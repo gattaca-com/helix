@@ -16,9 +16,10 @@ pub const PATH_PROPOSER_API: &str = "/eth/v1/builder";
 pub const PATH_STATUS: &str = "/status";
 pub const PATH_REGISTER_VALIDATORS: &str = "/validators";
 pub const PATH_GET_HEADER: &str = "/header/:slot/:parent_hash/:pubkey";
+pub const PATH_GET_HEADER_WITH_PROOFS: &str = "/header_with_proofs/:slot/:parent_hash/:pubkey";
 pub const PATH_GET_PAYLOAD: &str = "/blinded_blocks";
 
-pub(crate) const GET_HEADER_REQUEST_CUTOFF_MS: i64 = 3000;
+pub const GET_HEADER_REQUEST_CUTOFF_MS: i64 = 3000;
 
 #[derive(Debug, Deserialize)]
 pub struct GetHeaderParams {

@@ -14,8 +14,7 @@ mod data_api_tests {
         ReceivedBlocksResponse, ValidatorRegistrationParams,
     };
     use helix_database::MockDatabaseService;
-    use helix_utils::request_encoding::Encoding;
-    use reqwest::{Client, Response, StatusCode};
+    use reqwest::StatusCode;
     use serial_test::serial;
     use std::{sync::Arc, time::Duration};
     use tokio::sync::oneshot;
@@ -44,14 +43,6 @@ mod data_api_tests {
         fn bind_address(&self) -> String {
             format!("{}:{}", self.address, self.port)
         }
-    }
-
-    async fn send_request(req_url: &str, encoding: Encoding, req_payload: Vec<u8>) -> Response {
-        let client = Client::new();
-        let request = client.post(req_url).header("accept", "*/*");
-        let request = encoding.to_headers(request);
-
-        request.body(req_payload).send().await.unwrap()
     }
 
     async fn start_api_server() -> (

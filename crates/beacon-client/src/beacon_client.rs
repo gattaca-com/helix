@@ -23,7 +23,10 @@ use crate::{
 };
 
 const CONSENSUS_VERSION_HEADER: &str = "eth-consensus-version";
-const BEACON_CLIENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+// Note: we noticed that beacon clients can take 5-10s to respond with the full
+// validators list in some cases. The previous timeout of 5s was too short.
+const BEACON_CLIENT_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Debug)]
 pub struct BeaconClient {

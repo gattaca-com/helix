@@ -83,6 +83,12 @@ impl FromRow for GetPayloadTrace {
     }
 }
 
+impl FromRow for BlsPublicKey {
+    fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError> {
+        parse_bytes_to_pubkey(row.get::<&str, &[u8]>("validator_delegations"))
+    }
+}
+
 impl<
         const BYTES_PER_LOGS_BLOOM: usize,
         const MAX_EXTRA_DATA_BYTES: usize,

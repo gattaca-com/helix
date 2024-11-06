@@ -5,9 +5,9 @@ RUN apt install -y clang
 RUN apt install -y protobuf-compiler
 
 RUN wget https://github.com/mozilla/sccache/releases/download/v0.3.1/sccache-v0.3.1-x86_64-unknown-linux-musl.tar.gz \
-    && tar xzf sccache-v0.3.1-x86_64-unknown-linux-musl.tar.gz \
-    && mv sccache-v0.3.1-x86_64-unknown-linux-musl/sccache /usr/local/bin/sccache \
-    && chmod +x /usr/local/bin/sccache
+  && tar xzf sccache-v0.3.1-x86_64-unknown-linux-musl.tar.gz \
+  && mv sccache-v0.3.1-x86_64-unknown-linux-musl/sccache /usr/local/bin/sccache \
+  && chmod +x /usr/local/bin/sccache
 
 ARG AWS_ACCESS_KEY_ID
 ARG AWS_SECRET_ACCESS_KEY
@@ -33,13 +33,13 @@ RUN ls -lah /app/${REPO_NAME}
 WORKDIR /app/${REPO_NAME}
 
 RUN --mount=type=cache,target=/root/.cargo \
-    --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo fetch
+  --mount=type=cache,target=/usr/local/cargo/registry \
+  cargo fetch
 
 # Run build
 RUN --mount=type=cache,target=/root/.cargo \
-    --mount=type=cache,target=/usr/local/cargo/registry \
-    RUSTC_WRAPPER=/usr/local/bin/sccache cargo build -p helix-cmd --release
+  --mount=type=cache,target=/usr/local/cargo/registry \
+  RUSTC_WRAPPER=/usr/local/bin/sccache cargo build -p helix-cmd --release
 
 # Copy binary into the workdir
 RUN mv /app/$REPO_NAME/target/release/helix-cmd /app/helix-cmd

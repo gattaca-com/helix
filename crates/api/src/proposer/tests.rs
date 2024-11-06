@@ -50,7 +50,7 @@ mod proposer_api_tests {
         ssz::prelude::*,
     };
     use rand::Rng;
-    use reqwest::{Client, Response, StatusCode};
+    use reqwest::StatusCode;
     use reth_primitives::hex;
 
     use crate::proposer::{tests::gen_signed_vr, PATH_REGISTER_VALIDATORS};
@@ -60,16 +60,16 @@ mod proposer_api_tests {
         api::{
             builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
         },
-        capella::{self},
+        capella,
         chain_info::ChainInfo,
-        deneb::{self},
+        deneb,
         versioned_payload::PayloadAndBlobs,
         SignedBuilderBid, ValidatorPreferences,
     };
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-    use helix_utils::{request_encoding::Encoding, signing::verify_signed_consensus_message};
+    use helix_utils::signing::verify_signed_consensus_message;
     use serial_test::serial;
     use std::{sync::Arc, time::Duration};
     use tokio::{
@@ -111,14 +111,6 @@ mod proposer_api_tests {
         }
     }
 
-    async fn send_request(req_url: &str, encoding: Encoding, req_payload: Vec<u8>) -> Response {
-        let client = Client::new();
-        let request = client.post(req_url).header("accept", "*/*");
-        let request = encoding.to_headers(request);
-
-        request.body(req_payload).send().await.unwrap()
-    }
-
     fn get_test_pub_key_bytes(random: bool) -> [u8; 48] {
         if random {
             let mut pubkey_array = [0u8; 48];
@@ -140,13 +132,6 @@ mod proposer_api_tests {
     fn get_byte_vector_32_for_hex(hex: &str) -> ByteVector<32> {
         let bytes = hex::decode(&hex[2..]).unwrap();
         ByteVector::try_from(bytes.as_ref()).unwrap()
-    }
-
-    fn hex_to_byte_arr_32(hex: &str) -> [u8; 32] {
-        let bytes = hex::decode(&hex[2..]).unwrap();
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(&bytes);
-        arr
     }
 
     fn get_valid_payload_register_validator(
@@ -260,10 +245,13 @@ mod proposer_api_tests {
     }
 
     fn get_signed_builder_bid(value: U256) -> SignedBuilderBid {
-        SignedBuilderBid::Capella(capella::SignedBuilderBid {
-            message: helix_common::eth::capella::BuilderBid { value, ..Default::default() },
-            ..Default::default()
-        })
+        SignedBuilderBid::Capella(
+            capella::SignedBuilderBid {
+                message: helix_common::eth::capella::BuilderBid { value, ..Default::default() },
+                ..Default::default()
+            },
+            None,
+        )
     }
 
     fn get_blinded_beacon_block_body() -> BlindedBeaconBlockBody {

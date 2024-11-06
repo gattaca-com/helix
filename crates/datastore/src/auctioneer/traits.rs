@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 use helix_common::{
+    api::constraints_api::{SignedDelegation, SignedRevocation},
     bellatrix::Node,
     bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
@@ -8,6 +9,7 @@ use helix_common::{
     builder_info::BuilderInfo,
     eth::SignedBuilderBid,
     pending_block::PendingBlock,
+    proofs::{InclusionProofs, SignedConstraintsWithProofData},
     signing::RelaySigningContext,
     versioned_payload::PayloadAndBlobs,
     ProposerInfo,
@@ -20,6 +22,45 @@ use tokio_stream::Stream;
 #[async_trait]
 #[auto_impl::auto_impl(Arc)]
 pub trait Auctioneer: Send + Sync + Clone {
+    async fn get_validator_delegations(
+        &self,
+        pub_key: BlsPublicKey,
+    ) -> Result<Vec<SignedDelegation>, AuctioneerError>;
+
+    async fn save_validator_delegations(
+        &self,
+        signed_delegations: Vec<SignedDelegation>,
+    ) -> Result<(), AuctioneerError>;
+
+    async fn revoke_validator_delegations(
+        &self,
+        signed_revocations: Vec<SignedRevocation>,
+    ) -> Result<(), AuctioneerError>;
+
+    async fn save_constraints(
+        &self,
+        slot: u64,
+        constraints: SignedConstraintsWithProofData,
+    ) -> Result<(), AuctioneerError>;
+    async fn get_constraints(
+        &self,
+        slot: u64,
+    ) -> Result<Option<Vec<SignedConstraintsWithProofData>>, AuctioneerError>;
+
+    async fn save_inclusion_proof(
+        &self,
+        slot: u64,
+        proposer_pub_key: &BlsPublicKey,
+        bid_block_hash: &Hash32,
+        inclusion_proof: &InclusionProofs,
+    ) -> Result<(), AuctioneerError>;
+    async fn get_inclusion_proof(
+        &self,
+        slot: u64,
+        proposer_pub_key: &BlsPublicKey,
+        bid_block_hash: &Hash32,
+    ) -> Result<Option<InclusionProofs>, AuctioneerError>;
+
     async fn get_last_slot_delivered(&self) -> Result<Option<u64>, AuctioneerError>;
     async fn check_and_set_last_slot_and_hash_delivered(
         &self,

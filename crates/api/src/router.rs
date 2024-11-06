@@ -18,6 +18,7 @@ use crate::{
         api::{BuilderApi, MAX_PAYLOAD_LENGTH},
         optimistic_simulator::OptimisticSimulator,
     },
+    constraints::api::ConstraintsApi,
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     middleware::rate_limiting::rate_limit_by_ip::{
         rate_limit_by_ip, RateLimitState, RateLimitStateForRoute,
@@ -45,11 +46,14 @@ pub type ProposerApiProd = ProposerApi<
 
 pub type DataApiProd = DataApi<PostgresDatabaseService>;
 
+pub type ConstraintsApiProd = ConstraintsApi<RedisCache, PostgresDatabaseService>;
+
 pub fn build_router(
     router_config: &mut RouterConfig,
     builder_api: Arc<BuilderApiProd>,
     proposer_api: Arc<ProposerApiProd>,
     data_api: Arc<DataApiProd>,
+    constraints_api: Arc<ConstraintsApiProd>,
     bids_cache: Arc<BidsCache>,
     delivered_payloads_cache: Arc<DeliveredPayloadsCache>,
 ) -> Router {
@@ -81,6 +85,10 @@ pub fn build_router(
             Route::SubmitBlockOptimistic => {
                 router = router.route(&route.path(), post(BuilderApiProd::submit_block_v2));
             }
+            Route::SubmitBlockWithProofs => {
+                router =
+                    router.route(&route.path(), post(BuilderApiProd::submit_block_with_proofs));
+            }
             Route::SubmitHeader => {
                 router = router.route(&route.path(), post(BuilderApiProd::submit_header));
             }
@@ -90,6 +98,15 @@ pub fn build_router(
             Route::GetTopBid => {
                 router = router.route(&route.path(), get(BuilderApiProd::get_top_bid));
             }
+            Route::GetBuilderConstraints => {
+                router = router.route(&route.path(), get(BuilderApiProd::constraints));
+            }
+            Route::GetBuilderConstraintsStream => {
+                router = router.route(&route.path(), get(BuilderApiProd::constraints_stream));
+            }
+            Route::GetBuilderDelegations => {
+                router = router.route(&route.path(), get(BuilderApiProd::delegations));
+            }
             Route::Status => {
                 router = router.route(&route.path(), get(ProposerApiProd::status));
             }
@@ -98,6 +115,9 @@ pub fn build_router(
             }
             Route::GetHeader => {
                 router = router.route(&route.path(), get(ProposerApiProd::get_header));
+            }
+            Route::GetHeaderWithProofs => {
+                router = router.route(&route.path(), get(ProposerApiProd::get_header_with_proofs));
             }
             Route::GetPayload => {
                 router = router.route(&route.path(), post(ProposerApiProd::get_payload));
@@ -113,6 +133,15 @@ pub fn build_router(
             }
             Route::ValidatorRegistration => {
                 router = router.route(&route.path(), get(DataApiProd::validator_registration));
+            }
+            Route::SubmitBuilderConstraints => {
+                router = router.route(&route.path(), post(ConstraintsApiProd::submit_constraints));
+            }
+            Route::DelegateSubmissionRights => {
+                router = router.route(&route.path(), post(ConstraintsApiProd::delegate));
+            }
+            Route::RevokeSubmissionRights => {
+                router = router.route(&route.path(), post(ConstraintsApiProd::revoke));
             }
             _ => {
                 panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route);
@@ -140,6 +169,7 @@ pub fn build_router(
         .layer(Extension(builder_api))
         .layer(Extension(proposer_api))
         .layer(Extension(data_api))
+        .layer(Extension(constraints_api))
         .layer(Extension(bids_cache))
         .layer(Extension(delivered_payloads_cache));
 
