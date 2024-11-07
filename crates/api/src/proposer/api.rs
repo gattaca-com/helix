@@ -480,7 +480,7 @@ where
     ///
     /// The function returns a JSON response containing the best bid and inclusion proofs if found.
     ///
-    /// Implements this API: <https://docs.boltprotocol.xyz/api/builder#get_header_with_proofs>
+    /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/builder#get_header_with_proofs>
     pub async fn get_header_with_proofs(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
         headers: HeaderMap,

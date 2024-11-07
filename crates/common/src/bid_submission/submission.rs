@@ -364,7 +364,7 @@ pub struct SignedBidSubmissionDeneb {
     pub blobs_bundle: BlobsBundle,
     pub signature: BlsSignature,
     /// The Merkle proofs of inclusion as needed by the Constraints API.
-    /// Reference: <https://docs.boltprotocol.xyz/api/builder#get_header_with_proofs>
+    /// Reference: <https://docs.boltprotocol.xyz/technical-docs/api/builder#get_header_with_proofs>
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proofs: Option<InclusionProofs>,
 }
