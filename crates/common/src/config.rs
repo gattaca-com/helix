@@ -32,6 +32,8 @@ pub struct RelayConfig {
     #[serde(default = "default_duration")]
     pub target_get_payload_propagation_duration_ms: u64,
     #[serde(default)]
+    pub constraints_api_config: ConstraintsApiConfig,
+    #[serde(default)]
     pub primev_config: Option<PrimevConfig>,
     /// Submissions from these builder pubkeys will never be dropped early
     /// for having a low bid. They will always be simulated and fully verified.
@@ -123,6 +125,23 @@ pub enum NetworkConfig {
         genesis_validator_root: Node,
         genesis_time: u64,
     },
+}
+
+/// Configuration for the [Constraints API](https://docs.boltprotocol.xyz/technical-docs/api/builder)
+///
+/// These checks are enabled by default. Disabling them is recommended only for testing purposes.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ConstraintsApiConfig {
+    /// If `false`, the constraints signature via the
+    /// [`/constraints/v1/builder/constraints`](https://docs.boltprotocol.xyz/technical-docs/api/builder#constraints)
+    /// endpoint will not be checked.
+    pub check_constraints_signature: bool,
+}
+
+impl Default for ConstraintsApiConfig {
+    fn default() -> Self {
+        ConstraintsApiConfig { check_constraints_signature: true }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]

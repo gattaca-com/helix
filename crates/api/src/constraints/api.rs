@@ -12,7 +12,7 @@ use helix_common::{
     bellatrix::List,
     chain_info::ChainInfo,
     proofs::{ConstraintsMessage, SignedConstraints, SignedConstraintsWithProofData},
-    ConstraintSubmissionTrace,
+    ConstraintSubmissionTrace, ConstraintsApiConfig,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
@@ -42,6 +42,7 @@ where
     auctioneer: Arc<A>,
     db: Arc<DB>,
     chain_info: Arc<ChainInfo>,
+    constraints_api_config: Arc<ConstraintsApiConfig>,
 
     constraints_handle: ConstraintsHandle,
 }
@@ -69,8 +70,9 @@ where
         db: Arc<DB>,
         chain_info: Arc<ChainInfo>,
         constraints_handle: ConstraintsHandle,
+        constraints_api_config: Arc<ConstraintsApiConfig>,
     ) -> Self {
-        Self { auctioneer, db, chain_info, constraints_handle }
+        Self { auctioneer, db, chain_info, constraints_handle, constraints_api_config }
     }
 
     /// Handles the submission of batch of signed constraints.
@@ -152,17 +154,18 @@ where
                 return Err(ConstraintsApiError::PubkeyNotAuthorized(constraint.message.pubkey))
             }
 
-            // Verify the constraints message BLS signature
-            if let Err(e) = verify_signed_message(
-                &constraint.message.digest(),
-                &constraint.signature,
-                &constraint.message.pubkey,
-                COMMIT_BOOST_DOMAIN,
-                &api.chain_info.context,
-            ) {
-                error!(err = ?e, request_id = %request_id, "Invalid constraints signature");
-                return Err(ConstraintsApiError::InvalidSignature)
-            };
+            if api.constraints_api_config.check_constraints_signature {
+                if let Err(e) = verify_signed_message(
+                    &constraint.message.digest(),
+                    &constraint.signature,
+                    &constraint.message.pubkey,
+                    COMMIT_BOOST_DOMAIN,
+                    &api.chain_info.context,
+                ) {
+                    error!(err = ?e, request_id = %request_id, "Invalid constraints signature");
+                    return Err(ConstraintsApiError::InvalidSignature)
+                };
+            }
 
             // Send to the constraints channel
             api.constraints_handle.send_constraints(constraint.clone());
