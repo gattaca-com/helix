@@ -188,11 +188,14 @@ impl ApiService {
 
         let data_api = Arc::new(DataApiProd::new(validator_preferences.clone(), db.clone()));
 
+        let constraints_api_config = Arc::new(config.constraints_api_config);
+
         let constraints_api = Arc::new(ConstraintsApiProd::new(
             auctioneer.clone(),
             db.clone(),
             chain_info.clone(),
             constraints_handle,
+            constraints_api_config,
         ));
 
         let bids_cache: Arc<BidsCache> = Arc::new(

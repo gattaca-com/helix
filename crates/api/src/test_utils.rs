@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
     BoxError, Extension, Router,
 };
-use helix_common::{chain_info::ChainInfo, RelayConfig, Route};
+use helix_common::{chain_info::ChainInfo, ConstraintsApiConfig, RelayConfig, Route};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use helix_beacon_client::{
@@ -328,6 +328,7 @@ pub fn constraints_api_app() -> (
             database.clone(),
             Arc::new(ChainInfo::for_mainnet()),
             handler,
+            Arc::new(ConstraintsApiConfig::default()),
         ));
 
     let router = Router::new()
