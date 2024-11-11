@@ -18,12 +18,12 @@ tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 ethereum-consensus = { workspace = true }
+deadpool-postgres = { workspace = true }
+url = { workspace = true }
+async-trait = { workspace = true }
+hex = { workspace = true }
+reqwest = { workspace = true }
+
 askama = "0.12"
 alloy-primitives = "0.7.7"
-scaler = "1.1.0"
 num-format = "0.4.4"
-deadpool-postgres = { workspace = true }
-async-trait = "0.1.73"
-hex = "0.4.3"
-url = "2.4.1"
-reqwest = "0.11.23"

@@ -338,29 +338,6 @@ impl SignedBidSubmission {
             },
         }
     }
-
-    pub fn num_blobs(&self) -> u64 {
-        match self {
-            SignedBidSubmission::Deneb(signed_bid_submission) => {
-                signed_bid_submission.blobs_bundle.blobs.len() as u64
-            }
-            SignedBidSubmission::Capella(_) => 0,
-        }
-    }
-
-    pub fn blob_gas_used(&self) -> u64 {
-        match self.execution_payload() {
-            ExecutionPayload::Deneb(payload) => payload.blob_gas_used,
-            _ => 0,
-        }
-    }
-
-    pub fn excess_blob_gas(&self) -> u64 {
-        match self.execution_payload() {
-            ExecutionPayload::Deneb(payload) => payload.excess_blob_gas,
-            _ => 0,
-        }
-    }
 }
 
 impl Default for SignedBidSubmission {
