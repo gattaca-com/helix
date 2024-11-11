@@ -1,6 +1,6 @@
-use serde::{Serialize, Deserialize};
-use deadpool_postgres::tokio_postgres::{Row, Error};
+use deadpool_postgres::tokio_postgres::{Error, Row};
 use helix_common::bid_submission::BidTrace;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NumRegisteredValidators {
@@ -44,9 +44,6 @@ impl TryFrom<Row> for NetworkValidator {
     type Error = Error;
 
     fn try_from(row: Row) -> Result<Self, Self::Error> {
-        Ok(Self {
-            public_key: row.get("public_key"),
-            index: row.get("index"),
-        })
+        Ok(Self { public_key: row.get("public_key"), index: row.get("index") })
     }
 }

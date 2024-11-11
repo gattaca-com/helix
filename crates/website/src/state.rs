@@ -1,6 +1,5 @@
 use crate::templates::IndexTemplate;
-use helix_common::chain_info::ChainInfo;
-use helix_common::WebsiteConfig;
+use helix_common::{chain_info::ChainInfo, WebsiteConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use std::sync::Arc;
 use tokio::sync::RwLock;

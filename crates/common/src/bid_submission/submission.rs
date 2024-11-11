@@ -355,14 +355,12 @@ impl SignedBidSubmission {
         }
     }
 
-
     pub fn excess_blob_gas(&self) -> u64 {
         match self.execution_payload() {
             ExecutionPayload::Deneb(payload) => payload.excess_blob_gas,
             _ => 0,
         }
     }
-    
 }
 
 impl Default for SignedBidSubmission {

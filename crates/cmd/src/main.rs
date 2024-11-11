@@ -12,7 +12,6 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 use helix_website::website_service::WebsiteService;
 
-
 async fn run() {
     let config = match RelayConfig::load() {
         Ok(config) => config,
@@ -81,7 +80,7 @@ async fn run() {
                 match WebsiteService::run(website_config.clone()).await {
                     Ok(_) => {
                         tracing::error!("Website service unexpectedly completed. Restarting...");
-                    },
+                    }
                     Err(e) => {
                         tracing::error!("Website server error: {}. Restarting...", e);
                     }

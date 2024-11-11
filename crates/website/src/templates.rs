@@ -1,13 +1,12 @@
-use askama::Template;
 use crate::models::DeliveredPayload;
+use askama::Template;
 
 //Askama filters
 pub mod filters {
-    use num_format::{Locale, ToFormattedString};
     use alloy_primitives::utils::format_units;
+    use askama::{Error, Result};
     use ethereum_consensus::primitives::U256;
-    use askama::Result;
-    use askama::Error;
+    use num_format::{Locale, ToFormattedString};
 
     pub fn pretty_int<T>(i: &T) -> Result<String>
     where
@@ -17,13 +16,12 @@ pub mod filters {
     }
 
     pub fn wei_to_eth(wei: &U256) -> Result<String> {
-        let eth = format_units(*wei, "ether")
-            .map_err(|_| Error::Fmt(std::fmt::Error))?;
+        let eth = format_units(*wei, "ether").map_err(|_| Error::Fmt(std::fmt::Error))?;
         Ok(format!("{:.6}", eth)) // Format to 6 decimal places
     }
 }
 
-#[derive(Template)]
+#[derive(Template, Default)]
 #[template(path = "index.html")]
 pub struct IndexTemplate {
     pub network: String,
@@ -44,32 +42,5 @@ pub struct IndexTemplate {
     pub bellatrix_fork_version: String,
     pub genesis_fork_version: String,
     pub genesis_validators_root: String,
-    pub builder_signing_domain: String
-    //pub beacon_proposer_signing_domain: String //May be irrelevant?
-}
-
-impl Default for IndexTemplate {
-    fn default() -> Self {
-        Self {
-            network: String::new(),
-            relay_url: String::new(),
-            relay_pubkey: String::new(),
-            show_config_details: false,
-            network_validators: 0,
-            registered_validators: 0,
-            latest_slot: 0,
-            recent_payloads: Vec::new(),
-            num_delivered_payloads: 0,
-            value_link: String::new(),
-            value_order_icon: String::new(),
-            link_beaconchain: String::new(),
-            link_etherscan: String::new(),
-            link_data_api: String::new(),
-            capella_fork_version: String::new(),
-            bellatrix_fork_version: String::new(),
-            genesis_fork_version: String::new(),
-            genesis_validators_root: String::new(),
-            builder_signing_domain: String::new(),
-        }
-    }
+    pub builder_signing_domain: String, /* pub beacon_proposer_signing_domain: String //May be irrelevant? */
 }

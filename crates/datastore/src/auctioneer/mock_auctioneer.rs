@@ -74,7 +74,7 @@ impl Auctioneer for MockAuctioneer {
         constraints: SignedConstraintsWithProofData,
     ) -> Result<(), AuctioneerError> {
         let mut constraints_map = self.constraints.lock().unwrap();
-        let constraints_vec = constraints_map.entry(slot).or_insert_with(Vec::new);
+        let constraints_vec = constraints_map.entry(slot).or_default();
         constraints_vec.push(constraints);
         Ok(())
     }

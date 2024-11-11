@@ -1,20 +1,29 @@
-use deadpool_postgres::tokio_postgres;
-use async_trait::async_trait;
-use helix_database::error::DatabaseError;
 use crate::models::DeliveredPayload;
+use async_trait::async_trait;
+use deadpool_postgres::tokio_postgres;
 use helix_common::bid_submission::BidTrace;
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_database::postgres::postgres_db_u256_parsing::{PostgresNumeric};
-use helix_database::postgres::postgres_db_row_parsing::{parse_bytes_to_hash, parse_bytes_to_pubkey, parse_numeric_to_u256, FromRow, parse_rows, parse_i32_to_u64, parse_i32_to_usize};
+use helix_database::{
+    error::DatabaseError,
+    postgres::{
+        postgres_db_row_parsing::{
+            parse_bytes_to_hash, parse_bytes_to_pubkey, parse_i32_to_u64, parse_i32_to_usize,
+            parse_numeric_to_u256, parse_rows, FromRow,
+        },
+        postgres_db_service::PostgresDatabaseService,
+        postgres_db_u256_parsing::PostgresNumeric,
+    },
+};
 
 #[async_trait]
 pub trait WebsiteDatabaseService: Send + Sync {
-    async fn get_recent_delivered_payloads(&self, limit: i64) -> Result<Vec<DeliveredPayload>, DatabaseError>;
+    async fn get_recent_delivered_payloads(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<DeliveredPayload>, DatabaseError>;
     async fn get_num_network_validators(&self) -> Result<i64, DatabaseError>;
     async fn get_num_registered_validators(&self) -> Result<i64, DatabaseError>;
     async fn get_num_delivered_payloads(&self) -> Result<i64, DatabaseError>;
 }
-
 
 impl FromRow for DeliveredPayload {
     fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError> {
@@ -23,9 +32,15 @@ impl FromRow for DeliveredPayload {
                 slot: parse_i32_to_u64(row.get::<&str, i32>("slot_number"))?,
                 parent_hash: parse_bytes_to_hash::<32>(row.get::<&str, &[u8]>("parent_hash"))?,
                 block_hash: parse_bytes_to_hash::<32>(row.get::<&str, &[u8]>("block_hash"))?,
-                builder_public_key: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("builder_pubkey"))?,
-                proposer_public_key: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("proposer_pubkey"))?,
-                proposer_fee_recipient: parse_bytes_to_hash::<20>(row.get::<&str, &[u8]>("proposer_fee_recipient"))?,
+                builder_public_key: parse_bytes_to_pubkey(
+                    row.get::<&str, &[u8]>("builder_pubkey"),
+                )?,
+                proposer_public_key: parse_bytes_to_pubkey(
+                    row.get::<&str, &[u8]>("proposer_pubkey"),
+                )?,
+                proposer_fee_recipient: parse_bytes_to_hash::<20>(
+                    row.get::<&str, &[u8]>("proposer_fee_recipient"),
+                )?,
                 gas_limit: parse_i32_to_u64(row.get::<&str, i32>("gas_limit"))?,
                 gas_used: parse_i32_to_u64(row.get::<&str, i32>("gas_used"))?,
                 value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("value")),
@@ -35,14 +50,17 @@ impl FromRow for DeliveredPayload {
             num_blobs: parse_i32_to_usize(row.get::<&str, i32>("num_blobs"))?,
             blob_gas_used: parse_i32_to_u64(row.get::<&str, i32>("blob_gas_used"))?,
             excess_blob_gas: parse_i32_to_u64(row.get::<&str, i32>("excess_blob_gas"))?,
-            epoch: parse_i32_to_u64(row.get::<&str, i32>("slot_number"))?/32 //Calculate directly
+            epoch: parse_i32_to_u64(row.get::<&str, i32>("slot_number"))? / 32, //Calculate directly
         })
     }
 }
 
 #[async_trait]
 impl WebsiteDatabaseService for PostgresDatabaseService {
-    async fn get_recent_delivered_payloads(&self, limit: i64) -> Result<Vec<DeliveredPayload>, DatabaseError> {
+    async fn get_recent_delivered_payloads(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<DeliveredPayload>, DatabaseError> {
         let query = "
         SELECT
             block_submission.slot_number,
@@ -83,7 +101,6 @@ impl WebsiteDatabaseService for PostgresDatabaseService {
         let row = client.query_one("SELECT COUNT(*) FROM validator_registrations", &[]).await?;
         Ok(row.get::<usize, i64>(0))
     }
-
 
     async fn get_num_delivered_payloads(&self) -> Result<i64, DatabaseError> {
         let client = self.pool.get().await?;
