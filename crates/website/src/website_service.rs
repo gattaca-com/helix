@@ -40,12 +40,8 @@ impl WebsiteService {
             NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
             NetworkConfig::Holesky => ChainInfo::for_holesky(),
             NetworkConfig::Custom { ref dir_path, ref genesis_validator_root, genesis_time } => {
-                ChainInfo::for_custom(
-                    dir_path.clone(),
-                    *genesis_validator_root,
-                    genesis_time,
-                )
-                .expect("Failed to load custom chain info")
+                ChainInfo::for_custom(dir_path.clone(), *genesis_validator_root, genesis_time)
+                    .expect("Failed to load custom chain info")
             }
         });
 
@@ -104,10 +100,10 @@ impl WebsiteService {
         let addr: String =
             format!("{}:{}", config.website.listen_address, config.website.port).parse()?;
         let addr: SocketAddr = addr.parse().expect("Invalid listen address");
-        let listener = TcpListener::bind(&addr).await.unwrap();
+        let listener = TcpListener::bind(&addr).await?;
         info!("Website listening on {}", addr);
 
-        axum::serve(listener, app).await.unwrap();
+        axum::serve(listener, app).await?;
 
         Ok(())
     }

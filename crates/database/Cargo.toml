@@ -40,4 +40,3 @@ rand = "0.8"
 dashmap.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tokio-postgres-rustls.workspace = true

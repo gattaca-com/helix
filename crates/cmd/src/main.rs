@@ -2,7 +2,6 @@ use helix_api::service::ApiService;
 use helix_common::{LoggingConfig, RelayConfig};
 use helix_utils::set_panic_hook;
 use tokio::runtime::Builder;
-
 use tracing_appender::rolling::Rotation;
 
 use tikv_jemallocator::Jemalloc;
@@ -61,43 +60,26 @@ async fn run() {
 
     let mut handles = Vec::new();
 
-    if !config.router_config.enabled_routes.is_empty() {
-        let api_config = config.clone();
-        let api_handle = tokio::spawn(async move {
-            tracing::info!("Starting API service...");
-            ApiService::run(api_config).await;
-        });
-        handles.push(api_handle);
-    } else {
-        tracing::warn!("No relay API routes are enabled.");
-    }
+    // Start the API service
+    handles.push(tokio::spawn(ApiService::run(config.clone())));
 
+    // Start the website service (if enabled)
     if config.website.enabled {
-        let website_config = config.clone();
-        let website_handle = tokio::spawn(async move {
+        handles.push(tokio::spawn(async move {
             loop {
                 tracing::info!("Starting website service...");
-                match WebsiteService::run(website_config.clone()).await {
+                match WebsiteService::run(config.clone()).await {
                     Ok(_) => {
-                        tracing::error!("Website service unexpectedly completed. Restarting...");
+                        tracing::error!("Website service unexpectedly completed. Restarting...")
                     }
-                    Err(e) => {
-                        tracing::error!("Website server error: {}. Restarting...", e);
-                    }
+                    Err(e) => tracing::error!("Website server error: {}. Restarting...", e),
                 }
                 tokio::time::sleep(std::time::Duration::from_secs(5)).await;
             }
-        });
-        handles.push(website_handle);
+        }));
     }
 
-    if !handles.is_empty() {
-        // Await all tasks to prevent the runtime from shutting down
-        futures::future::join_all(handles).await;
-    } else {
-        tracing::error!("No services are enabled.");
-        std::process::exit(1);
-    }
+    futures::future::join_all(handles).await;
 }
 
 fn main() {
