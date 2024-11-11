@@ -182,8 +182,8 @@ impl ApiService {
             chain_info.clone(),
             slot_update_sender.clone(),
             validator_preferences.clone(),
-            config.target_get_payload_propagation_duration_ms,
             proposer_gossip_receiver,
+            config.clone(),
         ));
 
         let data_api = Arc::new(DataApiProd::new(validator_preferences.clone(), db.clone()));

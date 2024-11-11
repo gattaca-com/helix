@@ -46,7 +46,7 @@ use helix_common::{
     try_execution_header_from_payload,
     versioned_payload::PayloadAndBlobs,
     BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace,
-    ValidatorPreferences,
+    ValidatorPreferences, RelayConfig,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
@@ -88,7 +88,7 @@ where
     chain_info: Arc<ChainInfo>,
     validator_preferences: Arc<ValidatorPreferences>,
 
-    target_get_payload_propagation_duration_ms: u64,
+    relay_config: Arc<RelayConfig>,
 }
 
 impl<A, DB, M, G> ProposerApi<A, DB, M, G>
@@ -107,8 +107,8 @@ where
         chain_info: Arc<ChainInfo>,
         slot_update_subscription: Sender<Sender<ChainUpdate>>,
         validator_preferences: Arc<ValidatorPreferences>,
-        target_get_payload_propagation_duration_ms: u64,
         gossip_receiver: Receiver<GossipedMessage>,
+        relay_config: Arc<RelayConfig>,
     ) -> Self {
         let api = Self {
             auctioneer,
@@ -119,7 +119,7 @@ where
             curr_slot_info: Arc::new(RwLock::new((0, None))),
             chain_info,
             validator_preferences,
-            target_get_payload_propagation_duration_ms,
+            relay_config,
         };
 
         // Spin up gossip processing task
@@ -571,7 +571,21 @@ where
                     let constraints =
                         proposer_api.auctioneer.get_constraints(slot).await?.unwrap_or_default();
 
-                    if !constraints.is_empty() {
+                    let value_above_max_to_verify = proposer_api
+                        .relay_config
+                        .constraints_api_config
+                        .max_block_value_to_verify
+                        .map_or(false, |max| bid.value() > max);
+                    if value_above_max_to_verify {
+                        info!(
+                            %request_id,
+                            slot,
+                            value = ?bid.value(),
+                            "block value is greater than max value to verify, skipping inclusion proof check in get_header_with_proofs",
+                        );
+                    }
+
+                    if !constraints.is_empty() && !value_above_max_to_verify {
                         error!(
                             request_id = %request_id,
                             slot,
@@ -937,6 +951,7 @@ where
             let elapsed_since_propagate_start_ms =
                 (get_nanos_timestamp()?.saturating_sub(trace.beacon_client_broadcast)) / 1_000_000;
             let remaining_sleep_ms = self
+                .relay_config
                 .target_get_payload_propagation_duration_ms
                 .saturating_sub(elapsed_since_propagate_start_ms);
             if remaining_sleep_ms > 0 {

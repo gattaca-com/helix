@@ -997,8 +997,8 @@ mod proposer_api_tests {
             Arc::new(ChainInfo::for_holesky()),
             slot_update_sender.clone(),
             Arc::new(ValidatorPreferences::default()),
-            0,
             gossip_receiver,
+            Arc::new(Default::default()),
         );
 
         let mut x = gen_signed_vr();

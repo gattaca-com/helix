@@ -136,6 +136,10 @@ pub struct ConstraintsApiConfig {
     /// [`/constraints/v1/builder/constraints`](https://docs.boltprotocol.xyz/technical-docs/api/builder#constraints)
     /// endpoint will not be checked.
     pub check_constraints_signature: bool,
+    /// Only verify and save inclusion proofs if the block value is less than this threshold.
+    /// We do this to ensure that high value blocks are not rejected.
+    #[serde(default)]
+    pub max_block_value_to_verify: Option<u64>,
 }
 
 impl Default for ConstraintsApiConfig {
