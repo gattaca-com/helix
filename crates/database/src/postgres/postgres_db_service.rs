@@ -7,7 +7,7 @@ use std::{
 
 use async_trait::async_trait;
 use dashmap::{DashMap, DashSet};
-use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
+use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod, SslMode};
 use ethereum_consensus::{altair::Hash32, primitives::BlsPublicKey, ssz::prelude::ByteVector};
 
 use helix_common::{
@@ -40,6 +40,11 @@ use crate::{
     DatabaseService,
 };
 
+use rustls::RootCertStore;
+use rustls_pki_types::pem::PemObject;
+use rustls_pki_types::CertificateDer;
+use tracing::log::debug;
+
 struct RegistrationParams<'a> {
     fee_recipient: &'a [u8],
     gas_limit: i32,
@@ -69,7 +74,7 @@ pub struct PostgresDatabaseService {
     known_validators_cache: Arc<DashSet<BlsPublicKey>>,
     validator_pool_cache: Arc<DashMap<String, String>>,
     region: i16,
-    pool: Arc<Pool>,
+    pub pool: Arc<Pool>,
 }
 
 impl PostgresDatabaseService {
@@ -94,8 +99,28 @@ impl PostgresDatabaseService {
         cfg.dbname = Some(relay_config.postgres.db_name.clone());
         cfg.user = Some(relay_config.postgres.user.clone());
         cfg.password = Some(relay_config.postgres.password.clone());
+        cfg.ssl_mode = match &relay_config.postgres.ssl_mode {
+            Some(ssl_mode) => match ssl_mode.as_str() {
+                "prefer" => Some(SslMode::Prefer),
+                "require" => Some(SslMode::Require),
+                &_ => None,
+            },
+            None => None,
+        };
         cfg.manager = Some(ManagerConfig { recycling_method: RecyclingMethod::Fast });
-        let pool = cfg.create_pool(None, NoTls)?;
+
+        let rustls_config = rustls::ClientConfig::builder()
+            .with_root_certificates(Arc::new(root_certs(
+                relay_config.postgres.cert_file_pem.as_deref(),
+            )?))
+            .with_no_client_auth();
+
+        let tls = tokio_postgres_rustls::MakeRustlsConnect::new(rustls_config);
+
+        let pool = match cfg.ssl_mode {
+            Some(SslMode::Prefer) | Some(SslMode::Require) => cfg.create_pool(None, tls)?,
+            _ => cfg.create_pool(None, NoTls)?,
+        };
         Ok(PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
@@ -484,8 +509,8 @@ impl DatabaseService for PostgresDatabaseService {
             if let Some(existing_entry) =
                 self.validator_registration_cache.get(&entry.registration.message.public_key)
             {
-                if existing_entry.registration_info.registration.message.timestamp >=
-                    entry.registration.message.timestamp
+                if existing_entry.registration_info.registration.message.timestamp
+                    >= entry.registration.message.timestamp
                 {
                     return false
                 }
@@ -531,8 +556,8 @@ impl DatabaseService for PostgresDatabaseService {
         if let Some(existing_entry) =
             self.validator_registration_cache.get(&registration.message.public_key)
         {
-            if existing_entry.registration_info.registration.message.timestamp >=
-                registration.message.timestamp
+            if existing_entry.registration_info.registration.message.timestamp
+                >= registration.message.timestamp
             {
                 return Ok(false)
             }
@@ -996,8 +1021,8 @@ impl DatabaseService for PostgresDatabaseService {
             transaction.execute(&sql, &params[..]).await?;
         }
 
-        if payload.execution_payload.withdrawals().is_some() &&
-            !payload.execution_payload.withdrawals().unwrap().is_empty()
+        if payload.execution_payload.withdrawals().is_some()
+            && !payload.execution_payload.withdrawals().unwrap().is_empty()
         {
             // Save the withdrawals
             let mut structured_params: Vec<(i32, &[u8], i32, &[u8], i64)> = Vec::new();
@@ -1063,9 +1088,9 @@ impl DatabaseService for PostgresDatabaseService {
         transaction.execute(
             "
                 INSERT INTO
-                    block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen)
+                    block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen, num_blobs, blob_gas_used, excess_blob_gas)
                 VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                 ON CONFLICT (block_hash)
                 DO UPDATE SET
                     first_seen = LEAST(block_submission.first_seen, excluded.first_seen)
@@ -1084,6 +1109,9 @@ impl DatabaseService for PostgresDatabaseService {
                 &(submission.transactions().len() as i32),
                 &(submission.timestamp() as i64),
                 &(trace.receive as i64),
+                &(submission.num_blobs() as i32),
+                &(submission.blob_gas_used() as i32),
+                &(submission.excess_blob_gas() as i32),
             ],
         ).await?;
 
@@ -1339,7 +1367,10 @@ impl DatabaseService for PostgresDatabaseService {
                 block_submission.gas_limit              gas_limit,
                 block_submission.gas_used               gas_used,
                 block_submission.block_number           block_number,
-                block_submission.num_txs                num_txs
+                block_submission.num_txs                num_txs,
+                block_submission.num_blobs              num_blobs,
+                block_submission.blob_gas_used          blob_gas_used,
+                block_submission.excess_blob_gas        excess_blob_gas
             FROM 
                 delivered_payload 
             INNER JOIN
@@ -1673,4 +1704,23 @@ impl DatabaseService for PostgresDatabaseService {
                 .await?,
         )
     }
+}
+
+fn root_certs(cert_file_pem: Option<&str>) -> Result<RootCertStore, Box<dyn std::error::Error>> {
+    let mut roots = rustls::RootCertStore::empty();
+
+    // Load platform certificates (optional, but recommended)
+    for cert in rustls_native_certs::load_native_certs().expect("could not load platform certs") {
+        roots.add(cert)?;
+    }
+
+    // Load a self-signed cert
+    if let Some(cert_file_pem) = cert_file_pem {
+        debug!("found custom cert");
+        let cert_der_pem = CertificateDer::from_pem_file(cert_file_pem)?;
+        roots.add(cert_der_pem)?
+    }
+
+    debug!("total certs in store: {}", roots.len());
+    Ok(roots)
 }

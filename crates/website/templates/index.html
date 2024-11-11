@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en" class="no-js">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width">
+
+    <title>Aestus MEV-Boost Relay - {{ network|capitalize }}</title>
+    <meta name="description" content="Aestus Helix Relay enables Ethereum proof-of-stake validators access to blocks with maximal extractable value">
+
+    <link data-react-helmet=true rel="shortcut icon" href=https://aestus.live/favicon.ico>
+
+    <meta property="og:title" content="Aestus Helix MEV-Boost Relay" />
+    <meta property="og:description" content="Aestus Helix  MEV-Boost Relay enables Ethereum proof-of-stake validators access to blocks with maximal extractable value" />
+    <meta property="og:type" content="website"/>
+    <meta property="og:site_name" content="Aestus Helix MEV-Boost Relay" />
+    <meta property="og:image" content="https://aestus.live/logo-black-text.png" />
+    <meta property="og:image:url" content="https://aestus.live/logo-black-text.png" />
+    <meta property="og:image:alt" content="Aestus logo" />
+
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Aestus Helix MEV-Boost Relay" />
+    <meta property="twitter:description" content="Aestys MEV-Boost Relay enables Ethereum proof-of-stake validators access to blocks with maximal extractable value" />
+    <meta property="twitter:image" content="https://aestus.live/logo-black-text.png" />
+
+    <link rel="stylesheet" href="https://unpkg.com/purecss@2.1.0/build/pure-min.css" integrity="sha384-yHIFVG6ClnONEA5yB5DJXfW2/KC173DIQrYoZMEtBvGzmf0PKiGyNEqe9N6BNDBH" crossorigin="anonymous">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/purecss@2.1.0/build/grids-responsive-min.css" />
+
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <style type="text/css">
+        body {
+            padding: 10px 40px;
+        }
+
+        pre {
+            text-align: left;
+        }
+
+        hr {
+            border-top: 1px solid #e5e5e5;
+            margin: 40px 0;
+        }
+
+        tt {
+            font-size: 1.2em;
+            background: #129fea1f;
+        }
+
+        li {
+            margin: 2px 0px;
+        }
+
+        a {
+            text-decoration: none;
+            /* border-bottom: 1px dotted black; */
+        }
+
+        a:hover {
+            border-bottom: 1px dotted black;
+            background-color: #129fea1f;
+        }
+
+        .pure-table thead {
+            background-color: #129fea1f;
+        }
+
+
+        .pure-table-striped tr:nth-child(2n-1) td {
+            background: #30d2f80d !important;
+        }
+
+
+        .pure-table tr:hover td {
+            background: #129fea1f !important;
+        }
+
+        .relay-url-container {
+            background: #ffffff;
+            width: auto;
+            border: solid #30d2f8;
+            border-width: .1em .1em .1em .8em;
+            padding: .2em .6em;
+            overflow-x: hidden;
+            padding: 12px 16px;
+            word-break: break-all;
+            min-width: 440px;
+            display: flex;
+        }
+
+        .relay-url-container pre {
+            margin: 0;
+            line-height: 125%;
+            white-space: pre-wrap;
+            flex-grow: 1;
+        }
+
+        .relay-url-container .copy-icon {
+            width: 18px;
+            min-width: 18px;
+            margin-left: 10px;
+            cursor: pointer;
+        }
+
+        .icons-container {
+            display: flex;
+            flex-direction: row;
+            justify-content: space-between;
+            align-items: center;
+            max-width: 50px;
+        }
+
+        .icons-container a {
+            display: block;
+            width: 18px;
+            height: 18px;
+            border-bottom: 0px;
+        }
+
+        .img-beaconchain {
+            background-repeat: no-repeat;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='263.27 168.54 81.35 101.17'%3E%3Cpath d='M 341.287 198.092 L 340.508 198.289 C 338.293 198.85 337.797 198.496 336.846 196.409 C 335.8 193.738 334.475 191.177 332.89 188.769 C 325.505 178.925 315.692 174.652 303.269 176.552 C 301.781 176.788 300.881 176.336 300.517 174.869 C 300.294 173.884 300.041 172.998 299.829 172.053 C 299.445 170.36 300.001 169.513 301.711 169.208 C 312.434 167.239 322.146 169.631 330.887 175.962 C 337.423 180.697 341.702 187.076 344.363 194.666 C 344.98 196.33 344.484 197.216 342.704 197.708 L 342.704 197.738 Z M 329.865 201.006 C 328.166 201.439 327.842 199.894 326.578 196.94 C 323.522 189.645 315.884 185.189 307.831 186.003 C 305.252 186.259 303.461 186.712 303.117 185.343 C 302.055 181.041 302.237 180.795 306.688 180.421 C 317.858 179.693 328.237 186.055 332.385 196.172 C 332.476 196.419 332.567 196.665 332.678 196.911 C 333.73 199.342 333.366 200.081 330.796 200.77 Z M 323.866 199.923 C 323.927 200.071 323.988 200.228 324.058 200.376 C 324.726 201.882 324.483 202.345 322.824 202.778 L 322.227 202.926 C 321.135 203.201 320.963 202.237 320.133 200.396 C 318.102 195.813 313.219 193.07 308.125 193.652 C 306.455 193.829 305.302 194.125 305.09 193.268 C 304.422 190.581 304.543 190.423 307.406 190.167 C 314.489 189.592 321.142 193.536 323.866 199.923 Z M 274.143 222.713 C 271.866 216.439 271.442 209.669 272.919 203.172 C 273.778 199.234 275.144 198.673 278.473 200.839 C 285.554 205.446 292.515 209.935 300.082 214.838 C 300.82 213.528 301.802 212.278 302.459 210.851 C 302.775 210.139 302.883 209.355 302.773 208.586 C 302.267 205.525 303.785 202.827 306.648 202.138 C 309.515 201.493 312.366 203.272 312.96 206.076 C 313.579 208.883 311.831 211.669 308.985 212.416 C 308.512 212.509 308.076 212.73 307.73 213.056 C 307.558 213.312 304.624 217.899 304.624 217.899 L 315.014 224.889 C 318.525 227.242 322.005 229.575 325.546 231.879 C 329.086 234.182 328.975 235.639 325.738 238.179 C 308.954 251.233 282.104 244.972 274.143 222.713 Z M 263.271 269.704 L 263.271 269.655 C 263.758 268.742 276.643 244.586 277.269 243.948 C 278.645 242.55 298.322 252.808 299.525 254.019 C 299.778 254.275 304.988 269.682 304.988 269.682 L 304.988 269.704 Z'%3E%3C/path%3E%3C/svg%3E");
+        }
+
+        .img-etherscan {
+            background-repeat: no-repeat;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 123 123' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M25.79 58.4149C25.7901 57.7357 25.9244 57.0633 26.1851 56.4361C26.4458 55.809 26.8278 55.2396 27.3092 54.7605C27.7907 54.2814 28.3619 53.9021 28.9903 53.6444C29.6187 53.3867 30.2918 53.2557 30.971 53.2589L39.561 53.2869C40.9305 53.2869 42.244 53.831 43.2124 54.7994C44.1809 55.7678 44.725 57.0813 44.725 58.4509V90.9309C45.692 90.6439 46.934 90.3379 48.293 90.0179C49.237 89.7962 50.0783 89.262 50.6805 88.5019C51.2826 87.7418 51.6102 86.8006 51.61 85.8309V45.5409C51.61 44.1712 52.154 42.8576 53.1224 41.889C54.0908 40.9204 55.4043 40.3762 56.774 40.3759H65.381C66.7506 40.3762 68.0641 40.9204 69.0325 41.889C70.0009 42.8576 70.545 44.1712 70.545 45.5409V82.9339C70.545 82.9339 72.7 82.0619 74.799 81.1759C75.5787 80.8462 76.2441 80.2941 76.7122 79.5886C77.1803 78.8832 77.4302 78.0555 77.431 77.2089V32.6309C77.431 31.2615 77.9749 29.9481 78.9431 28.9797C79.9113 28.0113 81.2245 27.4672 82.5939 27.4669H91.201C92.5706 27.4669 93.884 28.0109 94.8525 28.9794C95.8209 29.9478 96.365 31.2613 96.365 32.6309V69.3399C103.827 63.9319 111.389 57.4279 117.39 49.6069C118.261 48.4717 118.837 47.1386 119.067 45.7267C119.297 44.3148 119.174 42.8678 118.709 41.5149C115.931 33.5227 111.516 26.1983 105.745 20.0105C99.974 13.8228 92.9749 8.90785 85.1955 5.58032C77.4161 2.2528 69.0277 0.585938 60.5671 0.686416C52.1065 0.786893 43.7601 2.6525 36.062 6.16383C28.3638 9.67517 21.4834 14.7549 15.8611 21.078C10.2388 27.401 5.99842 34.8282 3.41131 42.8842C0.824207 50.9401 -0.0526487 59.4474 0.836851 67.8617C1.72635 76.276 4.36263 84.4119 8.57696 91.7489C9.31111 93.0145 10.3912 94.0444 11.6903 94.7175C12.9894 95.3906 14.4536 95.679 15.911 95.5489C17.539 95.4059 19.566 95.2029 21.976 94.9199C23.0251 94.8008 23.9937 94.2999 24.6972 93.5126C25.4008 92.7253 25.7901 91.7067 25.791 90.6509L25.79 58.4149Z' fill='%2321325B'/%3E%3Cpath d='M25.6021 110.51C34.6744 117.11 45.3959 121.072 56.5802 121.957C67.7646 122.841 78.9757 120.615 88.9731 115.523C98.9705 110.431 107.364 102.673 113.226 93.1068C119.087 83.5405 122.188 72.539 122.185 61.3197C122.185 59.9197 122.12 58.5347 122.027 57.1577C99.808 90.2957 58.7831 105.788 25.604 110.505' fill='%23979695'/%3E%3C/svg%3E");
+        }
+
+        @media (max-width: 768px) {
+            .links {
+                display: none;
+            }
+        }
+    </style>
+
+    <script>
+        function copyRelayURLToClipboard() {
+            window.prompt("Copy Relay URL to clipboard: Ctrl+C, Enter", document.getElementById("relay-url").innerText);
+        }
+    </script>
+</head>
+
+<body>
+
+<div class="grids">
+    <div class="content">
+
+        <a href="https://aestus.live">
+            <img style="float:right; background:white; margin-left: 64px; width: 140px;" src="https://aestus.live/logo-black-notext.png">
+        </a>
+
+        <h1>
+            Aestus Helix Relay - {{ network|capitalize }}
+        </h1>
+
+        {% if relay_url != "" %}
+        <div class="relay-url-container">
+            <pre id="relay-url">{{ relay_url }}</pre>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 copy-icon" onclick="copyRelayURLToClipboard()">
+                <title>Copy Relay URL to clipboard</title>
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75"></path>
+            </svg>
+        </div>
+        {% endif %}
+
+        {% if show_config_details %}
+        <p>Configuration:</p>
+        <ul>
+            <li>Relay Pubkey: <tt>{{ relay_pubkey }}</tt></li>
+            <li>Capella fork version: <tt>{{ capella_fork_version }}</tt></li>
+            <li>Bellatrix fork version: <tt>{{ bellatrix_fork_version }}</tt></li>
+            <li>Genesis fork version: <tt>{{ genesis_fork_version }}</tt></li>
+            <li>Genesis validators root: <tt>{{ genesis_validators_root }}</tt></li>
+            <li>Builder signing domain: <tt>{{ builder_signing_domain }}</tt></li>
+            <!-- <li>Beacon proposer signing domain: <tt>beacon_proposer_signing_domain </tt></li> -->
+        </ul>
+        {% endif %}
+
+        <br>
+        <br>
+        <br>
+
+        <p>
+
+        <div class="pure-g">
+            <div class="pure-u-1 pure-u-md-2-3 stats">
+                <h2>
+                    Stats
+                </h2>
+
+                <table class="pure-table pure-table-horizontal">
+                    <tbody>
+                    <tr title="Currently active or pending validators on Ethereum PoS">
+                        <td>Validators active or in queue</td>
+                        <td>{{ network_validators }}</td>
+                    </tr>
+                    <tr title="Validators who have sent a registration at least once">
+                        <td> Registered Validators (all time)</td>
+                        <td>{{ registered_validators }}</td>
+                    </tr>
+                    <tr title="Last slot delivered through this relay">
+                        <td>Latest slot</td>
+                        <td>{{ latest_slot|pretty_int }}</td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pure-u-1 pure-u-md-1-3 links">
+                <h2>Links</h2>
+                <ul>
+                    <li><a href="https://www.aestus.live/">Homepage</a></li>
+                    <li><a href="https://mevboost.pics/">MEVBoost.pics by Toni W</a></li>
+                    <li><a href="https://github.com/gattaca-com/helix">Gattaca Helix on Github</a></li>
+                    <li><a href="https://github.com/aestus-relay/">Aestus Relay on Github</a></li>
+                    <li><a href="https://github.com/flashbots/relay-specs">Flashbots Relay Specs</a></li>
+                    <li><a href="https://github.com/flashbots/builder">Builder Specs</a>
+                </ul>
+
+            </div>
+        </div>
+
+        </p>
+
+        <br>
+        <br>
+        <br>
+
+        <p>
+        <h2>
+            Recently Delivered Payloads
+        </h2>
+
+        <table class="pure-table pure-table-horizontal" style="width:100%;">
+            <thead>
+            <tr>
+                <th>Epoch</th>
+                <th>Slot</th>
+                <th>Block number</th>
+                <th>
+                    Value (ETH{{ value_order_icon|safe }})
+
+                    <a href="{{ value_link }}">
+                        <svg id="icon-sort-default" style="float:right; width:16px;" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 7.5L7.5 3m0 0L12 7.5M7.5 3v13.5m13.5 0L16.5 21m0 0L12 16.5m4.5 4.5V7.5" />
+                        </svg>
+                    </a>
+                </th>
+                <th>Num txs</th>
+                <th>Blobs</th>
+                <th>Block hash</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for payload in recent_payloads %}
+            <tr>
+                <td>{{ payload.epoch|pretty_int}}</td>
+                <td>
+                    <a href="{{ link_data_api }}/relay/v1/data/bidtraces/proposer_payload_delivered?slot={{ payload.bid_trace.slot  }}">{{ payload.bid_trace.slot|pretty_int }}</a>
+                </td>
+                <td>{{ payload.block_number|pretty_int }}</td>
+                <td>{{ payload.bid_trace.value|wei_to_eth }}</td>
+                <td>{{ payload.num_txs }}</td>
+                <td>
+                    <div title="Blob Gas Used: {{ payload.blob_gas_used }}">{{ payload.num_blobs }}</div>
+                </td>
+                <td>{{ payload.bid_trace.block_hash }}</td>
+                <td>
+                    <div class="icons-container">
+                        {% if link_beaconchain != "" %}
+                        <a class="img-beaconchain" href="{{ link_beaconchain }}/slot/{{ payload.bid_trace.slot }}" target="_blank" alt="View slot in beaconcha.in" title="View slot in beaconcha.in"></a>
+                        &nbsp;
+                        {% endif %}
+                        {% if link_etherscan != "" %}
+                        <a class="img-etherscan" href="{{ link_etherscan }}/block/{{ payload.block_number }}" target="_blank" alt="View block on Etherscan" title="View block on Etherscan" /></a>
+                        {% endif %}
+                    </div>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        </p>
+
+        <center>
+            <p>{{ num_delivered_payloads|pretty_int }} payloads delivered</p>
+            <p>
+                <small>
+                    <a href="{{ link_data_api }}/relay/v1/data/bidtraces/proposer_payload_delivered?limit=10">Data API</a> &middot; <a href="https://flashbots-boost-relay-public.s3.us-east-2.amazonaws.com/index.html">Bulk Data</a>
+                </small>
+            </p>
+        </center>
+    </div>
+</div>
+</body>
+
+</html>

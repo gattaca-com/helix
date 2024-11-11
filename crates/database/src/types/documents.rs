@@ -33,6 +33,7 @@ pub struct DeliveredPayloadDocument {
     pub bid_trace: BidTrace,
     pub block_number: u64,
     pub num_txs: usize,
+
 }
 
 impl DeliveredPayloadDocument {

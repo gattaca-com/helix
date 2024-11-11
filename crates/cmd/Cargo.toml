@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 helix-api.workspace = true
+helix-website.workspace = true
 helix-common.workspace = true
 helix-utils.workspace = true
 
@@ -20,3 +21,4 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 
 num_cpus = "1.16.0"
+futures = "0.3.28"
