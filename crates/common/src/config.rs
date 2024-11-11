@@ -76,7 +76,7 @@ impl Default for WebsiteConfig {
         Self {
             enabled: false,
             port: 8080,
-            listen_address: "127.0.0.1".to_string(),
+            listen_address: "0.0.0.0".to_string(),
             show_config_details: false,
             network_name: String::new(),
             relay_url: String::new(),
