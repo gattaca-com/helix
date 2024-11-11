@@ -45,8 +45,8 @@ use helix_common::{
     signed_proposal::VersionedSignedProposal,
     try_execution_header_from_payload,
     versioned_payload::PayloadAndBlobs,
-    BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace,
-    ValidatorPreferences, RelayConfig,
+    BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace, RelayConfig,
+    ValidatorPreferences,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
@@ -88,7 +88,7 @@ where
     chain_info: Arc<ChainInfo>,
     validator_preferences: Arc<ValidatorPreferences>,
 
-    relay_config: Arc<RelayConfig>,
+    relay_config: RelayConfig,
 }
 
 impl<A, DB, M, G> ProposerApi<A, DB, M, G>
@@ -108,7 +108,7 @@ where
         slot_update_subscription: Sender<Sender<ChainUpdate>>,
         validator_preferences: Arc<ValidatorPreferences>,
         gossip_receiver: Receiver<GossipedMessage>,
-        relay_config: Arc<RelayConfig>,
+        relay_config: RelayConfig,
     ) -> Self {
         let api = Self {
             auctioneer,
@@ -535,24 +535,41 @@ where
                     return Err(ProposerApiError::BidValueZero)
                 }
 
-                // Get inclusion proofs
-                let proofs = proposer_api
-                    .auctioneer
-                    .get_inclusion_proof(slot, &bid_request.public_key, bid.block_hash())
-                    .await?;
-
                 // Save trace to DB
                 proposer_api
                     .save_get_header_call(
                         slot,
                         bid_request.parent_hash,
-                        bid_request.public_key,
+                        bid_request.public_key.clone(),
                         bid.block_hash().clone(),
                         trace,
                         request_id,
                         user_agent,
                     )
                     .await;
+
+                // If the block value is greater than the max value to verify, return the bid
+                // without proofs.
+                let value_above_max_to_verify = proposer_api
+                    .relay_config
+                    .constraints_api_config
+                    .max_block_value_to_verify_wei
+                    .map_or(false, |max| bid.value() > max);
+                if value_above_max_to_verify {
+                    info!(
+                        %request_id,
+                        slot,
+                        value = ?bid.value(),
+                        "block value is greater than max value to verify, returning bid without proofs",
+                    );
+                    return Ok(axum::Json(bid))
+                }
+
+                // Get inclusion proofs
+                let proofs = proposer_api
+                    .auctioneer
+                    .get_inclusion_proof(slot, &bid_request.public_key, bid.block_hash())
+                    .await?;
 
                 // Attach the proofs to the bid before sending it back
                 if let Some(proofs) = proofs {
@@ -571,21 +588,7 @@ where
                     let constraints =
                         proposer_api.auctioneer.get_constraints(slot).await?.unwrap_or_default();
 
-                    let value_above_max_to_verify = proposer_api
-                        .relay_config
-                        .constraints_api_config
-                        .max_block_value_to_verify
-                        .map_or(false, |max| bid.value() > max);
-                    if value_above_max_to_verify {
-                        info!(
-                            %request_id,
-                            slot,
-                            value = ?bid.value(),
-                            "block value is greater than max value to verify, skipping inclusion proof check in get_header_with_proofs",
-                        );
-                    }
-
-                    if !constraints.is_empty() && !value_above_max_to_verify {
+                    if !constraints.is_empty() {
                         error!(
                             request_id = %request_id,
                             slot,

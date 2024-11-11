@@ -1,6 +1,9 @@
 use crate::{api::*, BuilderInfo, ValidatorPreferences};
 use clap::Parser;
-use ethereum_consensus::{primitives::BlsPublicKey, ssz::prelude::Node};
+use ethereum_consensus::{
+    primitives::BlsPublicKey,
+    ssz::prelude::{Node, U256},
+};
 use helix_utils::{
     request_encoding::Encoding,
     serde::{default_bool, deserialize_url, serialize_url},
@@ -138,13 +141,15 @@ pub struct ConstraintsApiConfig {
     pub check_constraints_signature: bool,
     /// Only verify and save inclusion proofs if the block value is less than this threshold.
     /// We do this to ensure that high value blocks are not rejected.
-    #[serde(default)]
-    pub max_block_value_to_verify: Option<u64>,
+    pub max_block_value_to_verify_wei: Option<U256>,
 }
 
 impl Default for ConstraintsApiConfig {
     fn default() -> Self {
-        ConstraintsApiConfig { check_constraints_signature: true }
+        ConstraintsApiConfig {
+            check_constraints_signature: true,
+            max_block_value_to_verify_wei: None,
+        }
     }
 }
 
