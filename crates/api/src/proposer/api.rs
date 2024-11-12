@@ -45,7 +45,7 @@ use helix_common::{
     signed_proposal::VersionedSignedProposal,
     try_execution_header_from_payload,
     versioned_payload::PayloadAndBlobs,
-    BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace,
+    BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace, RelayConfig,
     ValidatorPreferences,
 };
 use helix_database::DatabaseService;
@@ -88,7 +88,7 @@ where
     chain_info: Arc<ChainInfo>,
     validator_preferences: Arc<ValidatorPreferences>,
 
-    target_get_payload_propagation_duration_ms: u64,
+    relay_config: RelayConfig,
 }
 
 impl<A, DB, M, G> ProposerApi<A, DB, M, G>
@@ -107,8 +107,8 @@ where
         chain_info: Arc<ChainInfo>,
         slot_update_subscription: Sender<Sender<ChainUpdate>>,
         validator_preferences: Arc<ValidatorPreferences>,
-        target_get_payload_propagation_duration_ms: u64,
         gossip_receiver: Receiver<GossipedMessage>,
+        relay_config: RelayConfig,
     ) -> Self {
         let api = Self {
             auctioneer,
@@ -119,7 +119,7 @@ where
             curr_slot_info: Arc::new(RwLock::new((0, None))),
             chain_info,
             validator_preferences,
-            target_get_payload_propagation_duration_ms,
+            relay_config,
         };
 
         // Spin up gossip processing task
@@ -535,24 +535,41 @@ where
                     return Err(ProposerApiError::BidValueZero)
                 }
 
-                // Get inclusion proofs
-                let proofs = proposer_api
-                    .auctioneer
-                    .get_inclusion_proof(slot, &bid_request.public_key, bid.block_hash())
-                    .await?;
-
                 // Save trace to DB
                 proposer_api
                     .save_get_header_call(
                         slot,
                         bid_request.parent_hash,
-                        bid_request.public_key,
+                        bid_request.public_key.clone(),
                         bid.block_hash().clone(),
                         trace,
                         request_id,
                         user_agent,
                     )
                     .await;
+
+                // If the block value is greater than the max value to verify, return the bid
+                // without proofs.
+                let value_above_max_to_verify = proposer_api
+                    .relay_config
+                    .constraints_api_config
+                    .max_block_value_to_verify_wei
+                    .map_or(false, |max| bid.value() > max);
+                if value_above_max_to_verify {
+                    info!(
+                        %request_id,
+                        slot,
+                        value = ?bid.value(),
+                        "block value is greater than max value to verify, returning bid without proofs",
+                    );
+                    return Ok(axum::Json(bid))
+                }
+
+                // Get inclusion proofs
+                let proofs = proposer_api
+                    .auctioneer
+                    .get_inclusion_proof(slot, &bid_request.public_key, bid.block_hash())
+                    .await?;
 
                 // Attach the proofs to the bid before sending it back
                 if let Some(proofs) = proofs {
@@ -937,6 +954,7 @@ where
             let elapsed_since_propagate_start_ms =
                 (get_nanos_timestamp()?.saturating_sub(trace.beacon_client_broadcast)) / 1_000_000;
             let remaining_sleep_ms = self
+                .relay_config
                 .target_get_payload_propagation_duration_ms
                 .saturating_sub(elapsed_since_propagate_start_ms);
             if remaining_sleep_ms > 0 {

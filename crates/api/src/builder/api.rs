@@ -679,42 +679,23 @@ where
             .await?;
 
         // Fetch constraints, and if available verify inclusion proofs and save them to cache
-        if let Some(constraints) = api.auctioneer.get_constraints(payload.slot()).await? {
-            let transactions_root: B256 = payload
-                .transactions()
-                .clone()
-                .hash_tree_root()?
-                .to_vec()
-                .as_slice()
-                .try_into()
-                .map_err(|e| {
-                    error!(error = %e, "failed to convert root to hash32");
-                    BuilderApiError::InternalError
-                })?;
-            let proofs = payload.proofs().ok_or(BuilderApiError::InclusionProofsNotFound)?;
-            let constraints_proofs: Vec<_> = constraints.iter().map(|c| &c.proof_data).collect();
-
-            verify_multiproofs(constraints_proofs.as_slice(), proofs, transactions_root).map_err(
-                |e| {
-                    error!(error = %e, "failed to verify inclusion proofs");
-                    BuilderApiError::InclusionProofVerificationFailed(e)
-                },
-            )?;
-
-            // Save inclusion proof to auctioneer.
-            api.save_inclusion_proof(
-                payload.slot(),
-                payload.proposer_public_key(),
-                payload.block_hash(),
-                proofs,
-                &request_id,
-            )
-            .await?;
-
-            info!(request_id = %request_id, head_slot, "inclusion proofs verified and saved to auctioneer");
+        let should_verify_and_save_proofs = api
+            .relay_config
+            .constraints_api_config
+            .max_block_value_to_verify_wei
+            .map_or(true, |max_block_value_to_verify| payload.value() <= max_block_value_to_verify);
+        if should_verify_and_save_proofs {
+            if let Err(err) = api.verify_and_save_inclusion_proofs(&payload, &request_id).await {
+                warn!(request_id = %request_id, error = %err, "failed to verify and save inclusion proofs");
+                return Err(err)
+            }
         } else {
-            info!(request_id = %request_id, "no constraints found for slot, proof verification is not needed");
-        };
+            info!(
+                request_id = %request_id,
+                block_value = %payload.value(),
+                "block value is greater than max value to verify, inclusion proof verification and saving is skipped",
+            );
+        }
 
         // If cancellations are enabled, then abort now if there is a later submission
         if is_cancellations_enabled {
@@ -2196,6 +2177,50 @@ where
                 "Failed to demote builder in database"
             );
         }
+    }
+
+    /// Fetch constraints, and if available verify inclusion proofs and save them to cache.
+    async fn verify_and_save_inclusion_proofs(
+        &self,
+        payload: &SignedBidSubmission,
+        request_id: &Uuid,
+    ) -> Result<(), BuilderApiError> {
+        if let Some(constraints) = self.auctioneer.get_constraints(payload.slot()).await? {
+            let transactions_root: B256 = payload
+                .transactions()
+                .clone()
+                .hash_tree_root()?
+                .to_vec()
+                .as_slice()
+                .try_into()
+                .map_err(|error| {
+                    error!(?error, "failed to convert root to hash32");
+                    BuilderApiError::InternalError
+                })?;
+            let proofs = payload.proofs().ok_or(BuilderApiError::InclusionProofsNotFound)?;
+            let constraints_proofs: Vec<_> = constraints.iter().map(|c| &c.proof_data).collect();
+
+            verify_multiproofs(constraints_proofs.as_slice(), proofs, transactions_root).map_err(
+                |e| {
+                    error!(error = %e, "failed to verify inclusion proofs");
+                    BuilderApiError::InclusionProofVerificationFailed(e)
+                },
+            )?;
+
+            // Save inclusion proof to auctioneer.
+            self.save_inclusion_proof(
+                payload.slot(),
+                payload.proposer_public_key(),
+                payload.block_hash(),
+                proofs,
+                request_id,
+            )
+            .await?;
+            info!(%request_id, "inclusion proofs verified and saved to auctioneer");
+        } else {
+            info!(%request_id, "no constraints found for slot, proof verification is not needed");
+        };
+        Ok(())
     }
 }
 

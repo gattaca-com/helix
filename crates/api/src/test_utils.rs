@@ -56,8 +56,8 @@ pub fn app() -> Router {
         Arc::new(ChainInfo::for_mainnet()),
         slot_update_sender,
         Arc::new(ValidatorPreferences::default()),
-        0,
         gossip_receiver,
+        Default::default(),
     ));
 
     let data_api = Arc::new(DataApi::<MockDatabaseService>::new(
@@ -218,8 +218,8 @@ pub fn proposer_api_app() -> (
         Arc::new(ChainInfo::for_mainnet()),
         slot_update_sender.clone(),
         Arc::new(ValidatorPreferences::default()),
-        0,
         gossip_receiver,
+        Default::default(),
     ));
 
     let router = Router::new()
