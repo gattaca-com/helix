@@ -998,7 +998,7 @@ mod proposer_api_tests {
             slot_update_sender.clone(),
             Arc::new(ValidatorPreferences::default()),
             gossip_receiver,
-            Arc::new(Default::default()),
+            Default::default(),
         );
 
         let mut x = gen_signed_vr();
