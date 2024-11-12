@@ -11,6 +11,7 @@ helix-api.workspace = true
 helix-website.workspace = true
 helix-common.workspace = true
 helix-utils.workspace = true
+helix-database.workspace = true
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.5", features = ["profiling"] }

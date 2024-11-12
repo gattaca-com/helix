@@ -114,18 +114,18 @@ impl PostgresDatabaseService {
         }
     }
 
-    pub async fn run_migrations(&self) {
-        let mut conn = self.pool.get().await.unwrap();
+    pub async fn run_migrations(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut conn = self.pool.get().await?;
+
         let client = conn.deref_mut().deref_mut();
         match run_migrations_async(client).await {
             Ok(report) => {
                 info!("Applied migrations: {}", report.applied_migrations().len());
                 info!("Migrations report: {:?}", report);
+                Ok(())
             }
-            Err(e) => {
-                panic!("Error applying migrations: {}", e);
-            }
-        };
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn init_region(&self, config: &RelayConfig) {

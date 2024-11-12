@@ -2806,6 +2806,7 @@ dependencies = [
  "futures 0.3.28",
  "helix-api",
  "helix-common",
+ "helix-database",
  "helix-utils",
  "helix-website",
  "num_cpus",
