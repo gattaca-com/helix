@@ -1,13 +1,14 @@
 [workspace]
 members = [
-  "crates/beacon-client",
-  "crates/api",
-  "crates/utils",
-  "crates/common",
-  "crates/database",
-  "crates/datastore",
-  "crates/cmd",
-  "crates/housekeeper",
+    "crates/beacon-client",
+    "crates/api",
+    "crates/utils",
+    "crates/common",
+    "crates/database",
+    "crates/datastore",
+    "crates/cmd",
+    "crates/housekeeper",
+    "crates/website",
 ]
 resolver = "2"
 
@@ -26,6 +27,7 @@ helix-database = { path = "./crates/database" }
 helix-datastore = { path = "./crates/datastore" }
 helix-housekeeper = { path = "./crates/housekeeper" }
 helix-utils = { path = "./crates/utils" }
+helix-website = { path = "./crates/website" }
 
 # Async and Networking 
 async-trait = "0.1"

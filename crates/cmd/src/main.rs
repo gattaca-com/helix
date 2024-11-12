@@ -1,10 +1,11 @@
 use helix_api::service::ApiService;
 use helix_common::{LoggingConfig, RelayConfig};
 use helix_utils::set_panic_hook;
-use tokio::runtime::Builder;
-use tracing_appender::rolling::Rotation;
+use helix_website::website_service::WebsiteService;
 
 use tikv_jemallocator::Jemalloc;
+use tokio::runtime::Builder;
+use tracing_appender::rolling::Rotation;
 
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
@@ -56,7 +57,17 @@ async fn run() {
         }
     }
 
-    ApiService::run(config).await;
+    let mut handles = Vec::new();
+
+    // Start the API service
+    handles.push(tokio::spawn(ApiService::run(config.clone())));
+
+    // Start the website service (if enabled)
+    if config.website.enabled {
+        handles.push(tokio::spawn(WebsiteService::run_loop(config.clone())));
+    }
+
+    futures::future::join_all(handles).await;
 }
 
 fn main() {

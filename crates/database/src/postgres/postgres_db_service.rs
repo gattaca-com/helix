@@ -69,7 +69,7 @@ pub struct PostgresDatabaseService {
     known_validators_cache: Arc<DashSet<BlsPublicKey>>,
     validator_pool_cache: Arc<DashMap<String, String>>,
     region: i16,
-    pool: Arc<Pool>,
+    pub pool: Arc<Pool>,
 }
 
 impl PostgresDatabaseService {
@@ -95,6 +95,7 @@ impl PostgresDatabaseService {
         cfg.user = Some(relay_config.postgres.user.clone());
         cfg.password = Some(relay_config.postgres.password.clone());
         cfg.manager = Some(ManagerConfig { recycling_method: RecyclingMethod::Fast });
+
         let pool = cfg.create_pool(None, NoTls)?;
         Ok(PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
@@ -1083,7 +1084,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(PostgresNumeric::from(submission.value())),
                 &(submission.transactions().len() as i32),
                 &(submission.timestamp() as i64),
-                &(trace.receive as i64),
+                &(trace.receive as i64)
             ],
         ).await?;
 

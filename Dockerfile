@@ -58,4 +58,3 @@ COPY --from=helix /app/helix-cmd* ./
 
 # set the startup command to run your binary
 ENTRYPOINT ["/app/helix-cmd"]
-
