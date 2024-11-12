@@ -23,13 +23,25 @@ use hex::encode as hex_encode;
 pub struct WebsiteService {}
 
 impl WebsiteService {
-    pub async fn run(config: RelayConfig) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn run_loop(config: RelayConfig) {
+        loop {
+            match WebsiteService::run(config.clone()).await {
+                Ok(_) => {
+                    tracing::error!("Website service unexpectedly completed. Restarting...")
+                }
+                Err(e) => tracing::error!("Website server error: {}. Restarting...", e),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        }
+    }
+
+    async fn run(config: RelayConfig) -> Result<(), Box<dyn std::error::Error>> {
         info!("Starting WebsiteService");
 
         // Initialize PostgresDB
+        //
+        // NOTE: We don't need to run migrations as the ApiService already does that.
         let postgres_db = PostgresDatabaseService::from_relay_config(&config).unwrap();
-        //postgres_db.run_migrations().await;
-        //postgres_db.init_region(&config).await;
         let db = Arc::new(postgres_db);
         debug!("PostgresDB initialized");
 

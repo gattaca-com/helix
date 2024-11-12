@@ -1,15 +1,14 @@
 use helix_api::service::ApiService;
 use helix_common::{LoggingConfig, RelayConfig};
 use helix_utils::set_panic_hook;
+use helix_website::website_service::WebsiteService;
+
+use tikv_jemallocator::Jemalloc;
 use tokio::runtime::Builder;
 use tracing_appender::rolling::Rotation;
 
-use tikv_jemallocator::Jemalloc;
-
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
-
-use helix_website::website_service::WebsiteService;
 
 async fn run() {
     let config = match RelayConfig::load() {
@@ -65,18 +64,7 @@ async fn run() {
 
     // Start the website service (if enabled)
     if config.website.enabled {
-        handles.push(tokio::spawn(async move {
-            loop {
-                tracing::info!("Starting website service...");
-                match WebsiteService::run(config.clone()).await {
-                    Ok(_) => {
-                        tracing::error!("Website service unexpectedly completed. Restarting...")
-                    }
-                    Err(e) => tracing::error!("Website server error: {}. Restarting...", e),
-                }
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            }
-        }));
+        handles.push(tokio::spawn(WebsiteService::run_loop(config.clone())));
     }
 
     futures::future::join_all(handles).await;
