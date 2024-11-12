@@ -1,5 +1,6 @@
 use helix_api::service::ApiService;
 use helix_common::{LoggingConfig, RelayConfig};
+use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_utils::set_panic_hook;
 use helix_website::website_service::WebsiteService;
 
@@ -59,12 +60,25 @@ async fn run() {
 
     let mut handles = Vec::new();
 
+    let postgres_db = PostgresDatabaseService::from_relay_config(&config).await;
+
+    // Try to run database migrations until they succeed
+    loop {
+        match postgres_db.run_migrations().await {
+            Ok(_) => break,
+            Err(e) => {
+                tracing::error!("Failed to run migrations: {:?}", e);
+                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            }
+        }
+    }
+
     // Start the API service
-    handles.push(tokio::spawn(ApiService::run(config.clone())));
+    handles.push(tokio::spawn(ApiService::run(config.clone(), postgres_db.clone())));
 
     // Start the website service (if enabled)
     if config.website.enabled {
-        handles.push(tokio::spawn(WebsiteService::run_loop(config.clone())));
+        handles.push(tokio::spawn(WebsiteService::run_loop(config.clone(), postgres_db.clone())));
     }
 
     futures::future::join_all(handles).await;

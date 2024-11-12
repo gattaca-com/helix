@@ -36,9 +36,7 @@ const PAYLOAD_ATTRIBUTE_CHANNEL_SIZE: usize = 300;
 pub struct ApiService {}
 
 impl ApiService {
-    pub async fn run(mut config: RelayConfig) {
-        let postgres_db = PostgresDatabaseService::from_relay_config(&config).unwrap();
-        postgres_db.run_migrations().await;
+    pub async fn run(mut config: RelayConfig, postgres_db: PostgresDatabaseService) {
         postgres_db.init_region(&config).await;
         postgres_db
             .store_builders_info(&config.builders)

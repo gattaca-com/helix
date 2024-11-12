@@ -240,7 +240,6 @@
                     </a>
                 </th>
                 <th>Num txs</th>
-                <th>Blobs</th>
                 <th>Block hash</th>
                 <th></th>
             </tr>
@@ -255,9 +254,6 @@
                 <td>{{ payload.block_number|pretty_int }}</td>
                 <td>{{ payload.bid_trace.value|wei_to_eth }}</td>
                 <td>{{ payload.num_txs }}</td>
-                <td>
-                    <div title="Blob Gas Used: {{ payload.blob_gas_used }}">{{ payload.num_blobs }}</div>
-                </td>
                 <td>{{ payload.bid_trace.block_hash }}</td>
                 <td>
                     <div class="icons-container">
