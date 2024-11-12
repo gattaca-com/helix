@@ -679,12 +679,12 @@ where
             .await?;
 
         // Fetch constraints, and if available verify inclusion proofs and save them to cache
-        let skip_inclusion_proof_verify_and_save = api
+        let should_verify_and_save_proofs = api
             .relay_config
             .constraints_api_config
             .max_block_value_to_verify_wei
-            .map_or(false, |max_block_value_to_verify| payload.value() > max_block_value_to_verify);
-        if !skip_inclusion_proof_verify_and_save {
+            .map_or(true, |max_block_value_to_verify| payload.value() <= max_block_value_to_verify);
+        if should_verify_and_save_proofs {
             if let Err(err) = api.verify_and_save_inclusion_proofs(&payload, &request_id).await {
                 warn!(request_id = %request_id, error = %err, "failed to verify and save inclusion proofs");
                 return Err(err)
