@@ -41,7 +41,7 @@ impl WebsiteService {
         // Initialize PostgresDB
         //
         // NOTE: We don't need to run migrations as the ApiService already does that.
-        let postgres_db = PostgresDatabaseService::from_relay_config(&config).unwrap();
+        let postgres_db = PostgresDatabaseService::from_relay_config(&config).await;
         let db = Arc::new(postgres_db);
         debug!("PostgresDB initialized");
 

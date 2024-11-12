@@ -37,7 +37,7 @@ pub struct ApiService {}
 
 impl ApiService {
     pub async fn run(mut config: RelayConfig) {
-        let postgres_db = PostgresDatabaseService::from_relay_config(&config).unwrap();
+        let postgres_db = PostgresDatabaseService::from_relay_config(&config).await;
         postgres_db.run_migrations().await;
         postgres_db.init_region(&config).await;
         postgres_db
