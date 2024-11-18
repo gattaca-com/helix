@@ -478,6 +478,9 @@ mod tests {
             SignedBidSubmission::Deneb(submission) => {
                 submission.message = bid_trace.clone();
             }
+            SignedBidSubmission::DenebWithProofs(submission) => {
+                submission.message = bid_trace.clone();
+            }
             SignedBidSubmission::Capella(submission) => {
                 submission.message = bid_trace.clone();
             }
