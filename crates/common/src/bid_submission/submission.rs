@@ -24,8 +24,8 @@ use helix_utils::signing::compute_builder_signing_root;
 #[ssz(transparent)]
 #[serde(untagged)]
 pub enum SignedBidSubmission {
-    Deneb(SignedBidSubmissionDeneb),
     DenebWithProofs(SignedBidSubmissionDenebWithProofs),
+    Deneb(SignedBidSubmissionDeneb),
     Capella(SignedBidSubmissionCapella),
 }
 
