@@ -86,8 +86,7 @@ pub fn build_router(
                 router = router.route(&route.path(), post(BuilderApiProd::submit_block_v2));
             }
             Route::SubmitBlockWithProofs => {
-                router =
-                    router.route(&route.path(), post(BuilderApiProd::submit_block_with_proofs));
+                router = router.route(&route.path(), post(BuilderApiProd::submit_block));
             }
             Route::SubmitHeader => {
                 router = router.route(&route.path(), post(BuilderApiProd::submit_header));
