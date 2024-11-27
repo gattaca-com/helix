@@ -152,7 +152,7 @@ async fn send_request(req_url: &str, encoding: Encoding, req_payload: Vec<u8>) -
 async fn start_api_server() -> (
     oneshot::Sender<()>,
     HttpServiceConfig,
-    Arc<ConstraintsApi<MockAuctioneer, MockDatabaseService>>,
+    Arc<ConstraintsApi<MockAuctioneer>>,
     Arc<BuilderApi<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>>,
     Receiver<Sender<ChainUpdate>>,
 ) {

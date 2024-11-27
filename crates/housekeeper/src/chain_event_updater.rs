@@ -36,7 +36,7 @@ pub struct PayloadAttributesUpdate {
 }
 
 /// Payload for head event updates sent to subscribers.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SlotUpdate {
     pub slot: u64,
     pub next_duty: Option<BuilderGetValidatorsResponseEntry>,

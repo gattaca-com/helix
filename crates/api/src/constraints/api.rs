@@ -3,7 +3,7 @@ use axum::{
     http::{Request, StatusCode},
     Extension,
 };
-use ethereum_consensus::{deneb::Slot, ssz};
+use ethereum_consensus::{deneb::Slot, phase0::mainnet::SLOTS_PER_EPOCH, ssz};
 use helix_common::{
     api::constraints_api::{
         SignableBLS, SignedDelegation, SignedRevocation, DELEGATION_ACTION,
@@ -14,15 +14,22 @@ use helix_common::{
     proofs::{ConstraintsMessage, SignedConstraints, SignedConstraintsWithProofData},
     ConstraintSubmissionTrace, ConstraintsApiConfig,
 };
-use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
+use helix_housekeeper::{ChainUpdate, SlotUpdate};
 use helix_utils::signing::{verify_signed_message, COMMIT_BOOST_DOMAIN};
 use std::{
     collections::HashSet,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::{sync::broadcast, time::Instant};
+use tokio::{
+    sync::{
+        broadcast,
+        mpsc::{self, error::SendError, Sender},
+        RwLock,
+    },
+    time::Instant,
+};
 use tracing::{error, info, trace, warn};
 use uuid::Uuid;
 
@@ -34,14 +41,15 @@ use super::error::Conflict;
 pub(crate) const MAX_REQUEST_LENGTH: usize = 1024 * 1024 * 5;
 
 #[derive(Clone)]
-pub struct ConstraintsApi<A, DB>
+pub struct ConstraintsApi<A>
 where
     A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
 {
     auctioneer: Arc<A>,
-    db: Arc<DB>,
     chain_info: Arc<ChainInfo>,
+    /// Information about the current head slot and next proposer duty
+    curr_slot_info: Arc<RwLock<SlotUpdate>>,
+
     constraints_api_config: Arc<ConstraintsApiConfig>,
 
     constraints_handle: ConstraintsHandle,
@@ -60,26 +68,44 @@ impl ConstraintsHandle {
     }
 }
 
-impl<A, DB> ConstraintsApi<A, DB>
+impl<A> ConstraintsApi<A>
 where
     A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
 {
     pub fn new(
         auctioneer: Arc<A>,
-        db: Arc<DB>,
         chain_info: Arc<ChainInfo>,
+        slot_update_subscription: Sender<Sender<ChainUpdate>>,
         constraints_handle: ConstraintsHandle,
         constraints_api_config: Arc<ConstraintsApiConfig>,
     ) -> Self {
-        Self { auctioneer, db, chain_info, constraints_handle, constraints_api_config }
+        let api = Self {
+            auctioneer,
+            chain_info,
+            curr_slot_info: Arc::new(RwLock::new(Default::default())),
+            constraints_handle,
+            constraints_api_config,
+        };
+
+        // Spin up the housekeep task
+        let api_clone = api.clone();
+        tokio::spawn(async move {
+            if let Err(err) = api_clone.housekeep(slot_update_subscription).await {
+                error!(
+                    error = %err,
+                    "ConstraintsApi. housekeep task encountered an error",
+                );
+            }
+        });
+
+        api
     }
 
     /// Handles the submission of batch of signed constraints.
     ///
     /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/builder#constraints>
     pub async fn submit_constraints(
-        Extension(api): Extension<Arc<ConstraintsApi<A, DB>>>,
+        Extension(api): Extension<Arc<ConstraintsApi<A>>>,
         req: Request<Body>,
     ) -> Result<StatusCode, ConstraintsApiError> {
         let request_id = Uuid::new_v4();
@@ -108,14 +134,18 @@ where
             return Err(ConstraintsApiError::InvalidConstraints)
         }
 
-        // PERF: can we avoid calling the db?
-        let maybe_validator_pubkey = api.db.get_proposer_duties().await?.iter().find_map(|d| {
-            if d.slot == first_constraints.slot {
-                Some(d.entry.registration.message.public_key.clone())
+        let maybe_validator_pubkey =
+            if let Some(duties) = api.curr_slot_info.read().await.new_duties.as_ref() {
+                duties.iter().find_map(|d| {
+                    if d.slot == first_constraints.slot {
+                        Some(d.entry.registration.message.public_key.clone())
+                    } else {
+                        None
+                    }
+                })
             } else {
                 None
-            }
-        });
+            };
 
         let Some(validator_pubkey) = maybe_validator_pubkey else {
             error!(request_id = %request_id, slot = first_constraints.slot, "Missing proposer info");
@@ -200,7 +230,7 @@ where
     ///
     /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/builder#delegate>
     pub async fn delegate(
-        Extension(api): Extension<Arc<ConstraintsApi<A, DB>>>,
+        Extension(api): Extension<Arc<ConstraintsApi<A>>>,
         req: Request<Body>,
     ) -> Result<StatusCode, ConstraintsApiError> {
         let request_id = Uuid::new_v4();
@@ -274,7 +304,7 @@ where
     ///
     /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/builder#revoke>
     pub async fn revoke(
-        Extension(api): Extension<Arc<ConstraintsApi<A, DB>>>,
+        Extension(api): Extension<Arc<ConstraintsApi<A>>>,
         req: Request<Body>,
     ) -> Result<StatusCode, ConstraintsApiError> {
         let request_id = Uuid::new_v4();
@@ -347,10 +377,9 @@ where
 }
 
 // Helpers
-impl<A, DB> ConstraintsApi<A, DB>
+impl<A> ConstraintsApi<A>
 where
     A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
 {
     async fn save_constraints_to_auctioneer(
         &self,
@@ -376,6 +405,45 @@ where
                 Err(ConstraintsApiError::AuctioneerError(err))
             }
         }
+    }
+}
+
+// STATE SYNC
+impl<A> ConstraintsApi<A>
+where
+    A: Auctioneer + 'static,
+{
+    /// Subscribes to slot head updater.
+    /// Updates the current slot and next proposer duty.
+    pub async fn housekeep(
+        &self,
+        slot_update_subscription: Sender<Sender<ChainUpdate>>,
+    ) -> Result<(), SendError<Sender<ChainUpdate>>> {
+        let (tx, mut rx) = mpsc::channel(20);
+        slot_update_subscription.send(tx).await?;
+
+        while let Some(slot_update) = rx.recv().await {
+            if let ChainUpdate::SlotUpdate(slot_update) = slot_update {
+                self.handle_new_slot(slot_update).await;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle a new slot update.
+    /// Updates the next proposer duty for the new slot.
+    async fn handle_new_slot(&self, slot_update: SlotUpdate) {
+        let epoch = slot_update.slot / self.chain_info.seconds_per_slot;
+        info!(
+            epoch = epoch,
+            slot = slot_update.slot,
+            slot_start_next_epoch = (epoch + 1) * SLOTS_PER_EPOCH,
+            next_proposer_duty = ?slot_update.next_duty,
+            "ConstraintsApi - housekeep: Updated head slot",
+        );
+
+        *self.curr_slot_info.write().await = slot_update
     }
 }
 
