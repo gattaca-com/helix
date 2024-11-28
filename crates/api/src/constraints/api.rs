@@ -3,7 +3,7 @@ use axum::{
     http::{Request, StatusCode},
     Extension,
 };
-use ethereum_consensus::{deneb::Slot, phase0::mainnet::SLOTS_PER_EPOCH, ssz};
+use ethereum_consensus::{phase0::mainnet::SLOTS_PER_EPOCH, ssz};
 use helix_common::{
     api::constraints_api::{
         SignableBLS, SignedDelegation, SignedRevocation, DELEGATION_ACTION,
@@ -200,18 +200,18 @@ where
             // Send to the constraints channel
             api.constraints_handle.send_constraints(constraint.clone());
 
+            // Decode the constraints and generate proof data.
+            let constraints_with_proofs = SignedConstraintsWithProofData::try_from(constraint).map_err(|err| {
+                error!(request_id = %request_id, "Failed to decode constraints transactions and generate proof data");
+                err
+            })?;
+
             // Finally add the constraints to the redis cache
-            if let Err(err) = api
-                .save_constraints_to_auctioneer(
-                    &mut trace,
-                    constraint.message.slot,
-                    constraint,
-                    &request_id,
-                )
-                .await
-            {
-                error!(request_id = %request_id, error = %err, "Failed to save constraints to auctioneer");
-            };
+            api.save_constraints_to_auctioneer(&mut trace, constraints_with_proofs, &request_id)
+                .await.map_err(|err| {
+                    error!(request_id = %request_id, error = %err, "Failed to save constraints to auctioneer");
+                    err
+                })?;
         }
 
         // Log some final info
@@ -384,12 +384,17 @@ where
     async fn save_constraints_to_auctioneer(
         &self,
         trace: &mut ConstraintSubmissionTrace,
-        slot: Slot,
-        constraint: SignedConstraints,
+        constraints_with_proofs: SignedConstraintsWithProofData,
         request_id: &Uuid,
     ) -> Result<(), ConstraintsApiError> {
-        let message_with_data = SignedConstraintsWithProofData::try_from(constraint)?;
-        match self.auctioneer.save_constraints(slot, message_with_data).await {
+        match self
+            .auctioneer
+            .save_constraints(
+                constraints_with_proofs.signed_constraints.message.slot,
+                constraints_with_proofs,
+            )
+            .await
+        {
             Ok(()) => {
                 trace.auctioneer_update = get_nanos_timestamp()?;
                 info!(
