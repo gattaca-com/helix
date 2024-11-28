@@ -46,7 +46,7 @@ pub type ProposerApiProd = ProposerApi<
 
 pub type DataApiProd = DataApi<PostgresDatabaseService>;
 
-pub type ConstraintsApiProd = ConstraintsApi<RedisCache, PostgresDatabaseService>;
+pub type ConstraintsApiProd = ConstraintsApi<RedisCache>;
 
 pub fn build_router(
     router_config: &mut RouterConfig,

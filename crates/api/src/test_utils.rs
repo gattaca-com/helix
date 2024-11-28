@@ -298,7 +298,7 @@ pub fn data_api_app() -> (Router, Arc<DataApi<MockDatabaseService>>, Arc<MockDat
 #[allow(clippy::type_complexity)]
 pub fn constraints_api_app() -> (
     Router,
-    Arc<ConstraintsApi<MockAuctioneer, MockDatabaseService>>,
+    Arc<ConstraintsApi<MockAuctioneer>>,
     Arc<BuilderApi<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>>,
     Receiver<Sender<ChainUpdate>>,
 ) {
@@ -322,14 +322,13 @@ pub fn constraints_api_app() -> (
         );
     let builder_api_service = Arc::new(builder_api_service);
 
-    let constraints_api_service =
-        Arc::new(ConstraintsApi::<MockAuctioneer, MockDatabaseService>::new(
-            auctioneer.clone(),
-            database.clone(),
-            Arc::new(ChainInfo::for_mainnet()),
-            handler,
-            Arc::new(ConstraintsApiConfig::default()),
-        ));
+    let constraints_api_service = Arc::new(ConstraintsApi::<MockAuctioneer>::new(
+        auctioneer.clone(),
+        Arc::new(ChainInfo::for_mainnet()),
+        slot_update_sender,
+        handler,
+        Arc::new(ConstraintsApiConfig::default()),
+    ));
 
     let router = Router::new()
         .route(
@@ -358,15 +357,15 @@ pub fn constraints_api_app() -> (
         )
         .route(
             &Route::SubmitBuilderConstraints.path(),
-            post(ConstraintsApi::<MockAuctioneer, MockDatabaseService>::submit_constraints),
+            post(ConstraintsApi::<MockAuctioneer>::submit_constraints),
         )
         .route(
             &Route::DelegateSubmissionRights.path(),
-            post(ConstraintsApi::<MockAuctioneer, MockDatabaseService>::delegate),
+            post(ConstraintsApi::<MockAuctioneer>::delegate),
         )
         .route(
             &Route::RevokeSubmissionRights.path(),
-            post(ConstraintsApi::<MockAuctioneer, MockDatabaseService>::revoke),
+            post(ConstraintsApi::<MockAuctioneer>::revoke),
         )
         .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH))
         .layer(Extension(builder_api_service.clone()))

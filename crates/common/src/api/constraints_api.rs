@@ -31,8 +31,8 @@ impl SignableBLS for DelegationMessage {
     fn digest(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update([self.action]);
-        hasher.update(&self.validator_pubkey.to_vec());
-        hasher.update(&self.delegatee_pubkey.to_vec());
+        hasher.update(self.validator_pubkey.as_slice());
+        hasher.update(self.delegatee_pubkey.as_slice());
 
         hasher.finalize().into()
     }
@@ -55,8 +55,8 @@ impl SignableBLS for RevocationMessage {
     fn digest(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update([self.action]);
-        hasher.update(&self.validator_pubkey.to_vec());
-        hasher.update(&self.delegatee_pubkey.to_vec());
+        hasher.update(self.validator_pubkey.as_slice());
+        hasher.update(self.delegatee_pubkey.as_slice());
 
         hasher.finalize().into()
     }

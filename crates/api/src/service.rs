@@ -190,8 +190,8 @@ impl ApiService {
 
         let constraints_api = Arc::new(ConstraintsApiProd::new(
             auctioneer.clone(),
-            db.clone(),
             chain_info.clone(),
+            slot_update_sender.clone(),
             constraints_handle,
             constraints_api_config,
         ));
