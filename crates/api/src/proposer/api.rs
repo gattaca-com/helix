@@ -674,29 +674,15 @@ where
             return Err(err);
         }
 
-        let message = signed_blinded_block.message();
-        let body = message.body();
-        let provided_header = body.execution_payload_header();
-        let local_header =
-            match try_execution_header_from_payload(&mut versioned_payload.execution_payload) {
-                Ok(header) => header,
-                Err(err) => {
-                    error!(
-                        request_id = %request_id,
-                        error = %err,
-                        "error converting execution payload to header",
-                    );
-                    return Err(err.into());
-                }
-            };
-        if let Err(err) = self.validate_header_equality(&local_header, provided_header) {
+        if let Err(err) = self.validate_block_equality(&mut versioned_payload, &signed_blinded_block, request_id) {
             error!(
-                request_id = %request_id,
+                %request_id,
                 error = %err,
-                "execution payload header invalid, does not match known ExecutionPayload",
+                "execution payload invalid, does not match known ExecutionPayload",
             );
             return Err(err);
         }
+
         trace.validation_complete = get_nanos_timestamp()?;
 
         let unblinded_payload =
@@ -951,41 +937,74 @@ where
         Ok(())
     }
 
-    /// Validates that the `ExecutionPayloadHeader` of a given `SignedBlindedBeaconBlock` matches
-    /// the known `ExecutionPayload`.
+    /// Validates that the `SignedBlindedBeaconBlock` matches the known `ExecutionPayload`.
     ///
     /// - Checks the fork versions match.
     /// - Checks the equality of the local and provided header.
+    /// - Checks the equality of the kzg commitments.
     /// - Returns `Ok(())` if the `ExecutionPayloadHeader` matches.
     /// - Returns `Err(ProposerApiError)` for mismatching or invalid headers.
-    fn validate_header_equality(
+    fn validate_block_equality(
         &self,
-        local_header: &ExecutionPayloadHeader,
-        provided_header: ExecutionPayloadHeaderRef<'_>,
+        local_versioned_payload: &mut PayloadAndBlobs,
+        provided_signed_blinded_block: &SignedBlindedBeaconBlock,
+        request_id: &Uuid,
     ) -> Result<(), ProposerApiError> {
+        let message = provided_signed_blinded_block.message();
+        let body = message.body();
+        let provided_header = body.execution_payload_header();
+
+        let local_header =
+            match try_execution_header_from_payload(&mut local_versioned_payload.execution_payload) {
+                Ok(header) => header,
+                Err(err) => {
+                    error!(
+                        %request_id,
+                        error = %err,
+                        "error converting execution payload to header",
+                    );
+                    return Err(err.into());
+                }
+            };
+
         match local_header {
             ExecutionPayloadHeader::Bellatrix(local_header) => {
                 let provided_header =
                     provided_header.bellatrix().ok_or(ProposerApiError::PayloadTypeMismatch)?;
-                if local_header != provided_header {
+                if local_header != *provided_header {
                     return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
                 }
             }
             ExecutionPayloadHeader::Capella(local_header) => {
                 let provided_header =
                     provided_header.capella().ok_or(ProposerApiError::PayloadTypeMismatch)?;
-                if local_header != provided_header {
+                if local_header != *provided_header {
                     return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
                 }
             }
             ExecutionPayloadHeader::Deneb(local_header) => {
                 let provided_header =
                     provided_header.deneb().ok_or(ProposerApiError::PayloadTypeMismatch)?;
-                if local_header != provided_header {
+                if local_header != *provided_header {
                     return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
+                }
+
+                let local_kzg_commitments = local_versioned_payload
+                    .blobs_bundle
+                    .as_ref()
+                    .map(|bundle| &bundle.commitments)
+                    .ok_or(ProposerApiError::BlobKzgCommitmentsMismatch)?;
+
+                let provided_kzg_commitments = body
+                    .blob_kzg_commitments()
+                    .ok_or(ProposerApiError::BlobKzgCommitmentsMismatch)?;
+
+                if local_kzg_commitments != provided_kzg_commitments {
+                    return Err(ProposerApiError::BlobKzgCommitmentsMismatch);
                 }
             }
         }
+
         Ok(())
     }
 
