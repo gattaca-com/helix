@@ -87,6 +87,7 @@ We sincerely apologise for the disruption caused and are committed to ensuring t
 | 10496174    | 2024-11-28 07:15:11 | Titan   | {TITAN}                                 | 0.01780644328 |
 | 10496230    | 2024-11-28 07:26:23 | Titan   | {BLOXROUTE_MAXPROFIT,TITAN}             | 0.02206454917 |
 
+Note: Bloxroute disabled headers at slot 10495752. However, their logic continues to serve get_payload requests, marking the payload as delivered while withholding headers for invalid blocks, which is why you still see Bloxroute relays in the CSV after this slot.
 
 For a full detailed report of impacted slots, [download the CSV file](./invalid_merkle_root_incident_impact.csv).
 
