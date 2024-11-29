@@ -44,7 +44,7 @@ const CUTT_OFF_TIME: u64 = 4;
 // Constants for known validators refresh logic.
 const MIN_SLOTS_BETWEEN_UPDATES: u64 = 6;
 const MAX_SLOTS_BEFORE_FORCED_UPDATE: u64 = 32;
-pub(crate) const SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS: Duration = Duration::from_secs(6);
+pub(crate) const SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS: Duration = Duration::from_millis(200);
 
 // Max time between header and payload for OptimsiticV2 submissions
 const MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS: u64 = 2_000;
@@ -484,6 +484,8 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         let mut formatted_proposer_duties: Vec<BuilderGetValidatorsResponseEntry> =
             Vec::with_capacity(proposer_duties.len());
 
+        let len = proposer_duties.len();
+
         for duty in proposer_duties {
             if let Some(reg) = signed_validator_registrations.get(&duty.public_key) {
                 if duty.public_key != reg.registration_info.registration.message.public_key {
@@ -495,6 +497,13 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
                     validator_index: duty.validator_index,
                     entry: reg.registration_info.clone(),
                 });
+            } else {
+                warn!(
+                    public_key = %duty.public_key,
+                    slot = duty.slot,
+                    proposer_duties_len = len,
+                    "No signed validator registration found for proposer duty"
+                );
             }
         }
 

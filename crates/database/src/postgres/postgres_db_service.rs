@@ -69,7 +69,7 @@ pub struct PostgresDatabaseService {
     known_validators_cache: Arc<DashSet<BlsPublicKey>>,
     validator_pool_cache: Arc<DashMap<String, String>>,
     region: i16,
-    pool: Arc<Pool>,
+    pub pool: Arc<Pool>,
 }
 
 impl PostgresDatabaseService {
@@ -85,9 +85,7 @@ impl PostgresDatabaseService {
         })
     }
 
-    pub fn from_relay_config(
-        relay_config: &RelayConfig,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn from_relay_config(relay_config: &RelayConfig) -> Self {
         let mut cfg = Config::new();
         cfg.host = Some(relay_config.postgres.hostname.clone());
         cfg.port = Some(relay_config.postgres.port);
@@ -95,29 +93,39 @@ impl PostgresDatabaseService {
         cfg.user = Some(relay_config.postgres.user.clone());
         cfg.password = Some(relay_config.postgres.password.clone());
         cfg.manager = Some(ManagerConfig { recycling_method: RecyclingMethod::Fast });
-        let pool = cfg.create_pool(None, NoTls)?;
-        Ok(PostgresDatabaseService {
+
+        let pool = loop {
+            match cfg.create_pool(None, NoTls) {
+                Ok(pool) => break pool,
+                Err(e) => {
+                    error!("Error creating pool: {}", e);
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            }
+        };
+
+        PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
             known_validators_cache: Arc::new(DashSet::new()),
             validator_pool_cache: Arc::new(DashMap::new()),
             region: relay_config.postgres.region,
             pool: Arc::new(pool),
-        })
+        }
     }
 
-    pub async fn run_migrations(&self) {
-        let mut conn = self.pool.get().await.unwrap();
+    pub async fn run_migrations(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let mut conn = self.pool.get().await?;
+
         let client = conn.deref_mut().deref_mut();
         match run_migrations_async(client).await {
             Ok(report) => {
                 info!("Applied migrations: {}", report.applied_migrations().len());
                 info!("Migrations report: {:?}", report);
+                Ok(())
             }
-            Err(e) => {
-                panic!("Error applying migrations: {}", e);
-            }
-        };
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn init_region(&self, config: &RelayConfig) {
@@ -1083,7 +1091,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(PostgresNumeric::from(submission.value())),
                 &(submission.transactions().len() as i32),
                 &(submission.timestamp() as i64),
-                &(trace.receive as i64),
+                &(trace.receive as i64)
             ],
         ).await?;
 

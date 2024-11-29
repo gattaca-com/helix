@@ -6,7 +6,8 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Bytes32, Hash32},
     ssz::{self, prelude::*},
 };
-use helix_common::simulator::BlockSimError;
+use helix_common::{proofs::ProofError, simulator::BlockSimError};
+use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
 
 #[derive(Debug, thiserror::Error)]
@@ -25,6 +26,12 @@ pub enum BuilderApiError {
 
     #[error("ssz deserialize error: {0}")]
     SszDeserializeError(#[from] ssz::prelude::DeserializeError),
+
+    #[error("ssz serialize error")]
+    SszSerializeError,
+
+    #[error("failed to deserialize")]
+    DeserializeError,
 
     #[error("failed to decode header-submission")]
     FailedToDecodeHeaderSubmission,
@@ -113,6 +120,9 @@ pub enum BuilderApiError {
     #[error("datastore error: {0}")]
     AuctioneerError(#[from] AuctioneerError),
 
+    #[error("database error: {0}")]
+    DatabaseError(#[from] DatabaseError),
+
     #[error("incorrect prev_randao - got: {got:?}, expected: {expected:?}")]
     PrevRandaoMismatch { got: Bytes32, expected: Bytes32 },
 
@@ -138,6 +148,24 @@ pub enum BuilderApiError {
 
     #[error("V2 submissions invalid if proposer requires regional filtering")]
     V2SubmissionsInvalidIfProposerRequiresRegionalFiltering,
+
+    #[error("no constraints found")]
+    NoConstraintsFound,
+
+    #[error("inclusion proof verification failed: {0}")]
+    InclusionProofVerificationFailed(#[from] ProofError),
+
+    #[error("inclusion proofs not found")]
+    InclusionProofsNotFound,
+
+    #[error("failed to compute hash tree root for transaction: {0}")]
+    HashTreeRootError(#[from] MerkleizationError),
+
+    #[error("failed to get constraints for slot {0}")]
+    ConstraintsError(u64),
+
+    #[error("incorrect slot for constraints request {0}")]
+    IncorrectSlot(u64),
 }
 
 impl IntoResponse for BuilderApiError {
@@ -151,6 +179,12 @@ impl IntoResponse for BuilderApiError {
             },
             BuilderApiError::SszDeserializeError(err) => {
                 (StatusCode::BAD_REQUEST, format!("SSZ deserialize error: {err}")).into_response()
+            },
+            BuilderApiError::SszSerializeError => {
+                (StatusCode::BAD_REQUEST, "SSZ serialize error".to_string()).into_response()
+            },
+            BuilderApiError::DeserializeError => {
+                (StatusCode::BAD_REQUEST, "Failed to deserialize").into_response()
             },
             BuilderApiError::FailedToDecodeHeaderSubmission => {
                 (StatusCode::BAD_REQUEST, "Failed to decode header submission").into_response()
@@ -225,6 +259,9 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::AuctioneerError(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("Auctioneer error: {err}")).into_response()
             },
+            BuilderApiError::DatabaseError(err) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {err}")).into_response()
+            },
             BuilderApiError::FeeRecipientMismatch { got, expected } => {
                 (StatusCode::BAD_REQUEST, format!("Fee recipient mismatch. got: {got:?}, expected: {expected:?}")).into_response()
             },
@@ -280,6 +317,24 @@ impl IntoResponse for BuilderApiError {
             },
             BuilderApiError::V2SubmissionsInvalidIfProposerRequiresRegionalFiltering => {
                 (StatusCode::BAD_REQUEST, "V2 submissions invalid if proposer requires regional filtering").into_response()
+            }
+            BuilderApiError::NoConstraintsFound => {
+                (StatusCode::BAD_REQUEST, "no constraints found").into_response()
+            }
+            BuilderApiError::InclusionProofVerificationFailed(err) => {
+                (StatusCode::BAD_REQUEST, format!("inclusion proof verifcation failed: {err}")).into_response()
+            }
+            BuilderApiError::InclusionProofsNotFound => {
+                (StatusCode::BAD_REQUEST, "inclusion proofs not found".to_string()).into_response()
+            }
+            BuilderApiError::HashTreeRootError(err) => {
+                (StatusCode::BAD_REQUEST, format!("failed to compute hash tree root for transaction: {err}")).into_response()
+            }
+            BuilderApiError::ConstraintsError(slot) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to get constraints for slot {slot}")).into_response()
+            }
+            BuilderApiError::IncorrectSlot(slot) => {
+                (StatusCode::BAD_REQUEST, format!("incorrect slot for constraints request {slot}")).into_response()
             }
         }
     }

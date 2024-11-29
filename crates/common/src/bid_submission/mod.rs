@@ -15,8 +15,12 @@ use ethereum_consensus::{
     Fork,
 };
 
+use crate::proofs::InclusionProofs;
+
 #[auto_impl::auto_impl(Arc)]
 pub trait BidSubmission {
+    fn proofs(&self) -> Option<&InclusionProofs>;
+
     fn bid_trace(&self) -> &BidTrace;
 
     fn signature(&self) -> &BlsSignature;

@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use crate::redis::utils::get_constraints_key;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 use deadpool_redis::{Config, CreatePoolError, Pool, Runtime};
@@ -8,20 +9,25 @@ use ethereum_consensus::{
 };
 use futures_util::TryStreamExt;
 use helix_common::{
-    api::builder_api::TopBidUpdate,
+    api::{
+        builder_api::TopBidUpdate,
+        constraints_api::{SignedDelegation, SignedRevocation},
+    },
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
     pending_block::PendingBlock,
+    proofs::SignedConstraintsWithProofData,
     versioned_payload::PayloadAndBlobs,
     ProposerInfo,
 };
 use redis::{AsyncCommands, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::broadcast;
-use tracing::error;
+use tracing::{error, trace};
 
 use helix_common::{
     bid_submission::{BidTrace, SignedBidSubmission},
     eth::SignedBuilderBid,
+    proofs::InclusionProofs,
     signing::RelaySigningContext,
     BuilderInfo,
 };
@@ -36,9 +42,9 @@ use crate::{
         utils::{
             get_builder_latest_bid_time_key, get_builder_latest_bid_value_key,
             get_cache_bid_trace_key, get_cache_get_header_response_key, get_execution_payload_key,
-            get_floor_bid_key, get_floor_bid_value_key, get_latest_bid_by_builder_key,
-            get_latest_bid_by_builder_key_str_builder_pub_key, get_seen_block_hashes_key,
-            get_top_bid_value_key,
+            get_floor_bid_key, get_floor_bid_value_key, get_inclusion_proof_key,
+            get_latest_bid_by_builder_key, get_latest_bid_by_builder_key_str_builder_pub_key,
+            get_seen_block_hashes_key, get_top_bid_value_key,
         },
     },
     types::{
@@ -53,9 +59,12 @@ use crate::{
 };
 
 use super::utils::{
-    get_hash_from_hex, get_header_tx_root_key, get_pending_block_builder_block_hash_key,
-    get_pending_block_builder_key, get_pubkey_from_hex,
+    get_delegations_key, get_hash_from_hex, get_header_tx_root_key,
+    get_pending_block_builder_block_hash_key, get_pending_block_builder_key, get_pubkey_from_hex,
 };
+
+// Constraints expire after 1 epoch = 32 slots.
+const CONSTRAINTS_CACHE_EXPIRY_S: usize = 12 * 32;
 
 const BID_CACHE_EXPIRY_S: usize = 45;
 const PENDING_BLOCK_EXPIRY_S: usize = 45;
@@ -498,6 +507,120 @@ impl RedisCache {
 
 #[async_trait]
 impl Auctioneer for RedisCache {
+    async fn get_validator_delegations(
+        &self,
+        pub_key: BlsPublicKey,
+    ) -> Result<Vec<SignedDelegation>, AuctioneerError> {
+        let key = get_delegations_key(&pub_key);
+
+        let delegations =
+            self.get(&key).await.map_err(AuctioneerError::RedisError)?.unwrap_or_default();
+        Ok(delegations)
+    }
+
+    async fn save_validator_delegations(
+        &self,
+        signed_delegations: Vec<SignedDelegation>,
+    ) -> Result<(), AuctioneerError> {
+        let len = signed_delegations.len();
+        for signed_delegation in signed_delegations {
+            let key = get_delegations_key(&signed_delegation.message.validator_pubkey);
+
+            // Attempt to get the existing delegations from the cache.
+            let mut delegations: Vec<SignedDelegation> =
+                self.get(&key).await.map_err(AuctioneerError::RedisError)?.unwrap_or_default();
+
+            // Append the new delegation to the existing delegations, removing duplicates.
+            delegations.push(signed_delegation);
+            let new_delegations: Vec<SignedDelegation> =
+                delegations.into_iter().collect::<HashSet<_>>().into_iter().collect();
+
+            // Save the updated delegations back to the cache.
+            self.set(&key, &new_delegations, None).await.map_err(AuctioneerError::RedisError)?;
+        }
+
+        trace!(len, "saved delegations to cache");
+
+        Ok(())
+    }
+
+    async fn revoke_validator_delegations(
+        &self,
+        signed_revocations: Vec<SignedRevocation>,
+    ) -> Result<(), AuctioneerError> {
+        for signed_revocation in &signed_revocations {
+            let key = get_delegations_key(&signed_revocation.message.validator_pubkey);
+
+            // Attempt to get the existing delegations from the cache.
+            let mut delegations: Vec<SignedDelegation> =
+                self.get(&key).await.map_err(AuctioneerError::RedisError)?.unwrap_or_default();
+
+            // Filter out the revoked delegation.
+            let updated_delegations = delegations.retain(|delegation| {
+                signed_revocations.iter().all(|revocation| {
+                    delegation.message.delegatee_pubkey != revocation.message.delegatee_pubkey
+                })
+            });
+
+            // Save the updated delegations back to the cache.
+            self.set(&key, &updated_delegations, None)
+                .await
+                .map_err(AuctioneerError::RedisError)?;
+        }
+
+        Ok(())
+    }
+
+    async fn save_constraints(
+        &self,
+        slot: u64,
+        constraints: SignedConstraintsWithProofData,
+    ) -> Result<(), AuctioneerError> {
+        let key = get_constraints_key(slot);
+
+        // Get the existing constraints from the cache or create new constraints.
+        let mut prev_constraints: Vec<SignedConstraintsWithProofData> =
+            self.get(&key).await.map_err(AuctioneerError::RedisError)?.unwrap_or_default();
+
+        prev_constraints.push(constraints);
+
+        // Save the constraints to the cache.
+        self.set(&key, &prev_constraints, Some(CONSTRAINTS_CACHE_EXPIRY_S))
+            .await
+            .map_err(AuctioneerError::RedisError)
+    }
+
+    async fn get_constraints(
+        &self,
+        slot: u64,
+    ) -> Result<Option<Vec<SignedConstraintsWithProofData>>, AuctioneerError> {
+        let key = get_constraints_key(slot);
+        self.get(&key).await.map_err(AuctioneerError::RedisError)
+    }
+
+    async fn save_inclusion_proof(
+        &self,
+        slot: u64,
+        proposer_pub_key: &BlsPublicKey,
+        bid_block_hash: &Hash32,
+        inclusion_proof: &InclusionProofs,
+    ) -> Result<(), AuctioneerError> {
+        let key = get_inclusion_proof_key(slot, proposer_pub_key, bid_block_hash);
+        self.set(&key, inclusion_proof, Some(CONSTRAINTS_CACHE_EXPIRY_S))
+            .await
+            .map_err(AuctioneerError::RedisError)
+    }
+
+    async fn get_inclusion_proof(
+        &self,
+        slot: u64,
+        proposer_pub_key: &BlsPublicKey,
+        bid_block_hash: &Hash32,
+    ) -> Result<Option<InclusionProofs>, AuctioneerError> {
+        let key = get_inclusion_proof_key(slot, proposer_pub_key, bid_block_hash);
+        self.get(&key).await.map_err(AuctioneerError::RedisError)
+    }
+
     async fn get_last_slot_delivered(&self) -> Result<Option<u64>, AuctioneerError> {
         self.get(LAST_SLOT_DELIVERED_KEY).await.map_err(AuctioneerError::RedisError)
     }
@@ -712,6 +835,7 @@ impl Auctioneer for RedisCache {
         let mut cloned_submission = (*submission).clone();
         let builder_bid = SignedBuilderBid::from_submission(
             &mut cloned_submission,
+            None, // Note: inclusion proofs are saved separately in the cache.
             signing_context.public_key.clone(),
             &signing_context.signing_key,
             &signing_context.context,
@@ -975,6 +1099,7 @@ impl Auctioneer for RedisCache {
         // Sign builder bid with relay pubkey.
         let builder_bid = SignedBuilderBid::from_header_submission(
             submission,
+            None, // Note: inclusion proofs are saved separately in the cache.
             signing_context.public_key.clone(),
             &signing_context.signing_key,
             &signing_context.context,
@@ -1438,10 +1563,13 @@ mod tests {
             public_key: prev_builder_pubkey.clone(),
         };
 
-        let prev_best_bid = SignedBuilderBid::Capella(capella::SignedBuilderBid {
-            message: capella_builder_bid.clone(),
-            ..Default::default()
-        });
+        let prev_best_bid = SignedBuilderBid::Capella(
+            capella::SignedBuilderBid {
+                message: capella_builder_bid.clone(),
+                ..Default::default()
+            },
+            None,
+        );
 
         let res = cache
             .save_builder_bid(
@@ -1503,10 +1631,13 @@ mod tests {
         // Test with floor_value greater than top_bid_value
         let higher_floor_value = U256::from(70);
         capella_builder_bid.value = higher_floor_value;
-        let floor_bid = SignedBuilderBid::Capella(capella::SignedBuilderBid {
-            message: capella_builder_bid.clone(),
-            ..Default::default()
-        });
+        let floor_bid = SignedBuilderBid::Capella(
+            capella::SignedBuilderBid {
+                message: capella_builder_bid.clone(),
+                ..Default::default()
+            },
+            None,
+        );
 
         let key_floor_bid = get_floor_bid_key(slot, &parent_hash, &proposer_pub_key);
         let res = cache.set(&key_floor_bid, &floor_bid, None).await;
@@ -1620,7 +1751,7 @@ mod tests {
 
         let mut capella_bid = capella::SignedBuilderBid::default();
         capella_bid.message.value = U256::from(1999);
-        let best_bid = SignedBuilderBid::Capella(capella_bid);
+        let best_bid = SignedBuilderBid::Capella(capella_bid, None);
 
         // Save the best bid
         let key = get_cache_get_header_response_key(slot, &parent_hash, &proposer_pub_key);
@@ -1699,7 +1830,7 @@ mod tests {
             ..Default::default()
         };
         bid.message.header.block_hash = block_hash;
-        let builder_bid = SignedBuilderBid::Capella(bid);
+        let builder_bid = SignedBuilderBid::Capella(bid, None);
 
         // Test: save_builder_bid
         let res = cache
@@ -1944,22 +2075,28 @@ mod tests {
 
         // Save 2 builder bids. builder bid 1 > builder bid 2
         let builder_pub_key_1 = BlsPublicKey::try_from([1u8; 48].as_ref()).unwrap();
-        let builder_bid_1 = SignedBuilderBid::Capella(capella::SignedBuilderBid {
-            message: helix_common::eth::capella::BuilderBid {
-                value: U256::from(100),
+        let builder_bid_1 = SignedBuilderBid::Capella(
+            capella::SignedBuilderBid {
+                message: helix_common::eth::capella::BuilderBid {
+                    value: U256::from(100),
+                    ..Default::default()
+                },
                 ..Default::default()
             },
-            ..Default::default()
-        });
+            None,
+        );
 
         let builder_pub_key_2 = BlsPublicKey::try_from([2u8; 48].as_ref()).unwrap();
-        let builder_bid_2 = SignedBuilderBid::Capella(capella::SignedBuilderBid {
-            message: helix_common::eth::capella::BuilderBid {
-                value: U256::from(50),
+        let builder_bid_2 = SignedBuilderBid::Capella(
+            capella::SignedBuilderBid {
+                message: helix_common::eth::capella::BuilderBid {
+                    value: U256::from(50),
+                    ..Default::default()
+                },
                 ..Default::default()
             },
-            ..Default::default()
-        });
+            None,
+        );
 
         // Save both builder bids
         let set_result = cache

@@ -7,27 +7,36 @@ use std::{
 
 use axum::{
     body::{to_bytes, Body},
-    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Query,
+    },
     http::{Request, StatusCode},
-    response::{IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive},
+        IntoResponse, Response, Sse,
+    },
     Extension, Json,
 };
 use ethereum_consensus::{
-    configs::mainnet::{CAPELLA_FORK_EPOCH, SECONDS_PER_SLOT},
+    configs::mainnet::CAPELLA_FORK_EPOCH,
     phase0::mainnet::SLOTS_PER_EPOCH,
     primitives::{BlsPublicKey, Hash32},
     ssz::{self, prelude::*},
 };
 use flate2::read::GzDecoder;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use hyper::HeaderMap;
+use reth_primitives::B256;
 use tokio::{
     sync::{
+        broadcast,
         mpsc::{self, error::SendError, Receiver, Sender},
         RwLock,
     },
     time::{self, Instant},
 };
+use tokio_stream::wrappers::BroadcastStream;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -41,6 +50,9 @@ use helix_common::{
         BidSubmission, BidTrace, SignedBidSubmission,
     },
     chain_info::ChainInfo,
+    proofs::{
+        verify_multiproofs, InclusionProofs, SignedConstraints, SignedConstraintsWithProofData,
+    },
     signing::RelaySigningContext,
     simulator::BlockSimError,
     versioned_payload::PayloadAndBlobs,
@@ -52,10 +64,13 @@ use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
 use helix_utils::{get_payload_attributes_key, has_reached_fork};
 
+use serde::Deserialize;
+
 use crate::{
     builder::{
         error::BuilderApiError, traits::BlockSimulator, BlockSimRequest, DbInfo, OptimisticVersion,
     },
+    constraints::api::ConstraintsHandle,
     gossiper::{
         traits::GossipClientTrait,
         types::{
@@ -66,6 +81,11 @@ use crate::{
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
+
+#[derive(Deserialize)]
+pub struct SlotQuery {
+    slot: u64,
+}
 
 #[derive(Clone)]
 pub struct BuilderApi<A, DB, S, G>
@@ -83,6 +103,7 @@ where
     signing_context: Arc<RelaySigningContext>,
     relay_config: Arc<RelayConfig>,
     db_sender: Sender<DbInfo>,
+    constraints_tx: broadcast::Sender<SignedConstraints>,
 
     /// Information about the current head slot and next proposer duty
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
@@ -108,8 +129,9 @@ where
         relay_config: RelayConfig,
         slot_update_subscription: Sender<Sender<ChainUpdate>>,
         gossip_receiver: Receiver<GossipedMessage>,
-    ) -> Self {
+    ) -> (Self, ConstraintsHandle) {
         let (db_sender, db_receiver) = mpsc::channel::<DbInfo>(10_000);
+        let (constraints_tx, _) = broadcast::channel(128);
 
         // Spin up db processing task
         let db_clone = db.clone();
@@ -127,6 +149,7 @@ where
             relay_config: Arc::new(relay_config),
 
             db_sender,
+            constraints_tx: constraints_tx.clone(),
 
             curr_slot_info: Arc::new(RwLock::new((0, None))),
             proposer_duties_response: Arc::new(RwLock::new(None)),
@@ -151,7 +174,7 @@ where
             }
         });
 
-        api
+        (api, ConstraintsHandle { constraints_tx })
     }
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/getValidators>
@@ -169,6 +192,104 @@ where
         }
     }
 
+    /// This endpoint returns a list of signed constraints for a given `slot`.
+    ///
+    /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/relay#constraints>
+    pub async fn constraints(
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        Query(slot): Query<SlotQuery>,
+    ) -> Result<impl IntoResponse, BuilderApiError> {
+        let slot = slot.slot;
+
+        info!(slot, "builder requested constraints for slot");
+
+        let head_slot = api.curr_slot_info.read().await.0;
+
+        if slot < head_slot || slot > head_slot + 32 {
+            return Err(BuilderApiError::IncorrectSlot(slot))
+        }
+
+        match api.auctioneer.get_constraints(slot).await {
+            Ok(Some(cache)) => {
+                let constraints = cache
+                    .into_iter()
+                    .map(|data| data.signed_constraints)
+                    .collect::<Vec<SignedConstraints>>();
+
+                info!(slot, len = constraints.len(), "returning constraints to builder");
+                Ok(Json(constraints))
+            }
+            Ok(None) => {
+                debug!("No constraints found for slot");
+                Ok(Json(vec![])) // Return an empty vector if no delegations found
+            }
+            Err(err) => {
+                warn!(error=%err, "Failed to get constraints");
+                Err(BuilderApiError::AuctioneerError(err))
+            }
+        }
+    }
+
+    /// This endpoint returns a stream of signed constraints for a given `slot`.
+    ///
+    /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/relay#constraints-stream>
+    pub async fn constraints_stream(
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+    ) -> Sse<impl Stream<Item = Result<Event, BuilderApiError>>> {
+        let constraints_rx = api.constraints_tx.subscribe();
+        let stream = BroadcastStream::new(constraints_rx);
+
+        let filtered = stream.map(|result| match result {
+            Ok(constraint) => match serde_json::to_string(&vec![constraint]) {
+                Ok(json) => Ok(Event::default()
+                    .data(json)
+                    .event("signed_constraint")
+                    .retry(Duration::from_millis(50))),
+                Err(err) => {
+                    warn!(error = %err, "Failed to serialize constraint");
+                    Err(BuilderApiError::SszSerializeError)
+                }
+            },
+            Err(err) => {
+                warn!(error = %err, "Error receiving constraint message");
+                Err(BuilderApiError::InternalError)
+            }
+        });
+
+        Sse::new(filtered).keep_alive(KeepAlive::default())
+    }
+
+    /// This endpoint returns the active delegations for the validator scheduled to propose
+    /// at the provided `slot`. The delegations are returned as a list of BLS pubkeys.
+    ///
+    /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/relay#delegations>
+    pub async fn delegations(
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        Query(slot): Query<SlotQuery>,
+    ) -> Result<impl IntoResponse, BuilderApiError> {
+        let slot = slot.slot;
+
+        let Some(duty_bytes) = &*api.proposer_duties_response.read().await else {
+            warn!(slot, "delegations -- could not find slot duty");
+            return Err(BuilderApiError::ProposerDutyNotFound);
+        };
+        let Ok(proposer_duties) =
+            serde_json::from_slice::<Vec<BuilderGetValidatorsResponse>>(duty_bytes)
+        else {
+            return Err(BuilderApiError::DeserializeError);
+        };
+
+        let duty = proposer_duties
+            .iter()
+            .find(|duty| duty.slot == slot)
+            .ok_or(BuilderApiError::ProposerDutyNotFound)?;
+
+        let pubkey = duty.entry.message.public_key.clone();
+        let delegations = Json(api.auctioneer.get_validator_delegations(pubkey).await?);
+
+        Ok(delegations)
+    }
+
     /// Handles the submission of a new block by performing various checks and verifications
     /// before saving the submission to the auctioneer.
     ///
@@ -180,6 +301,7 @@ where
     /// 6. Saves the bid to auctioneer and db.
     ///
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
+    /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/relay#blocks_with_proofs>
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
         req: Request<Body>,
@@ -328,6 +450,38 @@ where
                 &payload_attributes,
             )
             .await?;
+
+        // If constraints from the [Constraints API](https://docs.boltprotocol.xyz/technical-docs/api/relay#blocks_with_proofs)
+        // are available, verify inclusion proofs and save them to cache
+        //
+        // NOTE: this check must always be performed because otherwise a builder might trick
+        // the relay into accepting as best bid a block without invalid inclusion proofs when they
+        // are needed.
+        if let Some(constraints) = api.auctioneer.get_constraints(payload.slot()).await? {
+            let should_verify_and_save_proofs = api
+                .relay_config
+                .constraints_api_config
+                .max_block_value_to_verify_wei
+                .map_or(true, |max_block_value_to_verify| {
+                    payload.value() <= max_block_value_to_verify
+                });
+            if should_verify_and_save_proofs {
+                if let Err(err) =
+                    api.verify_and_save_inclusion_proofs(&payload, constraints, &request_id).await
+                {
+                    warn!(request_id = %request_id, error = %err, "failed to verify and save inclusion proofs");
+                    return Err(err)
+                }
+            } else {
+                info!(
+                    request_id = %request_id,
+                    block_value = %payload.value(),
+                    "block value is greater than max value to verify, inclusion proof verification and saving is skipped",
+                );
+            }
+        } else {
+            info!(%request_id, "no constraints found for slot, proof verification is not needed");
+        }
 
         // If cancellations are enabled, then abort now if there is a later submission
         if is_cancellations_enabled {
@@ -1600,6 +1754,26 @@ where
         }
     }
 
+    /// This function saves the inclusion proof to the auctioneer.
+    async fn save_inclusion_proof(
+        &self,
+        slot: u64,
+        proposer_pub_key: &BlsPublicKey,
+        bid_block_hash: &Hash32,
+        inclusion_proof: &InclusionProofs,
+        request_id: &Uuid,
+    ) -> Result<(), BuilderApiError> {
+        if let Err(err) = self
+            .auctioneer
+            .save_inclusion_proof(slot, proposer_pub_key, bid_block_hash, inclusion_proof)
+            .await
+        {
+            error!(request_id = %request_id, error = %err, "failed to save inclusion proof");
+            return Err(BuilderApiError::InternalError)
+        }
+        Ok(())
+    }
+
     async fn save_header_bid_to_auctioneer(
         &self,
         payload: Arc<SignedHeaderSubmission>,
@@ -1789,6 +1963,47 @@ where
                 "Failed to demote builder in database"
             );
         }
+    }
+
+    /// Fetch constraints, and if available verify inclusion proofs and save them to cache.
+    async fn verify_and_save_inclusion_proofs(
+        &self,
+        payload: &SignedBidSubmission,
+        constraints: Vec<SignedConstraintsWithProofData>,
+        request_id: &Uuid,
+    ) -> Result<(), BuilderApiError> {
+        let transactions_root: B256 = payload
+            .transactions()
+            .clone()
+            .hash_tree_root()?
+            .to_vec()
+            .as_slice()
+            .try_into()
+            .map_err(|error| {
+                error!(?error, "failed to convert root to hash32");
+                BuilderApiError::InternalError
+            })?;
+        let proofs = payload.proofs().ok_or(BuilderApiError::InclusionProofsNotFound)?;
+        let constraints_proofs: Vec<_> = constraints.iter().map(|c| &c.proof_data).collect();
+
+        verify_multiproofs(constraints_proofs.as_slice(), proofs, transactions_root).map_err(
+            |e| {
+                error!(error = %e, "failed to verify inclusion proofs");
+                BuilderApiError::InclusionProofVerificationFailed(e)
+            },
+        )?;
+
+        // Save inclusion proof to auctioneer.
+        self.save_inclusion_proof(
+            payload.slot(),
+            payload.proposer_public_key(),
+            payload.block_hash(),
+            proofs,
+            request_id,
+        )
+        .await?;
+        info!(%request_id, "inclusion proofs verified and saved to auctioneer");
+        Ok(())
     }
 }
 
@@ -2134,7 +2349,8 @@ fn sanity_check_block_submission(
     payload_attributes: &PayloadAttributesUpdate,
     chain_info: &ChainInfo,
 ) -> Result<(), BuilderApiError> {
-    let expected_timestamp = chain_info.genesis_time_in_secs + (bid_trace.slot * SECONDS_PER_SLOT);
+    let expected_timestamp =
+        chain_info.genesis_time_in_secs + (bid_trace.slot * chain_info.seconds_per_slot);
     if payload.timestamp() != expected_timestamp {
         return Err(BuilderApiError::IncorrectTimestamp {
             got: payload.timestamp(),

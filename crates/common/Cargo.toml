@@ -33,6 +33,15 @@ tokio-postgres.workspace = true
 
 # Misc
 auto_impl.workspace = true
-clap = {version = "4.3", features = ["derive"]}
+clap = { version = "4.2.7", features = ["derive"] }
 thiserror.workspace = true
 tracing.workspace = true
+ssz_rs = { git = "https://github.com/ralexstokes/ssz-rs", rev = "1df4cd9", features = [
+  "sha2-asm",
+] }
+sha2 = "0.10.8"
+tree_hash = "0.6.0"
+
+[dev-dependencies]
+tree_hash = "0.6.0"
+tree_hash_derive = "0.6.0"

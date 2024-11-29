@@ -1,6 +1,7 @@
 use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 
 use ethereum_consensus::crypto::SecretKey;
+use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
 use moka::sync::Cache;
 use tokio::{
     sync::broadcast,
@@ -12,7 +13,7 @@ use crate::{
     builder::optimistic_simulator::OptimisticSimulator,
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     relay_data::{BidsCache, DeliveredPayloadsCache},
-    router::{build_router, BuilderApiProd, DataApiProd, ProposerApiProd},
+    router::{build_router, BuilderApiProd, ConstraintsApiProd, DataApiProd, ProposerApiProd},
 };
 use helix_beacon_client::{
     beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
@@ -22,7 +23,6 @@ use helix_common::{
     chain_info::ChainInfo, signing::RelaySigningContext, BroadcasterConfig, NetworkConfig,
     RelayConfig,
 };
-use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
 use helix_datastore::redis::redis_cache::RedisCache;
 use helix_housekeeper::{ChainEventUpdater, Housekeeper};
 
@@ -36,9 +36,7 @@ const PAYLOAD_ATTRIBUTE_CHANNEL_SIZE: usize = 300;
 pub struct ApiService {}
 
 impl ApiService {
-    pub async fn run(mut config: RelayConfig) {
-        let postgres_db = PostgresDatabaseService::from_relay_config(&config).unwrap();
-        postgres_db.run_migrations().await;
+    pub async fn run(mut config: RelayConfig, postgres_db: PostgresDatabaseService) {
         postgres_db.init_region(&config).await;
         postgres_db
             .store_builders_info(&config.builders)
@@ -158,7 +156,7 @@ impl ApiService {
         let (builder_gossip_sender, builder_gossip_receiver) = tokio::sync::mpsc::channel(10_000);
         let (proposer_gossip_sender, proposer_gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
-        let builder_api = Arc::new(BuilderApiProd::new(
+        let (builder_api, constraints_handle) = BuilderApiProd::new(
             auctioneer.clone(),
             db.clone(),
             chain_info.clone(),
@@ -168,7 +166,8 @@ impl ApiService {
             config.clone(),
             slot_update_sender.clone(),
             builder_gossip_receiver,
-        ));
+        );
+        let builder_api = Arc::new(builder_api);
 
         gossiper.start_server(builder_gossip_sender, proposer_gossip_sender).await;
 
@@ -179,13 +178,23 @@ impl ApiService {
             broadcasters,
             multi_beacon_client.clone(),
             chain_info.clone(),
-            slot_update_sender,
+            slot_update_sender.clone(),
             validator_preferences.clone(),
-            config.target_get_payload_propagation_duration_ms,
             proposer_gossip_receiver,
+            config.clone(),
         ));
 
         let data_api = Arc::new(DataApiProd::new(validator_preferences.clone(), db.clone()));
+
+        let constraints_api_config = Arc::new(config.constraints_api_config);
+
+        let constraints_api = Arc::new(ConstraintsApiProd::new(
+            auctioneer.clone(),
+            chain_info.clone(),
+            slot_update_sender.clone(),
+            constraints_handle,
+            constraints_api_config,
+        ));
 
         let bids_cache: Arc<BidsCache> = Arc::new(
             Cache::builder()
@@ -206,6 +215,7 @@ impl ApiService {
             builder_api,
             proposer_api,
             data_api,
+            constraints_api,
             bids_cache,
             delivered_payloads_cache,
         );
@@ -255,9 +265,7 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
 // add test module
 #[cfg(test)]
 mod test {
-
-    use helix_common::{BeaconClientConfig, FiberConfig};
-    use helix_utils::request_encoding::Encoding;
+    use helix_common::BeaconClientConfig;
 
     use super::*;
     use std::convert::TryFrom;

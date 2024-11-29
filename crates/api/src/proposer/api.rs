@@ -45,7 +45,7 @@ use helix_common::{
     signed_proposal::VersionedSignedProposal,
     try_execution_header_from_payload,
     versioned_payload::PayloadAndBlobs,
-    BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace,
+    BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace, RelayConfig,
     ValidatorPreferences,
 };
 use helix_database::DatabaseService;
@@ -88,7 +88,7 @@ where
     chain_info: Arc<ChainInfo>,
     validator_preferences: Arc<ValidatorPreferences>,
 
-    target_get_payload_propagation_duration_ms: u64,
+    relay_config: RelayConfig,
 }
 
 impl<A, DB, M, G> ProposerApi<A, DB, M, G>
@@ -107,8 +107,8 @@ where
         chain_info: Arc<ChainInfo>,
         slot_update_subscription: Sender<Sender<ChainUpdate>>,
         validator_preferences: Arc<ValidatorPreferences>,
-        target_get_payload_propagation_duration_ms: u64,
         gossip_receiver: Receiver<GossipedMessage>,
+        relay_config: RelayConfig,
     ) -> Self {
         let api = Self {
             auctioneer,
@@ -119,7 +119,7 @@ where
             curr_slot_info: Arc::new(RwLock::new((0, None))),
             chain_info,
             validator_preferences,
-            target_get_payload_propagation_duration_ms,
+            relay_config,
         };
 
         // Spin up gossip processing task
@@ -233,7 +233,7 @@ where
 
         let (head_slot, _) = *proposer_api.curr_slot_info.read().await;
         let num_registrations = registrations.len();
-        debug!(
+        trace!(
             request_id = %request_id,
             event = "register_validators",
             head_slot = head_slot,
@@ -256,7 +256,7 @@ where
 
             let pub_key = registration.message.public_key.clone();
 
-            debug!(
+            trace!(
                 request_id = %request_id,
                 pub_key = ?pub_key,
                 fee_recipient = %registration.message.fee_recipient,
@@ -274,7 +274,7 @@ where
             }
 
             if !proposer_api_clone.db.is_registration_update_required(&registration).await? {
-                debug!(
+                trace!(
                     request_id = %request_id,
                     pub_key = ?pub_key,
                     "Registration update not required",
@@ -456,6 +456,158 @@ where
                     .await;
 
                 // Return header
+                Ok(axum::Json(bid))
+            }
+            Ok(None) => {
+                warn!(request_id = %request_id, "no bid found");
+                Err(ProposerApiError::NoBidPrepared)
+            }
+            Err(err) => {
+                error!(request_id = %request_id, error = %err, "error getting bid");
+                Err(ProposerApiError::InternalServerError)
+            }
+        }
+    }
+
+    /// Retrieves the best bid header (with inclusion proof) for the specified slot, parent hash,
+    /// and public key.
+    ///
+    /// This function accepts a slot number, parent hash and public_key.
+    /// 1. Validates that the request's slot is not older than the head slot.
+    /// 2. Validates the request timestamp to ensure it's not too late.
+    /// 3. Fetches the best bid for the given parameters from the auctioneer.
+    /// 4. Fetches the inclusion proof for the best bid.
+    ///
+    /// The function returns a JSON response containing the best bid and inclusion proofs if found.
+    ///
+    /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/builder#get_header_with_proofs>
+    pub async fn get_header_with_proofs(
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
+        headers: HeaderMap,
+        Path(GetHeaderParams { slot, parent_hash, public_key }): Path<GetHeaderParams>,
+    ) -> Result<impl IntoResponse, ProposerApiError> {
+        let request_id = Uuid::new_v4();
+        let mut trace = GetHeaderTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+
+        let (head_slot, _) = *proposer_api.curr_slot_info.read().await;
+        debug!(
+            request_id = %request_id,
+            event = "get_header_with_proofs",
+            head_slot = head_slot,
+            request_ts = trace.receive,
+            slot = slot,
+            parent_hash = ?parent_hash,
+            public_key = ?public_key,
+        );
+
+        let bid_request = BidRequest { slot, parent_hash, public_key };
+
+        // Dont allow requests for past slots
+        if bid_request.slot < head_slot {
+            warn!(request_id = %request_id, "request for past slot");
+            return Err(ProposerApiError::RequestForPastSlot {
+                request_slot: bid_request.slot,
+                head_slot,
+            })
+        }
+
+        if let Err(err) = proposer_api.validate_bid_request_time(&bid_request) {
+            warn!(request_id = %request_id, err = %err, "invalid bid request time");
+            return Err(err)
+        }
+        trace.validation_complete = get_nanos_timestamp()?;
+
+        // Get best bid from auctioneer
+        let get_best_bid_res = proposer_api
+            .auctioneer
+            .get_best_bid(bid_request.slot, &bid_request.parent_hash, &bid_request.public_key)
+            .await;
+        trace.best_bid_fetched = get_nanos_timestamp()?;
+        info!(request_id = %request_id, trace = ?trace, "best bid fetched");
+
+        let user_agent =
+            headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|v| v.to_string());
+
+        match get_best_bid_res {
+            Ok(Some(mut bid)) => {
+                if bid.value() == U256::ZERO {
+                    warn!(request_id = %request_id, "best bid value is 0");
+                    return Err(ProposerApiError::BidValueZero)
+                }
+
+                // Save trace to DB
+                proposer_api
+                    .save_get_header_call(
+                        slot,
+                        bid_request.parent_hash,
+                        bid_request.public_key.clone(),
+                        bid.block_hash().clone(),
+                        trace,
+                        request_id,
+                        user_agent,
+                    )
+                    .await;
+
+                // If the block value is greater than the max value to verify, return the bid
+                // without proofs.
+                let value_above_max_to_verify = proposer_api
+                    .relay_config
+                    .constraints_api_config
+                    .max_block_value_to_verify_wei
+                    .map_or(false, |max| bid.value() > max);
+                if value_above_max_to_verify {
+                    info!(
+                        %request_id,
+                        slot,
+                        value = ?bid.value(),
+                        "block value is greater than max value to verify, returning bid without proofs",
+                    );
+                    return Ok(axum::Json(bid))
+                }
+
+                // Get inclusion proofs
+                let proofs = proposer_api
+                    .auctioneer
+                    .get_inclusion_proof(slot, &bid_request.public_key, bid.block_hash())
+                    .await?;
+
+                // Attach the proofs to the bid before sending it back
+                if let Some(proofs) = proofs {
+                    bid.set_inclusion_proofs(proofs);
+
+                    info!(
+                        request_id = %request_id,
+                        slot,
+                        value = ?bid.value(),
+                        block_hash = ?bid.block_hash(),
+                        "delivering bid with proofs",
+                    );
+                } else {
+                    // Check whether we had constraints saved in the auctioneer.
+                    // If so, this is an internal error and we cannot return a valid bid.
+                    let constraints =
+                        proposer_api.auctioneer.get_constraints(slot).await?.unwrap_or_default();
+
+                    if !constraints.is_empty() {
+                        error!(
+                            request_id = %request_id,
+                            slot,
+                            block_hash = ?bid.block_hash(),
+                            "no inclusion proofs found from auctioneer for bid, but constraints were saved",
+                        );
+                        return Err(ProposerApiError::InternalServerError)
+                    }
+
+                    info!(
+                        request_id = %request_id,
+                        slot,
+                        value = ?bid.value(),
+                        block_hash = ?bid.block_hash(),
+                        "delivering bid with empty proofs, no constraints found",
+                    );
+                }
+
+                // Return header with proofs
                 Ok(axum::Json(bid))
             }
             Ok(None) => {
@@ -802,6 +954,7 @@ where
             let elapsed_since_propagate_start_ms =
                 (get_nanos_timestamp()?.saturating_sub(trace.beacon_client_broadcast)) / 1_000_000;
             let remaining_sleep_ms = self
+                .relay_config
                 .target_get_payload_propagation_duration_ms
                 .saturating_sub(elapsed_since_propagate_start_ms);
             if remaining_sleep_ms > 0 {
@@ -1304,7 +1457,7 @@ where
     /// Handle a new slot update.
     /// Updates the next proposer duty for the new slot.
     async fn handle_new_slot(&self, slot_update: SlotUpdate) {
-        let epoch = slot_update.slot / SLOTS_PER_EPOCH;
+        let epoch = slot_update.slot / self.chain_info.seconds_per_slot;
         info!(
             epoch = epoch,
             slot = slot_update.slot,

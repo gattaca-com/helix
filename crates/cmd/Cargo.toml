@@ -8,13 +8,16 @@ license.workspace = true
 
 [dependencies]
 helix-api.workspace = true
+helix-website.workspace = true
 helix-common.workspace = true
 helix-utils.workspace = true
+helix-database.workspace = true
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.5", features = ["profiling"] }
 
 tokio.workspace = true
+futures.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true

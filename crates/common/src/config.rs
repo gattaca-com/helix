@@ -1,6 +1,9 @@
 use crate::{api::*, BuilderInfo, ValidatorPreferences};
 use clap::Parser;
-use ethereum_consensus::{primitives::BlsPublicKey, ssz::prelude::Node};
+use ethereum_consensus::{
+    primitives::BlsPublicKey,
+    ssz::prelude::{Node, U256},
+};
 use helix_utils::{
     request_encoding::Encoding,
     serde::{default_bool, deserialize_url, serialize_url},
@@ -11,6 +14,8 @@ use std::{collections::HashSet, fs::File};
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RelayConfig {
+    #[serde(default)]
+    pub website: WebsiteConfig,
     pub postgres: PostgresConfig,
     pub redis: RedisConfig,
     #[serde(default)]
@@ -28,9 +33,12 @@ pub struct RelayConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub validator_preferences: ValidatorPreferences,
+    #[serde(default)]
     pub router_config: RouterConfig,
     #[serde(default = "default_duration")]
     pub target_get_payload_propagation_duration_ms: u64,
+    #[serde(default)]
+    pub constraints_api_config: ConstraintsApiConfig,
     #[serde(default)]
     pub primev_config: Option<PrimevConfig>,
     /// Submissions from these builder pubkeys will never be dropped early
@@ -40,6 +48,47 @@ pub struct RelayConfig {
     pub skip_floor_bid_builder_pubkeys: Vec<BlsPublicKey>,
     #[serde(default)]
     pub discord_webhook_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct WebsiteConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub listen_address: String,
+    #[serde(default)]
+    pub show_config_details: bool,
+    #[serde(default)]
+    pub network_name: String,
+    #[serde(default)]
+    pub relay_url: String,
+    #[serde(default)]
+    pub relay_pubkey: String,
+    #[serde(default)]
+    pub link_beaconchain: String,
+    #[serde(default)]
+    pub link_etherscan: String,
+    #[serde(default)]
+    pub link_data_api: String,
+}
+
+impl Default for WebsiteConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: 8080,
+            listen_address: "0.0.0.0".to_string(),
+            show_config_details: false,
+            network_name: String::new(),
+            relay_url: String::new(),
+            relay_pubkey: String::new(),
+            link_beaconchain: String::new(),
+            link_etherscan: String::new(),
+            link_data_api: String::new(),
+        }
+    }
 }
 
 impl RelayConfig {
@@ -125,6 +174,29 @@ pub enum NetworkConfig {
     },
 }
 
+/// Configuration for the [Constraints API](https://docs.boltprotocol.xyz/technical-docs/api/builder)
+///
+/// These checks are enabled by default. Disabling them is recommended only for testing purposes.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ConstraintsApiConfig {
+    /// If `false`, the constraints signature via the
+    /// [`/constraints/v1/builder/constraints`](https://docs.boltprotocol.xyz/technical-docs/api/builder#constraints)
+    /// endpoint will not be checked.
+    pub check_constraints_signature: bool,
+    /// Only verify and save inclusion proofs if the block value is less than this threshold.
+    /// We do this to ensure that high value blocks are not rejected.
+    pub max_block_value_to_verify_wei: Option<U256>,
+}
+
+impl Default for ConstraintsApiConfig {
+    fn default() -> Self {
+        ConstraintsApiConfig {
+            check_constraints_signature: true,
+            max_block_value_to_verify_wei: None,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct PrimevConfig {
     pub builder_url: String,
@@ -152,34 +224,58 @@ pub struct StartConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RouterConfig {
+    #[serde(default)]
     pub enabled_routes: Vec<RouteInfo>,
 }
 
 impl RouterConfig {
     // Function to resolve condensed variants and replace them with real routes
     pub fn resolve_condensed_routes(&mut self) {
-        if self.contains(Route::All) {
+        if self.enabled_routes.is_empty() {
+            // If no routes are enabled, enable all real routes
+            self.extend([
+                Route::BuilderApi,
+                Route::ProposerApi,
+                Route::DataApi,
+                Route::ConstraintsApi,
+            ]);
+        } else if self.contains(Route::All) {
             // If All is present, replace it with all real routes
             self.remove(&Route::All);
-            self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi]);
+            self.extend([
+                Route::BuilderApi,
+                Route::ProposerApi,
+                Route::DataApi,
+                Route::ConstraintsApi,
+            ]);
         }
 
-        // Replace BuilderApi, ProposerApi, DataApi with their real routes
+        // Replace BuilderApi, ProposerApi, DataApi, ConstraintsApi with their real routes
         self.replace_condensed_with_real(
             Route::BuilderApi,
             &[
                 Route::GetValidators,
                 Route::SubmitBlock,
+                Route::SubmitBlockWithProofs,
                 Route::SubmitBlockOptimistic,
                 Route::SubmitHeader,
                 Route::CancelBid,
                 Route::GetTopBid,
+                Route::GetBuilderConstraints,
+                Route::GetBuilderConstraintsStream,
+                Route::GetBuilderDelegations,
             ],
         );
 
         self.replace_condensed_with_real(
             Route::ProposerApi,
-            &[Route::Status, Route::RegisterValidators, Route::GetHeader, Route::GetPayload],
+            &[
+                Route::Status,
+                Route::RegisterValidators,
+                Route::GetHeader,
+                Route::GetHeaderWithProofs,
+                Route::GetPayload,
+            ],
         );
 
         self.replace_condensed_with_real(
@@ -188,6 +284,15 @@ impl RouterConfig {
                 Route::ProposerPayloadDelivered,
                 Route::BuilderBidsReceived,
                 Route::ValidatorRegistration,
+            ],
+        );
+
+        self.replace_condensed_with_real(
+            Route::ConstraintsApi,
+            &[
+                Route::SubmitBuilderConstraints,
+                Route::DelegateSubmissionRights,
+                Route::RevokeSubmissionRights,
             ],
         );
     }
@@ -236,6 +341,7 @@ pub enum Route {
     BuilderApi,
     ProposerApi,
     DataApi,
+    ConstraintsApi,
     GetValidators,
     SubmitBlock,
     SubmitBlockOptimistic,
@@ -249,6 +355,25 @@ pub enum Route {
     ProposerPayloadDelivered,
     BuilderBidsReceived,
     ValidatorRegistration,
+
+    // Constraints API: Builder <https://docs.boltprotocol.xyz/technical-docs/api/builder>
+    /// Reference: <https://docs.boltprotocol.xyz/technical-docs/api/builder#constraints>
+    SubmitBuilderConstraints,
+    /// Reference: <https://docs.boltprotocol.xyz/technical-docs/api/builder#delegate>
+    DelegateSubmissionRights,
+    /// Reference: <https://docs.boltprotocol.xyz/technical-docs/api/builder#revoke>
+    RevokeSubmissionRights,
+    /// Reference: <https://docs.boltprotocol.xyz/technical-docs/api/builder#get_header_with_proofs>
+    GetHeaderWithProofs,
+
+    // Constraints API: Relay <https://docs.boltprotocol.xyz/technical-docs/api/relay>
+    /// Reference: <https://docs.boltprotocol.xyz/technical-docs/api/relay#constraints>
+    GetBuilderConstraints,
+    /// Reference: <https://docs.boltprotocol.xyz/technical-docs/api/relay#constraints_stream>
+    GetBuilderConstraintsStream,
+    GetBuilderDelegations,
+    /// Reference: <https://docs.boltprotocol.xyz/technical-docs/api/relay#blocks_with_proofs>
+    SubmitBlockWithProofs,
 }
 
 impl Route {
@@ -256,6 +381,9 @@ impl Route {
         match self {
             Route::GetValidators => format!("{PATH_BUILDER_API}{PATH_GET_VALIDATORS}"),
             Route::SubmitBlock => format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK}"),
+            Route::SubmitBlockWithProofs => {
+                format!("{PATH_BUILDER_API}{PATH_BUILDER_BLOCKS_WITH_PROOFS}")
+            }
             Route::SubmitBlockOptimistic => {
                 format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC_V2}")
             }
@@ -265,16 +393,34 @@ impl Route {
             Route::Status => format!("{PATH_PROPOSER_API}{PATH_STATUS}"),
             Route::RegisterValidators => format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
             Route::GetHeader => format!("{PATH_PROPOSER_API}{PATH_GET_HEADER}"),
+            Route::GetHeaderWithProofs => {
+                format!("{PATH_PROPOSER_API}{PATH_GET_HEADER_WITH_PROOFS}")
+            }
             Route::GetPayload => format!("{PATH_PROPOSER_API}{PATH_GET_PAYLOAD}"),
             Route::ProposerPayloadDelivered => {
                 format!("{PATH_DATA_API}{PATH_PROPOSER_PAYLOAD_DELIVERED}")
             }
             Route::BuilderBidsReceived => format!("{PATH_DATA_API}{PATH_BUILDER_BIDS_RECEIVED}"),
             Route::ValidatorRegistration => format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),
+            Route::SubmitBuilderConstraints => {
+                format!("{PATH_CONSTRAINTS_API}{PATH_SUBMIT_BUILDER_CONSTRAINTS}")
+            }
+            Route::DelegateSubmissionRights => {
+                format!("{PATH_CONSTRAINTS_API}{PATH_DELEGATE_SUBMISSION_RIGHTS}")
+            }
+            Route::RevokeSubmissionRights => {
+                format!("{PATH_CONSTRAINTS_API}{PATH_REVOKE_SUBMISSION_RIGHTS}")
+            }
+            Route::GetBuilderConstraints => format!("{PATH_BUILDER_API}{PATH_BUILDER_CONSTRAINTS}"),
+            Route::GetBuilderConstraintsStream => {
+                format!("{PATH_BUILDER_API}{PATH_BUILDER_CONSTRAINTS_STREAM}")
+            }
+            Route::GetBuilderDelegations => format!("{PATH_BUILDER_API}{PATH_BUILDER_DELEGATIONS}"),
             Route::All => panic!("All is not a real route"),
             Route::BuilderApi => panic!("BuilderApi is not a real route"),
             Route::ProposerApi => panic!("ProposerApi is not a real route"),
             Route::DataApi => panic!("DataApi is not a real route"),
+            Route::ConstraintsApi => panic!("ConstraintsApi is not a real route"),
         }
     }
 }

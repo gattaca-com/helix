@@ -4,11 +4,27 @@ use crate::{
     error::AuctioneerError,
     types::keys::{
         BID_FLOOR_KEY, BID_FLOOR_VALUE_KEY, BID_TRACE_KEY, BLOCK_BUILDER_LATEST_BID_KEY,
-        BLOCK_BUILDER_LATEST_BID_TIME_KEY, BLOCK_BUILDER_LATEST_BID_VALUE_KEY, EXEC_PAYLOAD_KEY,
-        GET_HEADER_RESPONSE_KEY, HEADER_TX_ROOT, PENDING_BLOCK_KEY, SEEN_BLOCK_HASHES_KEY,
-        TOP_BID_VALUE_KEY,
+        BLOCK_BUILDER_LATEST_BID_TIME_KEY, BLOCK_BUILDER_LATEST_BID_VALUE_KEY, CONSTRAINTS_KEY,
+        DELEGATIONS_KEY, EXEC_PAYLOAD_KEY, GET_HEADER_RESPONSE_KEY, HEADER_TX_ROOT,
+        INCLUSION_PROOF_KEY, PENDING_BLOCK_KEY, SEEN_BLOCK_HASHES_KEY, TOP_BID_VALUE_KEY,
     },
 };
+
+pub fn get_delegations_key(validator_pubkey: &BlsPublicKey) -> String {
+    format!("{DELEGATIONS_KEY}:{validator_pubkey:?}")
+}
+
+pub fn get_constraints_key(slot: u64) -> String {
+    format!("{CONSTRAINTS_KEY}:{slot}")
+}
+
+pub fn get_inclusion_proof_key(
+    slot: u64,
+    proposer_pub_key: &BlsPublicKey,
+    bid_block_hash: &Hash32,
+) -> String {
+    format!("{INCLUSION_PROOF_KEY}:{slot}_{proposer_pub_key:?}_{bid_block_hash:?}")
+}
 
 pub fn get_cache_get_header_response_key(
     slot: u64,

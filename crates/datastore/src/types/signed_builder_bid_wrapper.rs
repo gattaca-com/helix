@@ -26,7 +26,7 @@ impl SignedBuilderBidWrapper {
 impl From<SignedBuilderBidWrapper> for TopBidUpdate {
     fn from(val: SignedBuilderBidWrapper) -> Self {
         match val.bid {
-            SignedBuilderBid::Bellatrix(bid) => TopBidUpdate {
+            SignedBuilderBid::Bellatrix(bid, _) => TopBidUpdate {
                 timestamp: val.received_at_ms,
                 slot: val.slot,
                 block_number: bid.message.header.block_number,
@@ -36,7 +36,7 @@ impl From<SignedBuilderBidWrapper> for TopBidUpdate {
                 fee_recipient: bid.message.header.fee_recipient,
                 value: bid.message.value,
             },
-            SignedBuilderBid::Capella(bid) => TopBidUpdate {
+            SignedBuilderBid::Capella(bid, _) => TopBidUpdate {
                 timestamp: val.received_at_ms,
                 slot: val.slot,
                 block_number: bid.message.header.block_number,
@@ -46,7 +46,7 @@ impl From<SignedBuilderBidWrapper> for TopBidUpdate {
                 fee_recipient: bid.message.header.fee_recipient,
                 value: bid.message.value,
             },
-            SignedBuilderBid::Deneb(bid) => TopBidUpdate {
+            SignedBuilderBid::Deneb(bid, _) => TopBidUpdate {
                 timestamp: val.received_at_ms,
                 slot: val.slot,
                 block_number: bid.message.header.block_number,

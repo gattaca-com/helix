@@ -2,8 +2,10 @@ pub mod mock_simulator;
 pub mod optimistic_simulator;
 mod optimistic_simulator_tests;
 pub mod rpc_simulator;
-mod simulator_tests;
 pub mod traits;
+
+#[cfg(test)]
+mod simulator_tests;
 
 use ethereum_consensus::{deneb::Bytes32, types::mainnet::ExecutionPayload};
 use std::sync::Arc;
