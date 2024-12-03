@@ -10,7 +10,7 @@ use tokio::{
 use tracing::{error, info};
 
 use crate::{
-    builder::optimistic_simulator::OptimisticSimulator,
+    builder::{multi_simulator::MultiSimulator, optimistic_simulator::OptimisticSimulator},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     relay_data::{BidsCache, DeliveredPayloadsCache},
     router::{build_router, BuilderApiProd, ConstraintsApiProd, DataApiProd, ProposerApiProd},
@@ -43,6 +43,7 @@ impl ApiService {
             .await
             .expect("failed to store builders info from config");
         postgres_db.load_known_validators().await;
+        //postgres_db.load_validator_registrations().await;
         postgres_db.start_registration_processor().await;
 
         let db = Arc::new(postgres_db);
@@ -125,12 +126,19 @@ impl ApiService {
         let client =
             reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
 
-        let simulator = OptimisticSimulator::<RedisCache, PostgresDatabaseService>::new(
-            auctioneer.clone(),
-            db.clone(),
-            client,
-            config.simulator.url.clone(),
-        );
+        let mut simulators = vec![];
+
+        for cfg in &config.simulators {
+            let simulator = OptimisticSimulator::<RedisCache, PostgresDatabaseService>::new(
+                auctioneer.clone(),
+                db.clone(),
+                client.clone(),
+                cfg.url.clone(),
+            );
+            simulators.push(simulator);
+        }
+
+        let simulator = MultiSimulator::new(simulators);
 
         let (mut chain_event_updater, slot_update_sender) =
             ChainEventUpdater::new(db.clone(), chain_info.clone());

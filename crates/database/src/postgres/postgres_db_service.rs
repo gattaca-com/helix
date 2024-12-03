@@ -1,3 +1,4 @@
+use core::num;
 use std::{
     collections::HashSet,
     ops::DerefMut,
@@ -14,16 +15,9 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
-    },
-    bid_submission::{
+    }, bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission,
-    },
-    deneb::SignedValidatorRegistration,
-    simulator::BlockSimError,
-    versioned_payload::PayloadAndBlobs,
-    BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace,
-    GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig,
-    SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
+    }, deneb::SignedValidatorRegistration, simulator::BlockSimError, validator_preferences, versioned_payload::PayloadAndBlobs, BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
 };
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{error, info};
@@ -579,7 +573,8 @@ impl DatabaseService for PostgresDatabaseService {
                     validator_preferences.trusted_builders,
                     validator_preferences.header_delay,
                     validator_preferences.gossip_blobs,
-                    validator_registrations.inserted_at
+                    validator_registrations.inserted_at,
+                    validator_registrations.user_agent
                 FROM validator_registrations
                 INNER JOIN validator_preferences ON validator_registrations.public_key = validator_preferences.public_key
                 WHERE validator_registrations.public_key = $1
@@ -1133,9 +1128,9 @@ impl DatabaseService for PostgresDatabaseService {
         transaction.execute(
             "
                 INSERT INTO slot_preferences (slot_number, proposer_pubkey, filtering, trusted_builders, header_delay, gossip_blobs)
-                SELECT $1::bytea, $2, filtering, trusted_builders, header_delay, gossip_blobs
+                SELECT $1, $2, filtering, trusted_builders, header_delay, gossip_blobs
                 FROM validator_preferences
-                WHERE public_key = $1::bytea
+                WHERE public_key = $2
                 ON CONFLICT (slot_number) DO NOTHING;                
             ",
             &[

@@ -324,8 +324,9 @@ where
 
         // Verify the payload is for the current slot
         if payload.slot() <= head_slot {
-            warn!(
+            debug!(
                 request_id = %request_id,
+                block_hash = ?block_hash,
                 "submission is for a past slot",
             );
             return Err(BuilderApiError::SubmissionForPastSlot {
@@ -336,13 +337,18 @@ where
 
         // Verify that we have a validator connected for this slot
         if next_duty.is_none() {
-            warn!(request_id = %request_id, "could not find slot duty");
-            return Err(BuilderApiError::ProposerDutyNotFound)
+            warn!(
+                request_id = %request_id,
+                block_hash = ?block_hash,
+                "could not find slot duty"
+            );
+            return Err(BuilderApiError::ProposerDutyNotFound);
         }
         let next_duty = next_duty.unwrap();
 
-        debug!(
+        info!(
             request_id = %request_id,
+            event = "submit_block",
             builder_pub_key = ?payload.builder_public_key(),
             block_value = %payload.value(),
             block_hash = ?block_hash,
@@ -351,7 +357,7 @@ where
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes = api
-            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &request_id)
+            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &block_hash, &request_id)
             .await?;
 
         // Handle duplicates.
@@ -402,7 +408,7 @@ where
         // Handle trusted builders check
         if !api.check_if_trusted_builder(&next_duty, &builder_info).await {
             let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
-            warn!(
+            debug!(
                 request_id = %request_id,
                 builder_pub_key = ?payload.builder_public_key(),
                 proposer_trusted_builders = ?proposer_trusted_builders,
@@ -417,8 +423,8 @@ where
         match api.auctioneer.get_last_slot_delivered().await {
             Ok(Some(slot)) => {
                 if payload.slot() <= slot {
-                    warn!(request_id = %request_id, "payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered)
+                    debug!(request_id = %request_id, "payload already delivered");
+                    return Err(BuilderApiError::PayloadAlreadyDelivered);
                 }
             }
             Ok(None) => {}
@@ -522,7 +528,7 @@ where
 
         // Log some final info
         trace.request_finish = get_nanos_timestamp()?;
-        info!(
+        debug!(
             request_id = %request_id,
             trace = ?trace,
             request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
@@ -577,8 +583,9 @@ where
 
         // Verify the payload is for the current slot
         if payload.slot() <= head_slot {
-            warn!(
+            debug!(
                 request_id = %request_id,
+                block_hash = ?block_hash,
                 "submission is for a past slot",
             );
             return Err(BuilderApiError::SubmissionForPastSlot {
@@ -589,13 +596,18 @@ where
 
         // Verify that we have a validator connected for this slot
         if next_duty.is_none() {
-            warn!(request_id = %request_id, "could not find slot duty");
-            return Err(BuilderApiError::ProposerDutyNotFound)
+            warn!(
+                request_id = %request_id,
+                block_hash = ?block_hash,
+                "could not find slot duty"
+            );
+            return Err(BuilderApiError::ProposerDutyNotFound);
         }
         let next_duty = next_duty.unwrap();
 
-        debug!(
+        info!(
             request_id = %request_id,
+            event = "submit_header",
             builder_pub_key = ?payload.builder_public_key(),
             block_value = %payload.value(),
             block_hash = ?block_hash,
@@ -604,7 +616,7 @@ where
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes = api
-            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &request_id)
+            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &block_hash, &request_id)
             .await?;
 
         // Fetch builder info
@@ -666,7 +678,7 @@ where
         // Handle trusted builders check
         if !api.check_if_trusted_builder(&next_duty, &builder_info).await {
             let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
-            warn!(
+            debug!(
                 request_id = %request_id,
                 builder_pub_key = ?payload.builder_public_key(),
                 proposer_trusted_builders = ?proposer_trusted_builders,
@@ -690,8 +702,8 @@ where
         match api.auctioneer.get_last_slot_delivered().await {
             Ok(Some(slot)) => {
                 if payload.slot() <= slot {
-                    warn!(request_id = %request_id, "payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered)
+                    debug!(request_id = %request_id, "payload already delivered");
+                    return Err(BuilderApiError::PayloadAlreadyDelivered);
                 }
             }
             Ok(None) => {}
@@ -808,8 +820,9 @@ where
 
         let builder_pub_key = payload.builder_public_key().clone();
         let block_hash = payload.message().block_hash.clone();
-        debug!(
+        info!(
             request_id = %request_id,
+            event = "submit_block_v2",
             builder_pub_key = ?builder_pub_key,
             block_value = %payload.value(),
             block_hash = ?payload.block_hash(),
@@ -831,8 +844,9 @@ where
 
         // Verify the payload is for the current slot
         if payload.slot() <= head_slot {
-            warn!(
+            debug!(
                 request_id = %request_id,
+                block_hash = ?block_hash,
                 "submission is for a past slot",
             );
             return Err(BuilderApiError::SubmissionForPastSlot {
@@ -845,14 +859,18 @@ where
         // Note: in `submit_block_v2` we have to do this check after decoding
         // so we can send a `PayloadReceived` message.
         if next_duty.is_none() {
-            warn!(request_id = %request_id, "could not find slot duty");
-            return Err(BuilderApiError::ProposerDutyNotFound)
+            warn!(
+                request_id = %request_id,
+                block_hash = ?block_hash,
+                "could not find slot duty"
+            );
+            return Err(BuilderApiError::ProposerDutyNotFound);
         }
         let next_duty = next_duty.unwrap();
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes = api
-            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &request_id)
+            .fetch_payload_attributes(payload.slot(), payload.parent_hash(),  &block_hash, &request_id)
             .await?;
 
         // Fetch builder info
@@ -889,8 +907,8 @@ where
         match api.auctioneer.get_last_slot_delivered().await {
             Ok(Some(slot)) => {
                 if payload.slot() <= slot {
-                    warn!(request_id = %request_id, "payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered)
+                    debug!(request_id = %request_id, "payload already delivered");
+                    return Err(BuilderApiError::PayloadAlreadyDelivered);
                 }
             }
             Ok(None) => {}
@@ -968,7 +986,7 @@ where
 
         // Log some final info
         trace.request_finish = get_nanos_timestamp()?;
-        info!(
+        debug!(
             request_id = %request_id,
             trace = ?trace,
             request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
@@ -1012,7 +1030,7 @@ where
 
         // Verify the cancellation is for the current slot
         if slot <= head_slot {
-            warn!(
+            debug!(
                 request_id = %request_id,
                 "cancellation is for a past slot",
             );
@@ -1028,8 +1046,8 @@ where
         match api.auctioneer.get_last_slot_delivered().await {
             Ok(Some(del_slot)) => {
                 if slot <= del_slot {
-                    warn!(request_id = %request_id, "payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered)
+                    debug!(request_id = %request_id, "payload already delivered");
+                    return Err(BuilderApiError::PayloadAlreadyDelivered);
                 }
             }
             Ok(None) => {}
@@ -1093,7 +1111,7 @@ where
 {
     pub async fn process_gossiped_header(&self, req: BroadcastHeaderParams) {
         let request_id = Uuid::new_v4();
-        info!(
+        debug!(
             request_id = %request_id,
             block_hash = ?req.signed_builder_bid.block_hash(),
             "received gossiped header",
@@ -1108,7 +1126,7 @@ where
         // Verify that the gossiped header is not for a past slot
         let (head_slot, _) = self.curr_slot_info.read().await.clone();
         if req.slot <= head_slot {
-            warn!(
+            debug!(
                 request_id = %request_id,
                 "received gossiped header for a past slot",
             );
@@ -1134,8 +1152,8 @@ where
         match self.auctioneer.get_last_slot_delivered().await {
             Ok(Some(slot)) => {
                 if req.slot <= slot {
-                    warn!(request_id = %request_id, "payload already delivered");
-                    return
+                    debug!(request_id = %request_id, "payload already delivered");
+                    return;
                 }
             }
             Ok(None) => {}
@@ -1186,7 +1204,7 @@ where
 
         trace.auctioneer_update = get_nanos_timestamp().unwrap_or_default();
 
-        info!(request_id = %request_id, "succesfully saved gossiped header");
+        debug!(request_id = %request_id, "succesfully saved gossiped header");
 
         // Save latency trace to db
         let db = self.db.clone();
@@ -1205,7 +1223,7 @@ where
 
     pub async fn process_gossiped_payload(&self, req: BroadcastPayloadParams) {
         let request_id = Uuid::new_v4();
-        info!(
+        debug!(
             request_id = %request_id,
             block_hash = ?req.execution_payload.execution_payload.block_hash(),
             "received gossiped payload",
@@ -1233,7 +1251,7 @@ where
         // Verify that the gossiped payload is not for a past slot
         let (head_slot, _) = self.curr_slot_info.read().await.clone();
         if req.slot <= head_slot {
-            warn!(
+            debug!(
                 request_id = %request_id,
                 "received gossiped payload for a past slot",
             );
@@ -1244,8 +1262,8 @@ where
         match self.auctioneer.get_last_slot_delivered().await {
             Ok(Some(slot)) => {
                 if req.slot <= slot {
-                    warn!(request_id = %request_id, "payload already delivered");
-                    return
+                    debug!(request_id = %request_id, "payload already delivered");
+                    return;
                 }
             }
             Ok(None) => {}
@@ -1273,7 +1291,7 @@ where
 
         trace.auctioneer_update = get_nanos_timestamp().unwrap_or_default();
 
-        info!(request_id = %request_id, "succesfully saved gossiped payload");
+        debug!(request_id = %request_id, "succesfully saved gossiped payload");
 
         // Save gossiped payload trace to db
         let db = self.db.clone();
@@ -1296,7 +1314,7 @@ where
     /// Processes a gossiped cancellation message. No need to verify the signature as the message
     /// is gossiped internally and verification has been performed upstream.
     pub async fn process_gossiped_cancellation(&self, req: BroadcastCancellationParams) {
-        info!(
+        debug!(
             request_id = %req.request_id,
             "received gossiped cancellation",
         );
@@ -1317,7 +1335,7 @@ where
         match self.auctioneer.get_last_slot_delivered().await {
             Ok(Some(del_slot)) => {
                 if slot <= del_slot {
-                    warn!(request_id = %req.request_id, "payload already delivered");
+                    debug!(request_id = %req.request_id, "payload already delivered");
                 }
             }
             Ok(None) => {}
@@ -1508,7 +1526,7 @@ where
         {
             Ok(false) => Ok(()),
             Ok(true) => {
-                warn!(request_id = %request_id, block_hash = ?block_hash, "duplicate block hash");
+                debug!(request_id = %request_id, block_hash = ?block_hash, "duplicate block hash");
                 Err(BuilderApiError::DuplicateBlockHash { block_hash: block_hash.clone() })
             }
             Err(err) => {
@@ -1664,7 +1682,7 @@ where
             Ok(top_bid_value) => {
                 let top_bid_value = top_bid_value.unwrap_or(U256::ZERO);
                 is_top_bid = payload.value() > top_bid_value;
-                info!(request_id = %request_id, top_bid_value = ?top_bid_value, new_bid_is_top_bid = is_top_bid);
+                debug!(request_id = %request_id, top_bid_value = ?top_bid_value, new_bid_is_top_bid = is_top_bid);
             }
             Err(err) => {
                 error!(request_id = %request_id, error = %err, "failed to get top bid value from auctioneer");
@@ -1692,7 +1710,7 @@ where
 
         match result {
             Ok(sim_optimistic) => {
-                info!(request_id = %request_id, "block simulation successful");
+                debug!(request_id = %request_id, "block simulation successful");
 
                 trace.simulation = get_nanos_timestamp()?;
                 debug!(request_id = %request_id, sim_latency = trace.simulation.saturating_sub(trace.signature));
@@ -1819,13 +1837,18 @@ where
         &self,
         slot: u64,
         parent_hash: &Hash32,
+        block_hash: &Hash32,
         request_id: &Uuid,
     ) -> Result<PayloadAttributesUpdate, BuilderApiError> {
         let payload_attributes_key = get_payload_attributes_key(parent_hash, slot);
         let payload_attributes =
             self.payload_attributes.read().await.get(&payload_attributes_key).cloned().ok_or_else(
                 || {
-                    warn!(request_id = %request_id, "payload attributes not yet known");
+                    warn!(
+                        request_id = %request_id,
+                        block_hash = ?block_hash,
+                        "payload attributes not yet known"
+                    );
                     BuilderApiError::PayloadAttributesNotYetKnown
                 },
             )?;
@@ -2042,7 +2065,7 @@ where
     /// Updates the next proposer duty and prepares the get_validators() response.
     async fn handle_new_slot(&self, slot_update: SlotUpdate) {
         let epoch = slot_update.slot / SLOTS_PER_EPOCH;
-        debug!(
+        info!(
             epoch = epoch,
             slot_head = slot_update.slot,
             slot_start_next_epoch = (epoch + 1) * SLOTS_PER_EPOCH,
@@ -2072,9 +2095,11 @@ where
             return
         }
 
-        debug!(
+        info!(
+            slot = payload_attributes.slot,
             randao = ?payload_attributes.payload_attributes.prev_randao,
             timestamp = payload_attributes.payload_attributes.timestamp,
+            "updated payload attributes",
         );
 
         // Discard payload attributes if already known
@@ -2171,7 +2196,7 @@ pub async fn decode_payload(
     };
 
     trace.decode = get_nanos_timestamp()?;
-    info!(
+    debug!(
         request_id = %request_id,
         timestamp_after_decoding = trace.decode,
         decode_latency_ns = trace.decode.saturating_sub(trace.receive),
@@ -2323,7 +2348,7 @@ pub async fn decode_header_submission(
     };
 
     trace.decode = get_nanos_timestamp()?;
-    info!(
+    debug!(
         request_id = %request_id,
         timestamp_after_decoding = Instant::now().elapsed().as_nanos(),
         decode_latency_ns = trace.decode.saturating_sub(trace.receive),
@@ -2451,7 +2476,7 @@ fn log_save_bid_info(
     bid_update_finish: u64,
     request_id: &Uuid,
 ) {
-    info!(
+    debug!(
         request_id = %request_id,
         bid_update_latency = bid_update_finish.saturating_sub(bid_update_start),
         was_bid_saved_in = update_bid_result.was_bid_saved,

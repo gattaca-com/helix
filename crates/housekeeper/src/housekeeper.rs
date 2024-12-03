@@ -229,7 +229,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             });
         }
 
-        debug!(
+        info!(
             head_slot = head_slot,
             head_slot_pos = (head_slot % EPOCH_SLOTS) + 1,
             prev_head_slot = prev_head_slot,
@@ -531,7 +531,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
     async fn primev_update(&self) -> Result<(), HousekeeperError> {
         let primev_config = self.config.primev_config.as_ref().unwrap();
-        let primev_builders = get_registered_primev_builders(primev_config).await;
+        let primev_builders = get_registered_primev_builders(&primev_config).await;
         for builder_pubkey in primev_builders {
             self.db
                 .store_builder_info(

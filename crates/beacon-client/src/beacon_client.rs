@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration, vec};
 
 use async_trait::async_trait;
 use ethereum_consensus::{primitives::Root, ssz};
