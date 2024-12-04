@@ -60,7 +60,6 @@ tokio-postgres = "0.7.10"
 deadpool-postgres = "0.11.0"
 refinery = { version = "0.8", features = ["tokio-postgres"] }
 bytes = "1.5.0"
-chrono = "0.4.19"
 
 # Ethereum Types
 ethereum-consensus = { git = "https://github.com/ralexstokes/ethereum-consensus", rev = "fc049504a200926c8bd5f0fbd3f9696c6c6f699d" }
@@ -74,7 +73,6 @@ tracing-appender = "0.2.2"
 # Testing and Mocking
 mockito = "1.1.1"
 serial_test = "1.0.0"
-tracing-test = "0.2.3"
 env_logger = "0.9"
 
 # Misc

@@ -7,20 +7,17 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-helix-beacon-client.workspace = true
 helix-database.workspace = true
 helix-common.workspace = true
 
 # Async and Networking
 async-trait.workspace = true
 axum.workspace = true
-hyper.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 futures-util = "0.3"
 
 # Serialization and Data Format 
-reth-primitives.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 hex.workspace = true
