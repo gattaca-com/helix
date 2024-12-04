@@ -14,31 +14,19 @@ helix-common.workspace = true
 helix-utils.workspace = true
 
 # Async and Networking
-async-trait.workspace = true
-axum.workspace = true
-hyper.workspace = true
 tokio.workspace = true
-
-socket2 = "0.4"
-futures-util = { version = "0.3", features = ["compat"] }
 
 # Serialization and Data Format
 reth-primitives.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 
 # Ethereum Types
 ethereum-consensus.workspace = true
 
-# DB
-deadpool-redis.workspace = true
-redis.workspace = true
 
 # Misc
-auto_impl.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
 uuid.workspace = true
 
 ethers = "2.0.14"

@@ -29,15 +29,12 @@ ethereum-consensus.workspace = true
 
 # Logging
 tracing.workspace = true
-tracing-subscriber.workspace = true
-tracing-appender.workspace = true
 
 # Testing and Mocking
 mockito.workspace = true
 
 # Misc
 auto_impl.workspace = true
-flate2 = "1.0"
 thiserror.workspace = true
 
 # Broadcasting
