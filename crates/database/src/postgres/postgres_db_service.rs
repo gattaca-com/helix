@@ -453,7 +453,8 @@ impl DatabaseService for PostgresDatabaseService {
                     gas_limit = excluded.gas_limit,
                     timestamp = excluded.timestamp,
                     signature = excluded.signature,
-                    inserted_at = excluded.inserted_at
+                    inserted_at = excluded.inserted_at,
+                    user_agent = excluded.user_agent
             ",
             &[
                 &(fee_recipient.as_ref()),
