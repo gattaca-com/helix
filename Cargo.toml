@@ -1,20 +1,20 @@
 [workspace]
 members = [
-    "crates/beacon-client",
-    "crates/api",
-    "crates/utils",
-    "crates/common",
-    "crates/database",
-    "crates/datastore",
-    "crates/cmd",
-    "crates/housekeeper",
-    "crates/website",
+  "crates/beacon-client",
+  "crates/api",
+  "crates/utils",
+  "crates/common",
+  "crates/database",
+  "crates/datastore",
+  "crates/cmd",
+  "crates/housekeeper",
+  "crates/website",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "0.0.1"
-rust-version = "1.72.0"
+rust-version = "1.82.0"
 edition = "2021"
 repository = "https://github.com/gattaca-com/helix"
 license = "MIT OR Apache-2.0"
@@ -44,7 +44,7 @@ reqwest = { version = "0.11.23", features = [
   "blocking",
 ] }
 tokio = { version = "1.33.0", features = ["full"] }
-tokio-stream = {version = "0.1.15", features = ["sync"]}
+tokio-stream = { version = "0.1.15", features = ["sync"] }
 tower-http = { version = "0.5.1", features = ["full"] }
 url = "2.4"
 
