@@ -304,6 +304,7 @@ where
     /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/relay#blocks_with_proofs>
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let request_id = Uuid::parse_str(headers
@@ -566,6 +567,7 @@ where
     /// verifications before saving the headre to the auctioneer.
     pub async fn submit_header(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let request_id = Uuid::parse_str(headers
@@ -809,6 +811,7 @@ where
     /// Implements this API: TODO: point to gattaca spec. rename?
     pub async fn submit_block_v2(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let request_id = Uuid::parse_str(headers
@@ -1027,6 +1030,7 @@ where
     /// all other relays.
     pub async fn cancel_bid(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        headers: HeaderMap,
         Json(mut signed_cancellation): Json<SignedCancellation>,
     ) -> Result<StatusCode, BuilderApiError> {
         let request_id = Uuid::parse_str(headers
