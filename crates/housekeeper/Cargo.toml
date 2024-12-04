@@ -19,7 +19,6 @@ axum.workspace = true
 hyper.workspace = true
 tokio.workspace = true
 
-tokio-ping = "0.2.0"
 socket2 = "0.4"
 futures-util = { version = "0.3", features = ["compat"] }
 
@@ -43,4 +42,3 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 ethers = "2.0.14"
-

@@ -1,4 +1,4 @@
-FROM rust:1.72.0 as helix
+FROM rust:1.82.0 as helix
 
 RUN apt update -y
 RUN apt install -y clang
