@@ -13,7 +13,7 @@ helix-utils.workspace = true
 # Async and Networking 
 axum.workspace = true
 async-trait.workspace = true
-futures = { workspace = true }
+futures.workspace = true
 http.workspace = true
 reqwest.workspace = true
 reqwest-eventsource = "0.5"
