@@ -261,6 +261,7 @@ impl FromRow for SignedValidatorRegistrationEntry {
                 row.get::<&str, std::time::SystemTime>("inserted_at"),
             )?,
             pool_name: None,
+            user_agent: None,
         })
     }
 }

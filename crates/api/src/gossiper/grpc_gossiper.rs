@@ -72,13 +72,21 @@ impl GrpcGossiperClient {
         };
 
         if let Some(mut client) = client {
-            if let Err(err) = client.broadcast_header(request).await {
-                return Err(GossipError::BroadcastError(err))
+            let result = tokio::time::timeout(Duration::from_secs(5), client.broadcast_header(request)).await;
+            match result {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(err)) => {
+                    error!(err = %err, "Client call failed.");
+                    return Err(GossipError::BroadcastError(err));
+                },
+                Err(_) => {
+                    error!("Client call timed out.");
+                    return Err(GossipError::TimeoutError);
+                },
             }
         } else {
             return Err(GossipError::ClientNotConnected)
         }
-        Ok(())
     }
 
     pub async fn broadcast_payload(
@@ -92,13 +100,21 @@ impl GrpcGossiperClient {
         };
 
         if let Some(mut client) = client {
-            if let Err(err) = client.broadcast_payload(request).await {
-                return Err(GossipError::BroadcastError(err))
+            let result = tokio::time::timeout(Duration::from_secs(5), client.broadcast_payload(request)).await;
+            match result {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(err)) => {
+                    error!(err = %err, "Client call failed.");
+                    return Err(GossipError::BroadcastError(err));
+                },
+                Err(_) => {
+                    error!("Client call timed out.");
+                    return Err(GossipError::TimeoutError);
+                },
             }
         } else {
             return Err(GossipError::ClientNotConnected)
         }
-        Ok(())
     }
 
     pub async fn broadcast_get_payload(
@@ -112,13 +128,21 @@ impl GrpcGossiperClient {
         };
 
         if let Some(mut client) = client {
-            if let Err(err) = client.broadcast_get_payload(request).await {
-                return Err(GossipError::BroadcastError(err))
+            let result = tokio::time::timeout(Duration::from_secs(5), client.broadcast_get_payload(request)).await;
+            match result {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(err)) => {
+                    error!(err = %err, "Client call failed.");
+                    return Err(GossipError::BroadcastError(err));
+                },
+                Err(_) => {
+                    error!("Client call timed out.");
+                    return Err(GossipError::TimeoutError);
+                },
             }
         } else {
             return Err(GossipError::ClientNotConnected)
         }
-        Ok(())
     }
 
     pub async fn broadcast_cancellation(
@@ -132,13 +156,21 @@ impl GrpcGossiperClient {
         };
 
         if let Some(mut client) = client {
-            if let Err(err) = client.broadcast_cancellation(request).await {
-                return Err(GossipError::BroadcastError(err))
+            let result = tokio::time::timeout(Duration::from_secs(5), client.broadcast_cancellation(request)).await;
+            match result {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(err)) => {
+                    error!(err = %err, "Client call failed.");
+                    return Err(GossipError::BroadcastError(err));
+                },
+                Err(_) => {
+                    error!("Client call timed out.");
+                    return Err(GossipError::TimeoutError);
+                },
             }
         } else {
             return Err(GossipError::ClientNotConnected)
         }
-        Ok(())
     }
 }
 

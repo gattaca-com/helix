@@ -1,3 +1,4 @@
+use core::num;
 use std::{
     collections::HashSet,
     ops::DerefMut,
@@ -14,16 +15,9 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
-    },
-    bid_submission::{
+    }, bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidSubmission, BidTrace, SignedBidSubmission,
-    },
-    deneb::SignedValidatorRegistration,
-    simulator::BlockSimError,
-    versioned_payload::PayloadAndBlobs,
-    BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace,
-    GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig,
-    SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
+    }, deneb::SignedValidatorRegistration, simulator::BlockSimError, validator_preferences, versioned_payload::PayloadAndBlobs, BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary
 };
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{error, info};
@@ -47,6 +41,7 @@ struct RegistrationParams<'a> {
     public_key: &'a [u8],
     signature: &'a [u8],
     inserted_at: SystemTime,
+    user_agent: Option<String>,
 }
 
 struct PreferenceParams<'a> {
@@ -259,6 +254,7 @@ impl PostgresDatabaseService {
                     public_key: public_key.as_ref(),
                     signature: signature.as_ref(),
                     inserted_at,
+                    user_agent: entry.user_agent.clone(),
                 });
 
                 structured_params_for_pref.push(PreferenceParams {
@@ -288,13 +284,14 @@ impl PostgresDatabaseService {
                         &tuple.public_key,
                         &tuple.signature,
                         &tuple.inserted_at,
+                        &tuple.user_agent,
                     ]
                 })
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
-            let mut sql = String::from("INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at) VALUES ");
-            let num_params_per_row = 6;
+            let mut sql = String::from("INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at, user_agent) VALUES ");
+            let num_params_per_row = 7;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -306,7 +303,7 @@ impl PostgresDatabaseService {
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
-            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET fee_recipient = excluded.fee_recipient, gas_limit = excluded.gas_limit, timestamp = excluded.timestamp, signature = excluded.signature, inserted_at = excluded.inserted_at");
+            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET fee_recipient = excluded.fee_recipient, gas_limit = excluded.gas_limit, timestamp = excluded.timestamp, signature = excluded.signature, inserted_at = excluded.inserted_at, user_agent = excluded.user_agent");
 
             // Execute the query
             transaction.execute(&sql, &params[..]).await?;
@@ -409,6 +406,7 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         registration_info: ValidatorRegistrationInfo,
         pool_name: Option<String>,
+        user_agent: Option<String>,
     ) -> Result<(), DatabaseError> {
         let registration = registration_info.registration.message.clone();
 
@@ -447,15 +445,16 @@ impl DatabaseService for PostgresDatabaseService {
 
         match transaction.execute(
             "
-                INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at)
-                VALUES ($1, $2, $3, $4, $5,$6)
+                INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at, user_agent)
+                VALUES ($1, $2, $3, $4, $5,$6,$7)
                 ON CONFLICT (public_key)
                 DO UPDATE SET
                     fee_recipient = excluded.fee_recipient,
                     gas_limit = excluded.gas_limit,
                     timestamp = excluded.timestamp,
                     signature = excluded.signature,
-                    inserted_at = excluded.inserted_at
+                    inserted_at = excluded.inserted_at,
+                    user_agent = excluded.user_agent
             ",
             &[
                 &(fee_recipient.as_ref()),
@@ -464,6 +463,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(public_key.as_ref()),
                 &(signature.as_ref()),
                 &(inserted_at),
+                &(user_agent)
             ],
         ).await {
             Ok(_) => {
@@ -471,6 +471,7 @@ impl DatabaseService for PostgresDatabaseService {
                     registration_info,
                     inserted_at: inserted_at.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
                     pool_name,
+                    user_agent,
                 });
             }
             Err(e) => {
@@ -487,6 +488,7 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         mut entries: Vec<ValidatorRegistrationInfo>,
         pool_name: Option<String>,
+        user_agent: Option<String>,
     ) -> Result<(), DatabaseError> {
         entries.retain(|entry| {
             if let Some(existing_entry) =
@@ -506,7 +508,11 @@ impl DatabaseService for PostgresDatabaseService {
                 .insert(entry.registration.message.public_key.clone());
             self.validator_registration_cache.insert(
                 entry.registration.message.public_key.clone(),
-                SignedValidatorRegistrationEntry::new(entry.clone(), pool_name.clone()),
+                SignedValidatorRegistrationEntry::new(
+                    entry.clone(),
+                    pool_name.clone(),
+                    user_agent.clone(),
+                ),
             );
         }
 
@@ -568,7 +574,8 @@ impl DatabaseService for PostgresDatabaseService {
                     validator_preferences.trusted_builders,
                     validator_preferences.header_delay,
                     validator_preferences.gossip_blobs,
-                    validator_registrations.inserted_at
+                    validator_registrations.inserted_at,
+                    validator_registrations.user_agent
                 FROM validator_registrations
                 INNER JOIN validator_preferences ON validator_registrations.public_key = validator_preferences.public_key
                 WHERE validator_registrations.public_key = $1
@@ -648,7 +655,7 @@ impl DatabaseService for PostgresDatabaseService {
         transaction
             .execute(
                 "
-                INSERT INTO proposer_duties_archive SELECT * FROM proposer_duties ON CONFLICT (slot_number) DO UPDATE SET public_key = excluded.public_key, validator_index = excluded.validator_index;
+                INSERT INTO proposer_duties_archive SELECT * FROM proposer_duties order by slot_number ON CONFLICT (slot_number) DO UPDATE SET public_key = excluded.public_key, validator_index = excluded.validator_index;
             ",
                 &[],
             )
@@ -904,6 +911,7 @@ impl DatabaseService for PostgresDatabaseService {
         bid_trace: &BidTrace,
         payload: Arc<PayloadAndBlobs>,
         latency_trace: &GetPayloadTrace,
+        user_agent: Option<String>,
     ) -> Result<(), DatabaseError> {
         let region_id = self.region;
         let mut client = self.pool.get().await?;
@@ -911,9 +919,9 @@ impl DatabaseService for PostgresDatabaseService {
         transaction.execute(
             "
                 INSERT INTO delivered_payload 
-                    (block_hash, payload_parent_hash, fee_recipient, state_root, receipts_root, logs_bloom, prev_randao, timestamp, block_number, gas_limit, gas_used, extra_data, base_fee_per_gas)
+                    (block_hash, payload_parent_hash, fee_recipient, state_root, receipts_root, logs_bloom, prev_randao, timestamp, block_number, gas_limit, gas_used, extra_data, base_fee_per_gas, user_agent)
                 VALUES 
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                 ON CONFLICT (block_hash)
                 DO NOTHING
             ",
@@ -931,6 +939,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(payload.execution_payload.gas_used() as i32),
                 &(payload.execution_payload.extra_data().as_ref()),
                 &(PostgresNumeric::from(*payload.execution_payload.base_fee_per_gas())),
+                &(user_agent),
             ],
             ).await?;
 
@@ -1117,6 +1126,20 @@ impl DatabaseService for PostgresDatabaseService {
             ],
         ).await?;
 
+        transaction.execute(
+            "
+                INSERT INTO slot_preferences (slot_number, proposer_pubkey, filtering, trusted_builders, header_delay, gossip_blobs)
+                SELECT $1, $2, filtering, trusted_builders, header_delay, gossip_blobs
+                FROM validator_preferences
+                WHERE public_key = $2
+                ON CONFLICT (slot_number) DO NOTHING;                
+            ",
+            &[
+                &(submission.slot() as i32),
+                &(submission.proposer_public_key().as_ref()),
+            ],
+            ).await?;
+
         transaction.commit().await?;
 
         Ok(())
@@ -1266,6 +1289,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn get_bids(
         &self,
         filters: &BidFilters,
+        validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<BidSubmissionDocument>, DatabaseError> {
         let filters = PgBidFilters::from(filters);
 
@@ -1287,8 +1311,25 @@ impl DatabaseService for PostgresDatabaseService {
                 block_submission
             LEFT JOIN
                 header_submission ON block_submission.block_hash = header_submission.block_hash
-            WHERE 1 = 1
         ");
+
+        let filtering = match validator_preferences.filtering {
+            Filtering::Regional => Some(1_i16),
+            Filtering::Global => None,
+        };
+
+        if filtering.is_some() {
+            query.push_str(
+                "
+                LEFT JOIN
+                    slot_preferences
+                ON
+                    block_submission.slot_number = slot_preferences.slot_number
+            ",
+            );
+        }
+
+        query.push_str(" WHERE 1 = 1");
 
         let mut param_index = 1;
         let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
@@ -1322,6 +1363,15 @@ impl DatabaseService for PostgresDatabaseService {
             params.push(Box::new(block_hash));
         }
 
+        if let Some(filtering) = filtering {
+            query.push_str(&format!(
+                " AND (slot_preferences.filtering = ${} OR slot_preferences.filtering IS NULL)",
+                param_index
+            ));
+            params.push(Box::new(filtering));
+            param_index += 1;
+        }        
+
         let params_refs: Vec<&(dyn ToSql + Sync)> =
             params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect();
 
@@ -1348,12 +1398,12 @@ impl DatabaseService for PostgresDatabaseService {
                 block_submission.gas_used               gas_used,
                 block_submission.block_number           block_number,
                 block_submission.num_txs                num_txs
-            FROM 
-                delivered_payload 
+            FROM
+                block_submission
             INNER JOIN
-                block_submission 
-            ON 
-                block_submission.block_hash = delivered_payload.block_hash
+                delivered_payload
+            ON
+                block_submission.block_number = delivered_payload.block_number and block_submission.block_hash = delivered_payload.block_hash
         ",
         );
 

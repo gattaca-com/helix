@@ -180,6 +180,9 @@ pub enum ProposerApiError {
 
     #[error("not serving headers")]
     NotServingHeaders,
+
+    #[error("blob kzg commitments mismatch in blinded block and payload")]
+    BlobKzgCommitmentsMismatch,
 }
 
 impl IntoResponse for ProposerApiError {
@@ -352,6 +355,9 @@ impl IntoResponse for ProposerApiError {
             },
             ProposerApiError::NotServingHeaders => {
                 (StatusCode::NO_CONTENT, ProposerApiError::NotServingHeaders.to_string()).into_response()
+            },
+            ProposerApiError::BlobKzgCommitmentsMismatch => {
+                (StatusCode::BAD_REQUEST, "blob kzg commitments mismatch in blinded block and payload").into_response()
             }
         }
     }

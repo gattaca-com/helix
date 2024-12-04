@@ -9,8 +9,8 @@ pub enum DataApiError {
     SlotAndCursor,
     #[error("need to query for specific slot or block_hash or block_number or builder_pubkey")]
     MissingFilter,
-    #[error("maximum limit is 500")]
-    LimitReached,
+    #[error("maximum limit is {limit}")]
+    LimitReached { limit: u64 },
     #[error("internal server error")]
     InternalServerError,
 }
@@ -26,8 +26,8 @@ impl IntoResponse for DataApiError {
                 "need to query for specific slot or block_hash or block_number or builder_pubkey",
             )
                 .into_response(),
-            DataApiError::LimitReached => {
-                (StatusCode::BAD_REQUEST, "maximum limit is 500").into_response()
+            DataApiError::LimitReached{limit} => {
+                (StatusCode::BAD_REQUEST, format!("maximum limit is {limit}")).into_response()
             }
             DataApiError::InternalServerError => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()

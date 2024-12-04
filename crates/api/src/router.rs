@@ -1,6 +1,6 @@
 use axum::{
     error_handling::HandleErrorLayer,
-    http::StatusCode,
+    http::{request, StatusCode},
     middleware,
     routing::{get, post},
     Extension, Router,
@@ -9,14 +9,16 @@ use helix_beacon_client::{beacon_client::BeaconClient, multi_beacon_client::Mult
 use helix_common::{Route, RouterConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
+use hyper::HeaderMap;
+use tracing::warn;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tower::{timeout::TimeoutLayer, BoxError, ServiceBuilder};
 use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 
 use crate::{
     builder::{
-        api::{BuilderApi, MAX_PAYLOAD_LENGTH},
-        optimistic_simulator::OptimisticSimulator,
+        api::{BuilderApi, MAX_PAYLOAD_LENGTH}, multi_simulator::MultiSimulator, optimistic_simulator::OptimisticSimulator
     },
     constraints::api::ConstraintsApi,
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
@@ -33,7 +35,7 @@ use crate::{
 pub type BuilderApiProd = BuilderApi<
     RedisCache,
     PostgresDatabaseService,
-    OptimisticSimulator<RedisCache, PostgresDatabaseService>,
+    MultiSimulator<OptimisticSimulator<RedisCache, PostgresDatabaseService>>,
     GrpcGossiperClientManager,
 >;
 
@@ -159,9 +161,22 @@ pub fn build_router(
     // Add Error-handling layer
     router = router.layer(
         ServiceBuilder::new()
-            .layer(HandleErrorLayer::new(|_: BoxError| async { StatusCode::REQUEST_TIMEOUT }))
+            .layer(HandleErrorLayer::new(|headers: HeaderMap, e: BoxError| async move {
+                let request_id = headers
+                    .get("x-request-id")
+                    .map(|v| v.to_str().unwrap_or_default())
+                    .unwrap_or_default();
+                warn!(
+                    request_id = request_id,
+                    "Request timed out {:?}", e
+                );
+                StatusCode::REQUEST_TIMEOUT
+            }))
             .layer(TimeoutLayer::new(API_REQUEST_TIMEOUT)),
     );
+
+    router = router.layer(PropagateRequestIdLayer::x_request_id());
+    router = router.layer(SetRequestIdLayer::x_request_id(MakeRequestUuid));
 
     // Add Extension layers
     router = router
