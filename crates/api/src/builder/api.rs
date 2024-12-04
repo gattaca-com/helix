@@ -306,11 +306,14 @@ where
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let request_id = Uuid::new_v4();
+        let request_id = Uuid::parse_str(headers
+            .get("x-request-id")
+            .map(|v| v.to_str().unwrap_or_default())
+            .unwrap_or_default()).unwrap();
         let mut trace = SubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
-        info!(
+        debug!(
             request_id = %request_id,
             event = "submit_block",
             head_slot = head_slot,
@@ -349,6 +352,7 @@ where
         info!(
             request_id = %request_id,
             event = "submit_block",
+            slot = payload.slot(),
             builder_pub_key = ?payload.builder_public_key(),
             block_value = %payload.value(),
             block_hash = ?block_hash,
@@ -564,12 +568,15 @@ where
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let request_id = Uuid::new_v4();
+        let request_id = Uuid::parse_str(headers
+            .get("x-request-id")
+            .map(|v| v.to_str().unwrap_or_default())
+            .unwrap_or_default()).unwrap();
         let mut trace =
             HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
-        info!(
+        debug!(
             request_id = %request_id,
             event = "submit_header",
             head_slot = head_slot,
@@ -580,6 +587,16 @@ where
         let (mut payload, is_cancellations_enabled) =
             decode_header_submission(req, &mut trace, &request_id).await?;
         let block_hash = payload.block_hash().clone();
+
+        info!(
+            request_id = %request_id,
+            event = "submit_header",
+            slot = payload.slot(),
+            builder_pub_key = ?payload.builder_public_key(),
+            block_value = %payload.value(),
+            block_hash = ?block_hash,
+            "header submission decoded",
+        );
 
         // Verify the payload is for the current slot
         if payload.slot() <= head_slot {
@@ -604,15 +621,6 @@ where
             return Err(BuilderApiError::ProposerDutyNotFound);
         }
         let next_duty = next_duty.unwrap();
-
-        info!(
-            request_id = %request_id,
-            event = "submit_header",
-            builder_pub_key = ?payload.builder_public_key(),
-            block_value = %payload.value(),
-            block_hash = ?block_hash,
-            "header submission decoded",
-        );
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes = api
@@ -803,12 +811,15 @@ where
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let request_id = Uuid::new_v4();
+        let request_id = Uuid::parse_str(headers
+            .get("x-request-id")
+            .map(|v| v.to_str().unwrap_or_default())
+            .unwrap_or_default()).unwrap();
         let now = SystemTime::now();
         let mut trace = SubmissionTrace { receive: get_nanos_from(now)?, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
-        info!(
+        debug!(
             request_id = %request_id,
             event = "submit_block_v2",
             head_slot = head_slot,
@@ -823,6 +834,7 @@ where
         info!(
             request_id = %request_id,
             event = "submit_block_v2",
+            slot = payload.slot(),
             builder_pub_key = ?builder_pub_key,
             block_value = %payload.value(),
             block_hash = ?payload.block_hash(),
@@ -1017,7 +1029,10 @@ where
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
         Json(mut signed_cancellation): Json<SignedCancellation>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let request_id = Uuid::new_v4();
+        let request_id = Uuid::parse_str(headers
+            .get("x-request-id")
+            .map(|v| v.to_str().unwrap_or_default())
+            .unwrap_or_default()).unwrap();
         let (head_slot, _next_duty) = api.curr_slot_info.read().await.clone();
 
         let slot = signed_cancellation.message.slot;
