@@ -1456,6 +1456,7 @@ impl DatabaseService for PostgresDatabaseService {
         if let Some(block_hash) = filters.block_hash() {
             query.push_str(&format!(" AND block_submission.block_hash = ${}", param_index));
             params.push(Box::new(block_hash));
+            param_index += 1;
         }
 
         if let Some(filtering) = filtering {
@@ -1464,7 +1465,6 @@ impl DatabaseService for PostgresDatabaseService {
                 param_index
             ));
             params.push(Box::new(filtering));
-            param_index += 1;
         }
 
         let params_refs: Vec<&(dyn ToSql + Sync)> =
