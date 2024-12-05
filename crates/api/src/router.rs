@@ -1,6 +1,6 @@
 use axum::{
     error_handling::HandleErrorLayer,
-    http::{request, StatusCode},
+    http::StatusCode,
     middleware,
     routing::{get, post},
     Extension, Router,
@@ -10,20 +10,27 @@ use helix_common::{Route, RouterConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
 use hyper::HeaderMap;
-use tracing::warn;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tower::{timeout::TimeoutLayer, BoxError, ServiceBuilder};
-use tower_http::limit::RequestBodyLimitLayer;
-use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
+use tower_http::{
+    limit::RequestBodyLimitLayer,
+    request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
+};
+use tracing::warn;
 
 use crate::{
     builder::{
-        api::{BuilderApi, MAX_PAYLOAD_LENGTH}, multi_simulator::MultiSimulator, optimistic_simulator::OptimisticSimulator
+        api::{BuilderApi, MAX_PAYLOAD_LENGTH},
+        multi_simulator::MultiSimulator,
+        optimistic_simulator::OptimisticSimulator,
     },
     constraints::api::ConstraintsApi,
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
-    middleware::rate_limiting::rate_limit_by_ip::{
-        rate_limit_by_ip, RateLimitState, RateLimitStateForRoute,
+    middleware::{
+        metrics_middleware,
+        rate_limiting::rate_limit_by_ip::{
+            rate_limit_by_ip, RateLimitState, RateLimitStateForRoute,
+        },
     },
     proposer::api::ProposerApi,
     relay_data::{
@@ -150,6 +157,8 @@ pub fn build_router(
         }
     }
 
+    router = router.layer(middleware::from_fn(metrics_middleware));
+
     // Add payload size limit
     router = router.layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));
 
@@ -166,10 +175,7 @@ pub fn build_router(
                     .get("x-request-id")
                     .map(|v| v.to_str().unwrap_or_default())
                     .unwrap_or_default();
-                warn!(
-                    request_id = request_id,
-                    "Request timed out {:?}", e
-                );
+                warn!(request_id = request_id, "Request timed out {:?}", e);
                 StatusCode::REQUEST_TIMEOUT
             }))
             .layer(TimeoutLayer::new(API_REQUEST_TIMEOUT)),

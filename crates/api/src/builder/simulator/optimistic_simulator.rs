@@ -4,10 +4,10 @@ use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32};
 use reqwest::Client;
 use tokio::sync::{mpsc::Sender, RwLock};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
-use helix_common::{simulator::BlockSimError, BuilderInfo};
+use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, BuilderInfo};
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 
@@ -101,6 +101,8 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         block_hash: &Hash32,
         reason: String,
     ) {
+        SimulatorMetrics::demotion_count();
+
         if let Err(err) = self.auctioneer.demote_builder(builder_public_key).await {
             *self.failsafe_triggered.write().await = true;
             error!(
@@ -157,6 +159,8 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
         request_id: Uuid,
     ) -> Result<bool, BlockSimError> {
         if self.should_process_optimistically(&request, builder_info).await {
+            SimulatorMetrics::sim_count(true);
+
             debug!(
                 request_id=%request_id,
                 block_hash=%request.execution_payload.block_hash(),
@@ -179,6 +183,8 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
 
             Ok(true)
         } else {
+            SimulatorMetrics::sim_count(false);
+
             debug!(
                 request_id=%request_id,
                 block_hash=?request.execution_payload.block_hash(),

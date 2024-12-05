@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use helix_common::BuilderInfo;
+use helix_common::{metrics::SimulatorMetrics, BuilderInfo};
 use reqwest::{
     header::{HeaderMap, HeaderValue, CONTENT_TYPE},
     Client, Response, StatusCode,
@@ -96,6 +96,8 @@ impl BlockSimulator for RpcSimulator {
         sim_result_saver_sender: Sender<DbInfo>,
         request_id: Uuid,
     ) -> Result<bool, BlockSimError> {
+        let timer = SimulatorMetrics::timer();
+
         let block_hash = request.execution_payload.block_hash().clone();
         debug!(
             request_id = %request_id,
@@ -106,7 +108,9 @@ impl BlockSimulator for RpcSimulator {
 
         match self.send_rpc_request(request, is_top_bid).await {
             Ok(response) => {
+                timer.stop_and_record();
                 let result = Self::process_rpc_response(response).await;
+                SimulatorMetrics::sim_status(result.is_ok());
 
                 // Send sim result to db processor task
                 let db_info =
@@ -119,7 +123,9 @@ impl BlockSimulator for RpcSimulator {
                 result.map(|_| false)
             }
             Err(err) => {
+                timer.stop_and_discard();
                 error!(request_id = %request_id, err = ?err, "Error sending RPC request");
+                SimulatorMetrics::sim_status(false);
                 Err(BlockSimError::RpcError(err.to_string()))
             }
         }

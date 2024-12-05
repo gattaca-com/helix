@@ -1,5 +1,5 @@
 use helix_api::service::ApiService;
-use helix_common::{LoggingConfig, RelayConfig};
+use helix_common::{metrics::start_metrics_server, LoggingConfig, RelayConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_utils::set_panic_hook;
 use helix_website::website_service::WebsiteService;
@@ -61,6 +61,7 @@ async fn run() {
     let mut handles = Vec::new();
 
     let postgres_db = PostgresDatabaseService::from_relay_config(&config).await;
+    start_metrics_server();
 
     // Try to run database migrations until they succeed
     loop {
