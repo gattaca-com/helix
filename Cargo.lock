@@ -2857,6 +2857,7 @@ dependencies = [
  "redis",
  "serde",
  "serde_json",
+ "serial_test",
  "thiserror",
  "tokio",
  "tokio-stream",
