@@ -1,3 +1,5 @@
+#![allow(clippy::doc_lazy_continuation)]
+
 use bytes::BufMut;
 use ethereum_consensus::primitives::U256;
 

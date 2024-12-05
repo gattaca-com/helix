@@ -927,15 +927,13 @@ where
                 )
                 .await;
 
-            if !is_trusted_proposer {
-                if let Err(_) = tx.send(()) {
-                    error!(request_id = %request_id_clone, "Error sending beacon client response, receiver dropped");
-                }
+            if !is_trusted_proposer && tx.send(()).is_err() {
+                error!(request_id = %request_id_clone, "Error sending beacon client response, receiver dropped");
             }
         });
 
         if !is_trusted_proposer {
-            if let Ok(_) = rx.await {
+            if (rx.await).is_ok() {
                 info!(request_id = %request_id, trace = ?trace, "Payload published and saved!")
             } else {
                 error!(request_id = %request_id, "Error in beacon client publishing");
@@ -1280,34 +1278,31 @@ where
     /// Will process new gossiped messages from
     async fn process_gossiped_info(&self, mut recveiver: Receiver<GossipedMessage>) {
         while let Some(msg) = recveiver.recv().await {
-            match msg {
-                GossipedMessage::GetPayload(payload) => {
-                    let api_clone = self.clone();
-                    tokio::spawn(async move {
-                        let mut trace = GetPayloadTrace {
-                            receive: get_nanos_timestamp().unwrap_or_default(),
-                            ..Default::default()
-                        };
-                        debug!(request_id = %payload.request_id, "processing gossiped payload");
-                        match api_clone
-                            ._get_payload(
-                                payload.signed_blinded_beacon_block,
-                                &mut trace,
-                                &payload.request_id,
-                                None,
-                            )
-                            .await
-                        {
-                            Ok(_get_payload_response) => {
-                                debug!(request_id = %payload.request_id, "gossiped payload processed");
-                            }
-                            Err(err) => {
-                                error!(request_id = %payload.request_id, error = %err, "error processing gossiped payload");
-                            }
+            if let GossipedMessage::GetPayload(payload) = msg {
+                let api_clone = self.clone();
+                tokio::spawn(async move {
+                    let mut trace = GetPayloadTrace {
+                        receive: get_nanos_timestamp().unwrap_or_default(),
+                        ..Default::default()
+                    };
+                    debug!(request_id = %payload.request_id, "processing gossiped payload");
+                    match api_clone
+                        ._get_payload(
+                            payload.signed_blinded_beacon_block,
+                            &mut trace,
+                            &payload.request_id,
+                            None,
+                        )
+                        .await
+                    {
+                        Ok(_get_payload_response) => {
+                            debug!(request_id = %payload.request_id, "gossiped payload processed");
                         }
-                    });
-                }
-                _ => {}
+                        Err(err) => {
+                            error!(request_id = %payload.request_id, error = %err, "error processing gossiped payload");
+                        }
+                    }
+                });
             }
         }
     }

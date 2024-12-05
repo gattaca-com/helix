@@ -61,7 +61,7 @@ pub struct ConstraintsMessage {
 impl SignableBLS for ConstraintsMessage {
     fn digest(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&self.pubkey.to_vec());
+        hasher.update(self.pubkey.to_vec());
         hasher.update(self.slot.to_le_bytes());
         hasher.update((self.top as u8).to_le_bytes());
         for tx in self.transactions.iter() {

@@ -531,7 +531,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
     async fn primev_update(&self) -> Result<(), HousekeeperError> {
         let primev_config = self.config.primev_config.as_ref().unwrap();
-        let primev_builders = get_registered_primev_builders(&primev_config).await;
+        let primev_builders = get_registered_primev_builders(primev_config).await;
         for builder_pubkey in primev_builders {
             self.db
                 .store_builder_info(
@@ -557,11 +557,11 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     /// Determine if the trusted proposers should be refreshed for the given slot.
     ///     
     /// This function checks two conditions:
-    /// 1. If the `head_slot` is exactly divisible by `TRUSTED_PROPOSERS_UPDATE_FREQ`,
-    ///   it will return `true` to trigger a trusted proposer update.
-    /// 2. If the distance between the current `head_slot` and the last slot for which
-    ///  the trusted proposers was refreshed (`refreshed_trusted_proposers_slot`) is greater than or
-    /// equal to `TRUSTED_PROPOSERS_UPDATE_FREQ`, it will also return `true`.
+    /// 1. If the `head_slot` is exactly divisible by `TRUSTED_PROPOSERS_UPDATE_FREQ`, it will
+    ///    return `true` to trigger a trusted proposer update.
+    /// 2. If the distance between the current `head_slot` and the last slot for which the trusted
+    ///    proposers was refreshed (`refreshed_trusted_proposers_slot`) is greater than or equal to
+    ///    `TRUSTED_PROPOSERS_UPDATE_FREQ`, it will also return `true`.
     async fn should_update_trusted_proposers(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
         head_slot: u64,

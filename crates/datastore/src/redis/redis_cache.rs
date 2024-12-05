@@ -1,3 +1,5 @@
+#![allow(dependency_on_unit_never_type_fallback)] // TODO: temp fix , needs to be fixed before upading to 2024 edition
+
 use crate::redis::utils::get_constraints_key;
 use std::collections::{HashMap, HashSet};
 
