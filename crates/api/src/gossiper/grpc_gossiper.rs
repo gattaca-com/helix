@@ -25,10 +25,10 @@ use crate::{
 
 use super::types::broadcast_cancellation::BroadcastCancellationParams;
 
-const HEADER_ENDPOINT: &str = "header";
-const PAYLOAD_ENDPOINT: &str = "payload";
-const GET_PAYLOAD_ENDPOINT: &str = "get_payload";
-const CANCELLATION_ENDPOINT: &str = "cancel";
+const HEADER_ID: &str = "header";
+const PAYLOAD_ID: &str = "payload";
+const GET_PAYLOAD_ID: &str = "get_payload";
+const CANCELLATION_ID: &str = "cancel";
 
 #[derive(Clone)]
 pub struct GrpcGossiperClient {
@@ -72,9 +72,9 @@ impl GrpcGossiperClient {
         &self,
         request: grpc::BroadcastHeaderParams,
     ) -> Result<(), GossipError> {
-        let _timer = GossipMetrics::out_timer(HEADER_ENDPOINT);
+        let _timer = GossipMetrics::out_timer(HEADER_ID);
         let size = request.encoded_len();
-        GossipMetrics::out_size(HEADER_ENDPOINT, size);
+        GossipMetrics::out_size(HEADER_ID, size);
 
         let request = Request::new(request);
         let client = {
@@ -88,22 +88,22 @@ impl GrpcGossiperClient {
                     .await;
             match result {
                 Ok(Ok(_)) => {
-                    GossipMetrics::out_count(HEADER_ENDPOINT, true);
+                    GossipMetrics::out_count(HEADER_ID, true);
                     Ok(())
                 }
                 Ok(Err(err)) => {
                     error!(err = %err, "Client call failed.");
-                    GossipMetrics::out_count(HEADER_ENDPOINT, false);
+                    GossipMetrics::out_count(HEADER_ID, false);
                     return Err(GossipError::BroadcastError(err));
                 }
                 Err(_) => {
                     error!("Client call timed out.");
-                    GossipMetrics::out_count(HEADER_ENDPOINT, false);
+                    GossipMetrics::out_count(HEADER_ID, false);
                     return Err(GossipError::TimeoutError);
                 }
             }
         } else {
-            GossipMetrics::out_count(HEADER_ENDPOINT, false);
+            GossipMetrics::out_count(HEADER_ID, false);
             return Err(GossipError::ClientNotConnected)
         }
     }
@@ -112,9 +112,9 @@ impl GrpcGossiperClient {
         &self,
         request: grpc::BroadcastPayloadParams,
     ) -> Result<(), GossipError> {
-        let _timer = GossipMetrics::out_timer(PAYLOAD_ENDPOINT);
+        let _timer = GossipMetrics::out_timer(PAYLOAD_ID);
         let size = request.encoded_len();
-        GossipMetrics::out_size(PAYLOAD_ENDPOINT, size);
+        GossipMetrics::out_size(PAYLOAD_ID, size);
 
         let request = Request::new(request);
         let client = {
@@ -128,22 +128,22 @@ impl GrpcGossiperClient {
                     .await;
             match result {
                 Ok(Ok(_)) => {
-                    GossipMetrics::out_count(PAYLOAD_ENDPOINT, true);
+                    GossipMetrics::out_count(PAYLOAD_ID, true);
                     Ok(())
                 }
                 Ok(Err(err)) => {
                     error!(err = %err, "Client call failed.");
-                    GossipMetrics::out_count(PAYLOAD_ENDPOINT, false);
+                    GossipMetrics::out_count(PAYLOAD_ID, false);
                     return Err(GossipError::BroadcastError(err));
                 }
                 Err(_) => {
                     error!("Client call timed out.");
-                    GossipMetrics::out_count(PAYLOAD_ENDPOINT, false);
+                    GossipMetrics::out_count(PAYLOAD_ID, false);
                     return Err(GossipError::TimeoutError);
                 }
             }
         } else {
-            GossipMetrics::out_count(PAYLOAD_ENDPOINT, false);
+            GossipMetrics::out_count(PAYLOAD_ID, false);
             return Err(GossipError::ClientNotConnected)
         }
     }
@@ -152,9 +152,9 @@ impl GrpcGossiperClient {
         &self,
         request: grpc::BroadcastGetPayloadParams,
     ) -> Result<(), GossipError> {
-        let _timer = GossipMetrics::out_timer(GET_PAYLOAD_ENDPOINT);
+        let _timer = GossipMetrics::out_timer(GET_PAYLOAD_ID);
         let size = request.encoded_len();
-        GossipMetrics::out_size(GET_PAYLOAD_ENDPOINT, size);
+        GossipMetrics::out_size(GET_PAYLOAD_ID, size);
 
         let request = Request::new(request);
         let client = {
@@ -168,22 +168,22 @@ impl GrpcGossiperClient {
                     .await;
             match result {
                 Ok(Ok(_)) => {
-                    GossipMetrics::out_count(GET_PAYLOAD_ENDPOINT, true);
+                    GossipMetrics::out_count(GET_PAYLOAD_ID, true);
                     Ok(())
                 }
                 Ok(Err(err)) => {
                     error!(err = %err, "Client call failed.");
-                    GossipMetrics::out_count(GET_PAYLOAD_ENDPOINT, false);
+                    GossipMetrics::out_count(GET_PAYLOAD_ID, false);
                     return Err(GossipError::BroadcastError(err));
                 }
                 Err(_) => {
                     error!("Client call timed out.");
-                    GossipMetrics::out_count(GET_PAYLOAD_ENDPOINT, false);
+                    GossipMetrics::out_count(GET_PAYLOAD_ID, false);
                     return Err(GossipError::TimeoutError);
                 }
             }
         } else {
-            GossipMetrics::out_count(GET_PAYLOAD_ENDPOINT, false);
+            GossipMetrics::out_count(GET_PAYLOAD_ID, false);
             return Err(GossipError::ClientNotConnected)
         }
     }
@@ -192,9 +192,9 @@ impl GrpcGossiperClient {
         &self,
         request: grpc::BroadcastCancellationParams,
     ) -> Result<(), GossipError> {
-        let _timer = GossipMetrics::out_timer(CANCELLATION_ENDPOINT);
+        let _timer = GossipMetrics::out_timer(CANCELLATION_ID);
         let size = request.encoded_len();
-        GossipMetrics::out_size(CANCELLATION_ENDPOINT, size);
+        GossipMetrics::out_size(CANCELLATION_ID, size);
 
         let request = Request::new(request);
         let client = {
@@ -210,22 +210,22 @@ impl GrpcGossiperClient {
             .await;
             match result {
                 Ok(Ok(_)) => {
-                    GossipMetrics::out_count(CANCELLATION_ENDPOINT, true);
+                    GossipMetrics::out_count(CANCELLATION_ID, true);
                     Ok(())
                 }
                 Ok(Err(err)) => {
                     error!(err = %err, "Client call failed.");
-                    GossipMetrics::out_count(CANCELLATION_ENDPOINT, false);
+                    GossipMetrics::out_count(CANCELLATION_ID, false);
                     return Err(GossipError::BroadcastError(err));
                 }
                 Err(_) => {
                     error!("Client call timed out.");
-                    GossipMetrics::out_count(CANCELLATION_ENDPOINT, false);
+                    GossipMetrics::out_count(CANCELLATION_ID, false);
                     return Err(GossipError::TimeoutError);
                 }
             }
         } else {
-            GossipMetrics::out_count(CANCELLATION_ENDPOINT, false);
+            GossipMetrics::out_count(CANCELLATION_ID, false);
             return Err(GossipError::ClientNotConnected)
         }
     }
@@ -351,10 +351,10 @@ impl GossipService for GrpcGossiperService {
         &self,
         request: Request<grpc::BroadcastHeaderParams>,
     ) -> Result<Response<()>, Status> {
-        GossipMetrics::in_count(HEADER_ENDPOINT);
+        GossipMetrics::in_count(HEADER_ID);
         let inner = request.into_inner();
         let size = inner.encoded_len();
-        GossipMetrics::in_size(HEADER_ENDPOINT, size);
+        GossipMetrics::in_size(HEADER_ID, size);
 
         let request = BroadcastHeaderParams::from_proto(inner);
         if let Err(err) =
@@ -369,10 +369,10 @@ impl GossipService for GrpcGossiperService {
         &self,
         request: Request<grpc::BroadcastPayloadParams>,
     ) -> Result<Response<()>, Status> {
-        GossipMetrics::in_count(PAYLOAD_ENDPOINT);
+        GossipMetrics::in_count(PAYLOAD_ID);
         let inner = request.into_inner();
         let size = inner.encoded_len();
-        GossipMetrics::in_size(PAYLOAD_ENDPOINT, size);
+        GossipMetrics::in_size(PAYLOAD_ID, size);
 
         let request = BroadcastPayloadParams::from_proto(inner);
         if let Err(err) =
@@ -387,10 +387,10 @@ impl GossipService for GrpcGossiperService {
         &self,
         request: Request<grpc::BroadcastGetPayloadParams>,
     ) -> Result<Response<()>, Status> {
-        GossipMetrics::in_count(GET_PAYLOAD_ENDPOINT);
+        GossipMetrics::in_count(GET_PAYLOAD_ID);
         let inner = request.into_inner();
         let size = inner.encoded_len();
-        GossipMetrics::in_size(GET_PAYLOAD_ENDPOINT, size);
+        GossipMetrics::in_size(GET_PAYLOAD_ID, size);
 
         let request = BroadcastGetPayloadParams::from_proto(inner);
         if let Err(err) =
@@ -405,10 +405,10 @@ impl GossipService for GrpcGossiperService {
         &self,
         request: Request<grpc::BroadcastCancellationParams>,
     ) -> Result<Response<()>, Status> {
-        GossipMetrics::in_count(CANCELLATION_ENDPOINT);
+        GossipMetrics::in_count(CANCELLATION_ID);
         let inner = request.into_inner();
         let size = inner.encoded_len();
-        GossipMetrics::in_size(CANCELLATION_ENDPOINT, size);
+        GossipMetrics::in_size(CANCELLATION_ID, size);
 
         let request = BroadcastCancellationParams::from_proto(inner);
         if let Err(err) =
