@@ -1,3 +1,5 @@
+#![allow(dependency_on_unit_never_type_fallback)] // TODO: temp fix , needs to be fixed before upading to 2024 edition
+
 use crate::redis::utils::get_constraints_key;
 use std::collections::{HashMap, HashSet};
 
@@ -899,7 +901,7 @@ impl Auctioneer for RedisCache {
         let is_bid_above_floor = submission.bid_trace().value > floor_value;
         if !cancellations_enabled && !is_bid_above_floor {
             record.record_success();
-            return Ok(None);
+            return Ok(None)
         }
 
         // Save the execution payload

@@ -201,9 +201,8 @@ where
             api.constraints_handle.send_constraints(constraint.clone());
 
             // Decode the constraints and generate proof data.
-            let constraints_with_proofs = SignedConstraintsWithProofData::try_from(constraint).map_err(|err| {
-                error!(request_id = %request_id, "Failed to decode constraints transactions and generate proof data");
-                err
+            let constraints_with_proofs = SignedConstraintsWithProofData::try_from(constraint).inspect_err(|err| {
+                error!(%err, %request_id, "Failed to decode constraints transactions and generate proof data");
             })?;
 
             // Finally add the constraints to the redis cache

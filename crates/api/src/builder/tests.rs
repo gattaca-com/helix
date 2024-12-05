@@ -14,7 +14,7 @@ use core::panic;
 use ethereum_consensus::{
     builder::{SignedValidatorRegistration, ValidatorRegistration},
     configs::mainnet::CAPELLA_FORK_EPOCH,
-    deneb::Transaction, Withdrawal,
+    deneb::Withdrawal,
     phase0::mainnet::SLOTS_PER_EPOCH,
     primitives::{BlsPublicKey, BlsSignature},
     ssz::{self, prelude::*},

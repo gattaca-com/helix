@@ -1,11 +1,11 @@
 use axum::async_trait;
 use helix_common::{simulator::BlockSimError, BuilderInfo};
-use tokio::sync::mpsc::Sender;
-use uuid::Uuid;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
+use tokio::sync::mpsc::Sender;
+use uuid::Uuid;
 
 use crate::builder::DbInfo;
 
@@ -19,10 +19,7 @@ pub struct MultiSimulator<B: BlockSimulator + Send + Sync> {
 
 impl<B: BlockSimulator + Send + Sync> MultiSimulator<B> {
     pub fn new(simulators: Vec<B>) -> Self {
-        Self {
-            simulators,
-            next_index: Arc::new(AtomicUsize::new(0)),
-        }
+        Self { simulators, next_index: Arc::new(AtomicUsize::new(0)) }
     }
 
     pub fn clone_for_async(&self) -> Self {
@@ -52,13 +49,7 @@ impl<B: BlockSimulator + Send + Sync> BlockSimulator for MultiSimulator<B> {
 
         // Process the request with the selected simulator
         simulator
-            .process_request(
-                request,
-                builder_info,
-                is_top_bid,
-                sim_result_saver_sender,
-                request_id,
-            )
+            .process_request(request, builder_info, is_top_bid, sim_result_saver_sender, request_id)
             .await
     }
 }

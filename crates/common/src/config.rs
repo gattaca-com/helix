@@ -436,13 +436,11 @@ fn test_config() {
 
     let mut config = RelayConfig::default();
     config.redis.url = "redis://localhost:6379".to_string();
-    config.simulators = vec![
-        SimulatorConfig {
-        url: "http://localhost:8080".to_string()
-    }];
+    config.simulators = vec![SimulatorConfig { url: "http://localhost:8080".to_string() }];
     config.beacon_clients.push(BeaconClientConfig {
         url: Url::parse("http://localhost:8080").unwrap(),
-        gossip_blobs_enabled: false,    });
+        gossip_blobs_enabled: false,
+    });
     config.broadcasters.push(BroadcasterConfig::BeaconClient(BeaconClientConfig {
         url: Url::parse("http://localhost:8080").unwrap(),
         gossip_blobs_enabled: false,

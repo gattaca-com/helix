@@ -17,16 +17,13 @@ use ethereum_consensus::{
     phase0::mainnet::SLOTS_PER_EPOCH,
     primitives::BlsPublicKey,
     ssz::prelude::*,
-    types::mainnet::{
-        ExecutionPayloadHeader, ExecutionPayloadHeaderRef, SignedBeaconBlock,
-        SignedBlindedBeaconBlock,
-    },
+    types::mainnet::{ExecutionPayloadHeader, SignedBeaconBlock, SignedBlindedBeaconBlock},
 };
 
-use reth_primitives::kzg;
 use tokio::{
     sync::{
-        mpsc::{self, error::SendError, Receiver, Sender}, oneshot, RwLock
+        mpsc::{self, error::SendError, Receiver, Sender},
+        oneshot, RwLock,
     },
     time::{sleep, Instant},
 };
@@ -170,10 +167,10 @@ where
             return Err(ProposerApiError::EmptyRequest)
         }
 
-        let request_id = Uuid::parse_str(headers
-            .get("x-request-id")
-            .map(|v| v.to_str().unwrap_or_default())
-            .unwrap_or_default()).unwrap();
+        let request_id = Uuid::parse_str(
+            headers.get("x-request-id").map(|v| v.to_str().unwrap_or_default()).unwrap_or_default(),
+        )
+        .unwrap();
 
         let mut trace =
             RegisterValidatorsTrace { receive: get_nanos_timestamp()?, ..Default::default() };
@@ -326,14 +323,18 @@ where
 
         // Bulk write registrations to db
         tokio::spawn(async move {
-
             // Add validator preferences to each registration
             let mut valid_registrations_infos = Vec::new();
 
             for reg in valid_registrations {
                 let mut preferences = validator_preferences.clone();
 
-                if proposer_api.auctioneer.is_primev_proposer(&reg.message.public_key).await.unwrap_or_default() {
+                if proposer_api
+                    .auctioneer
+                    .is_primev_proposer(&reg.message.public_key)
+                    .await
+                    .unwrap_or_default()
+                {
                     preferences.trusted_builders = Some(vec!["PrimevBuilder".to_string()]);
                 }
 
@@ -385,10 +386,10 @@ where
             return Err(ProposerApiError::ServiceUnavailableError)
         }
 
-        let request_id = Uuid::parse_str(headers
-            .get("x-request-id")
-            .map(|v| v.to_str().unwrap_or_default())
-            .unwrap_or_default()).unwrap();
+        let request_id = Uuid::parse_str(
+            headers.get("x-request-id").map(|v| v.to_str().unwrap_or_default()).unwrap_or_default(),
+        )
+        .unwrap();
 
         let mut trace = GetHeaderTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
@@ -651,10 +652,10 @@ where
         req: Request<Body>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         let mut trace = GetPayloadTrace { receive: get_nanos_timestamp()?, ..Default::default() };
-        let request_id = Uuid::parse_str(headers
-            .get("x-request-id")
-            .map(|v| v.to_str().unwrap_or_default())
-            .unwrap_or_default()).unwrap();
+        let request_id = Uuid::parse_str(
+            headers.get("x-request-id").map(|v| v.to_str().unwrap_or_default()).unwrap_or_default(),
+        )
+        .unwrap();
 
         let user_agent =
             headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|v| v.to_string());
@@ -842,7 +843,9 @@ where
             return Err(err)
         }
 
-        if let Err(err) = self.validate_block_equality(&mut versioned_payload, &signed_blinded_block, request_id) {
+        if let Err(err) =
+            self.validate_block_equality(&mut versioned_payload, &signed_blinded_block, request_id)
+        {
             error!(
                 %request_id,
                 error = %err,
@@ -924,20 +927,17 @@ where
                 )
                 .await;
 
-            if !is_trusted_proposer {
-                if let Err(_) = tx.send(()) {
-                    error!(request_id = %request_id_clone, "Error sending beacon client response, receiver dropped");
-                }
+            if !is_trusted_proposer && tx.send(()).is_err() {
+                error!(request_id = %request_id_clone, "Error sending beacon client response, receiver dropped");
             }
         });
 
         if !is_trusted_proposer {
-
-            if let Ok(_) = rx.await {
+            if (rx.await).is_ok() {
                 info!(request_id = %request_id, trace = ?trace, "Payload published and saved!")
             } else {
                 error!(request_id = %request_id, "Error in beacon client publishing");
-                return Err(ProposerApiError::InternalServerError);
+                return Err(ProposerApiError::InternalServerError)
             }
 
             // Calculate the remaining time needed to reach the target propagation duration.
@@ -1110,7 +1110,8 @@ where
         let provided_header = body.execution_payload_header();
 
         let local_header =
-            match try_execution_header_from_payload(&mut local_versioned_payload.execution_payload) {
+            match try_execution_header_from_payload(&mut local_versioned_payload.execution_payload)
+            {
                 Ok(header) => header,
                 Err(err) => {
                     error!(
@@ -1118,7 +1119,7 @@ where
                         error = %err,
                         "error converting execution payload to header",
                     );
-                    return Err(err.into());
+                    return Err(err.into())
                 }
             };
 
@@ -1127,21 +1128,21 @@ where
                 let provided_header =
                     provided_header.bellatrix().ok_or(ProposerApiError::PayloadTypeMismatch)?;
                 if local_header != *provided_header {
-                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
+                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch)
                 }
             }
             ExecutionPayloadHeader::Capella(local_header) => {
                 let provided_header =
                     provided_header.capella().ok_or(ProposerApiError::PayloadTypeMismatch)?;
                 if local_header != *provided_header {
-                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
+                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch)
                 }
             }
             ExecutionPayloadHeader::Deneb(local_header) => {
                 let provided_header =
                     provided_header.deneb().ok_or(ProposerApiError::PayloadTypeMismatch)?;
                 if local_header != *provided_header {
-                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
+                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch)
                 }
 
                 let local_kzg_commitments = local_versioned_payload
@@ -1155,7 +1156,7 @@ where
                     .ok_or(ProposerApiError::BlobKzgCommitmentsMismatch)?;
 
                 if local_kzg_commitments != provided_kzg_commitments {
-                    return Err(ProposerApiError::BlobKzgCommitmentsMismatch);
+                    return Err(ProposerApiError::BlobKzgCommitmentsMismatch)
                 }
             }
         }
@@ -1277,34 +1278,31 @@ where
     /// Will process new gossiped messages from
     async fn process_gossiped_info(&self, mut recveiver: Receiver<GossipedMessage>) {
         while let Some(msg) = recveiver.recv().await {
-            match msg {
-                GossipedMessage::GetPayload(payload) => {
-                    let api_clone = self.clone();
-                    tokio::spawn(async move {
-                        let mut trace = GetPayloadTrace {
-                            receive: get_nanos_timestamp().unwrap_or_default(),
-                            ..Default::default()
-                        };
-                        debug!(request_id = %payload.request_id, "processing gossiped payload");
-                        match api_clone
-                            ._get_payload(
-                                payload.signed_blinded_beacon_block,
-                                &mut trace,
-                                &payload.request_id,
+            if let GossipedMessage::GetPayload(payload) = msg {
+                let api_clone = self.clone();
+                tokio::spawn(async move {
+                    let mut trace = GetPayloadTrace {
+                        receive: get_nanos_timestamp().unwrap_or_default(),
+                        ..Default::default()
+                    };
+                    debug!(request_id = %payload.request_id, "processing gossiped payload");
+                    match api_clone
+                        ._get_payload(
+                            payload.signed_blinded_beacon_block,
+                            &mut trace,
+                            &payload.request_id,
                             None,
-                            )
-                            .await
-                        {
-                            Ok(_get_payload_response) => {
-                                debug!(request_id = %payload.request_id, "gossiped payload processed");
-                            }
-                            Err(err) => {
-                                error!(request_id = %payload.request_id, error = %err, "error processing gossiped payload");
-                            }
+                        )
+                        .await
+                    {
+                        Ok(_get_payload_response) => {
+                            debug!(request_id = %payload.request_id, "gossiped payload processed");
                         }
-                    });
-                }
-                _ => {}
+                        Err(err) => {
+                            error!(request_id = %payload.request_id, error = %err, "error processing gossiped payload");
+                        }
+                    }
+                });
             }
         }
     }

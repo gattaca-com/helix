@@ -50,7 +50,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         }
 
         if params.limit.is_some() && params.limit.unwrap() > 200 {
-            return Err(DataApiError::LimitReached{limit: 200});
+            return Err(DataApiError::LimitReached { limit: 200 })
         }
 
         if params.limit.is_none() {
@@ -58,7 +58,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         }
 
         if params.limit.is_some() && params.limit.unwrap() > 200 {
-            return Err(DataApiError::LimitReached{limit: 200});
+            return Err(DataApiError::LimitReached { limit: 200 })
         }
 
         if params.limit.is_none() {
@@ -108,7 +108,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         }
 
         if params.limit.is_some() && params.limit.unwrap() > 500 {
-            return Err(DataApiError::LimitReached{limit: 500});
+            return Err(DataApiError::LimitReached { limit: 500 })
         }
 
         if params.limit.is_none() {

@@ -127,11 +127,7 @@ mod tests {
         let registration = get_randomized_signed_validator_registration();
 
         db_service
-            .save_validator_registration(
-                registration.clone(),
-                Some("test".to_string()),
-                None,
-            )
+            .save_validator_registration(registration.clone(), Some("test".to_string()), None)
             .await
             .unwrap();
         sleep(Duration::from_secs(5)).await;
@@ -160,11 +156,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         db_service
-            .save_validator_registrations(
-                registrations.clone(),
-                Some("test".to_string()),
-                None,
-            )
+            .save_validator_registrations(registrations.clone(), Some("test".to_string()), None)
             .await
             .unwrap();
         sleep(Duration::from_secs(5)).await;
@@ -195,11 +187,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         db_service
-            .save_validator_registrations(
-                registrations.clone(),
-                Some("test".to_string()),
-                None,
-            )
+            .save_validator_registrations(registrations.clone(), Some("test".to_string()), None)
             .await
             .unwrap();
 
@@ -239,11 +227,7 @@ mod tests {
 
         let registration = get_randomized_signed_validator_registration();
         db_service
-            .save_validator_registration(
-                registration.clone(),
-                Some("test".to_string()),
-                None,
-            )
+            .save_validator_registration(registration.clone(), Some("test".to_string()), None)
             .await
             .unwrap();
 
@@ -264,11 +248,7 @@ mod tests {
         for i in 0..10 {
             let registration = get_randomized_signed_validator_registration();
             db_service
-                .save_validator_registration(
-                    registration.clone(),
-                    Some("test".to_string()),
-                    None,
-                )
+                .save_validator_registration(registration.clone(), Some("test".to_string()), None)
                 .await
                 .unwrap();
 
@@ -602,12 +582,7 @@ mod tests {
             PayloadAndBlobs { execution_payload: execution_payload.clone(), blobs_bundle: None };
 
         db_service
-            .save_delivered_payload(
-                &bid_trace,
-                Arc::new(payload_and_blobs),
-                &latency_trace,
-                None,
-            )
+            .save_delivered_payload(&bid_trace, Arc::new(payload_and_blobs), &latency_trace, None)
             .await?;
         Ok(())
     }

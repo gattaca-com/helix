@@ -307,10 +307,10 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let request_id = Uuid::parse_str(headers
-            .get("x-request-id")
-            .map(|v| v.to_str().unwrap_or_default())
-            .unwrap_or_default()).unwrap();
+        let request_id = Uuid::parse_str(
+            headers.get("x-request-id").map(|v| v.to_str().unwrap_or_default()).unwrap_or_default(),
+        )
+        .unwrap();
         let mut trace = SubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
@@ -336,7 +336,7 @@ where
             return Err(BuilderApiError::SubmissionForPastSlot {
                 current_slot: head_slot,
                 submission_slot: payload.slot(),
-            });
+            })
         }
 
         // Verify that we have a validator connected for this slot
@@ -346,7 +346,7 @@ where
                 block_hash = ?block_hash,
                 "could not find slot duty"
             );
-            return Err(BuilderApiError::ProposerDutyNotFound);
+            return Err(BuilderApiError::ProposerDutyNotFound)
         }
         let next_duty = next_duty.unwrap();
 
@@ -362,7 +362,12 @@ where
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes = api
-            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &block_hash, &request_id)
+            .fetch_payload_attributes(
+                payload.slot(),
+                payload.parent_hash(),
+                &block_hash,
+                &request_id,
+            )
             .await?;
 
         // Handle duplicates.
@@ -429,7 +434,7 @@ where
             Ok(Some(slot)) => {
                 if payload.slot() <= slot {
                     debug!(request_id = %request_id, "payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
+                    return Err(BuilderApiError::PayloadAlreadyDelivered)
                 }
             }
             Ok(None) => {}
@@ -570,10 +575,10 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let request_id = Uuid::parse_str(headers
-            .get("x-request-id")
-            .map(|v| v.to_str().unwrap_or_default())
-            .unwrap_or_default()).unwrap();
+        let request_id = Uuid::parse_str(
+            headers.get("x-request-id").map(|v| v.to_str().unwrap_or_default()).unwrap_or_default(),
+        )
+        .unwrap();
         let mut trace =
             HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
@@ -610,7 +615,7 @@ where
             return Err(BuilderApiError::SubmissionForPastSlot {
                 current_slot: head_slot,
                 submission_slot: payload.slot(),
-            });
+            })
         }
 
         // Verify that we have a validator connected for this slot
@@ -620,13 +625,18 @@ where
                 block_hash = ?block_hash,
                 "could not find slot duty"
             );
-            return Err(BuilderApiError::ProposerDutyNotFound);
+            return Err(BuilderApiError::ProposerDutyNotFound)
         }
         let next_duty = next_duty.unwrap();
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes = api
-            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &block_hash, &request_id)
+            .fetch_payload_attributes(
+                payload.slot(),
+                payload.parent_hash(),
+                &block_hash,
+                &request_id,
+            )
             .await?;
 
         // Fetch builder info
@@ -713,7 +723,7 @@ where
             Ok(Some(slot)) => {
                 if payload.slot() <= slot {
                     debug!(request_id = %request_id, "payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
+                    return Err(BuilderApiError::PayloadAlreadyDelivered)
                 }
             }
             Ok(None) => {}
@@ -814,10 +824,10 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let request_id = Uuid::parse_str(headers
-            .get("x-request-id")
-            .map(|v| v.to_str().unwrap_or_default())
-            .unwrap_or_default()).unwrap();
+        let request_id = Uuid::parse_str(
+            headers.get("x-request-id").map(|v| v.to_str().unwrap_or_default()).unwrap_or_default(),
+        )
+        .unwrap();
         let now = SystemTime::now();
         let mut trace = SubmissionTrace { receive: get_nanos_from(now)?, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
@@ -879,13 +889,18 @@ where
                 block_hash = ?block_hash,
                 "could not find slot duty"
             );
-            return Err(BuilderApiError::ProposerDutyNotFound);
+            return Err(BuilderApiError::ProposerDutyNotFound)
         }
         let next_duty = next_duty.unwrap();
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes = api
-            .fetch_payload_attributes(payload.slot(), payload.parent_hash(),  &block_hash, &request_id)
+            .fetch_payload_attributes(
+                payload.slot(),
+                payload.parent_hash(),
+                &block_hash,
+                &request_id,
+            )
             .await?;
 
         // Fetch builder info
@@ -923,7 +938,7 @@ where
             Ok(Some(slot)) => {
                 if payload.slot() <= slot {
                     debug!(request_id = %request_id, "payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
+                    return Err(BuilderApiError::PayloadAlreadyDelivered)
                 }
             }
             Ok(None) => {}
@@ -1033,10 +1048,10 @@ where
         headers: HeaderMap,
         Json(mut signed_cancellation): Json<SignedCancellation>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let request_id = Uuid::parse_str(headers
-            .get("x-request-id")
-            .map(|v| v.to_str().unwrap_or_default())
-            .unwrap_or_default()).unwrap();
+        let request_id = Uuid::parse_str(
+            headers.get("x-request-id").map(|v| v.to_str().unwrap_or_default()).unwrap_or_default(),
+        )
+        .unwrap();
         let (head_slot, _next_duty) = api.curr_slot_info.read().await.clone();
 
         let slot = signed_cancellation.message.slot;
@@ -1066,7 +1081,7 @@ where
             Ok(Some(del_slot)) => {
                 if slot <= del_slot {
                     debug!(request_id = %request_id, "payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
+                    return Err(BuilderApiError::PayloadAlreadyDelivered)
                 }
             }
             Ok(None) => {}
@@ -1172,7 +1187,7 @@ where
             Ok(Some(slot)) => {
                 if req.slot <= slot {
                     debug!(request_id = %request_id, "payload already delivered");
-                    return;
+                    return
                 }
             }
             Ok(None) => {}
@@ -1282,7 +1297,7 @@ where
             Ok(Some(slot)) => {
                 if req.slot <= slot {
                     debug!(request_id = %request_id, "payload already delivered");
-                    return;
+                    return
                 }
             }
             Ok(None) => {}
