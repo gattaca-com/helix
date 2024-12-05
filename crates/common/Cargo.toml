@@ -24,7 +24,7 @@ merkle_proof = { git = "https://github.com/sigp/lighthouse.git", tag = "v5.3.0" 
 ethereum-types = "0.14.1"
 ssz_types = "0.5.4"
 
-# DB
+# Async
 tokio.workspace = true
 
 # Misc
@@ -37,6 +37,9 @@ ssz_rs = { git = "https://github.com/ralexstokes/ssz-rs", rev = "1df4cd9", featu
 ] }
 sha2 = "0.10.8"
 tree_hash = "0.6.0"
+prometheus.workspace = true
+eyre.workspace = true
+lazy_static.workspace = true
 
 [dev-dependencies]
 tree_hash = "0.6.0"

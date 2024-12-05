@@ -5,6 +5,7 @@ pub mod builder_info;
 pub mod chain_info;
 pub mod config;
 pub mod eth;
+pub mod metrics;
 pub mod pending_block;
 pub mod proofs;
 pub mod proposer;

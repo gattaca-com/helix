@@ -14,6 +14,7 @@ use helix_common::{
         constraints_api::{SignedDelegation, SignedRevocation},
     },
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
+    metrics::RedisMetricRecord,
     pending_block::PendingBlock,
     proofs::SignedConstraintsWithProofData,
     versioned_payload::PayloadAndBlobs,
@@ -511,10 +512,14 @@ impl Auctioneer for RedisCache {
         &self,
         pub_key: BlsPublicKey,
     ) -> Result<Vec<SignedDelegation>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_validator_delegations");
+
         let key = get_delegations_key(&pub_key);
 
         let delegations =
             self.get(&key).await.map_err(AuctioneerError::RedisError)?.unwrap_or_default();
+
+        record.record_success();
         Ok(delegations)
     }
 
@@ -522,6 +527,8 @@ impl Auctioneer for RedisCache {
         &self,
         signed_delegations: Vec<SignedDelegation>,
     ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("save_validator_delegations");
+
         let len = signed_delegations.len();
         for signed_delegation in signed_delegations {
             let key = get_delegations_key(&signed_delegation.message.validator_pubkey);
@@ -541,6 +548,7 @@ impl Auctioneer for RedisCache {
 
         trace!(len, "saved delegations to cache");
 
+        record.record_success();
         Ok(())
     }
 
@@ -548,6 +556,8 @@ impl Auctioneer for RedisCache {
         &self,
         signed_revocations: Vec<SignedRevocation>,
     ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("revoke_validator_delegations");
+
         for signed_revocation in &signed_revocations {
             let key = get_delegations_key(&signed_revocation.message.validator_pubkey);
 
@@ -568,6 +578,7 @@ impl Auctioneer for RedisCache {
                 .map_err(AuctioneerError::RedisError)?;
         }
 
+        record.record_success();
         Ok(())
     }
 
@@ -576,6 +587,8 @@ impl Auctioneer for RedisCache {
         slot: u64,
         constraints: SignedConstraintsWithProofData,
     ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("save_constraints");
+
         let key = get_constraints_key(slot);
 
         // Get the existing constraints from the cache or create new constraints.
@@ -587,15 +600,23 @@ impl Auctioneer for RedisCache {
         // Save the constraints to the cache.
         self.set(&key, &prev_constraints, Some(CONSTRAINTS_CACHE_EXPIRY_S))
             .await
-            .map_err(AuctioneerError::RedisError)
+            .map_err(AuctioneerError::RedisError)?;
+
+        record.record_success();
+        Ok(())
     }
 
     async fn get_constraints(
         &self,
         slot: u64,
     ) -> Result<Option<Vec<SignedConstraintsWithProofData>>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_constraints");
+
         let key = get_constraints_key(slot);
-        self.get(&key).await.map_err(AuctioneerError::RedisError)
+        let constraints = self.get(&key).await.map_err(AuctioneerError::RedisError)?;
+
+        record.record_success();
+        Ok(constraints)
     }
 
     async fn save_inclusion_proof(
@@ -605,10 +626,15 @@ impl Auctioneer for RedisCache {
         bid_block_hash: &Hash32,
         inclusion_proof: &InclusionProofs,
     ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("save_inclusion_proof");
+
         let key = get_inclusion_proof_key(slot, proposer_pub_key, bid_block_hash);
         self.set(&key, inclusion_proof, Some(CONSTRAINTS_CACHE_EXPIRY_S))
             .await
-            .map_err(AuctioneerError::RedisError)
+            .map_err(AuctioneerError::RedisError)?;
+
+        record.record_success();
+        Ok(())
     }
 
     async fn get_inclusion_proof(
@@ -617,12 +643,23 @@ impl Auctioneer for RedisCache {
         proposer_pub_key: &BlsPublicKey,
         bid_block_hash: &Hash32,
     ) -> Result<Option<InclusionProofs>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_inclusion_proof");
+
         let key = get_inclusion_proof_key(slot, proposer_pub_key, bid_block_hash);
-        self.get(&key).await.map_err(AuctioneerError::RedisError)
+        let inclusion_proof = self.get(&key).await.map_err(AuctioneerError::RedisError)?;
+
+        record.record_success();
+        Ok(inclusion_proof)
     }
 
     async fn get_last_slot_delivered(&self) -> Result<Option<u64>, AuctioneerError> {
-        self.get(LAST_SLOT_DELIVERED_KEY).await.map_err(AuctioneerError::RedisError)
+        let mut record = RedisMetricRecord::new("get_last_slot_delivered");
+
+        let last_slot_delivered =
+            self.get(LAST_SLOT_DELIVERED_KEY).await.map_err(AuctioneerError::RedisError)?;
+
+        record.record_success();
+        Ok(last_slot_delivered)
     }
 
     async fn check_and_set_last_slot_and_hash_delivered(
@@ -630,6 +667,8 @@ impl Auctioneer for RedisCache {
         slot: u64,
         hash: &Hash32,
     ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("check_and_set_last_slot_and_hash_delivered");
+
         let last_slot_delivered_res = self.get_last_slot_delivered().await?;
 
         if let Some(last_slot_delivered) = last_slot_delivered_res {
@@ -648,6 +687,8 @@ impl Auctioneer for RedisCache {
                     }
                     None => return Err(AuctioneerError::UnexpectedValueType),
                 }
+
+                record.record_success();
                 return Ok(())
             }
         }
@@ -669,7 +710,10 @@ impl Auctioneer for RedisCache {
             .arg(hash_value)
             .ignore();
 
-        Ok(pipe.query_async(&mut conn).await.map_err(RedisCacheError::from)?)
+        pipe.query_async(&mut conn).await.map_err(RedisCacheError::from)?;
+
+        record.record_success();
+        Ok(())
     }
 
     async fn get_best_bid(
@@ -678,8 +722,12 @@ impl Auctioneer for RedisCache {
         parent_hash: &Hash32,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<Option<SignedBuilderBid>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_best_bid");
+
         let key = get_cache_get_header_response_key(slot, parent_hash, proposer_pub_key);
         let wrapped_bid: Option<SignedBuilderBidWrapper> = self.get(&key).await?;
+
+        record.record_success();
         Ok(wrapped_bid.map(|wrapped_bid| wrapped_bid.bid))
     }
 
@@ -698,8 +746,13 @@ impl Auctioneer for RedisCache {
         block_hash: &Hash32,
         execution_payload: &PayloadAndBlobs,
     ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("save_execution_payload");
+
         let key = get_execution_payload_key(slot, proposer_pub_key, block_hash);
-        Ok(self.set(&key, &execution_payload, Some(BID_CACHE_EXPIRY_S)).await?)
+        self.set(&key, &execution_payload, Some(BID_CACHE_EXPIRY_S)).await?;
+
+        record.record_success();
+        Ok(())
     }
 
     async fn get_execution_payload(
@@ -708,8 +761,13 @@ impl Auctioneer for RedisCache {
         proposer_pub_key: &BlsPublicKey,
         block_hash: &Hash32,
     ) -> Result<Option<PayloadAndBlobs>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_execution_payload");
+
         let key = get_execution_payload_key(slot, proposer_pub_key, block_hash);
-        Ok(self.get(&key).await?)
+        let execution_payload = self.get(&key).await?;
+
+        record.record_success();
+        Ok(execution_payload)
     }
 
     async fn get_bid_trace(
@@ -718,17 +776,27 @@ impl Auctioneer for RedisCache {
         proposer_pub_key: &BlsPublicKey,
         block_hash: &Hash32,
     ) -> Result<Option<BidTrace>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_bid_trace");
+
         let key = get_cache_bid_trace_key(slot, proposer_pub_key, block_hash);
-        Ok(self.get(&key).await?)
+        let bid_trace = self.get(&key).await?;
+
+        record.record_success();
+        Ok(bid_trace)
     }
 
     async fn save_bid_trace(&self, bid_trace: &BidTrace) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("save_bid_trace");
+
         let key = get_cache_bid_trace_key(
             bid_trace.slot,
             &bid_trace.proposer_public_key,
             &bid_trace.block_hash,
         );
-        Ok(self.set(&key, &bid_trace, Some(BID_CACHE_EXPIRY_S)).await?)
+        self.set(&key, &bid_trace, Some(BID_CACHE_EXPIRY_S)).await?;
+
+        record.record_success();
+        Ok(())
     }
 
     async fn get_builder_latest_payload_received_at(
@@ -738,8 +806,13 @@ impl Auctioneer for RedisCache {
         parent_hash: &Hash32,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<Option<u64>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_builder_latest_payload_received_at");
+
         let key = get_builder_latest_bid_time_key(slot, parent_hash, proposer_pub_key);
-        Ok(self.hget(&key, &format!("{builder_pub_key:?}")).await?)
+        let received_at = self.hget(&key, &format!("{builder_pub_key:?}")).await?;
+
+        record.record_success();
+        Ok(received_at)
     }
 
     /// This function performs three operations:
@@ -755,6 +828,8 @@ impl Auctioneer for RedisCache {
         received_at: u128,
         builder_bid: &SignedBuilderBid,
     ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("save_builder_bid");
+
         let mut conn = self.pool.get().await.map_err(RedisCacheError::from)?;
         let mut pipe = redis::pipe();
 
@@ -797,7 +872,10 @@ impl Auctioneer for RedisCache {
             .expire(&key_latest_bids_value, BID_CACHE_EXPIRY_S)
             .ignore();
 
-        Ok(pipe.query_async(&mut conn).await.map_err(RedisCacheError::from)?)
+        pipe.query_async(&mut conn).await.map_err(RedisCacheError::from)?;
+
+        record.record_success();
+        Ok(())
     }
 
     /// The `save_bid_and_update_top_bid` function performs several key operations:
@@ -815,10 +893,13 @@ impl Auctioneer for RedisCache {
         state: &mut SaveBidAndUpdateTopBidResponse,
         signing_context: &RelaySigningContext,
     ) -> Result<Option<(SignedBuilderBid, PayloadAndBlobs)>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("save_bid_and_update_top_bid");
+
         // Exit early if cancellations aren't enabled and the bid is below the floor.
         let is_bid_above_floor = submission.bid_trace().value > floor_value;
         if !cancellations_enabled && !is_bid_above_floor {
-            return Ok(None)
+            record.record_success();
+            return Ok(None);
         }
 
         // Save the execution payload
@@ -852,6 +933,7 @@ impl Auctioneer for RedisCache {
         )
         .await?;
 
+        record.record_success();
         Ok(Some((builder_bid, cloned_submission.payload_and_blobs())))
     }
 
@@ -861,8 +943,13 @@ impl Auctioneer for RedisCache {
         parent_hash: &Hash32,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<Option<U256>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_top_bid_value");
+
         let key = get_top_bid_value_key(slot, parent_hash, proposer_pub_key);
-        Ok(self.get(&key).await?)
+        let top_bid_value = self.get(&key).await?;
+
+        record.record_success();
+        Ok(top_bid_value)
     }
 
     async fn get_builder_latest_value(
@@ -872,8 +959,13 @@ impl Auctioneer for RedisCache {
         proposer_pub_key: &BlsPublicKey,
         builder_pub_key: &BlsPublicKey,
     ) -> Result<Option<U256>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_builder_latest_value");
+
         let key = get_builder_latest_bid_value_key(slot, parent_hash, proposer_pub_key);
-        Ok(self.hget(&key, &format!("{builder_pub_key:?}")).await?)
+        let builder_latest_value = self.hget(&key, &format!("{builder_pub_key:?}")).await?;
+
+        record.record_success();
+        Ok(builder_latest_value)
     }
 
     async fn get_floor_bid_value(
@@ -882,8 +974,13 @@ impl Auctioneer for RedisCache {
         parent_hash: &Hash32,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<Option<U256>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_floor_bid_value");
+
         let key = get_floor_bid_value_key(slot, parent_hash, proposer_pub_key);
-        Ok(self.get(&key).await?)
+        let floor_bid_value = self.get(&key).await?;
+
+        record.record_success();
+        Ok(floor_bid_value)
     }
 
     async fn delete_builder_bid(
@@ -893,6 +990,8 @@ impl Auctioneer for RedisCache {
         proposer_pub_key: &BlsPublicKey,
         builder_pub_key: &BlsPublicKey,
     ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("delete_builder_bid");
+
         // Delete the value
         let key_latest_value =
             get_builder_latest_bid_value_key(slot, parent_hash, proposer_pub_key);
@@ -911,41 +1010,55 @@ impl Auctioneer for RedisCache {
             .await?
             .unwrap_or(U256::ZERO);
 
-        Ok(self
-            .update_top_bid(
-                &mut state,
-                &builder_bids,
-                slot,
-                parent_hash,
-                proposer_pub_key,
-                floor_value,
-            )
-            .await?)
+        self.update_top_bid(
+            &mut state,
+            &builder_bids,
+            slot,
+            parent_hash,
+            proposer_pub_key,
+            floor_value,
+        )
+        .await?;
+
+        record.record_success();
+        Ok(())
     }
 
     async fn get_builder_info(
         &self,
         builder_pub_key: &BlsPublicKey,
     ) -> Result<BuilderInfo, AuctioneerError> {
-        self.hget(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"))
+        let mut record = RedisMetricRecord::new("get_builder_info");
+        let builder_info = self
+            .hget(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"))
             .await?
-            .ok_or(AuctioneerError::BuilderNotFound { pub_key: builder_pub_key.clone() })
+            .ok_or(AuctioneerError::BuilderNotFound { pub_key: builder_pub_key.clone() })?;
+
+        record.record_success();
+        Ok(builder_info)
     }
 
     async fn demote_builder(&self, builder_pub_key: &BlsPublicKey) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("demote_builder");
         let mut builder_info = self.get_builder_info(builder_pub_key).await?;
         if !builder_info.is_optimistic {
             return Ok(())
         }
         builder_info.is_optimistic = false;
-        Ok(self.hset(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"), &builder_info).await?)
+        self.hset(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"), &builder_info).await?;
+
+        record.record_success();
+        Ok(())
     }
 
     async fn update_builder_infos(
         &self,
         builder_infos: Vec<BuilderInfoDocument>,
     ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("update_builder_infos");
+
         if builder_infos.is_empty() {
+            record.record_success();
             return Ok(())
         }
 
@@ -967,6 +1080,7 @@ impl Auctioneer for RedisCache {
             }
         }
 
+        record.record_success();
         Ok(())
     }
 
@@ -977,8 +1091,12 @@ impl Auctioneer for RedisCache {
         parent_hash: &Hash32,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<bool, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("seen_or_insert_block_hash");
         let key = get_seen_block_hashes_key(slot, parent_hash, proposer_pub_key);
-        Ok(self.seen_or_add(&key, block_hash).await?)
+        let seen = self.seen_or_add(&key, block_hash).await?;
+
+        record.record_success();
+        Ok(seen)
     }
 
     async fn save_signed_builder_bid_and_update_top_bid(
@@ -990,9 +1108,12 @@ impl Auctioneer for RedisCache {
         floor_value: U256,
         state: &mut SaveBidAndUpdateTopBidResponse,
     ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("save_signed_builder_bid_and_update_top_bid");
+
         // Exit early if cancellations aren't enabled and the bid is below the floor.
         let is_bid_above_floor = builder_bid.value() > floor_value;
         if !cancellations_enabled && !is_bid_above_floor {
+            record.record_success();
             return Ok(())
         }
 
@@ -1035,6 +1156,7 @@ impl Auctioneer for RedisCache {
         // TODO: the floor may have raised but we will exit early here.
         state.top_bid_value = builder_bids.values().max().cloned().unwrap_or(U256::ZERO);
         if state.top_bid_value == state.prev_top_bid_value {
+            record.record_success();
             return Ok(())
         }
 
@@ -1054,6 +1176,7 @@ impl Auctioneer for RedisCache {
         // Handle floor value updates only if needed.
         // Only non-cancellable bids above the floor should set a new floor.
         if cancellations_enabled || !is_bid_above_floor {
+            record.record_success();
             return Ok(())
         }
         self.set_new_floor(
@@ -1066,6 +1189,7 @@ impl Auctioneer for RedisCache {
         .await?;
         state.set_latency_update_floor();
 
+        record.record_success();
         Ok(())
     }
 
@@ -1073,8 +1197,12 @@ impl Auctioneer for RedisCache {
         &self,
         block_hash: &Hash32,
     ) -> Result<Option<Node>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_header_tx_root");
         let key = get_header_tx_root_key(block_hash);
-        Ok(self.get(&key).await?)
+        let tx_root = self.get(&key).await?;
+
+        record.record_success();
+        Ok(tx_root)
     }
 
     async fn save_header_submission_and_update_top_bid(
@@ -1086,9 +1214,12 @@ impl Auctioneer for RedisCache {
         state: &mut SaveBidAndUpdateTopBidResponse,
         signing_context: &RelaySigningContext,
     ) -> Result<Option<SignedBuilderBid>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("save_header_submission_and_update_top_bid");
+
         // Exit early if cancellations aren't enabled and the bid is below the floor.
         let is_bid_above_floor = submission.value() > floor_value;
         if !cancellations_enabled && !is_bid_above_floor {
+            record.record_success();
             return Ok(None)
         }
 
@@ -1116,6 +1247,7 @@ impl Auctioneer for RedisCache {
         )
         .await?;
 
+        record.record_success();
         Ok(Some(builder_bid))
     }
 
@@ -1123,6 +1255,8 @@ impl Auctioneer for RedisCache {
         &self,
         proposer_whitelist: Vec<ProposerInfo>,
     ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("update_trusted_proposers");
+
         // get keys
         let proposer_keys: Vec<String> =
             proposer_whitelist.iter().map(|proposer| format!("{:?}", proposer.pub_key)).collect();
@@ -1145,6 +1279,7 @@ impl Auctioneer for RedisCache {
             }
         }
 
+        record.record_success();
         Ok(())
     }
 
@@ -1152,9 +1287,13 @@ impl Auctioneer for RedisCache {
         &self,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<bool, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("is_trusted_proposer");
+
         let key_str = format!("{proposer_pub_key:?}");
         let proposer_info: Option<ProposerInfo> =
             self.hget(PROPOSER_WHITELIST_KEY, &key_str).await?;
+
+        record.record_success();
         Ok(proposer_info.is_some())
     }
 
@@ -1162,6 +1301,8 @@ impl Auctioneer for RedisCache {
         &self,
         primev_proposers: &[BlsPublicKey],
     ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("update_primev_proposers");
+
         // get keys
         let proposer_keys: Vec<String> =
             primev_proposers.iter().map(|proposer| format!("{:?}", proposer)).collect();
@@ -1184,6 +1325,7 @@ impl Auctioneer for RedisCache {
             }
         }
 
+        record.record_success();
         Ok(())
     }
 
@@ -1191,9 +1333,14 @@ impl Auctioneer for RedisCache {
         &self,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<bool, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("is_primev_proposer");
+
         let key_str = format!("{proposer_pub_key:?}");
         let proposer_info: Option<BlsPublicKey> = self.hget(PRIMEV_PROPOSERS_KEY, &key_str).await?;
-        Ok(proposer_info.is_some())
+        let is_primev = proposer_info.is_some();
+
+        record.record_success();
+        Ok(is_primev)
     }
 
     async fn save_pending_block_header(
@@ -1203,6 +1350,8 @@ impl Auctioneer for RedisCache {
         block_hash: &Hash32,
         timestamp_ms: u64,
     ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("save_pending_block_header");
+
         let builder_key = get_pending_block_builder_key(builder_pub_key);
         self.add(builder_key.as_str(), format!("{block_hash:?}")).await?;
 
@@ -1210,6 +1359,7 @@ impl Auctioneer for RedisCache {
         let entries = vec![("slot", slot), ("header_received", timestamp_ms)];
         self.hset_multiple_not_exists(key.as_str(), &entries, PENDING_BLOCK_EXPIRY_S).await?;
 
+        record.record_success();
         Ok(())
     }
 
@@ -1220,6 +1370,8 @@ impl Auctioneer for RedisCache {
         block_hash: &Hash32,
         timestamp_ms: u64,
     ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("save_pending_block_payload");
+
         let builder_key = get_pending_block_builder_key(builder_pub_key);
         self.add(builder_key.as_str(), format!("{block_hash:?}")).await?;
 
@@ -1227,16 +1379,20 @@ impl Auctioneer for RedisCache {
         let entries = vec![("slot", slot), ("payload_received", timestamp_ms)];
         self.hset_multiple_not_exists(key.as_str(), &entries, PENDING_BLOCK_EXPIRY_S).await?;
 
+        record.record_success();
         Ok(())
     }
 
     async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_pending_blocks");
+
         let mut pending_blocks: Vec<PendingBlock> = Vec::new();
 
         let redis_builder_infos: Option<HashMap<String, BuilderInfo>> =
             self.hgetall(BUILDER_INFO_KEY).await?;
 
         if redis_builder_infos.is_none() {
+            record.record_success();
             return Ok(pending_blocks)
         }
 
@@ -1293,6 +1449,8 @@ impl Auctioneer for RedisCache {
                 self.remove(builder_key.as_str(), expired).await?;
             }
         }
+
+        record.record_success();
         Ok(pending_blocks)
     }
 
