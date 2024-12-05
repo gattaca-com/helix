@@ -94,12 +94,12 @@ impl GrpcGossiperClient {
                 Ok(Err(err)) => {
                     error!(err = %err, "Client call failed.");
                     GossipMetrics::out_count(HEADER_ID, false);
-                    return Err(GossipError::BroadcastError(err));
+                    return Err(GossipError::BroadcastError(err))
                 }
                 Err(_) => {
                     error!("Client call timed out.");
                     GossipMetrics::out_count(HEADER_ID, false);
-                    return Err(GossipError::TimeoutError);
+                    return Err(GossipError::TimeoutError)
                 }
             }
         } else {
@@ -134,12 +134,12 @@ impl GrpcGossiperClient {
                 Ok(Err(err)) => {
                     error!(err = %err, "Client call failed.");
                     GossipMetrics::out_count(PAYLOAD_ID, false);
-                    return Err(GossipError::BroadcastError(err));
+                    return Err(GossipError::BroadcastError(err))
                 }
                 Err(_) => {
                     error!("Client call timed out.");
                     GossipMetrics::out_count(PAYLOAD_ID, false);
-                    return Err(GossipError::TimeoutError);
+                    return Err(GossipError::TimeoutError)
                 }
             }
         } else {
@@ -174,12 +174,12 @@ impl GrpcGossiperClient {
                 Ok(Err(err)) => {
                     error!(err = %err, "Client call failed.");
                     GossipMetrics::out_count(GET_PAYLOAD_ID, false);
-                    return Err(GossipError::BroadcastError(err));
+                    return Err(GossipError::BroadcastError(err))
                 }
                 Err(_) => {
                     error!("Client call timed out.");
                     GossipMetrics::out_count(GET_PAYLOAD_ID, false);
-                    return Err(GossipError::TimeoutError);
+                    return Err(GossipError::TimeoutError)
                 }
             }
         } else {
@@ -216,12 +216,12 @@ impl GrpcGossiperClient {
                 Ok(Err(err)) => {
                     error!(err = %err, "Client call failed.");
                     GossipMetrics::out_count(CANCELLATION_ID, false);
-                    return Err(GossipError::BroadcastError(err));
+                    return Err(GossipError::BroadcastError(err))
                 }
                 Err(_) => {
                     error!("Client call timed out.");
                     GossipMetrics::out_count(CANCELLATION_ID, false);
-                    return Err(GossipError::TimeoutError);
+                    return Err(GossipError::TimeoutError)
                 }
             }
         } else {

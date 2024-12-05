@@ -899,7 +899,7 @@ impl Auctioneer for RedisCache {
         let is_bid_above_floor = submission.bid_trace().value > floor_value;
         if !cancellations_enabled && !is_bid_above_floor {
             record.record_success();
-            return Ok(None);
+            return Ok(None)
         }
 
         // Save the execution payload

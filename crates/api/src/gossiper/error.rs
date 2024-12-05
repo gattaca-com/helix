@@ -9,7 +9,6 @@ pub enum GossipError {
     #[error("Failed to reconnect")]
     ReconnectFailed,
     // Add other error common as needed
-
     #[error("Broadcast timed out")]
     TimeoutError,
 }
