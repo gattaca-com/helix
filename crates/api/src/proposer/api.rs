@@ -48,7 +48,10 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
 use helix_housekeeper::{ChainUpdate, SlotUpdate};
-use helix_utils::signing::{verify_signed_builder_message, verify_signed_consensus_message};
+use helix_utils::{
+    extract_request_id,
+    signing::{verify_signed_builder_message, verify_signed_consensus_message},
+};
 
 use crate::{
     gossiper::{
@@ -167,10 +170,7 @@ where
             return Err(ProposerApiError::EmptyRequest)
         }
 
-        let request_id = Uuid::parse_str(
-            headers.get("x-request-id").map(|v| v.to_str().unwrap_or_default()).unwrap_or_default(),
-        )
-        .unwrap();
+        let request_id = extract_request_id(&headers);
 
         let mut trace =
             RegisterValidatorsTrace { receive: get_nanos_timestamp()?, ..Default::default() };
@@ -386,10 +386,7 @@ where
             return Err(ProposerApiError::ServiceUnavailableError)
         }
 
-        let request_id = Uuid::parse_str(
-            headers.get("x-request-id").map(|v| v.to_str().unwrap_or_default()).unwrap_or_default(),
-        )
-        .unwrap();
+        let request_id = extract_request_id(&headers);
 
         let mut trace = GetHeaderTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
@@ -651,11 +648,9 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
+        let request_id = extract_request_id(&headers);
+
         let mut trace = GetPayloadTrace { receive: get_nanos_timestamp()?, ..Default::default() };
-        let request_id = Uuid::parse_str(
-            headers.get("x-request-id").map(|v| v.to_str().unwrap_or_default()).unwrap_or_default(),
-        )
-        .unwrap();
 
         let user_agent =
             headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|v| v.to_string());

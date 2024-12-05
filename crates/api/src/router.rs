@@ -9,6 +9,7 @@ use helix_beacon_client::{beacon_client::BeaconClient, multi_beacon_client::Mult
 use helix_common::{Route, RouterConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
+use helix_utils::extract_request_id;
 use hyper::HeaderMap;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tower::{timeout::TimeoutLayer, BoxError, ServiceBuilder};
@@ -171,11 +172,9 @@ pub fn build_router(
     router = router.layer(
         ServiceBuilder::new()
             .layer(HandleErrorLayer::new(|headers: HeaderMap, e: BoxError| async move {
-                let request_id = headers
-                    .get("x-request-id")
-                    .map(|v| v.to_str().unwrap_or_default())
-                    .unwrap_or_default();
-                warn!(request_id = request_id, "Request timed out {:?}", e);
+                let request_id = extract_request_id(&headers);
+
+                warn!(%request_id, "Request timed out {:?}", e);
                 StatusCode::REQUEST_TIMEOUT
             }))
             .layer(TimeoutLayer::new(API_REQUEST_TIMEOUT)),
