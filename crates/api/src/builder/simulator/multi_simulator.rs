@@ -5,7 +5,6 @@ use std::sync::{
     Arc,
 };
 use tokio::sync::mpsc::Sender;
-use uuid::Uuid;
 
 use crate::builder::DbInfo;
 
@@ -35,7 +34,6 @@ impl<B: BlockSimulator + Send + Sync> BlockSimulator for MultiSimulator<B> {
         builder_info: &BuilderInfo,
         is_top_bid: bool,
         sim_result_saver_sender: Sender<DbInfo>,
-        request_id: Uuid,
     ) -> Result<bool, BlockSimError> {
         // Load balancing: round-robin selection
         let index = self
@@ -48,8 +46,6 @@ impl<B: BlockSimulator + Send + Sync> BlockSimulator for MultiSimulator<B> {
         let simulator = &self.simulators[index];
 
         // Process the request with the selected simulator
-        simulator
-            .process_request(request, builder_info, is_top_bid, sim_result_saver_sender, request_id)
-            .await
+        simulator.process_request(request, builder_info, is_top_bid, sim_result_saver_sender).await
     }
 }

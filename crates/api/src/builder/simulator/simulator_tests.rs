@@ -16,7 +16,6 @@ use reqwest::Client;
 use reth_primitives::hex;
 use serde_json::json;
 use std::sync::Arc;
-use uuid::Uuid;
 
 // ++++ HELPERS ++++
 fn get_simulator(endpoint: &str) -> RpcSimulator {
@@ -65,9 +64,8 @@ async fn test_process_request_ok() {
     let (sim_res_sender, mut sim_res_receiver) = tokio::sync::mpsc::channel(100);
     let simulator = get_simulator(&server.url());
     let builder_info = BuilderInfo::default();
-    let result = simulator
-        .process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4())
-        .await;
+    let result =
+        simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender).await;
 
     mock.assert();
     assert!(result.is_ok());
@@ -98,9 +96,8 @@ async fn test_process_request_error() {
     let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
     let simulator = get_simulator(&server.url());
     let builder_info = BuilderInfo::default();
-    let result = simulator
-        .process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4())
-        .await;
+    let result =
+        simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender).await;
 
     mock.assert();
     assert!(result.is_err());
@@ -130,9 +127,8 @@ async fn test_process_request_validation_failed() {
     let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
     let simulator = get_simulator(&server.url());
     let builder_info = BuilderInfo::default();
-    let result = simulator
-        .process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4())
-        .await;
+    let result =
+        simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender).await;
 
     mock.assert();
     assert!(result.is_err());

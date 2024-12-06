@@ -4,8 +4,7 @@ use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32};
 use reqwest::Client;
 use tokio::sync::{mpsc::Sender, RwLock};
-use tracing::{debug, error, warn};
-use uuid::Uuid;
+use tracing::{debug, error, warn, Instrument};
 
 use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, BuilderInfo};
 use helix_database::DatabaseService;
@@ -58,22 +57,14 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         is_top_bid: bool,
         sim_result_saver_sender: Sender<DbInfo>,
         builder_info: BuilderInfo,
-        request_id: Uuid,
     ) -> Result<(), BlockSimError> {
         if let Err(err) = self
             .simulator
-            .process_request(
-                request.clone(),
-                &builder_info,
-                is_top_bid,
-                sim_result_saver_sender,
-                request_id,
-            )
+            .process_request(request.clone(), &builder_info, is_top_bid, sim_result_saver_sender)
             .await
         {
             if builder_info.is_optimistic {
                 warn!(
-                    request_id=%request_id,
                     builder=%request.message.builder_public_key,
                     block_hash=%request.execution_payload.block_hash(),
                     err=%err,
@@ -156,37 +147,37 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
         builder_info: &BuilderInfo,
         is_top_bid: bool,
         sim_result_saver_sender: Sender<DbInfo>,
-        request_id: Uuid,
     ) -> Result<bool, BlockSimError> {
         if self.should_process_optimistically(&request, builder_info).await {
             SimulatorMetrics::sim_count(true);
 
             debug!(
-                request_id=%request_id,
                 block_hash=%request.execution_payload.block_hash(),
                 "optimistically processing request"
             );
 
             let cloned_self = self.clone_for_async();
             let builder_info = builder_info.clone();
-            tokio::spawn(async move {
-                cloned_self
-                    .handle_simulation(
-                        request,
-                        is_top_bid,
-                        sim_result_saver_sender,
-                        builder_info,
-                        request_id,
-                    )
-                    .await
-            });
+            tokio::spawn(
+                async move {
+                    cloned_self
+                        .handle_simulation(
+                            request,
+                            is_top_bid,
+                            sim_result_saver_sender,
+                            builder_info,
+                        )
+                        .await
+                }
+                .in_current_span(),
+            );
 
             Ok(true)
         } else {
             SimulatorMetrics::sim_count(false);
 
             debug!(
-                request_id=%request_id,
+
                 block_hash=?request.execution_payload.block_hash(),
                 block_parent_hash=?request.execution_payload.parent_hash(),
                 block_number=%request.execution_payload.block_number(),
@@ -198,7 +189,6 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
                 is_top_bid,
                 sim_result_saver_sender,
                 builder_info.clone(),
-                request_id,
             )
             .await
             .map(|_| false)

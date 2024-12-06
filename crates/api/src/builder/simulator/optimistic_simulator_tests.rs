@@ -24,7 +24,6 @@ mod simulator_tests {
     use reth_primitives::hex;
     use serde_json::json;
     use std::sync::{atomic::AtomicBool, Arc};
-    use uuid::Uuid;
 
     // ++++ HELPERS ++++
     fn get_optimistic_simulator(
@@ -109,9 +108,8 @@ mod simulator_tests {
             builder_demoted.clone(),
         );
 
-        let result = simulator
-            .process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4())
-            .await;
+        let result =
+            simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender).await;
 
         // give the simulator time to process the request
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -140,9 +138,8 @@ mod simulator_tests {
             builder_demoted.clone(),
         );
 
-        let result = simulator
-            .process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4())
-            .await;
+        let result =
+            simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender).await;
 
         // give the simulator time to process the request
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -171,9 +168,8 @@ mod simulator_tests {
             builder_demoted.clone(),
         );
 
-        let result = simulator
-            .process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4())
-            .await;
+        let result =
+            simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender).await;
 
         // give the simulator time to process the request
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -202,9 +198,8 @@ mod simulator_tests {
             builder_demoted.clone(),
         );
 
-        let result = simulator
-            .process_request(get_sim_req(), &builder_info, true, sim_res_sender, Uuid::new_v4())
-            .await;
+        let result =
+            simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender).await;
 
         // give the simulator time to process the request
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
