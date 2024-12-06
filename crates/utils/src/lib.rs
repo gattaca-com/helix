@@ -136,7 +136,7 @@ pub fn extract_request_id(headers: &HeaderMap) -> Uuid {
         .unwrap_or(Uuid::new_v4())
 }
 
-//// TIME ////
+////// TIME //////
 
 /// Seconds
 pub fn utcnow_sec() -> u64 {
