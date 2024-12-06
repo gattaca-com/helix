@@ -2857,6 +2857,7 @@ dependencies = [
  "redis",
  "serde",
  "serde_json",
+ "serial_test",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -2897,6 +2898,7 @@ dependencies = [
  "tracing",
  "tree_hash 0.6.0",
  "tree_hash_derive",
+ "uuid 1.7.0",
 ]
 
 [[package]]

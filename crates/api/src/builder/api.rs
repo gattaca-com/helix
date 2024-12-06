@@ -62,7 +62,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-use helix_utils::{get_payload_attributes_key, has_reached_fork};
+use helix_utils::{extract_request_id, get_payload_attributes_key, has_reached_fork};
 
 use serde::Deserialize;
 
@@ -307,10 +307,8 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let request_id = Uuid::parse_str(
-            headers.get("x-request-id").map(|v| v.to_str().unwrap_or_default()).unwrap_or_default(),
-        )
-        .unwrap();
+        let request_id = extract_request_id(&headers);
+
         let mut trace = SubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
@@ -575,10 +573,8 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let request_id = Uuid::parse_str(
-            headers.get("x-request-id").map(|v| v.to_str().unwrap_or_default()).unwrap_or_default(),
-        )
-        .unwrap();
+        let request_id = extract_request_id(&headers);
+
         let mut trace =
             HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
@@ -824,10 +820,8 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let request_id = Uuid::parse_str(
-            headers.get("x-request-id").map(|v| v.to_str().unwrap_or_default()).unwrap_or_default(),
-        )
-        .unwrap();
+        let request_id = extract_request_id(&headers);
+
         let now = SystemTime::now();
         let mut trace = SubmissionTrace { receive: get_nanos_from(now)?, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
@@ -1048,10 +1042,8 @@ where
         headers: HeaderMap,
         Json(mut signed_cancellation): Json<SignedCancellation>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let request_id = Uuid::parse_str(
-            headers.get("x-request-id").map(|v| v.to_str().unwrap_or_default()).unwrap_or_default(),
-        )
-        .unwrap();
+        let request_id = extract_request_id(&headers);
+
         let (head_slot, _next_duty) = api.curr_slot_info.read().await.clone();
 
         let slot = signed_cancellation.message.slot;
