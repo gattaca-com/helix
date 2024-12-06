@@ -951,7 +951,7 @@ where
         Json(mut signed_cancellation): Json<SignedCancellation>,
     ) -> Result<StatusCode, BuilderApiError> {
         let request_id = extract_request_id(&headers);
-        tracing::Span::current().record("id", &request_id.to_string());
+        tracing::Span::current().record("id", request_id.to_string());
 
         let (head_slot, _next_duty) = api.curr_slot_info.read().await.clone();
 
