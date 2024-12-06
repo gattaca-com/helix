@@ -7,8 +7,9 @@ use axum::{
 use eyre::bail;
 use lazy_static::lazy_static;
 use prometheus::{
-    register_histogram, register_histogram_vec, register_int_counter, register_int_counter_vec,
-    Encoder, Histogram, HistogramTimer, HistogramVec, IntCounter, IntCounterVec, TextEncoder,
+    register_histogram_vec_with_registry, register_histogram_with_registry,
+    register_int_counter_vec_with_registry, register_int_counter_with_registry, Encoder, Histogram,
+    HistogramTimer, HistogramVec, IntCounter, IntCounterVec, Registry, TextEncoder,
 };
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
@@ -56,14 +57,14 @@ async fn handle_metrics() -> Response {
     match prepare_metrics() {
         Ok(response) => response,
         Err(err) => {
-            error!("Failed to prepare metrics: {:?}", err);
+            error!(?err, "failed to prepare metrics");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
 }
 
 fn prepare_metrics() -> Result<Response, MetricsError> {
-    let metrics = prometheus::gather();
+    let metrics = RELAY_METRICS_REGISTRY.gather();
     let encoder = TextEncoder::new();
     let s = encoder.encode_to_string(&metrics)?;
 
@@ -84,124 +85,159 @@ enum MetricsError {
 }
 
 lazy_static! {
+    static ref RELAY_METRICS_REGISTRY: Registry =
+        Registry::new_custom(Some("helix".to_string()), None).unwrap();
+
     //////////////// API ////////////////
 
     /// Count for requests by API and endpoint
-    static ref REQUEST_COUNTS: IntCounterVec =
-        register_int_counter_vec!("request_count_total", "Count of requests", &["endpoint"])
-            .unwrap();
+    static ref REQUEST_COUNTS: IntCounterVec = register_int_counter_vec_with_registry!(
+        "request_count_total",
+        "Count of requests",
+        &["endpoint"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 
     /// Count for status codes by API and endpoint
     static ref REQUEST_STATUS: IntCounterVec =
-        register_int_counter_vec!("request_status_total", "Count of status codes", &["endpoint", "http_status_code"])
-            .unwrap();
+        register_int_counter_vec_with_registry!(
+        "request_status_total",
+        "Count of status codes",
+        &["endpoint", "http_status_code"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 
     /// Duration of request in seconds
-    static ref REQUEST_LATENCY: HistogramVec = register_histogram_vec!(
+    static ref REQUEST_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
         "request_latency_sec",
         "Latency of requests",
-        &["endpoint"]
+        &["endpoint"],
+        &RELAY_METRICS_REGISTRY
     )
     .unwrap();
 
     /// Request size in bytes
-    static ref REQUEST_SIZE: IntCounterVec = register_int_counter_vec!(
+    static ref REQUEST_SIZE: IntCounterVec = register_int_counter_vec_with_registry!(
         "request_size_bytes",
         "Size of requests",
-        &["endpoint"]
+        &["endpoint"],
+        &RELAY_METRICS_REGISTRY
     )
     .unwrap();
 
     //////////////// SIMULATOR ////////////////
-    static ref SIMULATOR_COUNTS: IntCounterVec =
-        register_int_counter_vec!("simulator_count_total", "Count of sim requests", &["is_optimistic"])
-        .unwrap();
-
-    static ref SIMULATOR_STATUS: IntCounterVec =
-        register_int_counter_vec!("simulator_status_total", "Count of sim statuses", &["is_success"])
-        .unwrap();
-
-    static ref SIMULATOR_LATENCY: Histogram = register_histogram!(
-        "sim_latency_sec",
-        "Latency of simulations",
+    static ref SIMULATOR_COUNTS: IntCounterVec = register_int_counter_vec_with_registry!(
+        "simulator_count_total",
+        "Count of sim requests",
+        &["is_optimistic"],
+        &RELAY_METRICS_REGISTRY
     )
     .unwrap();
 
-    static ref BUILDER_DEMOTION_COUNT: IntCounter =
-        register_int_counter!("builder_demotion_count_total", "Count of builder demotions")
-        .unwrap();
+    static ref SIMULATOR_STATUS: IntCounterVec = register_int_counter_vec_with_registry!(
+        "simulator_status_total",
+        "Count of sim statuses",
+        &["is_success"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref SIMULATOR_LATENCY: Histogram = register_histogram_with_registry!(
+        "sim_latency_sec",
+        "Latency of simulations",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref BUILDER_DEMOTION_COUNT: IntCounter = register_int_counter_with_registry!(
+        "builder_demotion_count_total",
+        "Count of builder demotions",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 
     //////////////// GOSSIP ////////////////
 
     /// Received gossip messages coutn
-     static ref IN_GOSSIP_COUNTS: IntCounterVec = register_int_counter_vec!(
+     static ref IN_GOSSIP_COUNTS: IntCounterVec = register_int_counter_vec_with_registry!(
         "in_gossip_count_total",
         "Count of received gossip messages",
-        &["endpoint"]
+        &["endpoint"],
+        &RELAY_METRICS_REGISTRY
     )
     .unwrap();
 
 
     /// Received gossip size in bytes
-    static ref IN_GOSSIP_SIZE: IntCounterVec = register_int_counter_vec!(
+    static ref IN_GOSSIP_SIZE: IntCounterVec = register_int_counter_vec_with_registry!(
         "in_gossip_size_bytes",
         "Size of receivedgossip messages",
-        &["endpoint"]
+        &["endpoint"],
+        &RELAY_METRICS_REGISTRY
     )
     .unwrap();
 
     /// Sent gossip messages count
-    static ref OUT_GOSSIP_COUNTS: IntCounterVec = register_int_counter_vec!(
+    static ref OUT_GOSSIP_COUNTS: IntCounterVec = register_int_counter_vec_with_registry!(
         "out_gossip_count_total",
         "Count of sent gossip messages",
-        &["endpoint", "is_success"]
+        &["endpoint", "is_success"],
+        &RELAY_METRICS_REGISTRY
     )
     .unwrap();
 
     /// Sent gossip latency
-    static ref OUT_GOSSIP_LATENCY: HistogramVec = register_histogram_vec!(
+    static ref OUT_GOSSIP_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
         "out_gossip_latency_sec",
         "Latency of sent gossip messages",
-        &["endpoint"]
+        &["endpoint"],
+        &RELAY_METRICS_REGISTRY
     )
     .unwrap();
 
     /// Sent gossip size in bytes
-    static ref OUT_GOSSIP_SIZE: IntCounterVec = register_int_counter_vec!(
+    static ref OUT_GOSSIP_SIZE: IntCounterVec = register_int_counter_vec_with_registry!(
         "out_gossip_size_bytes",
         "Size of sent gossip messages",
-        &["endpoint"]
+        &["endpoint"],
+        &RELAY_METRICS_REGISTRY
     )
     .unwrap();
 
     //////////////// DB ////////////////
-    static ref DB_COUNTS: IntCounterVec = register_int_counter_vec!(
+    static ref DB_COUNTS: IntCounterVec = register_int_counter_vec_with_registry!(
         "db_count_total",
         "Count of db operations",
-        &["endpoint", "is_success"]
+        &["endpoint", "is_success"],
+        &RELAY_METRICS_REGISTRY
     )
     .unwrap();
 
-    static ref DB_LATENCY: HistogramVec = register_histogram_vec!(
+    static ref DB_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
         "db_latency_sec",
         "Latency of db operations",
-        &["endpoint"]
+        &["endpoint"],
+        &RELAY_METRICS_REGISTRY
     )
     .unwrap();
 
 
     //////////////// REDIS ////////////////
-    static ref REDIS_COUNTS: IntCounterVec = register_int_counter_vec!(
+    static ref REDIS_COUNTS: IntCounterVec = register_int_counter_vec_with_registry!(
         "redis_count_total",
         "Count of redis operations",
-        &["endpoint", "is_success"]
+        &["endpoint", "is_success"],
+        &RELAY_METRICS_REGISTRY
     )
     .unwrap();
 
-    static ref REDIS_LATENCY: HistogramVec = register_histogram_vec!(
+    static ref REDIS_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
         "redis_latency_sec",
         "Latency of redis operations",
-        &["endpoint"]
+        &["endpoint"],
+        &RELAY_METRICS_REGISTRY
     )
     .unwrap();
 }
