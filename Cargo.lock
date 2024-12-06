@@ -2830,6 +2830,7 @@ dependencies = [
  "env_logger",
  "ethereum-consensus",
  "helix-common",
+ "helix-utils",
  "hex",
  "rand",
  "refinery",

@@ -4,6 +4,7 @@ use std::{
     io::Write,
     panic,
     path::Path,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use ::serde::de;
@@ -133,4 +134,23 @@ pub fn extract_request_id(headers: &HeaderMap) -> Uuid {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| Uuid::parse_str(v).ok())
         .unwrap_or(Uuid::new_v4())
+}
+
+//// TIME ////
+
+/// Seconds
+pub fn utcnow_sec() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+}
+/// Millis
+pub fn utcnow_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
+}
+/// Micros
+pub fn utcnow_us() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64
+}
+/// Nanos
+pub fn utcnow_ns() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64
 }

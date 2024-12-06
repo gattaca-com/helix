@@ -4,8 +4,8 @@ use ethereum_consensus::{
     signing::compute_signing_root,
 };
 use helix_common::chain_info::ChainInfo;
+use helix_utils::utcnow_sec;
 use rand::thread_rng;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn gen_signed_vr() -> SignedValidatorRegistration {
     let mut rng = thread_rng();
@@ -15,7 +15,7 @@ pub fn gen_signed_vr() -> SignedValidatorRegistration {
     let mut vr = ValidatorRegistration {
         fee_recipient: Default::default(),
         gas_limit: 0,
-        timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+        timestamp: utcnow_sec(),
         public_key: pk,
     };
 
@@ -33,10 +33,7 @@ mod proposer_api_tests {
     // +++ IMPORTS +++
     use crate::{
         gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
-        proposer::{
-            api::{get_nanos_timestamp, ProposerApi},
-            PATH_GET_PAYLOAD, PATH_PROPOSER_API,
-        },
+        proposer::{api::ProposerApi, PATH_GET_PAYLOAD, PATH_PROPOSER_API},
         test_utils::proposer_api_app,
     };
 
@@ -69,7 +66,7 @@ mod proposer_api_tests {
     use helix_database::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-    use helix_utils::signing::verify_signed_consensus_message;
+    use helix_utils::{signing::verify_signed_consensus_message, utcnow_ns};
     use serial_test::serial;
     use std::{sync::Arc, time::Duration};
     use tokio::{
@@ -237,7 +234,7 @@ mod proposer_api_tests {
     fn calculate_current_slot() -> u64 {
         let genesis_time_in_secs: u64 = ChainInfo::for_mainnet().genesis_time_in_secs;
         let seconds_per_slot: u64 = ChainInfo::for_mainnet().seconds_per_slot;
-        let request_time_in_ns = get_nanos_timestamp().unwrap();
+        let request_time_in_ns = utcnow_ns();
         let current_time_in_secs = request_time_in_ns / 1_000_000_000;
         let time_since_genesis = current_time_in_secs.saturating_sub(genesis_time_in_secs);
 

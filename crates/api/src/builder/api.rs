@@ -1,9 +1,4 @@
-use std::{
-    collections::HashMap,
-    io::Read,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{collections::HashMap, io::Read, sync::Arc, time::Duration};
 
 use axum::{
     body::{to_bytes, Body},
@@ -62,7 +57,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-use helix_utils::{extract_request_id, get_payload_attributes_key, has_reached_fork};
+use helix_utils::{extract_request_id, get_payload_attributes_key, has_reached_fork, utcnow_ns};
 
 use serde::Deserialize;
 
@@ -307,7 +302,7 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = SubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
         debug!(head_slot, timestamp_request_start = trace.receive);
@@ -383,7 +378,7 @@ where
                 is_cancellations_enabled,
             )
             .await?;
-        trace.floor_bid_checks = get_nanos_timestamp()?;
+        trace.floor_bid_checks = utcnow_ns();
 
         // Fetch builder info
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
@@ -426,7 +421,7 @@ where
             warn!(%err, "failed sanity check");
             return Err(err)
         }
-        trace.pre_checks = get_nanos_timestamp()?;
+        trace.pre_checks = utcnow_ns();
 
         let (payload, was_simulated_optimistically) = api
             .verify_submitted_block(
@@ -494,7 +489,7 @@ where
         }
 
         // Log some final info
-        trace.request_finish = get_nanos_timestamp()?;
+        trace.request_finish = utcnow_ns();
         debug!(
             ?trace,
             request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
@@ -532,8 +527,7 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace =
-            HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let mut trace = HeaderSubmissionTrace { receive: utcnow_ns(), ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
         debug!(head_slot, timestamp_request_start = trace.receive,);
@@ -635,14 +629,14 @@ where
             })
         }
 
-        trace.pre_checks = get_nanos_timestamp()?;
+        trace.pre_checks = utcnow_ns();
 
         // Verify the payload signature
         if let Err(err) = payload.verify_signature(&api.chain_info.context) {
             warn!(%err, "failed to verify signature");
             return Err(BuilderApiError::SignatureVerificationFailed)
         }
-        trace.signature = get_nanos_timestamp()?;
+        trace.signature = utcnow_ns();
 
         // Verify payload has not already been delivered
         match api.auctioneer.get_last_slot_delivered().await {
@@ -671,7 +665,7 @@ where
                 is_cancellations_enabled,
             )
             .await?;
-        trace.floor_bid_checks = get_nanos_timestamp()?;
+        trace.floor_bid_checks = utcnow_ns();
 
         // Save bid to auctioneer
         match api
@@ -696,7 +690,7 @@ where
         }
 
         // Log some final info
-        trace.request_finish = get_nanos_timestamp()?;
+        trace.request_finish = utcnow_ns();
         info!(
             ?trace,
             request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
@@ -751,8 +745,7 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let now = SystemTime::now();
-        let mut trace = SubmissionTrace { receive: get_nanos_from(now)?, ..Default::default() };
+        let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
         debug!(head_slot, timestamp_request_start = trace.receive);
@@ -877,7 +870,7 @@ where
             warn!(%err, "failed sanity check");
             return Err(err)
         }
-        trace.pre_checks = get_nanos_timestamp()?;
+        trace.pre_checks = utcnow_ns();
 
         let (payload, _) = match api
             .verify_submitted_block(
@@ -911,13 +904,13 @@ where
             error!(%err, "failed to save execution payload");
             return Err(BuilderApiError::AuctioneerError(err))
         }
-        trace.auctioneer_update = get_nanos_timestamp()?;
+        trace.auctioneer_update = utcnow_ns();
 
         // Gossip to other relays
         api.gossip_payload(&payload, payload.payload_and_blobs()).await;
 
         // Log some final info
-        trace.request_finish = get_nanos_timestamp()?;
+        trace.request_finish = utcnow_ns();
         debug!(
             ?trace,
             request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
@@ -1040,7 +1033,7 @@ where
 
         let mut trace = GossipedHeaderTrace {
             on_receive: req.on_receive,
-            on_gossip_receive: get_nanos_timestamp().unwrap_or_default(),
+            on_gossip_receive: utcnow_ns(),
             ..Default::default()
         };
 
@@ -1098,7 +1091,7 @@ where
             }
         };
 
-        trace.pre_checks = get_nanos_timestamp().unwrap_or_default();
+        trace.pre_checks = utcnow_ns();
 
         // Save header to auctioneer
         let mut update_bid_result = SaveBidAndUpdateTopBidResponse::default();
@@ -1118,7 +1111,7 @@ where
             return
         }
 
-        trace.auctioneer_update = get_nanos_timestamp().unwrap_or_default();
+        trace.auctioneer_update = utcnow_ns();
 
         debug!("succesfully saved gossiped header");
 
@@ -1138,10 +1131,7 @@ where
     pub async fn process_gossiped_payload(&self, req: BroadcastPayloadParams) {
         debug!(block_hash = ?req.execution_payload.execution_payload.block_hash(), "received gossiped payload");
 
-        let mut trace = GossipedPayloadTrace {
-            receive: get_nanos_timestamp().unwrap_or_default(),
-            ..Default::default()
-        };
+        let mut trace = GossipedPayloadTrace { receive: utcnow_ns(), ..Default::default() };
 
         // Save gossiped payload to auctioneer in case it was sent to diffent region than the header
         if let Err(err) = self
@@ -1178,7 +1168,7 @@ where
             }
         }
 
-        trace.pre_checks = get_nanos_timestamp().unwrap_or_default();
+        trace.pre_checks = utcnow_ns();
 
         // Save payload to auctioneer
         if let Err(err) = self
@@ -1195,7 +1185,7 @@ where
             return
         }
 
-        trace.auctioneer_update = get_nanos_timestamp().unwrap_or_default();
+        trace.auctioneer_update = utcnow_ns();
 
         debug!("succesfully saved gossiped payload");
 
@@ -1373,7 +1363,7 @@ where
             warn!(%err, "failed to verify signature");
             return Err(BuilderApiError::SignatureVerificationFailed)
         }
-        trace.signature = get_nanos_timestamp()?;
+        trace.signature = utcnow_ns();
 
         // Simulate the submission
         let payload = Arc::new(payload);
@@ -1564,7 +1554,7 @@ where
             }
         }
 
-        debug!(timestamp_before_validation = get_nanos_timestamp()?);
+        debug!(timestamp_before_validation = utcnow_ns());
 
         let sim_request = BlockSimRequest::new(
             registration_info.registration.message.gas_limit,
@@ -1581,7 +1571,7 @@ where
             Ok(sim_optimistic) => {
                 debug!("block simulation successful");
 
-                trace.simulation = get_nanos_timestamp()?;
+                trace.simulation = utcnow_ns();
                 debug!(sim_latency = trace.simulation.saturating_sub(trace.signature));
 
                 Ok(sim_optimistic)
@@ -1622,7 +1612,7 @@ where
         {
             Ok(Some((builder_bid, execution_payload))) => {
                 // Log the results of the bid submission
-                trace.auctioneer_update = get_nanos_timestamp()?;
+                trace.auctioneer_update = utcnow_ns();
                 log_save_bid_info(&update_bid_result, trace.simulation, trace.auctioneer_update);
 
                 Ok(Some((builder_bid, execution_payload)))
@@ -1676,7 +1666,7 @@ where
         {
             Ok(Some(builder_bid)) => {
                 // Log the results of the bid submission
-                trace.auctioneer_update = get_nanos_timestamp()?;
+                trace.auctioneer_update = utcnow_ns();
                 log_save_bid_info(
                     &update_bid_result,
                     trace.floor_bid_checks,
@@ -2029,7 +2019,7 @@ pub async fn decode_payload(
         serde_json::from_slice(&body_bytes)?
     };
 
-    trace.decode = get_nanos_timestamp()?;
+    trace.decode = utcnow_ns();
     debug!(
         timestamp_after_decoding = trace.decode,
         decode_latency_ns = trace.decode.saturating_sub(trace.receive),
@@ -2179,7 +2169,7 @@ pub async fn decode_header_submission(
         serde_json::from_slice(&body_bytes)?
     };
 
-    trace.decode = get_nanos_timestamp()?;
+    trace.decode = utcnow_ns();
     debug!(
         timestamp_after_decoding = trace.decode,
         decode_latency_ns = trace.decode.saturating_sub(trace.receive),
@@ -2373,19 +2363,6 @@ async fn process_db_additions<DB: DatabaseService + 'static>(
             }
         }
     }
-}
-
-fn get_nanos_timestamp() -> Result<u64, BuilderApiError> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .map_err(|_| BuilderApiError::InternalError)
-}
-
-fn get_nanos_from(now: SystemTime) -> Result<u64, BuilderApiError> {
-    now.duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .map_err(|_| BuilderApiError::InternalError)
 }
 
 #[cfg(test)]
