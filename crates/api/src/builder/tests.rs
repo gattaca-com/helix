@@ -465,10 +465,9 @@ async fn test_header_submission_decoding_json_capella() {
         load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
     let mut header_submission_trace = HeaderSubmissionTrace::default();
-    let uuid = uuid::Uuid::new_v4();
     let request = generate_request(false, false, false, &req_payload_bytes);
     let decoded_submission =
-        decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
+        decode_header_submission(request, &mut header_submission_trace).await.unwrap();
 
     assert_eq!(decoded_submission.0.slot(), 5552306);
     assert!(matches!(
@@ -505,10 +504,10 @@ async fn test_header_submission_decoding_ssz_capella() {
         load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
     let mut header_submission_trace = HeaderSubmissionTrace::default();
-    let uuid = uuid::Uuid::new_v4();
+
     let request = generate_request(false, false, true, &req_payload_bytes);
     let decoded_submission =
-        decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
+        decode_header_submission(request, &mut header_submission_trace).await.unwrap();
 
     assert!(matches!(decoded_submission.0, SignedHeaderSubmission::Capella(_)));
     assert!(decoded_submission.0.commitments().is_none());
@@ -529,10 +528,10 @@ async fn test_header_submission_decoding_ssz_deneb() {
         load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
     let mut header_submission_trace = HeaderSubmissionTrace::default();
-    let uuid = uuid::Uuid::new_v4();
+
     let request = generate_request(false, false, true, &req_payload_bytes);
     let decoded_submission =
-        decode_header_submission(request, &mut header_submission_trace, &uuid).await.unwrap();
+        decode_header_submission(request, &mut header_submission_trace).await.unwrap();
 
     assert!(matches!(decoded_submission.0, SignedHeaderSubmission::Deneb(_)));
     assert!(decoded_submission.0.commitments().is_some());
@@ -553,9 +552,8 @@ async fn test_signed_bid_submission_decoding_capella() {
         load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
     let mut submission_trace = SubmissionTrace::default();
-    let uuid = uuid::Uuid::new_v4();
     let request = generate_request(false, false, false, &req_payload_bytes);
-    let decoded_submission = decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
+    let decoded_submission = decode_payload(request, &mut submission_trace).await.unwrap();
 
     assert_eq!(decoded_submission.0.message().slot, 5552306);
     assert!(matches!(decoded_submission.0.execution_payload(), ExecutionPayload::Capella(_)));
@@ -574,9 +572,8 @@ async fn test_signed_bid_submission_decoding_capella_gzip() {
         load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
     let mut submission_trace = SubmissionTrace::default();
-    let uuid = uuid::Uuid::new_v4();
     let request = generate_request(false, true, false, &req_payload_bytes);
-    let decoded_submission = decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
+    let decoded_submission = decode_payload(request, &mut submission_trace).await.unwrap();
 
     assert_eq!(decoded_submission.0.message().slot, 5552306);
     assert!(matches!(decoded_submission.0.execution_payload(), ExecutionPayload::Capella(_)));
@@ -595,10 +592,8 @@ async fn test_signed_bid_submission_decoding_deneb() {
         load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
 
     let mut submission_trace = SubmissionTrace::default();
-    let uuid = uuid::Uuid::new_v4();
     let request = generate_request(false, false, false, &req_payload_bytes);
-    let (decoded_submission, _) =
-        decode_payload(request, &mut submission_trace, &uuid).await.unwrap();
+    let (decoded_submission, _) = decode_payload(request, &mut submission_trace).await.unwrap();
 
     assert_eq!(decoded_submission.message().slot, 5552306);
     assert!(matches!(decoded_submission.execution_payload(), ExecutionPayload::Deneb(_)));
