@@ -33,10 +33,13 @@ impl RateLimitState {
 }
 
 // TODO: feels a bit hacky, maybe there's a better way to do this?
-fn replace_dynamic_routes(route: &str) -> &str {
-    // Currently, the only dynamic route is /eth/v1/builder/header/:slot/:parent_hash/:pubkey
+pub fn replace_dynamic_routes(route: &str) -> &str {
+    // Currently, the only dynamic route is /eth/v1/builder/header/:slot/:parent_hash/:pubkey and
+    // /eth/v1/builder/header_with_proofs/:slot/:parent_hash/:pubkey
     if route.starts_with("/eth/v1/builder/header") {
         "/eth/v1/builder/header/:slot/:parent_hash/:pubkey"
+    } else if route.starts_with("/eth/v1/builder/header_with_proofs") {
+        "/eth/v1/builder/header_with_proofs/:slot/:parent_hash/:pubkey"
     } else {
         route
     }
