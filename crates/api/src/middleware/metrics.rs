@@ -5,12 +5,23 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use helix_common::metrics::ApiMetrics;
+use helix_common::{
+    api::{PATH_BUILDER_API, PATH_CONSTRAINTS_API, PATH_DATA_API, PATH_PROPOSER_API},
+    metrics::ApiMetrics,
+};
 
 use crate::builder::api::MAX_PAYLOAD_LENGTH;
 
+use super::rate_limiting::rate_limit_by_ip::replace_dynamic_routes;
+
 pub async fn metrics_middleware(req: Request, next: Next) -> Response {
-    let endpoint = req.uri().path().to_string();
+    let endpoint = req.uri().path();
+
+    if !SUPPORTED_PATHS.iter().any(|path| endpoint.starts_with(path)) {
+        return next.run(req).await;
+    }
+
+    let endpoint = replace_dynamic_routes(endpoint).to_string();
 
     ApiMetrics::count(&endpoint);
     let _timer = ApiMetrics::timer(&endpoint);
@@ -32,3 +43,6 @@ pub async fn metrics_middleware(req: Request, next: Next) -> Response {
 
     response
 }
+
+const SUPPORTED_PATHS: [&str; 4] =
+    [PATH_BUILDER_API, PATH_PROPOSER_API, PATH_DATA_API, PATH_CONSTRAINTS_API];
