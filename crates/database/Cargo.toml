@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 helix-common.workspace = true
+helix-utils.workspace = true
 
 # Async and Networking 
 async-trait.workspace = true

@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     body::{to_bytes, Body},
@@ -51,6 +48,7 @@ use helix_housekeeper::{ChainUpdate, SlotUpdate};
 use helix_utils::{
     extract_request_id,
     signing::{verify_signed_builder_message, verify_signed_consensus_message},
+    utcnow_ms, utcnow_ns,
 };
 
 use crate::{
@@ -172,8 +170,7 @@ where
 
         let request_id = extract_request_id(&headers);
 
-        let mut trace =
-            RegisterValidatorsTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let mut trace = RegisterValidatorsTrace { receive: utcnow_ns(), ..Default::default() };
 
         // Get optional api key from headers
         let api_key = headers.get("x-api-key").and_then(|key| key.to_str().ok());
@@ -355,7 +352,7 @@ where
             }
         });
 
-        trace.registrations_complete = get_nanos_timestamp()?;
+        trace.registrations_complete = utcnow_ns();
 
         info!(
             request_id = %request_id,
@@ -388,7 +385,7 @@ where
 
         let request_id = extract_request_id(&headers);
 
-        let mut trace = GetHeaderTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let mut trace = GetHeaderTrace { receive: utcnow_ns(), ..Default::default() };
 
         let (head_slot, duty) = proposer_api.curr_slot_info.read().await.clone();
         debug!(
@@ -426,7 +423,7 @@ where
                 return Err(err)
             }
         };
-        trace.validation_complete = get_nanos_timestamp()?;
+        trace.validation_complete = utcnow_ns();
 
         let user_agent =
             headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|v| v.to_string());
@@ -436,7 +433,7 @@ where
             .auctioneer
             .get_best_bid(bid_request.slot, &bid_request.parent_hash, &bid_request.public_key)
             .await;
-        trace.best_bid_fetched = get_nanos_timestamp()?;
+        trace.best_bid_fetched = utcnow_ns();
         info!(request_id = %request_id, trace = ?trace, "best bid fetched");
 
         match get_best_bid_res {
@@ -498,7 +495,7 @@ where
         Path(GetHeaderParams { slot, parent_hash, public_key }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         let request_id = Uuid::new_v4();
-        let mut trace = GetHeaderTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let mut trace = GetHeaderTrace { receive: utcnow_ns(), ..Default::default() };
 
         let (head_slot, _) = *proposer_api.curr_slot_info.read().await;
         debug!(
@@ -526,14 +523,14 @@ where
             warn!(request_id = %request_id, err = %err, "invalid bid request time");
             return Err(err)
         }
-        trace.validation_complete = get_nanos_timestamp()?;
+        trace.validation_complete = utcnow_ns();
 
         // Get best bid from auctioneer
         let get_best_bid_res = proposer_api
             .auctioneer
             .get_best_bid(bid_request.slot, &bid_request.parent_hash, &bid_request.public_key)
             .await;
-        trace.best_bid_fetched = get_nanos_timestamp()?;
+        trace.best_bid_fetched = utcnow_ns();
         info!(request_id = %request_id, trace = ?trace, "best bid fetched");
 
         let user_agent =
@@ -650,7 +647,7 @@ where
     ) -> Result<impl IntoResponse, ProposerApiError> {
         let request_id = extract_request_id(&headers);
 
-        let mut trace = GetPayloadTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let mut trace = GetPayloadTrace { receive: utcnow_ns(), ..Default::default() };
 
         let user_agent =
             headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|v| v.to_string());
@@ -747,7 +744,7 @@ where
             warn!(request_id = %request_id, error = %err, "invalid proposal coordinate");
             return Err(err)
         }
-        trace.proposer_index_validated = get_nanos_timestamp()?;
+        trace.proposer_index_validated = utcnow_ns();
 
         let proposer_public_key = slot_duty.entry.registration.message.public_key;
         if let Err(err) = self.verify_signed_blinded_block_signature(
@@ -759,7 +756,7 @@ where
             warn!(request_id = %request_id, error = %err, "invalid signature");
             return Err(ProposerApiError::InvalidSignature(err))
         }
-        trace.signature_validated = get_nanos_timestamp()?;
+        trace.signature_validated = utcnow_ns();
 
         // Get execution payload from auctioneer
         let payload_result = self
@@ -786,7 +783,7 @@ where
             }
         };
         info!(request_id = %request_id, "found payload for blinded signed block");
-        trace.payload_fetched = get_nanos_timestamp()?;
+        trace.payload_fetched = utcnow_ns();
 
         // Check if get_payload has already been called
         if let Err(err) = self
@@ -849,7 +846,7 @@ where
             return Err(err)
         }
 
-        trace.validation_complete = get_nanos_timestamp()?;
+        trace.validation_complete = utcnow_ns();
 
         let unblinded_payload =
             match unblind_beacon_block(&signed_blinded_block, &versioned_payload) {
@@ -899,7 +896,7 @@ where
                 error!(request_id = %request_id_clone, error = %err, "error publishing block");
             };
 
-            trace_clone.beacon_client_broadcast = get_nanos_timestamp().unwrap_or_default();
+            trace_clone.beacon_client_broadcast = utcnow_ns();
 
             // Broadcast payload to all broadcasters
             self_clone.broadcast_signed_block(
@@ -907,10 +904,10 @@ where
                 Some(BroadcastValidation::Gossip),
                 &request_id_clone,
             );
-            trace_clone.broadcaster_block_broadcast = get_nanos_timestamp().unwrap_or_default();
+            trace_clone.broadcaster_block_broadcast = utcnow_ns();
 
             // While we wait for the block to propagate, we also store the payload information
-            trace_clone.on_deliver_payload = get_nanos_timestamp().unwrap_or_default();
+            trace_clone.on_deliver_payload = utcnow_ns();
             self_clone
                 .save_delivered_payload_info(
                     payload_clone,
@@ -940,7 +937,7 @@ where
             // `TARGET_GET_PAYLOAD_PROPAGATION_DURATION_MS` to allow the block to
             // propagate through the network.
             let elapsed_since_propagate_start_ms =
-                (get_nanos_timestamp()?.saturating_sub(trace.beacon_client_broadcast)) / 1_000_000;
+                (utcnow_ns().saturating_sub(trace.beacon_client_broadcast)) / 1_000_000;
             let remaining_sleep_ms = self
                 .relay_config
                 .target_get_payload_propagation_duration_ms
@@ -963,7 +960,7 @@ where
         };
 
         // Return response
-        info!(request_id = %request_id, trace = ?trace, timestamp = get_nanos_timestamp()?, "delivering payload");
+        info!(request_id = %request_id, trace = ?trace, timestamp = utcnow_ns(), "delivering payload");
         Ok(get_payload_response)
     }
 }
@@ -1032,7 +1029,7 @@ where
     ///
     /// Returns how many ms we are into the slot if ok.
     fn validate_bid_request_time(&self, bid_request: &BidRequest) -> Result<u64, ProposerApiError> {
-        let curr_timestamp_ms = get_millis_timestamp()? as i64;
+        let curr_timestamp_ms = utcnow_ms() as i64;
         let slot_start_timestamp = self.chain_info.genesis_time_in_secs +
             (bid_request.slot * self.chain_info.seconds_per_slot);
         let ms_into_slot = curr_timestamp_ms.saturating_sub((slot_start_timestamp * 1000) as i64);
@@ -1276,10 +1273,7 @@ where
             if let GossipedMessage::GetPayload(payload) = msg {
                 let api_clone = self.clone();
                 tokio::spawn(async move {
-                    let mut trace = GetPayloadTrace {
-                        receive: get_nanos_timestamp().unwrap_or_default(),
-                        ..Default::default()
-                    };
+                    let mut trace = GetPayloadTrace { receive: utcnow_ns(), ..Default::default() };
                     debug!(request_id = %payload.request_id, "processing gossiped payload");
                     match api_clone
                         ._get_payload(
@@ -1320,7 +1314,7 @@ where
 
         let mut last_error: Option<ProposerApiError> = None;
         let mut first_try = true; // Try at least once to cover case where get_payload is called too late.
-        while first_try || get_millis_timestamp()? < slot_cutoff_millis {
+        while first_try || utcnow_ms() < slot_cutoff_millis {
             match self.auctioneer.get_execution_payload(slot, pub_key, block_hash).await {
                 Ok(Some(versioned_payload)) => return Ok(versioned_payload),
                 Ok(None) => {
@@ -1509,20 +1503,6 @@ fn calculate_slot_time_info(
     let duration_until_slot_start = chain_info.clock.duration_until_slot(slot);
 
     (ms_into_slot, duration_until_slot_start)
-}
-
-pub fn get_nanos_timestamp() -> Result<u64, ProposerApiError> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .map_err(|_| ProposerApiError::InternalServerError)
-}
-
-fn get_millis_timestamp() -> Result<u64, ProposerApiError> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .map_err(|_| ProposerApiError::InternalServerError)
 }
 
 fn get_consensus_version(block: &SignedBeaconBlock) -> ethereum_consensus::Fork {
