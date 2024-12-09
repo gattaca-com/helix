@@ -93,6 +93,16 @@ impl ChainInfo {
         }
     }
 
+    pub fn genesis_time(&self) -> u64 {
+        match self.network {
+            Network::Mainnet => self.genesis_time_in_secs,
+            Network::Sepolia => self.genesis_time_in_secs,
+            Network::Goerli => self.genesis_time_in_secs,
+            Network::Holesky => self.genesis_time_in_secs,
+            Network::Custom(_) => self.genesis_time_in_secs + self.context.genesis_delay,
+        }
+    }
+
     pub fn for_sepolia() -> Self {
         Self {
             network: Network::Sepolia,
