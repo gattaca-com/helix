@@ -1,4 +1,6 @@
-#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct SubmissionTrace {
     pub receive: u64,
     pub decode: u64,
@@ -10,7 +12,7 @@ pub struct SubmissionTrace {
     pub request_finish: u64,
 }
 
-#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct HeaderSubmissionTrace {
     pub receive: u64,
     pub decode: u64,
@@ -21,14 +23,14 @@ pub struct HeaderSubmissionTrace {
     pub request_finish: u64,
 }
 
-#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct GossipedPayloadTrace {
     pub receive: u64,
     pub pre_checks: u64,
     pub auctioneer_update: u64,
 }
 
-#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct GossipedHeaderTrace {
     pub on_receive: u64,
     pub on_gossip_receive: u64,
