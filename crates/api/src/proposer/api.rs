@@ -1030,8 +1030,8 @@ where
     /// Returns how many ms we are into the slot if ok.
     fn validate_bid_request_time(&self, bid_request: &BidRequest) -> Result<u64, ProposerApiError> {
         let curr_timestamp_ms = utcnow_ms() as i64;
-        let slot_start_timestamp = self.chain_info.genesis_time_in_secs +
-            (bid_request.slot * self.chain_info.seconds_per_slot);
+        let slot_start_timestamp =
+            self.chain_info.genesis_time() + (bid_request.slot * self.chain_info.seconds_per_slot);
         let ms_into_slot = curr_timestamp_ms.saturating_sub((slot_start_timestamp * 1000) as i64);
 
         if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {
@@ -1308,8 +1308,7 @@ where
     ) -> Result<PayloadAndBlobs, ProposerApiError> {
         const RETRY_DELAY: Duration = Duration::from_millis(20);
 
-        let slot_time =
-            self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot);
+        let slot_time = self.chain_info.genesis_time() + (slot * self.chain_info.seconds_per_slot);
         let slot_cutoff_millis = (slot_time * 1000) + GET_PAYLOAD_REQUEST_CUTOFF_MS as u64;
 
         let mut last_error: Option<ProposerApiError> = None;
@@ -1496,7 +1495,7 @@ fn calculate_slot_time_info(
     request_time: u64,
 ) -> (i64, Duration) {
     let slot_start_timestamp_in_secs =
-        chain_info.genesis_time_in_secs + (slot * chain_info.seconds_per_slot);
+        chain_info.genesis_time() + (slot * chain_info.seconds_per_slot);
     let ms_into_slot =
         (request_time / 1_000_000) as i64 - (slot_start_timestamp_in_secs * 1000) as i64;
     let duration_until_slot_start = chain_info.clock.duration_until_slot(slot);

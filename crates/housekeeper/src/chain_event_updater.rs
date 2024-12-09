@@ -152,7 +152,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         // Validate this isn't a faulty head slot
 
         let slot_timestamp =
-            self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot);
+            self.chain_info.genesis_time() + (slot * self.chain_info.seconds_per_slot);
         if slot_timestamp > utcnow_sec() + MAX_DISTANCE_FOR_FUTURE_SLOT {
             warn!(head_slot = slot, "slot is too far in the future",);
             return
