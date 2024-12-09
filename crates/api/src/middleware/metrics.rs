@@ -18,7 +18,7 @@ pub async fn metrics_middleware(req: Request, next: Next) -> Response {
     let endpoint = req.uri().path();
 
     if !SUPPORTED_PATHS.iter().any(|path| endpoint.starts_with(path)) {
-        return next.run(req).await;
+        return next.run(req).await
     }
 
     let endpoint = replace_dynamic_routes(endpoint).to_string();
