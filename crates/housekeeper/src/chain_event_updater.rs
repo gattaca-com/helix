@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use ethereum_consensus::{
     configs::goerli::CAPELLA_FORK_EPOCH, deneb::Withdrawal, primitives::Bytes32,
@@ -20,7 +16,7 @@ use helix_common::{
     chain_info::ChainInfo,
 };
 use helix_database::DatabaseService;
-use helix_utils::{get_payload_attributes_key, has_reached_fork};
+use helix_utils::{get_payload_attributes_key, has_reached_fork, utcnow_sec};
 
 // Do not accept slots more than 60 seconds in the future
 const MAX_DISTANCE_FOR_FUTURE_SLOT: u64 = 60;
@@ -154,13 +150,12 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         info!(head_slot = slot, "Processing slot",);
 
         // Validate this isn't a faulty head slot
-        if let Ok(current_timestamp) = SystemTime::now().duration_since(UNIX_EPOCH) {
-            let slot_timestamp =
-                self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot);
-            if slot_timestamp > current_timestamp.as_secs() + MAX_DISTANCE_FOR_FUTURE_SLOT {
-                warn!(head_slot = slot, "slot is too far in the future",);
-                return
-            }
+
+        let slot_timestamp =
+            self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot);
+        if slot_timestamp > utcnow_sec() + MAX_DISTANCE_FOR_FUTURE_SLOT {
+            warn!(head_slot = slot, "slot is too far in the future",);
+            return
         }
 
         // Log any missed slots
