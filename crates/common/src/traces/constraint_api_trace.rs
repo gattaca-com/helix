@@ -1,4 +1,6 @@
-#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct ConstraintSubmissionTrace {
     pub receive: u64,
     pub decode: u64,

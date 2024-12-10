@@ -9,10 +9,10 @@ use helix_common::{
 
 #[derive(Clone)]
 pub enum DbInfo {
-    NewSubmission(Arc<SignedBidSubmission>, Arc<SubmissionTrace>, OptimisticVersion),
-    NewHeaderSubmission(Arc<SignedHeaderSubmission>, Arc<HeaderSubmissionTrace>),
-    GossipedHeader { block_hash: ByteVector<32>, trace: Arc<GossipedHeaderTrace> },
-    GossipedPayload { block_hash: ByteVector<32>, trace: Arc<GossipedPayloadTrace> },
+    NewSubmission(Arc<SignedBidSubmission>, SubmissionTrace, OptimisticVersion),
+    NewHeaderSubmission(Arc<SignedHeaderSubmission>, HeaderSubmissionTrace),
+    GossipedHeader { block_hash: ByteVector<32>, trace: GossipedHeaderTrace },
+    GossipedPayload { block_hash: ByteVector<32>, trace: GossipedPayloadTrace },
     SimulationResult { block_hash: ByteVector<32>, block_sim_result: Result<(), BlockSimError> },
 }
 
