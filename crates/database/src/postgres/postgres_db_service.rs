@@ -26,6 +26,7 @@ use helix_common::{
     GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig,
     SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
 };
+use helix_utils::utcnow_ms;
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{error, info};
 
@@ -1330,7 +1331,7 @@ impl DatabaseService for PostgresDatabaseService {
             )
             .await?;
 
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let timestamp = utcnow_ms();
         transaction
             .execute(
                 "

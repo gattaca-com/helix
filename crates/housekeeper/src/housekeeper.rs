@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use ethereum_consensus::primitives::BlsPublicKey;
 use ethers::{
@@ -11,6 +7,7 @@ use ethers::{
     providers::{Http, Provider},
     types::U256,
 };
+use helix_utils::utcnow_ms;
 use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
 use std::convert::TryFrom;
 use tokio::{
@@ -360,8 +357,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     ///
     /// DB entries are also removed if they have been waiting for over 45 seconds.
     async fn demote_builders_with_expired_pending_blocks(&self) -> Result<(), HousekeeperError> {
-        let current_time =
-            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let current_time = utcnow_ms();
 
         let mut demoted_builders = HashSet::new();
 

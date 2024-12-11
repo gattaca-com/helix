@@ -16,12 +16,11 @@ use helix_common::{
 };
 use helix_datastore::Auctioneer;
 use helix_housekeeper::{ChainUpdate, SlotUpdate};
-use helix_utils::signing::{verify_signed_message, COMMIT_BOOST_DOMAIN};
-use std::{
-    collections::HashSet,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+use helix_utils::{
+    signing::{verify_signed_message, COMMIT_BOOST_DOMAIN},
+    utcnow_ns,
 };
+use std::{self, collections::HashSet, sync::Arc};
 use tokio::{
     sync::{
         broadcast,
@@ -109,8 +108,7 @@ where
         req: Request<Body>,
     ) -> Result<StatusCode, ConstraintsApiError> {
         let request_id = Uuid::new_v4();
-        let mut trace =
-            ConstraintSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let mut trace = ConstraintSubmissionTrace { receive: utcnow_ns(), ..Default::default() };
 
         // Decode the incoming request body into a payload.
         let signed_constraints =
@@ -214,7 +212,7 @@ where
         }
 
         // Log some final info
-        trace.request_finish = get_nanos_timestamp()?;
+        trace.request_finish = utcnow_ns();
         trace!(
             request_id = %request_id,
             trace = ?trace,
@@ -233,8 +231,7 @@ where
         req: Request<Body>,
     ) -> Result<StatusCode, ConstraintsApiError> {
         let request_id = Uuid::new_v4();
-        let mut trace =
-            ConstraintSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let mut trace = ConstraintSubmissionTrace { receive: utcnow_ns(), ..Default::default() };
 
         info!(
             request_id = %request_id,
@@ -264,7 +261,7 @@ where
                 return Err(ConstraintsApiError::InvalidDelegation)
             }
         };
-        trace.decode = get_nanos_timestamp()?;
+        trace.decode = utcnow_ns();
 
         for delegation in &signed_delegations {
             if let Err(e) = verify_signed_message(
@@ -278,7 +275,7 @@ where
                 return Err(ConstraintsApiError::InvalidSignature)
             };
         }
-        trace.verify_signature = get_nanos_timestamp()?;
+        trace.verify_signature = utcnow_ns();
 
         // Store the delegation in the database
         tokio::spawn(async move {
@@ -288,7 +285,7 @@ where
         });
 
         // Log some final info
-        trace.request_finish = get_nanos_timestamp()?;
+        trace.request_finish = utcnow_ns();
         trace!(
             request_id = %request_id,
             trace = ?trace,
@@ -307,8 +304,7 @@ where
         req: Request<Body>,
     ) -> Result<StatusCode, ConstraintsApiError> {
         let request_id = Uuid::new_v4();
-        let mut trace =
-            ConstraintSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let mut trace = ConstraintSubmissionTrace { receive: utcnow_ns(), ..Default::default() };
 
         info!(
             request_id = %request_id,
@@ -338,7 +334,7 @@ where
                 return Err(ConstraintsApiError::InvalidRevocation)
             }
         };
-        trace.decode = get_nanos_timestamp()?;
+        trace.decode = utcnow_ns();
 
         for revocation in &signed_revocations {
             if let Err(e) = verify_signed_message(
@@ -352,7 +348,7 @@ where
                 return Err(ConstraintsApiError::InvalidSignature)
             };
         }
-        trace.verify_signature = get_nanos_timestamp()?;
+        trace.verify_signature = utcnow_ns();
 
         // Store the delegation in the database
         tokio::spawn(async move {
@@ -363,7 +359,7 @@ where
         });
 
         // Log some final info
-        trace.request_finish = get_nanos_timestamp()?;
+        trace.request_finish = utcnow_ns();
         info!(
             request_id = %request_id,
             trace = ?trace,
@@ -395,7 +391,7 @@ where
             .await
         {
             Ok(()) => {
-                trace.auctioneer_update = get_nanos_timestamp()?;
+                trace.auctioneer_update = utcnow_ns();
                 info!(
                     request_id = %request_id,
                     timestamp_after_auctioneer = Instant::now().elapsed().as_nanos(),
@@ -517,7 +513,7 @@ pub async fn decode_constraints_submission(
         serde_json::from_slice(&body_bytes)?
     };
 
-    trace.decode = get_nanos_timestamp()?;
+    trace.decode = utcnow_ns();
     info!(
         request_id = %request_id,
         timestamp_after_decoding = Instant::now().elapsed().as_nanos(),
@@ -526,11 +522,4 @@ pub async fn decode_constraints_submission(
     );
 
     Ok(constraints.to_vec())
-}
-
-fn get_nanos_timestamp() -> Result<u64, ConstraintsApiError> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .map_err(|_| ConstraintsApiError::InternalError)
 }

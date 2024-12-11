@@ -18,14 +18,9 @@ mod tests {
         versioned_payload::PayloadAndBlobs,
         Filtering, GetPayloadTrace, HeaderSubmissionTrace, SubmissionTrace, ValidatorSummary,
     };
+    use helix_utils::utcnow_sec;
     use rand::{seq::SliceRandom, thread_rng, Rng};
-    use std::{
-        default::Default,
-        ops::DerefMut,
-        str::FromStr,
-        sync::Arc,
-        time::{Duration, SystemTime, UNIX_EPOCH},
-    };
+    use std::{default::Default, ops::DerefMut, str::FromStr, sync::Arc, time::Duration};
     use tokio::time::sleep;
 
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
@@ -93,7 +88,7 @@ mod tests {
 
     fn get_randomized_signed_validator_registration() -> ValidatorRegistrationInfo {
         let mut rng = rand::thread_rng();
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let timestamp = utcnow_sec();
         let gas_limit = 0;
         let key = SecretKey::random(&mut rng).unwrap();
         let signature = key.sign("message".as_bytes());
