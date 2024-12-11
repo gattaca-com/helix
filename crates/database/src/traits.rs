@@ -105,7 +105,7 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn store_block_submission(
         &self,
         submission: Arc<SignedBidSubmission>,
-        trace: Arc<SubmissionTrace>,
+        trace: SubmissionTrace,
         optimistic_version: i16,
     ) -> Result<(), DatabaseError>;
 
@@ -175,19 +175,19 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn store_header_submission(
         &self,
         submission: Arc<SignedHeaderSubmission>,
-        trace: Arc<HeaderSubmissionTrace>,
+        trace: HeaderSubmissionTrace,
     ) -> Result<(), DatabaseError>;
 
     async fn save_gossiped_header_trace(
         &self,
         block_hash: ByteVector<32>,
-        trace: Arc<GossipedHeaderTrace>,
+        trace: GossipedHeaderTrace,
     ) -> Result<(), DatabaseError>;
 
     async fn save_gossiped_payload_trace(
         &self,
         block_hash: ByteVector<32>,
-        trace: Arc<GossipedPayloadTrace>,
+        trace: GossipedPayloadTrace,
     ) -> Result<(), DatabaseError>;
 
     async fn get_trusted_proposers(&self) -> Result<Vec<ProposerInfo>, DatabaseError>;

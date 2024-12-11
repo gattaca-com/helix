@@ -505,10 +505,8 @@ where
         // Save submission to db.
         tokio::spawn(
             async move {
-                if let Err(err) = api
-                    .db
-                    .store_block_submission(payload, Arc::new(trace), optimistic_version as i16)
-                    .await
+                if let Err(err) =
+                    api.db.store_block_submission(payload, trace, optimistic_version as i16).await
                 {
                     error!(%err, "failed to store block submission")
                 }
@@ -715,7 +713,7 @@ where
         let db = api.db.clone();
         tokio::spawn(
             async move {
-                if let Err(err) = db.store_header_submission(payload, Arc::new(trace)).await {
+                if let Err(err) = db.store_header_submission(payload, trace).await {
                     error!(
                         %err,
                         "failed to store header submission",
@@ -922,7 +920,7 @@ where
             async move {
                 if let Err(err) = api
                     .db
-                    .store_block_submission(payload, Arc::new(trace), OptimisticVersion::V2 as i16)
+                    .store_block_submission(payload, trace, OptimisticVersion::V2 as i16)
                     .await
                 {
                     error!(%err, "failed to store block submission")
@@ -1118,9 +1116,8 @@ where
         // Save latency trace to db
         let db = self.db.clone();
         tokio::spawn(async move {
-            if let Err(err) = db
-                .save_gossiped_header_trace(req.bid_trace.block_hash.clone(), Arc::new(trace))
-                .await
+            if let Err(err) =
+                db.save_gossiped_header_trace(req.bid_trace.block_hash.clone(), trace).await
             {
                 error!(%err, "failed to store gossiped header trace")
             }
@@ -1195,7 +1192,7 @@ where
             if let Err(err) = db
                 .save_gossiped_payload_trace(
                     req.execution_payload.execution_payload.block_hash().clone(),
-                    Arc::new(trace),
+                    trace,
                 )
                 .await
             {

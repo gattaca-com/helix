@@ -1135,7 +1135,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn store_block_submission(
         &self,
         submission: Arc<SignedBidSubmission>,
-        trace: Arc<SubmissionTrace>,
+        trace: SubmissionTrace,
         optimistic_version: i16,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_block_submission");
@@ -1718,7 +1718,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn store_header_submission(
         &self,
         submission: Arc<SignedHeaderSubmission>,
-        trace: Arc<HeaderSubmissionTrace>,
+        trace: HeaderSubmissionTrace,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_header_submission");
 
@@ -1781,7 +1781,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn save_gossiped_header_trace(
         &self,
         block_hash: ByteVector<32>,
-        trace: Arc<GossipedHeaderTrace>,
+        trace: GossipedHeaderTrace,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("save_gossiped_header_trace");
 
@@ -1811,7 +1811,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn save_gossiped_payload_trace(
         &self,
         block_hash: ByteVector<32>,
-        trace: Arc<GossipedPayloadTrace>,
+        trace: GossipedPayloadTrace,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("save_gossiped_payload_trace");
 

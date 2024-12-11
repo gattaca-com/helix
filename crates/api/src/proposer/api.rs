@@ -880,7 +880,7 @@ where
         let self_clone = self.clone();
         let unblinded_payload_clone = unblinded_payload.clone();
         let request_id_clone = *request_id;
-        let mut trace_clone = trace.clone();
+        let mut trace_clone = *trace;
         let payload_clone = payload.clone();
 
         tokio::spawn(async move {
@@ -913,7 +913,7 @@ where
                     payload_clone,
                     &signed_blinded_block,
                     &proposer_public_key,
-                    &trace_clone,
+                    trace_clone,
                     &request_id_clone,
                     user_agent,
                 )
@@ -1363,7 +1363,7 @@ where
         payload: Arc<PayloadAndBlobs>,
         signed_blinded_block: &SignedBlindedBeaconBlock,
         proposer_public_key: &BlsPublicKey,
-        trace: &GetPayloadTrace,
+        trace: GetPayloadTrace,
         request_id: &Uuid,
         user_agent: Option<String>,
     ) {
@@ -1388,7 +1388,6 @@ where
         };
 
         let db = self.db.clone();
-        let trace = trace.clone();
         let request_id = *request_id;
         tokio::spawn(async move {
             if let Err(err) =

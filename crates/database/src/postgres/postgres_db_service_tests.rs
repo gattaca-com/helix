@@ -487,7 +487,7 @@ mod tests {
         };
 
         db_service
-            .store_block_submission(Arc::new(signed_bid_submission), Arc::new(submission_trace), 0)
+            .store_block_submission(Arc::new(signed_bid_submission), submission_trace, 0)
             .await?;
         Ok(())
     }
@@ -686,7 +686,7 @@ mod tests {
         db_service
             .store_header_submission(
                 Arc::new(signed_bid_submission),
-                Arc::new(HeaderSubmissionTrace::default()),
+                HeaderSubmissionTrace::default(),
             )
             .await?;
         Ok(())

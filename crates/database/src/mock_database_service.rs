@@ -150,7 +150,7 @@ impl DatabaseService for MockDatabaseService {
     async fn store_block_submission(
         &self,
         _submission: Arc<SignedBidSubmission>,
-        _trace: Arc<SubmissionTrace>,
+        _trace: SubmissionTrace,
         _optimistic_version: i16,
     ) -> Result<(), DatabaseError> {
         Ok(())
@@ -252,7 +252,7 @@ impl DatabaseService for MockDatabaseService {
     async fn store_header_submission(
         &self,
         _submission: Arc<SignedHeaderSubmission>,
-        _trace: Arc<HeaderSubmissionTrace>,
+        _trace: HeaderSubmissionTrace,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -260,7 +260,7 @@ impl DatabaseService for MockDatabaseService {
     async fn save_gossiped_header_trace(
         &self,
         _block_hash: ByteVector<32>,
-        _trace: Arc<GossipedHeaderTrace>,
+        _trace: GossipedHeaderTrace,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
@@ -268,7 +268,7 @@ impl DatabaseService for MockDatabaseService {
     async fn save_gossiped_payload_trace(
         &self,
         _block_hash: ByteVector<32>,
-        _trace: Arc<GossipedPayloadTrace>,
+        _trace: GossipedPayloadTrace,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
