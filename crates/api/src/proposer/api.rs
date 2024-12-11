@@ -1150,6 +1150,20 @@ where
                 if local_kzg_commitments != provided_kzg_commitments {
                     return Err(ProposerApiError::BlobKzgCommitmentsMismatch)
                 }
+
+                let local_kzg_commitments = local_versioned_payload
+                    .blobs_bundle
+                    .as_ref()
+                    .map(|bundle| &bundle.commitments)
+                    .ok_or(ProposerApiError::BlobKzgCommitmentsMismatch)?;
+
+                let provided_kzg_commitments = body
+                    .blob_kzg_commitments()
+                    .ok_or(ProposerApiError::BlobKzgCommitmentsMismatch)?;
+
+                if local_kzg_commitments != provided_kzg_commitments {
+                    return Err(ProposerApiError::BlobKzgCommitmentsMismatch);
+                }
             }
         }
 
