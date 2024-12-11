@@ -1162,7 +1162,7 @@ where
                     .ok_or(ProposerApiError::BlobKzgCommitmentsMismatch)?;
 
                 if local_kzg_commitments != provided_kzg_commitments {
-                    return Err(ProposerApiError::BlobKzgCommitmentsMismatch);
+                    return Err(ProposerApiError::BlobKzgCommitmentsMismatch)
                 }
             }
         }
