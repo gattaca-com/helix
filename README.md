@@ -77,6 +77,60 @@ The graphs illustrate a marked reduction in latency across several operational s
 
 In addition to the improvements made in internal processing efficiency, using the OptimisticV2 implementation has resulted in significantly lower network latencies from our builders.
 
+## How to run
+The relay can be run locally for development, or configured for staging and production environments. Depending on the setup, you may want to leverage Docker for building and running the service, along with a Postgres database, Redis instance.
+
+#### Local setup
+```bash
+# Build the image
+$ docker build -t helix_mev_relayer -f local.Dockerfile .
+
+# Run the container
+$ docker run --name helix_mev_relayer helix_mev_relayer
+```
+
+#### Staging or Production-Ready setup
+AWS configuration is required as a cloud storage option for [sccache](https://github.com/mozilla/sccache.git) (a rust wrapper for caching builds for faster development).
+For environments closer to production, you can use the provided [Dockerfile](./Dockerfile). In these environments, [sccache](https://github.com/mozilla/sccache.git) can be configured to store build artifacts in AWS S3 for faster incremental builds. You must supply your AWS credentials as build arguments:
+
+```bash
+$ docker build \
+  --build-arg AWS_ACCESS_KEY_ID=<your_aws_access_key_id> \
+  --build-arg AWS_SECRET_ACCESS_KEY=<your_aws_secret_access_key> \
+  --build-arg REPO_NAME=<your_repo_name> \
+  -t helix_mev_relayer .
+
+$ docker run --name helix_mev_relayer helix_mev_relayer
+```
+
+### Configuration
+
+[config.yml](./config.yml) contains options for the relay.
+
+### Databases
+The relay relies on postgres database for persistent storage. Ensure you point the `config.postgres` settings to a database with `timescaledb` extension installed and enabled.
+
+For Redis set `config.redis.url` to a connection url to a running redis instance.
+
+### The simulator service
+`config.simulators`: should be an RPC endpoint for the payload validator. This service is responsible for sending block requests to the relay for validation.
+
+### Beacon client
+Beacon clients provide APIs for validators to register and propose blocks. You can point the relay to one or multiple beacon clients using `config.beacon_clients`. Examples: [Prysm](https://github.com/prysmaticlabs/prysm.git), [Lighthouse](https://github.com/sigp/lighthouse.git).
+
+It is the **Consensus Layer** (CL) of the blockchain and is dependent on an **Execution Layer** (EL).
+
+Each beacon client must have **HTTP API** enabled and requires a working EL client like [geth](https://github.com/ethereum/go-ethereum.git) or [reth](https://github.com/paradigmxyz/reth.git) (Rust ecosystem). Make sure both CL and EL are synchronized and accessible to the relay.
+
+### Logging
+Logs are tailed in `config.logging`. when there is a panic call by `panic::set_hook` logging is done in **{config.dir_path}/crash.log**.
+
+You can also add a webhook to log `panic!` messages to discord using the `config.discord_webhook_url`. Note this uses `reqwest::blocking` under the hood.
+
+### Additional Notes
+- Ensure that your environment is properly set up before starting the relay (e.g., databases running, AWS credentials ready if using sccache).
+- For best performance in production, always verify that your beacon and execution clients are properly synced and that the relay has the appropriate network permissions.
+
 ## Future Work
 
 ### In-Memory Auctioneer
