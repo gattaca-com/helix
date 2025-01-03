@@ -86,7 +86,9 @@ The relay can be run locally for development, or configured for staging and prod
 $ docker build -t helix_mev_relayer -f local.Dockerfile .
 
 # Run the container
-$ docker run --name helix_mev_relayer helix_mev_relayer
+$ docker run -e RELAY_KEY=<your_relay_key> \
+  -e METRICS_PORT=<your_prometheus_server_port> \
+  --name helix_mev_relayer helix_mev_relayer
 ```
 
 #### Staging or Production-Ready setup
@@ -100,12 +102,25 @@ $ docker build \
   --build-arg REPO_NAME=<your_repo_name> \
   -t helix_mev_relayer .
 
-$ docker run --name helix_mev_relayer helix_mev_relayer
+$ docker run -e RELAY_KEY=<your_relay_key> \
+  -e METRICS_PORT=<your_prometheus_server_port> \
+  --name helix_mev_relayer helix_mev_relayer
 ```
 
 ### Configuration
 
 [config.yml](./config.yml) contains options for the relay.
+
+### Network configuration
+The relay can be run using testnets (e.g `Sepolia`, `Holesky`). For custom network setups, simply update the `config.network_config` field. 
+A custom setup would look like this:
+
+```yaml
+  network_config: !Custom
+  dir_path: custom_dir # path to the directory where chain data is stored
+  genesis_validator_root: '0x0000000000000000000000000000000000000000000000000000000000000000'
+  genesis_time: 1578009600 # the network's genesis time (Unix timestamp)
+```
 
 ### Databases
 The relay relies on postgres database for persistent storage. Ensure you point the `config.postgres` settings to a database with `timescaledb` extension installed and enabled.
