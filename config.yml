@@ -1,0 +1,70 @@
+network_config: Sepolia
+website:
+    enabled: false
+    port: 8080
+    listen_address: 0.0.0.0
+    show_config_details: false
+    network_name: ""
+    relay_url: ""
+    relay_pubkey: ""
+    link_beaconchain: ""
+    link_etherscan: ""
+    link_data_api: ""
+postgres:
+    hostname: localhost
+    port: 5434
+    db_name: helix_mev_relayer
+    user: postgres
+    password: postgres
+    region: 0
+    region_name: ""
+redis:
+    url: redis://localhost:6379
+broadcasters:
+    - !BeaconClient
+      url: http://localhost:8545
+      gossip_blobs_enabled: false
+simulators:
+    - url: http://localhost:8545
+beacon_clients:
+    - url: http://localhost:8545
+      gossip_blobs_enabled: false
+relays: []
+builders: []
+logging: !File
+    dir_path: logs
+    file_name: log
+validator_preferences:
+    filtering: regional
+    trusted_builders: null
+    header_delay: true
+    gossip_blobs: false
+router_config:
+    enabled_routes:
+        - route: GetValidators
+          rate_limit: null
+        - route: SubmitBlock
+          rate_limit: null
+        - route: SubmitBlockOptimistic
+          rate_limit: null
+        - route: ValidatorRegistration
+          rate_limit: null
+        - route: GetHeader
+          rate_limit:
+              limit_duration_ms: 12
+              max_requests: 3
+        - route: GetPayload
+          rate_limit: null
+        - route: ProposerPayloadDelivered
+          rate_limit: null
+        - route: RegisterValidators
+          rate_limit: null
+        - route: Status
+          rate_limit: null
+target_get_payload_propagation_duration_ms: 0
+constraints_api_config:
+    check_constraints_signature: true
+    max_block_value_to_verify_wei: null
+primev_config: null
+skip_floor_bid_builder_pubkeys: []
+discord_webhook_url: null
