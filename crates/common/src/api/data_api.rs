@@ -4,6 +4,12 @@ use ethereum_consensus::{
 };
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize, Clone)]
+pub enum BidsOrderBy {
+    HighToLow,
+    LowToHigh,
+}
+
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct BidFilters {
     pub slot: Option<u64>,
@@ -13,7 +19,7 @@ pub struct BidFilters {
     pub block_number: Option<u64>,
     pub proposer_pubkey: Option<BlsPublicKey>,
     pub builder_pubkey: Option<BlsPublicKey>,
-    pub order_by: Option<i8>,
+    pub order_by: Option<BidsOrderBy>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -40,8 +46,8 @@ impl From<ProposerPayloadDeliveredParams> for BidFilters {
             builder_pubkey: value.builder_pubkey,
             order_by: match value.order_by.as_ref() {
                 Some(s) => match s.as_str() {
-                    "value" => Some(1),
-                    "-value" => Some(-1),
+                    "value" => Some(BidsOrderBy::LowToHigh),
+                    "-value" => Some(BidsOrderBy::HighToLow),
                     _ => None,
                 },
                 None => None,
