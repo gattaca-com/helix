@@ -150,14 +150,18 @@ impl ApiService {
                 .start(chain_updater_head_events, chain_updater_payload_events)
                 .await;
         });
-
-        let gossiper = Arc::new(
-            GrpcGossiperClientManager::new(
-                config.relays.iter().map(|cfg| cfg.url.clone()).collect(),
-            )
-            .await
-            .expect("failed to initialise gRPC gossiper"),
-        );
+        let gossiper;
+        if config.relays.len() == 0 {
+            gossiper = None;
+        }else{
+            gossiper = Some(Arc::new(
+                GrpcGossiperClientManager::new(
+                    config.relays.iter().map(|cfg| cfg.url.clone()).collect(),
+                )
+                .await
+                .expect("failed to initialise gRPC gossiper"),
+            ));
+        }
 
         let validator_preferences = Arc::new(config.validator_preferences.clone());
 
@@ -177,7 +181,9 @@ impl ApiService {
         );
         let builder_api = Arc::new(builder_api);
 
-        gossiper.start_server(builder_gossip_sender, proposer_gossip_sender).await;
+        if gossiper.is_some(){
+            gossiper.clone().unwrap().start_server(builder_gossip_sender, proposer_gossip_sender).await;
+        }
 
         let proposer_api = Arc::new(ProposerApiProd::new(
             auctioneer.clone(),

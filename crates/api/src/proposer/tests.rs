@@ -988,7 +988,7 @@ mod proposer_api_tests {
         >::new(
             auctioneer.clone(),
             Arc::new(MockDatabaseService::default()),
-            Arc::new(MockGossiper::new().unwrap()),
+            Some(Arc::new(MockGossiper::new().unwrap())),
             vec![],
             Arc::new(MockMultiBeaconClient::default()),
             Arc::new(ChainInfo::for_holesky()),

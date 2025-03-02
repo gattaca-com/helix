@@ -94,7 +94,7 @@ where
     db: Arc<DB>,
     chain_info: Arc<ChainInfo>,
     simulator: S,
-    gossiper: Arc<G>,
+    gossiper: Option<Arc<G>>,
     signing_context: Arc<RelaySigningContext>,
     relay_config: Arc<RelayConfig>,
     db_sender: Sender<DbInfo>,
@@ -119,7 +119,7 @@ where
         db: Arc<DB>,
         chain_info: Arc<ChainInfo>,
         simulator: S,
-        gossiper: Arc<G>,
+        gossiper: Option<Arc<G>>,
         signing_context: Arc<RelaySigningContext>,
         relay_config: RelayConfig,
         slot_update_subscription: Sender<Sender<ChainUpdate>>,
@@ -1301,8 +1301,12 @@ where
             is_cancellations_enabled,
             on_receive,
         };
-        if let Err(err) = self.gossiper.broadcast_header(params).await {
-            error!(%err, "failed to broadcast header");
+        if let Some(gossiper) = &self.gossiper {
+            if let Err(err) = gossiper.broadcast_header(params).await {
+                error!(%err, "failed to broadcast header");
+            }
+        }else {
+            warn!("Gossiper is not available, skipping header broadcast");
         }
     }
 
@@ -1316,8 +1320,13 @@ where
             slot: payload.slot(),
             proposer_pub_key: payload.proposer_public_key().clone(),
         };
-        if let Err(err) = self.gossiper.broadcast_payload(params).await {
-            error!(%err, "failed to broadcast payload");
+       
+        if let Some(gossiper) = &self.gossiper {
+            if let Err(err) = gossiper.broadcast_payload(params).await {
+                error!(%err, "failed to broadcast payload");
+            }
+        }else {
+            warn!("Gossiper is not available, skipping payload broadcast");
         }
     }
 
@@ -1327,8 +1336,12 @@ where
         request_id: &Uuid,
     ) {
         let params = BroadcastCancellationParams { signed_cancellation, request_id: *request_id };
-        if let Err(err) = self.gossiper.broadcast_cancellation(params).await {
-            error!(request_id = %request_id, error = %err, "failed to broadcast header");
+        if let Some(gossiper) = &self.gossiper {
+            if let Err(err) = gossiper.broadcast_cancellation(params).await {
+                error!(%err, "failed to broadcast header");
+            }
+        }else {
+            warn!("Gossiper is not available, skipping header broadcast");
         }
     }
 }
