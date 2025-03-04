@@ -541,12 +541,6 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             }
         };
 
-        let proposer_duties_for_epoch: Vec<ProposerDuty> = proposer_duties
-            .iter()
-            .filter(|duty| duty.slot >= epoch * EPOCH_SLOTS && duty.slot < (epoch + 1) * EPOCH_SLOTS)
-            .map(|duty| duty.clone())
-            .collect();
-
         for builder_pubkey in primev_builders {
             self.db
                 .store_builder_info(
@@ -560,7 +554,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
                 .await?;
         }
 
-        let primev_validators = get_registered_primev_validators(primev_config, proposer_duties_for_epoch).await;
+        let primev_validators = get_registered_primev_validators(primev_config, proposer_duties).await;
         self.auctioneer.update_primev_proposers(&primev_validators).await?;
 
         let primev_builder_pref = vec!["PrimevBuilder".to_string()];
