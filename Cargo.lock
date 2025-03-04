@@ -2869,6 +2869,7 @@ dependencies = [
 name = "helix-housekeeper"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "ethereum-consensus",
  "ethers",
  "helix-beacon-client",
