@@ -431,7 +431,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     async fn update_proposer_duties(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
         head_slot: u64,
-    ) -> Result<Arc<Vec<ProposerDuty>>, HousekeeperError> {
+    ) -> Result<Vec<ProposerDuty>, HousekeeperError> {
         // Only allow one update_proposer_duties task at a time.
         let _guard = self.proposer_duties_lock.try_lock()?;
 
@@ -440,7 +440,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         info!(epoch_from = epoch, epoch_to = epoch + 1, "Housekeeper::update_proposer_duties",);
 
         let proposer_duties = match self.fetch_duties(epoch).await {
-            Ok(duties) => Arc::new(duties),
+            Ok(proposer_duties) => proposer_duties,
             Err(err) => {
                 error!(err = %err, "failed to fetch proposer duties");
                 return Err(HousekeeperError::BeaconClientError(err))
@@ -463,8 +463,10 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         if signed_validator_registrations.is_empty() {
             warn!("No signed validator registrations found for proposer duties");
         } else {
-            match self.format_and_store_duties(Arc::clone(&proposer_duties), signed_validator_registrations).await {
-
+            match self
+                .format_and_store_duties(proposer_duties.clone(), signed_validator_registrations)
+                .await
+            {
                 Ok(num_duties) => {
                     info!(epoch_from = epoch, num_duties = num_duties, "updated proposer duties")
                 }
@@ -482,7 +484,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     /// Returns the number of proposer duties registered to the relay for the next 2 epochs.
     pub async fn format_and_store_duties(
         &self,
-        proposer_duties: Arc<Vec<ProposerDuty>>,
+        proposer_duties: Vec<ProposerDuty>,
         signed_validator_registrations: HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>,
     ) -> Result<usize, DatabaseError> {
         let mut formatted_proposer_duties: Vec<BuilderGetValidatorsResponseEntry> =
@@ -490,7 +492,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
         let len = proposer_duties.len();
 
-        for duty in proposer_duties.iter() {
+        for duty in proposer_duties {
             if let Some(reg) = signed_validator_registrations.get(&duty.public_key) {
                 if duty.public_key != reg.registration_info.registration.message.public_key {
                     error!(?duty, ?reg, "mismatch in duty vs registration")
@@ -536,7 +538,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     /// Updates primev builders and validators using pre-fetched proposer duties
     async fn primev_update_with_duties(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
-        proposer_duties: Arc<Vec<ProposerDuty>>,
+        proposer_duties: Vec<ProposerDuty>,
     ) -> Result<(), HousekeeperError> {
         let primev_config = self.config.primev_config.as_ref().unwrap();
         let primev_builders = get_registered_primev_builders(primev_config).await;
@@ -725,7 +727,7 @@ pub async fn get_registered_primev_builders(config: &PrimevConfig) -> Vec<BlsPub
 }
 
 /// Fetches the registered primev validators from the validators registry contract.
-pub async fn get_registered_primev_validators(config: &PrimevConfig, proposer_duties: Arc<Vec<ProposerDuty>>) -> Vec<BlsPublicKey> {
+pub async fn get_registered_primev_validators(config: &PrimevConfig, proposer_duties: Vec<ProposerDuty>) -> Vec<BlsPublicKey> {
     let provider = Provider::<Http>::try_from(config.validator_url.as_str()).unwrap();
     let provider = Arc::new(provider);
 
