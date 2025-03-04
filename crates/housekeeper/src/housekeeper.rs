@@ -190,10 +190,26 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         });
 
         // Spawn a task to asynchronously update proposer duties.
+        // After that completes, run primev_update if configured
         if self.should_update_duties(head_slot).await {
             let cloned_self = self.clone();
             tokio::spawn(async move {
-                let _ = cloned_self.update_proposer_duties(head_slot).await;
+                match cloned_self.update_proposer_duties(head_slot).await {
+                    Ok(proposer_duties) => {
+                        if cloned_self.config.primev_config.is_some() {
+                            // Run primev_update with the fetched duties
+                            let primev_self = cloned_self.clone();
+                            tokio::spawn(async move {
+                                if let Err(err) = primev_self.primev_update_with_duties(proposer_duties).await {
+                                    error!(err = %err, "failed to update primev");
+                                }
+                            });
+                        }
+                    },
+                    Err(err) => {
+                        error!(err = %err, "failed to update proposer duties");
+                    }
+                }
             });
         }
 
@@ -210,13 +226,6 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         tokio::spawn(async move {
             let _ = cloned_self.sync_builder_info_changes(head_slot).await;
         });
-
-        if self.config.primev_config.is_some() {
-            let cloned_self = self.clone();
-            tokio::spawn(async move {
-                let _ = cloned_self.primev_update(head_slot).await;
-            });
-        }
 
         // Spawn a task to asynchronously update the trusted proposers.
         if self.should_update_trusted_proposers(head_slot).await {
@@ -418,10 +427,11 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     }
 
     /// Update proposer duties for `head_slot` and `head_slot` + 1.
+    /// Returns the fetched proposer duties on success.
     async fn update_proposer_duties(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
         head_slot: u64,
-    ) -> Result<(), HousekeeperError> {
+    ) -> Result<Vec<ProposerDuty>, HousekeeperError> {
         // Only allow one update_proposer_duties task at a time.
         let _guard = self.proposer_duties_lock.try_lock()?;
 
@@ -454,7 +464,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             warn!("No signed validator registrations found for proposer duties");
         } else {
             match self
-                .format_and_store_duties(proposer_duties, signed_validator_registrations)
+                .format_and_store_duties(proposer_duties.clone(), signed_validator_registrations)
                 .await
             {
                 Ok(num_duties) => {
@@ -466,7 +476,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
         *self.proposer_duties_slot.lock().await = head_slot;
 
-        Ok(())
+        Ok(proposer_duties)
     }
 
     /// Format and store proposer duties
@@ -525,21 +535,13 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         last_proposer_duty_distance >= PROPOSER_DUTIES_UPDATE_FREQ
     }
 
-    async fn primev_update(
+    /// Updates primev builders and validators using pre-fetched proposer duties
+    async fn primev_update_with_duties(
         self: &SharedHousekeeper<DB, BeaconClient, A>,
-        head_slot: u64,
+        proposer_duties: Vec<ProposerDuty>,
     ) -> Result<(), HousekeeperError> {
         let primev_config = self.config.primev_config.as_ref().unwrap();
         let primev_builders = get_registered_primev_builders(primev_config).await;
-        let epoch = head_slot / EPOCH_SLOTS;
-
-        let proposer_duties: Vec<ProposerDuty> = match self.fetch_duties(epoch).await {
-            Ok(proposer_duties) => proposer_duties,
-            Err(err) => {
-                error!(err = %err, "failed to fetch proposer duties");
-                return Err(HousekeeperError::BeaconClientError(err))
-            }
-        };
 
         for builder_pubkey in primev_builders {
             self.db
