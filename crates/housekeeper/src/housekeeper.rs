@@ -214,7 +214,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         if self.config.primev_config.is_some() {
             let cloned_self = self.clone();
             tokio::spawn(async move {
-                let _ = cloned_self.primev_update().await;
+                let _ = cloned_self.primev_update(head_slot).await;
             });
         }
 
@@ -525,9 +525,28 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         last_proposer_duty_distance >= PROPOSER_DUTIES_UPDATE_FREQ
     }
 
-    async fn primev_update(&self) -> Result<(), HousekeeperError> {
+    async fn primev_update(
+        self: &SharedHousekeeper<DB, BeaconClient, A>,
+        head_slot: u64,
+    ) -> Result<(), HousekeeperError> {
         let primev_config = self.config.primev_config.as_ref().unwrap();
         let primev_builders = get_registered_primev_builders(primev_config).await;
+        let epoch = head_slot / EPOCH_SLOTS;
+
+        let proposer_duties: Vec<ProposerDuty> = match self.fetch_duties(epoch).await {
+            Ok(proposer_duties) => proposer_duties,
+            Err(err) => {
+                error!(err = %err, "failed to fetch proposer duties");
+                return Err(HousekeeperError::BeaconClientError(err))
+            }
+        };
+
+        let proposer_duties_for_epoch: Vec<ProposerDuty> = proposer_duties
+            .iter()
+            .filter(|duty| duty.slot >= epoch * EPOCH_SLOTS && duty.slot < (epoch + 1) * EPOCH_SLOTS)
+            .map(|duty| duty.clone())
+            .collect();
+
         for builder_pubkey in primev_builders {
             self.db
                 .store_builder_info(
@@ -541,7 +560,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
                 .await?;
         }
 
-        let primev_validators = get_registered_primev_validators(primev_config).await;
+        let primev_validators = get_registered_primev_validators(primev_config, proposer_duties_for_epoch).await;
         self.auctioneer.update_primev_proposers(&primev_validators).await?;
 
         let primev_builder_pref = vec!["PrimevBuilder".to_string()];
@@ -712,116 +731,98 @@ pub async fn get_registered_primev_builders(config: &PrimevConfig) -> Vec<BlsPub
 }
 
 /// Fetches the registered primev validators from the validators registry contract.
-pub async fn get_registered_primev_validators(config: &PrimevConfig) -> Vec<BlsPublicKey> {
+pub async fn get_registered_primev_validators(config: &PrimevConfig, proposer_duties: Vec<ProposerDuty>) -> Vec<BlsPublicKey> {
     let provider = Provider::<Http>::try_from(config.validator_url.as_str()).unwrap();
     let provider = Arc::new(provider);
 
     // Define the contract address and ABI
-    let provider_registry_address: Address = config.validator_contract.as_str().parse().unwrap();
+    let validator_registry_address: Address = config.validator_contract.as_str().parse().unwrap();
 
-    let abi_str = r#"
-    [
+    let abi_str = r#"[
+    {
+        "type": "function",
+        "name": "areValidatorsOptedIn",
+        "inputs": [
         {
-            "type": "function",
-            "name": "getStakedValidators",
-            "inputs": [
-                {
-                    "name": "start",
-                    "type": "uint256",
-                    "internalType": "uint256"
-                },
-                {
-                    "name": "end",
-                    "type": "uint256",
-                    "internalType": "uint256"
-                }
-            ],
-            "outputs": [
-                {
-                    "name": "",
-                    "type": "bytes[]",
-                    "internalType": "bytes[]"
-                },
-                {
-                    "name": "",
-                    "type": "uint256",
-                    "internalType": "uint256"
-                }
-            ],
-            "stateMutability": "view"
-        },
-        {
-            "type": "function",
-            "name": "getNumberOfStakedValidators",
-            "inputs": [],
-            "outputs": [
-                {
-                    "name": "",
-                    "type": "uint256",
-                    "internalType": "uint256"
-                },
-                {
-                    "name": "",
-                    "type": "uint256",
-                    "internalType": "uint256"
-                }
-            ],
-            "stateMutability": "view"
+            "name": "valBLSPubKeys",
+            "type": "bytes[]",
+            "internalType": "bytes[]"
         }
-    ]
-    "#;
+        ],
+        "outputs": [
+        {
+            "name": "",
+            "type": "tuple[]",
+            "internalType": "struct IValidatorOptInRouter.OptInStatus[]",
+            "components": [
+            {
+                "name": "isVanillaOptedIn",
+                "type": "bool",
+                "internalType": "bool"
+            },
+            {
+                "name": "isAvsOptedIn",
+                "type": "bool",
+                "internalType": "bool"
+            },
+            {
+                "name": "isMiddlewareOptedIn",
+                "type": "bool",
+                "internalType": "bool"
+            }
+            ]
+        }
+        ],
+        "stateMutability": "view"
+    }
+    ]"#;
 
     let abi: Abi = serde_json::from_str(abi_str).unwrap();
 
     // Create a new contract instance
-    let contract = Contract::new(provider_registry_address, abi, provider.clone());
+    let contract = Contract::new(validator_registry_address, abi, provider.clone());
 
-    let num_validators =
-        match contract.method::<(), (U256, U256)>("getNumberOfStakedValidators", ()) {
-            Ok(method) => match method.call().await {
-                Ok((num_validators, _version)) => num_validators,
-                Err(e) => {
-                    error!("Error calling method: {:?}", e);
-                    U256::from(0)
-                }
+    // Extract BLS public keys from proposer duties and format for contract call
+    let validator_pubkeys: Vec<Bytes> = proposer_duties
+        .iter()
+        .map(|duty| {
+            // Convert BlsPublicKey to Bytes for the contract call
+            Bytes::from(duty.public_key.to_vec())
+        })
+        .collect();
+
+    // Call the areValidatorsOptedIn function to check which validators are opted in
+    let opted_in_statuses = match contract
+        .method::<_, Vec<(bool, bool, bool)>>("areValidatorsOptedIn", (validator_pubkeys,))
+    {
+        Ok(method) => match method.call().await {
+            Ok(statuses) => {
+                debug!("Successfully queried opt-in status for {} validators", statuses.len());
+                statuses
             },
             Err(e) => {
-                error!("Error calling method: {:?}", e);
-                U256::from(0)
+                error!("Error calling areValidatorsOptedIn: {:?}", e);
+                Vec::new()
             }
-        };
+        },
+        Err(e) => {
+            error!("Error creating areValidatorsOptedIn method call: {:?}", e);
+            Vec::new()
+        }
+    };
 
-    let batch_size: U256 = U256::from(500);
-    let mut start: U256 = U256::from(0);
-    let mut total_validators: Vec<Bytes> = Vec::new();
-
-    while start < num_validators {
-        let end =
-            if start + batch_size > num_validators { num_validators } else { start + batch_size };
-
-        match contract
-            .method::<(U256, U256), (Vec<Bytes>, U256)>("getStakedValidators", (start, end))
-        {
-            Ok(method) => match method.call().await {
-                Ok(result) => {
-                    if result.0.is_empty() {
-                        break // No more validators to fetch
-                    }
-                    total_validators.extend(result.0);
-                }
-                Err(e) => {
-                    eprintln!("Error calling method: {:?}", e);
-                    break
-                }
-            },
-            Err(e) => {
-                eprintln!("Error creating method: {:?}", e);
-                break
+    // Extract the public keys of validators that are opted into any Primev service
+    let mut opted_in_validators = Vec::new();
+    for (index, status) in opted_in_statuses.iter().enumerate() {
+        // A validator is considered opted in if any of the three flags is true
+        // (isVanillaOptedIn || isAvsOptedIn || isMiddlewareOptedIn)
+        if status.0 || status.1 || status.2 {
+            if let Some(duty) = proposer_duties.get(index) {
+                opted_in_validators.push(duty.public_key.clone());
             }
         }
-
-        start = end;
     }
 
-    total_validators.iter().map(|bytes| BlsPublicKey::try_from(bytes.as_slice()).unwrap()).collect()
+    // Return just the list of opted-in validator pubkeys
+    opted_in_validators
 }
