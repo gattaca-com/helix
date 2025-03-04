@@ -738,6 +738,8 @@ pub async fn get_registered_primev_validators(config: &PrimevConfig, proposer_du
     // Define the contract address and ABI
     let validator_registry_address: Address = config.validator_contract.as_str().parse().unwrap();
 
+    // The abi is specific to the validatorOptedInRouter contract
+    // see https://docs.primev.xyz/v1.0.0/developers/mainnet#l1-validator-registries for contract details
     let abi_str = r#"[
     {
         "type": "function",
@@ -782,7 +784,7 @@ pub async fn get_registered_primev_validators(config: &PrimevConfig, proposer_du
     // Create a new contract instance
     let contract = Contract::new(validator_registry_address, abi, provider.clone());
 
-    // Extract BLS public keys from proposer duties and format for contract call
+
     let validator_pubkeys: Vec<Bytes> = proposer_duties
         .iter()
         .map(|duty| {
