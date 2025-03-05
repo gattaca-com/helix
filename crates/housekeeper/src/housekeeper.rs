@@ -82,6 +82,8 @@ pub struct Housekeeper<
     refreshed_trusted_proposers_slot: Mutex<u64>,
     refresh_trusted_proposers_lock: Mutex<()>,
 
+    refresh_primev_builders_lock: Mutex<()>,
+
     leader_id: String,
 
     config: RelayConfig,
@@ -114,6 +116,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer, P
             re_sync_builder_info_lock: Mutex::new(()),
             refreshed_trusted_proposers_slot: Mutex::new(0),
             refresh_trusted_proposers_lock: Mutex::new(()),
+            refresh_primev_builders_lock: Mutex::new(()),
             leader_id: Uuid::new_v4().to_string(),
             config,
             chain_info,
@@ -202,8 +205,15 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer, P
                             // Run primev_update with the fetched duties
                             let primev_self = cloned_self.clone();
                             tokio::spawn(async move {
-                                if let Err(err) = primev_self.primev_update_with_duties(proposer_duties).await {
-                                    error!(err = %err, "failed to update primev");
+                                match primev_self.refresh_primev_builders_lock.try_lock() {
+                                    Ok(_guard) => {
+                                        if let Err(err) = primev_self.primev_update_with_duties(proposer_duties).await {
+                                            error!(err = %err, "failed to update primev");
+                                        }
+                                    }
+                                    Err(_) => {
+                                        debug!("Primev update already in progress, skipping");
+                                    }
                                 }
                             });
                         }
@@ -542,8 +552,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer, P
         self: &SharedHousekeeper<DB, BeaconClient, A, P>,
         proposer_duties: Vec<ProposerDuty>,
     ) -> Result<(), HousekeeperError> {
-        let primev_config = self.config.primev_config.as_ref().unwrap();
-        let primev_builders = self.primev_service.get_registered_primev_builders(primev_config).await;
+        let primev_builders = self.primev_service.get_registered_primev_builders().await;
 
         for builder_pubkey in primev_builders {
             self.db
@@ -558,7 +567,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer, P
                 .await?;
         }
 
-        let primev_validators = self.primev_service.get_registered_primev_validators(primev_config, proposer_duties).await;
+        let primev_validators = self.primev_service.get_registered_primev_validators(proposer_duties).await;
         self.auctioneer.update_primev_proposers(&primev_validators).await?;
 
         let primev_builder_pref = vec!["PrimevBuilder".to_string()];
