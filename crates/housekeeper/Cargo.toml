@@ -15,6 +15,7 @@ helix-utils.workspace = true
 
 # Async and Networking
 tokio.workspace = true
+async-trait.workspace = true
 
 # Serialization and Data Format
 reth-primitives.workspace = true

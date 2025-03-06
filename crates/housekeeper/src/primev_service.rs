@@ -1,0 +1,280 @@
+use ethereum_consensus::primitives::BlsPublicKey;
+use ethers::{
+    abi::{Abi, AbiParser, Address, Bytes},
+    contract::{Contract, EthEvent},
+    providers::{Http, Provider},
+    types::U256,
+};
+use std::convert::TryFrom;
+use std::sync::{Arc, Mutex};
+use tracing::{debug, error};
+use helix_common::{PrimevConfig, ProposerDuty};
+use async_trait::async_trait;
+
+/// Service for interacting with Primev contracts
+#[async_trait]
+pub trait PrimevService: Send + Sync + 'static {
+    /// Initialize the service with configuration
+    async fn initialize(&mut self, config: PrimevConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Fetch validators that have opted into Primev services
+    async fn get_registered_primev_validators(
+        &self, 
+        proposer_duties: Vec<ProposerDuty>
+    ) -> Vec<BlsPublicKey>;
+    
+    /// Fetch builders registered with Primev
+    async fn get_registered_primev_builders(&self) -> Vec<BlsPublicKey>;
+}
+
+#[derive(Debug, EthEvent)]
+#[ethevent(
+    abi = "ProviderRegistered(address indexed provider, uint256 stakedAmount, bytes blsPublicKey)"
+)]
+pub struct ValueChanged {
+    #[ethevent(indexed, name = "provider")]
+    pub provider: Address,
+    #[ethevent(name = "stakedAmount")]
+    pub staked_amount: U256,
+    #[ethevent(name = "blsPublicKey")]
+    pub bls_public_key: Vec<u8>,
+}
+
+/// Default implementation for Primev service that connects to Ethereum contracts
+pub struct EthereumPrimevService {
+    builder_contract: Contract<Provider<Http>>,
+    validator_contract: Contract<Provider<Http>>,
+}
+
+impl EthereumPrimevService {
+    /// Create a new EthereumPrimevService with the given configuration
+    /// This ensures the service is always initialized before use
+    pub async fn new(config: PrimevConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        // Initialize builder contract
+        let builder_provider = Provider::<Http>::try_from(config.builder_url.as_str())?;
+        let builder_provider = Arc::new(builder_provider);
+        let builder_address: Address = config.builder_contract.as_str().parse()?;
+
+        // Builder contract setup
+        let abi_human_readable = r#"
+        [
+            "event ProviderRegistered(address indexed provider, uint256 stakedAmount, bytes blsPublicKey)"
+        ]
+        "#;
+        let builder_abi = AbiParser::default().parse_str(abi_human_readable)?;
+        let builder_contract = Contract::new(builder_address, builder_abi, builder_provider);
+        
+        // Initialize validator contract
+        let validator_provider = Provider::<Http>::try_from(config.validator_url.as_str())?;
+        let validator_provider = Arc::new(validator_provider);
+        let validator_address: Address = config.validator_contract.as_str().parse()?;
+        
+        // Validator contract setup
+        let validator_abi_str = r#"[
+        {
+            "type": "function",
+            "name": "areValidatorsOptedIn",
+            "inputs": [
+            {
+                "name": "valBLSPubKeys",
+                "type": "bytes[]",
+                "internalType": "bytes[]"
+            }
+            ],
+            "outputs": [
+            {
+                "name": "",
+                "type": "tuple[]",
+                "internalType": "struct IValidatorOptInRouter.OptInStatus[]",
+                "components": [
+                {
+                    "name": "isVanillaOptedIn",
+                    "type": "bool",
+                    "internalType": "bool"
+                },
+                {
+                    "name": "isAvsOptedIn",
+                    "type": "bool",
+                    "internalType": "bool"
+                },
+                {
+                    "name": "isMiddlewareOptedIn",
+                    "type": "bool",
+                    "internalType": "bool"
+                }
+                ]
+            }
+            ],
+            "stateMutability": "view"
+        }
+        ]"#;
+        let validator_abi: Abi = serde_json::from_str(validator_abi_str)?;
+        let validator_contract = Contract::new(validator_address, validator_abi, validator_provider);
+        
+        Ok(Self {
+            builder_contract,
+            validator_contract,
+        })
+    }
+    
+    /// Create an uninitialized service - only for compatibility with the PrimevService trait
+    fn uninitialized() -> Self {
+        panic!("EthereumPrimevService must be initialized with new() - cannot create uninitialized instance")
+    }
+}
+
+// We need to keep this implementation for the trait, but we'll make it panic
+// if someone tries to use it, forcing them to use new() instead
+#[async_trait]
+impl PrimevService for EthereumPrimevService {
+    async fn initialize(&mut self, _config: PrimevConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        // This method exists only for trait compatibility
+        // It should never be called directly on EthereumPrimevService
+        panic!("EthereumPrimevService must be initialized with new() method, not through the trait")
+    }
+    
+    async fn get_registered_primev_builders(&self) -> Vec<BlsPublicKey> {
+        let event = self.builder_contract
+            .event_for_name("ProviderRegistered")
+            .unwrap()
+            .from_block(0);
+
+        let providers: Vec<ValueChanged> = match event.query().await {
+            Ok(providers) => providers,
+            Err(err) => {
+                error!("Error querying ProviderRegistered events: {:?}", err);
+                Vec::new()
+            }
+        };
+
+        providers.iter()
+            .filter_map(|key| BlsPublicKey::try_from(key.bls_public_key.as_slice()).ok())
+            .collect()
+    }
+    
+    async fn get_registered_primev_validators(
+        &self,
+        proposer_duties: Vec<ProposerDuty>
+    ) -> Vec<BlsPublicKey> {
+        let validator_pubkeys: Vec<Bytes> = proposer_duties
+            .iter()
+            .map(|duty| Bytes::from(duty.public_key.to_vec()))
+            .collect();
+
+        let opted_in_statuses = match self.validator_contract
+            .method::<_, Vec<(bool, bool, bool)>>("areValidatorsOptedIn", (validator_pubkeys,))
+        {
+            Ok(method) => match method.call().await {
+                Ok(statuses) => {
+                    debug!("Successfully queried opt-in status for {} validators", statuses.len());
+                    statuses
+                },
+                Err(e) => {
+                    error!("Error calling areValidatorsOptedIn: {:?}", e);
+                    Vec::new()
+                }
+            },
+            Err(e) => {
+                error!("Error creating areValidatorsOptedIn method call: {:?}", e);
+                Vec::new()
+            }
+        };
+
+        // Extract the public keys of validators that are opted into any Primev service
+        let mut opted_in_validators = Vec::new();
+        for (index, status) in opted_in_statuses.iter().enumerate() {
+            if status.0 || status.1 || status.2 {
+                if let Some(duty) = proposer_duties.get(index) {
+                    opted_in_validators.push(duty.public_key.clone());
+                }
+            }
+        }
+
+        opted_in_validators
+    }
+}
+
+// Implement Default for API compatibility, but make it clear it should not be used
+impl Default for EthereumPrimevService {
+    fn default() -> Self {
+        // For API compatibility only, will panic if used
+        Self::uninitialized()
+    }
+}
+
+#[cfg(test)]
+pub struct MockPrimevService {
+    pub mock_validators: Vec<BlsPublicKey>,
+    pub mock_builders: Vec<BlsPublicKey>,
+    operation_tracker: Option<Arc<Mutex<Vec<&'static str>>>>,
+    is_initialized: bool,
+}
+
+#[cfg(test)]
+impl MockPrimevService {
+    pub fn new() -> Self {
+        // Create default test values
+        let default_validator = BlsPublicKey::try_from(vec![1; 48].as_slice()).unwrap_or_default();
+        let default_builder = BlsPublicKey::try_from(vec![2; 48].as_slice()).unwrap_or_default();
+        
+        Self {
+            mock_validators: vec![default_validator],
+            mock_builders: vec![default_builder],
+            operation_tracker: None,
+            is_initialized: false,
+        }
+    }
+    
+    pub fn with_validators(mut self, validators: Vec<BlsPublicKey>) -> Self {
+        self.mock_validators = validators;
+        self
+    }
+    
+    pub fn with_builders(mut self, builders: Vec<BlsPublicKey>) -> Self {
+        self.mock_builders = builders;
+        self
+    }
+
+    pub fn set_operation_tracker(&mut self, tracker: Arc<Mutex<Vec<&'static str>>>) {
+        self.operation_tracker = Some(tracker);
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl PrimevService for MockPrimevService {
+    async fn initialize(&mut self, _config: PrimevConfig) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        if let Some(tracker) = &self.operation_tracker {
+            tracker.lock().unwrap().push("initialize");
+        }
+        self.is_initialized = true;
+        Ok(())
+    }
+    
+    async fn get_registered_primev_validators(
+        &self, 
+        _proposer_duties: Vec<ProposerDuty>
+    ) -> Vec<BlsPublicKey> {
+        if let Some(tracker) = &self.operation_tracker {
+            tracker.lock().unwrap().push("get_registered_primev_validators");
+        }
+        
+        if !self.is_initialized {
+            debug!("Using default mock validators because service not initialized");
+        }
+        
+        self.mock_validators.clone()
+    }
+    
+    async fn get_registered_primev_builders(&self) -> Vec<BlsPublicKey> {
+        if let Some(tracker) = &self.operation_tracker {
+            tracker.lock().unwrap().push("get_registered_primev_builders");
+        }
+        
+        if !self.is_initialized {
+            debug!("Using default mock builders because service not initialized");
+        }
+        
+        self.mock_builders.clone()
+    }
+}

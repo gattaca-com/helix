@@ -8,6 +8,9 @@ use std::{
 
 // ++++ IMPORTS ++++
 use crate::housekeeper::{Housekeeper, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS};
+use helix_common::config::PrimevConfig;
+
+use crate::primev_service::MockPrimevService;
 
 use helix_beacon_client::{
     mock_multi_beacon_client::MockMultiBeaconClient, MultiBeaconClientTrait,
@@ -16,9 +19,10 @@ use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, RelayConfig,
     ValidatorSummary,
 };
-use helix_database::MockDatabaseService;
+use helix_database::{MockDatabaseService};
 use helix_datastore::MockAuctioneer;
 use tokio::{sync::broadcast, task};
+use ethereum_consensus::primitives::BlsPublicKey;
 
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 
@@ -43,6 +47,7 @@ fn get_housekeeper() -> HelperVars {
         Arc::new(db),
         beacon_client.clone(),
         auctioneer,
+        MockPrimevService::new(),
         RelayConfig::default(),
         Arc::new(ChainInfo::for_mainnet()),
     );
@@ -60,7 +65,7 @@ fn get_housekeeper() -> HelperVars {
 }
 
 async fn start_housekeeper(
-    housekeeper: Arc<Housekeeper<MockDatabaseService, MockMultiBeaconClient, MockAuctioneer>>,
+    housekeeper: Arc<Housekeeper<MockDatabaseService, MockMultiBeaconClient, MockAuctioneer, MockPrimevService>>,
     beacon_client: MockMultiBeaconClient,
 ) {
     let (head_event_sender, mut head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
@@ -71,7 +76,7 @@ async fn start_housekeeper(
 }
 
 struct HelperVars {
-    pub housekeeper: Arc<Housekeeper<MockDatabaseService, MockMultiBeaconClient, MockAuctioneer>>,
+    pub housekeeper: Arc<Housekeeper<MockDatabaseService, MockMultiBeaconClient, MockAuctioneer, MockPrimevService>>,
     pub subscribed_to_head_events: Arc<AtomicBool>,
     pub chan_head_events_capacity: Arc<AtomicUsize>,
     pub known_validators: Arc<Mutex<Vec<ValidatorSummary>>>,
@@ -143,4 +148,56 @@ async fn test_state_validators_have_been_read() {
         .await;
 
     assert!(vars.state_validators_has_been_read.load(std::sync::atomic::Ordering::Relaxed));
+}
+
+#[tokio::test]
+async fn test_primev_enabled_housekeeper() {
+    // Create a standard helper vars
+    let vars = get_housekeeper();
+    
+    // Create mock Primev service with test data
+    let test_validator_pubkey = BlsPublicKey::try_from(vec![1; 48].as_slice()).unwrap();
+    let test_builder_pubkey = BlsPublicKey::try_from(vec![2; 48].as_slice()).unwrap();
+    
+    let mut mock_primev = MockPrimevService::new()
+        .with_validators(vec![test_validator_pubkey.clone()])
+        .with_builders(vec![test_builder_pubkey.clone()]);
+    
+    // Create tracking for Primev operations
+    let primev_operations = Arc::new(Mutex::new(Vec::new()));
+    mock_primev.set_operation_tracker(primev_operations.clone());
+    
+    // Create a custom config with Primev enabled
+    let mut config = RelayConfig::default();
+    config.primev_config = Some(PrimevConfig {
+        builder_url: "http://localhost:8545".to_string(),
+        builder_contract: "0x1234567890123456789012345678901234567890".to_string(),
+        validator_url: "http://localhost:8545".to_string(),
+        validator_contract: "0x1234567890123456789012345678901234567890".to_string(),
+    });
+    let known_validators: Arc<Mutex<Vec<ValidatorSummary>>> = Arc::new(Mutex::new(vec![]));
+    let proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>> =
+        Arc::new(Mutex::new(vec![]));
+    // Create a tracked mock auctioneer
+    let mock_auctioneer = MockAuctioneer::new();
+    let db = Arc::new(MockDatabaseService::new(known_validators.clone(), proposer_duties.clone()));
+
+    // Create a new housekeeper with mocks
+    let housekeeper = Housekeeper::new(
+        Arc::clone(&db), // Use original DB to maintain tracking
+        vars.beacon_client.clone(),
+        mock_auctioneer,
+        mock_primev,
+        config,
+        Arc::new(ChainInfo::for_mainnet()),
+    );
+    
+    // Start the housekeeper
+    start_housekeeper(housekeeper.clone(), vars.beacon_client).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    
+    // Verify Primev operations were performed
+    let ops = primev_operations.lock().unwrap();
+    assert!(ops.contains(&"get_registered_primev_builders"), "Primev builders should be fetched");
+    assert!(ops.contains(&"get_registered_primev_validators"), "Primev validators should be fetched");
 }

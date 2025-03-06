@@ -2,14 +2,12 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use ethereum_consensus::primitives::BlsPublicKey;
 use ethers::{
-    abi::{Abi, AbiParser, Address, Bytes},
-    contract::{Contract, EthEvent},
-    providers::{Http, Provider},
+    abi::Address,
+    contract::EthEvent,
     types::U256,
 };
 use helix_utils::utcnow_ms;
 use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
-use std::convert::TryFrom;
 use tokio::{
     sync::{broadcast, Mutex},
     time::{interval_at, sleep, Instant},
@@ -23,12 +21,12 @@ use helix_beacon_client::{
 };
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
-    pending_block::PendingBlock, BuilderInfo, PrimevConfig, ProposerDuty, RelayConfig, Route,
+    pending_block::PendingBlock, BuilderInfo, ProposerDuty, RelayConfig, Route,
     SignedValidatorRegistrationEntry,
 };
 use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
-
+use crate::primev_service::PrimevService;
 use crate::error::HousekeeperError;
 use uuid::Uuid;
 
@@ -50,8 +48,8 @@ const MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS: u64 = 2_000;
 const MAX_DELAY_WITH_NO_V2_PAYLOAD_MS: u64 = 20_000;
 
 /// Arc wrapped Housekeeper type for convenience
-type SharedHousekeeper<Database, BeaconClient, Auctioneer> =
-    Arc<Housekeeper<Database, BeaconClient, Auctioneer>>;
+type SharedHousekeeper<Database, BeaconClient, Auctioneer, PrimevService> =
+    Arc<Housekeeper<Database, BeaconClient, Auctioneer, PrimevService>>;
 
 /// Housekeeper Service.
 ///
@@ -63,10 +61,12 @@ pub struct Housekeeper<
     DB: DatabaseService + 'static,
     BeaconClient: MultiBeaconClientTrait + 'static,
     A: Auctioneer + 'static,
+    P: PrimevService + 'static,
 > {
     db: Arc<DB>,
     beacon_client: BeaconClient,
     auctioneer: A,
+    primev_service: P,
 
     head_slot: Mutex<u64>,
 
@@ -82,6 +82,8 @@ pub struct Housekeeper<
     refreshed_trusted_proposers_slot: Mutex<u64>,
     refresh_trusted_proposers_lock: Mutex<()>,
 
+    refresh_primev_builders_lock: Mutex<()>,
+
     leader_id: String,
 
     config: RelayConfig,
@@ -89,13 +91,14 @@ pub struct Housekeeper<
     chain_info: Arc<ChainInfo>,
 }
 
-impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
-    Housekeeper<DB, BeaconClient, A>
+impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer, P: PrimevService>
+    Housekeeper<DB, BeaconClient, A, P>
 {
     pub fn new(
         db: Arc<DB>,
         beacon_client: BeaconClient,
         auctioneer: A,
+        primev_service: P,
         config: RelayConfig,
         chain_info: Arc<ChainInfo>,
     ) -> Arc<Self> {
@@ -103,6 +106,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             db,
             beacon_client,
             auctioneer,
+            primev_service,
             head_slot: Mutex::new(0),
             proposer_duties_slot: Mutex::new(0),
             proposer_duties_lock: Mutex::new(()),
@@ -112,6 +116,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             re_sync_builder_info_lock: Mutex::new(()),
             refreshed_trusted_proposers_slot: Mutex::new(0),
             refresh_trusted_proposers_lock: Mutex::new(()),
+            refresh_primev_builders_lock: Mutex::new(()),
             leader_id: Uuid::new_v4().to_string(),
             config,
             chain_info,
@@ -120,7 +125,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
     /// Start the Housekeeper service.
     pub async fn start(
-        self: &SharedHousekeeper<DB, BeaconClient, A>,
+        self: &SharedHousekeeper<DB, BeaconClient, A, P>,
         head_event_receiver: &mut broadcast::Receiver<HeadEventData>,
     ) -> Result<(), BeaconClientError> {
         let best_sync_status = self.beacon_client.best_sync_status().await?;
@@ -165,7 +170,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     /// Process updates for the given slot.
     ///
     /// Skips slots that are older than the currently processed slot.
-    async fn process_new_slot(self: &SharedHousekeeper<DB, BeaconClient, A>, head_slot: u64) {
+    async fn process_new_slot(self: &SharedHousekeeper<DB, BeaconClient, A, P>, head_slot: u64) {
         let (is_new_block, prev_head_slot) = self.update_head_slot(head_slot).await;
         if !is_new_block {
             return
@@ -190,10 +195,33 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         });
 
         // Spawn a task to asynchronously update proposer duties.
+        // After that completes, run primev_update if configured
         if self.should_update_duties(head_slot).await {
             let cloned_self = self.clone();
             tokio::spawn(async move {
-                let _ = cloned_self.update_proposer_duties(head_slot).await;
+                match cloned_self.update_proposer_duties(head_slot).await {
+                    Ok(proposer_duties) => {
+                        if cloned_self.config.primev_config.is_some() {
+                            // Run primev_update with the fetched duties
+                            let primev_self = cloned_self.clone();
+                            tokio::spawn(async move {
+                                match primev_self.refresh_primev_builders_lock.try_lock() {
+                                    Ok(_guard) => {
+                                        if let Err(err) = primev_self.primev_update_with_duties(proposer_duties).await {
+                                            error!(err = %err, "failed to update primev");
+                                        }
+                                    }
+                                    Err(_) => {
+                                        debug!("Primev update already in progress, skipping");
+                                    }
+                                }
+                            });
+                        }
+                    },
+                    Err(err) => {
+                        error!(err = %err, "failed to update proposer duties");
+                    }
+                }
             });
         }
 
@@ -210,13 +238,6 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         tokio::spawn(async move {
             let _ = cloned_self.sync_builder_info_changes(head_slot).await;
         });
-
-        if self.config.primev_config.is_some() {
-            let cloned_self = self.clone();
-            tokio::spawn(async move {
-                let _ = cloned_self.primev_update().await;
-            });
-        }
 
         // Spawn a task to asynchronously update the trusted proposers.
         if self.should_update_trusted_proposers(head_slot).await {
@@ -275,7 +296,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     /// This will lock `known_validators_lock` to ensure that only one task is refreshing the known
     /// validators at a time.
     async fn refresh_known_validators(
-        self: &SharedHousekeeper<DB, BeaconClient, A>,
+        self: &SharedHousekeeper<DB, BeaconClient, A, P>,
         head_slot: u64,
     ) -> Result<(), HousekeeperError> {
         let _guard = self.refresh_validators_lock.try_lock()?;
@@ -317,7 +338,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
     /// Synchronizes builder information changes.
     async fn sync_builder_info_changes(
-        self: &SharedHousekeeper<DB, BeaconClient, A>,
+        self: &SharedHousekeeper<DB, BeaconClient, A, P>,
         head_slot: u64,
     ) -> Result<(), HousekeeperError> {
         let _guard = self.re_sync_builder_info_lock.try_lock()?;
@@ -394,7 +415,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
     /// Determine if known validators should be refreshed for the given slot.
     async fn should_refresh_known_validators(
-        self: &SharedHousekeeper<DB, BeaconClient, A>,
+        self: &SharedHousekeeper<DB, BeaconClient, A, P>,
         head_slot: u64,
     ) -> bool {
         let last_refreshed_slot = *self.refreshed_validators_slot.lock().await;
@@ -418,10 +439,11 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     }
 
     /// Update proposer duties for `head_slot` and `head_slot` + 1.
+    /// Returns the fetched proposer duties on success.
     async fn update_proposer_duties(
-        self: &SharedHousekeeper<DB, BeaconClient, A>,
+        self: &SharedHousekeeper<DB, BeaconClient, A, P>,
         head_slot: u64,
-    ) -> Result<(), HousekeeperError> {
+    ) -> Result<Vec<ProposerDuty>, HousekeeperError> {
         // Only allow one update_proposer_duties task at a time.
         let _guard = self.proposer_duties_lock.try_lock()?;
 
@@ -454,7 +476,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
             warn!("No signed validator registrations found for proposer duties");
         } else {
             match self
-                .format_and_store_duties(proposer_duties, signed_validator_registrations)
+                .format_and_store_duties(proposer_duties.clone(), signed_validator_registrations)
                 .await
             {
                 Ok(num_duties) => {
@@ -466,7 +488,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
         *self.proposer_duties_slot.lock().await = head_slot;
 
-        Ok(())
+        Ok(proposer_duties)
     }
 
     /// Format and store proposer duties
@@ -517,7 +539,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     /// duties were fetched (`proposer_duties_slot`) is greater than or equal to
     /// PROPOSER_DUTIES_UPDATE_FREQ, it will also return `true`.
     async fn should_update_duties(
-        self: &SharedHousekeeper<DB, BeaconClient, A>,
+        self: &SharedHousekeeper<DB, BeaconClient, A, P>,
         head_slot: u64,
     ) -> bool {
         let proposer_duties_slot = *self.proposer_duties_slot.lock().await;
@@ -525,9 +547,13 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
         last_proposer_duty_distance >= PROPOSER_DUTIES_UPDATE_FREQ
     }
 
-    async fn primev_update(&self) -> Result<(), HousekeeperError> {
-        let primev_config = self.config.primev_config.as_ref().unwrap();
-        let primev_builders = get_registered_primev_builders(primev_config).await;
+    /// Updates primev builders and validators using pre-fetched proposer duties
+    async fn primev_update_with_duties(
+        self: &SharedHousekeeper<DB, BeaconClient, A, P>,
+        proposer_duties: Vec<ProposerDuty>,
+    ) -> Result<(), HousekeeperError> {
+        let primev_builders = self.primev_service.get_registered_primev_builders().await;
+
         for builder_pubkey in primev_builders {
             self.db
                 .store_builder_info(
@@ -541,7 +567,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
                 .await?;
         }
 
-        let primev_validators = get_registered_primev_validators(primev_config).await;
+        let primev_validators = self.primev_service.get_registered_primev_validators(proposer_duties).await;
         self.auctioneer.update_primev_proposers(&primev_validators).await?;
 
         let primev_builder_pref = vec!["PrimevBuilder".to_string()];
@@ -559,7 +585,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     ///    proposers was refreshed (`refreshed_trusted_proposers_slot`) is greater than or equal to
     ///    `TRUSTED_PROPOSERS_UPDATE_FREQ`, it will also return `true`.
     async fn should_update_trusted_proposers(
-        self: &SharedHousekeeper<DB, BeaconClient, A>,
+        self: &SharedHousekeeper<DB, BeaconClient, A, P>,
         head_slot: u64,
     ) -> bool {
         let trusted_proposers_slot = *self.refreshed_trusted_proposers_slot.lock().await;
@@ -580,7 +606,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     ///
     /// This function will return `Ok(())` if it completes successfully.
     async fn update_trusted_proposers(
-        self: &SharedHousekeeper<DB, BeaconClient, A>,
+        self: &SharedHousekeeper<DB, BeaconClient, A, P>,
         head_slot: u64,
     ) -> Result<(), HousekeeperError> {
         let _guard = self.refresh_trusted_proposers_lock.try_lock()?;
@@ -607,7 +633,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
     /// This function will error if it cannot fetch the duties for the current epoch
     /// but will continue if it fails to fetch epoch + 1.
     async fn fetch_duties(
-        self: &SharedHousekeeper<DB, BeaconClient, A>,
+        self: &SharedHousekeeper<DB, BeaconClient, A, P>,
         epoch: u64,
     ) -> Result<Vec<ProposerDuty>, BeaconClientError> {
         // Fetch duties for current epoch
@@ -624,7 +650,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer>
 
     /// Fetch validator registrations for `pub_keys` from database.
     async fn fetch_signed_validator_registrations(
-        self: &SharedHousekeeper<DB, BeaconClient, A>,
+        self: &SharedHousekeeper<DB, BeaconClient, A, P>,
         pub_keys: Vec<BlsPublicKey>,
     ) -> Result<HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>, DatabaseError> {
         let registrations: Vec<SignedValidatorRegistrationEntry> =
@@ -662,166 +688,4 @@ pub struct ValueChanged {
     pub staked_amount: U256,
     #[ethevent(name = "blsPublicKey")]
     pub bls_public_key: Vec<u8>,
-}
-
-/// Fetches the registered primev builders from the provider registry contract.
-/// Returns a list of builder pubkeys.
-/// Currently returns the wrong type, need to fix. Primev working on this.
-pub async fn get_registered_primev_builders(config: &PrimevConfig) -> Vec<BlsPublicKey> {
-    let provider = Provider::<Http>::try_from(config.builder_url.as_str()).unwrap();
-    let provider = Arc::new(provider);
-
-    // Define the contract address and ABI
-    let provider_registry_address: Address = config.builder_contract.as_str().parse().unwrap();
-    // let abi: Abi =
-    // serde_json::from_str(r#"[{"anonymous":false,"inputs":[{"indexed":true,"internalType":"
-    // address","name":"provider","type":"address"},{"indexed":false,"internalType":"uint256","name"
-    // :"stakedAmount","type":"uint256"}],"name":"ProviderRegistered","type":"event"}]"#).unwrap();
-
-    let abi_human_readable = r#"
-    [
-        "event ProviderRegistered(address indexed provider, uint256 stakedAmount, bytes blsPublicKey)"
-    ]
-    "#;
-
-    // Parse the ABI
-    let abi: Abi = AbiParser::default().parse_str(abi_human_readable).unwrap();
-
-    // Create a new contract instance
-    let contract = Contract::new(provider_registry_address, abi, provider.clone());
-
-    let event = contract
-        .event_for_name("ProviderRegistered")
-        .unwrap()
-        .from_block(0)
-        .address(provider_registry_address.into());
-
-    let providers: Vec<ValueChanged> = match event.query().await {
-        Ok(providers) => providers,
-        Err(err) => {
-            println!("{:?}", err);
-            Vec::new()
-        }
-    };
-
-    let mut bls_public_keys = Vec::new();
-    for i in providers.iter() {
-        bls_public_keys.push(BlsPublicKey::try_from(i.bls_public_key.as_slice()).unwrap());
-    }
-    bls_public_keys
-}
-
-/// Fetches the registered primev validators from the validators registry contract.
-pub async fn get_registered_primev_validators(config: &PrimevConfig) -> Vec<BlsPublicKey> {
-    let provider = Provider::<Http>::try_from(config.validator_url.as_str()).unwrap();
-    let provider = Arc::new(provider);
-
-    // Define the contract address and ABI
-    let provider_registry_address: Address = config.validator_contract.as_str().parse().unwrap();
-
-    let abi_str = r#"
-    [
-        {
-            "type": "function",
-            "name": "getStakedValidators",
-            "inputs": [
-                {
-                    "name": "start",
-                    "type": "uint256",
-                    "internalType": "uint256"
-                },
-                {
-                    "name": "end",
-                    "type": "uint256",
-                    "internalType": "uint256"
-                }
-            ],
-            "outputs": [
-                {
-                    "name": "",
-                    "type": "bytes[]",
-                    "internalType": "bytes[]"
-                },
-                {
-                    "name": "",
-                    "type": "uint256",
-                    "internalType": "uint256"
-                }
-            ],
-            "stateMutability": "view"
-        },
-        {
-            "type": "function",
-            "name": "getNumberOfStakedValidators",
-            "inputs": [],
-            "outputs": [
-                {
-                    "name": "",
-                    "type": "uint256",
-                    "internalType": "uint256"
-                },
-                {
-                    "name": "",
-                    "type": "uint256",
-                    "internalType": "uint256"
-                }
-            ],
-            "stateMutability": "view"
-        }
-    ]
-    "#;
-
-    let abi: Abi = serde_json::from_str(abi_str).unwrap();
-
-    // Create a new contract instance
-    let contract = Contract::new(provider_registry_address, abi, provider.clone());
-
-    let num_validators =
-        match contract.method::<(), (U256, U256)>("getNumberOfStakedValidators", ()) {
-            Ok(method) => match method.call().await {
-                Ok((num_validators, _version)) => num_validators,
-                Err(e) => {
-                    error!("Error calling method: {:?}", e);
-                    U256::from(0)
-                }
-            },
-            Err(e) => {
-                error!("Error calling method: {:?}", e);
-                U256::from(0)
-            }
-        };
-
-    let batch_size: U256 = U256::from(500);
-    let mut start: U256 = U256::from(0);
-    let mut total_validators: Vec<Bytes> = Vec::new();
-
-    while start < num_validators {
-        let end =
-            if start + batch_size > num_validators { num_validators } else { start + batch_size };
-
-        match contract
-            .method::<(U256, U256), (Vec<Bytes>, U256)>("getStakedValidators", (start, end))
-        {
-            Ok(method) => match method.call().await {
-                Ok(result) => {
-                    if result.0.is_empty() {
-                        break // No more validators to fetch
-                    }
-                    total_validators.extend(result.0);
-                }
-                Err(e) => {
-                    eprintln!("Error calling method: {:?}", e);
-                    break
-                }
-            },
-            Err(e) => {
-                eprintln!("Error creating method: {:?}", e);
-                break
-            }
-        }
-
-        start = end;
-    }
-
-    total_validators.iter().map(|bytes| BlsPublicKey::try_from(bytes.as_slice()).unwrap()).collect()
 }
