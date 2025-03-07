@@ -11,6 +11,11 @@ use tracing::{debug, error};
 use helix_common::{PrimevConfig, ProposerDuty};
 use async_trait::async_trait;
 
+use ethers::providers::Middleware;
+use ethers::types::transaction::eip2718::TypedTransaction;
+
+
+
 /// Service for interacting with Primev contracts
 #[async_trait]
 pub trait PrimevService: Send + Sync + 'static {
@@ -156,31 +161,99 @@ impl PrimevService for EthereumPrimevService {
         &self,
         proposer_duties: Vec<ProposerDuty>
     ) -> Vec<BlsPublicKey> {
+        if proposer_duties.is_empty() {
+            debug!("No proposer duties provided, skipping validator check");
+            return Vec::new();
+        }
+    
+        // Convert public keys to the format expected by the contract
+        // Keep using Bytes for compatibility with the rest of the code
         let validator_pubkeys: Vec<Bytes> = proposer_duties
             .iter()
             .map(|duty| Bytes::from(duty.public_key.to_vec()))
             .collect();
-
-        let opted_in_statuses = match self.validator_contract
-            .method::<_, Vec<(bool, bool, bool)>>("areValidatorsOptedIn", (validator_pubkeys,))
-        {
-            Ok(method) => match method.call().await {
-                Ok(statuses) => {
-                    debug!("Successfully queried opt-in status for {} validators", statuses.len());
-                    statuses
-                },
-                Err(e) => {
-                    error!("Error calling areValidatorsOptedIn: {:?}", e);
-                    Vec::new()
-                }
-            },
+        
+        // Get the function from the ABI directly
+        let func = match self.validator_contract.abi().function("areValidatorsOptedIn") {
+            Ok(f) => f,
             Err(e) => {
-                error!("Error creating areValidatorsOptedIn method call: {:?}", e);
-                Vec::new()
+                error!("Failed to get function from ABI: {:?}", e);
+                return Vec::new();
             }
         };
-
+        
+        // Create input tokens for manual encoding - use the approach from the test
+        let input_tokens = vec![ethers::abi::Token::Array(
+            validator_pubkeys.iter()
+                .map(|key| ethers::abi::Token::Bytes(key.to_vec()))
+                .collect()
+        )];
+        
+        // Encode the function call data
+        let call_data = match func.encode_input(&input_tokens) {
+            Ok(data) => data,
+            Err(e) => {
+                error!("Failed to encode function input: {:?}", e);
+                return Vec::new();
+            }
+        };
+        
+        // Get the provider from the contract
+        let provider = self.validator_contract.client();
+        
+        // Create the transaction request
+        let tx: TypedTransaction = ethers::types::TransactionRequest::new()
+            .to(self.validator_contract.address())
+            .data(call_data)
+            .into();
+        
+        // Make the call
+        let result = match provider.call(&tx, None).await {
+            Ok(data) => data,
+            Err(e) => {
+                error!("Contract call failed: {:?}", e);
+                return Vec::new();
+            }
+        };
+        
+        // Decode the output
+        let decoded = match func.decode_output(&result) {
+            Ok(tokens) => tokens,
+            Err(e) => {
+                error!("Failed to decode output: {:?}", e);
+                return Vec::new();
+            }
+        };
+        
+        // Convert the decoded output to the expected Vec<(bool, bool, bool)> format
+        let opted_in_statuses = if let Some(ethers::abi::Token::Array(tuples)) = decoded.get(0) {
+            tuples.iter()
+                .map(|token| {
+                    if let ethers::abi::Token::Tuple(values) = token {
+                        if values.len() >= 3 {
+                            if let (
+                                ethers::abi::Token::Bool(vanilla_opted_in),
+                                ethers::abi::Token::Bool(avs_opted_in),
+                                ethers::abi::Token::Bool(middleware_opted_in)
+                            ) = (
+                                values.get(0).unwrap_or(&ethers::abi::Token::Bool(false)),
+                                values.get(1).unwrap_or(&ethers::abi::Token::Bool(false)),
+                                values.get(2).unwrap_or(&ethers::abi::Token::Bool(false))
+                            ) {
+                                return (*vanilla_opted_in, *avs_opted_in, *middleware_opted_in);
+                            }
+                        }
+                    }
+                    (false, false, false) // Default if parsing fails
+                })
+                .collect()
+        } else {
+            // Return empty Vec if output doesn't match expected format
+            Vec::new()
+        };
+    
         // Extract the public keys of validators that are opted into any Primev service
+        // This part remains unchanged from the original code
         let mut opted_in_validators = Vec::new();
         for (index, status) in opted_in_statuses.iter().enumerate() {
             if status.0 || status.1 || status.2 {
@@ -189,7 +262,7 @@ impl PrimevService for EthereumPrimevService {
                 }
             }
         }
-
+    
         opted_in_validators
     }
 }
