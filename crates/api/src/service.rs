@@ -98,7 +98,7 @@ impl ApiService {
             db.clone(),
             multi_beacon_client.clone(),
             auctioneer.clone(),
-            EthereumPrimevService::new(config.primev_config.unwrap()).await.unwrap(),
+            EthereumPrimevService::new(config.primev_config.clone().unwrap()).await.unwrap(),
             config.clone(),
             chain_info.clone(),
         );

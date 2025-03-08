@@ -166,14 +166,11 @@ impl PrimevService for EthereumPrimevService {
             return Vec::new();
         }
     
-        // Convert public keys to the format expected by the contract
-        // Keep using Bytes for compatibility with the rest of the code
         let validator_pubkeys: Vec<Bytes> = proposer_duties
             .iter()
             .map(|duty| Bytes::from(duty.public_key.to_vec()))
             .collect();
         
-        // Get the function from the ABI directly
         let func = match self.validator_contract.abi().function("areValidatorsOptedIn") {
             Ok(f) => f,
             Err(e) => {
@@ -182,14 +179,12 @@ impl PrimevService for EthereumPrimevService {
             }
         };
         
-        // Create input tokens for manual encoding - use the approach from the test
         let input_tokens = vec![ethers::abi::Token::Array(
             validator_pubkeys.iter()
                 .map(|key| ethers::abi::Token::Bytes(key.to_vec()))
                 .collect()
         )];
         
-        // Encode the function call data
         let call_data = match func.encode_input(&input_tokens) {
             Ok(data) => data,
             Err(e) => {
@@ -198,16 +193,14 @@ impl PrimevService for EthereumPrimevService {
             }
         };
         
-        // Get the provider from the contract
+
         let provider = self.validator_contract.client();
         
-        // Create the transaction request
         let tx: TypedTransaction = ethers::types::TransactionRequest::new()
             .to(self.validator_contract.address())
             .data(call_data)
             .into();
         
-        // Make the call
         let result = match provider.call(&tx, None).await {
             Ok(data) => data,
             Err(e) => {
@@ -216,7 +209,7 @@ impl PrimevService for EthereumPrimevService {
             }
         };
         
-        // Decode the output
+
         let decoded = match func.decode_output(&result) {
             Ok(tokens) => tokens,
             Err(e) => {
@@ -253,7 +246,6 @@ impl PrimevService for EthereumPrimevService {
         };
     
         // Extract the public keys of validators that are opted into any Primev service
-        // This part remains unchanged from the original code
         let mut opted_in_validators = Vec::new();
         for (index, status) in opted_in_statuses.iter().enumerate() {
             if status.0 || status.1 || status.2 {
