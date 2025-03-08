@@ -254,7 +254,6 @@ impl PrimevService for EthereumPrimevService {
                 }
             }
         }
-    
         opted_in_validators
     }
 }
