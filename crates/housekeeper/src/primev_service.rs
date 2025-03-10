@@ -6,7 +6,7 @@ use ethers::{
     types::U256,
 };
 use std::convert::TryFrom;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tracing::{debug, error};
 use helix_common::{PrimevConfig, ProposerDuty};
 use async_trait::async_trait;
@@ -14,7 +14,8 @@ use async_trait::async_trait;
 use ethers::providers::Middleware;
 use ethers::types::transaction::eip2718::TypedTransaction;
 
-
+#[cfg(test)]
+use std::sync::Mutex;
 
 /// Service for interacting with Primev contracts
 #[async_trait]
@@ -219,7 +220,7 @@ impl PrimevService for EthereumPrimevService {
         };
         
         // Convert the decoded output to the expected Vec<(bool, bool, bool)> format
-        let opted_in_statuses = if let Some(ethers::abi::Token::Array(tuples)) = decoded.get(0) {
+        let opted_in_statuses = if let Some(ethers::abi::Token::Array(tuples)) = decoded.first() {
             tuples.iter()
                 .map(|token| {
                     if let ethers::abi::Token::Tuple(values) = token {
@@ -229,7 +230,7 @@ impl PrimevService for EthereumPrimevService {
                                 ethers::abi::Token::Bool(avs_opted_in),
                                 ethers::abi::Token::Bool(middleware_opted_in)
                             ) = (
-                                values.get(0).unwrap_or(&ethers::abi::Token::Bool(false)),
+                                values.first().unwrap_or(&ethers::abi::Token::Bool(false)),
                                 values.get(1).unwrap_or(&ethers::abi::Token::Bool(false)),
                                 values.get(2).unwrap_or(&ethers::abi::Token::Bool(false))
                             ) {
