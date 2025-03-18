@@ -93,12 +93,16 @@ impl ApiService {
                 }
             }
         });
-
+        let primev_service = if let Some(primev_config) = config.primev_config.clone() {
+            Some(EthereumPrimevService::new(primev_config).await.unwrap())
+        } else {
+            None
+        };
         let housekeeper = Housekeeper::new(
             db.clone(),
             multi_beacon_client.clone(),
             auctioneer.clone(),
-            EthereumPrimevService::new(config.primev_config.clone().unwrap()).await.unwrap(),
+            primev_service,
             config.clone(),
             chain_info.clone(),
         );
