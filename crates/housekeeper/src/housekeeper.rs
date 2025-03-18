@@ -1,11 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use ethereum_consensus::primitives::BlsPublicKey;
-use ethers::{
-    abi::Address,
-    contract::EthEvent,
-    types::U256,
-};
+use ethers::{abi::Address, contract::EthEvent, types::U256};
 use helix_utils::utcnow_ms;
 use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
 use tokio::{
@@ -14,6 +10,7 @@ use tokio::{
 };
 use tracing::{debug, error, info, warn};
 
+use crate::{error::HousekeeperError, primev_service::PrimevService};
 use helix_beacon_client::{
     error::BeaconClientError,
     types::{HeadEventData, StateId},
@@ -26,8 +23,6 @@ use helix_common::{
 };
 use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
-use crate::primev_service::PrimevService;
-use crate::error::HousekeeperError;
 use uuid::Uuid;
 
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 1;
@@ -91,8 +86,12 @@ pub struct Housekeeper<
     chain_info: Arc<ChainInfo>,
 }
 
-impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer, P: PrimevService>
-    Housekeeper<DB, BeaconClient, A, P>
+impl<
+        DB: DatabaseService,
+        BeaconClient: MultiBeaconClientTrait,
+        A: Auctioneer,
+        P: PrimevService,
+    > Housekeeper<DB, BeaconClient, A, P>
 {
     pub fn new(
         db: Arc<DB>,
@@ -207,7 +206,10 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer, P
                             tokio::spawn(async move {
                                 match primev_self.refresh_primev_builders_lock.try_lock() {
                                     Ok(_guard) => {
-                                        if let Err(err) = primev_self.primev_update_with_duties(proposer_duties).await {
+                                        if let Err(err) = primev_self
+                                            .primev_update_with_duties(proposer_duties)
+                                            .await
+                                        {
                                             error!(err = %err, "failed to update primev");
                                         }
                                     }
@@ -217,7 +219,7 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer, P
                                 }
                             });
                         }
-                    },
+                    }
                     Err(err) => {
                         error!(err = %err, "failed to update proposer duties");
                     }
@@ -567,7 +569,8 @@ impl<DB: DatabaseService, BeaconClient: MultiBeaconClientTrait, A: Auctioneer, P
                 .await?;
         }
 
-        let primev_validators = self.primev_service.get_registered_primev_validators(proposer_duties).await;
+        let primev_validators =
+            self.primev_service.get_registered_primev_validators(proposer_duties).await;
         self.auctioneer.update_primev_proposers(&primev_validators).await?;
 
         let primev_builder_pref = vec!["PrimevBuilder".to_string()];

@@ -24,7 +24,7 @@ use helix_common::{
     RelayConfig,
 };
 use helix_datastore::redis::redis_cache::RedisCache;
-use helix_housekeeper::{ChainEventUpdater, EthereumPrimevService, Housekeeper, PrimevService};
+use helix_housekeeper::{ChainEventUpdater, EthereumPrimevService, Housekeeper};
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -98,7 +98,7 @@ impl ApiService {
             db.clone(),
             multi_beacon_client.clone(),
             auctioneer.clone(),
-            EthereumPrimevService::new(config.primev_config.unwrap()).await.unwrap(),
+            EthereumPrimevService::new(config.primev_config.clone().unwrap()).await.unwrap(),
             config.clone(),
             chain_info.clone(),
         );
