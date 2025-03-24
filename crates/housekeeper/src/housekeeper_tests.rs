@@ -211,7 +211,8 @@ async fn test_primev_enabled_housekeeper() {
 
 #[tokio::test]
 async fn test_primev_builder_fetch() {
-    // Create a custom config with Primev enabled - using the same URL and contract address as the working cast command
+    // Create a custom config with Primev enabled - using the same URL and contract address as the
+    // working cast command
     let config = PrimevConfig {
         builder_url: "https://chainrpc.mev-commit.xyz/".to_string(),
         builder_contract: "0xb772Add4718E5BD6Fe57Fb486A6f7f008E52167E".to_string(),
