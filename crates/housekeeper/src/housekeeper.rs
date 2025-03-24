@@ -61,7 +61,7 @@ pub struct Housekeeper<
     db: Arc<DB>,
     beacon_client: BeaconClient,
     auctioneer: A,
-    primev_service: P,
+    primev_service: Option<P>,
 
     head_slot: Mutex<u64>,
 
@@ -97,7 +97,7 @@ impl<
         db: Arc<DB>,
         beacon_client: BeaconClient,
         auctioneer: A,
-        primev_service: P,
+        primev_service: Option<P>,
         config: RelayConfig,
         chain_info: Arc<ChainInfo>,
     ) -> Arc<Self> {
@@ -554,7 +554,13 @@ impl<
         self: &SharedHousekeeper<DB, BeaconClient, A, P>,
         proposer_duties: Vec<ProposerDuty>,
     ) -> Result<(), HousekeeperError> {
-        let primev_builders = self.primev_service.get_registered_primev_builders().await;
+        // Check if primev service exists, if not exit early
+        let primev_service = match &self.primev_service {
+            Some(service) => service,
+            None => return Ok(()),
+        };
+        
+        let primev_builders = primev_service.get_registered_primev_builders().await;
 
         for builder_pubkey in primev_builders {
             self.db
@@ -570,7 +576,7 @@ impl<
         }
 
         let primev_validators =
-            self.primev_service.get_registered_primev_validators(proposer_duties).await;
+            primev_service.get_registered_primev_validators(proposer_duties).await;
         self.auctioneer.update_primev_proposers(&primev_validators).await?;
 
         let primev_builder_pref = vec!["PrimevBuilder".to_string()];

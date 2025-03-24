@@ -47,7 +47,7 @@ fn get_housekeeper() -> HelperVars {
         Arc::new(db),
         beacon_client.clone(),
         auctioneer,
-        MockPrimevService::new(),
+        Some(MockPrimevService::new()),
         RelayConfig::default(),
         Arc::new(ChainInfo::for_mainnet()),
     );
@@ -191,7 +191,7 @@ async fn test_primev_enabled_housekeeper() {
         Arc::clone(&db), // Use original DB to maintain tracking
         vars.beacon_client.clone(),
         mock_auctioneer,
-        mock_primev,
+        Some(mock_primev),
         config,
         Arc::new(ChainInfo::for_mainnet()),
     );
