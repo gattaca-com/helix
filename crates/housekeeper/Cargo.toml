@@ -31,3 +31,4 @@ tracing.workspace = true
 uuid.workspace = true
 
 ethers = "2.0.14"
+hex = "0.4.3"

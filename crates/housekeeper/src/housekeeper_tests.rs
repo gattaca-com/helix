@@ -10,7 +10,7 @@ use std::{
 use crate::housekeeper::{Housekeeper, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS};
 use helix_common::config::PrimevConfig;
 
-use crate::primev_service::MockPrimevService;
+use crate::primev_service::{EthereumPrimevService, MockPrimevService, PrimevService};
 
 use ethereum_consensus::primitives::BlsPublicKey;
 use helix_beacon_client::{
@@ -207,6 +207,25 @@ async fn test_primev_enabled_housekeeper() {
         ops.contains(&"get_registered_primev_validators"),
         "Primev validators should be fetched"
     );
+}
+
+#[tokio::test]
+async fn test_primev_builder_fetch() {
+    // Create a custom config with Primev enabled - using the same URL and contract address as the working cast command
+    let config = PrimevConfig {
+        builder_url: "https://chainrpc.mev-commit.xyz/".to_string(),
+        builder_contract: "0xb772Add4718E5BD6Fe57Fb486A6f7f008E52167E".to_string(),
+        validator_url: "https://127.0.0.1:8545".to_string(),
+        validator_contract: "0x0000000000000000000000000000000000000000".to_string(),
+    };
+
+    let service = EthereumPrimevService::new(config.clone()).await.unwrap();
+
+    // Use the trait to call the method
+    let primev_service: &dyn PrimevService = &service;
+    let pubkeys = primev_service.get_registered_primev_builders().await;
+
+    assert!(pubkeys.len() > 0, "Expected at least one public key to be returned");
 }
 
 #[tokio::test]

@@ -4,7 +4,6 @@ use ethers::{
     abi::{Abi, AbiParser, Address, Bytes},
     contract::{Contract, EthEvent},
     providers::{Http, Provider},
-    types::U256,
 };
 use helix_common::{PrimevConfig, ProposerDuty};
 use std::{convert::TryFrom, sync::Arc};
@@ -36,15 +35,55 @@ pub trait PrimevService: Send + Sync + 'static {
 
 #[derive(Debug, EthEvent)]
 #[ethevent(
-    abi = "ProviderRegistered(address indexed provider, uint256 stakedAmount, bytes blsPublicKey)"
+    abi = "BLSKeyAdded(address indexed provider, bytes blsPublicKey)"
 )]
 pub struct ValueChanged {
     #[ethevent(indexed, name = "provider")]
     pub provider: Address,
-    #[ethevent(name = "stakedAmount")]
-    pub staked_amount: U256,
     #[ethevent(name = "blsPublicKey")]
     pub bls_public_key: Vec<u8>,
+}
+
+/// Helper function to process BLS keys from raw event data
+fn process_bls_key_data(data: &[u8]) -> Option<BlsPublicKey> {
+    // Convert to hex for easier debugging
+    let hex_data = format!("0x{}", hex::encode(data));
+    debug!("Raw BLS key data: {}", hex_data);
+    
+    // Try directly with the raw data first
+    if let Ok(key) = BlsPublicKey::try_from(data) {
+        return Some(key);
+    }
+    
+    // Remove the Solidity encoding overhead similar to the jq command
+    // The pattern is typically:
+    // - First 32 bytes (0x00...0020) indicate offset to data
+    // - Next 32 bytes indicate length of the data
+    // - Remaining bytes are the actual data
+    
+    if data.len() < 64 {
+        debug!("Data too short for BLS key");
+        return None;
+    }
+    
+    // Extract the data part after the length prefix
+    let data_part = &data[64..];
+    if data_part.len() < 48 {
+        debug!("Data part too short for BLS key: {}", data_part.len());
+        return None;
+    }
+    
+    // Use only the first 48 bytes which is the BLS pubkey size
+    let key_bytes = &data_part[..48];
+    
+    // Extract the BLS key
+    match BlsPublicKey::try_from(key_bytes) {
+        Ok(key) => Some(key),
+        Err(err) => {
+            debug!("Failed to create BLS key from processed data: {:?}", err);
+            None
+        }
+    }
 }
 
 /// Default implementation for Primev service that connects to Ethereum contracts
@@ -67,7 +106,7 @@ impl EthereumPrimevService {
         // Builder contract setup
         let abi_human_readable = r#"
         [
-            "event ProviderRegistered(address indexed provider, uint256 stakedAmount, bytes blsPublicKey)"
+            "event BLSKeyAdded(address indexed provider, bytes blsPublicKey)"
         ]
         "#;
         let builder_abi = AbiParser::default().parse_str(abi_human_readable)?;
@@ -145,20 +184,28 @@ impl PrimevService for EthereumPrimevService {
 
     async fn get_registered_primev_builders(&self) -> Vec<BlsPublicKey> {
         let event =
-            self.builder_contract.event_for_name("ProviderRegistered").unwrap().from_block(0);
-
+            self.builder_contract.event_for_name("BLSKeyAdded").unwrap().from_block(0);
+        
         let providers: Vec<ValueChanged> = match event.query().await {
-            Ok(providers) => providers,
+            Ok(providers) => {
+                providers
+            }
             Err(err) => {
-                error!("Error querying ProviderRegistered events: {:?}", err);
+                error!("Error querying BLSKeyAdded events: {:?}", err);
                 Vec::new()
             }
         };
 
-        providers
-            .iter()
-            .filter_map(|key| BlsPublicKey::try_from(key.bls_public_key.as_slice()).ok())
-            .collect()
+        let mut result = Vec::new();
+        for (i, value) in providers.iter().enumerate() {
+            if let Some(key) = process_bls_key_data(&value.bls_public_key) {
+                result.push(key);
+            } else {
+                error!("Failed to extract BLS key from event {}", i);
+            }
+        }
+
+        result
     }
 
     async fn get_registered_primev_validators(
