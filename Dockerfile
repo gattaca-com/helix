@@ -54,7 +54,8 @@ RUN apt-get install -y ca-certificates
 
 WORKDIR /app
 
-COPY --from=helix /app/helix-cmd* ./
+# the binary requires config.yml for startup
+COPY --from=helix /app/helix-cmd* /app/config.yml ./
 
 # set the startup command to run your binary
 ENTRYPOINT ["/app/helix-cmd"]

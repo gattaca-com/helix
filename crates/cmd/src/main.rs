@@ -86,6 +86,7 @@ async fn run() {
 }
 
 fn main() {
+    let _ = dotenvy::dotenv();
     let num_cpus = num_cpus::get();
     let worker_threads = num_cpus;
     let max_blocking_threads = num_cpus / 2;

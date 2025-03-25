@@ -4,3 +4,4 @@
 audits/
 images/
 **/target/
+logs/
