@@ -76,7 +76,7 @@ where
 {
     auctioneer: Arc<A>,
     db: Arc<DB>,
-    gossiper: Arc<G>,
+    gossiper: Option<Arc<G>>,
     broadcasters: Vec<Arc<BlockBroadcaster>>,
     multi_beacon_client: Arc<M>,
 
@@ -99,7 +99,7 @@ where
     pub fn new(
         auctioneer: Arc<A>,
         db: Arc<DB>,
-        gossiper: Arc<G>,
+        gossiper: Option<Arc<G>>,
         broadcasters: Vec<Arc<BlockBroadcaster>>,
         multi_beacon_client: Arc<M>,
         chain_info: Arc<ChainInfo>,
@@ -671,16 +671,20 @@ where
         let slot = signed_blinded_block.message().slot();
 
         // Broadcast get payload request
-        if let Err(e) = proposer_api
-            .gossiper
-            .broadcast_get_payload(BroadcastGetPayloadParams {
-                signed_blinded_beacon_block: signed_blinded_block.clone(),
-                request_id,
-            })
-            .await
-        {
-            error!(request_id = %request_id, error = %e, "failed to broadcast get payload");
-        };
+        if let Some(gossiper) = &proposer_api.gossiper {
+            if let Err(e) = gossiper
+                .broadcast_get_payload(BroadcastGetPayloadParams {
+                    signed_blinded_beacon_block: signed_blinded_block.clone(),
+                    request_id,
+                })
+                .await
+            {
+                error!(request_id = %request_id, error = %e, "failed to broadcast get payload");
+            }
+        } else {
+            warn!(request_id = %request_id, "Gossiper is not available, skipping broadcast");
+        }
+        
 
         match proposer_api
             ._get_payload(signed_blinded_block, &mut trace, &request_id, user_agent)
