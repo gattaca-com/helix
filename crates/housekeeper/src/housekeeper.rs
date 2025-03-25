@@ -559,7 +559,7 @@ impl<
             Some(service) => service,
             None => return Ok(()),
         };
-        
+
         let primev_builders = primev_service.get_registered_primev_builders().await;
 
         for builder_pubkey in primev_builders {

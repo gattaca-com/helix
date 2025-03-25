@@ -2877,6 +2877,7 @@ dependencies = [
  "helix-database",
  "helix-datastore",
  "helix-utils",
+ "hex",
  "reth-primitives 0.1.0-alpha.10",
  "serde_json",
  "thiserror",
