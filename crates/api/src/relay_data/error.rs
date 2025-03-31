@@ -2,6 +2,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use ethereum_consensus::primitives::BlsPublicKey;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DataApiError {
@@ -11,6 +12,8 @@ pub enum DataApiError {
     MissingFilter,
     #[error("maximum limit is {limit}")]
     LimitReached { limit: u64 },
+    #[error("no registration found for validator {pubkey}")]
+    ValidatorRegistrationNotFound { pubkey: BlsPublicKey },
     #[error("internal server error")]
     InternalServerError,
 }
@@ -28,6 +31,10 @@ impl IntoResponse for DataApiError {
                 .into_response(),
             DataApiError::LimitReached { limit } => {
                 (StatusCode::BAD_REQUEST, format!("maximum limit is {limit}")).into_response()
+            }
+            DataApiError::ValidatorRegistrationNotFound { pubkey } => {
+                (StatusCode::BAD_REQUEST, format!("no registration found for validator {pubkey}"))
+                    .into_response()
             }
             DataApiError::InternalServerError => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error").into_response()

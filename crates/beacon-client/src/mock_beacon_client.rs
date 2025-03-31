@@ -93,7 +93,7 @@ impl BeaconClientTrait for MockBeaconClient {
         "test_uri".to_string()
     }
 
-    async fn publish_block<SignedBeaconBlock: Send + Sync + SimpleSerialize>(
+    async fn publish_block<SignedBeaconBlock: Send + Sync + Serializable>(
         &self,
         _block: Arc<SignedBeaconBlock>,
         _broadcast_validation: Option<BroadcastValidation>,

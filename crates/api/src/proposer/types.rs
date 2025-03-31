@@ -1,5 +1,5 @@
 use ethereum_consensus::{
-    bellatrix, capella, deneb,
+    bellatrix, capella, deneb, electra,
     primitives::{BlsPublicKey, Hash32},
     types::mainnet::{SignedBeaconBlock, SignedBlindedBeaconBlock},
 };
@@ -10,14 +10,6 @@ use helix_common::{
 use serde::Deserialize;
 
 use crate::proposer::error::ProposerApiError;
-
-pub const PATH_PROPOSER_API: &str = "/eth/v1/builder";
-
-pub const PATH_STATUS: &str = "/status";
-pub const PATH_REGISTER_VALIDATORS: &str = "/validators";
-pub const PATH_GET_HEADER: &str = "/header/:slot/:parent_hash/:pubkey";
-pub const PATH_GET_HEADER_WITH_PROOFS: &str = "/header_with_proofs/:slot/:parent_hash/:pubkey";
-pub const PATH_GET_PAYLOAD: &str = "/blinded_blocks";
 
 pub const GET_HEADER_REQUEST_CUTOFF_MS: i64 = 3000;
 
@@ -141,6 +133,53 @@ pub fn unblind_beacon_block(
             };
             Ok(VersionedSignedProposal::Deneb(SignedBlockContents {
                 signed_block: SignedBeaconBlock::Deneb(inner),
+                kzg_proofs: blobs_bundle.proofs.clone(),
+                blobs: blobs_bundle.blobs.clone(),
+            }))
+        }
+        SignedBlindedBeaconBlock::Electra(blinded_block) => {
+            let signature = blinded_block.signature.clone();
+            let block = &blinded_block.message;
+            let body = &block.body;
+            let execution_payload = versioned_execution_payload
+                .execution_payload
+                .electra()
+                .ok_or(ProposerApiError::PayloadTypeMismatch)?;
+            let blobs_bundle = versioned_execution_payload
+                .blobs_bundle
+                .clone()
+                .ok_or(ProposerApiError::PayloadTypeMismatch)?;
+
+            if body.blob_kzg_commitments.len() != blobs_bundle.blobs.len() {
+                return Err(ProposerApiError::BlindedBlobsBundleLengthMismatch)
+            }
+
+            let inner = electra::SignedBeaconBlock {
+                message: electra::BeaconBlock {
+                    slot: block.slot,
+                    proposer_index: block.proposer_index,
+                    parent_root: block.parent_root,
+                    state_root: block.state_root,
+                    body: electra::BeaconBlockBody {
+                        randao_reveal: body.randao_reveal.clone(),
+                        eth1_data: body.eth1_data.clone(),
+                        graffiti: body.graffiti.clone(),
+                        proposer_slashings: body.proposer_slashings.clone(),
+                        attester_slashings: body.attester_slashings.clone(),
+                        attestations: body.attestations.clone(),
+                        deposits: body.deposits.clone(),
+                        voluntary_exits: body.voluntary_exits.clone(),
+                        sync_aggregate: body.sync_aggregate.clone(),
+                        execution_payload: execution_payload.clone(),
+                        bls_to_execution_changes: body.bls_to_execution_changes.clone(),
+                        blob_kzg_commitments: body.blob_kzg_commitments.clone(),
+                        execution_requests: body.execution_requests.clone(),
+                    },
+                },
+                signature,
+            };
+            Ok(VersionedSignedProposal::Electra(SignedBlockContents {
+                signed_block: SignedBeaconBlock::Electra(inner),
                 kzg_proofs: blobs_bundle.proofs.clone(),
                 blobs: blobs_bundle.blobs.clone(),
             }))

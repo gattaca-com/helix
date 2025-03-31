@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
     BoxError, Extension, Router,
 };
+
 use helix_common::{chain_info::ChainInfo, ConstraintsApiConfig, RelayConfig, Route};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
@@ -13,7 +14,14 @@ use helix_beacon_client::{
     mock_block_broadcaster::MockBlockBroadcaster, mock_multi_beacon_client::MockMultiBeaconClient,
     BlockBroadcaster,
 };
-use helix_common::{signing::RelaySigningContext, ValidatorPreferences};
+use helix_common::{
+    api::{
+        PATH_GET_HEADER, PATH_GET_HEADER_WITH_PROOFS, PATH_GET_PAYLOAD, PATH_PROPOSER_API,
+        PATH_REGISTER_VALIDATORS, PATH_STATUS,
+    },
+    signing::RelaySigningContext,
+    ValidatorPreferences,
+};
 use helix_database::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
 use helix_housekeeper::ChainUpdate;
@@ -27,11 +35,7 @@ use crate::{
     },
     constraints::api::{ConstraintsApi, ConstraintsHandle},
     gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
-    proposer::{
-        api::{ProposerApi, MAX_BLINDED_BLOCK_LENGTH, MAX_VAL_REGISTRATIONS_LENGTH},
-        PATH_GET_HEADER, PATH_GET_HEADER_WITH_PROOFS, PATH_GET_PAYLOAD, PATH_PROPOSER_API,
-        PATH_REGISTER_VALIDATORS, PATH_STATUS,
-    },
+    proposer::api::{ProposerApi, MAX_BLINDED_BLOCK_LENGTH, _MAX_VAL_REGISTRATIONS_LENGTH},
     relay_data::{
         DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API, PATH_PROPOSER_PAYLOAD_DELIVERED,
         PATH_VALIDATOR_REGISTRATION,
@@ -41,6 +45,7 @@ use crate::{
 pub fn app() -> Router {
     let (slot_update_sender, _slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
     let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
+    let (v3_sender, _v3_receiver) = channel(32);
 
     let api_service = Arc::new(ProposerApi::<
         MockAuctioneer,
@@ -58,6 +63,7 @@ pub fn app() -> Router {
         Arc::new(ValidatorPreferences::default()),
         gossip_receiver,
         Default::default(),
+        v3_sender,
     ));
 
     let data_api = Arc::new(DataApi::<MockDatabaseService>::new(
@@ -152,6 +158,7 @@ pub fn builder_api_app() -> (
             RelayConfig::default(),
             slot_update_sender.clone(),
             gossip_receiver,
+            Arc::new(ValidatorPreferences::default()),
         );
     let builder_api_service = Arc::new(builder_api_service);
 
@@ -203,7 +210,9 @@ pub fn proposer_api_app() -> (
 ) {
     let (slot_update_sender, slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
     let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
+    let (v3_sender, _v3_receiver) = channel(32);
     let auctioneer = Arc::new(MockAuctioneer::default());
+
     let proposer_api_service = Arc::new(ProposerApi::<
         MockAuctioneer,
         MockDatabaseService,
@@ -220,6 +229,7 @@ pub fn proposer_api_app() -> (
         Arc::new(ValidatorPreferences::default()),
         gossip_receiver,
         Default::default(),
+        v3_sender,
     ));
 
     let router = Router::new()
@@ -264,7 +274,7 @@ pub fn proposer_api_app() -> (
                 >::register_validators,
             ),
         )
-        .layer(RequestBodyLimitLayer::new(MAX_VAL_REGISTRATIONS_LENGTH))
+        .layer(RequestBodyLimitLayer::new(_MAX_VAL_REGISTRATIONS_LENGTH))
         .layer(Extension(proposer_api_service.clone()));
 
     (router, proposer_api_service, slot_update_receiver, auctioneer)
@@ -319,6 +329,7 @@ pub fn constraints_api_app() -> (
             RelayConfig::default(),
             slot_update_sender.clone(),
             gossip_receiver,
+            Arc::new(ValidatorPreferences::default()),
         );
     let builder_api_service = Arc::new(builder_api_service);
 

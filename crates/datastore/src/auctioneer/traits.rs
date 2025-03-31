@@ -17,6 +17,7 @@ use helix_common::{
 use helix_database::BuilderInfoDocument;
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse};
+use helix_common::bid_submission::v3::header_submission_v3::PayloadSocketAddress;
 use tokio_stream::Stream;
 
 #[async_trait]
@@ -223,6 +224,17 @@ pub trait Auctioneer: Send + Sync + Clone {
         block_hash: &Hash32,
         timestamp_ms: u64,
     ) -> Result<(), AuctioneerError>;
+
+    async fn save_payload_address(
+        &self,
+        block_hash: &Hash32,
+        payload_socket_address: PayloadSocketAddress,
+    ) -> Result<(), AuctioneerError>;
+
+    async fn get_payload_address(
+        &self,
+        block_hash: &Hash32,
+    ) -> Result<Option<PayloadSocketAddress>, AuctioneerError>;
 
     /// Try to acquire or renew leadership for the housekeeper.
     /// Returns: true if the housekeeper is the leader, false if it isn't.

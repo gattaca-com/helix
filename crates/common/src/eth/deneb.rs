@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use crate::{signed_proposal::VersionedSignedProposal, BLOB_KZG_COMMITMENTS_INDEX};
 use ethereum_consensus::{
-    altair::{BeaconBlockHeader, Bytes32, SignedBeaconBlockHeader},
-    deneb,
+    altair::{BeaconBlockHeader, SignedBeaconBlockHeader},
+    crypto::{KzgCommitment, KzgProof},
     deneb::{
+        self,
         mainnet::{BlobSidecar, MAX_BLOBS_PER_BLOCK, MAX_BLOB_COMMITMENTS_PER_BLOCK},
-        polynomial_commitments::{KzgCommitment, KzgProof},
     },
     primitives::{BlsPublicKey, BlsSignature, Root, U256},
     serde::as_str,
@@ -23,10 +23,12 @@ use tracing::error;
 pub type ExecutionPayload = spec::ExecutionPayload;
 pub type ExecutionPayloadHeader = spec::ExecutionPayloadHeader;
 pub type SignedBlindedBeaconBlock = spec::SignedBlindedBeaconBlock;
-pub type SignedBlindedBlobSidecar = spec::SignedBlindedBlobSidecar;
+pub type SignedBlindedBlobSidecar = spec::BlobSidecar;
 pub type Blob = spec::Blob;
 
-#[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Default, Clone, Serializable, serde::Serialize, serde::Deserialize, HashTreeRoot,
+)]
 pub struct BuilderBid {
     pub header: spec::ExecutionPayloadHeader,
     pub blob_kzg_commitments: List<KzgCommitment, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
@@ -36,33 +38,33 @@ pub struct BuilderBid {
     pub public_key: BlsPublicKey,
 }
 
-#[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, Serializable, serde::Serialize, serde::Deserialize)]
 pub struct BlindedBlobsBundle {
     pub commitments: List<KzgCommitment, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
     pub proofs: List<KzgProof, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
     pub blob_roots: List<Root, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
 }
 
-#[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, Serializable, serde::Serialize, serde::Deserialize)]
 pub struct SignedBuilderBid {
     pub message: BuilderBid,
     pub signature: BlsSignature,
 }
 
-#[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, Serializable, serde::Serialize, serde::Deserialize)]
 pub struct SignedBlindedBlockAndBlobSidecars {
     pub signed_blinded_block: SignedBlindedBeaconBlock,
     pub signed_blinded_blob_sidecars: List<SignedBlindedBlobSidecar, MAX_BLOBS_PER_BLOCK>,
 }
 
-#[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, Serializable, serde::Serialize, serde::Deserialize)]
 pub struct BlobsBundle {
     pub commitments: List<KzgCommitment, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
     pub proofs: List<KzgProof, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
     pub blobs: List<Blob, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
 }
 
-#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serializable, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct SignedBlockContents {
     pub signed_block: SignedBeaconBlock,
     pub kzg_proofs: List<KzgProof, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
@@ -70,7 +72,7 @@ pub struct SignedBlockContents {
 }
 
 #[derive(
-    Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize, PartialEq, Eq,
+    Debug, Default, Clone, Serializable, serde::Serialize, serde::Deserialize, PartialEq, Eq,
 )]
 pub struct BlobSidecars {
     pub sidecars: List<BlobSidecar, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
@@ -144,9 +146,9 @@ pub fn new_blob_sidecar(
         kzg_commitments.get(index).ok_or(BuildBlobSidecarError::MissingKzgCommitment)?.clone();
 
     let kzg_commitment_inclusion_proof = kzg_commitment_merkle_proof(signed_block, index)?;
-    let kzg_commitment_inclusion_proof: Vec<Bytes32> = kzg_commitment_inclusion_proof
+    let kzg_commitment_inclusion_proof: Vec<Node> = kzg_commitment_inclusion_proof
         .into_iter()
-        .map(|x| Bytes32::try_from(x.as_bytes()).unwrap())
+        .map(|x| Node::try_from(x.as_bytes()).unwrap())
         .collect();
     let kzg_commitment_inclusion_proof = kzg_commitment_inclusion_proof
         .try_into()
@@ -193,7 +195,7 @@ fn kzg_commitment_merkle_proof(
         Vec::with_capacity(signed_block.message.body.blob_kzg_commitments.len());
     for commitment in signed_block.message.body.blob_kzg_commitments.iter_mut() {
         let root = commitment.hash_tree_root()?;
-        leaves.push(H256::from_slice(&root));
+        leaves.push(H256::from_slice(&root.as_slice()));
     }
 
     let depth = MAX_BLOB_COMMITMENTS_PER_BLOCK.next_power_of_two().ilog2() as usize;
@@ -216,18 +218,26 @@ fn kzg_commitment_merkle_proof(
     // Part 2
     // Branches for `BeaconBlockBody` container
     let leaves: [H256; 12] = [
-        H256::from_slice(&signed_block.message.body.randao_reveal.hash_tree_root()?),
-        H256::from_slice(&signed_block.message.body.eth1_data.hash_tree_root()?),
-        H256::from_slice(&signed_block.message.body.graffiti.hash_tree_root()?),
-        H256::from_slice(&signed_block.message.body.proposer_slashings.hash_tree_root()?),
-        H256::from_slice(&signed_block.message.body.attester_slashings.hash_tree_root()?),
-        H256::from_slice(&signed_block.message.body.attestations.hash_tree_root()?),
-        H256::from_slice(&signed_block.message.body.deposits.hash_tree_root()?),
-        H256::from_slice(&signed_block.message.body.voluntary_exits.hash_tree_root()?),
-        H256::from_slice(&signed_block.message.body.sync_aggregate.hash_tree_root()?),
-        H256::from_slice(&signed_block.message.body.execution_payload.hash_tree_root()?),
-        H256::from_slice(&signed_block.message.body.bls_to_execution_changes.hash_tree_root()?),
-        H256::from_slice(&signed_block.message.body.blob_kzg_commitments.hash_tree_root()?),
+        H256::from_slice(&signed_block.message.body.randao_reveal.hash_tree_root()?.as_slice()),
+        H256::from_slice(&signed_block.message.body.eth1_data.hash_tree_root()?.as_slice()),
+        H256::from_slice(&signed_block.message.body.graffiti.hash_tree_root()?.as_slice()),
+        H256::from_slice(
+            &signed_block.message.body.proposer_slashings.hash_tree_root()?.as_slice(),
+        ),
+        H256::from_slice(
+            &signed_block.message.body.attester_slashings.hash_tree_root()?.as_slice(),
+        ),
+        H256::from_slice(&signed_block.message.body.attestations.hash_tree_root()?.as_slice()),
+        H256::from_slice(&signed_block.message.body.deposits.hash_tree_root()?.as_slice()),
+        H256::from_slice(&signed_block.message.body.voluntary_exits.hash_tree_root()?.as_slice()),
+        H256::from_slice(&signed_block.message.body.sync_aggregate.hash_tree_root()?.as_slice()),
+        H256::from_slice(&signed_block.message.body.execution_payload.hash_tree_root()?.as_slice()),
+        H256::from_slice(
+            &signed_block.message.body.bls_to_execution_changes.hash_tree_root()?.as_slice(),
+        ),
+        H256::from_slice(
+            &signed_block.message.body.blob_kzg_commitments.hash_tree_root()?.as_slice(),
+        ),
     ];
     let beacon_block_body_depth = leaves.len().next_power_of_two().ilog2() as usize;
     let tree = merkle_proof::MerkleTree::create(&leaves, beacon_block_body_depth);
@@ -238,4 +248,55 @@ fn kzg_commitment_merkle_proof(
     proof.append(&mut proof_body);
 
     Ok(proof.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use ethereum_consensus::types::BlindedBeaconBlockRef;
+
+    use crate::{
+        bid_submission::SignedBidSubmissionDeneb,
+        utils::test_utils::{test_encode_decode_json, test_encode_decode_ssz},
+        versioned_payload::PayloadAndBlobs,
+    };
+    use ethereum_consensus::types::mainnet::SignedBlindedBeaconBlock;
+
+    #[test]
+    // this is from mev-boost test data
+    fn test_signed_blinded_block_fb() {
+        let data = include_str!("testdata/signed-blinded-beacon-block-deneb.json");
+        let block = test_encode_decode_json::<SignedBlindedBeaconBlock>(&data);
+        assert!(matches!(block.message(), BlindedBeaconBlockRef::Deneb(_)));
+    }
+
+    #[test]
+    // this is from the builder api spec, but with sync_committee_bits fixed to
+    // deserialize correctly
+    fn test_signed_blinded_beacon_block() {
+        let data = include_str!("testdata/signed-blinded-beacon-block-deneb-2.json");
+        let block_json = test_encode_decode_json::<SignedBlindedBeaconBlock>(&data);
+        assert!(matches!(block_json.message(), BlindedBeaconBlockRef::Deneb(_)));
+    }
+
+    #[test]
+    // this is dummy data generated with https://github.com/attestantio/go-builder-client
+    fn test_execution_payload_block_ssz() {
+        let data_json = include_str!("testdata/execution-payload-deneb.json");
+        test_encode_decode_json::<PayloadAndBlobs>(&data_json);
+    }
+
+    #[test]
+    // this is from the relay API spec, addging the blob and the proposer_pubkey field
+    fn test_submit_block() {
+        let data_json = include_str!("testdata/signed-bid-submission-deneb.json");
+        test_encode_decode_json::<SignedBidSubmissionDeneb>(&data_json);
+    }
+
+    #[test]
+    // this is random data
+    fn test_submit_block_2() {
+        let data_ssz = include_bytes!("testdata/signed-bid-submission-deneb-2.ssz");
+        let data_ssz = alloy::primitives::hex::decode(data_ssz).unwrap();
+        test_encode_decode_ssz::<SignedBidSubmissionDeneb>(&data_ssz);
+    }
 }

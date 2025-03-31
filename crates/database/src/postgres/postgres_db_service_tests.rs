@@ -107,6 +107,7 @@ mod tests {
                 filtering: Filtering::Global,
                 trusted_builders: Some(vec!["test".to_string(), "test2".to_string()]),
                 header_delay: true,
+                delay_ms: Some(1000),
                 gossip_blobs: true,
             },
         }
@@ -202,8 +203,8 @@ mod tests {
             let result = result
                 .iter()
                 .find(|r| {
-                    r.registration_info.registration.message.public_key ==
-                        registration.registration.message.public_key
+                    r.registration_info.registration.message.public_key
+                        == registration.registration.message.public_key
                 })
                 .unwrap();
             assert_eq!(
@@ -400,7 +401,9 @@ mod tests {
         let builder_info = helix_common::BuilderInfo {
             collateral: U256::from_str("1000000000000000000000000000").unwrap(),
             is_optimistic: false,
+            is_optimistic_for_regional_filtering: false,
             builder_id: None,
+            builder_ids: Some(vec!["test3".to_string()]),
         };
 
         let result = db_service.store_builder_info(&public_key, &builder_info).await;
@@ -425,7 +428,9 @@ mod tests {
         let builder_info = helix_common::BuilderInfo {
             collateral: Default::default(),
             is_optimistic: false,
+            is_optimistic_for_regional_filtering: false,
             builder_id: None,
+            builder_ids: None,
         };
 
         let result = db_service.store_builder_info(&public_key, &builder_info).await;
@@ -470,6 +475,9 @@ mod tests {
         };
         let mut signed_bid_submission = SignedBidSubmission::default();
         match &mut signed_bid_submission {
+            SignedBidSubmission::Electra(submission) => {
+                submission.message = bid_trace.clone();
+            }
             SignedBidSubmission::Deneb(submission) => {
                 submission.message = bid_trace.clone();
             }
@@ -487,7 +495,7 @@ mod tests {
         };
 
         db_service
-            .store_block_submission(Arc::new(signed_bid_submission), submission_trace, 0)
+            .store_block_submission(Arc::new(signed_bid_submission), Arc::new(submission_trace), 0)
             .await?;
         Ok(())
     }
@@ -636,6 +644,7 @@ mod tests {
                 reg.message.public_key,
                 Default::default(),
                 Default::default(),
+                false,
                 None,
             )
             .await?;

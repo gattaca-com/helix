@@ -24,6 +24,9 @@ pub enum AuctioneerError {
     #[error("parse int error: {0}")]
     ParseIntError(#[from] std::num::ParseIntError),
 
+    #[error("from hex error: {0}")]
+    FromHexError(#[from] hex::FromHexError),
+
     #[error("past slot already delivered")]
     PastSlotAlreadyDelivered,
 
@@ -46,7 +49,7 @@ pub enum AuctioneerError {
     EthereumConsensusError(#[from] ethereum_consensus::Error),
 
     #[error("ethereum consensus crypto error: {0}")]
-    EthereumConsensusCryptoError(#[from] ethereum_consensus::crypto::Error),
+    EthereumConsensusCryptoError(#[from] ethereum_consensus::crypto::bls::Error),
 }
 
 impl IntoResponse for AuctioneerError {
@@ -63,6 +66,9 @@ impl IntoResponse for AuctioneerError {
             }
             AuctioneerError::ParseIntError(err) => {
                 (StatusCode::BAD_REQUEST, format!("Parse Int error: {err}")).into_response()
+            }
+            AuctioneerError::FromHexError(err) => {
+                (StatusCode::BAD_REQUEST, format!("From Hex error: {err}")).into_response()
             }
             AuctioneerError::PastSlotAlreadyDelivered => {
                 (StatusCode::BAD_REQUEST, "Past slot already delivered".to_string()).into_response()

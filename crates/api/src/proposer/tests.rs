@@ -33,10 +33,11 @@ mod proposer_api_tests {
     // +++ IMPORTS +++
     use crate::{
         gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
-        proposer::{api::ProposerApi, PATH_GET_PAYLOAD, PATH_PROPOSER_API},
+        proposer::api::ProposerApi,
         test_utils::proposer_api_app,
     };
 
+    use alloy::hex;
     use ethereum_consensus::{
         bellatrix,
         builder::{SignedValidatorRegistration, ValidatorRegistration},
@@ -48,14 +49,15 @@ mod proposer_api_tests {
     };
     use rand::Rng;
     use reqwest::StatusCode;
-    use reth_primitives::hex;
 
-    use crate::proposer::{tests::gen_signed_vr, PATH_REGISTER_VALIDATORS};
+    use crate::proposer::tests::gen_signed_vr;
     use ethereum_consensus::types::mainnet::{ExecutionPayload, SignedBlindedBeaconBlock};
     use helix_beacon_client::mock_multi_beacon_client::MockMultiBeaconClient;
     use helix_common::{
         api::{
-            builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
+            builder_api::BuilderGetValidatorsResponseEntry,
+            proposer_api::ValidatorRegistrationInfo, PATH_GET_PAYLOAD, PATH_PROPOSER_API,
+            PATH_REGISTER_VALIDATORS,
         },
         capella,
         chain_info::ChainInfo,
@@ -71,7 +73,7 @@ mod proposer_api_tests {
     use std::{sync::Arc, time::Duration};
     use tokio::{
         sync::{
-            mpsc::{channel, Receiver, Sender},
+            mpsc::{self, channel, Receiver, Sender},
             oneshot,
         },
         time::sleep,
@@ -978,6 +980,7 @@ mod proposer_api_tests {
     async fn test_validate_registration() {
         let (slot_update_sender, _slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
         let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
+        let (v3_sender, _v3_receiver) = channel(32);
         let auctioneer = Arc::new(MockAuctioneer::default());
 
         let prop_api = ProposerApi::<
@@ -996,6 +999,7 @@ mod proposer_api_tests {
             Arc::new(ValidatorPreferences::default()),
             gossip_receiver,
             Default::default(),
+            v3_sender,
         );
 
         let mut x = gen_signed_vr();
@@ -1038,5 +1042,21 @@ mod proposer_api_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_decode_signed_blinded_block_electra() {
+        let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
+        if !current_dir.ends_with("api") {
+            current_dir.push("crates/api/");
+        }
+        current_dir.push("test_data/signed_blinded_beacon_block_electra.json");
+        let req_payload_bytes =
+            load_bytes(current_dir.to_str().expect("Failed to convert path to string"));
+
+        let decoded_submission: SignedBlindedBeaconBlock =
+            serde_json::from_slice(&req_payload_bytes).unwrap();
+
+        assert!(decoded_submission.electra().is_some());
     }
 }

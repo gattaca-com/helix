@@ -25,4 +25,8 @@ impl BlockSimulator for MockSimulator {
     ) -> Result<bool, BlockSimError> {
         Ok(true)
     }
+
+    async fn is_synced(&self) -> Result<bool, BlockSimError> {
+        Ok(true)
+    }
 }

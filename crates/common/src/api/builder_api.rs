@@ -37,7 +37,7 @@ impl From<BuilderGetValidatorsResponseEntry> for BuilderGetValidatorsResponse {
     }
 }
 
-#[derive(Clone, Default, Debug, SimpleSerialize)]
+#[derive(Clone, Default, Debug, Serializable)]
 pub struct TopBidUpdate {
     pub timestamp: u64,
     pub slot: u64,

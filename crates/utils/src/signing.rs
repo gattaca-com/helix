@@ -3,7 +3,7 @@ use ethereum_consensus::{
     domains::DomainType,
     phase0::mainnet::compute_domain,
     primitives::{BlsPublicKey, BlsSignature, Domain, Root, Slot},
-    signing::{compute_signing_root, sign_with_domain, verify_signature, verify_signed_data},
+    signing::{compute_signing_root, sign_with_domain, verify_signed_data},
     ssz::prelude::*,
     state_transition::Context,
     Error, Fork,
@@ -15,7 +15,7 @@ pub const APPLICATION_BUILDER_DOMAIN: [u8; 4] = [0, 0, 0, 1];
 pub const GENESIS_VALIDATORS_ROOT: [u8; 32] = [0; 32];
 pub const COMMIT_BOOST_DOMAIN: [u8; 4] = [109, 109, 111, 67];
 
-pub fn verify_signed_consensus_message<T: Merkleized>(
+pub fn verify_signed_consensus_message<T: HashTreeRoot>(
     message: &mut T,
     signature: &BlsSignature,
     public_key: &BlsPublicKey,
@@ -27,6 +27,7 @@ pub fn verify_signed_consensus_message<T: Merkleized>(
         Fork::Bellatrix => context.bellatrix_fork_version,
         Fork::Capella => context.capella_fork_version,
         Fork::Deneb => context.deneb_fork_version,
+        Fork::Electra => context.electra_fork_version,
         _ => unimplemented!("Fork {:?} is not supported", context.fork_for(slot)),
     });
     let domain =
@@ -35,7 +36,7 @@ pub fn verify_signed_consensus_message<T: Merkleized>(
     Ok(())
 }
 
-pub fn verify_signed_builder_message<T: Merkleized>(
+pub fn verify_signed_builder_message<T: HashTreeRoot>(
     message: &mut T,
     signature: &BlsSignature,
     public_key: &BlsPublicKey,
@@ -57,7 +58,7 @@ pub fn compute_signing_root_custom(object_root: [u8; 32], signing_domain: [u8; 3
     signing_data.tree_hash_root().0
 }
 
-pub fn verify_signed_message<T: TreeHash>(
+pub fn verify_signed_message<T: HashTreeRoot>(
     message: &T,
     signature: &BlsSignature,
     public_key: &BlsPublicKey,
@@ -65,9 +66,7 @@ pub fn verify_signed_message<T: TreeHash>(
     context: &Context,
 ) -> Result<(), Error> {
     let domain = compute_domain_custom(context, domain_mask);
-    let signing_root = compute_signing_root_custom(message.tree_hash_root().0, domain);
-
-    verify_signature(public_key, &signing_root, signature)
+    verify_signed_data(message, signature, public_key, domain)
 }
 
 // NOTE: this currently works only for builder domain signatures and
@@ -92,7 +91,7 @@ pub fn compute_domain_custom(chain: &Context, domain_mask: [u8; 4]) -> [u8; 32] 
     domain
 }
 
-pub fn compute_consensus_signing_root<T: Merkleized>(
+pub fn compute_consensus_signing_root<T: HashTreeRoot>(
     data: &mut T,
     slot: Slot,
     genesis_validators_root: &Root,
@@ -109,7 +108,7 @@ pub fn compute_consensus_signing_root<T: Merkleized>(
     compute_signing_root(data, domain)
 }
 
-pub fn sign_builder_message<T: Merkleized>(
+pub fn sign_builder_message<T: HashTreeRoot>(
     message: &mut T,
     signing_key: &SecretKey,
     context: &Context,
@@ -118,7 +117,7 @@ pub fn sign_builder_message<T: Merkleized>(
     sign_with_domain(message, signing_key, domain)
 }
 
-pub fn compute_builder_signing_root<T: Merkleized>(
+pub fn compute_builder_signing_root<T: HashTreeRoot>(
     data: &mut T,
     context: &Context,
 ) -> Result<Root, Error> {

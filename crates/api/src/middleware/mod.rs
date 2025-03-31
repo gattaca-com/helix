@@ -1,4 +1,3 @@
 pub mod metrics;
-pub mod rate_limiting;
 
-pub use metrics::metrics_middleware;
+pub use metrics::{inner_metrics_middleware, outer_metrics_middleware};

@@ -15,7 +15,7 @@ use helix_common::{
     },
     ValidatorPreferences,
 };
-use helix_database::DatabaseService;
+use helix_database::{error::DatabaseError, DatabaseService};
 
 use crate::relay_data::error::DataApiError;
 
@@ -46,11 +46,11 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         Query(mut params): Query<ProposerPayloadDeliveredParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         if params.slot.is_some() && params.cursor.is_some() {
-            return Err(DataApiError::SlotAndCursor)
+            return Err(DataApiError::SlotAndCursor);
         }
 
         if params.limit.is_some() && params.limit.unwrap() > 200 {
-            return Err(DataApiError::LimitReached { limit: 200 })
+            return Err(DataApiError::LimitReached { limit: 200 });
         }
 
         if params.limit.is_none() {
@@ -58,7 +58,15 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         }
 
         if params.limit.is_some() && params.limit.unwrap() > 200 {
-            return Err(DataApiError::LimitReached { limit: 200 })
+            return Err(DataApiError::LimitReached { limit: 200 });
+        }
+
+        if params.limit.is_none() {
+            params.limit = Some(200);
+        }
+
+        if params.limit.is_some() && params.limit.unwrap() > 200 {
+            return Err(DataApiError::LimitReached { limit: 200 });
         }
 
         if params.limit.is_none() {
@@ -68,7 +76,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         let cache_key = format!("{:?}", params);
 
         if let Some(cached_result) = cache.get(&cache_key) {
-            return Ok(Json(cached_result))
+            return Ok(Json(cached_result));
         }
 
         match data_api
@@ -99,16 +107,16 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         Extension(cache): Extension<Arc<BidsCache>>,
         Query(mut params): Query<BuilderBlocksReceivedParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
-        if params.slot.is_none() &&
-            params.block_hash.is_none() &&
-            params.block_number.is_none() &&
-            params.builder_pubkey.is_none()
+        if params.slot.is_none()
+            && params.block_hash.is_none()
+            && params.block_number.is_none()
+            && params.builder_pubkey.is_none()
         {
-            return Err(DataApiError::MissingFilter)
+            return Err(DataApiError::MissingFilter);
         }
 
         if params.limit.is_some() && params.limit.unwrap() > 500 {
-            return Err(DataApiError::LimitReached { limit: 500 })
+            return Err(DataApiError::LimitReached { limit: 500 });
         }
 
         if params.limit.is_none() {
@@ -118,7 +126,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         let cache_key = format!("{:?}", params);
 
         if let Some(cached_result) = cache.get(&cache_key) {
-            return Ok(Json(cached_result))
+            return Ok(Json(cached_result));
         }
 
         match data_api.db.get_bids(&params.into(), data_api.validator_preferences.clone()).await {
@@ -142,12 +150,18 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         Extension(data_api): Extension<Arc<DataApi<DB>>>,
         Query(params): Query<ValidatorRegistrationParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
-        match data_api.db.get_validator_registration(params.pubkey).await {
+        match data_api.db.get_validator_registration(params.pubkey.clone()).await {
             Ok(result) => Ok(Json(result.registration_info.registration)),
-            Err(err) => {
-                warn!(error=%err, "Failed to get validator registration info");
-                Err(DataApiError::InternalServerError)
-            }
+            Err(err) => match err {
+                DatabaseError::ValidatorRegistrationNotFound => {
+                    warn!("Validator registration not found");
+                    Err(DataApiError::ValidatorRegistrationNotFound { pubkey: params.pubkey })
+                }
+                _ => {
+                    warn!(error=%err, "Failed to get validator registration info");
+                    Err(DataApiError::InternalServerError)
+                }
+            },
         }
     }
 }

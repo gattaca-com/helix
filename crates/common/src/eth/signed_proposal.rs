@@ -6,13 +6,14 @@ use ethereum_consensus::{
 
 use crate::deneb::SignedBlockContents;
 
-#[derive(Debug, Clone, PartialEq, Eq, SimpleSerialize, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serializable, serde::Serialize)]
 #[ssz(transparent)]
 #[serde(untagged)]
 pub enum VersionedSignedProposal {
     Bellatrix(SignedBeaconBlock),
     Capella(SignedBeaconBlock),
     Deneb(SignedBlockContents),
+    Electra(SignedBlockContents),
 }
 
 impl Default for VersionedSignedProposal {
@@ -27,6 +28,7 @@ impl VersionedSignedProposal {
             Self::Bellatrix(block) => block.version(),
             Self::Capella(block) => block.version(),
             Self::Deneb(block_contents) => block_contents.signed_block.version(),
+            Self::Electra(block_contents) => block_contents.signed_block.version(),
         }
     }
 
@@ -35,6 +37,7 @@ impl VersionedSignedProposal {
             Self::Bellatrix(block) => block,
             Self::Capella(block) => block,
             Self::Deneb(block_contents) => &block_contents.signed_block,
+            Self::Electra(block_contents) => &block_contents.signed_block,
         }
     }
 
@@ -47,6 +50,7 @@ impl VersionedSignedProposal {
                 unreachable!("VersionedSignedProposal::Capella is not supported in block_contents")
             }
             Self::Deneb(block_contents) => block_contents,
+            Self::Electra(block_contents) => block_contents,
         }
     }
 
@@ -55,6 +59,7 @@ impl VersionedSignedProposal {
             Self::Bellatrix(block) => ssz::prelude::serialize(block),
             Self::Capella(block) => ssz::prelude::serialize(block),
             Self::Deneb(block_contents) => ssz::prelude::serialize(&block_contents.signed_block),
+            Self::Electra(block_contents) => ssz::prelude::serialize(&block_contents.signed_block),
         }
     }
 }

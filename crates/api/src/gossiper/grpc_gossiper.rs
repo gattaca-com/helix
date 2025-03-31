@@ -1,19 +1,12 @@
 use std::{sync::Arc, time::Duration};
 
-use async_trait::async_trait;
-use helix_common::metrics::GossipMetrics;
-use prost::Message;
-use tokio::{sync::mpsc::Sender, time::sleep};
-use tonic::{transport::Channel, Request, Response, Status};
-use tracing::error;
-
 use crate::{
     gossiper::{
         error::GossipError,
         traits::GossipClientTrait,
         types::{
             BroadcastGetPayloadParams, BroadcastHeaderParams, BroadcastPayloadParams,
-            GossipedMessage,
+            GossipedMessage, RequestPayloadParams,
         },
     },
     grpc::{
@@ -22,6 +15,15 @@ use crate::{
         gossip_service_server::{GossipService, GossipServiceServer},
     },
 };
+use async_trait::async_trait;
+use helix_common::{
+    metrics::{GossipMetrics, BUILDER_GOSSIP_QUEUE, PROPOSER_GOSSIP_QUEUE},
+    task,
+};
+use prost::Message;
+use tokio::{sync::mpsc::Sender, time::sleep};
+use tonic::{transport::Channel, Request, Response, Status};
+use tracing::error;
 
 use super::types::broadcast_cancellation::BroadcastCancellationParams;
 
@@ -29,6 +31,7 @@ const HEADER_ID: &str = "header";
 const PAYLOAD_ID: &str = "payload";
 const GET_PAYLOAD_ID: &str = "get_payload";
 const CANCELLATION_ID: &str = "cancel";
+const REQUEST_PAYLOAD_ID: &str = "request_payload";
 
 #[derive(Clone)]
 pub struct GrpcGossiperClient {
@@ -44,7 +47,7 @@ impl GrpcGossiperClient {
     pub async fn connect(&self) {
         let endpoint = self.endpoint.clone();
         let client = self.client.clone();
-        tokio::spawn(async move {
+        task::spawn(file!(), line!(), async move {
             let mut attempt = 1;
             let base_delay = Duration::from_secs(1);
             let max_delay = Duration::from_secs(60);
@@ -229,6 +232,45 @@ impl GrpcGossiperClient {
             Err(GossipError::ClientNotConnected)
         }
     }
+
+    pub async fn request_payload(
+        &self,
+        request: grpc::RequestPayloadParams,
+    ) -> Result<(), GossipError> {
+        let _timer = GossipMetrics::out_timer(REQUEST_PAYLOAD_ID);
+        let size = request.encoded_len();
+        GossipMetrics::out_size(REQUEST_PAYLOAD_ID, size);
+
+        let request = Request::new(request);
+        let client = {
+            let client_guard = self.client.read().await;
+            client_guard.clone()
+        };
+
+        if let Some(mut client) = client {
+            let result =
+                tokio::time::timeout(Duration::from_secs(5), client.request_payload(request)).await;
+            match result {
+                Ok(Ok(_)) => {
+                    GossipMetrics::out_count(REQUEST_PAYLOAD_ID, true);
+                    Ok(())
+                }
+                Ok(Err(err)) => {
+                    error!(err = %err, "Client call failed.");
+                    GossipMetrics::out_count(REQUEST_PAYLOAD_ID, false);
+                    return Err(GossipError::BroadcastError(err))
+                }
+                Err(_) => {
+                    error!("Client call timed out.");
+                    GossipMetrics::out_count(REQUEST_PAYLOAD_ID, false);
+                    return Err(GossipError::TimeoutError)
+                }
+            }
+        } else {
+            GossipMetrics::out_count(REQUEST_PAYLOAD_ID, false);
+            return Err(GossipError::ClientNotConnected)
+        }
+    }
 }
 
 /// `GrpcGossiperClientManager` manages multiple gRPC connections used for gossiping new bids
@@ -259,7 +301,7 @@ impl GrpcGossiperClientManager {
         let service = GrpcGossiperService { builder_api_sender, proposer_api_sender };
 
         let addr = "0.0.0.0:50051".parse().unwrap();
-        tokio::spawn(async move {
+        task::spawn(file!(), line!(), async move {
             tonic::transport::Server::builder()
                 .add_service(GossipServiceServer::new(service))
                 .serve(addr)
@@ -277,7 +319,7 @@ impl GossipClientTrait for GrpcGossiperClientManager {
         for client in self.clients.iter() {
             let client = client.clone();
             let request = request.clone();
-            tokio::spawn(async move {
+            task::spawn(file!(), line!(), async move {
                 if let Err(err) = client.broadcast_header(request).await {
                     error!(err = %err, "failed to broadcast header");
                 }
@@ -292,7 +334,7 @@ impl GossipClientTrait for GrpcGossiperClientManager {
         for client in self.clients.iter() {
             let client = client.clone();
             let request = request.clone();
-            tokio::spawn(async move {
+            task::spawn(file!(), line!(), async move {
                 if let Err(err) = client.broadcast_payload(request).await {
                     error!(err = %err, "failed to broadcast payload");
                 }
@@ -310,7 +352,7 @@ impl GossipClientTrait for GrpcGossiperClientManager {
         for client in self.clients.iter() {
             let client = client.clone();
             let request = request.clone();
-            tokio::spawn(async move {
+            task::spawn(file!(), line!(), async move {
                 if let Err(err) = client.broadcast_get_payload(request).await {
                     error!(err = %err, "failed to broadcast get payload");
                 }
@@ -328,9 +370,24 @@ impl GossipClientTrait for GrpcGossiperClientManager {
         for client in self.clients.iter() {
             let client = client.clone();
             let request = request.clone();
-            tokio::spawn(async move {
+            task::spawn(file!(), line!(), async move {
                 if let Err(err) = client.broadcast_cancellation(request).await {
                     error!(err = %err, "failed to broadcast header");
+                }
+            });
+        }
+        Ok(())
+    }
+
+    async fn request_payload(&self, request: RequestPayloadParams) -> Result<(), GossipError> {
+        let request = request.to_proto();
+
+        for client in self.clients.iter() {
+            let client = client.clone();
+            let request = request.clone();
+            task::spawn(file!(), line!(), async move {
+                if let Err(err) = client.request_payload(request).await {
+                    error!(err = %err, "failed to request payload");
                 }
             });
         }
@@ -361,6 +418,8 @@ impl GossipService for GrpcGossiperService {
             self.builder_api_sender.send(GossipedMessage::Header(Box::new(request))).await
         {
             error!(err = %err, "failed to send header to builder");
+        } else {
+            BUILDER_GOSSIP_QUEUE.inc();
         }
         Ok(Response::new(()))
     }
@@ -379,6 +438,8 @@ impl GossipService for GrpcGossiperService {
             self.builder_api_sender.send(GossipedMessage::Payload(Box::new(request))).await
         {
             error!(err = %err, "failed to send payload to builder");
+        } else {
+            BUILDER_GOSSIP_QUEUE.inc();
         }
         Ok(Response::new(()))
     }
@@ -397,6 +458,8 @@ impl GossipService for GrpcGossiperService {
             self.proposer_api_sender.send(GossipedMessage::GetPayload(Box::new(request))).await
         {
             error!(err = %err, "failed to send get payload to builder");
+        } else {
+            PROPOSER_GOSSIP_QUEUE.inc();
         }
         Ok(Response::new(()))
     }
@@ -415,6 +478,28 @@ impl GossipService for GrpcGossiperService {
             self.builder_api_sender.send(GossipedMessage::Cancellation(Box::new(request))).await
         {
             error!(err = %err, "failed to send cancellation to builder");
+        } else {
+            BUILDER_GOSSIP_QUEUE.inc();
+        }
+        Ok(Response::new(()))
+    }
+
+    async fn request_payload(
+        &self,
+        request: Request<grpc::RequestPayloadParams>,
+    ) -> Result<Response<()>, Status> {
+        GossipMetrics::in_count(REQUEST_PAYLOAD_ID);
+        let inner = request.into_inner();
+        let size = inner.encoded_len();
+        GossipMetrics::in_size(REQUEST_PAYLOAD_ID, size);
+
+        let request = RequestPayloadParams::from_proto(inner);
+        if let Err(err) =
+            self.proposer_api_sender.send(GossipedMessage::RequestPayload(Box::new(request))).await
+        {
+            error!(err = %err, "failed to send cancellation to builder");
+        } else {
+            PROPOSER_GOSSIP_QUEUE.inc();
         }
         Ok(Response::new(()))
     }

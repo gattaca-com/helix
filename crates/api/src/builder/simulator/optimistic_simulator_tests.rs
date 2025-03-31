@@ -7,6 +7,7 @@ mod simulator_tests {
         traits::BlockSimulator,
         BlockSimRequest,
     };
+    use alloy::hex;
     use ethereum_consensus::{
         primitives::{BlsPublicKey, BlsSignature},
         ssz::prelude::*,
@@ -21,7 +22,6 @@ mod simulator_tests {
     use helix_datastore::MockAuctioneer;
     use rand::Rng;
     use reqwest::Client;
-    use reth_primitives::hex;
     use serde_json::json;
     use std::sync::{atomic::AtomicBool, Arc};
 
@@ -100,8 +100,13 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info =
-            BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None };
+        let builder_info = BuilderInfo {
+            collateral: U256::from(100),
+            is_optimistic: true,
+            is_optimistic_for_regional_filtering: true,
+            builder_id: None,
+            builder_ids: None,
+        };
         let simulator = get_optimistic_simulator(
             &server.url(),
             Some(builder_info.clone()),
@@ -130,8 +135,13 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info =
-            BuilderInfo { collateral: U256::from(100), is_optimistic: true, builder_id: None };
+        let builder_info = BuilderInfo {
+            collateral: U256::from(100),
+            is_optimistic: true,
+            is_optimistic_for_regional_filtering: true,
+            builder_id: None,
+            builder_ids: None,
+        };
         let simulator = get_optimistic_simulator(
             &server.url(),
             Some(builder_info.clone()),
@@ -160,8 +170,13 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info =
-            BuilderInfo { collateral: U256::from(100), is_optimistic: false, builder_id: None };
+        let builder_info = BuilderInfo {
+            collateral: U256::from(100),
+            is_optimistic: false,
+            is_optimistic_for_regional_filtering: true,
+            builder_id: None,
+            builder_ids: None,
+        };
         let simulator = get_optimistic_simulator(
             &server.url(),
             Some(builder_info.clone()),
@@ -190,8 +205,13 @@ mod simulator_tests {
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
         let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
-        let builder_info =
-            BuilderInfo { collateral: U256::from(100), is_optimistic: false, builder_id: None };
+        let builder_info = BuilderInfo {
+            collateral: U256::from(100),
+            is_optimistic: false,
+            is_optimistic_for_regional_filtering: true,
+            builder_id: None,
+            builder_ids: None,
+        };
         let simulator = get_optimistic_simulator(
             &server.url(),
             Some(builder_info.clone()),

@@ -133,7 +133,7 @@ pub fn get_pending_block_builder_block_hash_key(
 
 pub fn get_pubkey_from_hex(
     pubkey: &str,
-) -> Result<BlsPublicKey, ethereum_consensus::crypto::Error> {
+) -> Result<BlsPublicKey, ethereum_consensus::crypto::bls::Error> {
     // strip 0x prefix if present
     let hex_str = pubkey.trim_start_matches("0x");
     let bytes = hex::decode(hex_str)?;
@@ -143,7 +143,7 @@ pub fn get_pubkey_from_hex(
 pub fn get_hash_from_hex(hash: &str) -> Result<Hash32, AuctioneerError> {
     // strip 0x prefix if present
     let hex_str = hash.trim_start_matches("0x");
-    let bytes = hex::decode(hex_str).map_err(ethereum_consensus::crypto::Error::Hex)?;
+    let bytes = hex::decode(hex_str)?;
     Ok(Hash32::try_from(bytes.as_slice())?)
 }
 

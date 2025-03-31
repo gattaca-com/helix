@@ -4,16 +4,21 @@ use crate::builder::{
     traits::BlockSimulator,
     BlockSimRequest, DbInfo,
 };
+use alloy::hex;
 use ethereum_consensus::{
-    primitives::BlsSignature, ssz::prelude::*, types::mainnet::ExecutionPayload,
+    electra::ExecutionRequests, primitives::BlsSignature, ssz::prelude::*,
+    types::mainnet::ExecutionPayload,
 };
 use helix_common::{
-    bid_submission::{BidTrace, SignedBidSubmission, SignedBidSubmissionCapella},
+    bid_submission::{
+        BidTrace, SignedBidSubmission, SignedBidSubmissionCapella, SignedBidSubmissionElectra,
+    },
+    deneb::BlobsBundle,
+    electra::SignedBeaconBlock,
     simulator::BlockSimError,
     BuilderInfo, ValidatorPreferences,
 };
 use reqwest::Client;
-use reth_primitives::hex;
 use serde_json::json;
 use std::sync::Arc;
 
@@ -26,6 +31,48 @@ fn get_simulator(endpoint: &str) -> RpcSimulator {
 fn get_byte_vector_32_for_hex(hex: &str) -> ByteVector<32> {
     let bytes = hex::decode(&hex[2..]).unwrap();
     ByteVector::try_from(bytes.as_ref()).unwrap()
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct BlockResponse {
+    version: String,
+    execution_optimistic: bool,
+    finalized: bool,
+    data: SignedBeaconBlock,
+}
+
+// -> BlockSimRequest later
+async fn get_block(slot_number: u64) -> BlockSimRequest {
+    let client = Client::new();
+    let beacon_node_url = "http://localhost:5052/eth/v2/beacon/blocks";
+
+    let url = format!("{}/{}", beacon_node_url, slot_number);
+    let response = client.get(&url).send().await.unwrap();
+    let block_response: BlockResponse = response.json().await.unwrap();
+
+    let electra_exec_payload =
+        ExecutionPayload::Electra(block_response.data.message.body.execution_payload);
+
+    let bid_trace = BidTrace { ..Default::default() };
+    let signed_bid_submission = SignedBidSubmission::Electra(SignedBidSubmissionElectra {
+        message: bid_trace,
+        signature: block_response.data.signature,
+        execution_payload: electra_exec_payload,
+        blobs_bundle: BlobsBundle::default(),
+        execution_requests: ExecutionRequests::default(),
+    });
+
+    BlockSimRequest::new(
+        30000000,
+        Arc::new(signed_bid_submission),
+        ValidatorPreferences::default(),
+        Some(
+            helix_common::bellatrix::ByteVector::try_from(
+                block_response.data.message.parent_root.as_ref(),
+            )
+            .unwrap(),
+        ),
+    )
 }
 
 fn get_sim_req() -> BlockSimRequest {
@@ -102,6 +149,25 @@ async fn test_process_request_error() {
     mock.assert();
     assert!(result.is_err());
     assert!(matches!(result.unwrap_err(), BlockSimError::RpcError(_)));
+}
+
+#[tokio::test]
+#[ignore]
+async fn test_process_request_from_beacon() -> Result<(), BlockSimError> {
+    let block = get_block(3875710).await;
+    let simulator = get_simulator("http://localhost:8545");
+    match simulator.send_rpc_request(block, true).await {
+        Ok(x) => match x.json::<BlockSimRpcResponse>().await {
+            Ok(rpc_response) => {
+                if let Some(error) = rpc_response.error {
+                    return Err(BlockSimError::BlockValidationFailed(error.message));
+                }
+                Ok(())
+            }
+            Err(err) => Err(BlockSimError::RpcError(err.to_string())),
+        },
+        Err(e) => panic!("Error: {:?}", e),
+    }
 }
 
 #[tokio::test]

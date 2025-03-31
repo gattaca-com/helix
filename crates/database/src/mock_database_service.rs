@@ -150,7 +150,7 @@ impl DatabaseService for MockDatabaseService {
     async fn store_block_submission(
         &self,
         _submission: Arc<SignedBidSubmission>,
-        _trace: SubmissionTrace,
+        _trace: Arc<SubmissionTrace>,
         _optimistic_version: i16,
     ) -> Result<(), DatabaseError> {
         Ok(())
@@ -235,6 +235,8 @@ impl DatabaseService for MockDatabaseService {
         _public_key: BlsPublicKey,
         _best_block_hash: ByteVector<32>,
         _trace: GetHeaderTrace,
+
+        _mev_boost: bool,
         _user_agent: Option<String>,
     ) -> Result<(), DatabaseError> {
         Ok(())

@@ -146,9 +146,6 @@ pub enum BuilderApiError {
     #[error("builder not in proposer's trusted list: {proposer_trusted_builders:?}")]
     BuilderNotInProposersTrustedList { proposer_trusted_builders: Vec<String> },
 
-    #[error("V2 submissions invalid if proposer requires regional filtering")]
-    V2SubmissionsInvalidIfProposerRequiresRegionalFiltering,
-
     #[error("no constraints found")]
     NoConstraintsFound,
 
@@ -315,9 +312,6 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders } => {
                 (StatusCode::BAD_REQUEST, format!("builder not in proposer's trusted list: {proposer_trusted_builders:?}")).into_response()
             },
-            BuilderApiError::V2SubmissionsInvalidIfProposerRequiresRegionalFiltering => {
-                (StatusCode::BAD_REQUEST, "V2 submissions invalid if proposer requires regional filtering").into_response()
-            }
             BuilderApiError::NoConstraintsFound => {
                 (StatusCode::BAD_REQUEST, "no constraints found").into_response()
             }

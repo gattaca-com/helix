@@ -1,9 +1,10 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use alloy::{eips::merge::EPOCH_SLOTS, primitives::map::HashSet};
 use ethereum_consensus::primitives::BlsPublicKey;
 use ethers::{abi::Address, contract::EthEvent, types::U256};
 use helix_utils::utcnow_ms;
-use reth_primitives::{constants::EPOCH_SLOTS, revm_primitives::HashSet};
+
 use tokio::{
     sync::{broadcast, Mutex},
     time::{interval_at, sleep, Instant},
@@ -18,11 +19,13 @@ use helix_beacon_client::{
 };
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
-    pending_block::PendingBlock, BuilderInfo, ProposerDuty, RelayConfig, Route,
+    pending_block::PendingBlock, BuilderInfo, ProposerDuty, RelayConfig,
     SignedValidatorRegistrationEntry,
 };
 use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
+
+use helix_common::task;
 use uuid::Uuid;
 
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 1;
@@ -131,9 +134,9 @@ impl<
 
         self.process_new_slot(best_sync_status.head_slot).await;
         loop {
-            let start_instant = Instant::now() +
-                self.chain_info.clock.duration_until_next_slot() +
-                Duration::from_secs(CUTT_OFF_TIME);
+            let start_instant = Instant::now()
+                + self.chain_info.clock.duration_until_next_slot()
+                + Duration::from_secs(CUTT_OFF_TIME);
             let mut timer =
                 interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
 
@@ -172,22 +175,17 @@ impl<
     async fn process_new_slot(self: &SharedHousekeeper<DB, BeaconClient, A, P>, head_slot: u64) {
         let (is_new_block, prev_head_slot) = self.update_head_slot(head_slot).await;
         if !is_new_block {
-            return
-        }
-
-        // Skip processing if the GetPayload route is enabled.
-        if self.config.router_config.enabled_routes.iter().any(|r| r.route == Route::GetPayload) {
-            return
+            return;
         }
 
         // Only allow one housekeeper task to run at a time.
         if !self.auctioneer.try_acquire_or_renew_leadership(&self.leader_id).await {
-            return
+            return;
         }
 
         // Demote builders with expired pending blocks
         let cloned_self = self.clone();
-        tokio::spawn(async move {
+        task::spawn(file!(), line!(), async move {
             if let Err(err) = cloned_self.demote_builders_with_expired_pending_blocks().await {
                 error!(err = %err, "failed to demote builders with expired pending blocks");
             }
@@ -197,7 +195,7 @@ impl<
         // After that completes, run primev_update if configured
         if self.should_update_duties(head_slot).await {
             let cloned_self = self.clone();
-            tokio::spawn(async move {
+            task::spawn(file!(), line!(), async move {
                 match cloned_self.update_proposer_duties(head_slot).await {
                     Ok(proposer_duties) => {
                         if cloned_self.config.primev_config.is_some() {
@@ -230,21 +228,21 @@ impl<
         // Spawn a task to asynchronously update known validators.
         if self.should_refresh_known_validators(head_slot).await {
             let cloned_self = self.clone();
-            tokio::spawn(async move {
+            task::spawn(file!(), line!(), async move {
                 let _ = cloned_self.refresh_known_validators(head_slot).await;
             });
         }
 
         // Spawn a task to asynchronously re sync builder info.
         let cloned_self = self.clone();
-        tokio::spawn(async move {
+        task::spawn(file!(), line!(), async move {
             let _ = cloned_self.sync_builder_info_changes(head_slot).await;
         });
 
         // Spawn a task to asynchronously update the trusted proposers.
         if self.should_update_trusted_proposers(head_slot).await {
             let cloned_self = self.clone();
-            tokio::spawn(async move {
+            task::spawn(file!(), line!(), async move {
                 let _ = cloned_self.update_trusted_proposers(head_slot).await;
             });
         }
@@ -318,7 +316,7 @@ impl<
             Ok(validators) => validators,
             Err(err) => {
                 error!(err = %err, "failed to fetch validators");
-                return Err(HousekeeperError::BeaconClientError(err))
+                return Err(HousekeeperError::BeaconClientError(err));
             }
         };
 
@@ -330,7 +328,7 @@ impl<
 
         if let Err(err) = self.db.set_known_validators(validators).await {
             error!(err = %err, "failed to set known validators");
-            return Err(HousekeeperError::DatabaseError(err))
+            return Err(HousekeeperError::DatabaseError(err));
         }
 
         *self.refreshed_validators_slot.lock().await = head_slot;
@@ -357,13 +355,13 @@ impl<
             Ok(builder_infos) => builder_infos,
             Err(err) => {
                 error!(err = %err, "failed to fetch builder infos");
-                return Err(HousekeeperError::DatabaseError(err))
+                return Err(HousekeeperError::DatabaseError(err));
             }
         };
 
         if let Err(err) = self.auctioneer.update_builder_infos(builder_infos).await {
             error!(err = %err, "failed to update builder infos in auctioneer");
-            return Err(HousekeeperError::AuctioneerError(err))
+            return Err(HousekeeperError::AuctioneerError(err));
         }
 
         *self.re_sync_builder_info_slot.lock().await = head_slot;
@@ -384,16 +382,9 @@ impl<
 
         let mut demoted_builders = HashSet::new();
 
-        let mut pending_block_hashes = HashMap::new();
-
         for pending_block in self.auctioneer.get_pending_blocks().await? {
-            pending_block_hashes
-                .entry(pending_block.builder_pubkey.clone())
-                .or_insert_with(Vec::new)
-                .push(pending_block.block_hash.clone());
-
             if demoted_builders.contains(&pending_block.builder_pubkey) {
-                continue
+                continue;
             }
 
             if v2_submission_late(&pending_block, current_time) {
@@ -423,17 +414,17 @@ impl<
         let last_refreshed_slot = *self.refreshed_validators_slot.lock().await;
 
         if head_slot <= last_refreshed_slot {
-            return false
+            return false;
         }
 
         let slots_since_last_update = head_slot - last_refreshed_slot;
         if slots_since_last_update < MIN_SLOTS_BETWEEN_UPDATES {
-            return false
+            return false;
         }
 
         let force_update = slots_since_last_update > MAX_SLOTS_BEFORE_FORCED_UPDATE;
         if force_update {
-            return true
+            return true;
         }
 
         let head_slot_pos = (head_slot % EPOCH_SLOTS) + 1; // position in epoch.
@@ -457,7 +448,7 @@ impl<
             Ok(proposer_duties) => proposer_duties,
             Err(err) => {
                 error!(err = %err, "failed to fetch proposer duties");
-                return Err(HousekeeperError::BeaconClientError(err))
+                return Err(HousekeeperError::BeaconClientError(err));
             }
         };
 
@@ -469,7 +460,7 @@ impl<
                 Ok(signed_validator_registrations) => signed_validator_registrations,
                 Err(err) => {
                     error!(err = %err, "failed to fetch signed validator registrations");
-                    return Err(HousekeeperError::DatabaseError(err))
+                    return Err(HousekeeperError::DatabaseError(err));
                 }
             };
 
@@ -563,13 +554,16 @@ impl<
         let primev_builders = primev_service.get_registered_primev_builders().await;
 
         for builder_pubkey in primev_builders {
+            info!(builder_pubkey = %builder_pubkey, "PrimevBuilder");
             self.db
                 .store_builder_info(
                     &builder_pubkey,
                     &BuilderInfo {
                         collateral: ethereum_consensus::primitives::U256::from(0),
                         is_optimistic: false,
+                        is_optimistic_for_regional_filtering: false,
                         builder_id: Some("PrimevBuilder".to_string()),
+                        builder_ids: Some(vec!["PrimevBuilder".to_string()]),
                     },
                 )
                 .await?;
@@ -599,8 +593,8 @@ impl<
     ) -> bool {
         let trusted_proposers_slot = *self.refreshed_trusted_proposers_slot.lock().await;
         let last_trusted_proposers_distance = head_slot.saturating_sub(trusted_proposers_slot);
-        head_slot % TRUSTED_PROPOSERS_UPDATE_FREQ == 0 ||
-            last_trusted_proposers_distance >= TRUSTED_PROPOSERS_UPDATE_FREQ
+        head_slot % TRUSTED_PROPOSERS_UPDATE_FREQ == 0
+            || last_trusted_proposers_distance >= TRUSTED_PROPOSERS_UPDATE_FREQ
     }
 
     /// Update the proposer whitelist.
@@ -664,6 +658,7 @@ impl<
     ) -> Result<HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>, DatabaseError> {
         let registrations: Vec<SignedValidatorRegistrationEntry> =
             self.db.get_validator_registrations_for_pub_keys(pub_keys).await?;
+
         Ok(registrations.into_iter().map(|entry| (entry.public_key().clone(), entry)).collect())
     }
 }
@@ -680,8 +675,8 @@ fn v2_submission_late(pending_block: &PendingBlock, current_time: u64) -> bool {
             (current_time.saturating_sub(header_receive_ms)) > MAX_DELAY_WITH_NO_V2_PAYLOAD_MS
         }
         (Some(header_receive_ms), Some(payload_receive_ms)) => {
-            payload_receive_ms.saturating_sub(header_receive_ms) >
-                MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
+            payload_receive_ms.saturating_sub(header_receive_ms)
+                > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
         }
     }
 }

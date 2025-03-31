@@ -1,3 +1,4 @@
+use alloy::hex;
 use ethereum_consensus::{
     clock::{
         for_goerli, for_holesky, for_mainnet, for_sepolia, from_system_time, Clock,
@@ -123,6 +124,9 @@ impl ChainInfo {
         // TODO: remove this once the library defaults are fixed
         cxt.deneb_fork_epoch = 29696;
         cxt.deneb_fork_version = [5, 1, 112, 0];
+
+        cxt.electra_fork_epoch = 115968;
+        cxt.electra_fork_version = hex!("06017000");
 
         Self {
             network: Network::Holesky,

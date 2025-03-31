@@ -7,15 +7,19 @@ repository.workspace = true
 license.workspace = true
 
 [dependencies]
-# Serialization and Data Format 
+# Serialization and Data Format
+lazy_static = "1.5.0"
+prometheus = "0.13.4"
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 tree_hash = "0.6.0"
 tree_hash_derive = "0.6.0"
 
 # Ethereum Types
 ethereum-consensus.workspace = true
 reth-primitives.workspace = true
+alloy.workspace = true
 
 # Networking
 http.workspace = true

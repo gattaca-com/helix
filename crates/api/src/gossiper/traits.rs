@@ -4,7 +4,7 @@ use crate::gossiper::{
     error::GossipError,
     types::{
         broadcast_cancellation::BroadcastCancellationParams, BroadcastGetPayloadParams,
-        BroadcastHeaderParams, BroadcastPayloadParams,
+        BroadcastHeaderParams, BroadcastPayloadParams, RequestPayloadParams,
     },
 };
 
@@ -33,4 +33,6 @@ pub trait GossipClientTrait: Send + Sync + Clone {
         &self,
         request: BroadcastCancellationParams,
     ) -> Result<(), GossipError>;
+
+    async fn request_payload(&self, _request: RequestPayloadParams) -> Result<(), GossipError>;
 }

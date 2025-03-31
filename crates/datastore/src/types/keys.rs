@@ -21,3 +21,4 @@ pub(crate) const PENDING_BLOCK_KEY: &str = "pending-block";
 pub(crate) const PRIMEV_PROPOSERS_KEY: &str = "primev-proposers";
 pub(crate) const HEADER_TX_ROOT: &str = "header-tx-root";
 pub(crate) const KILL_SWITCH: &str = "kill-switch";
+pub(crate) const PAYLOAD_ADDRESS_KEY: &str = "payload-addr";

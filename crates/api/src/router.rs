@@ -5,19 +5,23 @@ use axum::{
     routing::{get, post},
     Extension, Router,
 };
+
 use helix_beacon_client::{beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient};
 use helix_common::{Route, RouterConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
 use helix_utils::extract_request_id;
-use hyper::HeaderMap;
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use hyper::{HeaderMap, Uri};
+use std::{sync::Arc, time::Duration};
 use tower::{timeout::TimeoutLayer, BoxError, ServiceBuilder};
+use tower_governor::{
+    governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer,
+};
 use tower_http::{
     limit::RequestBodyLimitLayer,
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
 };
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     builder::{
@@ -27,16 +31,9 @@ use crate::{
     },
     constraints::api::ConstraintsApi,
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
-    middleware::{
-        metrics_middleware,
-        rate_limiting::rate_limit_by_ip::{
-            rate_limit_by_ip, RateLimitState, RateLimitStateForRoute,
-        },
-    },
+    middleware::{inner_metrics_middleware, outer_metrics_middleware},
     proposer::api::ProposerApi,
-    relay_data::{
-        BidsCache, DataApi, DeliveredPayloadsCache, PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API,
-    },
+    relay_data::{BidsCache, DataApi, DeliveredPayloadsCache},
     service::API_REQUEST_TIMEOUT,
 };
 
@@ -69,119 +66,91 @@ pub fn build_router(
 ) -> Router {
     router_config.resolve_condensed_routes();
 
-    let mut rate_limits_per_route = HashMap::new();
-    for route_info in &router_config.enabled_routes {
-        if let Some(rate_limit) = route_info.rate_limit.as_ref() {
-            rate_limits_per_route.insert(
-                route_info.route.path(),
-                RateLimitStateForRoute::new(
-                    Duration::from_millis(rate_limit.limit_duration_ms),
-                    rate_limit.max_requests,
-                ),
-            );
-        }
-    }
-    let rate_limiting_state = RateLimitState::new(rate_limits_per_route);
-    let mut router = Router::new().with_state(rate_limiting_state.clone());
+    let mut router = Router::new();
+    let mut limiters = Vec::new();
 
-    for route in router_config.enabled_routes.iter().map(|route_info| route_info.route) {
-        match route {
-            Route::GetValidators => {
-                router = router.route(&route.path(), get(BuilderApiProd::get_validators));
-            }
-            Route::SubmitBlock => {
-                router = router.route(&route.path(), post(BuilderApiProd::submit_block));
-            }
-            Route::SubmitBlockOptimistic => {
-                router = router.route(&route.path(), post(BuilderApiProd::submit_block_v2));
-            }
-            Route::SubmitBlockWithProofs => {
-                router = router.route(&route.path(), post(BuilderApiProd::submit_block));
-            }
-            Route::SubmitHeader => {
-                router = router.route(&route.path(), post(BuilderApiProd::submit_header));
-            }
-            Route::CancelBid => {
-                router = router.route(&route.path(), post(BuilderApiProd::cancel_bid));
-            }
-            Route::GetTopBid => {
-                router = router.route(&route.path(), get(BuilderApiProd::get_top_bid));
-            }
-            Route::GetBuilderConstraints => {
-                router = router.route(&route.path(), get(BuilderApiProd::constraints));
-            }
-            Route::GetBuilderConstraintsStream => {
-                router = router.route(&route.path(), get(BuilderApiProd::constraints_stream));
-            }
-            Route::GetBuilderDelegations => {
-                router = router.route(&route.path(), get(BuilderApiProd::delegations));
-            }
-            Route::Status => {
-                router = router.route(&route.path(), get(ProposerApiProd::status));
-            }
-            Route::RegisterValidators => {
-                router = router.route(&route.path(), post(ProposerApiProd::register_validators));
-            }
-            Route::GetHeader => {
-                router = router.route(&route.path(), get(ProposerApiProd::get_header));
-            }
-            Route::GetHeaderWithProofs => {
-                router = router.route(&route.path(), get(ProposerApiProd::get_header_with_proofs));
-            }
-            Route::GetPayload => {
-                router = router.route(&route.path(), post(ProposerApiProd::get_payload));
-            }
-            Route::ProposerPayloadDelivered => {
-                router = router.route(&route.path(), get(DataApiProd::proposer_payload_delivered));
-            }
-            Route::BuilderBidsReceived => {
-                router = router.route(
-                    &format!("{PATH_DATA_API}{PATH_BUILDER_BIDS_RECEIVED}"),
-                    get(DataApiProd::builder_bids_received),
-                );
-            }
-            Route::ValidatorRegistration => {
-                router = router.route(&route.path(), get(DataApiProd::validator_registration));
-            }
-            Route::SubmitBuilderConstraints => {
-                router = router.route(&route.path(), post(ConstraintsApiProd::submit_constraints));
-            }
-            Route::DelegateSubmissionRights => {
-                router = router.route(&route.path(), post(ConstraintsApiProd::delegate));
-            }
-            Route::RevokeSubmissionRights => {
-                router = router.route(&route.path(), post(ConstraintsApiProd::revoke));
-            }
+    for route_info in router_config.enabled_routes.iter() {
+        let method = match route_info.route {
+            Route::GetValidators => get(BuilderApiProd::get_validators),
+            Route::SubmitBlock => post(BuilderApiProd::submit_block),
+            Route::SubmitBlockOptimistic => post(BuilderApiProd::submit_block_v2),
+            Route::SubmitBlockWithProofs => post(BuilderApiProd::submit_block),
+            Route::SubmitHeader => post(BuilderApiProd::submit_header),
+            Route::CancelBid => post(BuilderApiProd::cancel_bid),
+            Route::GetTopBid => get(BuilderApiProd::get_top_bid),
+            Route::GetBuilderConstraints => get(BuilderApiProd::constraints),
+            Route::GetBuilderConstraintsStream => get(BuilderApiProd::constraints_stream),
+            Route::GetBuilderDelegations => get(BuilderApiProd::delegations),
+            Route::Status => get(ProposerApiProd::status),
+            Route::RegisterValidators => post(ProposerApiProd::register_validators),
+            Route::GetHeader => get(ProposerApiProd::get_header),
+            Route::GetHeaderWithProofs => get(ProposerApiProd::get_header_with_proofs),
+            Route::GetPayload => post(ProposerApiProd::get_payload),
+            Route::ProposerPayloadDelivered => get(DataApiProd::proposer_payload_delivered),
+            Route::BuilderBidsReceived => get(DataApiProd::builder_bids_received),
+            Route::ValidatorRegistration => get(DataApiProd::validator_registration),
+            Route::SubmitBuilderConstraints => post(ConstraintsApiProd::submit_constraints),
+            Route::DelegateSubmissionRights => post(ConstraintsApiProd::delegate),
+            Route::RevokeSubmissionRights => post(ConstraintsApiProd::revoke),
             _ => {
-                panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route);
+                panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route_info.route);
             }
-        }
+        };
+
+        let maybe_limited = if let Some(rate_limit) = route_info.rate_limit.as_ref() {
+            let config = Arc::new(
+                GovernorConfigBuilder::default()
+                    .per_millisecond(rate_limit.replenish_ms)
+                    .burst_size(rate_limit.burst_size)
+                    .key_extractor(SmartIpKeyExtractor)
+                    .finish()
+                    .unwrap(),
+            );
+
+            let governor_limiter = config.limiter().clone();
+            limiters.push((governor_limiter, route_info.route.path()));
+
+            method.layer(GovernorLayer { config })
+        } else {
+            method
+        };
+
+        router = router.route(&route_info.route.path(), maybe_limited);
     }
 
-    router = router.layer(middleware::from_fn(metrics_middleware));
+    // periodically prune rate limits
+    std::thread::spawn(move || {
+        let interval = Duration::from_secs(60);
+        loop {
+            std::thread::sleep(interval);
+            for (limiter, route) in limiters.iter() {
+                info!(size = limiters.len(), %route, "pruning rate limits");
+                limiter.retain_recent();
+            }
+        }
+    });
 
-    // Add payload size limit
-    router = router.layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH));
-
-    // Add Rate-Limiting Layer
-    router = router
-        .route_layer(middleware::from_fn_with_state(rate_limiting_state.clone(), rate_limit_by_ip));
-
-    // Add Timeout-Layer
-    // Add Error-handling layer
+    // add layers, split in two to make the traits happy, layers are applied bottom to top across
+    // router.layer, but in order for each of the two
     router = router.layer(
         ServiceBuilder::new()
-            .layer(HandleErrorLayer::new(|headers: HeaderMap, e: BoxError| async move {
+            .layer(middleware::from_fn(inner_metrics_middleware)) // body size
+            .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid)) // request ids
+            .layer(PropagateRequestIdLayer::x_request_id()) // propagate request id
+            .layer(HandleErrorLayer::new(|uri: Uri, headers: HeaderMap, e: BoxError| async move {
                 let request_id = extract_request_id(&headers);
-
-                warn!(%request_id, "Request timed out {:?}", e);
+                warn!(uri = %uri.path(), %request_id, "request timed out {:?}", e);
                 StatusCode::REQUEST_TIMEOUT
-            }))
+            })) // timeout
             .layer(TimeoutLayer::new(API_REQUEST_TIMEOUT)),
     );
 
-    router = router.layer(PropagateRequestIdLayer::x_request_id());
-    router = router.layer(SetRequestIdLayer::x_request_id(MakeRequestUuid));
+    // this is applied first
+    router = router.layer(
+        ServiceBuilder::new()
+            .layer(middleware::from_fn(outer_metrics_middleware)) // status and full latency
+            .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH)), // streaming body limit
+    );
 
     // Add Extension layers
     router = router

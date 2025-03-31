@@ -37,6 +37,9 @@ pub struct RelayConfig {
     pub router_config: RouterConfig,
     #[serde(default = "default_duration")]
     pub target_get_payload_propagation_duration_ms: u64,
+    /// Configuration for timing game parameters.
+    #[serde(default)]
+    pub timing_game_config: TimingGameConfig,
     #[serde(default)]
     pub constraints_api_config: ConstraintsApiConfig,
     #[serde(default)]
@@ -48,6 +51,10 @@ pub struct RelayConfig {
     pub skip_floor_bid_builder_pubkeys: Vec<BlsPublicKey>,
     #[serde(default)]
     pub discord_webhook_url: Option<String>,
+    #[serde(default)]
+    pub payload_gossip_enabled: bool,
+    #[serde(default)]
+    pub v3_port: Option<u16>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -110,6 +117,25 @@ pub struct PostgresConfig {
     pub password: String,
     pub region: i16,
     pub region_name: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TimingGameConfig {
+    /// Max time we will delay for before returning get header.
+    pub max_header_delay_ms: u64,
+    /// Max ms into slot we will sleep up to. e.g., if a request is made 2.4s into the next slot
+    /// and the limit is 2.5s we will only sleep 100ms.
+    pub latest_header_delay_ms_in_slot: u64,
+}
+
+impl Default for TimingGameConfig {
+    fn default() -> Self {
+        Self {
+            // very safe by default
+            max_header_delay_ms: 650,
+            latest_header_delay_ms_in_slot: 2000,
+        }
+    }
 }
 
 fn default_port() -> u16 {
@@ -329,10 +355,11 @@ pub struct RouteInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RateLimitInfo {
-    // The duration of the rate limit in milliseconds
-    pub limit_duration_ms: u64,
-    // The maximum number of requests allowed within the duration
-    pub max_requests: usize,
+    // Interval after which one element of the quota is replenished in milliseconds
+    pub replenish_ms: u64,
+    // The quota size that defines how many requests can occur before being rate limited and
+    // clients have to wait until the elements of the quota are replenished
+    pub burst_size: u32,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -456,6 +483,7 @@ fn test_config() {
         filtering: Filtering::Regional,
         trusted_builders: None,
         header_delay: true,
+        delay_ms: Some(1000),
         gossip_blobs: false,
     };
     config.router_config = RouterConfig {
@@ -466,7 +494,7 @@ fn test_config() {
             RouteInfo { route: Route::ValidatorRegistration, rate_limit: None },
             RouteInfo {
                 route: Route::GetHeader,
-                rate_limit: Some(RateLimitInfo { limit_duration_ms: 12, max_requests: 3 }),
+                rate_limit: Some(RateLimitInfo { replenish_ms: 12, burst_size: 3 }),
             },
             RouteInfo { route: Route::GetPayload, rate_limit: None },
             RouteInfo { route: Route::ProposerPayloadDelivered, rate_limit: None },

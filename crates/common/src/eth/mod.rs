@@ -1,6 +1,7 @@
 pub mod bellatrix;
 pub mod capella;
 pub mod deneb;
+pub mod electra;
 pub mod signed_proposal;
 pub mod versioned_payload;
 pub mod versioned_payload_header;
@@ -63,6 +64,7 @@ pub enum SignedBuilderBid {
     Bellatrix(bellatrix::SignedBuilderBid, Option<InclusionProofs>),
     Capella(capella::SignedBuilderBid, Option<InclusionProofs>),
     Deneb(deneb::SignedBuilderBid, Option<InclusionProofs>),
+    Electra(electra::SignedBuilderBid, Option<InclusionProofs>),
 }
 
 impl<'de> serde::Deserialize<'de> for SignedBuilderBid {
@@ -99,6 +101,11 @@ impl<'de> serde::Deserialize<'de> for SignedBuilderBid {
                 let bid = <deneb::SignedBuilderBid as serde::Deserialize>::deserialize(data)
                     .map_err(de::Error::custom)?;
                 Ok(SignedBuilderBid::Deneb(bid, proofs))
+            }
+            "electra" => {
+                let bid = <electra::SignedBuilderBid as serde::Deserialize>::deserialize(data)
+                    .map_err(de::Error::custom)?;
+                Ok(SignedBuilderBid::Electra(bid, proofs))
             }
             _ => Err(de::Error::custom("unknown version")),
         }
@@ -156,6 +163,21 @@ impl serde::Serialize for SignedBuilderBid {
                 map.insert("data".to_string(), serde_json::to_value(data_map).unwrap());
                 map.serialize(serializer)
             }
+            Self::Electra(bid, proofs) => {
+                let mut map = serde_json::Map::new();
+                map.insert("version".to_string(), "electra".into());
+
+                let mut data_map = serde_json::Map::new();
+                data_map.insert("message".to_string(), serde_json::to_value(&bid.message).unwrap());
+                data_map
+                    .insert("signature".to_string(), serde_json::to_value(&bid.signature).unwrap());
+                if let Some(proofs) = proofs {
+                    data_map.insert("proofs".to_string(), serde_json::to_value(proofs).unwrap());
+                }
+
+                map.insert("data".to_string(), serde_json::to_value(data_map).unwrap());
+                map.serialize(serializer)
+            }
         }
     }
 }
@@ -178,7 +200,7 @@ impl SignedBuilderBid {
     ) -> Result<Self, Error> {
         match &mut submission.execution_payload_mut() {
             ExecutionPayload::Bellatrix(payload) => {
-                let header = bellatrix::ExecutionPayloadHeader::try_from(payload)?;
+                let header = bellatrix::ExecutionPayloadHeader::try_from(&*payload)?;
                 let mut message =
                     bellatrix::BuilderBid { header, value: submission.value(), public_key };
                 let signature = sign_builder_message(&mut message, signing_key, context)?;
@@ -186,14 +208,14 @@ impl SignedBuilderBid {
                 Ok(Self::Bellatrix(bellatrix::SignedBuilderBid { message, signature }, proofs))
             }
             ExecutionPayload::Capella(payload) => {
-                let header = capella::ExecutionPayloadHeader::try_from(payload)?;
+                let header = capella::ExecutionPayloadHeader::try_from(&*payload)?;
                 let mut message =
                     capella::BuilderBid { header, value: submission.value(), public_key };
                 let signature = sign_builder_message(&mut message, signing_key, context)?;
                 Ok(Self::Capella(capella::SignedBuilderBid { message, signature }, proofs))
             }
             ExecutionPayload::Deneb(payload) => {
-                let header = deneb::ExecutionPayloadHeader::try_from(payload)?;
+                let header = deneb::ExecutionPayloadHeader::try_from(&*payload)?;
                 match submission.blobs_bundle() {
                     Some(blobs_bundle) => {
                         let mut message = deneb::BuilderBid {
@@ -205,6 +227,31 @@ impl SignedBuilderBid {
                         let signature = sign_builder_message(&mut message, signing_key, context)?;
 
                         Ok(Self::Deneb(deneb::SignedBuilderBid { message, signature }, proofs))
+                    }
+                    None => Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "Missing blobs bundle",
+                    )
+                    .into()),
+                }
+            }
+            ExecutionPayload::Electra(payload) => {
+                let header = electra::ExecutionPayloadHeader::try_from(&*payload)?;
+                match submission.blobs_bundle() {
+                    Some(blobs_bundle) => {
+                        let mut message = electra::BuilderBid {
+                            header,
+                            blob_kzg_commitments: blobs_bundle.commitments.clone(),
+                            execution_requests: submission
+                                .execution_requests()
+                                .expect("Missing execution requests")
+                                .clone(),
+                            value: submission.value(),
+                            public_key,
+                        };
+                        let signature = sign_builder_message(&mut message, signing_key, context)?;
+
+                        Ok(Self::Electra(electra::SignedBuilderBid { message, signature }, proofs))
                     }
                     None => Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
@@ -261,6 +308,28 @@ impl SignedBuilderBid {
                 )
                 .into()),
             },
+            ExecutionPayloadHeader::Electra(header) => match submission.commitments() {
+                Some(commitments) => {
+                    let mut message = electra::BuilderBid {
+                        header: header.clone(),
+                        blob_kzg_commitments: commitments.clone(),
+                        execution_requests: submission
+                            .execution_requests()
+                            .expect("Missing execution requests")
+                            .clone(),
+                        value: submission.value(),
+                        public_key,
+                    };
+                    let signature = sign_builder_message(&mut message, signing_key, context)?;
+
+                    Ok(Self::Electra(electra::SignedBuilderBid { message, signature }, proofs))
+                }
+                None => Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Missing blobs bundle",
+                )
+                .into()),
+            },
         }
     }
 
@@ -269,6 +338,7 @@ impl SignedBuilderBid {
             Self::Bellatrix(bid, _) => bid.message.value,
             Self::Capella(bid, _) => bid.message.value,
             Self::Deneb(bid, _) => bid.message.value,
+            Self::Electra(bid, _) => bid.message.value,
         }
     }
 
@@ -277,6 +347,7 @@ impl SignedBuilderBid {
             Self::Bellatrix(bid, _) => &bid.message.public_key,
             Self::Capella(bid, _) => &bid.message.public_key,
             Self::Deneb(bid, _) => &bid.message.public_key,
+            Self::Electra(bid, _) => &bid.message.public_key,
         }
     }
 
@@ -285,6 +356,7 @@ impl SignedBuilderBid {
             Self::Bellatrix(bid, _) => &bid.message.header.block_hash,
             Self::Capella(bid, _) => &bid.message.header.block_hash,
             Self::Deneb(bid, _) => &bid.message.header.block_hash,
+            Self::Electra(bid, _) => &bid.message.header.block_hash,
         }
     }
 
@@ -293,6 +365,7 @@ impl SignedBuilderBid {
             Self::Bellatrix(bid, _) => &bid.message.header.parent_hash,
             Self::Capella(bid, _) => &bid.message.header.parent_hash,
             Self::Deneb(bid, _) => &bid.message.header.parent_hash,
+            Self::Electra(bid, _) => &bid.message.header.parent_hash,
         }
     }
 
@@ -301,6 +374,7 @@ impl SignedBuilderBid {
             Self::Bellatrix(bid, _) => &bid.message.header.logs_bloom,
             Self::Capella(bid, _) => &bid.message.header.logs_bloom,
             Self::Deneb(bid, _) => &bid.message.header.logs_bloom,
+            Self::Electra(bid, _) => &bid.message.header.logs_bloom,
         }
     }
 
@@ -309,6 +383,7 @@ impl SignedBuilderBid {
             Self::Bellatrix(_, _) => "bellatrix",
             Self::Capella(_, _) => "capella",
             Self::Deneb(_, _) => "deneb",
+            Self::Electra(_, _) => "electra",
         }
     }
 
@@ -317,6 +392,7 @@ impl SignedBuilderBid {
             Self::Bellatrix(_, proofs) => proofs,
             Self::Capella(_, proofs) => proofs,
             Self::Deneb(_, proofs) => proofs,
+            Self::Electra(_, proofs) => proofs,
         }
     }
 
@@ -325,6 +401,7 @@ impl SignedBuilderBid {
             Self::Bellatrix(_, proofs_opt) => *proofs_opt = Some(proofs),
             Self::Capella(_, proofs_opt) => *proofs_opt = Some(proofs),
             Self::Deneb(_, proofs_opt) => *proofs_opt = Some(proofs),
+            Self::Electra(_, proofs_opt) => *proofs_opt = Some(proofs),
         }
     }
 }
@@ -334,16 +411,20 @@ pub fn try_execution_header_from_payload(
 ) -> Result<ExecutionPayloadHeader, Error> {
     match execution_payload {
         ExecutionPayload::Bellatrix(execution_payload) => {
-            let header = bellatrix::ExecutionPayloadHeader::try_from(execution_payload)?;
+            let header = bellatrix::ExecutionPayloadHeader::try_from(&*execution_payload)?;
             Ok(ExecutionPayloadHeader::Bellatrix(header))
         }
         ExecutionPayload::Capella(execution_payload) => {
-            let header = capella::ExecutionPayloadHeader::try_from(execution_payload)?;
+            let header = capella::ExecutionPayloadHeader::try_from(&*execution_payload)?;
             Ok(ExecutionPayloadHeader::Capella(header))
         }
         ExecutionPayload::Deneb(execution_payload) => {
-            let header = deneb::ExecutionPayloadHeader::try_from(execution_payload)?;
+            let header = deneb::ExecutionPayloadHeader::try_from(&*execution_payload)?;
             Ok(ExecutionPayloadHeader::Deneb(header))
+        }
+        ExecutionPayload::Electra(execution_payload) => {
+            let header = electra::ExecutionPayloadHeader::try_from(&*execution_payload)?;
+            Ok(ExecutionPayloadHeader::Electra(header))
         }
     }
 }

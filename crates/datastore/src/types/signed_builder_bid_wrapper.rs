@@ -56,6 +56,16 @@ impl From<SignedBuilderBidWrapper> for TopBidUpdate {
                 fee_recipient: bid.message.header.fee_recipient,
                 value: bid.message.value,
             },
+            SignedBuilderBid::Electra(bid, _) => TopBidUpdate {
+                timestamp: val.received_at_ms,
+                slot: val.slot,
+                block_number: bid.message.header.block_number,
+                block_hash: bid.message.header.block_hash,
+                parent_hash: bid.message.header.parent_hash,
+                builder_pubkey: val.builder_pub_key,
+                fee_recipient: bid.message.header.fee_recipient,
+                value: bid.message.value,
+            },
         }
     }
 }

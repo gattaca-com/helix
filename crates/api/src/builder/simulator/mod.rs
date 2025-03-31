@@ -15,6 +15,7 @@ use ethereum_consensus::{primitives::BlsSignature, serde::as_str};
 use helix_common::{
     bid_submission::{BidSubmission, BidTrace, SignedBidSubmission},
     deneb::BlobsBundle,
+    electra::ExecutionRequests,
     ValidatorPreferences,
 };
 
@@ -27,6 +28,7 @@ pub struct BlockSimRequest {
     pub signature: BlsSignature,
     pub proposer_preferences: ValidatorPreferences,
     pub blobs_bundle: Option<BlobsBundle>,
+    pub execution_requests: Option<ExecutionRequests>,
     pub parent_beacon_block_root: Option<Bytes32>,
 }
 
@@ -44,6 +46,7 @@ impl BlockSimRequest {
             signature: block.signature().clone(),
             proposer_preferences,
             blobs_bundle: block.blobs_bundle().cloned(),
+            execution_requests: block.execution_requests().cloned(),
             parent_beacon_block_root,
         }
     }

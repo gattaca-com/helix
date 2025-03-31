@@ -308,7 +308,7 @@ impl PostgresDatabaseService {
 
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql = String::from("INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at, user_agent) VALUES ");
-            let num_params_per_row = 7;
+            let num_params_per_row = 8;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -320,7 +320,7 @@ impl PostgresDatabaseService {
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
-            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET fee_recipient = excluded.fee_recipient, gas_limit = excluded.gas_limit, timestamp = excluded.timestamp, signature = excluded.signature, inserted_at = excluded.inserted_at, user_agent = excluded.user_agent");
+            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET fee_recipient = excluded.fee_recipient, gas_limit = excluded.gas_limit, timestamp = excluded.timestamp, signature = excluded.signature, inserted_at = excluded.inserted_at, user_agent = excluded.user_agent, active = true");
 
             // Execute the query
             transaction.execute(&sql, &params[..]).await?;
@@ -341,7 +341,7 @@ impl PostgresDatabaseService {
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql =
                 String::from("INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay, gossip_blobs) VALUES ");
-            let num_params_per_row = 5;
+            let num_params_per_row = 6;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -353,14 +353,21 @@ impl PostgresDatabaseService {
 
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
-            sql.push_str(" ON CONFLICT (public_key) DO UPDATE SET filtering = excluded.filtering, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay, gossip_blobs = excluded.gossip_blobs");
+            sql.push_str(
+                " ON CONFLICT (public_key) DO UPDATE SET 
+                            filtering = excluded.filtering, 
+                            trusted_builders = excluded.trusted_builders, 
+                            header_delay = excluded.header_delay,
+                            gossip_blobs = excluded.gossip_blobs
+                        WHERE validator_preferences.manual_override = FALSE",
+            );
 
             // Execute the query
             transaction.execute(&sql, &params[..]).await?;
 
             if structured_params_for_trusted.is_empty() {
                 transaction.commit().await?;
-                continue
+                continue;
             }
 
             let params: Vec<&(dyn ToSql + Sync)> = structured_params_for_trusted
@@ -432,7 +439,7 @@ impl DatabaseService for PostgresDatabaseService {
 
         if let Some(entry) = self.validator_registration_cache.get(&registration.public_key) {
             if entry.registration_info.registration.message.timestamp >= registration.timestamp {
-                return Ok(())
+                return Ok(());
             }
         }
 
@@ -448,7 +455,7 @@ impl DatabaseService for PostgresDatabaseService {
         transaction
             .execute(
                 "INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay, gossip_blobs)
-            VALUES ($1, $2, $3, $4, $5)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (public_key)
             DO UPDATE SET
                 filtering = excluded.filtering, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay, gossip_blobs = excluded.gossip_blobs
@@ -474,7 +481,8 @@ impl DatabaseService for PostgresDatabaseService {
                     timestamp = excluded.timestamp,
                     signature = excluded.signature,
                     inserted_at = excluded.inserted_at,
-                    user_agent = excluded.user_agent
+                    user_agent = excluded.user_agent,
+                    active = true
             ",
             &[
                 &(fee_recipient.as_ref()),
@@ -483,7 +491,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(public_key.as_ref()),
                 &(signature.as_ref()),
                 &(inserted_at),
-                &(user_agent)
+                &(user_agent),
             ],
         ).await {
             Ok(_) => {
@@ -517,10 +525,10 @@ impl DatabaseService for PostgresDatabaseService {
             if let Some(existing_entry) =
                 self.validator_registration_cache.get(&entry.registration.message.public_key)
             {
-                if existing_entry.registration_info.registration.message.timestamp >=
-                    entry.registration.message.timestamp
+                if existing_entry.registration_info.registration.message.timestamp
+                    >= entry.registration.message.timestamp
                 {
-                    return false
+                    return false;
                 }
             }
             true
@@ -572,10 +580,10 @@ impl DatabaseService for PostgresDatabaseService {
         if let Some(existing_entry) =
             self.validator_registration_cache.get(&registration.message.public_key)
         {
-            if existing_entry.registration_info.registration.message.timestamp >=
-                registration.message.timestamp
+            if existing_entry.registration_info.registration.message.timestamp
+                >= registration.message.timestamp
             {
-                return Ok(false)
+                return Ok(false);
             }
         }
         Ok(true)
@@ -604,10 +612,11 @@ impl DatabaseService for PostgresDatabaseService {
                     validator_preferences.header_delay,
                     validator_preferences.gossip_blobs,
                     validator_registrations.inserted_at,
-                    validator_registrations.user_agent
+                    validator_registrations.user_agent,
+                    validator_preferences.delay_ms,
                 FROM validator_registrations
                 INNER JOIN validator_preferences ON validator_registrations.public_key = validator_preferences.public_key
-                WHERE validator_registrations.public_key = $1
+                WHERE validator_registrations.public_key = $1 AND validator_registrations.active = true
             ",
                 &[&(pub_key.as_ref())],
             )
@@ -635,6 +644,7 @@ impl DatabaseService for PostgresDatabaseService {
                     SELECT * FROM validator_registrations
                     INNER JOIN validator_preferences
                     ON validator_registrations.public_key = validator_preferences.public_key
+                    WHERE validator_registrations.active = true
                 ",
                 &[],
             )
@@ -658,7 +668,7 @@ impl DatabaseService for PostgresDatabaseService {
             "SELECT *
             FROM validator_registrations
             INNER JOIN validator_preferences ON validator_registrations.public_key = validator_preferences.public_key
-            WHERE validator_preferences.public_key IN ({})",
+            WHERE validator_registrations.active = true AND validator_preferences.public_key IN ({})",
             placeholders.join(", ")
         );
 
@@ -772,6 +782,7 @@ impl DatabaseService for PostgresDatabaseService {
                             ON proposer_duties.public_key = validator_registrations.public_key
                             INNER JOIN validator_preferences
                             ON proposer_duties.public_key = validator_preferences.public_key
+                            WHERE validator_registrations.active = true
                         ",
                 &[],
             )
@@ -904,7 +915,7 @@ impl DatabaseService for PostgresDatabaseService {
         }
 
         if self.validator_pool_cache.contains_key(api_key) {
-            return Ok(self.validator_pool_cache.get(api_key).map(|f| f.clone()))
+            return Ok(self.validator_pool_cache.get(api_key).map(|f| f.clone()));
         }
 
         let api_key = api_key.to_string();
@@ -915,12 +926,12 @@ impl DatabaseService for PostgresDatabaseService {
             Ok(rows) => rows,
             Err(e) => {
                 error!("Error querying validator_pools: {}", e);
-                return Err(DatabaseError::from(e))
+                return Err(DatabaseError::from(e));
             }
         };
 
         if rows.is_empty() {
-            return Ok(None)
+            return Ok(None);
         }
 
         let name: String = rows[0].get("name");
@@ -1076,8 +1087,8 @@ impl DatabaseService for PostgresDatabaseService {
             transaction.execute(&sql, &params[..]).await?;
         }
 
-        if payload.execution_payload.withdrawals().is_some() &&
-            !payload.execution_payload.withdrawals().unwrap().is_empty()
+        if payload.execution_payload.withdrawals().is_some()
+            && !payload.execution_payload.withdrawals().unwrap().is_empty()
         {
             // Save the withdrawals
             let mut structured_params: Vec<(i32, &[u8], i32, &[u8], i64)> = Vec::new();
@@ -1135,7 +1146,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn store_block_submission(
         &self,
         submission: Arc<SignedBidSubmission>,
-        trace: SubmissionTrace,
+        trace: Arc<SubmissionTrace>,
         optimistic_version: i16,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_block_submission");
@@ -1220,23 +1231,26 @@ impl DatabaseService for PostgresDatabaseService {
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_builder_info");
 
+        info!("Storing builder info for {:?}", builder_pub_key);
+
         self.pool
             .get()
             .await?
             .execute(
                 "
-                    INSERT INTO builder_info (public_key, collateral, is_optimistic, builder_id)
-                    VALUES ($1, $2, $3, $4)
+                    INSERT INTO builder_info (public_key, collateral, is_optimistic, is_optimistic_for_regional_filtering, builder_id, builder_ids)
+                    VALUES ($1, $2, $3, $4, $5, $6)
                     ON CONFLICT (public_key)
                     DO UPDATE SET
-                        collateral = excluded.collateral,
-                        is_optimistic = excluded.is_optimistic
+                        builder_ids = array_concat_uniq(COALESCE(builder_info.builder_ids, '{}'::character varying[]), EXCLUDED.builder_ids)
                 ",
                 &[
                     &(builder_pub_key.as_ref()),
                     &(PostgresNumeric::from(builder_info.collateral)),
                     &(builder_info.is_optimistic),
+                    &(builder_info.is_optimistic_for_regional_filtering),
                     &(builder_info.builder_id),
+                    &(builder_info.builder_ids),
                 ],
             )
             .await?;
@@ -1371,7 +1385,7 @@ impl DatabaseService for PostgresDatabaseService {
                         ON CONFLICT (block_hash)
                         DO NOTHING
                     ",
-                    &[&(block_hash.as_ref()), &(format!("{:?}", e))],
+                    &[&(block_hash.as_ref()), &(&format!("{:?}", e))],
                 )
                 .await?;
         }
@@ -1610,6 +1624,7 @@ impl DatabaseService for PostgresDatabaseService {
         public_key: BlsPublicKey,
         best_block_hash: ByteVector<32>,
         trace: GetHeaderTrace,
+        mev_boost: bool,
         user_agent: Option<String>,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("save_get_header_call");
@@ -1623,9 +1638,9 @@ impl DatabaseService for PostgresDatabaseService {
             .execute(
                 "
                     INSERT INTO get_header
-                        (slot_number, region_id, parent_hash, proposer_pubkey, block_hash, user_agent)
+                        (slot_number, region_id, parent_hash, proposer_pubkey, block_hash, mev_boost, user_agent)
                     VALUES
-                        ($1, $2, $3, $4, $5, $6)
+                        ($1, $2, $3, $4, $5, $6, $7)
                 ",
                 &[
                     &(slot as i32),
@@ -1633,6 +1648,7 @@ impl DatabaseService for PostgresDatabaseService {
                     &(parent_hash.as_ref()),
                     &(public_key.as_ref()),
                     &(best_block_hash.as_ref()),
+                    &(mev_boost),
                     &(user_agent),
                 ],
             )

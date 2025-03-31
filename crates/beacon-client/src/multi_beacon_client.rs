@@ -3,21 +3,20 @@ use std::sync::{
     Arc,
 };
 
-use async_trait::async_trait;
-use ethereum_consensus::primitives::Root;
-use futures::future::join_all;
-use helix_common::{
-    beacon_api::PublishBlobsRequest, bellatrix::SimpleSerialize,
-    signed_proposal::VersionedSignedProposal, ProposerDuty, ValidatorSummary,
-};
-use tokio::{sync::broadcast::Sender, task::JoinError};
-use tracing::{error, warn};
-
 use crate::{
     error::BeaconClientError,
     traits::{BeaconClientTrait, MultiBeaconClientTrait},
     types::{BroadcastValidation, HeadEventData, PayloadAttributesEvent, StateId, SyncStatus},
 };
+use async_trait::async_trait;
+use ethereum_consensus::primitives::Root;
+use futures::future::join_all;
+use helix_common::{
+    beacon_api::PublishBlobsRequest, bellatrix::Serializable,
+    signed_proposal::VersionedSignedProposal, task, ProposerDuty, ValidatorSummary,
+};
+use tokio::{sync::broadcast::Sender, task::JoinError};
+use tracing::{error, warn};
 
 #[derive(Clone)]
 pub struct MultiBeaconClient<BeaconClient: BeaconClientTrait + 'static> {
@@ -77,7 +76,9 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
 
         let handles = clients
             .into_iter()
-            .map(|(_, client)| tokio::spawn(async move { client.sync_status().await }))
+            .map(|(_, client)| {
+                task::spawn(file!(), line!(), async move { client.sync_status().await })
+            })
             .collect::<Vec<_>>();
 
         let results: Vec<Result<Result<SyncStatus, BeaconClientError>, JoinError>> =
@@ -114,7 +115,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
 
         for (_, client) in clients {
             let chan = chan.clone();
-            tokio::spawn(async move {
+            task::spawn(file!(), line!(), async move {
                 if let Err(err) = client.subscribe_to_head_events(chan).await {
                     tracing::error!("Failed to subscribe to head events: {err:?}");
                 }
@@ -132,7 +133,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
 
         for (_, client) in clients {
             let chan = chan.clone();
-            tokio::spawn(async move {
+            task::spawn(file!(), line!(), async move {
                 if let Err(err) = client.subscribe_to_payload_attributes_events(chan).await {
                     tracing::error!("Failed to subscribe to payload attributes events: {err:?}");
                 }
@@ -190,7 +191,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
     /// It will instantly return after the first successful response.
     ///
     /// Follows the spec: [Ethereum 2.0 Beacon APIs documentation](https://ethereum.github.io/beacon-APIs/#/ValidatorRequiredApi/publishBlock).
-    async fn publish_block<T: Send + Sync + 'static + SimpleSerialize>(
+    async fn publish_block<T: Send + Sync + 'static + Serializable>(
         &self,
         block: Arc<T>,
         broadcast_validation: Option<BroadcastValidation>,
@@ -205,7 +206,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
             let broadcast_validation = broadcast_validation.clone();
             let sender = sender.clone();
 
-            tokio::spawn(async move {
+            task::spawn(file!(), line!(), async move {
                 let res = client.publish_block(block, broadcast_validation, fork).await;
                 if let Err(err) = sender.send((i, res)).await {
                     // TODO: we might be able to completely remove this as this should only error if
@@ -250,7 +251,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
         clients.into_iter().for_each(|(_i, client)| {
             let sidecars = blob_sidecars.clone();
 
-            tokio::spawn(async move {
+            task::spawn(file!(), line!(), async move {
                 let res = client.publish_blobs(sidecars).await;
                 if let Err(err) = res {
                     match err {

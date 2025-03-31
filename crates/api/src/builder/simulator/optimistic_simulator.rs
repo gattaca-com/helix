@@ -1,18 +1,26 @@
-use std::sync::Arc;
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32};
 use reqwest::Client;
-use tokio::sync::{mpsc::Sender, RwLock};
+use tokio::{
+    sync::{mpsc::Sender, RwLock},
+    time::sleep,
+};
 use tracing::{debug, error, warn, Instrument};
-
-use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, BuilderInfo};
-use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 
 use crate::builder::{
     rpc_simulator::RpcSimulator, traits::BlockSimulator, BlockSimRequest, DbInfo,
 };
+use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, task, BuilderInfo};
+use helix_database::DatabaseService;
+use helix_datastore::Auctioneer;
 
 /// OptimisticSimulator is responsible for running simulations optimistically or synchronously based
 /// on the builder's status.
@@ -28,13 +36,15 @@ pub struct OptimisticSimulator<A: Auctioneer + 'static, DB: DatabaseService + 's
     /// flag will be set to `true`. Once triggered, the system will halt all optimistic
     /// simulations.
     failsafe_triggered: Arc<RwLock<bool>>,
+    optimistic_state: Arc<PauseState>,
 }
 
 impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator<A, DB> {
     pub fn new(auctioneer: Arc<A>, db: Arc<DB>, http: Client, endpoint: String) -> Self {
         let simulator = Arc::new(RpcSimulator::new(http, endpoint));
         let failsafe_triggered = Arc::new(RwLock::new(false));
-        Self { simulator, auctioneer, db, failsafe_triggered }
+        let optimistic_state = Arc::new(PauseState::new(Duration::from_secs(60)));
+        Self { simulator, auctioneer, db, failsafe_triggered, optimistic_state }
     }
 
     /// This is a lightweight operation as all params are references.
@@ -44,6 +54,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             auctioneer: self.auctioneer.clone(),
             db: self.db.clone(),
             failsafe_triggered: self.failsafe_triggered.clone(),
+            optimistic_state: self.optimistic_state.clone(),
         }
     }
 
@@ -64,6 +75,28 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             .await
         {
             if builder_info.is_optimistic {
+                if err.is_aleady_known() {
+                    warn!(
+                        builder=%request.message.builder_public_key,
+                        block_hash=%request.execution_payload.block_hash(),
+                        "Block already known. Skipping demotion"
+                    );
+                    return Ok(())
+                }
+
+                if err.is_temporary() {
+                    self.optimistic_state.pause();
+
+                    // Pause optimistic simulations until the node is synced
+                    warn!(
+                        builder=%request.message.builder_public_key,
+                        block_hash=%request.execution_payload.block_hash(),
+                        err=%err,
+                        "Block simulation resulted in a temporary error. Pausing optimistic simulations...",
+                    );
+                    return Err(err)
+                }
+
                 warn!(
                     builder=%request.message.builder_public_key,
                     block_hash=%request.execution_payload.block_hash(),
@@ -117,13 +150,20 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
     /// - The failsafe hasn't been triggered.
     /// - The builder has optimistic relaying enabled.
     /// - The builder collateral is greater than the block value.
-    /// - The proposer preferences do not have regional filtering enabled.
+    /// - The proposer preferences do not have regional filtering enabled or the builder is
+    ///   optimistic for regional filtering.
     async fn should_process_optimistically(
         &self,
         request: &BlockSimRequest,
         builder_info: &BuilderInfo,
     ) -> bool {
         if builder_info.is_optimistic && request.message.value <= builder_info.collateral {
+            if request.proposer_preferences.filtering.is_regional() &&
+                !builder_info.can_process_regional_slot_optimistically()
+            {
+                return false
+            }
+
             if *self.failsafe_triggered.read().await {
                 warn!(
                     builder=%request.message.builder_public_key,
@@ -132,6 +172,16 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
                 );
                 return false
             }
+
+            if self.optimistic_state.is_paused() {
+                warn!(
+                    builder=%request.message.builder_public_key,
+                    block_hash=%request.execution_payload.block_hash(),
+                    "Optimistic simulation paused. Skipping simulation"
+                );
+                return false
+            }
+
             return true
         }
 
@@ -158,19 +208,18 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
 
             let cloned_self = self.clone_for_async();
             let builder_info = builder_info.clone();
-            tokio::spawn(
+            let sender_clone = sim_result_saver_sender.clone();
+            task::spawn(file!(), line!(), {
                 async move {
-                    cloned_self
-                        .handle_simulation(
-                            request,
-                            is_top_bid,
-                            sim_result_saver_sender,
-                            builder_info,
-                        )
+                    if let Err(e) = cloned_self
+                        .handle_simulation(request, is_top_bid, sender_clone, builder_info)
                         .await
+                    {
+                        error!("Simulation failed: {:?}", e);
+                    }
                 }
-                .in_current_span(),
-            );
+                .in_current_span()
+            });
 
             Ok(true)
         } else {
@@ -193,5 +242,47 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
             .await
             .map(|_| false)
         }
+    }
+
+    async fn is_synced(&self) -> Result<bool, BlockSimError> {
+        self.simulator.is_synced().await
+    }
+}
+
+#[derive(Clone)]
+pub struct PauseState {
+    /// Indicates whether we are currently "paused" (true) or not (false).
+    is_paused: Arc<AtomicBool>,
+    /// How long the pause lasts once triggered.
+    duration: Duration,
+}
+
+impl PauseState {
+    /// Create a new `PauseState` with a specified cooldown or “pause” duration.
+    pub fn new(duration: Duration) -> Self {
+        Self { is_paused: Arc::new(AtomicBool::new(false)), duration }
+    }
+
+    /// Trigger a pause. If we are not already paused, we set it to paused
+    /// and spawn a background task to un-pause after `self.duration`.
+    ///
+    /// If already paused, this does nothing.
+    pub fn pause(&self) {
+        if self.is_paused.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+        {
+            // We just transitioned from false -> true. Spawn a task to
+            // reset to false after `duration`.
+            let duration = self.duration;
+            let this = self.clone();
+            task::spawn(file!(), line!(), async move {
+                sleep(duration).await;
+                this.is_paused.store(false, Ordering::SeqCst);
+            });
+        }
+    }
+
+    /// Returns whether we are currently paused.
+    pub fn is_paused(&self) -> bool {
+        self.is_paused.load(Ordering::SeqCst)
     }
 }
