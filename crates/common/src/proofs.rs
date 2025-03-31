@@ -106,7 +106,7 @@ impl TryFrom<SignedConstraints> for SignedConstraintsWithProofData {
             let root = transaction
                 .hash_tree_root()
                 .map_err(|e| ProofError::DecodingFailed(e.to_string()))?;
-            let root = Hash256::from_slice(&root.as_slice());
+            let root = Hash256::from_slice(root.as_slice());
 
             transactions.push((tx_hash, root));
         }
@@ -131,14 +131,14 @@ pub fn verify_multiproofs(
 ) -> Result<(), ProofError> {
     // Check if the length of the leaves and indices match
     if proofs.transaction_hashes.len() != proofs.generalized_indexes.len() {
-        return Err(ProofError::LengthMismatch)
+        return Err(ProofError::LengthMismatch);
     }
 
     let total_leaves = total_leaves(constraints_proofs_data);
 
     // Check if the total leaves matches the proofs provided
     if total_leaves != proofs.total_leaves() {
-        return Err(ProofError::LeavesMismatch)
+        return Err(ProofError::LeavesMismatch);
     }
 
     // Get all the leaves from the saved constraints
@@ -153,17 +153,17 @@ pub fn verify_multiproofs(
                 if saved_hash.as_slice() == hash.as_slice() {
                     found = true;
                     leaves.push(B256::from(leaf.0));
-                    break
+                    break;
                 }
             }
             if found {
-                break
+                break;
             }
         }
 
         // If the hash is not found in the constraints cache, return an error
         if !found {
-            return Err(ProofError::MissingHash(TxHash::from_slice(hash.as_slice())))
+            return Err(ProofError::MissingHash(TxHash::from_slice(hash.as_slice())));
         }
     }
 

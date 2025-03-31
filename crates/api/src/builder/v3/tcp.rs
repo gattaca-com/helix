@@ -53,69 +53,65 @@ async fn handle_builder_connection<A, DB, S, G>(
     let mut header_buffer = [0u8; size_of::<MessageHeader>()];
     let mut payload_buffer = Vec::with_capacity(32 * 1024);
 
-    while let Ok(_) = stream.read_exact(&mut header_buffer).await {
+    while (stream.read_exact(&mut header_buffer).await).is_ok() {
         let msg_header: &MessageHeader = header_buffer.as_slice().into();
-        match msg_header.message_type {
-            MessageType::HeaderSubmission => {
-                let receive = utcnow_ns();
-                let mut trace = HeaderSubmissionTrace { receive, ..Default::default() };
 
-                payload_buffer.resize(msg_header.message_length as usize, 0);
-                let Ok(_) = stream.read_exact(payload_buffer.as_mut_slice()).await else {
-                    tracing::error!(?msg_header, "tcp stream read failed for header submission");
-                    break;
-                };
+        if msg_header.message_type == MessageType::HeaderSubmission {
+            let receive = utcnow_ns();
+            let mut trace = HeaderSubmissionTrace { receive, ..Default::default() };
 
-                match decode_message(msg_header, payload_buffer.as_slice()) {
-                    Ok(header) => {
-                        trace.decode = utcnow_ns();
-                        match BuilderApi::handle_submit_header(
-                            &builder_api,
-                            header.submission,
-                            Some(header.payload_socket_address),
-                            msg_header
-                                .message_flags
-                                .contains(MessageHeaderFlags::CANCELLATION_ENABLED),
-                            trace,
-                        )
-                        .await
-                        {
-                            Ok(_) => {
-                                let ack = MessageHeader {
-                                    message_type: MessageType::HeaderSubmissionAck,
+            payload_buffer.resize(msg_header.message_length as usize, 0);
+            let Ok(_) = stream.read_exact(payload_buffer.as_mut_slice()).await else {
+                tracing::error!(?msg_header, "tcp stream read failed for header submission");
+                break;
+            };
+
+            match decode_message(msg_header, payload_buffer.as_slice()) {
+                Ok(header) => {
+                    trace.decode = utcnow_ns();
+                    match BuilderApi::handle_submit_header(
+                        &builder_api,
+                        header.submission,
+                        Some(header.payload_socket_address),
+                        msg_header.message_flags.contains(MessageHeaderFlags::CANCELLATION_ENABLED),
+                        trace,
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            let ack = MessageHeader {
+                                message_type: MessageType::HeaderSubmissionAck,
+                                padding: 0,
+                                message_length: 0,
+                                sequence_number: msg_header.sequence_number,
+                                message_flags: MessageHeaderFlags::empty(),
+                            };
+                            let _ = stream.write_all(ack.as_ref()).await;
+                        }
+                        Err(e) => {
+                            tracing::error!(error=?e, "v3 header submission failed");
+                            let err_code = e.into_response().status().as_u16();
+                            if let Ok(encoded) = encode_error(msg_header, err_code) {
+                                let err = MessageHeader {
+                                    message_type: MessageType::Error,
                                     padding: 0,
-                                    message_length: 0,
+                                    message_length: encoded.len() as u32,
                                     sequence_number: msg_header.sequence_number,
-                                    message_flags: MessageHeaderFlags::empty(),
+                                    message_flags: msg_header.message_flags,
                                 };
-                                let _ = stream.write_all(ack.as_ref()).await;
-                            }
-                            Err(e) => {
-                                tracing::error!(error=?e, "v3 header submission failed");
-                                let err_code = e.into_response().status().as_u16();
-                                if let Ok(encoded) = encode_error(msg_header, err_code) {
-                                    let err = MessageHeader {
-                                        message_type: MessageType::Error,
-                                        padding: 0,
-                                        message_length: encoded.len() as u32,
-                                        sequence_number: msg_header.sequence_number,
-                                        message_flags: msg_header.message_flags,
-                                    };
-                                    if let Ok(_) = stream.write_all(err.as_ref()).await {
-                                        let _ = stream.write_all(encoded.as_slice()).await;
-                                    }
+                                if (stream.write_all(err.as_ref()).await).is_ok() {
+                                    let _ = stream.write_all(encoded.as_slice()).await;
                                 }
                             }
                         }
                     }
-                    Err(e) => {
-                        trace.decode = utcnow_ns();
-                        tracing::error!(error=?e, ?msg_header, "Failed to decode payload for header submission");
-                        break
-                    }
+                }
+                Err(e) => {
+                    trace.decode = utcnow_ns();
+                    tracing::error!(error=?e, ?msg_header, "Failed to decode payload for header submission");
+                    break;
                 }
             }
-            _ => {}
         }
     }
     tracing::info!(?remote_addr, "builder connection disconnected");

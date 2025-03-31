@@ -525,8 +525,8 @@ impl DatabaseService for PostgresDatabaseService {
             if let Some(existing_entry) =
                 self.validator_registration_cache.get(&entry.registration.message.public_key)
             {
-                if existing_entry.registration_info.registration.message.timestamp
-                    >= entry.registration.message.timestamp
+                if existing_entry.registration_info.registration.message.timestamp >=
+                    entry.registration.message.timestamp
                 {
                     return false;
                 }
@@ -580,8 +580,8 @@ impl DatabaseService for PostgresDatabaseService {
         if let Some(existing_entry) =
             self.validator_registration_cache.get(&registration.message.public_key)
         {
-            if existing_entry.registration_info.registration.message.timestamp
-                >= registration.message.timestamp
+            if existing_entry.registration_info.registration.message.timestamp >=
+                registration.message.timestamp
             {
                 return Ok(false);
             }
@@ -1087,8 +1087,8 @@ impl DatabaseService for PostgresDatabaseService {
             transaction.execute(&sql, &params[..]).await?;
         }
 
-        if payload.execution_payload.withdrawals().is_some()
-            && !payload.execution_payload.withdrawals().unwrap().is_empty()
+        if payload.execution_payload.withdrawals().is_some() &&
+            !payload.execution_payload.withdrawals().unwrap().is_empty()
         {
             // Save the withdrawals
             let mut structured_params: Vec<(i32, &[u8], i32, &[u8], i64)> = Vec::new();

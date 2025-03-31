@@ -203,8 +203,8 @@ mod tests {
             let result = result
                 .iter()
                 .find(|r| {
-                    r.registration_info.registration.message.public_key
-                        == registration.registration.message.public_key
+                    r.registration_info.registration.message.public_key ==
+                        registration.registration.message.public_key
                 })
                 .unwrap();
             assert_eq!(

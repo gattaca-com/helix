@@ -154,6 +154,7 @@ pub trait DatabaseService: Send + Sync + Clone {
         validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError>;
 
+    #[allow(clippy::too_many_arguments)]
     async fn save_get_header_call(
         &self,
         slot: u64,

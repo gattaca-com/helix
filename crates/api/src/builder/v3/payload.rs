@@ -86,7 +86,7 @@ async fn fetch_block(
     payload_buffer: &mut Vec<u8>,
 ) -> Result<SignedBidSubmission, Error> {
     let request_ts = utcnow_ms();
-    let mut connection = connection(&payload_address).await?;
+    let mut connection = connection(payload_address).await?;
 
     // Create and serialize the request.
     let request = GetPayloadV3 { block_hash, request_ts };

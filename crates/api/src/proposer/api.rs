@@ -926,7 +926,7 @@ where
 
         let self_clone = self.clone();
         let unblinded_payload_clone = unblinded_payload.clone();
-        let mut trace_clone = trace.clone();
+        let mut trace_clone = *trace;
         let payload_clone = payload.clone();
 
         task::spawn(file!(), line!(), async move {
@@ -1517,7 +1517,7 @@ where
         };
 
         let db = self.db.clone();
-        let trace = trace.clone();
+        let trace = *trace;
         task::spawn(file!(), line!(), async move {
             if let Err(err) =
                 db.save_delivered_payload(&bid_trace, payload, &trace, user_agent).await

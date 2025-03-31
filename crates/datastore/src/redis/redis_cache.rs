@@ -89,6 +89,7 @@ pub struct RedisCache {
     tx: broadcast::Sender<Vec<u8>>,
 }
 
+#[allow(dead_code)]
 impl RedisCache {
     pub async fn new(
         conn_str: &str,
