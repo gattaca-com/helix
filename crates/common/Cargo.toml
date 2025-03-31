@@ -1,46 +1,31 @@
 [package]
-name = "helix-common"
-version.workspace = true
-rust-version.workspace = true
 edition.workspace = true
-repository.workspace = true
 license.workspace = true
+name = "helix-common"
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
+alloy.workspace = true
+auto_impl.workspace = true
+axum.workspace = true
+bitflags.workspace = true
+clap.workspace = true
+ethereum-consensus.workspace = true
+ethereum-types.workspace = true
+eyre.workspace = true
 helix-utils.workspace = true
-
-# Networking 
+lazy_static.workspace = true
+merkle_proof.workspace = true
+prometheus.workspace = true
 reqwest.workspace = true
-
-# Serialization and Data Format 
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml = "0.9.25"
-bitflags.workspace = true
-
-# Ethereum Types
-ethereum-consensus.workspace = true
-reth-primitives.workspace = true
-alloy.workspace = true
-merkle_proof = { git = "https://github.com/sigp/lighthouse.git", tag = "v5.3.0" }
-ethereum-types = "0.14.1"
-ssz_types = "0.5.4"
-
-# Async
-axum.workspace = true
-tokio.workspace = true
-
-# Misc
-auto_impl.workspace = true
-clap = { version = "4.2.7", features = ["derive"] }
+serde_yaml.workspace = true
+sha2.workspace = true
+ssz_types.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 tracing.workspace = true
-sha2 = "0.10.8"
-tree_hash = "0.6.0"
-prometheus.workspace = true
-eyre.workspace = true
-lazy_static.workspace = true
-
-[dev-dependencies]
-tree_hash = "0.6.0"
-tree_hash_derive = "0.6.0"
+tree_hash.workspace = true

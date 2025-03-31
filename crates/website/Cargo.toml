@@ -1,26 +1,24 @@
 [package]
-name = "helix-website"
-version.workspace = true
-rust-version.workspace = true
 edition.workspace = true
-repository.workspace = true
 license.workspace = true
+name = "helix-website"
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
-helix-database.workspace = true
-helix-common.workspace = true
-helix-utils.workspace = true
-helix-housekeeper.workspace = true
-helix-beacon-client.workspace = true
+alloy.workspace = true
+askama.workspace = true
+async-trait.workspace = true
 axum.workspace = true
+deadpool-postgres.workspace = true
+ethereum-consensus.workspace = true
+helix-beacon-client.workspace = true
+helix-common.workspace = true
+helix-database.workspace = true
+helix-housekeeper.workspace = true
+helix-utils.workspace = true
+num-format.workspace = true
+serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-serde.workspace = true
-ethereum-consensus.workspace = true
-deadpool-postgres.workspace = true
-async-trait.workspace = true
-hex.workspace = true
-
-askama = "0.12"
-alloy-primitives = "0.7.7"
-num-format = "0.4.4"

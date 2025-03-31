@@ -1,45 +1,23 @@
 [package]
-name = "helix-housekeeper"
-version.workspace = true
-rust-version.workspace = true
 edition.workspace = true
-repository.workspace = true
 license.workspace = true
+name = "helix-housekeeper"
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
+alloy.workspace = true
+async-trait.workspace = true
+ethereum-consensus.workspace = true
+ethers.workspace = true
 helix-beacon-client.workspace = true
+helix-common.workspace = true
 helix-database.workspace = true
 helix-datastore.workspace = true
-helix-common.workspace = true
 helix-utils.workspace = true
-
-# Async and Networking
-async-trait.workspace = true
-axum.workspace = true
-hyper.workspace = true
-tokio.workspace = true
-futures.workspace = true
-
-futures-util = { version = "0.3", features = ["compat"] }
-
-# Serialization and Data Format
-serde.workspace = true
 serde_json.workspace = true
-
-# Ethereum Types
-ethereum-consensus.workspace = true
-reth-primitives.workspace = true
-alloy.workspace = true
-# DB
-deadpool-redis.workspace = true
-redis.workspace = true
-
-# Misc
-auto_impl.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
 uuid.workspace = true
-
-ethers = "2.0.14"
-hex = "0.4.3"
