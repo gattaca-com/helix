@@ -8,10 +8,11 @@ pub mod traits;
 #[cfg(test)]
 mod simulator_tests;
 
-use ethereum_consensus::{deneb::Bytes32, types::mainnet::ExecutionPayload};
 use std::sync::Arc;
 
-use ethereum_consensus::{primitives::BlsSignature, serde::as_str};
+use ethereum_consensus::{
+    deneb::Bytes32, primitives::BlsSignature, serde::as_str, types::mainnet::ExecutionPayload,
+};
 use helix_common::{
     bid_submission::{BidSubmission, BidTrace, SignedBidSubmission},
     deneb::BlobsBundle,

@@ -1,18 +1,17 @@
+#[cfg(test)]
+use std::sync::Mutex;
+use std::{convert::TryFrom, sync::Arc};
+
 use async_trait::async_trait;
 use ethereum_consensus::primitives::BlsPublicKey;
 use ethers::{
     abi::{Abi, AbiParser, Address, Bytes},
     contract::{Contract, EthEvent},
-    providers::{Http, Provider},
+    providers::{Http, Middleware, Provider},
+    types::transaction::eip2718::TypedTransaction,
 };
 use helix_common::{PrimevConfig, ProposerDuty};
-use std::{convert::TryFrom, sync::Arc};
 use tracing::{debug, error};
-
-use ethers::{providers::Middleware, types::transaction::eip2718::TypedTransaction};
-
-#[cfg(test)]
-use std::sync::Mutex;
 
 /// Service for interacting with Primev contracts
 #[async_trait]

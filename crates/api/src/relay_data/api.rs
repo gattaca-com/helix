@@ -5,9 +5,6 @@ use axum::{
     response::IntoResponse,
     Json,
 };
-use moka::sync::Cache;
-use tracing::warn;
-
 use helix_common::{
     api::data_api::{
         BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
@@ -16,6 +13,8 @@ use helix_common::{
     ValidatorPreferences,
 };
 use helix_database::{error::DatabaseError, DatabaseService};
+use moka::sync::Cache;
+use tracing::warn;
 
 use crate::relay_data::error::DataApiError;
 

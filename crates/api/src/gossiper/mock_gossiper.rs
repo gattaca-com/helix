@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use tonic::{Request, Response, Status};
 
+use super::types::broadcast_cancellation::BroadcastCancellationParams;
 use crate::{
     gossiper::{
         error::GossipError,
@@ -12,8 +13,6 @@ use crate::{
     },
     grpc::{self, gossip_service_server::GossipService},
 };
-
-use super::types::broadcast_cancellation::BroadcastCancellationParams;
 
 #[derive(Clone)]
 pub struct MockGossiper {}

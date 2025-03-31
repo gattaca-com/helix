@@ -6,23 +6,21 @@ use std::{
     time::Duration,
 };
 
-// ++++ IMPORTS ++++
-use crate::housekeeper::{Housekeeper, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS};
-use helix_common::config::PrimevConfig;
-
-use crate::primev_service::{EthereumPrimevService, MockPrimevService, PrimevService};
-
 use ethereum_consensus::primitives::BlsPublicKey;
 use helix_beacon_client::{
     mock_multi_beacon_client::MockMultiBeaconClient, MultiBeaconClientTrait,
 };
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, RelayConfig,
-    ValidatorSummary,
+    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
+    config::PrimevConfig, RelayConfig, ValidatorSummary,
 };
 use helix_database::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
 use tokio::{sync::broadcast, task};
+
+// ++++ IMPORTS ++++
+use crate::housekeeper::{Housekeeper, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS};
+use crate::primev_service::{EthereumPrimevService, MockPrimevService, PrimevService};
 
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 

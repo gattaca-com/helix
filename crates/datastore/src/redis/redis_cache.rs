@@ -1,6 +1,5 @@
 #![allow(dependency_on_unit_never_type_fallback)] // TODO: temp fix , needs to be fixed before upading to 2024 edition
 
-use crate::redis::utils::get_constraints_key;
 use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
@@ -15,26 +14,25 @@ use helix_common::{
         builder_api::TopBidUpdate,
         constraints_api::{SignedDelegation, SignedRevocation},
     },
-    bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
+    bid_submission::{
+        v2::header_submission::SignedHeaderSubmission,
+        v3::header_submission_v3::PayloadSocketAddress, BidSubmission, BidTrace,
+        SignedBidSubmission,
+    },
+    eth::SignedBuilderBid,
     metrics::RedisMetricRecord,
     pending_block::PendingBlock,
-    proofs::SignedConstraintsWithProofData,
+    proofs::{InclusionProofs, SignedConstraintsWithProofData},
+    signing::RelaySigningContext,
     versioned_payload::PayloadAndBlobs,
-    ProposerInfo,
+    BuilderInfo, ProposerInfo,
 };
+use helix_database::types::BuilderInfoDocument;
 use redis::{AsyncCommands, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::broadcast;
+use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 use tracing::{error, info, trace};
-
-use helix_common::{
-    bid_submission::{BidTrace, SignedBidSubmission},
-    eth::SignedBuilderBid,
-    proofs::InclusionProofs,
-    signing::RelaySigningContext,
-    BuilderInfo,
-};
-use helix_database::types::BuilderInfoDocument;
 
 use super::utils::{
     get_delegations_key, get_hash_from_hex, get_header_tx_root_key,
@@ -46,10 +44,11 @@ use crate::{
         error::RedisCacheError,
         utils::{
             get_builder_latest_bid_time_key, get_builder_latest_bid_value_key,
-            get_cache_bid_trace_key, get_cache_get_header_response_key, get_execution_payload_key,
-            get_floor_bid_key, get_floor_bid_value_key, get_inclusion_proof_key,
-            get_latest_bid_by_builder_key, get_latest_bid_by_builder_key_str_builder_pub_key,
-            get_seen_block_hashes_key, get_top_bid_value_key,
+            get_cache_bid_trace_key, get_cache_get_header_response_key, get_constraints_key,
+            get_execution_payload_key, get_floor_bid_key, get_floor_bid_value_key,
+            get_inclusion_proof_key, get_latest_bid_by_builder_key,
+            get_latest_bid_by_builder_key_str_builder_pub_key, get_seen_block_hashes_key,
+            get_top_bid_value_key,
         },
     },
     types::{
@@ -63,8 +62,6 @@ use crate::{
     },
     Auctioneer,
 };
-use helix_common::bid_submission::v3::header_submission_v3::PayloadSocketAddress;
-use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 
 // Constraints expire after 1 epoch = 32 slots.
 const CONSTRAINTS_CACHE_EXPIRY_S: usize = 12 * 32;
@@ -1563,12 +1560,12 @@ fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {
 #[cfg(test)]
 mod tests {
 
-    use super::*;
     use ethereum_consensus::clock::get_current_unix_time_in_nanos;
     use helix_common::capella::{self, ExecutionPayloadHeader};
+    use serde::{Deserialize, Serialize};
     use serial_test::serial;
 
-    use serde::{Deserialize, Serialize};
+    use super::*;
 
     impl RedisCache {
         async fn clear_cache(&self) -> Result<(), RedisCacheError> {

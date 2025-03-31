@@ -6,27 +6,23 @@ use axum::{
     routing::{get, post},
     BoxError, Extension, Router,
 };
-
-use helix_common::{
-    api::PATH_DATA_API, chain_info::ChainInfo, ConstraintsApiConfig, RelayConfig, Route,
-};
-use tokio::sync::mpsc::{channel, Receiver, Sender};
-
 use helix_beacon_client::{
     mock_block_broadcaster::MockBlockBroadcaster, mock_multi_beacon_client::MockMultiBeaconClient,
     BlockBroadcaster,
 };
 use helix_common::{
     api::{
-        PATH_GET_HEADER, PATH_GET_HEADER_WITH_PROOFS, PATH_GET_PAYLOAD, PATH_PROPOSER_API,
-        PATH_REGISTER_VALIDATORS, PATH_STATUS,
+        PATH_DATA_API, PATH_GET_HEADER, PATH_GET_HEADER_WITH_PROOFS, PATH_GET_PAYLOAD,
+        PATH_PROPOSER_API, PATH_REGISTER_VALIDATORS, PATH_STATUS,
     },
+    chain_info::ChainInfo,
     signing::RelaySigningContext,
-    ValidatorPreferences,
+    ConstraintsApiConfig, RelayConfig, Route, ValidatorPreferences,
 };
 use helix_database::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
 use helix_housekeeper::ChainUpdate;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tower::{buffer::BufferLayer, limit::RateLimitLayer, timeout::TimeoutLayer, ServiceBuilder};
 use tower_http::limit::RequestBodyLimitLayer;
 

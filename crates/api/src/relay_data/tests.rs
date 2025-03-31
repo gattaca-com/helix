@@ -1,13 +1,8 @@
 #[cfg(test)]
 mod data_api_tests {
     // *** IMPORTS ***
-    use crate::{
-        relay_data::{
-            DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_PROPOSER_PAYLOAD_DELIVERED,
-            PATH_VALIDATOR_REGISTRATION,
-        },
-        test_utils::data_api_app,
-    };
+    use std::{sync::Arc, time::Duration};
+
     use ethereum_consensus::{builder::SignedValidatorRegistration, primitives::BlsPublicKey};
     use helix_common::api::{
         data_api::{
@@ -19,8 +14,15 @@ mod data_api_tests {
     use helix_database::MockDatabaseService;
     use reqwest::StatusCode;
     use serial_test::serial;
-    use std::{sync::Arc, time::Duration};
     use tokio::sync::oneshot;
+
+    use crate::{
+        relay_data::{
+            DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_PROPOSER_PAYLOAD_DELIVERED,
+            PATH_VALIDATOR_REGISTRATION,
+        },
+        test_utils::data_api_app,
+    };
 
     // +++ HELPER VARIABLES +++
     const ADDRESS: &str = "0.0.0.0";

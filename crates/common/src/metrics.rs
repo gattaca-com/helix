@@ -1,3 +1,5 @@
+use std::{net::SocketAddr, time::Duration};
+
 use axum::{
     body::Body,
     http::{header::CONTENT_TYPE, StatusCode},
@@ -13,7 +15,6 @@ use prometheus::{
     GaugeVec, Histogram, HistogramTimer, HistogramVec, IntCounter, IntCounterVec, Registry,
     TextEncoder,
 };
-use std::{net::SocketAddr, time::Duration};
 use tokio::net::TcpListener;
 use tracing::{error, info};
 

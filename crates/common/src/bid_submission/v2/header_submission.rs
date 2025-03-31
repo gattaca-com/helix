@@ -1,3 +1,15 @@
+use ethereum_consensus::{
+    altair::Bytes32,
+    capella::Withdrawal,
+    crypto::KzgCommitment,
+    deneb::mainnet::{BYTES_PER_LOGS_BLOOM, MAX_BLOB_COMMITMENTS_PER_BLOCK, MAX_EXTRA_DATA_BYTES},
+    primitives::{BlsPublicKey, BlsSignature, ExecutionAddress, Hash32, Slot, U256},
+    ssz::prelude::*,
+    types::mainnet::ExecutionPayloadHeader,
+    Fork,
+};
+use helix_utils::signing::verify_signed_builder_message;
+
 use crate::{
     bid_submission::{BidSubmission, BidTrace},
     capella,
@@ -6,18 +18,6 @@ use crate::{
     proofs::InclusionProofs,
     versioned_payload_header::VersionedExecutionPayloadHeader,
 };
-use ethereum_consensus::{
-    altair::Bytes32,
-    capella::Withdrawal,
-    deneb::mainnet::{BYTES_PER_LOGS_BLOOM, MAX_BLOB_COMMITMENTS_PER_BLOCK, MAX_EXTRA_DATA_BYTES},
-    primitives::{BlsPublicKey, BlsSignature, ExecutionAddress, Hash32, Slot, U256},
-    ssz::prelude::*,
-    types::mainnet::ExecutionPayloadHeader,
-    Fork,
-};
-
-use ethereum_consensus::crypto::KzgCommitment;
-use helix_utils::signing::verify_signed_builder_message;
 
 #[derive(Default, Debug, Clone, Serializable, serde::Serialize, serde::Deserialize)]
 pub struct HeaderSubmission {

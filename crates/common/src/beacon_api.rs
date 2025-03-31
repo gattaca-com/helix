@@ -1,5 +1,6 @@
-use crate::deneb::BlobSidecars;
 use ethereum_consensus::primitives::Root;
+
+use crate::deneb::BlobSidecars;
 
 /// Struct used in the custom `publish_blobs` beacon chain api.
 /// Beacon chain expects this JSON serialised.

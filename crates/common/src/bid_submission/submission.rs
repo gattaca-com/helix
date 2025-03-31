@@ -1,11 +1,3 @@
-use crate::{
-    bid_submission::{BidSubmission, BidTrace},
-    capella,
-    deneb::BlobsBundle,
-    electra::ExecutionRequests,
-    proofs::InclusionProofs,
-    versioned_payload::PayloadAndBlobs,
-};
 use ethereum_consensus::{
     altair::Bytes32,
     capella::Withdrawal,
@@ -19,6 +11,15 @@ use ethereum_consensus::{
     Fork,
 };
 use helix_utils::signing::verify_signed_builder_message;
+
+use crate::{
+    bid_submission::{BidSubmission, BidTrace},
+    capella,
+    deneb::BlobsBundle,
+    electra::ExecutionRequests,
+    proofs::InclusionProofs,
+    versioned_payload::PayloadAndBlobs,
+};
 
 #[derive(Debug, Clone, Serializable, serde::Serialize, serde::Deserialize)]
 #[ssz(transparent)]

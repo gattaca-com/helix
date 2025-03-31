@@ -11,7 +11,6 @@ use ethereum_consensus::{
         prelude::{HashTreeRoot, *},
     },
 };
-
 use sha2::{Digest, Sha256};
 use tree_hash::Hash256;
 

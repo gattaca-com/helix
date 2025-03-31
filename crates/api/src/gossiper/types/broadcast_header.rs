@@ -1,4 +1,3 @@
-use crate::grpc;
 use ethereum_consensus::{
     primitives::{BlsPublicKey, Hash32},
     ssz,
@@ -7,6 +6,8 @@ use helix_common::{
     bid_submission::{v3::header_submission_v3::PayloadSocketAddress, BidTrace},
     SignedBuilderBid,
 };
+
+use crate::grpc;
 
 #[derive(Clone, Debug)]
 pub struct BroadcastHeaderParams {

@@ -1,7 +1,17 @@
 use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 
 use ethereum_consensus::crypto::SecretKey;
+use helix_beacon_client::{
+    beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
+    multi_beacon_client::MultiBeaconClient, BlockBroadcaster, MultiBeaconClientTrait,
+};
+use helix_common::{
+    chain_info::ChainInfo, signing::RelaySigningContext, task, BroadcasterConfig, NetworkConfig,
+    RelayConfig,
+};
 use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
+use helix_datastore::redis::redis_cache::RedisCache;
+use helix_housekeeper::{ChainEventUpdater, EthereumPrimevService, Housekeeper};
 use moka::sync::Cache;
 use tokio::{
     sync::{broadcast, mpsc},
@@ -16,16 +26,6 @@ use crate::{
     relay_data::{BidsCache, DeliveredPayloadsCache},
     router::{build_router, BuilderApiProd, ConstraintsApiProd, DataApiProd, ProposerApiProd},
 };
-use helix_beacon_client::{
-    beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
-    multi_beacon_client::MultiBeaconClient, BlockBroadcaster, MultiBeaconClientTrait,
-};
-use helix_common::{
-    chain_info::ChainInfo, signing::RelaySigningContext, task, BroadcasterConfig, NetworkConfig,
-    RelayConfig,
-};
-use helix_datastore::redis::redis_cache::RedisCache;
-use helix_housekeeper::{ChainEventUpdater, EthereumPrimevService, Housekeeper};
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -291,11 +291,12 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
 // add test module
 #[cfg(test)]
 mod test {
+    use std::convert::TryFrom;
+
     use helix_common::BeaconClientConfig;
+    use url::Url;
 
     use super::*;
-    use std::convert::TryFrom;
-    use url::Url;
 
     #[test]
     fn test() {

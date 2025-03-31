@@ -19,7 +19,6 @@ use axum::{
     },
     Extension, Json,
 };
-
 use bytes::Bytes;
 use ethereum_consensus::{
     configs::mainnet::CAPELLA_FORK_EPOCH,
@@ -29,20 +28,6 @@ use ethereum_consensus::{
 };
 use flate2::read::GzDecoder;
 use futures::{Stream, StreamExt};
-use hyper::HeaderMap;
-use serde::Deserialize;
-use tokio::{
-    sync::{
-        broadcast,
-        mpsc::{self, error::SendError, Receiver, Sender},
-        RwLock,
-    },
-    time::{self},
-};
-use tokio_stream::wrappers::BroadcastStream;
-use tracing::{debug, error, info, warn, Instrument};
-use uuid::Uuid;
-
 use helix_common::{
     api::{
         builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
@@ -69,6 +54,19 @@ use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
 use helix_utils::{extract_request_id, get_payload_attributes_key, has_reached_fork, utcnow_ns};
+use hyper::HeaderMap;
+use serde::Deserialize;
+use tokio::{
+    sync::{
+        broadcast,
+        mpsc::{self, error::SendError, Receiver, Sender},
+        RwLock,
+    },
+    time::{self},
+};
+use tokio_stream::wrappers::BroadcastStream;
+use tracing::{debug, error, info, warn, Instrument};
+use uuid::Uuid;
 
 use crate::{
     builder::{
@@ -2536,12 +2534,12 @@ pub(crate) fn get_nanos_from(now: SystemTime) -> Result<u64, BuilderApiError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use axum::http::{
         header::{CONTENT_ENCODING, CONTENT_TYPE},
         HeaderValue, Uri,
     };
+
+    use super::*;
 
     async fn build_test_request(payload: Vec<u8>, is_gzip: bool, is_ssz: bool) -> Request<Body> {
         let mut req = Request::new(Body::from(payload));

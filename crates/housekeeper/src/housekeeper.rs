@@ -4,15 +4,6 @@ use alloy_eips::merge::EPOCH_SLOTS;
 use alloy_primitives::map::HashSet;
 use ethereum_consensus::primitives::BlsPublicKey;
 use ethers::{abi::Address, contract::EthEvent, types::U256};
-use helix_utils::utcnow_ms;
-
-use tokio::{
-    sync::{broadcast, Mutex},
-    time::{interval_at, sleep, Instant},
-};
-use tracing::{debug, error, info, warn};
-
-use crate::{error::HousekeeperError, primev_service::PrimevService};
 use helix_beacon_client::{
     error::BeaconClientError,
     types::{HeadEventData, StateId},
@@ -20,14 +11,20 @@ use helix_beacon_client::{
 };
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
-    pending_block::PendingBlock, BuilderInfo, ProposerDuty, RelayConfig,
+    pending_block::PendingBlock, task, BuilderInfo, ProposerDuty, RelayConfig,
     SignedValidatorRegistrationEntry,
 };
 use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
-
-use helix_common::task;
+use helix_utils::utcnow_ms;
+use tokio::{
+    sync::{broadcast, Mutex},
+    time::{interval_at, sleep, Instant},
+};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+
+use crate::{error::HousekeeperError, primev_service::PrimevService};
 
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 1;
 
@@ -557,16 +554,13 @@ impl<
         for builder_pubkey in primev_builders {
             info!(builder_pubkey = %builder_pubkey, "PrimevBuilder");
             self.db
-                .store_builder_info(
-                    &builder_pubkey,
-                    &BuilderInfo {
-                        collateral: ethereum_consensus::primitives::U256::from(0),
-                        is_optimistic: false,
-                        is_optimistic_for_regional_filtering: false,
-                        builder_id: Some("PrimevBuilder".to_string()),
-                        builder_ids: Some(vec!["PrimevBuilder".to_string()]),
-                    },
-                )
+                .store_builder_info(&builder_pubkey, &BuilderInfo {
+                    collateral: ethereum_consensus::primitives::U256::from(0),
+                    is_optimistic: false,
+                    is_optimistic_for_regional_filtering: false,
+                    builder_id: Some("PrimevBuilder".to_string()),
+                    builder_ids: Some(vec!["PrimevBuilder".to_string()]),
+                })
                 .await?;
         }
 

@@ -1,4 +1,3 @@
-use helix_utils::utcnow_ms;
 use std::{
     io::{Error, IoSlice},
     net::SocketAddr,
@@ -18,6 +17,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
+use helix_utils::utcnow_ms;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,

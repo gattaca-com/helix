@@ -1,4 +1,5 @@
-use crate::{api::*, BuilderInfo, ValidatorPreferences};
+use std::{collections::HashSet, fs::File};
+
 use clap::Parser;
 use ethereum_consensus::{
     primitives::BlsPublicKey,
@@ -10,7 +11,8 @@ use helix_utils::{
 };
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, fs::File};
+
+use crate::{api::*, BuilderInfo, ValidatorPreferences};
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RelayConfig {
@@ -277,50 +279,38 @@ impl RouterConfig {
         }
 
         // Replace BuilderApi, ProposerApi, DataApi, ConstraintsApi with their real routes
-        self.replace_condensed_with_real(
-            Route::BuilderApi,
-            &[
-                Route::GetValidators,
-                Route::SubmitBlock,
-                Route::SubmitBlockWithProofs,
-                Route::SubmitBlockOptimistic,
-                Route::SubmitHeader,
-                Route::CancelBid,
-                Route::GetTopBid,
-                Route::GetBuilderConstraints,
-                Route::GetBuilderConstraintsStream,
-                Route::GetBuilderDelegations,
-            ],
-        );
+        self.replace_condensed_with_real(Route::BuilderApi, &[
+            Route::GetValidators,
+            Route::SubmitBlock,
+            Route::SubmitBlockWithProofs,
+            Route::SubmitBlockOptimistic,
+            Route::SubmitHeader,
+            Route::CancelBid,
+            Route::GetTopBid,
+            Route::GetBuilderConstraints,
+            Route::GetBuilderConstraintsStream,
+            Route::GetBuilderDelegations,
+        ]);
 
-        self.replace_condensed_with_real(
-            Route::ProposerApi,
-            &[
-                Route::Status,
-                Route::RegisterValidators,
-                Route::GetHeader,
-                Route::GetHeaderWithProofs,
-                Route::GetPayload,
-            ],
-        );
+        self.replace_condensed_with_real(Route::ProposerApi, &[
+            Route::Status,
+            Route::RegisterValidators,
+            Route::GetHeader,
+            Route::GetHeaderWithProofs,
+            Route::GetPayload,
+        ]);
 
-        self.replace_condensed_with_real(
-            Route::DataApi,
-            &[
-                Route::ProposerPayloadDelivered,
-                Route::BuilderBidsReceived,
-                Route::ValidatorRegistration,
-            ],
-        );
+        self.replace_condensed_with_real(Route::DataApi, &[
+            Route::ProposerPayloadDelivered,
+            Route::BuilderBidsReceived,
+            Route::ValidatorRegistration,
+        ]);
 
-        self.replace_condensed_with_real(
-            Route::ConstraintsApi,
-            &[
-                Route::SubmitBuilderConstraints,
-                Route::DelegateSubmissionRights,
-                Route::RevokeSubmissionRights,
-            ],
-        );
+        self.replace_condensed_with_real(Route::ConstraintsApi, &[
+            Route::SubmitBuilderConstraints,
+            Route::DelegateSubmissionRights,
+            Route::RevokeSubmissionRights,
+        ]);
     }
 
     fn contains(&self, route: Route) -> bool {

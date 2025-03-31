@@ -1,11 +1,13 @@
-use crate::state::AppState;
+use std::{collections::HashMap, sync::Arc};
+
 use askama::Template;
 use axum::{
     extract::{Query, State},
     response::Html,
 };
-use std::{collections::HashMap, sync::Arc};
 use tracing::info;
+
+use crate::state::AppState;
 
 pub async fn index(
     State(state): State<Arc<AppState>>,

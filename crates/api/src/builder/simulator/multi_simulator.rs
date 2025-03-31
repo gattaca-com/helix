@@ -1,5 +1,3 @@
-use async_trait::async_trait;
-use helix_common::{simulator::BlockSimError, BuilderInfo};
 use std::{
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -7,14 +5,16 @@ use std::{
     },
     time::Duration,
 };
+
+use async_trait::async_trait;
+use helix_common::{simulator::BlockSimError, BuilderInfo};
 use tokio::{
     sync::{mpsc::Sender, RwLock},
     time::sleep,
 };
 
-use crate::builder::DbInfo;
-
 use super::{traits::BlockSimulator, BlockSimRequest};
+use crate::builder::DbInfo;
 
 #[derive(Clone)]
 pub struct MultiSimulator<B: BlockSimulator + Send + Sync> {

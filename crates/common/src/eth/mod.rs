@@ -14,7 +14,6 @@ use ethereum_consensus::{
     types::mainnet::{ExecutionPayload, ExecutionPayloadHeader},
     Error,
 };
-
 use helix_utils::signing::sign_builder_message;
 use serde::de;
 
@@ -431,9 +430,9 @@ pub fn try_execution_header_from_payload(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     use ethereum_consensus::types::mainnet::SignedBlindedBeaconBlock;
+
+    use super::*;
 
     #[test]
     fn build_signed_builder() {

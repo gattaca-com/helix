@@ -1,5 +1,6 @@
-use crate::grpc;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32};
+
+use crate::grpc;
 
 #[derive(Clone, Debug)]
 pub struct RequestPayloadParams {

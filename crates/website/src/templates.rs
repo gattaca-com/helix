@@ -1,5 +1,6 @@
-use crate::models::DeliveredPayload;
 use askama::Template;
+
+use crate::models::DeliveredPayload;
 
 //Askama filters
 pub mod filters {

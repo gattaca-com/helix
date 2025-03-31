@@ -2,7 +2,6 @@
 
 use bytes::BufMut;
 use ethereum_consensus::primitives::U256;
-
 use tokio_postgres::types::{FromSql, ToSql};
 
 #[derive(Debug, Clone)]
@@ -133,10 +132,10 @@ impl ToSql for PostgresNumeric {
 }
 #[cfg(test)]
 mod tests {
+    use ethereum_consensus::primitives::U256;
+
     use super::*;
     use crate::postgres::postgres_db_u256_parsing::PostgresNumeric;
-
-    use ethereum_consensus::primitives::U256;
 
     fn get_values() -> Vec<U256> {
         vec![

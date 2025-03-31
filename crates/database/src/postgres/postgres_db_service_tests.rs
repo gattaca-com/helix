@@ -1,13 +1,19 @@
 #[cfg(test)]
 mod tests {
-    use crate::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
+    use std::{default::Default, ops::DerefMut, str::FromStr, sync::Arc, time::Duration};
+
+    use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
     use ethereum_consensus::{
         builder::{SignedValidatorRegistration, ValidatorRegistration},
         clock::get_current_unix_time_in_nanos,
         crypto::{PublicKey, SecretKey},
+        phase0::Validator,
         primitives::U256,
     };
     use helix_common::{
+        api::{
+            builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
+        },
         bellatrix::{ByteList, ByteVector, List},
         bid_submission::{
             v2::header_submission::{
@@ -15,26 +21,22 @@ mod tests {
             },
             BidTrace, SignedBidSubmission,
         },
+        simulator::BlockSimError,
+        validator_preferences::ValidatorPreferences,
         versioned_payload::PayloadAndBlobs,
         Filtering, GetPayloadTrace, HeaderSubmissionTrace, SubmissionTrace, ValidatorSummary,
     };
     use helix_utils::utcnow_sec;
     use rand::{seq::SliceRandom, thread_rng, Rng};
-    use std::{default::Default, ops::DerefMut, str::FromStr, sync::Arc, time::Duration};
     use tokio::time::sleep;
-
-    use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
-    use ethereum_consensus::phase0::Validator;
-    use helix_common::{
-        api::{
-            builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
-        },
-        simulator::BlockSimError,
-        validator_preferences::ValidatorPreferences,
-    };
     use tokio_postgres::NoTls;
 
-    use crate::postgres::postgres_db_init::run_migrations_async;
+    use crate::{
+        postgres::{
+            postgres_db_init::run_migrations_async, postgres_db_service::PostgresDatabaseService,
+        },
+        DatabaseService,
+    };
 
     /// These tests depend on a local instance of postgres running on port 5433
     /// e.g. to start a local postgres instance in docker:

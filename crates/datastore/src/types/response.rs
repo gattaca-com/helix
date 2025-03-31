@@ -1,5 +1,6 @@
-use ethereum_consensus::primitives::U256;
 use std::time::Instant;
+
+use ethereum_consensus::primitives::U256;
 
 #[derive(Debug, Clone)]
 pub struct SaveBidAndUpdateTopBidResponse {

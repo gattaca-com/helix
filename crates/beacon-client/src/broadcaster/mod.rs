@@ -1,8 +1,9 @@
 pub mod fiber_broadcaster;
 pub mod mock_block_broadcaster;
 
-use helix_common::signed_proposal::VersionedSignedProposal;
 use std::sync::Arc;
+
+use helix_common::signed_proposal::VersionedSignedProposal;
 
 use crate::{
     beacon_client::BeaconClient, error::BeaconClientError, fiber_broadcaster::FiberBroadcaster,

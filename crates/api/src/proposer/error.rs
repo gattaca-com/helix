@@ -8,12 +8,11 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, ExecutionAddress, Hash32, Slot},
     ssz::prelude::MerkleizationError,
 };
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
-
 use helix_beacon_client::error::BeaconClientError;
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ProposerApiError {
