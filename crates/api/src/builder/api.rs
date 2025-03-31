@@ -683,8 +683,8 @@ where
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional()
-            && !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional() &&
+            !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering and builder is not optimistic for regional filtering, discarding optimistic v2 submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
@@ -925,8 +925,8 @@ where
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional()
-            && !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional() &&
+            !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering enabled, discarding optimistic v2 submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
@@ -2367,10 +2367,7 @@ fn sanity_check_block_submission(
     }
 
     if payload.slot() != next_duty.slot {
-        return Err(BuilderApiError::SlotMismatch {
-            got: payload.slot(),
-            expected: next_duty.slot,
-        });
+        return Err(BuilderApiError::SlotMismatch { got: payload.slot(), expected: next_duty.slot });
     }
 
     if next_duty.entry.registration.message.public_key != bid_trace.proposer_public_key {
