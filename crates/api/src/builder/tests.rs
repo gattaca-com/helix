@@ -13,7 +13,6 @@ use std::{
 
 use alloy_primitives::hex;
 use axum::http::{header, Method, Request, Uri};
-use core::panic;
 use ethereum_consensus::{
     builder::{SignedValidatorRegistration, ValidatorRegistration},
     configs::mainnet::CAPELLA_FORK_EPOCH,
@@ -50,16 +49,6 @@ use reqwest::{Client, Response};
 use reqwest_eventsource::{Event as ReqwestEvent, EventSource};
 use serde_json::json;
 use serial_test::serial;
-use std::{
-    convert::Infallible,
-    future::pending,
-    io::Write,
-    ops::Deref,
-    pin::Pin,
-    str::FromStr,
-    sync::Arc,
-    time::{Duration, Instant},
-};
 use tokio::sync::{
     mpsc::{Receiver, Sender},
     oneshot,

@@ -17,6 +17,12 @@ use helix_common::{
 use reqwest::Client;
 use serde_json::json;
 
+use crate::builder::{
+    rpc_simulator::{BlockSimRpcResponse, JsonRpcError, RpcSimulator},
+    traits::BlockSimulator,
+    BlockSimRequest, DbInfo,
+};
+
 // ++++ HELPERS ++++
 fn get_simulator(endpoint: &str) -> RpcSimulator {
     let http = Client::new();
