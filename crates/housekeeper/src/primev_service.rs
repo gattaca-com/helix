@@ -44,9 +44,7 @@ pub struct ValueChanged {
 
 /// Helper function to process BLS keys from raw event data
 fn process_bls_key_data(data: &[u8]) -> Option<BlsPublicKey> {
-    // Convert to hex for easier debugging
-    let hex_data = format!("{}", alloy::hex::encode_prefixed(data));
-    debug!("Raw BLS key data: {}", hex_data);
+    debug!(raw = alloy_primitives::hex::encode_prefixed(data), "Raw BLS key data");
 
     // Try directly with the raw data first
     if let Ok(key) = BlsPublicKey::try_from(data) {

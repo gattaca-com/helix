@@ -1,4 +1,4 @@
-use alloy::hex;
+use alloy_primitives::hex;
 use ethereum_consensus::{
     clock::{
         for_goerli, for_holesky, for_mainnet, for_sepolia, from_system_time, Clock,

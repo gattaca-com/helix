@@ -25,7 +25,7 @@ pub enum AuctioneerError {
     ParseIntError(#[from] std::num::ParseIntError),
 
     #[error("from hex error: {0}")]
-    FromHexError(#[from] alloy::hex::FromHexError),
+    FromHexError(#[from] alloy_primitives::hex::FromHexError),
 
     #[error("past slot already delivered")]
     PastSlotAlreadyDelivered,

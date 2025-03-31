@@ -9,7 +9,7 @@ use crate::{
     service::API_REQUEST_TIMEOUT,
     test_utils::builder_api_app,
 };
-use alloy::hex;
+use alloy_primitives::hex;
 use axum::http::{header, Method, Request, Uri};
 use core::panic;
 use ethereum_consensus::{

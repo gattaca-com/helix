@@ -7,7 +7,7 @@ mod simulator_tests {
         traits::BlockSimulator,
         BlockSimRequest,
     };
-    use alloy::hex;
+    use alloy_primitives::hex;
     use ethereum_consensus::{
         primitives::{BlsPublicKey, BlsSignature},
         ssz::prelude::*,

@@ -37,7 +37,7 @@ mod proposer_api_tests {
         test_utils::proposer_api_app,
     };
 
-    use alloy::hex;
+    use alloy_primitives::hex;
     use ethereum_consensus::{
         bellatrix,
         builder::{SignedValidatorRegistration, ValidatorRegistration},

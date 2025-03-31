@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use alloy::{eips::merge::EPOCH_SLOTS, primitives::map::HashSet};
+use alloy_eips::merge::EPOCH_SLOTS;
+use alloy_primitives::map::HashSet;
 use ethereum_consensus::primitives::BlsPublicKey;
 use ethers::{abi::Address, contract::EthEvent, types::U256};
 use helix_utils::utcnow_ms;

@@ -292,7 +292,7 @@ mod tests {
     // this is random data
     fn test_submit_block_2() {
         let data_ssz = include_bytes!("testdata/signed-bid-submission-deneb-2.ssz");
-        let data_ssz = alloy::primitives::hex::decode(data_ssz).unwrap();
+        let data_ssz = alloy_primitives::hex::decode(data_ssz).unwrap();
         test_encode_decode_ssz::<SignedBidSubmissionDeneb>(&data_ssz);
     }
 }

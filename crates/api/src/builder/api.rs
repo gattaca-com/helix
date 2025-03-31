@@ -5,7 +5,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use alloy::primitives::B256;
+use alloy_primitives::B256;
 use axum::{
     body::{to_bytes, Body},
     extract::{
