@@ -2,13 +2,6 @@
 mod simulator_tests {
     use std::sync::{atomic::AtomicBool, Arc};
 
-    // ++++ IMPORTS ++++
-    use crate::builder::{
-        optimistic_simulator::OptimisticSimulator,
-        rpc_simulator::{BlockSimRpcResponse, JsonRpcError},
-        traits::BlockSimulator,
-        BlockSimRequest,
-    };
     use alloy_primitives::hex;
     use ethereum_consensus::{
         primitives::{BlsPublicKey, BlsSignature},
@@ -25,6 +18,14 @@ mod simulator_tests {
     use rand::Rng;
     use reqwest::Client;
     use serde_json::json;
+
+    // ++++ IMPORTS ++++
+    use crate::builder::{
+        optimistic_simulator::OptimisticSimulator,
+        rpc_simulator::{BlockSimRpcResponse, JsonRpcError},
+        traits::BlockSimulator,
+        BlockSimRequest,
+    };
 
     // ++++ HELPERS ++++
     fn get_optimistic_simulator(
