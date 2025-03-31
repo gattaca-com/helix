@@ -6,17 +6,16 @@ use ethereum_consensus::{
     serde::as_str,
 };
 use helix_beacon_client::{beacon_client::BeaconClient, BeaconClientTrait};
-use reqwest::{Error, Response};
-use serde::{Deserialize, Serialize};
-use tokio::{sync::mpsc::channel, time::sleep};
-use tracing::{error, info};
-
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
     },
     BeaconClientConfig,
 };
+use reqwest::{Error, Response};
+use serde::{Deserialize, Serialize};
+use tokio::{sync::mpsc::channel, time::sleep};
+use tracing::{error, info};
 use url::Url;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

@@ -1,8 +1,10 @@
-use crate::templates::IndexTemplate;
+use std::sync::Arc;
+
 use helix_common::{chain_info::ChainInfo, WebsiteConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use std::sync::Arc;
 use tokio::sync::RwLock;
+
+use crate::templates::IndexTemplate;
 
 #[derive(Clone)]
 pub struct AppState {

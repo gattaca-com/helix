@@ -17,31 +17,6 @@ use ethereum_consensus::{
     ssz::prelude::*,
     types::mainnet::{ExecutionPayloadHeader, SignedBeaconBlock, SignedBlindedBeaconBlock},
 };
-
-use serde_json::json;
-use tokio::{
-    sync::{
-        mpsc::{self, error::SendError, Receiver, Sender},
-        oneshot, RwLock,
-    },
-    time::{sleep, Instant},
-};
-use tracing::{debug, error, info, trace, warn, Instrument};
-use uuid::Uuid;
-
-use crate::{
-    gossiper::{
-        traits::GossipClientTrait,
-        types::{
-            BroadcastGetPayloadParams, BroadcastPayloadParams, GossipedMessage,
-            RequestPayloadParams,
-        },
-    },
-    proposer::{
-        error::ProposerApiError, unblind_beacon_block, GetHeaderParams, PreferencesHeader,
-        GET_HEADER_REQUEST_CUTOFF_MS,
-    },
-};
 use helix_beacon_client::{types::BroadcastValidation, BlockBroadcaster, MultiBeaconClientTrait};
 use helix_common::{
     api::{
@@ -66,6 +41,30 @@ use helix_utils::{
     extract_request_id,
     signing::{verify_signed_builder_message, verify_signed_consensus_message},
     utcnow_ms, utcnow_ns,
+};
+use serde_json::json;
+use tokio::{
+    sync::{
+        mpsc::{self, error::SendError, Receiver, Sender},
+        oneshot, RwLock,
+    },
+    time::{sleep, Instant},
+};
+use tracing::{debug, error, info, trace, warn, Instrument};
+use uuid::Uuid;
+
+use crate::{
+    gossiper::{
+        traits::GossipClientTrait,
+        types::{
+            BroadcastGetPayloadParams, BroadcastPayloadParams, GossipedMessage,
+            RequestPayloadParams,
+        },
+    },
+    proposer::{
+        error::ProposerApiError, unblind_beacon_block, GetHeaderParams, PreferencesHeader,
+        GET_HEADER_REQUEST_CUTOFF_MS,
+    },
 };
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;

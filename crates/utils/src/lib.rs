@@ -1,4 +1,3 @@
-use http::HeaderMap;
 use std::{
     collections::HashMap,
     fs::{self, File},
@@ -14,6 +13,7 @@ use ethereum_consensus::{
     phase0::mainnet::SLOTS_PER_EPOCH,
     ssz::{self, prelude::Serializable},
 };
+use http::HeaderMap;
 use tracing::{error, info};
 use uuid::Uuid;
 

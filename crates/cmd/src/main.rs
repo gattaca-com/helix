@@ -3,7 +3,6 @@ use helix_common::{metrics::start_metrics_server, LoggingConfig, RelayConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_utils::set_panic_hook;
 use helix_website::website_service::WebsiteService;
-
 use tikv_jemallocator::Jemalloc;
 use tokio::runtime::Builder;
 use tracing_appender::rolling::Rotation;

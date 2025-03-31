@@ -5,8 +5,6 @@ use std::{
 
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
-
-use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_common::{
     api::constraints_api::{SignedDelegation, SignedRevocation},
     bellatrix::Node,
@@ -23,6 +21,8 @@ use helix_common::{
 };
 use helix_database::types::BuilderInfoDocument;
 use tokio_stream::Stream;
+
+use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 
 #[derive(Default, Clone)]
 pub struct MockAuctioneer {

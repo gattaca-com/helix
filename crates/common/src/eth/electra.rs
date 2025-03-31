@@ -1,7 +1,5 @@
-pub use ethereum_consensus::{builder::SignedValidatorRegistration, electra::mainnet as spec};
 use std::sync::Arc;
 
-use crate::{signed_proposal::VersionedSignedProposal, BLOB_KZG_COMMITMENTS_INDEX};
 use ethereum_consensus::{
     altair::{BeaconBlockHeader, SignedBeaconBlockHeader},
     crypto::{KzgCommitment, KzgProof},
@@ -17,11 +15,14 @@ use ethereum_consensus::{
     serde::as_str,
     ssz::prelude::*,
 };
+pub use ethereum_consensus::{builder::SignedValidatorRegistration, electra::mainnet as spec};
 use ethereum_types::H256;
 use merkle_proof::MerkleTreeError;
 use ssz_types::{typenum::U17, FixedVector};
 use thiserror::Error;
 use tracing::error;
+
+use crate::{signed_proposal::VersionedSignedProposal, BLOB_KZG_COMMITMENTS_INDEX};
 
 pub type ExecutionRequests = spec::ExecutionRequests<
     MAX_DEPOSIT_REQUESTS_PER_PAYLOAD,
@@ -259,14 +260,16 @@ fn kzg_commitment_merkle_proof(
 
 #[cfg(test)]
 mod tests {
-    use ethereum_consensus::{ssz::prelude::*, types::BlindedBeaconBlockRef};
+    use ethereum_consensus::{
+        ssz::prelude::*,
+        types::{mainnet::SignedBlindedBeaconBlock, BlindedBeaconBlockRef},
+    };
 
     use crate::{
         bid_submission::SignedBidSubmissionElectra,
         utils::test_utils::{test_encode_decode_json, test_encode_decode_ssz},
         SignedBuilderBid,
     };
-    use ethereum_consensus::types::mainnet::SignedBlindedBeaconBlock;
 
     #[test]
     fn test_signed_builder_electra() {

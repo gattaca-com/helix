@@ -9,7 +9,6 @@ use async_trait::async_trait;
 use dashmap::{DashMap, DashSet};
 use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
 use ethereum_consensus::{altair::Hash32, primitives::BlsPublicKey, ssz::prelude::ByteVector};
-
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
@@ -879,10 +878,9 @@ impl DatabaseService for PostgresDatabaseService {
                 pub_keys.insert(public_key.clone());
             } else {
                 let rows = client
-                    .query(
-                        "SELECT * FROM known_validators WHERE public_key = $1",
-                        &[&(public_key.as_ref())],
-                    )
+                    .query("SELECT * FROM known_validators WHERE public_key = $1", &[
+                        &(public_key.as_ref())
+                    ])
                     .await?;
                 for row in rows {
                     let public_key: BlsPublicKey =

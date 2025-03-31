@@ -1,17 +1,18 @@
 // +++ IMPORTS +++
-use crate::{
-    builder::{
-        api::{decode_header_submission, decode_payload, BuilderApi, MAX_PAYLOAD_LENGTH},
-        mock_simulator::MockSimulator,
-    },
-    constraints::api::ConstraintsHandle,
-    gossiper::mock_gossiper::MockGossiper,
-    service::API_REQUEST_TIMEOUT,
-    test_utils::builder_api_app,
+use core::panic;
+use std::{
+    convert::Infallible,
+    future::pending,
+    io::Write,
+    ops::Deref,
+    pin::Pin,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, Instant},
 };
+
 use alloy::hex;
 use axum::http::{header, Method, Request, Uri};
-use core::panic;
 use ethereum_consensus::{
     builder::{SignedValidatorRegistration, ValidatorRegistration},
     configs::mainnet::CAPELLA_FORK_EPOCH,
@@ -21,7 +22,6 @@ use ethereum_consensus::{
     types::mainnet::{ExecutionPayload, ExecutionPayloadHeader},
     Fork,
 };
-
 use futures::{lock::Mutex, stream::FuturesOrdered, Future, SinkExt, StreamExt};
 use helix_beacon_client::types::PayloadAttributes;
 use helix_common::{
@@ -49,16 +49,6 @@ use reqwest::{Client, Response};
 use reqwest_eventsource::{Event as ReqwestEvent, EventSource};
 use serde_json::json;
 use serial_test::serial;
-use std::{
-    convert::Infallible,
-    future::pending,
-    io::Write,
-    ops::Deref,
-    pin::Pin,
-    str::FromStr,
-    sync::Arc,
-    time::{Duration, Instant},
-};
 use tokio::sync::{
     mpsc::{Receiver, Sender},
     oneshot,
@@ -69,6 +59,17 @@ use tokio_tungstenite::{
 };
 use tonic::transport::Body;
 use tracing::debug;
+
+use crate::{
+    builder::{
+        api::{decode_header_submission, decode_payload, BuilderApi, MAX_PAYLOAD_LENGTH},
+        mock_simulator::MockSimulator,
+    },
+    constraints::api::ConstraintsHandle,
+    gossiper::mock_gossiper::MockGossiper,
+    service::API_REQUEST_TIMEOUT,
+    test_utils::builder_api_app,
+};
 
 // +++ HELPER VARIABLES +++
 const ADDRESS: &str = "0.0.0.0";
@@ -266,8 +267,9 @@ fn load_bid_submission_from_file(
 }
 
 fn load_gzipped_bytes(filename: &str) -> Vec<u8> {
-    use flate2::read::GzDecoder;
     use std::io::Read;
+
+    use flate2::read::GzDecoder;
 
     let mut file = std::fs::File::open(filename).unwrap();
     let mut buffer = Vec::new();

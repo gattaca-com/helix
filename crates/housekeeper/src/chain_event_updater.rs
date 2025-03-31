@@ -3,12 +3,6 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use ethereum_consensus::{
     configs::goerli::CAPELLA_FORK_EPOCH, deneb::Withdrawal, primitives::Bytes32,
 };
-use tokio::{
-    sync::{broadcast, mpsc},
-    time::{interval_at, sleep, Instant},
-};
-use tracing::{error, info, warn};
-
 use helix_beacon_client::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry,
@@ -17,6 +11,11 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_utils::{get_payload_attributes_key, has_reached_fork, utcnow_sec};
+use tokio::{
+    sync::{broadcast, mpsc},
+    time::{interval_at, sleep, Instant},
+};
+use tracing::{error, info, warn};
 
 // Do not accept slots more than 60 seconds in the future
 const MAX_DISTANCE_FOR_FUTURE_SLOT: u64 = 60;

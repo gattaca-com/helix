@@ -1,4 +1,3 @@
-use crate::models::DeliveredPayload;
 use async_trait::async_trait;
 use deadpool_postgres::tokio_postgres;
 use helix_common::bid_submission::BidTrace;
@@ -13,6 +12,8 @@ use helix_database::{
         postgres_db_u256_parsing::PostgresNumeric,
     },
 };
+
+use crate::models::DeliveredPayload;
 
 #[async_trait]
 pub trait WebsiteDatabaseService: Send + Sync {

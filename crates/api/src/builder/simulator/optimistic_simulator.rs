@@ -8,6 +8,9 @@ use std::{
 
 use async_trait::async_trait;
 use ethereum_consensus::primitives::{BlsPublicKey, Hash32};
+use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, task, BuilderInfo};
+use helix_database::DatabaseService;
+use helix_datastore::Auctioneer;
 use reqwest::Client;
 use tokio::{
     sync::{mpsc::Sender, RwLock},
@@ -18,9 +21,6 @@ use tracing::{debug, error, warn, Instrument};
 use crate::builder::{
     rpc_simulator::RpcSimulator, traits::BlockSimulator, BlockSimRequest, DbInfo,
 };
-use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, task, BuilderInfo};
-use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 
 /// OptimisticSimulator is responsible for running simulations optimistically or synchronously based
 /// on the builder's status.

@@ -4,7 +4,8 @@ use helix_common::{
     api::constraints_api::{SignedDelegation, SignedRevocation},
     bellatrix::Node,
     bid_submission::{
-        v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
+        v2::header_submission::SignedHeaderSubmission,
+        v3::header_submission_v3::PayloadSocketAddress, BidTrace, SignedBidSubmission,
     },
     builder_info::BuilderInfo,
     eth::SignedBuilderBid,
@@ -15,10 +16,9 @@ use helix_common::{
     ProposerInfo,
 };
 use helix_database::BuilderInfoDocument;
+use tokio_stream::Stream;
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse};
-use helix_common::bid_submission::v3::header_submission_v3::PayloadSocketAddress;
-use tokio_stream::Stream;
 
 #[async_trait]
 #[auto_impl::auto_impl(Arc)]
