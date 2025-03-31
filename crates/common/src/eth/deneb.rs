@@ -1,7 +1,5 @@
-pub use ethereum_consensus::{builder::SignedValidatorRegistration, deneb::mainnet as spec};
 use std::sync::Arc;
 
-use crate::{signed_proposal::VersionedSignedProposal, BLOB_KZG_COMMITMENTS_INDEX};
 use ethereum_consensus::{
     altair::{BeaconBlockHeader, SignedBeaconBlockHeader},
     crypto::{KzgCommitment, KzgProof},
@@ -14,11 +12,14 @@ use ethereum_consensus::{
     ssz::prelude::*,
     types::mainnet::SignedBeaconBlock,
 };
+pub use ethereum_consensus::{builder::SignedValidatorRegistration, deneb::mainnet as spec};
 use ethereum_types::H256;
 use merkle_proof::MerkleTreeError;
 use ssz_types::{typenum::U17, FixedVector};
 use thiserror::Error;
 use tracing::error;
+
+use crate::{signed_proposal::VersionedSignedProposal, BLOB_KZG_COMMITMENTS_INDEX};
 
 pub type ExecutionPayload = spec::ExecutionPayload;
 pub type ExecutionPayloadHeader = spec::ExecutionPayloadHeader;
@@ -248,14 +249,13 @@ fn kzg_commitment_merkle_proof(
 
 #[cfg(test)]
 mod tests {
-    use ethereum_consensus::types::BlindedBeaconBlockRef;
+    use ethereum_consensus::types::{mainnet::SignedBlindedBeaconBlock, BlindedBeaconBlockRef};
 
     use crate::{
         bid_submission::SignedBidSubmissionDeneb,
         utils::test_utils::{test_encode_decode_json, test_encode_decode_ssz},
         versioned_payload::PayloadAndBlobs,
     };
-    use ethereum_consensus::types::mainnet::SignedBlindedBeaconBlock;
 
     #[test]
     // this is from mev-boost test data

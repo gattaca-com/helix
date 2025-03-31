@@ -91,14 +91,11 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
         _epoch: u64,
     ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError> {
         self.proposer_duties_has_been_read.store(true, std::sync::atomic::Ordering::Relaxed);
-        Ok((
-            Root::default(),
-            vec![ProposerDuty {
-                public_key: BlsPublicKey::default(),
-                validator_index: 1,
-                slot: 19,
-            }],
-        ))
+        Ok((Root::default(), vec![ProposerDuty {
+            public_key: BlsPublicKey::default(),
+            validator_index: 1,
+            slot: 19,
+        }]))
     }
     async fn publish_block<VersionedSignedProposal: Serializable + Send + Sync + 'static>(
         &self,

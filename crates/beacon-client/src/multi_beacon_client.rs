@@ -3,11 +3,6 @@ use std::sync::{
     Arc,
 };
 
-use crate::{
-    error::BeaconClientError,
-    traits::{BeaconClientTrait, MultiBeaconClientTrait},
-    types::{BroadcastValidation, HeadEventData, PayloadAttributesEvent, StateId, SyncStatus},
-};
 use async_trait::async_trait;
 use ethereum_consensus::primitives::Root;
 use futures::future::join_all;
@@ -17,6 +12,12 @@ use helix_common::{
 };
 use tokio::{sync::broadcast::Sender, task::JoinError};
 use tracing::{error, warn};
+
+use crate::{
+    error::BeaconClientError,
+    traits::{BeaconClientTrait, MultiBeaconClientTrait},
+    types::{BroadcastValidation, HeadEventData, PayloadAttributesEvent, StateId, SyncStatus},
+};
 
 #[derive(Clone)]
 pub struct MultiBeaconClient<BeaconClient: BeaconClientTrait + 'static> {

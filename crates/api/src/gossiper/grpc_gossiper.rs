@@ -1,5 +1,16 @@
 use std::{sync::Arc, time::Duration};
 
+use async_trait::async_trait;
+use helix_common::{
+    metrics::{GossipMetrics, BUILDER_GOSSIP_QUEUE, PROPOSER_GOSSIP_QUEUE},
+    task,
+};
+use prost::Message;
+use tokio::{sync::mpsc::Sender, time::sleep};
+use tonic::{transport::Channel, Request, Response, Status};
+use tracing::error;
+
+use super::types::broadcast_cancellation::BroadcastCancellationParams;
 use crate::{
     gossiper::{
         error::GossipError,
@@ -15,17 +26,6 @@ use crate::{
         gossip_service_server::{GossipService, GossipServiceServer},
     },
 };
-use async_trait::async_trait;
-use helix_common::{
-    metrics::{GossipMetrics, BUILDER_GOSSIP_QUEUE, PROPOSER_GOSSIP_QUEUE},
-    task,
-};
-use prost::Message;
-use tokio::{sync::mpsc::Sender, time::sleep};
-use tonic::{transport::Channel, Request, Response, Status};
-use tracing::error;
-
-use super::types::broadcast_cancellation::BroadcastCancellationParams;
 
 const HEADER_ID: &str = "header";
 const PAYLOAD_ID: &str = "payload";

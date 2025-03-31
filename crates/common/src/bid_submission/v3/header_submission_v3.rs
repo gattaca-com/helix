@@ -1,9 +1,10 @@
-use bitflags::bitflags;
-use ethereum_consensus::{altair::BlsPublicKey, primitives::Hash32, ssz::prelude::*};
 use std::{
     fmt::{Debug, Formatter},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
 };
+
+use bitflags::bitflags;
+use ethereum_consensus::{altair::BlsPublicKey, primitives::Hash32, ssz::prelude::*};
 
 use crate::{
     bellatrix::SimpleSerialize, bid_submission::v2::header_submission::SignedHeaderSubmission,

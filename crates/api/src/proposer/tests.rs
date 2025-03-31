@@ -31,11 +31,7 @@ pub fn gen_signed_vr() -> SignedValidatorRegistration {
 #[cfg(test)]
 mod proposer_api_tests {
     // +++ IMPORTS +++
-    use crate::{
-        gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
-        proposer::api::ProposerApi,
-        test_utils::proposer_api_app,
-    };
+    use std::{sync::Arc, time::Duration};
 
     use alloy::hex;
     use ethereum_consensus::{
@@ -46,12 +42,8 @@ mod proposer_api_tests {
         phase0::Eth1Data,
         primitives::{BlsPublicKey, BlsSignature},
         ssz::prelude::*,
+        types::mainnet::{ExecutionPayload, SignedBlindedBeaconBlock},
     };
-    use rand::Rng;
-    use reqwest::StatusCode;
-
-    use crate::proposer::tests::gen_signed_vr;
-    use ethereum_consensus::types::mainnet::{ExecutionPayload, SignedBlindedBeaconBlock};
     use helix_beacon_client::mock_multi_beacon_client::MockMultiBeaconClient;
     use helix_common::{
         api::{
@@ -69,14 +61,21 @@ mod proposer_api_tests {
     use helix_datastore::MockAuctioneer;
     use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
     use helix_utils::{signing::verify_signed_consensus_message, utcnow_ns};
+    use rand::Rng;
+    use reqwest::StatusCode;
     use serial_test::serial;
-    use std::{sync::Arc, time::Duration};
     use tokio::{
         sync::{
             mpsc::{channel, Receiver, Sender},
             oneshot,
         },
         time::sleep,
+    };
+
+    use crate::{
+        gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
+        proposer::{api::ProposerApi, tests::gen_signed_vr},
+        test_utils::proposer_api_app,
     };
 
     // +++ HELPER VARIABLES +++

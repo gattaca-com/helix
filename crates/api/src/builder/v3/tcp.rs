@@ -1,3 +1,5 @@
+use std::{io::Error, net::SocketAddr, sync::Arc};
+
 use axum::response::IntoResponse;
 use ethereum_consensus::ssz;
 use helix_common::{
@@ -9,7 +11,6 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_utils::utcnow_ns;
-use std::{io::Error, net::SocketAddr, sync::Arc};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},

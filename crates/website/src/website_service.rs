@@ -1,16 +1,6 @@
-use crate::state::{AppState, CachedTemplates};
-use axum::{routing::get, Router};
 use std::{net::SocketAddr, sync::Arc};
-use tokio::{
-    net::TcpListener,
-    sync::{broadcast, mpsc, RwLock},
-};
-use tracing::{debug, error, info, warn};
 
-use crate::{
-    handlers, models::DeliveredPayload, postgres_db_website::WebsiteDatabaseService,
-    templates::IndexTemplate,
-};
+use axum::{routing::get, Router};
 use helix_beacon_client::{
     beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient, MultiBeaconClientTrait,
 };
@@ -18,6 +8,19 @@ use helix_common::{chain_info::ChainInfo, NetworkConfig, RelayConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_housekeeper::{ChainEventUpdater, ChainUpdate};
 use helix_utils::signing::compute_builder_domain;
+use tokio::{
+    net::TcpListener,
+    sync::{broadcast, mpsc, RwLock},
+};
+use tracing::{debug, error, info, warn};
+
+use crate::{
+    handlers,
+    models::DeliveredPayload,
+    postgres_db_website::WebsiteDatabaseService,
+    state::{AppState, CachedTemplates},
+    templates::IndexTemplate,
+};
 
 pub struct WebsiteService {}
 

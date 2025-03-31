@@ -5,7 +5,6 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Hash32},
     ssz::prelude::*,
 };
-
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,

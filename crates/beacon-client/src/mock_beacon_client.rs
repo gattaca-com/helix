@@ -2,9 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use ethereum_consensus::{primitives::Root, ssz::prelude::*};
-use tokio::sync::broadcast::Sender;
-
 use helix_common::{beacon_api::PublishBlobsRequest, ProposerDuty, ValidatorSummary};
+use tokio::sync::broadcast::Sender;
 
 use crate::{
     error::BeaconClientError,

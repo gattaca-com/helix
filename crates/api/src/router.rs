@@ -1,3 +1,5 @@
+use std::{sync::Arc, time::Duration};
+
 use axum::{
     error_handling::HandleErrorLayer,
     http::StatusCode,
@@ -5,14 +7,12 @@ use axum::{
     routing::{get, post},
     Extension, Router,
 };
-
 use helix_beacon_client::{beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient};
 use helix_common::{Route, RouterConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
 use helix_utils::extract_request_id;
 use hyper::{HeaderMap, Uri};
-use std::{sync::Arc, time::Duration};
 use tower::{timeout::TimeoutLayer, BoxError, ServiceBuilder};
 use tower_governor::{
     governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer,

@@ -8,6 +8,5 @@ pub mod traits;
 pub mod types;
 
 pub use broadcaster::*;
-pub use traits::*;
-
 pub use helix_common::*;
+pub use traits::*;

@@ -1,9 +1,9 @@
+use std::sync::Arc;
+
 use ethereum_consensus::{clock::get_current_unix_time_in_nanos, Fork};
 use helix_common::signed_proposal::VersionedSignedProposal;
-use std::sync::Arc;
-use tracing::debug;
-
 use helix_utils::request_encoding::Encoding;
+use tracing::debug;
 
 use crate::{error::BeaconClientError, types::BroadcastValidation};
 

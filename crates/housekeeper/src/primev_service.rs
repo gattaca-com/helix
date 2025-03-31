@@ -1,18 +1,17 @@
+#[cfg(test)]
+use std::sync::Mutex;
+use std::{convert::TryFrom, sync::Arc};
+
 use async_trait::async_trait;
 use ethereum_consensus::primitives::BlsPublicKey;
 use ethers::{
     abi::{Abi, AbiParser, Address, Bytes},
     contract::{Contract, EthEvent},
-    providers::{Http, Provider},
+    providers::{Http, Middleware, Provider},
+    types::transaction::eip2718::TypedTransaction,
 };
 use helix_common::{PrimevConfig, ProposerDuty};
-use std::{convert::TryFrom, sync::Arc};
 use tracing::{debug, error};
-
-use ethers::{providers::Middleware, types::transaction::eip2718::TypedTransaction};
-
-#[cfg(test)]
-use std::sync::Mutex;
 
 /// Service for interacting with Primev contracts
 #[async_trait]
@@ -44,9 +43,7 @@ pub struct ValueChanged {
 
 /// Helper function to process BLS keys from raw event data
 fn process_bls_key_data(data: &[u8]) -> Option<BlsPublicKey> {
-    // Convert to hex for easier debugging
-    let hex_data = format!("{}", alloy::hex::encode_prefixed(data));
-    debug!("Raw BLS key data: {}", hex_data);
+    debug!(raw = alloy::hex::encode_prefixed(data), "Raw BLS key data");
 
     // Try directly with the raw data first
     if let Ok(key) = BlsPublicKey::try_from(data) {

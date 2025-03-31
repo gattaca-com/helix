@@ -1,9 +1,8 @@
-use thiserror::Error;
-use tokio::sync::TryLockError;
-
 use helix_beacon_client::error::BeaconClientError;
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
+use thiserror::Error;
+use tokio::sync::TryLockError;
 
 #[derive(Debug, Error)]
 pub enum HousekeeperError {
