@@ -45,12 +45,12 @@ pub struct ValueChanged {
 /// Helper function to process BLS keys from raw event data
 fn process_bls_key_data(data: &[u8]) -> Option<BlsPublicKey> {
     // Convert to hex for easier debugging
-    let hex_data = format!("0x{}", hex::encode(data));
+    let hex_data = format!("{}", alloy::hex::encode_prefixed(data));
     debug!("Raw BLS key data: {}", hex_data);
 
     // Try directly with the raw data first
     if let Ok(key) = BlsPublicKey::try_from(data) {
-        return Some(key)
+        return Some(key);
     }
 
     // Remove the Solidity encoding overhead similar to the jq command
@@ -61,14 +61,14 @@ fn process_bls_key_data(data: &[u8]) -> Option<BlsPublicKey> {
 
     if data.len() < 64 {
         debug!("Data too short for BLS key");
-        return None
+        return None;
     }
 
     // Extract the data part after the length prefix
     let data_part = &data[64..];
     if data_part.len() < 48 {
         debug!("Data part too short for BLS key: {}", data_part.len());
-        return None
+        return None;
     }
 
     // Use only the first 48 bytes which is the BLS pubkey size
@@ -209,7 +209,7 @@ impl PrimevService for EthereumPrimevService {
     ) -> Vec<BlsPublicKey> {
         if proposer_duties.is_empty() {
             debug!("No proposer duties provided, skipping validator check");
-            return Vec::new()
+            return Vec::new();
         }
 
         let validator_pubkeys: Vec<Bytes> =
@@ -219,7 +219,7 @@ impl PrimevService for EthereumPrimevService {
             Ok(f) => f,
             Err(e) => {
                 error!("Failed to get function from ABI: {:?}", e);
-                return Vec::new()
+                return Vec::new();
             }
         };
 
@@ -231,7 +231,7 @@ impl PrimevService for EthereumPrimevService {
             Ok(data) => data,
             Err(e) => {
                 error!("Failed to encode function input: {:?}", e);
-                return Vec::new()
+                return Vec::new();
             }
         };
 
@@ -246,7 +246,7 @@ impl PrimevService for EthereumPrimevService {
             Ok(data) => data,
             Err(e) => {
                 error!("Contract call failed: {:?}", e);
-                return Vec::new()
+                return Vec::new();
             }
         };
 
@@ -254,7 +254,7 @@ impl PrimevService for EthereumPrimevService {
             Ok(tokens) => tokens,
             Err(e) => {
                 error!("Failed to decode output: {:?}", e);
-                return Vec::new()
+                return Vec::new();
             }
         };
 
@@ -274,7 +274,7 @@ impl PrimevService for EthereumPrimevService {
                                 values.get(1).unwrap_or(&ethers::abi::Token::Bool(false)),
                                 values.get(2).unwrap_or(&ethers::abi::Token::Bool(false)),
                             ) {
-                                return (*vanilla_opted_in, *avs_opted_in, *middleware_opted_in)
+                                return (*vanilla_opted_in, *avs_opted_in, *middleware_opted_in);
                             }
                         }
                     }

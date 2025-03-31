@@ -1,38 +1,26 @@
 [package]
-name = "helix-database"
-version.workspace = true
-rust-version.workspace = true
 edition.workspace = true
-repository.workspace = true
 license.workspace = true
+name = "helix-database"
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
+alloy.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+dashmap.workspace = true
+deadpool-postgres.workspace = true
+env_logger.workspace = true
+ethereum-consensus.workspace = true
 helix-common.workspace = true
 helix-utils.workspace = true
-
-# Async and Networking 
-async-trait.workspace = true
-tokio.workspace = true
-
-# Serialization and Data Format 
+rand.workspace = true
+refinery.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-
-# DB 
-tokio-postgres.workspace = true
-deadpool-postgres.workspace = true
-refinery.workspace = true
-bytes.workspace = true
-
-# Ethereum Types
-ethereum-consensus.workspace = true
-
-# Testing
-env_logger.workspace = true
-
-# Misc 
-hex.workspace = true
-rand = "0.8"
-dashmap.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
 tracing.workspace = true

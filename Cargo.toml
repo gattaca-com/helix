@@ -1,25 +1,47 @@
 [workspace]
 members = [
-  "crates/beacon-client",
   "crates/api",
-  "crates/utils",
+  "crates/beacon-client",
+  "crates/cmd",
   "crates/common",
   "crates/database",
   "crates/datastore",
-  "crates/cmd",
   "crates/housekeeper",
+  "crates/utils",
   "crates/website",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.1"
-rust-version = "1.82.0"
 edition = "2021"
-repository = "https://github.com/gattaca-com/helix"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/gattaca-com/helix"
+rust-version = "1.82.0"
+version = "0.0.1"
 
 [workspace.dependencies]
+alloy = { version = "0.11.0", features = ["full", "rlp"] }
+askama = "0.12"
+async-trait = "0.1"
+auto_impl = "1.0.1"
+axum = { version = "0.8", features = ["matched-path", "ws"] }
+backtrace = "0.3.69"
+bitflags = "2.8.0"
+bytes = "1.10"
+cbor4ii = { version = "1.0.0", features = ["serde1"] }
+clap = { version = "4.2.7", features = ["derive"] }
+dashmap = { version = "5.5.3", features = [] }
+deadpool-postgres = "0.11.0"
+deadpool-redis = { version = "0.12.0", features = ["rt_tokio_1"] }
+env_logger = "0.9"
+ethereum-consensus = { git = "https://github.com/gattaca-com/ethereum-consensus" }
+ethereum-types = "0.14.1"
+ethers = "2.0.14"
+eyre = "0.6.12"
+fiber = { git = "https://github.com/chainbound/fiber-rs.git", tag = "v0.8.0" }
+flate2 = "1.0"
+futures = "0.3"
+futures-util = { version = "0.3", features = ["compat"] }
 helix-api = { path = "./crates/api" }
 helix-beacon-client = { path = "./crates/beacon-client" }
 helix-common = { path = "crates/common" }
@@ -28,71 +50,42 @@ helix-datastore = { path = "./crates/datastore" }
 helix-housekeeper = { path = "./crates/housekeeper" }
 helix-utils = { path = "./crates/utils" }
 helix-website = { path = "./crates/website" }
-
-# Async and Networking 
-async-trait = "0.1"
-axum = { version = "0.8", features = ["ws", "matched-path"] }
-dashmap = { version = "5.5.3", features = [] }
-futures = "0.3"
-hyper = "1.1.0"
 http = "1.0.0"
-tower = { version = "0.4.13", features = ["full"] }
-tower_governor = { version = "0.6.0", features = ["axum"] }
-reqwest = { version = "0.11.23", features = [
-  "json",
-  "native-tls-vendored",
-  "stream",
-  "blocking",
-] }
-tokio = { version = "1.43", features = ["full"] }
-tokio-stream = { version = "0.1.15", features = ["sync"] }
-tower-http = { version = "0.5.1", features = ["full"] }
-url = "2.4"
-
-# Serialization and Data Format 
+hyper = "1.1.0"
+lazy_static = "1.5.0"
+merkle_proof = { git = "https://github.com/sigp/lighthouse.git", tag = "v5.3.0" }
+mockito = "1.1.1"
+moka = "0.9"
+num-format = "0.4.4"
+num_cpus = "1.16.0"
+prometheus = "0.13.4"
+prost = "0.12"
+rand = "0.8"
+redis = { version = "0.23.2", features = ["aio", "tokio-comp"] }
+refinery = { version = "0.8", features = ["tokio-postgres"] }
+reqwest = { version = "0.11.23", features = ["blocking", "json", "native-tls-vendored", "stream"] }
+reqwest-eventsource = "0.5"
 serde = { version = "1.0.191", features = ["derive"] }
 serde_json = "1.0.106"
-hex = "0.4.2"
-bitflags = "2.8.0"
-cbor4ii = { version = "1.0.0", features = ["serde1"] }
-
-# DB 
-deadpool-redis = { version = "0.12.0", features = ["rt_tokio_1"] }
-redis = { version = "0.23.2", features = ["aio", "tokio-comp"] }
-tokio-postgres = "0.7.10"
-deadpool-postgres = "0.11.0"
-refinery = { version = "0.8", features = ["tokio-postgres"] }
-bytes = "1.10"
-
-# Ethereum Types
-ethereum-consensus = { git = "https://github.com/gattaca-com/ethereum-consensus" }
-reth-primitives = { git = "https://github.com/paradigmxyz/reth", rev = "1e965ca" }
-alloy = { version = "0.11.0", features = ["full", "rlp"] }
-# Logging
-tracing = "0.1.37"
-tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
-tracing-appender = "0.2.2"
-
-# Testing and Mocking
-mockito = "1.1.1"
+serde_yaml = "0.9.25"
 serial_test = "1.0.0"
-env_logger = "0.9"
-
-# Misc
-auto_impl = "1.0.1"
-backtrace = "0.3.69"
-eyre = "0.6.12"
+sha2 = "0.10.8"
+ssz_types = "0.5.4"
 thiserror = "1.0.49"
+tikv-jemallocator = { version = "0.5", features = ["profiling"] }
+tokio = { version = "1.43", features = ["full"] }
+tokio-postgres = "0.7.10"
+tokio-stream = { version = "0.1.15", features = ["sync"] }
+tokio-tungstenite = "0.16"
+tonic = "0.10"
+tonic-build = "0.10"
+tower = { version = "0.4.13", features = ["full"] }
+tower-http = { version = "0.5.1", features = ["full"] }
+tower_governor = { version = "0.6.0", features = ["axum"] }
+tracing = "0.1.37"
+tracing-appender = "0.2.2"
+tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
+tree_hash = "0.6.0"
+tree_hash_derive = "0.6.0"
+url = "2.4"
 uuid = { version = "1.5", features = ["fast-rng", "v4"] }
-prometheus = "0.13.4"
-lazy_static = "1.5.0"
-
-# Broadcasting
-fiber = { git = "https://github.com/chainbound/fiber-rs.git", tag = "v0.8.0" }
-
-
-[patch."https://github.com/ralexstokes/ethereum-consensus"]
-ethereum-consensus = { git = "https://github.com/gattaca-com/ethereum-consensus", rev = "a1ef9be1d795c6f9748641d448c66220d7986471" }
-
-[patch.crates-io]
-ethereum-consensus = { git = "https://github.com/gattaca-com/ethereum-consensus", rev = "a1ef9be1d795c6f9748641d448c66220d7986471" }

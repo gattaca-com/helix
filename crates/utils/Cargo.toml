@@ -1,31 +1,20 @@
 [package]
-name = "helix-utils"
-version.workspace = true
-rust-version.workspace = true
 edition.workspace = true
-repository.workspace = true
 license.workspace = true
+name = "helix-utils"
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
 
 [dependencies]
-# Serialization and Data Format
-lazy_static = "1.5.0"
-prometheus = "0.13.4"
-serde.workspace = true
-serde_json.workspace = true
-tokio.workspace = true
-tree_hash = "0.6.0"
-tree_hash_derive = "0.6.0"
-
-# Ethereum Types
+axum.workspace = true
+backtrace.workspace = true
 ethereum-consensus.workspace = true
-reth-primitives.workspace = true
-alloy.workspace = true
-
-# Networking
 http.workspace = true
 reqwest.workspace = true
-axum.workspace = true
-
-backtrace.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tracing.workspace = true
+tree_hash.workspace = true
+tree_hash_derive.workspace = true
 uuid.workspace = true
