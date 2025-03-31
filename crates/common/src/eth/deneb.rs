@@ -103,7 +103,7 @@ impl BlobSidecars {
         let payload = match unblinded_payload.as_ref() {
             VersionedSignedProposal::Deneb(payload) => {
                 if payload.blobs.is_empty() {
-                    return Err(BuildBlobSidecarError::NoBlobsInPayload)
+                    return Err(BuildBlobSidecarError::NoBlobsInPayload);
                 }
                 payload
             }
@@ -195,7 +195,7 @@ fn kzg_commitment_merkle_proof(
         Vec::with_capacity(signed_block.message.body.blob_kzg_commitments.len());
     for commitment in signed_block.message.body.blob_kzg_commitments.iter_mut() {
         let root = commitment.hash_tree_root()?;
-        leaves.push(H256::from_slice(&root.as_slice()));
+        leaves.push(H256::from_slice(root.as_slice()));
     }
 
     let depth = MAX_BLOB_COMMITMENTS_PER_BLOCK.next_power_of_two().ilog2() as usize;
@@ -218,25 +218,21 @@ fn kzg_commitment_merkle_proof(
     // Part 2
     // Branches for `BeaconBlockBody` container
     let leaves: [H256; 12] = [
-        H256::from_slice(&signed_block.message.body.randao_reveal.hash_tree_root()?.as_slice()),
-        H256::from_slice(&signed_block.message.body.eth1_data.hash_tree_root()?.as_slice()),
-        H256::from_slice(&signed_block.message.body.graffiti.hash_tree_root()?.as_slice()),
+        H256::from_slice(signed_block.message.body.randao_reveal.hash_tree_root()?.as_slice()),
+        H256::from_slice(signed_block.message.body.eth1_data.hash_tree_root()?.as_slice()),
+        H256::from_slice(signed_block.message.body.graffiti.hash_tree_root()?.as_slice()),
+        H256::from_slice(signed_block.message.body.proposer_slashings.hash_tree_root()?.as_slice()),
+        H256::from_slice(signed_block.message.body.attester_slashings.hash_tree_root()?.as_slice()),
+        H256::from_slice(signed_block.message.body.attestations.hash_tree_root()?.as_slice()),
+        H256::from_slice(signed_block.message.body.deposits.hash_tree_root()?.as_slice()),
+        H256::from_slice(signed_block.message.body.voluntary_exits.hash_tree_root()?.as_slice()),
+        H256::from_slice(signed_block.message.body.sync_aggregate.hash_tree_root()?.as_slice()),
+        H256::from_slice(signed_block.message.body.execution_payload.hash_tree_root()?.as_slice()),
         H256::from_slice(
-            &signed_block.message.body.proposer_slashings.hash_tree_root()?.as_slice(),
+            signed_block.message.body.bls_to_execution_changes.hash_tree_root()?.as_slice(),
         ),
         H256::from_slice(
-            &signed_block.message.body.attester_slashings.hash_tree_root()?.as_slice(),
-        ),
-        H256::from_slice(&signed_block.message.body.attestations.hash_tree_root()?.as_slice()),
-        H256::from_slice(&signed_block.message.body.deposits.hash_tree_root()?.as_slice()),
-        H256::from_slice(&signed_block.message.body.voluntary_exits.hash_tree_root()?.as_slice()),
-        H256::from_slice(&signed_block.message.body.sync_aggregate.hash_tree_root()?.as_slice()),
-        H256::from_slice(&signed_block.message.body.execution_payload.hash_tree_root()?.as_slice()),
-        H256::from_slice(
-            &signed_block.message.body.bls_to_execution_changes.hash_tree_root()?.as_slice(),
-        ),
-        H256::from_slice(
-            &signed_block.message.body.blob_kzg_commitments.hash_tree_root()?.as_slice(),
+            signed_block.message.body.blob_kzg_commitments.hash_tree_root()?.as_slice(),
         ),
     ];
     let beacon_block_body_depth = leaves.len().next_power_of_two().ilog2() as usize;

@@ -54,10 +54,9 @@ impl BlockSimError {
 
     pub fn is_aleady_known(&self) -> bool {
         match self {
-            BlockSimError::BlockValidationFailed(reason) => match reason.to_lowercase().as_str() {
-                BLOCK_ALREADY_KNOWN => true,
-                _ => false,
-            },
+            BlockSimError::BlockValidationFailed(reason) => {
+                matches!(reason.to_lowercase().as_str(), BLOCK_ALREADY_KNOWN)
+            }
             _ => false,
         }
     }

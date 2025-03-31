@@ -73,7 +73,7 @@ mod proposer_api_tests {
     use std::{sync::Arc, time::Duration};
     use tokio::{
         sync::{
-            mpsc::{self, channel, Receiver, Sender},
+            mpsc::{channel, Receiver, Sender},
             oneshot,
         },
         time::sleep,

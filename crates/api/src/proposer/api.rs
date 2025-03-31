@@ -900,8 +900,8 @@ where
             };
         let payload = Arc::new(versioned_payload);
 
-        if self.validator_preferences.gossip_blobs
-            || !matches!(self.chain_info.network, Network::Mainnet)
+        if self.validator_preferences.gossip_blobs ||
+            !matches!(self.chain_info.network, Network::Mainnet)
         {
             info!("gossip blobs: about to gossip blobs");
             let self_clone = self.clone();
@@ -926,7 +926,7 @@ where
 
         let self_clone = self.clone();
         let unblinded_payload_clone = unblinded_payload.clone();
-        let mut trace_clone = trace.clone();
+        let mut trace_clone = *trace;
         let payload_clone = payload.clone();
 
         task::spawn(file!(), line!(), async move {
@@ -1073,8 +1073,8 @@ where
     /// Returns how many ms we are into the slot if ok.
     fn validate_bid_request_time(&self, bid_request: &BidRequest) -> Result<u64, ProposerApiError> {
         let curr_timestamp_ms = utcnow_ms() as i64;
-        let slot_start_timestamp = self.chain_info.genesis_time_in_secs
-            + (bid_request.slot * self.chain_info.seconds_per_slot);
+        let slot_start_timestamp = self.chain_info.genesis_time_in_secs +
+            (bid_request.slot * self.chain_info.seconds_per_slot);
         let ms_into_slot = curr_timestamp_ms.saturating_sub((slot_start_timestamp * 1000) as i64);
 
         if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {
@@ -1314,8 +1314,8 @@ where
                 Ok(blob_sidecars) => blob_sidecars,
                 Err(err) => {
                     match err {
-                        BuildBlobSidecarError::NoBlobsInPayload
-                        | BuildBlobSidecarError::PayloadVersionBeforeBlobs => {}
+                        BuildBlobSidecarError::NoBlobsInPayload |
+                        BuildBlobSidecarError::PayloadVersionBeforeBlobs => {}
                         error => {
                             error!(
                                 ?error,
@@ -1517,7 +1517,7 @@ where
         };
 
         let db = self.db.clone();
-        let trace = trace.clone();
+        let trace = *trace;
         task::spawn(file!(), line!(), async move {
             if let Err(err) =
                 db.save_delivered_payload(&bid_trace, payload, &trace, user_agent).await

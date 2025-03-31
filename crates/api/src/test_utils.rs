@@ -7,7 +7,9 @@ use axum::{
     BoxError, Extension, Router,
 };
 
-use helix_common::{chain_info::ChainInfo, ConstraintsApiConfig, RelayConfig, Route};
+use helix_common::{
+    api::PATH_DATA_API, chain_info::ChainInfo, ConstraintsApiConfig, RelayConfig, Route,
+};
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use helix_beacon_client::{
@@ -37,7 +39,7 @@ use crate::{
     gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
     proposer::api::{ProposerApi, MAX_BLINDED_BLOCK_LENGTH, _MAX_VAL_REGISTRATIONS_LENGTH},
     relay_data::{
-        DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API, PATH_PROPOSER_PAYLOAD_DELIVERED,
+        DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_PROPOSER_PAYLOAD_DELIVERED,
         PATH_VALIDATOR_REGISTRATION,
     },
 };

@@ -21,7 +21,7 @@ use ethereum_consensus::{
     types::mainnet::{ExecutionPayload, ExecutionPayloadHeader},
     Fork,
 };
-use flate2::bufread::GzDecoder;
+
 use futures::{lock::Mutex, stream::FuturesOrdered, Future, SinkExt, StreamExt};
 use helix_beacon_client::types::PayloadAttributes;
 use helix_common::{
@@ -52,7 +52,7 @@ use serial_test::serial;
 use std::{
     convert::Infallible,
     future::pending,
-    io::{Read, Write},
+    io::Write,
     ops::Deref,
     pin::Pin,
     str::FromStr,

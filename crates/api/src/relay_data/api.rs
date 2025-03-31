@@ -19,8 +19,6 @@ use helix_database::{error::DatabaseError, DatabaseService};
 
 use crate::relay_data::error::DataApiError;
 
-pub(crate) const PATH_DATA_API: &str = "/relay/v1/data";
-
 pub const PATH_PROPOSER_PAYLOAD_DELIVERED: &str = "/bidtraces/proposer_payload_delivered";
 pub const PATH_BUILDER_BIDS_RECEIVED: &str = "/bidtraces/builder_blocks_received";
 pub const PATH_VALIDATOR_REGISTRATION: &str = "/validator_registration";
@@ -107,10 +105,10 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
         Extension(cache): Extension<Arc<BidsCache>>,
         Query(mut params): Query<BuilderBlocksReceivedParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
-        if params.slot.is_none()
-            && params.block_hash.is_none()
-            && params.block_number.is_none()
-            && params.builder_pubkey.is_none()
+        if params.slot.is_none() &&
+            params.block_hash.is_none() &&
+            params.block_number.is_none() &&
+            params.builder_pubkey.is_none()
         {
             return Err(DataApiError::MissingFilter);
         }

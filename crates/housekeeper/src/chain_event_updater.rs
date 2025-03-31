@@ -91,9 +91,9 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         mut head_event_rx: broadcast::Receiver<HeadEventData>,
         mut payload_attributes_rx: broadcast::Receiver<PayloadAttributesEvent>,
     ) {
-        let start_instant = Instant::now()
-            + self.chain_info.clock.duration_until_next_slot()
-            + Duration::from_secs(CUTT_OFF_TIME);
+        let start_instant = Instant::now() +
+            self.chain_info.clock.duration_until_next_slot() +
+            Duration::from_secs(CUTT_OFF_TIME);
         let mut timer =
             interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
         loop {

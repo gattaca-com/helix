@@ -5,9 +5,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use alloy::{hex, primitives::B256};
+use alloy::primitives::B256;
 use axum::{
-    body::{self, to_bytes, Body},
+    body::{to_bytes, Body},
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Query,
@@ -29,7 +29,7 @@ use ethereum_consensus::{
 };
 use flate2::read::GzDecoder;
 use futures::{Stream, StreamExt};
-use hyper::{header, HeaderMap};
+use hyper::HeaderMap;
 use serde::Deserialize;
 use tokio::{
     sync::{
@@ -115,7 +115,7 @@ where
     proposer_duties_response: Arc<RwLock<Option<Vec<u8>>>>,
     payload_attributes: Arc<RwLock<HashMap<String, PayloadAttributesUpdate>>>,
 
-    validator_preferences: Arc<validator_preferences::ValidatorPreferences>,
+    _validator_preferences: Arc<validator_preferences::ValidatorPreferences>,
 }
 
 impl<A, DB, S, G> BuilderApi<A, DB, S, G>
@@ -161,7 +161,7 @@ where
             curr_slot_info: Arc::new(RwLock::new((0, None))),
             proposer_duties_response: Arc::new(RwLock::new(None)),
             payload_attributes: Arc::new(RwLock::new(HashMap::new())),
-            validator_preferences,
+            _validator_preferences: validator_preferences,
         };
 
         // Spin up gossip processing task
@@ -683,8 +683,8 @@ where
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional()
-            && !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional() &&
+            !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering and builder is not optimistic for regional filtering, discarding optimistic v2 submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
@@ -925,8 +925,8 @@ where
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional()
-            && !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional() &&
+            !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering enabled, discarding optimistic v2 submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
@@ -1396,7 +1396,7 @@ where
         }
     }
 
-    async fn gossip_new_submission(
+    async fn _gossip_new_submission(
         &self,
         payload: &SignedBidSubmission,
         execution_payload: PayloadAndBlobs,
@@ -1648,12 +1648,10 @@ where
 
             if let Some(builder_id) = &builder_info.builder_id {
                 trusted_builders.contains(builder_id)
+            } else if let Some(ids) = &builder_info.builder_ids {
+                ids.iter().any(|id| trusted_builders.contains(id))
             } else {
-                if let Some(ids) = &builder_info.builder_ids {
-                    ids.iter().any(|id| trusted_builders.contains(id))
-                } else {
-                    false
-                }
+                false
             }
         } else {
             true
@@ -1944,13 +1942,10 @@ where
         block_hash: &Hash32,
         err: &BuilderApiError,
     ) {
-        match err {
-            BuilderApiError::BlockValidationError(sim_err) => {
-                if sim_err.is_temporary() {
-                    return;
-                }
+        if let BuilderApiError::BlockValidationError(sim_err) = err {
+            if sim_err.is_temporary() {
+                return;
             }
-            _ => {}
         }
 
         error!(%err, %builder, "verification failed for submit_block_v2. Demoting builder!");
@@ -2372,10 +2367,7 @@ fn sanity_check_block_submission(
     }
 
     if payload.slot() != next_duty.slot {
-        return Err(BuilderApiError::SlotMismatch {
-            got: payload.slot(),
-            expected: next_duty.slot,
-        });
+        return Err(BuilderApiError::SlotMismatch { got: payload.slot(), expected: next_duty.slot });
     }
 
     if next_duty.entry.registration.message.public_key != bid_trace.proposer_public_key {
