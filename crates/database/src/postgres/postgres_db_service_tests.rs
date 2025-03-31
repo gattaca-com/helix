@@ -399,7 +399,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
-        let public_key = PublicKey::try_from(alloy::hex::decode("8C266FD5CB50B5D9431DAA69C4BE17BC9A79A85D172112DA09E0AC3E2D0DCF785021D49B6DF57827D6BC61EBA086A507").unwrap().as_ref()).unwrap();
+        let public_key = PublicKey::try_from(alloy_primitives::hex::decode("8C266FD5CB50B5D9431DAA69C4BE17BC9A79A85D172112DA09E0AC3E2D0DCF785021D49B6DF57827D6BC61EBA086A507").unwrap().as_ref()).unwrap();
         let builder_info = helix_common::BuilderInfo {
             collateral: U256::from_str("1000000000000000000000000000").unwrap(),
             is_optimistic: false,
@@ -469,7 +469,7 @@ mod tests {
             parent_hash: Default::default(),
             block_hash: ByteVector::<32>::try_from(random_bytes.as_slice()).unwrap(),
             builder_public_key: Default::default(),
-            proposer_public_key:  PublicKey::try_from(alloy::hex::decode("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").unwrap().as_ref()).unwrap(),
+            proposer_public_key:  PublicKey::try_from(alloy_primitives::hex::decode("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").unwrap().as_ref()).unwrap(),
             proposer_fee_recipient: Default::default(),
             gas_limit: 0,
             gas_used: 0,
@@ -544,7 +544,7 @@ mod tests {
                 extra_data: ByteList::try_from(extra_data.as_slice()).unwrap(),
                 base_fee_per_gas: U256::from(1234),
                 block_hash: ByteVector::try_from(
-                    alloy::hex::decode(
+                    alloy_primitives::hex::decode(
                         "6AD0CC0183284A1F2CEBB5188DC68F49EC6D522D9E99706DA097EF2BD8148D88",
                     )
                     .unwrap()
@@ -575,13 +575,13 @@ mod tests {
         let bid_trace =  BidTrace {
             slot: 1235,
             block_hash: ByteVector::try_from(
-            alloy::hex::decode("6AD0CC0183284A1F2CEBB5188DC68F49EC6D522D9E99706DA097EF2BD8148D88")
+            alloy_primitives::hex::decode("6AD0CC0183284A1F2CEBB5188DC68F49EC6D522D9E99706DA097EF2BD8148D88")
                 .unwrap()
                 .as_slice(),
         )
         .unwrap(),
             proposer_public_key: PublicKey::try_from(
-                alloy::hex::decode("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").unwrap().as_ref()).unwrap(),
+                alloy_primitives::hex::decode("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").unwrap().as_ref()).unwrap(),
             ..Default::default() };
         let latency_trace = GetPayloadTrace::default();
 

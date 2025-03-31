@@ -1,7 +1,11 @@
-// ++++ IMPORTS ++++
 use std::sync::Arc;
 
-use alloy::hex;
+use crate::builder::{
+    rpc_simulator::{BlockSimRpcResponse, JsonRpcError, RpcSimulator},
+    traits::BlockSimulator,
+    BlockSimRequest, DbInfo,
+};
+use alloy_primitives::hex;
 use ethereum_consensus::{
     electra::ExecutionRequests, primitives::BlsSignature, ssz::prelude::*,
     types::mainnet::ExecutionPayload,
@@ -17,12 +21,6 @@ use helix_common::{
 };
 use reqwest::Client;
 use serde_json::json;
-
-use crate::builder::{
-    rpc_simulator::{BlockSimRpcResponse, JsonRpcError, RpcSimulator},
-    traits::BlockSimulator,
-    BlockSimRequest, DbInfo,
-};
 
 // ++++ HELPERS ++++
 fn get_simulator(endpoint: &str) -> RpcSimulator {

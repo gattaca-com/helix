@@ -7,7 +7,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-alloy.workspace = true
+alloy-primitives.workspace = true
 askama.workspace = true
 async-trait.workspace = true
 axum.workspace = true

@@ -2,7 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use alloy::hex;
+use alloy_primitives::hex;
 use ethereum_consensus::{
     builder::ValidatorRegistration,
     primitives::{BlsPublicKey, BlsSignature},
