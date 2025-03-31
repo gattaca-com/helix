@@ -4,7 +4,9 @@ use ethereum_consensus::{
     ssz::prelude::*,
 };
 
-#[derive(Debug, Default, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Default, Clone, Serializable, serde::Serialize, serde::Deserialize, HashTreeRoot,
+)]
 pub struct BidTrace {
     #[serde(with = "as_str")]
     pub slot: Slot,

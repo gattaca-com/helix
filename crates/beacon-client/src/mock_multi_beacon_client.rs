@@ -9,7 +9,7 @@ use ethereum_consensus::{
     primitives::{BlsPublicKey, Root},
 };
 use helix_common::{
-    beacon_api::PublishBlobsRequest, bellatrix::SimpleSerialize, ProposerDuty, ValidatorStatus,
+    beacon_api::PublishBlobsRequest, bellatrix::Serializable, ProposerDuty, ValidatorStatus,
     ValidatorSummary,
 };
 use tokio::sync::broadcast::Sender;
@@ -100,7 +100,7 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
             }],
         ))
     }
-    async fn publish_block<VersionedSignedProposal: SimpleSerialize + Send + Sync + 'static>(
+    async fn publish_block<VersionedSignedProposal: Serializable + Send + Sync + 'static>(
         &self,
         _block: Arc<VersionedSignedProposal>,
         _broadcast_validation: Option<BroadcastValidation>,

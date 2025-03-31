@@ -9,7 +9,7 @@ use tokio::{sync::broadcast::Sender, time::sleep};
 use tracing::{debug, error, warn};
 
 use helix_common::{
-    beacon_api::PublishBlobsRequest, bellatrix::SimpleSerialize,
+    beacon_api::PublishBlobsRequest, bellatrix::Serializable,
     signed_proposal::VersionedSignedProposal, BeaconClientConfig, ProposerDuty, ValidatorSummary,
 };
 
@@ -188,7 +188,7 @@ impl BeaconClientTrait for BeaconClient {
 
     /// `publish_block` publishes the signed beacon block ssz-encoded via
     /// <https://ethereum.github.io/beacon-APIs/#/ValidatorRequiredApi/publishBlockV2>
-    async fn publish_block<SB: Send + Sync + SimpleSerialize>(
+    async fn publish_block<SB: Send + Sync + Serializable>(
         &self,
         block: Arc<SB>,
         broadcast_validation: Option<BroadcastValidation>,

@@ -2,6 +2,7 @@
 
 use std::{sync::Arc, time::Duration};
 
+use alloy::hex;
 use ethereum_consensus::{
     builder::ValidatorRegistration,
     primitives::{BlsPublicKey, BlsSignature},
@@ -24,7 +25,6 @@ use helix_housekeeper::{ChainUpdate, SlotUpdate};
 use helix_utils::request_encoding::Encoding;
 use rand::Rng;
 use reqwest::{Client, Response};
-use reth_primitives::hex;
 use serial_test::serial;
 use tokio::sync::{
     mpsc::{Receiver, Sender},

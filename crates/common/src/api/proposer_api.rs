@@ -13,6 +13,9 @@ pub enum GetPayloadResponse {
     Capella(ExecutionPayload),
     #[serde(rename = "deneb")]
     Deneb(PayloadAndBlobs),
+    // FIXME: this uses the same spec as deneb
+    #[serde(rename = "electra")]
+    Electra(PayloadAndBlobs),
 }
 
 impl GetPayloadResponse {
@@ -25,6 +28,7 @@ impl GetPayloadResponse {
                 Some(GetPayloadResponse::Bellatrix(exec_payload.execution_payload.clone()))
             }
             Fork::Deneb => Some(GetPayloadResponse::Deneb(exec_payload.clone())),
+            Fork::Electra => Some(GetPayloadResponse::Electra(exec_payload.clone())),
             _ => None,
         }
     }
@@ -37,10 +41,13 @@ impl<'de> serde::Deserialize<'de> for GetPayloadResponse {
     {
         let value = serde_json::Value::deserialize(deserializer)?;
         if let Ok(inner) = <_ as serde::Deserialize>::deserialize(&value) {
-            return Ok(Self::Capella(inner))
+            return Ok(Self::Electra(inner))
         }
         if let Ok(inner) = <_ as serde::Deserialize>::deserialize(&value) {
             return Ok(Self::Deneb(inner))
+        }
+        if let Ok(inner) = <_ as serde::Deserialize>::deserialize(&value) {
+            return Ok(Self::Capella(inner))
         }
         if let Ok(inner) = <_ as serde::Deserialize>::deserialize(&value) {
             return Ok(Self::Bellatrix(inner))

@@ -7,13 +7,15 @@ use axum::{
 use eyre::bail;
 use lazy_static::lazy_static;
 use prometheus::{
+    register_gauge_vec_with_registry, register_gauge_with_registry,
     register_histogram_vec_with_registry, register_histogram_with_registry,
-    register_int_counter_vec_with_registry, register_int_counter_with_registry, Encoder, Histogram,
-    HistogramTimer, HistogramVec, IntCounter, IntCounterVec, Registry, TextEncoder,
+    register_int_counter_vec_with_registry, register_int_counter_with_registry, Encoder, Gauge,
+    GaugeVec, Histogram, HistogramTimer, HistogramVec, IntCounter, IntCounterVec, Registry,
+    TextEncoder,
 };
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 use tokio::net::TcpListener;
-use tracing::{error, info, trace};
+use tracing::{error, info};
 
 pub fn start_metrics_server() {
     let port =
@@ -35,7 +37,7 @@ impl MetricsProvider {
 
         let router = axum::Router::new()
             .route("/metrics", get(handle_metrics))
-            .route("/status", get(handle_status));
+            .route("/status", get(|| async { StatusCode::OK }));
         let address = SocketAddr::from(([0, 0, 0, 0], self.port));
         let listener = TcpListener::bind(&address).await?;
 
@@ -45,15 +47,7 @@ impl MetricsProvider {
     }
 }
 
-async fn handle_status() -> Response {
-    trace!("Handling status request");
-
-    StatusCode::OK.into_response()
-}
-
 async fn handle_metrics() -> Response {
-    trace!("Handling metrics request");
-
     match prepare_metrics() {
         Ok(response) => response,
         Err(err) => {
@@ -85,26 +79,27 @@ enum MetricsError {
 }
 
 lazy_static! {
-    static ref RELAY_METRICS_REGISTRY: Registry =
+    pub static ref RELAY_METRICS_REGISTRY: Registry =
         Registry::new_custom(Some("helix".to_string()), None).unwrap();
 
     //////////////// API ////////////////
 
-    /// Count for requests by API and endpoint
-    static ref REQUEST_COUNTS: IntCounterVec = register_int_counter_vec_with_registry!(
-        "request_count_total",
-        "Count of requests",
-        &["endpoint"],
-        &RELAY_METRICS_REGISTRY
-    )
-    .unwrap();
-
-    /// Count for status codes by API and endpoint
+    /// Count for status codes by endpoint
     static ref REQUEST_STATUS: IntCounterVec =
         register_int_counter_vec_with_registry!(
         "request_status_total",
         "Count of status codes",
         &["endpoint", "http_status_code"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    /// Client side timeouts by endpoint
+    static ref REQUEST_TIMEOUT: IntCounterVec =
+        register_int_counter_vec_with_registry!(
+        "request_timeout_total",
+        "Count of timeouts",
+        &["endpoint"],
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
@@ -118,9 +113,18 @@ lazy_static! {
     )
     .unwrap();
 
+    /// Pending requests
+    static ref REQUEST_PENDING: GaugeVec = register_gauge_vec_with_registry!(
+        "request_pending",
+        "Pending requests",
+        &["endpoint"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     /// Request size in bytes
-    static ref REQUEST_SIZE: IntCounterVec = register_int_counter_vec_with_registry!(
-        "request_size_bytes",
+    static ref REQUEST_SIZE: HistogramVec = register_histogram_vec_with_registry!(
+        "request_size_dist_bytes",
         "Size of requests",
         &["endpoint"],
         &RELAY_METRICS_REGISTRY
@@ -240,23 +244,79 @@ lazy_static! {
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
+
+    pub static ref TASK_COUNT: GaugeVec = register_gauge_vec_with_registry!(
+        "tokio_tasks",
+        "Count of spawned tasks",
+        &["origin",],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref DB_QUEUE: Gauge = register_gauge_with_registry!(
+        "db_queue",
+        "Length of the DB queue",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref BUILDER_GOSSIP_QUEUE: Gauge = register_gauge_with_registry!(
+        "builder_gossip_queue",
+        "Length of the builder gossip queue",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref PROPOSER_GOSSIP_QUEUE: Gauge = register_gauge_with_registry!(
+        "proposer_gossip_queue",
+        "Length of the proposer gossip queue",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+
+    //////////////// TIMING GAMES ////////////////
+
+    static ref GET_HEADER_TIMEOUT: HistogramVec = register_histogram_vec_with_registry!(
+        "get_header_sleep",
+        "Sleep time for get header",
+        &["is_timeout"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 }
 
-pub struct ApiMetrics;
+pub struct ApiMetrics {
+    endpoint: String,
+    // records latency on drop
+    _timer: HistogramTimer,
+    has_completed: bool,
+}
 
 impl ApiMetrics {
-    pub fn count(endpoint: &str) {
-        REQUEST_COUNTS.with_label_values(&[endpoint]).inc();
+    pub fn new(endpoint: String) -> Self {
+        REQUEST_PENDING.with_label_values(&[endpoint.as_str()]).inc();
+        let _timer = REQUEST_LATENCY.with_label_values(&[endpoint.as_str()]).start_timer();
+        Self { endpoint, _timer, has_completed: false }
     }
-    pub fn status(endpoint: &str, status_code: &str) {
-        REQUEST_STATUS.with_label_values(&[endpoint, status_code]).inc();
+
+    pub fn status(&mut self, status_code: &str) {
+        REQUEST_STATUS.with_label_values(&[self.endpoint.as_str(), status_code]).inc();
+        self.has_completed = true;
     }
-    /// Records on drop
-    pub fn timer(endpoint: &str) -> HistogramTimer {
-        REQUEST_LATENCY.with_label_values(&[endpoint]).start_timer()
-    }
+
     pub fn size(endpoint: &str, size: usize) {
-        REQUEST_SIZE.with_label_values(&[endpoint]).inc_by(size as u64);
+        REQUEST_SIZE.with_label_values(&[endpoint]).observe(size as f64);
+    }
+}
+
+impl Drop for ApiMetrics {
+    fn drop(&mut self) {
+        // decrease pending even when client cancels
+        REQUEST_PENDING.with_label_values(&[self.endpoint.as_str()]).dec();
+        if !self.has_completed {
+            REQUEST_TIMEOUT.with_label_values(&[self.endpoint.as_str()]).inc();
+        }
     }
 }
 
@@ -388,5 +448,30 @@ impl SimulatorMetrics {
 
     pub fn demotion_count() {
         BUILDER_DEMOTION_COUNT.inc();
+    }
+}
+
+pub struct GetHeaderMetric {
+    sleep_time: f64,
+    has_recorded: bool,
+}
+
+impl GetHeaderMetric {
+    pub fn new(sleep_time: Duration) -> Self {
+        Self { sleep_time: sleep_time.as_secs_f64(), has_recorded: false }
+    }
+
+    pub fn record(&mut self) {
+        self.has_recorded = true;
+    }
+}
+
+impl Drop for GetHeaderMetric {
+    fn drop(&mut self) {
+        let is_timeout = !self.has_recorded;
+
+        GET_HEADER_TIMEOUT
+            .with_label_values(&[is_timeout.to_string().as_str()])
+            .observe(self.sleep_time);
     }
 }

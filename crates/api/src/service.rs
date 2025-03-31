@@ -4,12 +4,13 @@ use ethereum_consensus::crypto::SecretKey;
 use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
 use moka::sync::Cache;
 use tokio::{
-    sync::broadcast,
+    sync::{broadcast, mpsc},
     time::{sleep, timeout},
 };
 use tracing::{error, info};
 
 use crate::{
+    builder,
     builder::{multi_simulator::MultiSimulator, optimistic_simulator::OptimisticSimulator},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     relay_data::{BidsCache, DeliveredPayloadsCache},
@@ -20,7 +21,7 @@ use helix_beacon_client::{
     multi_beacon_client::MultiBeaconClient, BlockBroadcaster, MultiBeaconClientTrait,
 };
 use helix_common::{
-    chain_info::ChainInfo, signing::RelaySigningContext, BroadcasterConfig, NetworkConfig,
+    chain_info::ChainInfo, signing::RelaySigningContext, task, BroadcasterConfig, NetworkConfig,
     RelayConfig,
 };
 use helix_datastore::redis::redis_cache::RedisCache;
@@ -53,7 +54,7 @@ impl ApiService {
         let auctioneer = Arc::new(RedisCache::new(&config.redis.url, builder_infos).await.unwrap());
 
         let auctioneer_clone = auctioneer.clone();
-        tokio::spawn(async move {
+        task::spawn(file!(), line!(), async move {
             loop {
                 if let Err(err) = auctioneer_clone.start_best_bid_listener().await {
                     tracing::error!("Bid listener error: {}", err);
@@ -107,7 +108,7 @@ impl ApiService {
             chain_info.clone(),
         );
         let mut housekeeper_head_events = head_event_receiver.resubscribe();
-        tokio::spawn(async move {
+        task::spawn(file!(), line!(), async move {
             loop {
                 if let Err(err) = housekeeper.start(&mut housekeeper_head_events).await {
                     tracing::error!("Housekeeper error: {}", err);
@@ -150,7 +151,7 @@ impl ApiService {
 
         let chain_updater_head_events = head_event_receiver.resubscribe();
         let chain_updater_payload_events = payload_attribute_receiver.resubscribe();
-        tokio::spawn(async move {
+        task::spawn(file!(), line!(), async move {
             chain_event_updater
                 .start(chain_updater_head_events, chain_updater_payload_events)
                 .await;
@@ -179,10 +180,21 @@ impl ApiService {
             config.clone(),
             slot_update_sender.clone(),
             builder_gossip_receiver,
+            validator_preferences.clone(),
         );
         let builder_api = Arc::new(builder_api);
 
         gossiper.start_server(builder_gossip_sender, proposer_gossip_sender).await;
+
+        let (v3_payload_request_send, v3_payload_request_recv) = mpsc::channel(32);
+        if let Some(v3_port) = config.v3_port {
+            // v3 optimistic configured
+            tokio::spawn(builder::v3::tcp::run_api(v3_port, builder_api.clone()));
+            tokio::spawn(builder::v3::payload::fetch_builder_blocks(
+                builder_api.clone(),
+                v3_payload_request_recv,
+            ));
+        }
 
         let proposer_api = Arc::new(ProposerApiProd::new(
             auctioneer.clone(),
@@ -195,6 +207,7 @@ impl ApiService {
             validator_preferences.clone(),
             proposer_gossip_receiver,
             config.clone(),
+            v3_payload_request_send,
         ));
 
         let data_api = Arc::new(DataApiProd::new(validator_preferences.clone(), db.clone()));

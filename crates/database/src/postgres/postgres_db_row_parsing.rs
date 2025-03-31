@@ -185,6 +185,7 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                         },
                     ),
                     header_delay: row.get::<&str, bool>("header_delay"),
+                    delay_ms: parse_i64_to_u64(row.get::<&str, i64>("delay_ms")).ok(),
                     gossip_blobs: row.get::<&str, bool>("gossip_blobs"),
                 },
             },
@@ -212,7 +213,13 @@ impl FromRow for BuilderInfo {
         Ok(BuilderInfo {
             collateral: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("collateral")),
             is_optimistic: parse_bool_to_bool(row.get::<&str, bool>("is_optimistic"))?,
+            is_optimistic_for_regional_filtering: parse_bool_to_bool(
+                row.get::<&str, bool>("is_optimistic_for_regional_filtering"),
+            )?,
             builder_id: row.get::<&str, Option<&str>>("builder_id").map(|s| s.to_string()),
+            builder_ids: row
+                .get::<&str, Option<Vec<&str>>>("builder_ids")
+                .map(|ids| ids.into_iter().map(|id| id.to_string()).collect()),
         })
     }
 }
@@ -254,6 +261,7 @@ impl FromRow for SignedValidatorRegistrationEntry {
                         },
                     ),
                     header_delay: row.get::<&str, bool>("header_delay"),
+                    delay_ms: parse_i64_to_u64(row.get::<&str, i64>("delay_ms")).ok(),
                     gossip_blobs: row.get::<&str, bool>("gossip_blobs"),
                 },
             },

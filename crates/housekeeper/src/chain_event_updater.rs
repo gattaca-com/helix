@@ -12,7 +12,7 @@ use tracing::{error, info, warn};
 use helix_beacon_client::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry,
-    bellatrix::{List, Merkleized, Node},
+    bellatrix::{HashTreeRoot, List, Node},
     chain_info::ChainInfo,
 };
 use helix_database::DatabaseService;
@@ -91,9 +91,9 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         mut head_event_rx: broadcast::Receiver<HeadEventData>,
         mut payload_attributes_rx: broadcast::Receiver<PayloadAttributesEvent>,
     ) {
-        let start_instant = Instant::now() +
-            self.chain_info.clock.duration_until_next_slot() +
-            Duration::from_secs(CUTT_OFF_TIME);
+        let start_instant = Instant::now()
+            + self.chain_info.clock.duration_until_next_slot()
+            + Duration::from_secs(CUTT_OFF_TIME);
         let mut timer =
             interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
         loop {
@@ -144,7 +144,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
     /// Handles a new slot.
     async fn process_slot(&mut self, slot: u64) {
         if self.head_slot >= slot {
-            return
+            return;
         }
 
         info!(head_slot = slot, "Processing slot",);
@@ -155,7 +155,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
             self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot);
         if slot_timestamp > utcnow_sec() + MAX_DISTANCE_FOR_FUTURE_SLOT {
             warn!(head_slot = slot, "slot is too far in the future",);
-            return
+            return;
         }
 
         // Log any missed slots
@@ -200,14 +200,14 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
     async fn process_payload_attributes(&mut self, event: PayloadAttributesEvent) {
         // require new proposal slot in the future
         if self.head_slot >= event.data.proposal_slot {
-            return
+            return;
         }
 
         // Discard payload attributes if already known
         let payload_attributes_key =
             get_payload_attributes_key(&event.data.parent_block_hash, event.data.proposal_slot);
         if self.known_payload_attributes.contains_key(&payload_attributes_key) {
-            return
+            return;
         }
 
         // Clean up old payload attributes
@@ -225,7 +225,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
 
         let mut withdrawals_root = None;
         if has_reached_fork(event.data.proposal_slot, CAPELLA_FORK_EPOCH) {
-            let mut withdrawals_list: List<Withdrawal, 16> =
+            let withdrawals_list: List<Withdrawal, 16> =
                 event.data.payload_attributes.withdrawals.clone().try_into().unwrap();
             withdrawals_root = withdrawals_list.hash_tree_root().ok();
         }

@@ -25,7 +25,7 @@ use helix_common::{
 use redis::{AsyncCommands, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::broadcast;
-use tracing::{error, trace};
+use tracing::{error, info, trace};
 
 use helix_common::{
     bid_submission::{BidTrace, SignedBidSubmission},
@@ -36,8 +36,10 @@ use helix_common::{
 };
 use helix_database::types::BuilderInfoDocument;
 
-use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
-
+use super::utils::{
+    get_delegations_key, get_hash_from_hex, get_header_tx_root_key,
+    get_pending_block_builder_block_hash_key, get_pending_block_builder_key, get_pubkey_from_hex,
+};
 use crate::{
     error::AuctioneerError,
     redis::{
@@ -53,24 +55,23 @@ use crate::{
     types::{
         keys::{
             BUILDER_INFO_KEY, HOUSEKEEPER_LOCK_KEY, KILL_SWITCH, LAST_HASH_DELIVERED_KEY,
-            LAST_SLOT_DELIVERED_KEY, PRIMEV_PROPOSERS_KEY, PROPOSER_WHITELIST_KEY,
+            LAST_SLOT_DELIVERED_KEY, PAYLOAD_ADDRESS_KEY, PRIMEV_PROPOSERS_KEY,
+            PROPOSER_WHITELIST_KEY,
         },
         signed_builder_bid_wrapper::SignedBuilderBidWrapper,
         SaveBidAndUpdateTopBidResponse,
     },
     Auctioneer,
 };
-
-use super::utils::{
-    get_delegations_key, get_hash_from_hex, get_header_tx_root_key,
-    get_pending_block_builder_block_hash_key, get_pending_block_builder_key, get_pubkey_from_hex,
-};
+use helix_common::bid_submission::v3::header_submission_v3::PayloadSocketAddress;
+use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 
 // Constraints expire after 1 epoch = 32 slots.
 const CONSTRAINTS_CACHE_EXPIRY_S: usize = 12 * 32;
 
 const BID_CACHE_EXPIRY_S: usize = 45;
 const PENDING_BLOCK_EXPIRY_S: usize = 45;
+const PAYLOAD_ADDRESS_EXPIRY_S: usize = 24;
 const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 45_000;
 
 const BEST_BIDS_CHANNEL: &str = "best_bids";
@@ -124,7 +125,7 @@ impl RedisCache {
                 Ok(payload) => payload,
                 Err(err) => {
                     error!(err=%err, "Failed to get payload from message");
-                    continue
+                    continue;
                 }
             };
 
@@ -132,14 +133,14 @@ impl RedisCache {
                 Ok(data) => data,
                 Err(err) => {
                     error!(err=%err, "Failed to get data from redis");
-                    continue
+                    continue;
                 }
             };
             let sig_bid: SignedBuilderBidWrapper = match serde_json::from_str(&data) {
                 Ok(sig_bid) => sig_bid,
                 Err(err) => {
                     error!(err=%err, "Failed to deserialize data");
-                    continue
+                    continue;
                 }
             };
 
@@ -149,13 +150,13 @@ impl RedisCache {
                 Ok(serialized) => serialized,
                 Err(err) => {
                     error!(err=%err, "Failed to serialize top bid update");
-                    continue
+                    continue;
                 }
             };
 
             if let Err(err) = self.tx.send(serialized) {
                 error!(err=%err, "Failed to send top bid update");
-                continue
+                continue;
             }
         }
 
@@ -199,7 +200,7 @@ impl RedisCache {
         let mut conn = self.pool.get().await?;
         let entries: HashMap<String, Vec<u8>> = conn.hgetall(key).await?;
         if entries.is_empty() {
-            return Ok(None)
+            return Ok(None);
         }
 
         let mut deserialized_entries = HashMap::with_capacity(entries.len());
@@ -215,6 +216,32 @@ impl RedisCache {
         let mut conn = self.pool.get().await?;
         let entries: HashMap<String, Vec<u8>> = conn.hgetall(key).await?;
         Ok(entries)
+    }
+
+    pub async fn scan_keys(&self, pattern: &str) -> Result<Vec<String>, RedisCacheError> {
+        let mut conn = self.pool.get().await?;
+        let mut cursor: u64 = 0;
+        let mut keys: Vec<String> = Vec::new();
+
+        loop {
+            let (new_cursor, batch): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(pattern)
+                .arg("COUNT")
+                .arg(1000)
+                .query_async(&mut conn)
+                .await?;
+
+            keys.extend(batch);
+
+            if new_cursor == 0 {
+                break;
+            }
+            cursor = new_cursor;
+        }
+
+        Ok(keys)
     }
 
     #[allow(dead_code)]
@@ -376,7 +403,7 @@ impl RedisCache {
             return Err(RedisCacheError::RedisCopyError {
                 from: from.to_string(),
                 to: to.to_string(),
-            })
+            });
         }
 
         // If an expiry is provided, set the expiry for the 'to' key
@@ -446,7 +473,7 @@ impl RedisCache {
         floor_value: U256,
     ) -> Result<(), RedisCacheError> {
         if builder_bids.is_empty() {
-            return Ok(())
+            return Ok(());
         }
 
         // Determine the current top bid.
@@ -675,7 +702,7 @@ impl Auctioneer for RedisCache {
 
         if let Some(last_slot_delivered) = last_slot_delivered_res {
             if slot < last_slot_delivered {
-                return Err(AuctioneerError::PastSlotAlreadyDelivered)
+                return Err(AuctioneerError::PastSlotAlreadyDelivered);
             }
 
             if slot == last_slot_delivered {
@@ -684,14 +711,14 @@ impl Auctioneer for RedisCache {
                 match last_hash_delivered_res {
                     Some(last_hash_delivered) => {
                         if *hash != last_hash_delivered {
-                            return Err(AuctioneerError::AnotherPayloadAlreadyDeliveredForSlot)
+                            return Err(AuctioneerError::AnotherPayloadAlreadyDeliveredForSlot);
                         }
                     }
                     None => return Err(AuctioneerError::UnexpectedValueType),
                 }
 
                 record.record_success();
-                return Ok(())
+                return Ok(());
             }
         }
 
@@ -901,7 +928,7 @@ impl Auctioneer for RedisCache {
         let is_bid_above_floor = submission.bid_trace().value > floor_value;
         if !cancellations_enabled && !is_bid_above_floor {
             record.record_success();
-            return Ok(None)
+            return Ok(None);
         }
 
         // Save the execution payload
@@ -1044,10 +1071,13 @@ impl Auctioneer for RedisCache {
         let mut record = RedisMetricRecord::new("demote_builder");
         let mut builder_info = self.get_builder_info(builder_pub_key).await?;
         if !builder_info.is_optimistic {
-            return Ok(())
+            return Ok(());
         }
         builder_info.is_optimistic = false;
+        builder_info.is_optimistic_for_regional_filtering = false;
         self.hset(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"), &builder_info).await?;
+
+        // TODO remove pending blocks
 
         record.record_success();
         Ok(())
@@ -1061,7 +1091,7 @@ impl Auctioneer for RedisCache {
 
         if builder_infos.is_empty() {
             record.record_success();
-            return Ok(())
+            return Ok(());
         }
 
         // Fetch current builder info
@@ -1072,13 +1102,25 @@ impl Auctioneer for RedisCache {
         for builder_info in builder_infos {
             let builder_pub_key_str = format!("{:?}", builder_info.pub_key);
             if let Some(redis_builder_info) = redis_builder_infos.get(&builder_pub_key_str) {
+                info!(
+                    "Redis builder info: {:?}, Builder info: {:?}",
+                    redis_builder_info, builder_info
+                );
                 if builder_info.builder_info != *redis_builder_info {
                     self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info)
                         .await?;
+                    info!(
+                        "Updated builder info for {:?} is opt is now {:?}",
+                        builder_info.pub_key, builder_info.builder_info.is_optimistic
+                    );
                 }
             } else {
                 self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info)
                     .await?;
+                info!(
+                    "Updated builder info for {:?} is opt is now {:?}",
+                    builder_info.pub_key, builder_info.builder_info.is_optimistic
+                );
             }
         }
 
@@ -1116,7 +1158,7 @@ impl Auctioneer for RedisCache {
         let is_bid_above_floor = builder_bid.value() > floor_value;
         if !cancellations_enabled && !is_bid_above_floor {
             record.record_success();
-            return Ok(())
+            return Ok(());
         }
 
         // Load the latest bids from all builders for the current slot, parent hash, and proposer
@@ -1159,7 +1201,7 @@ impl Auctioneer for RedisCache {
         state.top_bid_value = builder_bids.values().max().cloned().unwrap_or(U256::ZERO);
         if state.top_bid_value == state.prev_top_bid_value {
             record.record_success();
-            return Ok(())
+            return Ok(());
         }
 
         // Update the top bid
@@ -1179,7 +1221,7 @@ impl Auctioneer for RedisCache {
         // Only non-cancellable bids above the floor should set a new floor.
         if cancellations_enabled || !is_bid_above_floor {
             record.record_success();
-            return Ok(())
+            return Ok(());
         }
         self.set_new_floor(
             builder_bid.value(),
@@ -1222,7 +1264,7 @@ impl Auctioneer for RedisCache {
         let is_bid_above_floor = submission.value() > floor_value;
         if !cancellations_enabled && !is_bid_above_floor {
             record.record_success();
-            return Ok(None)
+            return Ok(None);
         }
 
         // Cache the transaction root for the header
@@ -1345,6 +1387,29 @@ impl Auctioneer for RedisCache {
         Ok(is_primev)
     }
 
+    async fn get_payload_address(
+        &self,
+        block_hash: &Hash32,
+    ) -> Result<Option<PayloadSocketAddress>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_payload_address");
+        let key = format!("{PAYLOAD_ADDRESS_KEY}_{block_hash:?}");
+        let payload_address: Option<PayloadSocketAddress> = self.get(&key).await?;
+        record.record_success();
+        Ok(payload_address)
+    }
+
+    async fn save_payload_address(
+        &self,
+        block_hash: &Hash32,
+        payload_socket_address: PayloadSocketAddress,
+    ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("save_payload_address");
+        let key = format!("{PAYLOAD_ADDRESS_KEY}_{block_hash:?}");
+        self.set(&key, &payload_socket_address, Some(PAYLOAD_ADDRESS_EXPIRY_S)).await?;
+        record.record_success();
+        Ok(())
+    }
+
     async fn save_pending_block_header(
         &self,
         slot: u64,
@@ -1353,9 +1418,6 @@ impl Auctioneer for RedisCache {
         timestamp_ms: u64,
     ) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("save_pending_block_header");
-
-        let builder_key = get_pending_block_builder_key(builder_pub_key);
-        self.add(builder_key.as_str(), format!("{block_hash:?}")).await?;
 
         let key = get_pending_block_builder_block_hash_key(builder_pub_key, block_hash);
         let entries = vec![("slot", slot), ("header_received", timestamp_ms)];
@@ -1373,9 +1435,6 @@ impl Auctioneer for RedisCache {
         timestamp_ms: u64,
     ) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("save_pending_block_payload");
-
-        let builder_key = get_pending_block_builder_key(builder_pub_key);
-        self.add(builder_key.as_str(), format!("{block_hash:?}")).await?;
 
         let key = get_pending_block_builder_block_hash_key(builder_pub_key, block_hash);
         let entries = vec![("slot", slot), ("payload_received", timestamp_ms)];
@@ -1395,30 +1454,26 @@ impl Auctioneer for RedisCache {
 
         if redis_builder_infos.is_none() {
             record.record_success();
-            return Ok(pending_blocks)
+            return Ok(pending_blocks);
         }
 
         for (bulder_pub_key_str, builder_info) in redis_builder_infos.unwrap() {
-            let mut expired: Vec<String> = Vec::new();
-
             let builder_pubkey = get_pubkey_from_hex(&bulder_pub_key_str)?;
-            let builder_key: String = get_pending_block_builder_key(&builder_pubkey);
+            let builder_key_prefix =
+                format!("{}_*", get_pending_block_builder_key(&builder_pubkey));
 
             if builder_info.is_optimistic {
-                let block_hashes: Vec<String> = self.get_set_members(builder_key.as_str()).await?;
+                let keys: Vec<String> = self.scan_keys(builder_key_prefix.as_str()).await?;
                 let builder_pubkey_clone = builder_pubkey.clone();
-                for block_hash_str in block_hashes {
-                    let block_hash = get_hash_from_hex(&block_hash_str)?;
-                    let key = get_pending_block_builder_block_hash_key(
-                        &builder_pubkey_clone,
-                        &block_hash,
-                    );
+                for key in keys {
                     let pending_block = self.hgetall_raw(key.as_str()).await?;
 
                     if pending_block.is_empty() {
-                        expired.push(block_hash_str);
-                        continue
+                        continue;
                     }
+
+                    let block_hash_str = key.split('_').last().unwrap_or("");
+                    let block_hash = get_hash_from_hex(block_hash_str)?;
 
                     let slot = match pending_block.get("slot") {
                         Some(s) => serde_json::from_slice(s).map_err(RedisCacheError::from)?,
@@ -1445,10 +1500,6 @@ impl Auctioneer for RedisCache {
 
                     pending_blocks.push(pending_block);
                 }
-            }
-
-            if !expired.is_empty() {
-                self.remove(builder_key.as_str(), expired).await?;
             }
         }
 
@@ -1482,10 +1533,10 @@ impl Auctioneer for RedisCache {
     /// status.
     async fn try_acquire_or_renew_leadership(&self, leader_id: &str) -> bool {
         if self.renew_lock(HOUSEKEEPER_LOCK_KEY, leader_id, HOUSEKEEPER_LOCK_EXPIRY_MS).await {
-            return true
+            return true;
         }
 
-        return self.set_lock(HOUSEKEEPER_LOCK_KEY, leader_id, HOUSEKEEPER_LOCK_EXPIRY_MS).await
+        return self.set_lock(HOUSEKEEPER_LOCK_KEY, leader_id, HOUSEKEEPER_LOCK_EXPIRY_MS).await;
     }
 
     async fn kill_switch_enabled(&self) -> Result<bool, AuctioneerError> {
@@ -2111,8 +2162,13 @@ mod tests {
         let builder_pub_key = BlsPublicKey::default();
         let unknown_builder_pub_key = BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap();
 
-        let builder_info =
-            BuilderInfo { collateral: U256::from(12), is_optimistic: true, builder_id: None };
+        let builder_info = BuilderInfo {
+            collateral: U256::from(12),
+            is_optimistic: true,
+            is_optimistic_for_regional_filtering: false,
+            builder_id: None,
+            builder_ids: None,
+        };
 
         // Test case 1: Builder exists
         let set_result =
@@ -2195,8 +2251,13 @@ mod tests {
         cache.clear_cache().await.unwrap();
 
         let builder_pub_key = BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap();
-        let builder_info =
-            BuilderInfo { collateral: U256::from(12), is_optimistic: false, builder_id: None };
+        let builder_info = BuilderInfo {
+            collateral: U256::from(12),
+            is_optimistic: false,
+            is_optimistic_for_regional_filtering: false,
+            builder_id: None,
+            builder_ids: None,
+        };
 
         // Set builder info in the cache
         let set_result =
@@ -2215,8 +2276,13 @@ mod tests {
         cache.clear_cache().await.unwrap();
 
         let builder_pub_key_optimistic = BlsPublicKey::try_from([11u8; 48].as_ref()).unwrap();
-        let builder_info =
-            BuilderInfo { collateral: U256::from(12), is_optimistic: true, builder_id: None };
+        let builder_info = BuilderInfo {
+            collateral: U256::from(12),
+            is_optimistic: true,
+            is_optimistic_for_regional_filtering: false,
+            builder_id: None,
+            builder_ids: None,
+        };
 
         // Set builder info in the cache
         let set_result = cache
@@ -2641,7 +2707,9 @@ mod tests {
             builder_info: BuilderInfo {
                 collateral: U256::from(100),
                 is_optimistic: true,
+                is_optimistic_for_regional_filtering: false,
                 builder_id: None,
+                builder_ids: None,
             },
             pub_key: BlsPublicKey::default(),
         }];
@@ -2678,7 +2746,9 @@ mod tests {
             builder_info: BuilderInfo {
                 collateral: U256::from(100),
                 is_optimistic: true,
+                is_optimistic_for_regional_filtering: false,
                 builder_id: None,
+                builder_ids: None,
             },
             pub_key: BlsPublicKey::default(),
         }];
@@ -2742,7 +2812,9 @@ mod tests {
             builder_info: BuilderInfo {
                 collateral: U256::from(100),
                 is_optimistic: true,
+                is_optimistic_for_regional_filtering: false,
                 builder_id: None,
+                builder_ids: None,
             },
             pub_key: BlsPublicKey::default(),
         }];
@@ -2777,7 +2849,9 @@ mod tests {
             builder_info: BuilderInfo {
                 collateral: U256::from(100),
                 is_optimistic: true,
+                is_optimistic_for_regional_filtering: false,
                 builder_id: None,
+                builder_ids: None,
             },
             pub_key: BlsPublicKey::default(),
         }];
@@ -2812,7 +2886,9 @@ mod tests {
             builder_info: BuilderInfo {
                 collateral: U256::from(100),
                 is_optimistic: true,
+                is_optimistic_for_regional_filtering: false,
                 builder_id: None,
+                builder_ids: None,
             },
             pub_key: BlsPublicKey::default(),
         }];

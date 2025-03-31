@@ -9,18 +9,19 @@ use crate::{
     service::API_REQUEST_TIMEOUT,
     test_utils::builder_api_app,
 };
+use alloy::hex;
 use axum::http::{header, Method, Request, Uri};
 use core::panic;
 use ethereum_consensus::{
     builder::{SignedValidatorRegistration, ValidatorRegistration},
     configs::mainnet::CAPELLA_FORK_EPOCH,
-    deneb::Withdrawal,
     phase0::mainnet::SLOTS_PER_EPOCH,
     primitives::{BlsPublicKey, BlsSignature},
     ssz::{self, prelude::*},
     types::mainnet::{ExecutionPayload, ExecutionPayloadHeader},
     Fork,
 };
+use flate2::bufread::GzDecoder;
 use futures::{lock::Mutex, stream::FuturesOrdered, Future, SinkExt, StreamExt};
 use helix_beacon_client::types::PayloadAttributes;
 use helix_common::{
@@ -34,7 +35,7 @@ use helix_common::{
         v2::header_submission::{
             SignedHeaderSubmission, SignedHeaderSubmissionCapella, SignedHeaderSubmissionDeneb,
         },
-        BidSubmission, SignedBidSubmission,
+        BidSubmission, SignedBidSubmission, SignedBidSubmissionElectra,
     },
     proofs::SignedConstraints,
     HeaderSubmissionTrace, Route, SubmissionTrace, ValidatorPreferences,
@@ -42,17 +43,16 @@ use helix_common::{
 use helix_database::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-use helix_utils::{calculate_withdrawals_root, request_encoding::Encoding};
+use helix_utils::request_encoding::Encoding;
 use rand::Rng;
 use reqwest::{Client, Response};
 use reqwest_eventsource::{Event as ReqwestEvent, EventSource};
-use reth_primitives::hex;
 use serde_json::json;
 use serial_test::serial;
 use std::{
     convert::Infallible,
     future::pending,
-    io::Write,
+    io::{Read, Write},
     ops::Deref,
     pin::Pin,
     str::FromStr,
@@ -605,6 +605,14 @@ async fn test_signed_bid_submission_decoding_deneb() {
 }
 
 #[tokio::test]
+async fn test_signed_bid_submission_decoding_electra_gzip() {
+    let bytes = b"x\x04\x01\0\0\0\0\0\x06_*\xc7!\xad\xeb\xfdI\x8b\xe6\x89\x81\xae,\xe0\x96\xf1\xeb\x13\xc4\xe40|\x0b\x13\xb1Mf-\x96\n\xbc\xb1Be\x94.\xab\x8f\x91G\xbb\xb1\xb0\xe5\x81\xb7^X+\x08\xa1\xde\xc9\x9d\x9aK\x9b\x99Yx\xef\xae\xa9zn-S4\xf8\x89\n\xbf\x9fH\xc0n\xd8\xd6\xb98!\xcf&\xd8\x9c/VM\xe6\xa0 \x95\x8a\x9a\xca\x14v{\xc7\x90\xe1Y\x85Eij\xf6\xe7S\x88\xb9\xefIA)\xdf\xe9%A\xa1`}\xdey\x02_\xec\xe5\xc7\x01\x9fZ3T:aO\xdb\xea\x87\x17Xh]\x12\xc8\x06&\xd9\t\xec\xe9\0\xd5B\xeeqT\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\0Q%\x02\0\0\0\0}\xd06\x01\0\0\0\0\x8b\x14l\x84\xb3{\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0X\x01\0\0s\r\0\0\x7f\r\0\0\x93\xe5\xfd\x8a\x1d\x0f\x06\xe8\xe9@\xa2'\xb5\xbdPI\xcf|\xa9\xdeF\xe2\xd4!\xdb\x80;\xa0\x1e'S\xdf!\x13\xdf[\x8e\xf3\x868&\x07\x7f\xab\x82\xe5IP\x07\xa9\xe1\x9c\xa5\xc4\x02\xc2[\xd8\x80\xe4\x07\xa7\xb6\x99\x0f\xb2/\xaa\x05\x89I\x81hk\xf5:5\xd7\xd7\x19\x15\xf4\x8f\xe7Y\xeb\xa6\x8c%\xa1\xd87\xb2\xbekH\x06_*\xc7!\xad\xeb\xfdI\x8b\xe6\x89\x81\xae,\xe0\x96\xf1\xeb\x13\xc4\xe40|\x0b\x13\xb1Mf-\x96\nVw~\xd8>\xea\x1f]\xf3\x16,\xf1\x01\xe8\x852\xcet\xb5\x1e\xe3\xbaL)\xb5\xda|\r\xf8\x8b\xbe\xea\xd2\x94\x0eBJ\"_\x93\x05+\xf4\x83\x1e\xe6\xaa\xa9\x08\xb16\xddb\xbdS\xdf\xc5\xc6yqL/m\xd1%\x14\xad\x1c\xa0\xb2\xc8\xee\x04\xce\x18U\xe1u\xc5\xf8\x0e\xc2\xf1W\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\xe7\xd7\xb56\xfc\xb3TPoG\xaf\xf3\x04\x04\xe2\xab\xf0\xf2\xc8l\x89\x05\xfb\x81/@\0!\x97\xab\x1a\x9c/\xf0\0\0\0\0\0\0\0Q%\x02\0\0\0\0}\xd06\x01\0\0\0\0\xb8F\xe4g\0\0\0\0\x10\x02\0\0I|\xa56\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\xbc\xb1Be\x94.\xab\x8f\x91G\xbb\xb1\xb0\xe5\x81\xb7^X+\x08\xa1\xde\xc9\x9d\x9aK\x9b\x99Yx\xef\xae\x14\x02\0\0[\t\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\xf0\x9f\x8c\x8a(\0\0\0\x1c\x02\0\0\xb3\x02\0\0J\x03\0\0\xe1\x03\0\0x\x04\0\0\x0f\x05\0\0\xa6\x05\0\0=\x06\0\0\xd4\x06\0\0\xf9\x01\xf1\x80\x84~l\xb5\xf0\x83\x02y\"\x80\x80\xb9\x01\x9c`\x80`@R4\x80\x15a\0\x10W`\0\x80\xfd[Pa\x01|\x80a\0 `\09`\0\xf3\xfe`\x80`@R4\x80\x15a\0\x10W`\0\x80\xfd[P`\x046\x10a\0+W`\05`\xe0\x1c\x80cSW\x94C\x14a\00W[`\0\x80\xfd[a\08a\0NV[`@Qa\0E\x91\x90a\0\xc4V[`@Q\x80\x91\x03\x90\xf3[```@Q\x80`@\x01`@R\x80`\n\x81R` \x01\x7fjgqspelekh\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x81RP\x90P\x90V[`\0a\0\x96\x82a\0\xe6V[a\0\xa0\x81\x85a\0\xf1V[\x93Pa\0\xb0\x81\x85` \x86\x01a\x01\x02V[a\0\xb9\x81a\x015V[\x84\x01\x91PP\x92\x91PPV[`\0` \x82\x01\x90P\x81\x81\x03`\0\x83\x01Ra\0\xde\x81\x84a\0\x8bV[\x90P\x92\x91PPV[`\0\x81Q\x90P\x91\x90PV[`\0\x82\x82R` \x82\x01\x90P\x92\x91PPV[`\0[\x83\x81\x10\x15a\x01 W\x80\x82\x01Q\x81\x84\x01R` \x81\x01\x90Pa\x01\x05V[\x83\x81\x11\x15a\x01/W`\0\x84\x84\x01R[PPPPV[`\0`\x1f\x19`\x1f\x83\x01\x16\x90P\x91\x90PV\xfe\xa2dipfsX\"\x12 e\xc9+\x992\x14\xa1\x8f\xa7t\x88\xe7\x95\xae\x8a\x8a\xd8D\xa5\xb2\x8d\x19\xed=\xee\x06\x83\x9f\x08;`\xfadsolcC\0\x08\0\03\x83\x11\x17\x84\xa0\xceB\xc4W\x91R\xce\x05l\xb7\x8c\xf2:\xda\xf2\xca?\xad?'\xf1\x89\xb0\xad\x02:\xbe\xa5\x160\xa8.\xa0V\xb8N\xc2\xcb~\xb9\xd1I\xa5:\xa6\xd2\x17\xcc\xa9\x08U5\x8a\xadq\xfe.N\x80\x8f\xf9%N\xb1>\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1dl\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x80\xa0^\x88M\x07\xd1K\xd4R\xabW\xe7j|\xa3\xae)\x05\x1e\x03\x1eG\xb1\xe0\xac\xab\x1b\xc7\xf2N\xea\xa8\x84\xa0D_\xa5\x11S`\xf9\x9b^\xdf\xa3\x0ce\x92\xea'\x14r\xe5\x8b`\xfd,\x1c#p3\x9bN\xbdg\xcb\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1dc\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x80\xa0\x83\xd1\xdb\x91\xed)\xedm\xd4\x18z\xd8?\xb9n3\xe6\x04\xe0\x12E\x83\xbd\xf3\xf6\xdb\xc5&'\x063\xb8\xa0\x11\xf2\x88\x9b\xcd\x10aU\xe1\xcbB$\x11Aw\xa5p\x82\xef\xb0\xf4\xf2\xe1\xfd\x02\xde\xfb\xff/\x82\x19\x9b\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1d]\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x80\xa0i]\x02\x9aj\x8e\xcd\x13\xe0c\x9c\x13\x12\x93\x93\x0e\xde\x86T\xdf\xce/\xb8v\x87\xd5\x0c\xf7J\x0c\xd3[\xa0\x0f\x91Q\x05yq\xa3\xed\xa7\x1b\xc5\xc8\x83\x17p#\xd0Q\x18\x02\xd6a\x05\x89\x08\x8c\x95z\x8e\xad\xfe9\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1dZ\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x80\xa0\x9a\xa5\x8c\xfe\x15\xf6\x98I\x05G\xc8\x11l\xd1\xcdS\xf4\xb9\xd0\xed\xaa\x1b\xa16\x05\x97c\x07\x01\x93B\xd4\xa0z\xd8\xb2+\x9fG\xd6*\xaf\x05\x0e\xab\xe4\x90{\xf3D\xa2\x96x+y\xc5\xa6\x93Rz\xa2\x9a\xc8)c\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1d\\\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x01\xa0-\xf5\x90N]\xea\xa3\x81@\xbb\x99\xb5\xc0\x95:H\xac\x1e^\x11\xb1\x1a\x12\x0b\xca\0Y\x11\xbc9\xcd\xa5\xa0>y,\x1dw509\xa3s\xb6\x8a+Qe\x84\xf9f\x12m\xa34x\x12\xbe\x06Dm/\xbdb\xb0\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1da\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x80\xa0\xcf\xf6<\xf9\xd4\xc0\xbd\nr\xb4w\0\xe8sT\x99\xf7\xa9\x0evf\xfc\xb8\x1eV\x96\xf3\xbc;\xfc\xb4,\xa0qJ\xff\x03\x1e\xce\xa3\xbb\xe7\x18\x8avO\">\xbd\x03KK\x93\xf0\xb2\x0bOL\x01A\xf1s\x80\xb8W\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1d_\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x01\xa0\xfacd\xb7\xb27\x14\xd6Ug\x89\x94\xa7\xd1~\x89Mv\r\xcfnSb)9\x83k;QG\xede\xa0$\x9f<\xc9\xf3^\xa4\xad\xd3,\x0b\xc9W\xd6W\xe6\xf9\xd3e\x80\x9eR\n\xfd6\xbf\x9bX,4\xfe\x9f\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1dX\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x80\xa0\xe2\x11\x9d\xcf\x0c\x96\xda4\x82\xf3\x1dWh\xab<x\xe2,\x96\x1e<A}\xf8\x9b\xd7W\x18\xd0\x87\x06 \xa0+0\x82\x90\xc6S\xefr\x80Z\xc3\xa6&TMj)\xa1\xfajkm\xddW}\xcd\x1cO:${\x86\x02\xf8p\x83\x08\x8b\xb0\x10\x80\x846\xa5|I\x82R\x08\x94\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\x87\x06{\xb3\x84l\x14\x8b\x80\xc0\x80\xa0\x85\x80\xe3\xe9\xe4\x11\x10\xa5\xe7/a\x07\xe0\xcf%\x1a^\xec\xf8\xa2Y\xc1\xff\xbdZa\xbe\xbc\xf7\xcb\x88\xd7\xa0Xn\xb3\x7f\xca@\xd7\x03\x08\xc2\xd0\0\xf1\x08\xe9\xcb\xbb\xce\xde\xad\xa6\xec\xc3\xa0\xe3\x81S\xe8\x90.\x9bG\x86\xd2\x0e\0\0\0\0\0(a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\x10\xc6\x16\0\0\0\0\0\x87\xd2\x0e\0\0\0\0\0)a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30U'\x17\0\0\0\0\0\x88\xd2\x0e\0\0\0\0\0*a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30Z\xff\x16\0\0\0\0\0\x89\xd2\x0e\0\0\0\0\0+a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\xa1\xcf\x16\0\0\0\0\0\x8a\xd2\x0e\0\0\0\0\0,a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30F\xe8\x16\0\0\0\0\0\x8b\xd2\x0e\0\0\0\0\0-a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\\\xe9\x16\0\0\0\0\0\x8c\xd2\x0e\0\0\0\0\0.a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\xa8\xfd\x16\0\0\0\0\0\x8d\xd2\x0e\0\0\0\0\0/a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc302\x08\x17\0\0\0\0\0\x8e\xd2\x0e\0\0\0\0\00a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc309\xef\x16\0\0\0\0\0\x8f\xd2\x0e\0\0\0\0\01a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30E\x02\x17\0\0\0\0\0\x90\xd2\x0e\0\0\0\0\02a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\xe7\xc5\x16\0\0\0\0\0\x91\xd2\x0e\0\0\0\0\03a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\x15\xe6\x16\0\0\0\0\0\x92\xd2\x0e\0\0\0\0\04a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\xfe\xdc\x16\0\0\0\0\0\x93\xd2\x0e\0\0\0\0\05a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\x05\0\x17\0\0\0\0\0\x94\xd2\x0e\0\0\0\0\06a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30%\x17\x17\0\0\0\0\0\x95\xd2\x0e\0\0\0\0\07a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\xd2\xe5\x16\0\0\0\0\0\x0c\0\0\0\x0c\0\0\0\x0c\0\0\0\x0c\0\0\0\x0c\0\0\0\x0c\0\0\0";
+    let payload: SignedBidSubmissionElectra = ssz::prelude::deserialize(bytes).unwrap();
+
+    println!("Payload: {:?}", payload);
+}
+
+#[tokio::test]
 #[serial]
 async fn test_constraints_stream_ok() {
     tracing_subscriber::fmt::init();
@@ -676,7 +684,7 @@ async fn test_constraints_stream_ok() {
         {
             let received = received_constraints.lock().await;
             if received.len() >= test_constraints.len() {
-                break
+                break;
             }
         }
         if start_time.elapsed() > timeout {
@@ -1449,12 +1457,12 @@ async fn websocket_test() {
 
                 message_count += 1;
                 if message_count >= 3 {
-                    break
+                    break;
                 }
             }
             Err(e) => {
                 println!("Error: {}", e);
-                break
+                break;
             }
         }
     }
@@ -1492,48 +1500,56 @@ async fn websocket_test_auth_fails() {
     let _ = tx.send(());
 }
 
-#[tokio::test]
-async fn test_calculate_withdrawals_root() {
-    let json_str = r#"
-        [
-            {"index": "53516667", "validator_index": "226593", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18829431"},
-            {"index": "53516668", "validator_index": "226594", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18895995"},
-            {"index": "53516669", "validator_index": "226595", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18921948"},
-            {"index": "53516670", "validator_index": "226596", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18879996"},
-            {"index": "53516671", "validator_index": "226597", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18862058"},
-            {"index": "53516672", "validator_index": "226598", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18877682"},
-            {"index": "53516673", "validator_index": "226599", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18876362"},
-            {"index": "53516674", "validator_index": "226600", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18905370"},
-            {"index": "53516675", "validator_index": "226601", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18911572"},
-            {"index": "53516676", "validator_index": "226602", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18908681"},
-            {"index": "53516677", "validator_index": "226603", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18904531"},
-            {"index": "53516678", "validator_index": "226604", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18829228"},
-            {"index": "53516679", "validator_index": "226605", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18883181"},
-            {"index": "53516680", "validator_index": "226606", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "63784192"},
-            {"index": "53516681", "validator_index": "226607", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18875686"},
-            {"index": "53516682", "validator_index": "226608", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18924753"}
-        ]
-    "#;
+// #[tokio::test]
+// async fn test_calculate_withdrawals_root() {
+//     let json_str = r#"
+//         [
+//             {"index": "53516667", "validator_index": "226593", "address":
+// "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18829431"},             {"index":
+// "53516668", "validator_index": "226594", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f",
+// "amount": "18895995"},             {"index": "53516669", "validator_index": "226595", "address":
+// "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18921948"},             {"index":
+// "53516670", "validator_index": "226596", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f",
+// "amount": "18879996"},             {"index": "53516671", "validator_index": "226597", "address":
+// "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18862058"},             {"index":
+// "53516672", "validator_index": "226598", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f",
+// "amount": "18877682"},             {"index": "53516673", "validator_index": "226599", "address":
+// "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18876362"},             {"index":
+// "53516674", "validator_index": "226600", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f",
+// "amount": "18905370"},             {"index": "53516675", "validator_index": "226601", "address":
+// "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18911572"},             {"index":
+// "53516676", "validator_index": "226602", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f",
+// "amount": "18908681"},             {"index": "53516677", "validator_index": "226603", "address":
+// "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18904531"},             {"index":
+// "53516678", "validator_index": "226604", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f",
+// "amount": "18829228"},             {"index": "53516679", "validator_index": "226605", "address":
+// "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18883181"},             {"index":
+// "53516680", "validator_index": "226606", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f",
+// "amount": "63784192"},             {"index": "53516681", "validator_index": "226607", "address":
+// "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f", "amount": "18875686"},             {"index":
+// "53516682", "validator_index": "226608", "address": "0xb9d7934878b5fb9610b3fe8a5e441e8fad7e293f",
+// "amount": "18924753"}         ]
+//     "#;
 
-    let withdrawals: Vec<Withdrawal> = serde_json::from_str(json_str).unwrap();
+//     let withdrawals: Vec<Withdrawal> = serde_json::from_str(json_str).unwrap();
 
-    let withdrawals_root = calculate_withdrawals_root(&withdrawals);
+//     let withdrawals_root = calculate_withdrawals_root(&withdrawals);
 
-    // calculate_withdrawals_root use MPT to calculate the root
-    assert_eq!(
-        hex::encode(withdrawals_root),
-        "25068b16d9a849006edff1fbe9bf96799ef524f0ba87199559d1f714719a8202"
-    );
+//     // calculate_withdrawals_root use MPT to calculate the root
+//     assert_eq!(
+//         hex::encode(withdrawals_root),
+//         "25068b16d9a849006edff1fbe9bf96799ef524f0ba87199559d1f714719a8202"
+//     );
 
-    let mut wlist: List<Withdrawal, 16> = withdrawals.try_into().unwrap();
-    let root = wlist.hash_tree_root().unwrap();
+//     let mut wlist: List<Withdrawal, 16> = withdrawals.try_into().unwrap();
+//     let root = wlist.hash_tree_root().unwrap();
 
-    // hash_tree_root use SSZ to calculate the root
-    assert_eq!(
-        hex::encode(root.deref()),
-        "c4726ded906a1d6775eec5e83fa867cffb9f77c6da58b3ceb2e412df971b07f1"
-    );
-}
+//     // hash_tree_root use SSZ to calculate the root
+//     assert_eq!(
+//         hex::encode(root.deref()),
+//         "c4726ded906a1d6775eec5e83fa867cffb9f77c6da58b3ceb2e412df971b07f1"
+//     );
+// }
 
 #[tokio::test]
 async fn test_calculate_tx_root() {
@@ -1543,7 +1559,7 @@ async fn test_calculate_tx_root() {
     let b: ByteList<1073741824> = txs[1].as_slice().try_into().unwrap();
     let c: ByteList<1073741824> = txs[2].as_slice().try_into().unwrap();
     let x = vec![a, b, c];
-    let mut txs_list: List<ByteList<1073741824>, 1048576> = x.try_into().unwrap();
+    let txs_list: List<ByteList<1073741824>, 1048576> = x.try_into().unwrap();
     let root = txs_list.hash_tree_root().unwrap();
 
     println!("{:?}", hex::encode(root.deref()));

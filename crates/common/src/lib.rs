@@ -11,7 +11,9 @@ pub mod proofs;
 pub mod proposer;
 pub mod signing;
 pub mod simulator;
+pub mod task;
 pub mod traces;
+pub mod utils;
 pub mod validator;
 pub mod validator_preferences;
 

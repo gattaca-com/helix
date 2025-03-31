@@ -1,7 +1,13 @@
-use std::{collections::HashMap, io::Read, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    io::Read,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
+use alloy::{hex, primitives::B256};
 use axum::{
-    body::{to_bytes, Body},
+    body::{self, to_bytes, Body},
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Query,
@@ -13,6 +19,8 @@ use axum::{
     },
     Extension, Json,
 };
+
+use bytes::Bytes;
 use ethereum_consensus::{
     configs::mainnet::CAPELLA_FORK_EPOCH,
     phase0::mainnet::SLOTS_PER_EPOCH,
@@ -21,8 +29,8 @@ use ethereum_consensus::{
 };
 use flate2::read::GzDecoder;
 use futures::{Stream, StreamExt};
-use hyper::HeaderMap;
-use reth_primitives::B256;
+use hyper::{header, HeaderMap};
+use serde::Deserialize;
 use tokio::{
     sync::{
         broadcast,
@@ -42,14 +50,17 @@ use helix_common::{
     },
     bid_submission::{
         cancellation::SignedCancellation, v2::header_submission::SignedHeaderSubmission,
-        BidSubmission, BidTrace, SignedBidSubmission,
+        v3::header_submission_v3::PayloadSocketAddress, BidSubmission, BidTrace,
+        SignedBidSubmission,
     },
     chain_info::ChainInfo,
+    metrics::{BUILDER_GOSSIP_QUEUE, DB_QUEUE},
     proofs::{
         verify_multiproofs, InclusionProofs, SignedConstraints, SignedConstraintsWithProofData,
     },
     signing::RelaySigningContext,
     simulator::BlockSimError,
+    task, validator_preferences,
     versioned_payload::PayloadAndBlobs,
     BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, RelayConfig,
     SignedBuilderBid, SubmissionTrace,
@@ -58,8 +69,6 @@ use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
 use helix_utils::{extract_request_id, get_payload_attributes_key, has_reached_fork, utcnow_ns};
-
-use serde::Deserialize;
 
 use crate::{
     builder::{
@@ -105,6 +114,8 @@ where
 
     proposer_duties_response: Arc<RwLock<Option<Vec<u8>>>>,
     payload_attributes: Arc<RwLock<HashMap<String, PayloadAttributesUpdate>>>,
+
+    validator_preferences: Arc<validator_preferences::ValidatorPreferences>,
 }
 
 impl<A, DB, S, G> BuilderApi<A, DB, S, G>
@@ -124,13 +135,14 @@ where
         relay_config: RelayConfig,
         slot_update_subscription: Sender<Sender<ChainUpdate>>,
         gossip_receiver: Receiver<GossipedMessage>,
+        validator_preferences: Arc<validator_preferences::ValidatorPreferences>,
     ) -> (Self, ConstraintsHandle) {
         let (db_sender, db_receiver) = mpsc::channel::<DbInfo>(10_000);
         let (constraints_tx, _) = broadcast::channel(128);
 
         // Spin up db processing task
         let db_clone = db.clone();
-        tokio::spawn(async move {
+        task::spawn(file!(), line!(), async move {
             process_db_additions(db_clone, db_receiver).await;
         });
 
@@ -149,18 +161,19 @@ where
             curr_slot_info: Arc::new(RwLock::new((0, None))),
             proposer_duties_response: Arc::new(RwLock::new(None)),
             payload_attributes: Arc::new(RwLock::new(HashMap::new())),
+            validator_preferences,
         };
 
         // Spin up gossip processing task
         let api_clone = api.clone();
-        tokio::spawn(async move {
+        task::spawn(file!(), line!(), async move {
             api_clone.process_gossiped_info(gossip_receiver).await;
         });
 
         // Spin up the housekeep task.
         // This keeps the curr slot info variables up to date.
         let api_clone = api.clone();
-        tokio::spawn(async move {
+        task::spawn(file!(), line!(), async move {
             if let Err(err) = api_clone.housekeep(slot_update_subscription.clone()).await {
                 error!(%err, "BuilderApi. housekeep task encountered an error");
             }
@@ -198,7 +211,7 @@ where
         let head_slot = api.curr_slot_info.read().await.0;
 
         if slot < head_slot || slot > head_slot + 32 {
-            return Err(BuilderApiError::IncorrectSlot(slot))
+            return Err(BuilderApiError::IncorrectSlot(slot));
         }
 
         match api.auctioneer.get_constraints(slot).await {
@@ -311,23 +324,6 @@ where
         let (payload, is_cancellations_enabled) = decode_payload(req, &mut trace).await?;
         let block_hash = payload.message().block_hash.clone();
 
-        // Verify the payload is for the current slot
-        if payload.slot() <= head_slot {
-            debug!(?block_hash, "submission is for a past slot");
-
-            return Err(BuilderApiError::SubmissionForPastSlot {
-                current_slot: head_slot,
-                submission_slot: payload.slot(),
-            })
-        }
-
-        // Verify that we have a validator connected for this slot
-        if next_duty.is_none() {
-            warn!(?block_hash, "could not find slot duty");
-            return Err(BuilderApiError::ProposerDutyNotFound)
-        }
-        let next_duty = next_duty.unwrap();
-
         info!(
             slot = payload.slot(),
             builder_pub_key = ?payload.builder_public_key(),
@@ -335,6 +331,23 @@ where
             ?block_hash,
             "payload decoded",
         );
+
+        // Verify the payload is for the current slot
+        if payload.slot() <= head_slot {
+            debug!(?block_hash, "submission is for a past slot");
+
+            return Err(BuilderApiError::SubmissionForPastSlot {
+                current_slot: head_slot,
+                submission_slot: payload.slot(),
+            });
+        }
+
+        // Verify that we have a validator connected for this slot
+        if next_duty.is_none() {
+            warn!(?block_hash, "could not find slot duty");
+            return Err(BuilderApiError::ProposerDutyNotFound);
+        }
+        let next_duty = next_duty.unwrap();
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes = api
@@ -393,7 +406,7 @@ where
             );
             return Err(BuilderApiError::BuilderNotInProposersTrustedList {
                 proposer_trusted_builders,
-            })
+            });
         }
 
         // Verify payload has not already been delivered
@@ -401,7 +414,7 @@ where
             Ok(Some(slot)) => {
                 if payload.slot() <= slot {
                     debug!("payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered)
+                    return Err(BuilderApiError::PayloadAlreadyDelivered);
                 }
             }
             Ok(None) => {}
@@ -419,7 +432,7 @@ where
             &api.chain_info,
         ) {
             warn!(%err, "failed sanity check");
-            return Err(err)
+            return Err(err);
         }
         trace.pre_checks = utcnow_ns();
 
@@ -451,7 +464,7 @@ where
                 if let Err(err) = api.verify_and_save_inclusion_proofs(&payload, constraints).await
                 {
                     warn!(%err, "failed to verify and save inclusion proofs");
-                    return Err(err)
+                    return Err(err);
                 }
             } else {
                 info!(block_value = %payload.value(), "block value is greater than max value to verify, inclusion proof verification and saving is skipped");
@@ -464,7 +477,57 @@ where
         if is_cancellations_enabled {
             if let Err(err) = api.check_for_later_submissions(&payload, trace.receive).await {
                 warn!(%err, "already processing later submission");
-                return Err(err)
+
+                // Save bid to auctioneer
+                if let Err(err) = api
+                    .auctioneer
+                    .save_execution_payload(
+                        payload.slot(),
+                        &payload.message().proposer_public_key,
+                        payload.block_hash(),
+                        &payload.payload_and_blobs(),
+                    )
+                    .await
+                {
+                    error!(%err, "failed to save execution payload");
+                    return Err(BuilderApiError::AuctioneerError(err));
+                }
+
+                // Log some final info
+                trace.request_finish = get_nanos_timestamp()?;
+                debug!(
+                    ?trace,
+                    request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
+                    "submit_block request finished"
+                );
+
+                let optimistic_version = if was_simulated_optimistically {
+                    OptimisticVersion::V1
+                } else {
+                    OptimisticVersion::NotOptimistic
+                };
+
+                // Save submission to db.
+                task::spawn(
+                    file!(),
+                    line!(),
+                    async move {
+                        if let Err(err) = api
+                            .db
+                            .store_block_submission(
+                                payload,
+                                Arc::new(trace),
+                                optimistic_version as i16,
+                            )
+                            .await
+                        {
+                            error!(%err, "failed to store block submission")
+                        }
+                    }
+                    .in_current_span(),
+                );
+
+                return Err(err);
             }
         }
 
@@ -476,14 +539,17 @@ where
             // If the bid was succesfully saved then we gossip the header and payload to all other
             // relays.
             Some((builder_bid, execution_payload)) => {
-                api.gossip_new_submission(
-                    &payload,
-                    execution_payload,
+                api.gossip_header(
                     builder_bid,
+                    payload.bid_trace(),
                     is_cancellations_enabled,
                     trace.receive,
+                    None,
                 )
                 .await;
+                if api.relay_config.payload_gossip_enabled {
+                    api.gossip_payload(&payload, execution_payload).await;
+                }
             }
             None => { /* Bid wasn't saved so no need to gossip as it will never be served */ }
         }
@@ -503,10 +569,14 @@ where
         };
 
         // Save submission to db.
-        tokio::spawn(
+        task::spawn(
+            file!(),
+            line!(),
             async move {
-                if let Err(err) =
-                    api.db.store_block_submission(payload, trace, optimistic_version as i16).await
+                if let Err(err) = api
+                    .db
+                    .store_block_submission(payload, Arc::new(trace), optimistic_version as i16)
+                    .await
                 {
                     error!(%err, "failed to store block submission")
                 }
@@ -525,15 +595,39 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = HeaderSubmissionTrace { receive: utcnow_ns(), ..Default::default() };
-        let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
+        let mut trace =
+            HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
 
-        debug!(head_slot, timestamp_request_start = trace.receive,);
+        debug!(timestamp_request_start = trace.receive,);
 
         // Decode the incoming request body into a payload
-        let (mut payload, is_cancellations_enabled) =
-            decode_header_submission(req, &mut trace).await?;
+        let (payload, is_cancellations_enabled) = decode_header_submission(req, &mut trace).await?;
+
+        Self::handle_submit_header(&api, payload, None, is_cancellations_enabled, trace).await
+    }
+
+    pub(crate) async fn handle_submit_header(
+        api: &Arc<BuilderApi<A, DB, S, G>>,
+        mut payload: SignedHeaderSubmission,
+        payload_address: Option<PayloadSocketAddress>,
+        is_cancellations_enabled: bool,
+        mut trace: HeaderSubmissionTrace,
+    ) -> Result<StatusCode, BuilderApiError> {
+        let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
+
         let block_hash = payload.block_hash().clone();
+
+        // Verify the payload is for the current slot
+        if payload.slot() <= head_slot {
+            debug!(
+                block_hash = ?block_hash,
+                "submission is for a past slot",
+            );
+            return Err(BuilderApiError::SubmissionForPastSlot {
+                current_slot: head_slot,
+                submission_slot: payload.slot(),
+            });
+        }
 
         info!(
             slot = payload.slot(),
@@ -543,19 +637,10 @@ where
             "header submission decoded",
         );
 
-        // Verify the payload is for the current slot
-        if payload.slot() <= head_slot {
-            debug!(?block_hash, "submission is for a past slot",);
-            return Err(BuilderApiError::SubmissionForPastSlot {
-                current_slot: head_slot,
-                submission_slot: payload.slot(),
-            })
-        }
-
         // Verify that we have a validator connected for this slot
         if next_duty.is_none() {
             warn!(?block_hash, "could not find slot duty");
-            return Err(BuilderApiError::ProposerDutyNotFound)
+            return Err(BuilderApiError::ProposerDutyNotFound);
         }
         let next_duty = next_duty.unwrap();
 
@@ -571,7 +656,7 @@ where
         // Make sure that the builder has enough collateral to cover the submission.
         if let Err(err) = api.check_builder_collateral(&payload, &builder_info).await {
             warn!(%err, "builder has insufficient collateral");
-            return Err(err)
+            return Err(err);
         }
 
         // Handle duplicates.
@@ -597,9 +682,14 @@ where
         }
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
-        if next_duty.entry.preferences.filtering.is_regional() {
-            warn!("proposer has regional filtering, discarding optimistic v2 submission");
-            return Err(BuilderApiError::V2SubmissionsInvalidIfProposerRequiresRegionalFiltering)
+        // and the builder is not optimistic for regional filtering.
+        if next_duty.entry.preferences.filtering.is_regional()
+            && !builder_info.can_process_regional_slot_optimistically()
+        {
+            warn!("proposer has regional filtering and builder is not optimistic for regional filtering, discarding optimistic v2 submission");
+            return Err(BuilderApiError::BuilderNotOptimistic {
+                builder_pub_key: payload.builder_public_key().clone(),
+            });
         }
 
         // Validate basic information about the payload
@@ -611,7 +701,7 @@ where
             &api.chain_info,
         ) {
             warn!(%err, "failed sanity check");
-            return Err(err)
+            return Err(err);
         }
 
         // Handle trusted builders check
@@ -624,7 +714,7 @@ where
             );
             return Err(BuilderApiError::BuilderNotInProposersTrustedList {
                 proposer_trusted_builders,
-            })
+            });
         }
 
         trace.pre_checks = utcnow_ns();
@@ -632,7 +722,7 @@ where
         // Verify the payload signature
         if let Err(err) = payload.verify_signature(&api.chain_info.context) {
             warn!(%err, "failed to verify signature");
-            return Err(BuilderApiError::SignatureVerificationFailed)
+            return Err(BuilderApiError::SignatureVerificationFailed);
         }
         trace.signature = utcnow_ns();
 
@@ -641,7 +731,7 @@ where
             Ok(Some(slot)) => {
                 if payload.slot() <= slot {
                     debug!("payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered)
+                    return Err(BuilderApiError::PayloadAlreadyDelivered);
                 }
             }
             Ok(None) => {}
@@ -681,6 +771,7 @@ where
                     payload.bid_trace(),
                     is_cancellations_enabled,
                     trace.receive,
+                    payload_address.clone(),
                 )
                 .await;
             }
@@ -695,23 +786,38 @@ where
             "submit_header request finished"
         );
 
-        // Save pending block header to auctioneer
-        api.auctioneer
-            .save_pending_block_header(
-                payload.slot(),
-                payload.builder_public_key(),
-                payload.block_hash(),
-                trace.receive / 1_000_000, // convert to ms
-            )
-            .await
-            .map_err(|err| {
-                error!(%err, "failed to save pending block header");
-                BuilderApiError::AuctioneerError(err)
-            })?;
+        match payload_address {
+            None => {
+                // Save pending block header to auctioneer
+                api.auctioneer
+                    .save_pending_block_header(
+                        payload.slot(),
+                        payload.builder_public_key(),
+                        payload.block_hash(),
+                        trace.receive / 1_000_000, // convert to ms
+                    )
+                    .await
+                    .map_err(|err| {
+                        error!(%err, "failed to save pending block header");
+                        BuilderApiError::AuctioneerError(err)
+                    })?;
+            }
+            Some(payload_addr) => {
+                api.auctioneer
+                    .save_payload_address(payload.block_hash(), payload_addr)
+                    .await
+                    .map_err(|err| {
+                        error!(%err, "failed to save payload address");
+                        BuilderApiError::AuctioneerError(err)
+                    })?;
+            }
+        }
 
         // Save submission to db
         let db = api.db.clone();
-        tokio::spawn(
+        task::spawn(
+            file!(),
+            line!(),
             async move {
                 if let Err(err) = db.store_header_submission(payload, trace).await {
                     error!(
@@ -744,18 +850,13 @@ where
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
-        let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
-
-        debug!(head_slot, timestamp_request_start = trace.receive);
 
         // Decode the incoming request body into a payload
         let (payload, _) = decode_payload(req, &mut trace).await?;
 
-        let builder_pub_key = payload.builder_public_key().clone();
-        let block_hash = payload.message().block_hash.clone();
         info!(
             slot = payload.slot(),
-            builder_pub_key = ?builder_pub_key,
+            builder_pub_key = ?payload.builder_public_key(),
             block_value = %payload.value(),
             block_hash = ?payload.block_hash(),
             "payload decoded",
@@ -775,13 +876,27 @@ where
                 BuilderApiError::AuctioneerError(err)
             })?;
 
+        Self::handle_optimistic_payload(api, payload, trace).await
+    }
+
+    pub(crate) async fn handle_optimistic_payload(
+        api: Arc<BuilderApi<A, DB, S, G>>,
+        payload: SignedBidSubmission,
+        mut trace: SubmissionTrace,
+    ) -> Result<StatusCode, BuilderApiError> {
+        let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
+        debug!(head_slot, timestamp_request_start = trace.receive);
+
+        let builder_pub_key = payload.builder_public_key().clone();
+        let block_hash = payload.message().block_hash.clone();
+
         // Verify the payload is for the current slot
         if payload.slot() <= head_slot {
             debug!(?block_hash, "submission is for a past slot",);
             return Err(BuilderApiError::SubmissionForPastSlot {
                 current_slot: head_slot,
                 submission_slot: payload.slot(),
-            })
+            });
         }
 
         // Verify that we have a validator connected for this slot
@@ -789,7 +904,7 @@ where
         // so we can send a `PayloadReceived` message.
         if next_duty.is_none() {
             warn!(?block_hash, "could not find slot duty");
-            return Err(BuilderApiError::ProposerDutyNotFound)
+            return Err(BuilderApiError::ProposerDutyNotFound);
         }
         let next_duty = next_duty.unwrap();
 
@@ -805,13 +920,18 @@ where
         // Make sure that the builder has enough collateral to cover the submission.
         if let Err(err) = api.check_builder_collateral(&payload, &builder_info).await {
             warn!(%err, "builder has insufficient collateral");
-            return Err(err)
+            return Err(err);
         }
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
-        if next_duty.entry.preferences.filtering.is_regional() {
+        // and the builder is not optimistic for regional filtering.
+        if next_duty.entry.preferences.filtering.is_regional()
+            && !builder_info.can_process_regional_slot_optimistically()
+        {
             warn!("proposer has regional filtering enabled, discarding optimistic v2 submission");
-            return Err(BuilderApiError::V2SubmissionsInvalidIfProposerRequiresRegionalFiltering)
+            return Err(BuilderApiError::BuilderNotOptimistic {
+                builder_pub_key: payload.builder_public_key().clone(),
+            });
         }
 
         // Handle trusted builders check
@@ -824,7 +944,7 @@ where
             );
             return Err(BuilderApiError::BuilderNotInProposersTrustedList {
                 proposer_trusted_builders,
-            })
+            });
         }
 
         // Verify payload has not already been delivered
@@ -832,7 +952,7 @@ where
             Ok(Some(slot)) => {
                 if payload.slot() <= slot {
                     debug!("payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered)
+                    return Err(BuilderApiError::PayloadAlreadyDelivered);
                 }
             }
             Ok(None) => {}
@@ -852,7 +972,7 @@ where
                 }
                 _ => {
                     api.demote_builder(&builder_pub_key, &block_hash, &err).await;
-                    return Err(err)
+                    return Err(err);
                 }
             }
         }
@@ -866,7 +986,7 @@ where
             &api.chain_info,
         ) {
             warn!(%err, "failed sanity check");
-            return Err(err)
+            return Err(err);
         }
         trace.pre_checks = utcnow_ns();
 
@@ -884,7 +1004,7 @@ where
             Err(err) => {
                 // Any invalid submission for optimistic v2 results in a demotion.
                 api.demote_builder(&builder_pub_key, &block_hash, &err).await;
-                return Err(err)
+                return Err(err);
             }
         };
 
@@ -900,12 +1020,14 @@ where
             .await
         {
             error!(%err, "failed to save execution payload");
-            return Err(BuilderApiError::AuctioneerError(err))
+            return Err(BuilderApiError::AuctioneerError(err));
         }
         trace.auctioneer_update = utcnow_ns();
 
         // Gossip to other relays
-        api.gossip_payload(&payload, payload.payload_and_blobs()).await;
+        if api.relay_config.payload_gossip_enabled {
+            api.gossip_payload(&payload, payload.payload_and_blobs()).await;
+        }
 
         // Log some final info
         trace.request_finish = utcnow_ns();
@@ -916,11 +1038,13 @@ where
         );
 
         // Save submission to db
-        tokio::spawn(
+        task::spawn(
+            file!(),
+            line!(),
             async move {
                 if let Err(err) = api
                     .db
-                    .store_block_submission(payload, trace, OptimisticVersion::V2 as i16)
+                    .store_block_submission(payload, Arc::new(trace), OptimisticVersion::V2 as i16)
                     .await
                 {
                     error!(%err, "failed to store block submission")
@@ -958,7 +1082,7 @@ where
         // Verify the payload signature
         if let Err(err) = signed_cancellation.verify_signature(&api.chain_info.context) {
             warn!(%err, "failed to verify signature");
-            return Err(BuilderApiError::SignatureVerificationFailed)
+            return Err(BuilderApiError::SignatureVerificationFailed);
         }
 
         // Verify payload has not already been delivered
@@ -966,7 +1090,7 @@ where
             Ok(Some(del_slot)) => {
                 if slot <= del_slot {
                     debug!("payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered)
+                    return Err(BuilderApiError::PayloadAlreadyDelivered);
                 }
             }
             Ok(None) => {}
@@ -986,7 +1110,7 @@ where
             .await
         {
             error!(%err, "Failed processing cancellable bid below floor. Could not delete builder bid.");
-            return Err(BuilderApiError::InternalError)
+            return Err(BuilderApiError::InternalError);
         }
 
         api.gossip_cancellation(signed_cancellation, &request_id).await;
@@ -1007,7 +1131,7 @@ where
                 Ok(false) => return Err(BuilderApiError::InvalidApiKey),
                 Err(err) => {
                     error!(%err, "failed to check api key");
-                    return Err(BuilderApiError::InternalError)
+                    return Err(BuilderApiError::InternalError);
                 }
             },
             None => return Err(BuilderApiError::InvalidApiKey),
@@ -1039,7 +1163,7 @@ where
         let (head_slot, _) = self.curr_slot_info.read().await.clone();
         if req.slot <= head_slot {
             debug!("received gossiped header for a past slot");
-            return
+            return;
         }
 
         // Handle duplicates.
@@ -1053,7 +1177,7 @@ where
             .await
             .is_err()
         {
-            return
+            return;
         }
 
         // Verify payload has not already been delivered
@@ -1061,7 +1185,7 @@ where
             Ok(Some(slot)) => {
                 if req.slot <= slot {
                     debug!("payload already delivered");
-                    return
+                    return;
                 }
             }
             Ok(None) => {}
@@ -1085,7 +1209,7 @@ where
             Ok(floor_bid_value) => floor_bid_value,
             Err(err) => {
                 warn!(%err, "bid is below floor");
-                return
+                return;
             }
         };
 
@@ -1106,49 +1230,49 @@ where
             .await
         {
             warn!(%err, "failed to save header bid");
-            return
+            return;
         }
 
-        trace.auctioneer_update = utcnow_ns();
+        if let Some(payload_address) = req.payload_address {
+            if let Err(e) = self
+                .auctioneer
+                .save_payload_address(&req.bid_trace.block_hash, payload_address)
+                .await
+            {
+                warn!(%e, "failed to save payload address");
+            }
+        }
+
+        trace.auctioneer_update = get_nanos_timestamp().unwrap_or_default();
 
         debug!("succesfully saved gossiped header");
 
         // Save latency trace to db
-        let db = self.db.clone();
-        tokio::spawn(async move {
-            if let Err(err) =
-                db.save_gossiped_header_trace(req.bid_trace.block_hash.clone(), trace).await
-            {
-                error!(%err, "failed to store gossiped header trace")
-            }
-        });
+        // let db = self.db.clone();
+        // task::spawn(file!(), line!(), async move {
+        //     if let Err(err) = db
+        //         .save_gossiped_header_trace(req.bid_trace.block_hash.clone(), Arc::new(trace))
+        //         .await
+        //     {
+        //         error!(%err, "failed to store gossiped header trace")
+        //     }
+        // });
     }
 
     #[tracing::instrument(skip_all, fields(id = %Uuid::new_v4()))]
     pub async fn process_gossiped_payload(&self, req: BroadcastPayloadParams) {
         debug!(block_hash = ?req.execution_payload.execution_payload.block_hash(), "received gossiped payload");
 
-        let mut trace = GossipedPayloadTrace { receive: utcnow_ns(), ..Default::default() };
-
-        // Save gossiped payload to auctioneer in case it was sent to diffent region than the header
-        if let Err(err) = self
-            .auctioneer
-            .save_pending_block_payload(
-                req.slot,
-                &req.proposer_pub_key,
-                &req.execution_payload.execution_payload.block_hash().clone(),
-                trace.receive / 1_000_000, // convert to ms
-            )
-            .await
-        {
-            error!(%err, "failed to save pending block header");
-        }
+        let mut trace = GossipedPayloadTrace {
+            receive: get_nanos_timestamp().unwrap_or_default(),
+            ..Default::default()
+        };
 
         // Verify that the gossiped payload is not for a past slot
         let (head_slot, _) = self.curr_slot_info.read().await.clone();
         if req.slot <= head_slot {
             debug!("received gossiped payload for a past slot");
-            return
+            return;
         }
 
         // Verify payload has not already been delivered
@@ -1156,7 +1280,7 @@ where
             Ok(Some(slot)) => {
                 if req.slot <= slot {
                     debug!("payload already delivered");
-                    return
+                    return;
                 }
             }
             Ok(None) => {}
@@ -1179,7 +1303,7 @@ where
             .await
         {
             error!(%err, "failed to save execution payload");
-            return
+            return;
         }
 
         trace.auctioneer_update = utcnow_ns();
@@ -1188,7 +1312,7 @@ where
 
         // Save gossiped payload trace to db
         let db = self.db.clone();
-        tokio::spawn(async move {
+        task::spawn(file!(), line!(), async move {
             if let Err(err) = db
                 .save_gossiped_payload_trace(
                     req.execution_payload.execution_payload.block_hash().clone(),
@@ -1247,22 +1371,23 @@ where
     /// Will process new gossiped messages from
     async fn process_gossiped_info(&self, mut recveiver: Receiver<GossipedMessage>) {
         while let Some(msg) = recveiver.recv().await {
+            BUILDER_GOSSIP_QUEUE.dec();
             match msg {
                 GossipedMessage::Header(header) => {
                     let api_clone = self.clone();
-                    tokio::spawn(async move {
+                    task::spawn(file!(), line!(), async move {
                         api_clone.process_gossiped_header(*header).await;
                     });
                 }
                 GossipedMessage::Payload(payload) => {
                     let api_clone = self.clone();
-                    tokio::spawn(async move {
+                    task::spawn(file!(), line!(), async move {
                         api_clone.process_gossiped_payload(*payload).await;
                     });
                 }
                 GossipedMessage::Cancellation(payload) => {
                     let api_clone = self.clone();
-                    tokio::spawn(async move {
+                    task::spawn(file!(), line!(), async move {
                         api_clone.process_gossiped_cancellation(*payload).await;
                     });
                 }
@@ -1279,8 +1404,14 @@ where
         is_cancellations_enabled: bool,
         on_receive: u64,
     ) {
-        self.gossip_header(builder_bid, payload.bid_trace(), is_cancellations_enabled, on_receive)
-            .await;
+        self.gossip_header(
+            builder_bid,
+            payload.bid_trace(),
+            is_cancellations_enabled,
+            on_receive,
+            None,
+        )
+        .await;
         self.gossip_payload(payload, execution_payload).await;
     }
 
@@ -1290,6 +1421,7 @@ where
         bid_trace: &BidTrace,
         is_cancellations_enabled: bool,
         on_receive: u64,
+        payload_address: Option<PayloadSocketAddress>,
     ) {
         let params = BroadcastHeaderParams {
             signed_builder_bid: builder_bid,
@@ -1300,6 +1432,7 @@ where
             builder_pub_key: bid_trace.builder_public_key.clone(),
             is_cancellations_enabled,
             on_receive,
+            payload_address,
         };
         if let Err(err) = self.gossiper.broadcast_header(params).await {
             error!(%err, "failed to broadcast header");
@@ -1358,7 +1491,7 @@ where
         // Verify the payload signature
         if let Err(err) = payload.verify_signature(&self.chain_info.context) {
             warn!(%err, "failed to verify signature");
-            return Err(BuilderApiError::SignatureVerificationFailed)
+            return Err(BuilderApiError::SignatureVerificationFailed);
         }
         trace.signature = utcnow_ns();
 
@@ -1415,7 +1548,7 @@ where
                     Some(tx_root) => tx_root,
                     None => {
                         warn!("no tx root found in payload");
-                        return Err(BuilderApiError::MissingTransactions)
+                        return Err(BuilderApiError::MissingTransactions);
                     }
                 };
 
@@ -1424,16 +1557,16 @@ where
                     return Err(BuilderApiError::TransactionsRootMismatch {
                         got: Hash32::try_from(tx_root.as_ref()).unwrap(),
                         expected: Hash32::try_from(expected_tx_root.as_ref()).unwrap(),
-                    })
+                    });
                 }
             }
             Ok(None) => {
                 warn!("no tx root found for block hash");
-                return Err(BuilderApiError::MissingTransactionsRoot)
+                return Err(BuilderApiError::MissingTransactionsRoot);
             }
             Err(err) => {
                 error!(%err, "failed to get tx root");
-                return Err(BuilderApiError::AuctioneerError(err))
+                return Err(BuilderApiError::AuctioneerError(err));
             }
         };
         Ok(())
@@ -1461,7 +1594,7 @@ where
                 Ok(floor_value) => floor_value.unwrap_or(U256::ZERO),
                 Err(err) => {
                     error!(%err, "Failed to get floor bid value");
-                    return Err(BuilderApiError::InternalError)
+                    return Err(BuilderApiError::InternalError);
                 }
             };
 
@@ -1469,7 +1602,7 @@ where
         // `skip_floor_bid_builder_pubkeys` config.
         if self.relay_config.skip_floor_bid_builder_pubkeys.contains(builder_public_key) {
             debug!(?builder_public_key, "skipping floor bid checks for submission");
-            return Ok(floor_bid_value)
+            return Ok(floor_bid_value);
         }
 
         let is_bid_below_floor = value < floor_bid_value;
@@ -1483,12 +1616,12 @@ where
                 .await
             {
                 error!(%err, "Failed processing cancellable bid below floor. Could not delete builder bid.");
-                return Err(BuilderApiError::InternalError)
+                return Err(BuilderApiError::InternalError);
             }
-            return Err(BuilderApiError::BidBelowFloor)
+            return Err(BuilderApiError::BidBelowFloor);
         } else if !is_cancellations_enabled && is_bid_at_or_below_floor {
             debug!("submission at or below floor bid value, without cancellation");
-            return Err(BuilderApiError::BidBelowFloor)
+            return Err(BuilderApiError::BidBelowFloor);
         }
         Ok(floor_bid_value)
     }
@@ -1510,13 +1643,17 @@ where
         if let Some(trusted_builders) = &next_duty.entry.preferences.trusted_builders {
             // Handle case where proposer specifies an empty list.
             if trusted_builders.is_empty() {
-                return true
+                return true;
             }
 
             if let Some(builder_id) = &builder_info.builder_id {
                 trusted_builders.contains(builder_id)
             } else {
-                false
+                if let Some(ids) = &builder_info.builder_ids {
+                    ids.iter().any(|id| trusted_builders.contains(id))
+                } else {
+                    false
+                }
             }
         } else {
             true
@@ -1636,7 +1773,7 @@ where
             .await
         {
             error!(%err, "failed to save inclusion proof");
-            return Err(BuilderApiError::InternalError)
+            return Err(BuilderApiError::InternalError);
         }
         Ok(())
     }
@@ -1704,7 +1841,7 @@ where
             return Err(BuilderApiError::PayloadSlotMismatchWithPayloadAttributes {
                 got: slot,
                 expected: payload_attributes.slot,
-            })
+            });
         }
 
         Ok(payload_attributes)
@@ -1732,7 +1869,7 @@ where
         {
             Ok(Some(latest_payload_received_at)) => {
                 if on_receive < latest_payload_received_at {
-                    return Err(BuilderApiError::AlreadyProcessingNewerPayload)
+                    return Err(BuilderApiError::AlreadyProcessingNewerPayload);
                 }
             }
             Ok(None) => {}
@@ -1760,7 +1897,7 @@ where
             );
             return Err(BuilderApiError::BuilderNotOptimistic {
                 builder_pub_key: payload.builder_public_key().clone(),
-            })
+            });
         } else if builder_info.collateral < payload.value() {
             warn!(
                 builder=?payload.builder_public_key(),
@@ -1773,7 +1910,7 @@ where
                 collateral: builder_info.collateral,
                 collateral_required: payload.value(),
                 is_optimistic: builder_info.is_optimistic,
-            })
+            });
         }
 
         // Builder has enough collateral
@@ -1790,17 +1927,32 @@ where
                     err=%err,
                     "Failed to retrieve builder info"
                 );
-                BuilderInfo { collateral: U256::ZERO, is_optimistic: false, builder_id: None }
+                BuilderInfo {
+                    collateral: U256::ZERO,
+                    is_optimistic: false,
+                    is_optimistic_for_regional_filtering: false,
+                    builder_id: None,
+                    builder_ids: None,
+                }
             }
         }
     }
 
-    async fn demote_builder(
+    pub(crate) async fn demote_builder(
         &self,
         builder: &BlsPublicKey,
         block_hash: &Hash32,
         err: &BuilderApiError,
     ) {
+        match err {
+            BuilderApiError::BlockValidationError(sim_err) => {
+                if sim_err.is_temporary() {
+                    return;
+                }
+            }
+            _ => {}
+        }
+
         error!(%err, %builder, "verification failed for submit_block_v2. Demoting builder!");
 
         if let Err(err) = self.auctioneer.demote_builder(builder).await {
@@ -1914,7 +2066,7 @@ where
         let (head_slot, _) = *self.curr_slot_info.read().await;
 
         if payload_attributes.slot <= head_slot {
-            return
+            return;
         }
 
         info!(
@@ -1929,7 +2081,7 @@ where
             get_payload_attributes_key(&payload_attributes.parent_hash, payload_attributes.slot);
         let mut all_payload_attributes = self.payload_attributes.write().await;
         if all_payload_attributes.contains_key(&payload_attributes_key) {
-            return
+            return;
         }
 
         // Clean up old payload attributes
@@ -1967,6 +2119,8 @@ pub async fn decode_payload(
         })
         .unwrap_or(false);
 
+    let headers = req.headers().clone();
+
     // Get content encoding and content type
     let is_gzip = req
         .headers()
@@ -1987,7 +2141,7 @@ pub async fn decode_payload(
         return Err(BuilderApiError::PayloadTooLarge {
             max_size: MAX_PAYLOAD_LENGTH,
             size: body_bytes.len(),
-        })
+        });
     }
 
     // Decompress if necessary
@@ -2001,6 +2155,15 @@ pub async fn decode_payload(
         decoder.read_to_end(&mut buf)?;
         body_bytes = buf.into();
     }
+
+    info!(
+        payload_size = body_bytes.len(),
+        is_gzip = is_gzip,
+        is_ssz = is_ssz,
+        headers = ?headers,
+        bytes = ?body_bytes,
+        "received payload",
+    );
 
     // Decode payload
     let payload: SignedBidSubmission = if is_ssz {
@@ -2052,7 +2215,7 @@ async fn push_top_bids<A: Auctioneer + 'static>(mut socket: WebSocket, auctionee
             Some(result) = bid_stream.next() => {
                 match result {
                     Ok(bid) => {
-                        if socket.send(Message::Binary(bid)).await.is_err() {
+                        if socket.send(Message::Binary(bid.into())).await.is_err() {
                             error!("Failed to send bid. Disconnecting.");
                             break;
                         }
@@ -2064,11 +2227,12 @@ async fn push_top_bids<A: Auctioneer + 'static>(mut socket: WebSocket, auctionee
                 }
             },
             _ = interval.tick() => {
-                if socket.send(Message::Ping(Vec::new())).await.is_err() {
+                if socket.send(Message::Ping(Bytes::new())).await.is_err() {
                     error!("Failed to send ping.");
                     break;
                 }
             },
+
             msg = socket.next() => {
                 match msg {
                     Some(Ok(Message::Ping(data))) => {
@@ -2102,9 +2266,7 @@ async fn push_top_bids<A: Auctioneer + 'static>(mut socket: WebSocket, auctionee
             }
         }
     }
-    if let Err(e) = socket.close().await {
-        error!("Failed to close socket properly: {}", e);
-    }
+
     debug!("Socket connection closed gracefully.");
 }
 
@@ -2149,7 +2311,7 @@ pub async fn decode_header_submission(
         return Err(BuilderApiError::PayloadTooLarge {
             max_size: MAX_PAYLOAD_LENGTH,
             size: body_bytes.len(),
-        })
+        });
     }
 
     // Decode header
@@ -2198,7 +2360,7 @@ fn sanity_check_block_submission(
         return Err(BuilderApiError::IncorrectTimestamp {
             got: payload.timestamp(),
             expected: expected_timestamp,
-        })
+        });
     }
 
     // Check duty
@@ -2206,18 +2368,21 @@ fn sanity_check_block_submission(
         return Err(BuilderApiError::FeeRecipientMismatch {
             got: payload.proposer_fee_recipient().clone(),
             expected: next_duty.entry.registration.message.fee_recipient.clone(),
-        })
+        });
     }
 
     if payload.slot() != next_duty.slot {
-        return Err(BuilderApiError::SlotMismatch { got: payload.slot(), expected: next_duty.slot })
+        return Err(BuilderApiError::SlotMismatch {
+            got: payload.slot(),
+            expected: next_duty.slot,
+        });
     }
 
     if next_duty.entry.registration.message.public_key != bid_trace.proposer_public_key {
         return Err(BuilderApiError::ProposerPublicKeyMismatch {
             got: bid_trace.proposer_public_key.clone(),
             expected: next_duty.entry.registration.message.public_key.clone(),
-        })
+        });
     }
 
     // Check payload attrs
@@ -2225,7 +2390,7 @@ fn sanity_check_block_submission(
         return Err(BuilderApiError::PrevRandaoMismatch {
             got: payload.prev_randao().clone(),
             expected: payload_attributes.payload_attributes.prev_randao.clone(),
-        })
+        });
     }
 
     if has_reached_fork(payload.slot(), CAPELLA_FORK_EPOCH) {
@@ -2244,7 +2409,7 @@ fn sanity_check_block_submission(
                 return Err(BuilderApiError::WithdrawalsRootMismatch {
                     got: Hash32::try_from(withdrawals_root.as_ref()).unwrap(),
                     expected: Hash32::try_from(expected_withdrawals_root.as_ref()).unwrap(),
-                })
+                });
             }
         } else {
             let expected_withdrawals_root = match payload_attributes.withdrawals_root {
@@ -2261,28 +2426,28 @@ fn sanity_check_block_submission(
                 return Err(BuilderApiError::WithdrawalsRootMismatch {
                     got: Hash32::try_from(payload_withdrawals_root.as_ref()).unwrap(),
                     expected: Hash32::try_from(expected_withdrawals_root.as_ref()).unwrap(),
-                })
+                });
             }
         }
     }
 
     // Misc. sanity checks
     if payload.value() == U256::ZERO {
-        return Err(BuilderApiError::ZeroValueBlock)
+        return Err(BuilderApiError::ZeroValueBlock);
     }
 
     if bid_trace.block_hash != *payload.block_hash() {
         return Err(BuilderApiError::BlockHashMismatch {
             message: bid_trace.block_hash.clone(),
             payload: payload.block_hash().clone(),
-        })
+        });
     }
 
     if bid_trace.parent_hash != *payload.parent_hash() {
         return Err(BuilderApiError::ParentHashMismatch {
             message: bid_trace.parent_hash.clone(),
             payload: payload.parent_hash().clone(),
-        })
+        });
     }
 
     Ok(())
@@ -2316,9 +2481,11 @@ async fn process_db_additions<DB: DatabaseService + 'static>(
     mut db_receiver: mpsc::Receiver<DbInfo>,
 ) {
     while let Some(db_info) = db_receiver.recv().await {
+        DB_QUEUE.dec();
         match db_info {
             DbInfo::NewSubmission(submission, trace, version) => {
-                if let Err(err) = db.store_block_submission(submission, trace, version as i16).await
+                if let Err(err) =
+                    db.store_block_submission(submission, Arc::new(trace), version as i16).await
                 {
                     error!(
                         error = %err,
@@ -2360,6 +2527,19 @@ async fn process_db_additions<DB: DatabaseService + 'static>(
             }
         }
     }
+}
+
+fn get_nanos_timestamp() -> Result<u64, BuilderApiError> {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .map_err(|_| BuilderApiError::InternalError)
+}
+
+pub(crate) fn get_nanos_from(now: SystemTime) -> Result<u64, BuilderApiError> {
+    now.duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .map_err(|_| BuilderApiError::InternalError)
 }
 
 #[cfg(test)]

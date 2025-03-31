@@ -2,6 +2,7 @@ pub mod bid_trace;
 pub mod cancellation;
 pub mod submission;
 pub mod v2;
+pub mod v3;
 
 pub use bid_trace::*;
 pub use submission::*;

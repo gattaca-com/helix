@@ -18,9 +18,7 @@ pub struct SignedDelegation {
     pub signature: BlsSignature,
 }
 
-#[derive(
-    Debug, Clone, SimpleSerialize, serde::Deserialize, serde::Serialize, Hash, PartialEq, Eq,
-)]
+#[derive(Debug, Clone, Serializable, serde::Deserialize, serde::Serialize, Hash, PartialEq, Eq)]
 pub struct DelegationMessage {
     pub action: u8,
     pub validator_pubkey: BlsPublicKey,
@@ -44,7 +42,7 @@ pub struct SignedRevocation {
     pub signature: BlsSignature,
 }
 
-#[derive(Debug, Clone, SimpleSerialize, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Clone, Serializable, serde::Deserialize, serde::Serialize)]
 pub struct RevocationMessage {
     pub action: u8,
     pub validator_pubkey: BlsPublicKey,

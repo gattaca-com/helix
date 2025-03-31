@@ -1,16 +1,21 @@
+use alloy::{
+    consensus::TxEnvelope,
+    primitives::{TxHash, B256},
+    rlp::Decodable,
+};
 use ethereum_consensus::{
     bellatrix::presets::minimal::Transaction,
     deneb::minimal::MAX_TRANSACTIONS_PER_PAYLOAD,
     phase0::Bytes32,
     primitives::{BlsPublicKey, BlsSignature},
-    ssz::prelude::*,
+    ssz::{
+        self,
+        prelude::{HashTreeRoot, *},
+    },
 };
-use reth_primitives::{Bytes, PooledTransactionsElement, TxHash, B256};
+
 use sha2::{Digest, Sha256};
 use tree_hash::Hash256;
-
-// Import the new version of the `ssz-rs` crate for multiproof verification.
-use ::ssz_rs as ssz;
 
 use crate::api::constraints_api::{SignableBLS, MAX_CONSTRAINTS_PER_SLOT};
 
@@ -28,7 +33,7 @@ pub enum ProofError {
     DecodingFailed(String),
 }
 
-#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Serializable, serde::Serialize, serde::Deserialize)]
 pub struct InclusionProofs {
     pub transaction_hashes: List<Bytes32, MAX_CONSTRAINTS_PER_SLOT>,
     pub generalized_indexes: List<u64, MAX_CONSTRAINTS_PER_SLOT>,
@@ -42,7 +47,7 @@ impl InclusionProofs {
     }
 }
 
-pub type HashTreeRoot = tree_hash::Hash256;
+pub type HashTreeRootType = tree_hash::Hash256;
 
 #[derive(Debug, Clone, Serializable, serde::Deserialize, serde::Serialize)]
 pub struct SignedConstraints {
@@ -50,7 +55,7 @@ pub struct SignedConstraints {
     pub signature: BlsSignature,
 }
 
-#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Serializable, Merkleized)]
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, Serializable)]
 pub struct ConstraintsMessage {
     pub pubkey: BlsPublicKey,
     pub slot: u64,
@@ -68,8 +73,8 @@ impl SignableBLS for ConstraintsMessage {
             // Convert the opaque bytes to a EIP-2718 envelope and obtain the tx hash.
             // this is needed to handle type 3 transactions.
             // FIXME: don't unwrap here and handle the error properly
-            let tx = PooledTransactionsElement::decode_enveloped(tx.to_vec().into()).unwrap();
-            hasher.update(tx.hash().as_slice());
+            let tx = TxEnvelope::decode(&mut tx.as_slice()).unwrap();
+            hasher.update(tx.tx_hash().as_slice());
         }
 
         hasher.finalize().into()
@@ -77,7 +82,7 @@ impl SignableBLS for ConstraintsMessage {
 }
 
 /// List of transaction hashes and the corresponding hash tree roots of the raw transactions.
-pub type ConstraintsProofData = Vec<(TxHash, HashTreeRoot)>;
+pub type ConstraintsProofData = Vec<(TxHash, HashTreeRootType)>;
 
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
 pub struct SignedConstraintsWithProofData {
@@ -91,23 +96,17 @@ impl TryFrom<SignedConstraints> for SignedConstraintsWithProofData {
     fn try_from(value: SignedConstraints) -> Result<Self, ProofError> {
         let mut transactions = Vec::with_capacity(value.message.transactions.len());
         for transaction in value.message.transactions.iter() {
-            let tx = PooledTransactionsElement::decode_enveloped(Bytes::copy_from_slice(
-                transaction.as_slice(),
-            ))
-            .map_err(|e| ProofError::DecodingFailed(e.to_string()))?;
+            let tx = TxEnvelope::decode(&mut transaction.as_slice())
+                .map_err(|e| ProofError::DecodingFailed(e.to_string()))?;
 
-            let tx_hash = *tx.hash();
+            let tx_hash = *tx.tx_hash();
 
             // Compute the hash tree root on the transaction object decoded without the optional
             // sidecar. this is to prevent hashing the blobs of type 3 transactions.
-            let root = tx.into_transaction().envelope_encoded();
-            let root = Transaction::try_from(root.as_ref())
-                .map_err(|e| ProofError::DecodingFailed(e.to_string()))?;
-            let root = root
-                .clone()
+            let root = transaction
                 .hash_tree_root()
                 .map_err(|e| ProofError::DecodingFailed(e.to_string()))?;
-            let root = Hash256::from_slice(&root);
+            let root = Hash256::from_slice(&root.as_slice());
 
             transactions.push((tx_hash, root));
         }
@@ -181,7 +180,7 @@ pub fn verify_multiproofs(
     let root = root.as_slice().try_into().expect("Invalid root length");
 
     // Verify the Merkle multiproof against the root
-    ssz::multiproofs::verify_merkle_multiproof(
+    ssz::prelude::multiproofs::verify_merkle_multiproof(
         leaves.as_slice(),
         merkle_proofs.as_ref(),
         indexes.as_slice(),

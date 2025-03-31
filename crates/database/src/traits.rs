@@ -105,7 +105,7 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn store_block_submission(
         &self,
         submission: Arc<SignedBidSubmission>,
-        trace: SubmissionTrace,
+        trace: Arc<SubmissionTrace>,
         optimistic_version: i16,
     ) -> Result<(), DatabaseError>;
 
@@ -161,6 +161,8 @@ pub trait DatabaseService: Send + Sync + Clone {
         public_key: BlsPublicKey,
         best_block_hash: ByteVector<32>,
         trace: GetHeaderTrace,
+
+        mev_boost: bool,
         user_agent: Option<String>,
     ) -> Result<(), DatabaseError>;
 

@@ -18,6 +18,9 @@ pub enum BlockSimError {
 
     #[error("tokio::mpsc send error")]
     SendError,
+
+    #[error("no simulator available")]
+    NoSimulatorAvailable,
 }
 
 impl BlockSimError {
@@ -31,6 +34,31 @@ impl BlockSimError {
                 _ => true,
             },
             _ => true,
+        }
+    }
+
+    pub fn is_temporary(&self) -> bool {
+        match self {
+            BlockSimError::BlockValidationFailed(reason) => match reason.to_lowercase().as_str() {
+                UNKNOWN_ANCESTOR => true,
+                BLOCK_REQ_REORG => true,
+                r if r.starts_with(MISSING_TRIE_NODE) => true,
+                _ => false,
+            },
+            BlockSimError::Timeout => true,
+            BlockSimError::RpcError(_) => true,
+            BlockSimError::NoSimulatorAvailable => true,
+            _ => false,
+        }
+    }
+
+    pub fn is_aleady_known(&self) -> bool {
+        match self {
+            BlockSimError::BlockValidationFailed(reason) => match reason.to_lowercase().as_str() {
+                BLOCK_ALREADY_KNOWN => true,
+                _ => false,
+            },
+            _ => false,
         }
     }
 }
@@ -51,6 +79,9 @@ mod tests {
         assert!(!error.is_severe());
 
         let error = BlockSimError::BlockValidationFailed("other reason".to_string());
+        assert!(error.is_severe());
+
+        let error = BlockSimError::BlockValidationFailed("invalid merkle root (remote: 72dccf8dfd7d2ccd518a03abea41b5e5d0a542f814b1e2c56f288e6056a287dc local: 43069fde058f3df14e7e6191f7de244fc5336940c89eff9349c09466c75eaf4b) dberr: %!w(<nil>)".to_string());
         assert!(error.is_severe());
 
         let error = BlockSimError::Timeout;

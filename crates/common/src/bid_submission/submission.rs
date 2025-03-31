@@ -2,6 +2,7 @@ use crate::{
     bid_submission::{BidSubmission, BidTrace},
     capella,
     deneb::BlobsBundle,
+    electra::ExecutionRequests,
     proofs::InclusionProofs,
     versioned_payload::PayloadAndBlobs,
 };
@@ -13,20 +14,20 @@ use ethereum_consensus::{
         MAX_TRANSACTIONS_PER_PAYLOAD,
     },
     primitives::{BlsPublicKey, BlsSignature, ExecutionAddress, Hash32, Slot, U256},
-    signing::verify_signature,
     ssz::prelude::*,
     types::mainnet::ExecutionPayload,
     Fork,
 };
-use helix_utils::signing::compute_builder_signing_root;
+use helix_utils::signing::verify_signed_builder_message;
 
-#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Serializable, serde::Serialize, serde::Deserialize)]
 #[ssz(transparent)]
 #[serde(untagged)]
 pub enum SignedBidSubmission {
-    DenebWithProofs(SignedBidSubmissionDenebWithProofs),
-    Deneb(SignedBidSubmissionDeneb),
     Capella(SignedBidSubmissionCapella),
+    Deneb(SignedBidSubmissionDeneb),
+    DenebWithProofs(SignedBidSubmissionDenebWithProofs),
+    Electra(SignedBidSubmissionElectra),
 }
 
 impl BidSubmission for SignedBidSubmission {
@@ -41,6 +42,7 @@ impl BidSubmission for SignedBidSubmission {
 
     fn bid_trace(&self) -> &BidTrace {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => &signed_bid_submission.message,
             SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.message,
             SignedBidSubmission::DenebWithProofs(signed_bid_submission) => {
                 &signed_bid_submission.message
@@ -51,6 +53,7 @@ impl BidSubmission for SignedBidSubmission {
 
     fn signature(&self) -> &BlsSignature {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => &signed_bid_submission.signature,
             SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.signature,
             SignedBidSubmission::DenebWithProofs(signed_bid_submission) => {
                 &signed_bid_submission.signature
@@ -61,6 +64,9 @@ impl BidSubmission for SignedBidSubmission {
 
     fn slot(&self) -> Slot {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                signed_bid_submission.message.slot
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => signed_bid_submission.message.slot,
             SignedBidSubmission::DenebWithProofs(signed_bid_submission) => {
                 signed_bid_submission.message.slot
@@ -73,6 +79,9 @@ impl BidSubmission for SignedBidSubmission {
 
     fn parent_hash(&self) -> &Hash32 {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                &signed_bid_submission.message.parent_hash
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => {
                 &signed_bid_submission.message.parent_hash
             }
@@ -87,6 +96,9 @@ impl BidSubmission for SignedBidSubmission {
 
     fn block_hash(&self) -> &Hash32 {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                &signed_bid_submission.message.block_hash
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => {
                 &signed_bid_submission.message.block_hash
             }
@@ -101,6 +113,9 @@ impl BidSubmission for SignedBidSubmission {
 
     fn builder_public_key(&self) -> &BlsPublicKey {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                &signed_bid_submission.message.builder_public_key
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => {
                 &signed_bid_submission.message.builder_public_key
             }
@@ -115,6 +130,9 @@ impl BidSubmission for SignedBidSubmission {
 
     fn proposer_public_key(&self) -> &BlsPublicKey {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                &signed_bid_submission.message.proposer_public_key
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => {
                 &signed_bid_submission.message.proposer_public_key
             }
@@ -129,6 +147,9 @@ impl BidSubmission for SignedBidSubmission {
 
     fn proposer_fee_recipient(&self) -> &ExecutionAddress {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                &signed_bid_submission.message.proposer_fee_recipient
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => {
                 &signed_bid_submission.message.proposer_fee_recipient
             }
@@ -143,6 +164,9 @@ impl BidSubmission for SignedBidSubmission {
 
     fn gas_limit(&self) -> u64 {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                signed_bid_submission.message.gas_limit
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => {
                 signed_bid_submission.message.gas_limit
             }
@@ -157,6 +181,9 @@ impl BidSubmission for SignedBidSubmission {
 
     fn gas_used(&self) -> u64 {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                signed_bid_submission.message.gas_used
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => {
                 signed_bid_submission.message.gas_used
             }
@@ -171,6 +198,9 @@ impl BidSubmission for SignedBidSubmission {
 
     fn value(&self) -> U256 {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                signed_bid_submission.message.value
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => {
                 signed_bid_submission.message.value
             }
@@ -224,6 +254,7 @@ impl BidSubmission for SignedBidSubmission {
             ExecutionPayload::Bellatrix(_) => None,
             ExecutionPayload::Capella(payload) => Some(&payload.withdrawals),
             ExecutionPayload::Deneb(payload) => Some(&payload.withdrawals),
+            ExecutionPayload::Electra(payload) => Some(&payload.withdrawals),
         }
     }
 
@@ -231,14 +262,21 @@ impl BidSubmission for SignedBidSubmission {
         match &self.execution_payload() {
             ExecutionPayload::Bellatrix(_) => None,
             ExecutionPayload::Capella(payload) => {
-                let mut withdrawals = payload.withdrawals.clone();
+                let withdrawals = payload.withdrawals.clone();
                 match withdrawals.hash_tree_root() {
                     Ok(root) => Some(root),
                     Err(_) => None,
                 }
             }
             ExecutionPayload::Deneb(payload) => {
-                let mut withdrawals = payload.withdrawals.clone();
+                let withdrawals = payload.withdrawals.clone();
+                match withdrawals.hash_tree_root() {
+                    Ok(root) => Some(root),
+                    Err(_) => None,
+                }
+            }
+            ExecutionPayload::Electra(payload) => {
+                let withdrawals = payload.withdrawals.clone();
                 match withdrawals.hash_tree_root() {
                     Ok(root) => Some(root),
                     Err(_) => None,
@@ -251,14 +289,21 @@ impl BidSubmission for SignedBidSubmission {
         match &self.execution_payload() {
             ExecutionPayload::Bellatrix(_) => None,
             ExecutionPayload::Capella(payload) => {
-                let mut transactions = payload.transactions.clone();
+                let transactions = payload.transactions.clone();
                 match transactions.hash_tree_root() {
                     Ok(root) => Some(root),
                     Err(_) => None,
                 }
             }
             ExecutionPayload::Deneb(payload) => {
-                let mut transactions = payload.transactions.clone();
+                let transactions = payload.transactions.clone();
+                match transactions.hash_tree_root() {
+                    Ok(root) => Some(root),
+                    Err(_) => None,
+                }
+            }
+            ExecutionPayload::Electra(payload) => {
+                let transactions = payload.transactions.clone();
                 match transactions.hash_tree_root() {
                     Ok(root) => Some(root),
                     Err(_) => None,
@@ -269,6 +314,7 @@ impl BidSubmission for SignedBidSubmission {
 
     fn consensus_version(&self) -> Fork {
         match self {
+            SignedBidSubmission::Electra(_) => Fork::Electra,
             SignedBidSubmission::Deneb(_) => Fork::Deneb,
             SignedBidSubmission::DenebWithProofs(_) => Fork::Deneb,
             SignedBidSubmission::Capella(_) => Fork::Capella,
@@ -285,15 +331,18 @@ impl SignedBidSubmission {
         &mut self,
         context: &ethereum_consensus::state_transition::Context,
     ) -> Result<(), ethereum_consensus::Error> {
-        let signing_root = compute_builder_signing_root(self.message_mut(), context)?;
-        let public_key = self.builder_public_key();
-        verify_signature(public_key, signing_root.as_ref(), self.signature())
+        let public_key = self.builder_public_key().clone();
+        let signature = self.signature().clone();
+        verify_signed_builder_message(self.message_mut(), &signature, &public_key, context)
     }
 
     pub fn transactions(
         &self,
     ) -> &List<ByteList<MAX_BYTES_PER_TRANSACTION>, MAX_TRANSACTIONS_PER_PAYLOAD> {
         match &self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                signed_bid_submission.execution_payload.transactions()
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => {
                 signed_bid_submission.execution_payload.transactions()
             }
@@ -308,6 +357,9 @@ impl SignedBidSubmission {
 
     pub fn blobs_bundle(&self) -> Option<&BlobsBundle> {
         match &self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                Some(&signed_bid_submission.blobs_bundle)
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => {
                 Some(&signed_bid_submission.blobs_bundle)
             }
@@ -320,6 +372,7 @@ impl SignedBidSubmission {
 
     pub fn message(&self) -> &BidTrace {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => &signed_bid_submission.message,
             SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.message,
             SignedBidSubmission::DenebWithProofs(signed_bid_submission) => {
                 &signed_bid_submission.message
@@ -330,6 +383,9 @@ impl SignedBidSubmission {
 
     pub fn message_mut(&mut self) -> &mut BidTrace {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                &mut signed_bid_submission.message
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => &mut signed_bid_submission.message,
             SignedBidSubmission::DenebWithProofs(signed_bid_submission) => {
                 &mut signed_bid_submission.message
@@ -342,6 +398,9 @@ impl SignedBidSubmission {
 
     pub fn execution_payload(&self) -> &ExecutionPayload {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                &signed_bid_submission.execution_payload
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => {
                 &signed_bid_submission.execution_payload
             }
@@ -356,6 +415,9 @@ impl SignedBidSubmission {
 
     pub fn execution_payload_mut(&mut self) -> &mut ExecutionPayload {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                &mut signed_bid_submission.execution_payload
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => {
                 &mut signed_bid_submission.execution_payload
             }
@@ -370,6 +432,9 @@ impl SignedBidSubmission {
 
     pub fn execution_payload_moved(self) -> ExecutionPayload {
         match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                signed_bid_submission.execution_payload
+            }
             SignedBidSubmission::Deneb(signed_bid_submission) => {
                 signed_bid_submission.execution_payload
             }
@@ -384,6 +449,10 @@ impl SignedBidSubmission {
 
     pub fn payload_and_blobs(&self) -> PayloadAndBlobs {
         match self {
+            SignedBidSubmission::Electra(_) => PayloadAndBlobs {
+                execution_payload: self.execution_payload().clone(),
+                blobs_bundle: self.blobs_bundle().cloned(),
+            },
             SignedBidSubmission::Deneb(_) => PayloadAndBlobs {
                 execution_payload: self.execution_payload().clone(),
                 blobs_bundle: self.blobs_bundle().cloned(),
@@ -398,6 +467,17 @@ impl SignedBidSubmission {
             },
         }
     }
+
+    pub fn execution_requests(&self) -> Option<&ExecutionRequests> {
+        match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                Some(&signed_bid_submission.execution_requests)
+            }
+            SignedBidSubmission::Deneb(_) => None,
+            SignedBidSubmission::DenebWithProofs(_) => None,
+            SignedBidSubmission::Capella(_) => None,
+        }
+    }
 }
 
 impl Default for SignedBidSubmission {
@@ -410,14 +490,16 @@ impl Default for SignedBidSubmission {
     }
 }
 
-#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Serializable, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SignedBidSubmissionCapella {
     pub message: BidTrace,
     pub execution_payload: ExecutionPayload,
     pub signature: BlsSignature,
 }
 
-#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Serializable, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SignedBidSubmissionDeneb {
     pub message: BidTrace,
     pub execution_payload: ExecutionPayload,
@@ -425,7 +507,8 @@ pub struct SignedBidSubmissionDeneb {
     pub signature: BlsSignature,
 }
 
-#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Serializable, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SignedBidSubmissionDenebWithProofs {
     pub message: BidTrace,
     pub execution_payload: ExecutionPayload,
@@ -434,4 +517,14 @@ pub struct SignedBidSubmissionDenebWithProofs {
     /// The Merkle proofs of inclusion as needed by the Constraints API.
     /// Reference: <https://docs.boltprotocol.xyz/technical-docs/api/builder#get_header_with_proofs>
     pub proofs: InclusionProofs,
+}
+
+#[derive(Debug, Clone, Serializable, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedBidSubmissionElectra {
+    pub message: BidTrace,
+    pub execution_payload: ExecutionPayload,
+    pub blobs_bundle: BlobsBundle,
+    pub execution_requests: ExecutionRequests,
+    pub signature: BlsSignature,
 }

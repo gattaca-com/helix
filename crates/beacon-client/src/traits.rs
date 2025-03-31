@@ -6,7 +6,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::broadcast::Sender;
 
 use helix_common::{
-    beacon_api::PublishBlobsRequest, bellatrix::SimpleSerialize, ProposerDuty, ValidatorSummary,
+    beacon_api::PublishBlobsRequest, bellatrix::Serializable, ProposerDuty, ValidatorSummary,
 };
 
 use crate::{
@@ -36,7 +36,7 @@ pub trait BeaconClientTrait: Send + Sync + Clone {
         &self,
         epoch: u64,
     ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError>;
-    async fn publish_block<VersionedSignedProposal: Send + Sync + SimpleSerialize>(
+    async fn publish_block<VersionedSignedProposal: Send + Sync + Serializable>(
         &self,
         block: Arc<VersionedSignedProposal>,
         broadcast_validation: Option<BroadcastValidation>,
@@ -64,7 +64,7 @@ pub trait MultiBeaconClientTrait: Send + Sync + Clone {
         epoch: u64,
     ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError>;
     async fn publish_block<
-        VersionedSignedProposal: Serialize + DeserializeOwned + Send + Sync + 'static + SimpleSerialize,
+        VersionedSignedProposal: Serialize + DeserializeOwned + Send + Sync + 'static + Serializable,
     >(
         &self,
         block: Arc<VersionedSignedProposal>,

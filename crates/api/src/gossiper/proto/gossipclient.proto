@@ -9,6 +9,7 @@ service GossipService {
   rpc BroadcastPayload (BroadcastPayloadParams) returns (google.protobuf.Empty);
   rpc BroadcastGetPayload (BroadcastGetPayloadParams) returns (google.protobuf.Empty);
   rpc BroadcastCancellation (BroadcastCancellationParams) returns (google.protobuf.Empty);
+  rpc RequestPayload (RequestPayloadParams) returns (google.protobuf.Empty);
 }
 
 message BroadcastHeaderParams {
@@ -20,6 +21,7 @@ message BroadcastHeaderParams {
   bytes builder_pub_key = 6;
   bool is_cancellations_enabled = 7;
   uint64 on_receive = 8;
+  optional bytes payload_address = 9;
 }
 
 message BroadcastPayloadParams {
@@ -36,4 +38,10 @@ message BroadcastGetPayloadParams {
 message BroadcastCancellationParams {
   bytes signed_cancellation = 1;
   bytes request_id = 2;
+}
+
+message RequestPayloadParams {
+  uint64 slot = 1;
+  bytes proposer_pub_key = 2;
+  bytes block_hash = 3;
 }

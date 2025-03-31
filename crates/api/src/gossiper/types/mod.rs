@@ -2,11 +2,13 @@ pub mod broadcast_cancellation;
 pub mod broadcast_get_payload;
 pub mod broadcast_header;
 pub mod broadcast_payload;
+pub mod request_payload;
 
 use broadcast_cancellation::BroadcastCancellationParams;
 pub use broadcast_get_payload::*;
 pub use broadcast_header::*;
 pub use broadcast_payload::*;
+pub use request_payload::*;
 
 #[derive(Debug, Clone)]
 pub enum GossipedMessage {
@@ -14,4 +16,5 @@ pub enum GossipedMessage {
     Payload(Box<BroadcastPayloadParams>),
     GetPayload(Box<BroadcastGetPayloadParams>),
     Cancellation(Box<BroadcastCancellationParams>),
+    RequestPayload(Box<RequestPayloadParams>),
 }

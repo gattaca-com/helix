@@ -1,0 +1,148 @@
+use axum::response::IntoResponse;
+use ethereum_consensus::ssz;
+use helix_common::{
+    bid_submission::v3::header_submission_v3::{
+        HeaderSubmissionV3, MessageHeader, MessageHeaderFlags, MessageType, SubmissionV3Error,
+    },
+    HeaderSubmissionTrace,
+};
+use helix_database::DatabaseService;
+use helix_datastore::Auctioneer;
+use helix_utils::utcnow_ns;
+use std::{io::Error, net::SocketAddr, sync::Arc};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
+};
+
+use crate::{
+    builder::{api::BuilderApi, traits::BlockSimulator},
+    gossiper::traits::GossipClientTrait,
+};
+
+pub async fn run_api<A, DB, S, G>(
+    listening_port: u16,
+    builder_api: Arc<BuilderApi<A, DB, S, G>>,
+) -> Result<(), Error>
+where
+    A: Auctioneer + 'static,
+    DB: DatabaseService + 'static,
+    S: BlockSimulator + 'static,
+    G: GossipClientTrait + 'static,
+{
+    let tcp_listener = TcpListener::bind(format!("0.0.0.0:{listening_port}")).await?;
+    while let Ok((socket, remote_addr)) = tcp_listener.accept().await {
+        tokio::spawn(handle_builder_connection(socket, remote_addr, builder_api.clone()));
+    }
+    tracing::error!("Builder API TCP listener has exited");
+    Err(Error::other("TCP API listener exited"))
+}
+
+async fn handle_builder_connection<A, DB, S, G>(
+    mut stream: TcpStream,
+    remote_addr: SocketAddr,
+    builder_api: Arc<BuilderApi<A, DB, S, G>>,
+) where
+    A: Auctioneer + 'static,
+    DB: DatabaseService + 'static,
+    S: BlockSimulator + 'static,
+    G: GossipClientTrait + 'static,
+{
+    tracing::info!(?remote_addr, "builder connection connected");
+
+    let mut header_buffer = [0u8; size_of::<MessageHeader>()];
+    let mut payload_buffer = Vec::with_capacity(32 * 1024);
+
+    while let Ok(_) = stream.read_exact(&mut header_buffer).await {
+        let msg_header: &MessageHeader = header_buffer.as_slice().into();
+        match msg_header.message_type {
+            MessageType::HeaderSubmission => {
+                let receive = utcnow_ns();
+                let mut trace = HeaderSubmissionTrace { receive, ..Default::default() };
+
+                payload_buffer.resize(msg_header.message_length as usize, 0);
+                let Ok(_) = stream.read_exact(payload_buffer.as_mut_slice()).await else {
+                    tracing::error!(?msg_header, "tcp stream read failed for header submission");
+                    break;
+                };
+
+                match decode_message(msg_header, payload_buffer.as_slice()) {
+                    Ok(header) => {
+                        trace.decode = utcnow_ns();
+                        match BuilderApi::handle_submit_header(
+                            &builder_api,
+                            header.submission,
+                            Some(header.payload_socket_address),
+                            msg_header
+                                .message_flags
+                                .contains(MessageHeaderFlags::CANCELLATION_ENABLED),
+                            trace,
+                        )
+                        .await
+                        {
+                            Ok(_) => {
+                                let ack = MessageHeader {
+                                    message_type: MessageType::HeaderSubmissionAck,
+                                    padding: 0,
+                                    message_length: 0,
+                                    sequence_number: msg_header.sequence_number,
+                                    message_flags: MessageHeaderFlags::empty(),
+                                };
+                                let _ = stream.write_all(ack.as_ref()).await;
+                            }
+                            Err(e) => {
+                                tracing::error!(error=?e, "v3 header submission failed");
+                                let err_code = e.into_response().status().as_u16();
+                                if let Ok(encoded) = encode_error(msg_header, err_code) {
+                                    let err = MessageHeader {
+                                        message_type: MessageType::Error,
+                                        padding: 0,
+                                        message_length: encoded.len() as u32,
+                                        sequence_number: msg_header.sequence_number,
+                                        message_flags: msg_header.message_flags,
+                                    };
+                                    if let Ok(_) = stream.write_all(err.as_ref()).await {
+                                        let _ = stream.write_all(encoded.as_slice()).await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        trace.decode = utcnow_ns();
+                        tracing::error!(error=?e, ?msg_header, "Failed to decode payload for header submission");
+                        break
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    tracing::info!(?remote_addr, "builder connection disconnected");
+}
+
+fn decode_message(header: &MessageHeader, payload: &[u8]) -> Result<HeaderSubmissionV3, Error> {
+    if header.message_flags.contains(MessageHeaderFlags::CBOR_ENCODED) {
+        cbor4ii::serde::from_slice(payload).map_err(Error::other)
+    } else if header.message_flags.contains(MessageHeaderFlags::SSZ_ENCODED) {
+        ssz::prelude::deserialize(payload).map_err(Error::other)
+    } else if header.message_flags.contains(MessageHeaderFlags::JSON_ENCODED) {
+        serde_json::from_slice(payload).map_err(Error::other)
+    } else {
+        Err(Error::other(format!("Unknown message encoding: {header:?}")))
+    }
+}
+
+fn encode_error(header: &MessageHeader, status: u16) -> Result<Vec<u8>, Error> {
+    let error = SubmissionV3Error { status };
+    if header.message_flags.contains(MessageHeaderFlags::CBOR_ENCODED) {
+        let vec = vec![];
+        cbor4ii::serde::to_vec(vec, &error).map_err(Error::other)
+    } else if header.message_flags.contains(MessageHeaderFlags::SSZ_ENCODED) {
+        ssz::prelude::serialize(&error).map_err(Error::other)
+    } else if header.message_flags.contains(MessageHeaderFlags::JSON_ENCODED) {
+        serde_json::to_vec(&error).map_err(Error::other)
+    } else {
+        Err(Error::other(format!("Unknown message encoding: {header:?}")))
+    }
+}

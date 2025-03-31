@@ -2,9 +2,9 @@ name: Unit Tests
 
 on:
   push:
-    branches: [main, develop, "release/**"]
+    branches: [main, staging, develop]
   pull_request:
-    branches: [main, develop, "release/**"]
+    branches: [main, staging, develop]
 
 env:
   CARGO_TERM_COLOR: always

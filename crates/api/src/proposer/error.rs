@@ -178,6 +178,9 @@ pub enum ProposerApiError {
     #[error("parent hash unknown for slot: {slot}")]
     ParentHashUnknownForSlot { slot: u64 },
 
+    #[error("get header disabled for proposer")]
+    GetHeaderDisabledForProposer,
+
     #[error("not serving headers")]
     NotServingHeaders,
 
@@ -353,6 +356,9 @@ impl IntoResponse for ProposerApiError {
             ProposerApiError::ParentHashUnknownForSlot {slot} => {
                 (StatusCode::BAD_REQUEST, format!("parent hash unknown for slot: {slot}")).into_response()
             },
+            ProposerApiError::GetHeaderDisabledForProposer => {
+                (StatusCode::NO_CONTENT, "get header disabled for proposer").into_response()
+            }
             ProposerApiError::NotServingHeaders => {
                 (StatusCode::NO_CONTENT, ProposerApiError::NotServingHeaders.to_string()).into_response()
             },
