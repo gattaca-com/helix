@@ -134,12 +134,12 @@ pub fn get_pending_block_builder_block_hash_key(
 pub fn get_pubkey_from_hex(
     pubkey: &str,
 ) -> Result<BlsPublicKey, ethereum_consensus::crypto::bls::Error> {
-    let bytes = alloy::hex::decode(pubkey)?;
+    let bytes = alloy_primitives::hex::decode(pubkey)?;
     BlsPublicKey::try_from(bytes.as_slice())
 }
 
 pub fn get_hash_from_hex(hash: &str) -> Result<Hash32, AuctioneerError> {
-    let bytes = alloy::hex::decode(hash)?;
+    let bytes = alloy_primitives::hex::decode(hash)?;
     Ok(Hash32::try_from(bytes.as_slice())?)
 }
 

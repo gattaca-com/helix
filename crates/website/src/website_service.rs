@@ -277,16 +277,20 @@ impl WebsiteService {
             link_beaconchain: state.website_config.link_beaconchain.clone(),
             link_etherscan: state.website_config.link_etherscan.clone(),
             link_data_api: state.website_config.link_data_api.clone(),
-            capella_fork_version: alloy::hex::encode(state.chain_info.context.capella_fork_version),
-            bellatrix_fork_version: alloy::hex::encode(
+            capella_fork_version: alloy_primitives::hex::encode(
+                state.chain_info.context.capella_fork_version,
+            ),
+            bellatrix_fork_version: alloy_primitives::hex::encode(
                 state.chain_info.context.bellatrix_fork_version,
             ),
-            genesis_fork_version: alloy::hex::encode(state.chain_info.context.genesis_fork_version),
-            genesis_validators_root: alloy::hex::encode(
+            genesis_fork_version: alloy_primitives::hex::encode(
+                state.chain_info.context.genesis_fork_version,
+            ),
+            genesis_validators_root: alloy_primitives::hex::encode(
                 state.chain_info.genesis_validators_root.as_ref() as &[u8],
             ),
             builder_signing_domain: compute_builder_domain(&state.chain_info.context)
-                .map(alloy::hex::encode)
+                .map(alloy_primitives::hex::encode)
                 .unwrap_or_else(|_e| String::from("Error computing builder domain")),
         })
     }

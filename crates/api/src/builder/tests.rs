@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use alloy::hex;
+use alloy_primitives::hex;
 use axum::http::{header, Method, Request, Uri};
 use ethereum_consensus::{
     builder::{SignedValidatorRegistration, ValidatorRegistration},

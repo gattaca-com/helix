@@ -1,7 +1,6 @@
-// ++++ IMPORTS ++++
 use std::sync::Arc;
 
-use alloy::hex;
+use alloy_primitives::hex;
 use ethereum_consensus::{
     electra::ExecutionRequests, primitives::BlsSignature, ssz::prelude::*,
     types::mainnet::ExecutionPayload,

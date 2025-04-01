@@ -365,7 +365,7 @@ mod tests {
         assert!(written > 0);
 
         let data_ssz = include_bytes!("testdata/signed-blinded-beacon-block-electra-2.ssz");
-        let data_ssz = alloy::primitives::hex::decode(data_ssz).unwrap();
+        let data_ssz = alloy_primitives::hex::decode(data_ssz).unwrap();
 
         assert_eq!(encoded, data_ssz);
         let block_ssz = test_encode_decode_ssz::<SignedBlindedBeaconBlock>(&data_ssz);
@@ -389,7 +389,7 @@ mod tests {
     // this is random data
     fn test_submit_block_2() {
         let data_ssz = include_bytes!("testdata/signed-bid-submission-electra-2.ssz");
-        let data_ssz = alloy::primitives::hex::decode(data_ssz).unwrap();
+        let data_ssz = alloy_primitives::hex::decode(data_ssz).unwrap();
         test_encode_decode_ssz::<SignedBidSubmissionElectra>(&data_ssz);
     }
 }

@@ -33,7 +33,7 @@ mod proposer_api_tests {
     // +++ IMPORTS +++
     use std::{sync::Arc, time::Duration};
 
-    use alloy::hex;
+    use alloy_primitives::hex;
     use ethereum_consensus::{
         bellatrix,
         builder::{SignedValidatorRegistration, ValidatorRegistration},

@@ -1,8 +1,6 @@
-use alloy::{
-    consensus::TxEnvelope,
-    primitives::{TxHash, B256},
-    rlp::Decodable,
-};
+use alloy_consensus::TxEnvelope;
+use alloy_primitives::{TxHash, B256};
+use alloy_rlp::Decodable;
 use ethereum_consensus::{
     bellatrix::presets::minimal::Transaction,
     deneb::minimal::MAX_TRANSACTIONS_PER_PAYLOAD,
