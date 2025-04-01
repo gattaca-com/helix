@@ -6,6 +6,7 @@ use helix_beacon_client::{
 };
 use helix_common::{chain_info::ChainInfo, NetworkConfig, RelayConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
+use helix_datastore::MockAuctioneer; // Import MockAuctioneer from the appropriate module
 use helix_housekeeper::{ChainEventUpdater, ChainUpdate};
 use helix_utils::signing::compute_builder_domain;
 use tokio::{
@@ -80,7 +81,7 @@ impl WebsiteService {
 
         // Create the ChainEventUpdater and subscription
         let (mut chain_updater, chain_update_subscription) =
-            ChainEventUpdater::new(db.clone(), chain_info.clone());
+            ChainEventUpdater::new(db.clone(), Arc::new(MockAuctioneer::new()), chain_info.clone());
         info!("ChainEventUpdater initialized");
 
         let (head_event_tx, head_event_rx) = broadcast::channel(100);

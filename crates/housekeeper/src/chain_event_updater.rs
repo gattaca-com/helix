@@ -10,6 +10,7 @@ use helix_common::{
     chain_info::ChainInfo,
 };
 use helix_database::DatabaseService;
+use helix_datastore::Auctioneer;
 use helix_utils::{get_payload_attributes_key, has_reached_fork, utcnow_sec};
 use tokio::{
     sync::{broadcast, mpsc},
@@ -45,7 +46,7 @@ pub enum ChainUpdate {
 }
 
 /// Manages the update of head slots and the fetching of new proposer duties.
-pub struct ChainEventUpdater<D: DatabaseService> {
+pub struct ChainEventUpdater<D: DatabaseService, A: Auctioneer> {
     subscribers: Vec<mpsc::Sender<ChainUpdate>>,
 
     head_slot: u64,
@@ -54,13 +55,15 @@ pub struct ChainEventUpdater<D: DatabaseService> {
     proposer_duties: Vec<BuilderGetValidatorsResponseEntry>,
 
     database: Arc<D>,
+    auctioneer: Arc<A>,
     subscription_channel: mpsc::Receiver<mpsc::Sender<ChainUpdate>>,
     chain_info: Arc<ChainInfo>,
 }
 
-impl<D: DatabaseService> ChainEventUpdater<D> {
+impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
     pub fn new_with_channel(
         database: Arc<D>,
+        auctioneer: Arc<A>,
         subscription_channel: mpsc::Receiver<mpsc::Sender<ChainUpdate>>,
         chain_info: Arc<ChainInfo>,
     ) -> Self {
@@ -69,6 +72,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
             head_slot: 0,
             known_payload_attributes: Default::default(),
             database,
+            auctioneer,
             subscription_channel,
             proposer_duties: Vec::new(),
             chain_info,
@@ -77,10 +81,11 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
 
     pub fn new(
         database: Arc<D>,
+        auctioneer: Arc<A>,
         chain_info: Arc<ChainInfo>,
     ) -> (Self, mpsc::Sender<mpsc::Sender<ChainUpdate>>) {
         let (tx, rx) = mpsc::channel(200);
-        let updater = Self::new_with_channel(database, rx, chain_info);
+        let updater = Self::new_with_channel(database, auctioneer, rx, chain_info);
         (updater, tx)
     }
 
@@ -168,7 +173,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
 
         // Give housekeeper some time to update proposer duties
         sleep(std::time::Duration::from_secs(1)).await;
-        let new_duties = match self.database.get_proposer_duties().await {
+        let mut new_duties = match self.database.get_proposer_duties().await {
             Ok(new_duties) => {
                 info!(
                     head_slot = slot,
@@ -184,7 +189,33 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         };
 
         // Update local cache if new duties were fetched.
-        if let Some(new_duties) = &new_duties {
+        if let Some(new_duties) = &mut new_duties {
+            for duty in new_duties.iter_mut() {
+                match self
+                    .auctioneer
+                    .is_primev_proposer(&duty.entry.registration.message.public_key)
+                    .await
+                {
+                    Ok(is_primev) => {
+                        if is_primev {
+                            info!(head_slot = slot, "Primev proposer duty found");
+                            match &mut duty.entry.preferences.trusted_builders {
+                                Some(trusted_builders) => {
+                                    trusted_builders.push("PrimevBuilder".to_string());
+                                }
+                                None => {
+                                    duty.entry.preferences.trusted_builders =
+                                        Some(vec!["".to_string()]);
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        error!(error = %err, "Failed to check if proposer is primev");
+                    }
+                }
+            }
+
             self.proposer_duties.clone_from(new_duties);
         }
 
