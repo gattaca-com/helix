@@ -8,6 +8,7 @@ version.workspace = true
 
 [dependencies]
 alloy-primitives.workspace = true
+alloy-rpc-types.workspace = true
 async-trait.workspace = true
 auto_impl.workspace = true
 axum.workspace = true

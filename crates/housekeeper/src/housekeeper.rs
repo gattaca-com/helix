@@ -1,9 +1,8 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_eips::merge::EPOCH_SLOTS;
-use alloy_primitives::map::HashSet;
-use ethereum_consensus::primitives::BlsPublicKey;
-use ethers::{abi::Address, contract::EthEvent, types::U256};
+use alloy_primitives::{map::HashSet, U256};
+use alloy_rpc_types::beacon::BlsPublicKey;
 use helix_beacon_client::{
     error::BeaconClientError,
     types::{HeadEventData, StateId},
@@ -16,6 +15,7 @@ use helix_common::{
 };
 use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
+use helix_types::{alloy_pubkey_to_eth_consensus, eth_consensus_pubkey_to_alloy};
 use helix_utils::utcnow_ms;
 use tokio::{
     sync::{broadcast, Mutex},
@@ -452,7 +452,7 @@ impl<
 
         // Check if signed validator registrations exist for each proposer duty
         let pub_keys: Vec<BlsPublicKey> =
-            proposer_duties.iter().map(|duty| duty.public_key.clone()).collect();
+            proposer_duties.iter().map(|duty| duty.public_key).collect();
         let signed_validator_registrations =
             match self.fetch_signed_validator_registrations(pub_keys).await {
                 Ok(signed_validator_registrations) => signed_validator_registrations,
@@ -497,7 +497,11 @@ impl<
 
         for duty in proposer_duties {
             if let Some(reg) = signed_validator_registrations.get(&duty.public_key) {
-                if duty.public_key != reg.registration_info.registration.message.public_key {
+                if duty.public_key !=
+                    eth_consensus_pubkey_to_alloy(
+                        &reg.registration_info.registration.message.public_key,
+                    )
+                {
                     error!(?duty, ?reg, "mismatch in duty vs registration")
                 }
 
@@ -554,8 +558,8 @@ impl<
         for builder_pubkey in primev_builders {
             info!(builder_pubkey = %builder_pubkey, "PrimevBuilder");
             self.db
-                .store_builder_info(&builder_pubkey, &BuilderInfo {
-                    collateral: ethereum_consensus::primitives::U256::from(0),
+                .store_builder_info(&alloy_pubkey_to_eth_consensus(&builder_pubkey), &BuilderInfo {
+                    collateral: U256::ZERO,
                     is_optimistic: false,
                     is_optimistic_for_regional_filtering: false,
                     builder_id: Some("PrimevBuilder".to_string()),
@@ -564,8 +568,13 @@ impl<
                 .await?;
         }
 
-        let primev_validators =
-            primev_service.get_registered_primev_validators(proposer_duties).await;
+        let primev_validators = primev_service
+            .get_registered_primev_validators(proposer_duties)
+            .await
+            .into_iter()
+            .map(|p| alloy_pubkey_to_eth_consensus(&p))
+            .collect::<Vec<_>>();
+
         self.auctioneer.update_primev_proposers(&primev_validators).await?;
 
         let primev_builder_pref = vec!["PrimevBuilder".to_string()];
@@ -649,12 +658,17 @@ impl<
     /// Fetch validator registrations for `pub_keys` from database.
     async fn fetch_signed_validator_registrations(
         self: &SharedHousekeeper<DB, BeaconClient, A, P>,
-        pub_keys: Vec<BlsPublicKey>,
+        pubkeys: Vec<BlsPublicKey>,
     ) -> Result<HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>, DatabaseError> {
-        let registrations: Vec<SignedValidatorRegistrationEntry> =
-            self.db.get_validator_registrations_for_pub_keys(pub_keys).await?;
+        let pubkeys = pubkeys.iter().map(alloy_pubkey_to_eth_consensus).collect();
 
-        Ok(registrations.into_iter().map(|entry| (entry.public_key().clone(), entry)).collect())
+        let registrations: Vec<SignedValidatorRegistrationEntry> =
+            self.db.get_validator_registrations_for_pub_keys(pubkeys).await?;
+
+        Ok(registrations
+            .into_iter()
+            .map(|entry| (eth_consensus_pubkey_to_alloy(entry.public_key()), entry))
+            .collect())
     }
 }
 
@@ -674,17 +688,4 @@ fn v2_submission_late(pending_block: &PendingBlock, current_time: u64) -> bool {
                 MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
         }
     }
-}
-
-#[derive(Debug, EthEvent)]
-#[ethevent(
-    abi = "ProviderRegistered(address indexed provider, uint256 stakedAmount, bytes blsPublicKey)"
-)]
-pub struct ValueChanged {
-    #[ethevent(indexed, name = "provider")]
-    pub provider: Address,
-    #[ethevent(name = "stakedAmount")]
-    pub staked_amount: U256,
-    #[ethevent(name = "blsPublicKey")]
-    pub bls_public_key: Vec<u8>,
 }

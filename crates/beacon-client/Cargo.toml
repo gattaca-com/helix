@@ -7,6 +7,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+alloy-rpc-types.workspace = true
 async-trait.workspace = true
 auto_impl.workspace = true
 axum.workspace = true
@@ -14,6 +15,7 @@ ethereum-consensus.workspace = true
 fiber.workspace = true
 futures.workspace = true
 helix-common.workspace = true
+helix-types.workspace = true
 helix-utils.workspace = true
 http.workspace = true
 mockito.workspace = true

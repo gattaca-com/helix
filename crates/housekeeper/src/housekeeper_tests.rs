@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use ethereum_consensus::primitives::BlsPublicKey;
+use alloy_rpc_types::beacon::BlsPublicKey;
 use helix_beacon_client::{
     mock_multi_beacon_client::MockMultiBeaconClient, MultiBeaconClientTrait,
 };
@@ -18,13 +18,13 @@ use helix_database::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
 use tokio::{sync::broadcast, task};
 
-// ++++ IMPORTS ++++
-use crate::housekeeper::{Housekeeper, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS};
-use crate::primev_service::{EthereumPrimevService, MockPrimevService, PrimevService};
+use crate::{
+    housekeeper::{Housekeeper, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS},
+    primev_service::{EthereumPrimevService, MockPrimevService, PrimevService},
+};
 
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 
-// ++++ HELPERS ++++
 fn get_housekeeper() -> HelperVars {
     let subscribed_to_head_events = Arc::new(AtomicBool::new(false));
     let chan_head_events_capacity = Arc::new(AtomicUsize::new(0));
@@ -88,7 +88,6 @@ struct HelperVars {
     pub beacon_client: MockMultiBeaconClient,
 }
 
-// ++++ TESTS ++++
 #[tokio::test]
 async fn test_head_event_is_processed_by_housekeeper() {
     let vars = get_housekeeper();
@@ -240,7 +239,7 @@ async fn test_primev_real_contract_integration() {
     #[allow(unreachable_code)]
     if std::env::var("RUN_EXTERNAL_TESTS").is_err() {
         println!("Skipping external contract test. Set RUN_EXTERNAL_TESTS=1 to run.");
-        return
+        return;
     }
 
     // Create a real EthereumPrimevService
@@ -325,7 +324,7 @@ async fn test_primev_real_contract_integration() {
                                 values.get(2).unwrap_or(&Token::Bool(false)),
                             ) {
                                 statuses.push((*a, *b, *c));
-                                continue
+                                continue;
                             }
                         }
                     }

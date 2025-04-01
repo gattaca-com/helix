@@ -1559,7 +1559,7 @@ fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {
 
 #[cfg(test)]
 mod tests {
-
+    use alloy_rpc_types::beacon::BlsPublicKey as AlloyBlsPublicKey;
     use ethereum_consensus::clock::get_current_unix_time_in_nanos;
     use helix_common::capella::{self, ExecutionPayloadHeader};
     use serde::{Deserialize, Serialize};
@@ -2201,10 +2201,10 @@ mod tests {
 
         cache
             .update_trusted_proposers(vec![
-                ProposerInfo { name: "test".to_string(), pub_key: BlsPublicKey::default() },
+                ProposerInfo { name: "test".to_string(), pub_key: AlloyBlsPublicKey::ZERO },
                 ProposerInfo {
                     name: "test2".to_string(),
-                    pub_key: BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap(),
+                    pub_key: AlloyBlsPublicKey::try_from([23u8; 48].as_ref()).unwrap(),
                 },
             ])
             .await
@@ -2228,7 +2228,7 @@ mod tests {
         cache
             .update_trusted_proposers(vec![ProposerInfo {
                 name: "test2".to_string(),
-                pub_key: BlsPublicKey::try_from([25u8; 48].as_ref()).unwrap(),
+                pub_key: AlloyBlsPublicKey::try_from([25u8; 48].as_ref()).unwrap(),
             }])
             .await
             .unwrap();

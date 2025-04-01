@@ -1,0 +1,20 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "helix-types"
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+alloy-primitives.workspace = true
+alloy-rpc-types.workspace = true
+# Pin from lighthouse v6.0.1, remove this once fixed
+crate_crypto_internal_eth_kzg_bls12_381 = "=0.5.1"
+crate_crypto_internal_eth_kzg_erasure_codes = "=0.5.1"
+crate_crypto_internal_eth_kzg_maybe_rayon = "=0.5.1"
+crate_crypto_internal_eth_kzg_polynomial = "=0.5.1"
+crate_crypto_kzg_multi_open_fk20 = "=0.5.1"
+ethereum-consensus.workspace = true
+lh-types.workspace = true
+rust_eth_kzg = "=0.5.1"
