@@ -567,9 +567,6 @@ impl<
             primev_service.get_registered_primev_validators(proposer_duties).await;
         self.auctioneer.update_primev_proposers(&primev_validators).await?;
 
-        let primev_builder_pref = vec!["PrimevBuilder".to_string()];
-        self.db.update_trusted_builders(&primev_validators, &primev_builder_pref).await?;
-
         Ok(())
     }
 

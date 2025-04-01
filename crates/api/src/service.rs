@@ -147,7 +147,7 @@ impl ApiService {
         let simulator = MultiSimulator::new(simulators);
 
         let (mut chain_event_updater, slot_update_sender) =
-            ChainEventUpdater::new(db.clone(), chain_info.clone());
+            ChainEventUpdater::new(db.clone(), auctioneer.clone(), chain_info.clone());
 
         let chain_updater_head_events = head_event_receiver.resubscribe();
         let chain_updater_payload_events = payload_attribute_receiver.resubscribe();

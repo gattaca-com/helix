@@ -325,17 +325,7 @@ where
             let mut valid_registrations_infos = Vec::new();
 
             for reg in valid_registrations {
-                let mut preferences = validator_preferences.clone();
-
-                if proposer_api
-                    .auctioneer
-                    .is_primev_proposer(&reg.message.public_key)
-                    .await
-                    .unwrap_or_default()
-                {
-                    preferences.trusted_builders = Some(vec!["PrimevBuilder".to_string()]);
-                }
-
+                let preferences = validator_preferences.clone();
                 valid_registrations_infos
                     .push(ValidatorRegistrationInfo { registration: reg, preferences });
             }

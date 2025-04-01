@@ -3953,6 +3953,7 @@ dependencies = [
  "helix-beacon-client",
  "helix-common",
  "helix-database",
+ "helix-datastore",
  "helix-housekeeper",
  "helix-utils",
  "num-format",

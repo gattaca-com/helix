@@ -16,6 +16,7 @@ ethereum-consensus.workspace = true
 helix-beacon-client.workspace = true
 helix-common.workspace = true
 helix-database.workspace = true
+helix-datastore.workspace = true
 helix-housekeeper.workspace = true
 helix-utils.workspace = true
 num-format.workspace = true
