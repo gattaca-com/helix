@@ -12,7 +12,6 @@ askama.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 deadpool-postgres.workspace = true
-ethereum-consensus.workspace = true
 helix-beacon-client.workspace = true
 helix-common.workspace = true
 helix-database.workspace = true
