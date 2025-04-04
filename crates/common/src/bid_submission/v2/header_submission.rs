@@ -4,7 +4,6 @@ use helix_types::{
     ExecutionPayloadHeaderDeneb, ExecutionPayloadHeaderElectra, ExecutionRequests, ExtraData,
     KzgCommittments, SigError, SignedMessage, SignedRoot, Slot,
 };
-
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 

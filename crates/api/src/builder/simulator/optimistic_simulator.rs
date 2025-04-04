@@ -159,8 +159,8 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         builder_info: &BuilderInfo,
     ) -> bool {
         if builder_info.is_optimistic && request.message.value <= builder_info.collateral {
-            if request.proposer_preferences.filtering.is_regional()
-                && !builder_info.can_process_regional_slot_optimistically()
+            if request.proposer_preferences.filtering.is_regional() &&
+                !builder_info.can_process_regional_slot_optimistically()
             {
                 return false;
             }

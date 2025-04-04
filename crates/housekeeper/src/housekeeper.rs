@@ -131,9 +131,9 @@ impl<
 
         self.process_new_slot(best_sync_status.head_slot).await;
         loop {
-            let start_instant = Instant::now()
-                + self.chain_info.clock.duration_to_next_slot().unwrap()
-                + Duration::from_secs(CUTT_OFF_TIME);
+            let start_instant = Instant::now() +
+                self.chain_info.clock.duration_to_next_slot().unwrap() +
+                Duration::from_secs(CUTT_OFF_TIME);
             let mut timer =
                 interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
 
@@ -553,16 +553,13 @@ impl<
         for builder_pubkey in primev_builders {
             info!(builder_pubkey = %builder_pubkey, "PrimevBuilder");
             self.db
-                .store_builder_info(
-                    &builder_pubkey,
-                    &BuilderInfo {
-                        collateral: U256::ZERO,
-                        is_optimistic: false,
-                        is_optimistic_for_regional_filtering: false,
-                        builder_id: Some("PrimevBuilder".to_string()),
-                        builder_ids: Some(vec!["PrimevBuilder".to_string()]),
-                    },
-                )
+                .store_builder_info(&builder_pubkey, &BuilderInfo {
+                    collateral: U256::ZERO,
+                    is_optimistic: false,
+                    is_optimistic_for_regional_filtering: false,
+                    builder_id: Some("PrimevBuilder".to_string()),
+                    builder_ids: Some(vec!["PrimevBuilder".to_string()]),
+                })
                 .await?;
         }
 
@@ -591,8 +588,8 @@ impl<
     ) -> bool {
         let trusted_proposers_slot = *self.refreshed_trusted_proposers_slot.lock().await;
         let last_trusted_proposers_distance = head_slot.saturating_sub(trusted_proposers_slot);
-        head_slot % TRUSTED_PROPOSERS_UPDATE_FREQ == 0
-            || last_trusted_proposers_distance >= TRUSTED_PROPOSERS_UPDATE_FREQ
+        head_slot % TRUSTED_PROPOSERS_UPDATE_FREQ == 0 ||
+            last_trusted_proposers_distance >= TRUSTED_PROPOSERS_UPDATE_FREQ
     }
 
     /// Update the proposer whitelist.
@@ -673,8 +670,8 @@ fn v2_submission_late(pending_block: &PendingBlock, current_time: u64) -> bool {
             (current_time.saturating_sub(header_receive_ms)) > MAX_DELAY_WITH_NO_V2_PAYLOAD_MS
         }
         (Some(header_receive_ms), Some(payload_receive_ms)) => {
-            payload_receive_ms.saturating_sub(header_receive_ms)
-                > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
+            payload_receive_ms.saturating_sub(header_receive_ms) >
+                MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
         }
     }
 }

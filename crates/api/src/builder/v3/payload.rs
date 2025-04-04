@@ -23,6 +23,7 @@ use tokio::{
     sync::mpsc::Receiver,
 };
 
+use super::V3Error;
 use crate::{
     builder::{
         api::{get_nanos_from, BuilderApi, MAX_PAYLOAD_LENGTH},
@@ -31,8 +32,6 @@ use crate::{
     },
     gossiper::traits::GossipClientTrait,
 };
-
-use super::V3Error;
 
 /// A task that fetches builder blocks for optimistic v3 submissions.
 pub async fn fetch_builder_blocks<A, DB, S, G>(

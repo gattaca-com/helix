@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 
 use alloy_primitives::{B256, U256};
-
 use async_trait::async_trait;
 use deadpool_redis::{Config, CreatePoolError, Pool, Runtime};
 use futures_util::TryStreamExt;
@@ -1386,7 +1385,6 @@ fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {
 #[cfg(test)]
 mod tests {
     use alloy_primitives::U256;
-
     use helix_types::random_bls_pubkey;
     use serde::{Deserialize, Serialize};
     use serial_test::serial;

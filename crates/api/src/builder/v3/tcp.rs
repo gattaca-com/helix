@@ -16,12 +16,11 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 
+use super::V3Error;
 use crate::{
     builder::{api::BuilderApi, traits::BlockSimulator},
     gossiper::traits::GossipClientTrait,
 };
-
-use super::V3Error;
 
 pub async fn run_api<A, DB, S, G>(
     listening_port: u16,

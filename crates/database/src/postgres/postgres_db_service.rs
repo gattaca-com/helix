@@ -523,8 +523,8 @@ impl DatabaseService for PostgresDatabaseService {
             if let Some(existing_entry) =
                 self.validator_registration_cache.get(&entry.registration.message.pubkey)
             {
-                if existing_entry.registration_info.registration.message.timestamp
-                    >= entry.registration.message.timestamp
+                if existing_entry.registration_info.registration.message.timestamp >=
+                    entry.registration.message.timestamp
                 {
                     return false;
                 }
@@ -580,8 +580,8 @@ impl DatabaseService for PostgresDatabaseService {
         if let Some(existing_entry) =
             self.validator_registration_cache.get(&registration.message.pubkey)
         {
-            if existing_entry.registration_info.registration.message.timestamp
-                >= registration.message.timestamp
+            if existing_entry.registration_info.registration.message.timestamp >=
+                registration.message.timestamp
             {
                 return Ok(false);
             }
@@ -878,10 +878,9 @@ impl DatabaseService for PostgresDatabaseService {
                 pub_keys.insert(public_key.clone());
             } else {
                 let rows = client
-                    .query(
-                        "SELECT * FROM known_validators WHERE public_key = $1",
-                        &[&(public_key.serialize().to_vec())],
-                    )
+                    .query("SELECT * FROM known_validators WHERE public_key = $1", &[&(public_key
+                        .serialize()
+                        .to_vec())])
                     .await?;
                 for row in rows {
                     let public_key: BlsPublicKey =
@@ -1086,8 +1085,8 @@ impl DatabaseService for PostgresDatabaseService {
             transaction.execute(&sql, &params[..]).await?;
         }
 
-        if payload.execution_payload.withdrawals().is_ok()
-            && !payload.execution_payload.withdrawals().unwrap().is_empty()
+        if payload.execution_payload.withdrawals().is_ok() &&
+            !payload.execution_payload.withdrawals().unwrap().is_empty()
         {
             // Save the withdrawals
             let mut structured_params: Vec<(i32, Vec<u8>, i32, &[u8], i64)> = Vec::new();

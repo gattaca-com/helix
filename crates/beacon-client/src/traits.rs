@@ -5,13 +5,13 @@ use async_trait::async_trait;
 use helix_common::{beacon_api::PublishBlobsRequest, ProposerDuty, ValidatorSummary};
 use helix_types::ForkName;
 use serde::{de::DeserializeOwned, Serialize};
+use ssz::Encode;
 use tokio::sync::broadcast::Sender;
 
 use crate::{
     error::BeaconClientError,
     types::{BroadcastValidation, HeadEventData, PayloadAttributesEvent, StateId, SyncStatus},
 };
-use ssz::Encode;
 
 #[async_trait]
 pub trait BeaconClientTrait: Send + Sync + Clone {

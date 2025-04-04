@@ -4,7 +4,6 @@ mod tests {
 
     use alloy_primitives::B256;
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
-
     use helix_common::{
         api::{
             builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
@@ -197,8 +196,8 @@ mod tests {
             let result = result
                 .iter()
                 .find(|r| {
-                    r.registration_info.registration.message.pubkey
-                        == registration.registration.message.pubkey
+                    r.registration_info.registration.message.pubkey ==
+                        registration.registration.message.pubkey
                 })
                 .unwrap();
             assert_eq!(

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use ethereum_consensus::clock::get_current_unix_time_in_nanos;
-
 use helix_types::VersionedSignedProposal;
 use helix_utils::request_encoding::Encoding;
 use ssz::Encode;

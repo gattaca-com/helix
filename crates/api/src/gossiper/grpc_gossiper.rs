@@ -6,7 +6,6 @@ use helix_common::{
     metrics::{GossipMetrics, BUILDER_GOSSIP_QUEUE, PROPOSER_GOSSIP_QUEUE},
     task,
 };
-
 use prost::Message;
 use tokio::{sync::mpsc::Sender, time::sleep};
 use tonic::{transport::Channel, Request, Response, Status};

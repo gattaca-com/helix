@@ -1,5 +1,4 @@
 use alloy_primitives::{Address, B256, U256};
-
 use lh_types::{ExecutionPayloadDeneb, ExecutionPayloadElectra, MainnetEthSpec, SignedRoot, Slot};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};

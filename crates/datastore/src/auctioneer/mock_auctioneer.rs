@@ -1,5 +1,6 @@
-use alloy_primitives::{B256, U256};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
+use alloy_primitives::{B256, U256};
 use async_trait::async_trait;
 use helix_common::{
     bid_submission::{
@@ -12,7 +13,6 @@ use helix_common::{
 };
 use helix_database::types::BuilderInfoDocument;
 use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use tokio_stream::Stream;
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse, Auctioneer};

@@ -1,11 +1,12 @@
-use alloy_primitives::B256;
-use bitflags::bitflags;
-use helix_types::BlsPublicKey;
-use ssz_derive::{Decode, Encode};
 use std::{
     fmt::{Debug, Formatter},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
 };
+
+use alloy_primitives::B256;
+use bitflags::bitflags;
+use helix_types::BlsPublicKey;
+use ssz_derive::{Decode, Encode};
 
 use crate::bid_submission::v2::header_submission::SignedHeaderSubmission;
 

@@ -3,7 +3,6 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-
 use helix_common::simulator::BlockSimError;
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;

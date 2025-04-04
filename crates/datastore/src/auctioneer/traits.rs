@@ -1,6 +1,4 @@
 use alloy_primitives::{B256, U256};
-use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
-
 use async_trait::async_trait;
 use helix_common::{
     bid_submission::{
@@ -13,6 +11,7 @@ use helix_common::{
     ProposerInfo,
 };
 use helix_database::BuilderInfoDocument;
+use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
 use tokio_stream::Stream;
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse};

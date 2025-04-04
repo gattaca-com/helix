@@ -1,7 +1,6 @@
 use std::time::Duration;
 
-pub use lh_slot_clock::SlotClock as SlotClockTrait;
-pub use lh_slot_clock::SystemTimeSlotClock as SlotClock;
+pub use lh_slot_clock::{SlotClock as SlotClockTrait, SystemTimeSlotClock as SlotClock};
 
 pub const MAINNET_GENESIS_TIME: u64 = 1606824023;
 pub const SEPOLIA_GENESIS_TIME: u64 = 1655733600;

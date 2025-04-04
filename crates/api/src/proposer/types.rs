@@ -24,11 +24,11 @@ pub fn unblind_beacon_block(
     versioned_execution_payload: &PayloadAndBlobs,
 ) -> Result<VersionedSignedProposal, ProposerApiError> {
     match signed_blinded_beacon_block {
-        SignedBlindedBeaconBlock::Altair(_)
-        | SignedBlindedBeaconBlock::Base(_)
-        | SignedBlindedBeaconBlock::Bellatrix(_)
-        | SignedBlindedBeaconBlock::Capella(_)
-        | SignedBlindedBeaconBlock::Fulu(_) => Err(ProposerApiError::UnsupportedBeaconChainVersion),
+        SignedBlindedBeaconBlock::Altair(_) |
+        SignedBlindedBeaconBlock::Base(_) |
+        SignedBlindedBeaconBlock::Bellatrix(_) |
+        SignedBlindedBeaconBlock::Capella(_) |
+        SignedBlindedBeaconBlock::Fulu(_) => Err(ProposerApiError::UnsupportedBeaconChainVersion),
 
         SignedBlindedBeaconBlock::Deneb(blinded_block) => {
             let signature = blinded_block.signature.clone();

@@ -6,27 +6,23 @@ mod spec;
 mod test_utils;
 mod validator;
 
+use std::sync::Arc;
+
 pub use bid_submission::*;
 pub use clock::*;
 pub use error::*;
+pub use lh_kzg::KzgProof;
+pub use lh_types::{
+    blob_sidecar::BlobSidecarError, fork_name::ForkName,
+    fork_versioned_response::ForkVersionDecode, payload::ExecPayload, MainnetEthSpec, SignedRoot,
+};
+use lh_types::{EthSpec, FixedVector, VariableList};
+use serde::{Deserialize, Serialize};
 pub use spec::*;
+use ssz_derive::{Decode, Encode};
 #[cfg(test)]
 pub use test_utils::*;
 pub use validator::*;
-
-use serde::{Deserialize, Serialize};
-use ssz_derive::{Decode, Encode};
-use std::sync::Arc;
-
-use lh_types::{EthSpec, FixedVector, VariableList};
-
-pub use lh_kzg::KzgProof;
-pub use lh_types::blob_sidecar::BlobSidecarError;
-pub use lh_types::fork_name::ForkName;
-pub use lh_types::fork_versioned_response::ForkVersionDecode;
-pub use lh_types::payload::ExecPayload;
-pub use lh_types::MainnetEthSpec;
-pub use lh_types::SignedRoot;
 
 pub type Slot = lh_types::Slot;
 pub type Epoch = lh_types::Epoch;

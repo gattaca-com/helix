@@ -6,7 +6,6 @@ use std::sync::{
 use alloy_primitives::B256;
 use async_trait::async_trait;
 use helix_common::{beacon_api::PublishBlobsRequest, ProposerDuty, ValidatorSummary};
-
 use helix_types::ForkName;
 use ssz::Encode;
 use tokio::sync::broadcast::Sender;
@@ -92,8 +91,8 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
         // self.proposer_duties_has_been_read.store(true, std::sync::atomic::Ordering::Relaxed);
         // Ok((
         //     B256::default(),
-        //     vec![ProposerDuty { public_key: BlsPublicKey::empty(), validator_index: 1, slot: 19 }],
-        // ))
+        //     vec![ProposerDuty { public_key: BlsPublicKey::empty(), validator_index: 1, slot: 19
+        // }], ))
     }
     async fn publish_block<VersionedSignedProposal: Encode + Send + Sync + 'static>(
         &self,
