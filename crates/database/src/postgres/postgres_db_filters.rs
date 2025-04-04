@@ -28,12 +28,12 @@ impl PgBidFilters {
         self.0.block_number.map(|block_number| block_number as i32)
     }
 
-    pub fn proposer_pubkey(&self) -> Option<&[u8]> {
-        self.0.proposer_pubkey.as_ref().map(|pubkey| pubkey.as_ref())
+    pub fn proposer_pubkey(&self) -> Option<[u8; 48]> {
+        self.0.proposer_pubkey.as_ref().map(|pubkey| pubkey.serialize())
     }
 
-    pub fn builder_pubkey(&self) -> Option<&[u8]> {
-        self.0.builder_pubkey.as_ref().map(|pubkey| pubkey.as_ref())
+    pub fn builder_pubkey(&self) -> Option<[u8; 48]> {
+        self.0.builder_pubkey.as_ref().map(|pubkey| pubkey.serialize())
     }
 
     pub fn block_hash(&self) -> Option<&[u8]> {

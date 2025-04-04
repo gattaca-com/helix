@@ -4,7 +4,7 @@ use alloy_primitives::B256;
 use helix_beacon_client::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo};
 use helix_database::DatabaseService;
-use helix_types::{eth_consensus_hash_to_alloy, Withdrawals};
+use helix_types::{eth_consensus_hash_to_alloy, SlotClockTrait, Withdrawals};
 use helix_utils::{get_payload_attributes_key, utcnow_sec};
 use tokio::{
     sync::{broadcast, mpsc},
@@ -86,9 +86,9 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         mut head_event_rx: broadcast::Receiver<HeadEventData>,
         mut payload_attributes_rx: broadcast::Receiver<PayloadAttributesEvent>,
     ) {
-        let start_instant = Instant::now() +
-            self.chain_info.clock.duration_until_next_slot() +
-            Duration::from_secs(CUTT_OFF_TIME);
+        let start_instant = Instant::now()
+            + self.chain_info.clock.duration_to_next_slot().unwrap()
+            + Duration::from_secs(CUTT_OFF_TIME);
         let mut timer =
             interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
         loop {
@@ -125,8 +125,8 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
                 }
                 _ = timer.tick() => {
                     info!("4 seconds into slot. Attempting to slot update...");
-                    match self.chain_info.clock.current_slot() {
-                        Some(slot) => self.process_slot(slot).await,
+                    match self.chain_info.clock.now() {
+                        Some(slot) => self.process_slot(slot.as_u64()).await,
                         None => {
                             error!("could not get current slot");
                         }

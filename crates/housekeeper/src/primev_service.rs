@@ -2,7 +2,6 @@
 use std::sync::Mutex;
 use std::{convert::TryFrom, sync::Arc};
 
-use alloy_rpc_types::beacon::BlsPublicKey;
 use async_trait::async_trait;
 use ethers::{
     abi::{Abi, AbiParser, Address, Bytes},
@@ -11,6 +10,7 @@ use ethers::{
     types::transaction::eip2718::TypedTransaction,
 };
 use helix_common::{PrimevConfig, ProposerDuty};
+use helix_types::BlsPublicKey;
 use tracing::{debug, error};
 
 /// Service for interacting with Primev contracts
@@ -46,7 +46,7 @@ fn process_bls_key_data(data: &[u8]) -> Option<BlsPublicKey> {
     debug!(raw = alloy_primitives::hex::encode_prefixed(data), "Raw BLS key data");
 
     // Try directly with the raw data first
-    if let Ok(key) = BlsPublicKey::try_from(data) {
+    if let Ok(key) = BlsPublicKey::deserialize(data) {
         return Some(key);
     }
 
@@ -72,7 +72,7 @@ fn process_bls_key_data(data: &[u8]) -> Option<BlsPublicKey> {
     let key_bytes = &data_part[..48];
 
     // Extract the BLS key
-    match BlsPublicKey::try_from(key_bytes) {
+    match BlsPublicKey::deserialize(key_bytes) {
         Ok(key) => Some(key),
         Err(err) => {
             debug!("Failed to create BLS key from processed data: {:?}", err);
@@ -210,7 +210,7 @@ impl PrimevService for EthereumPrimevService {
         }
 
         let validator_pubkeys: Vec<Bytes> =
-            proposer_duties.iter().map(|duty| Bytes::from(duty.public_key.to_vec())).collect();
+            proposer_duties.iter().map(|duty| Bytes::from(duty.public_key.serialize())).collect();
 
         let func = match self.validator_contract.abi().function("areValidatorsOptedIn") {
             Ok(f) => f,
@@ -288,7 +288,7 @@ impl PrimevService for EthereumPrimevService {
         for (index, status) in opted_in_statuses.iter().enumerate() {
             if status.0 || status.1 || status.2 {
                 if let Some(duty) = proposer_duties.get(index) {
-                    opted_in_validators.push(duty.public_key);
+                    opted_in_validators.push(duty.public_key.clone());
                 }
             }
         }
@@ -317,8 +317,8 @@ pub struct MockPrimevService {
 impl MockPrimevService {
     pub fn new() -> Self {
         // Create default test values
-        let default_validator = BlsPublicKey::try_from(vec![1; 48].as_slice()).unwrap_or_default();
-        let default_builder = BlsPublicKey::try_from(vec![2; 48].as_slice()).unwrap_or_default();
+        let default_validator = BlsPublicKey::deserialize(vec![1; 48].as_slice()).unwrap();
+        let default_builder = BlsPublicKey::deserialize(vec![2; 48].as_slice()).unwrap();
 
         Self {
             mock_validators: vec![default_validator],

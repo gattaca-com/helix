@@ -25,7 +25,6 @@ alloy-consensus = { version = "0.12", features = ["k256"] }
 alloy-eips = { version = "0.12", features = ["kzg"] }
 alloy-primitives = { version = "0.8.25", features = ["getrandom", "k256"] }
 alloy-rlp = "0.3.9"
-alloy-rpc-types = { version = "0.12.0", features = ["beacon"] }
 alloy-serde = "0.12.0"
 askama = "0.12"
 async-trait = "0.1"
@@ -41,6 +40,9 @@ deadpool-postgres = "0.11.0"
 deadpool-redis = { version = "0.12.0", features = ["rt_tokio_1"] }
 env_logger = "0.9"
 ethereum-consensus = { git = "https://github.com/gattaca-com/ethereum-consensus" }
+ethereum_serde_utils = "0.7"
+ethereum_ssz = "0.8"
+ethereum_ssz_derive = "0.8"
 ethers = "2.0.14"
 eyre = "0.6.12"
 fiber = { git = "https://github.com/chainbound/fiber-rs.git", tag = "v0.8.0" }
@@ -59,8 +61,12 @@ helix-website = { path = "./crates/website" }
 http = "1.0.0"
 hyper = "1.1.0"
 lazy_static = "1.5.0"
-lh-types = { package = "types", git = "https://github.com/sigp/lighthouse.git", tag = "v6.0.1" }
-merkle_proof = { git = "https://github.com/sigp/lighthouse.git", tag = "v6.0.1" }
+lh-bls = { package = "bls", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
+lh-eth2 = { package = "eth2", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
+lh-kzg = { package = "kzg", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
+lh-slot-clock = { package = "slot_clock", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
+lh-types = { package = "types", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
+merkle_proof = { package = "merkle_proof", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
 mockito = "1.1.1"
 moka = "0.9"
 num-format = "0.4.4"
@@ -77,7 +83,7 @@ serde_json = "1.0.106"
 serde_yaml = "0.9.25"
 serial_test = "1.0.0"
 sha2 = "0.10.8"
-ssz_types = "0.5.4"
+ssz_types = "0.10"
 thiserror = "1.0.49"
 tikv-jemallocator = { version = "0.5", features = ["profiling"] }
 tokio = { version = "1.43", features = ["full"] }
@@ -92,7 +98,7 @@ tower_governor = { version = "0.6.0", features = ["axum"] }
 tracing = "0.1.37"
 tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
-tree_hash = "0.8.0"
-tree_hash_derive = "0.8.0"
+tree_hash = "0.9"
+tree_hash_derive = "0.9"
 url = "2.4"
 uuid = { version = "1.5", features = ["fast-rng", "v4"] }

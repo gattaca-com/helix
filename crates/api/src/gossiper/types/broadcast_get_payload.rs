@@ -1,4 +1,5 @@
-use ethereum_consensus::{ssz, types::mainnet::SignedBlindedBeaconBlock};
+use helix_types::SignedBlindedBeaconBlock;
+use ssz::Encode;
 use uuid::Uuid;
 
 use crate::grpc;
@@ -12,7 +13,8 @@ pub struct BroadcastGetPayloadParams {
 impl BroadcastGetPayloadParams {
     pub fn from_proto(proto_params: grpc::BroadcastGetPayloadParams) -> Self {
         Self {
-            signed_blinded_beacon_block: ssz::prelude::deserialize(
+            // TODO: pass chain spec
+            signed_blinded_beacon_block: SignedBlindedBeaconBlock::any_from_ssz_bytes(
                 &proto_params.signed_blinded_beacon_block,
             )
             .unwrap(),
@@ -21,8 +23,9 @@ impl BroadcastGetPayloadParams {
     }
     pub fn to_proto(&self) -> grpc::BroadcastGetPayloadParams {
         grpc::BroadcastGetPayloadParams {
-            signed_blinded_beacon_block: ssz::prelude::serialize(&self.signed_blinded_beacon_block)
-                .unwrap(),
+            signed_blinded_beacon_block: SignedBlindedBeaconBlock::as_ssz_bytes(
+                &self.signed_blinded_beacon_block,
+            ),
             request_id: self.request_id.as_bytes().to_vec(),
         }
     }

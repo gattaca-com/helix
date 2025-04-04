@@ -1,7 +1,7 @@
 #[cfg(test)]
 pub mod test_utils {
-    use ethereum_consensus::ssz::prelude::Serializable;
     use serde_json::Value;
+    use ssz::{Decode, Encode};
 
     /// Test that the encoding and decoding works, returns the decoded struct
     pub fn test_encode_decode_json<T: serde::Serialize + serde::de::DeserializeOwned>(
@@ -23,10 +23,9 @@ pub mod test_utils {
         decoded
     }
 
-    pub fn test_encode_decode_ssz<T: Serializable>(d: &[u8]) -> T {
-        let decoded = T::deserialize(d).expect("deserialize");
-        let mut encoded = Vec::new();
-        decoded.serialize(&mut encoded).unwrap();
+    pub fn test_encode_decode_ssz<T: Encode + Decode>(d: &[u8]) -> T {
+        let decoded = T::from_ssz_bytes(d).expect("deserialize");
+        let encoded = T::as_ssz_bytes(&decoded);
 
         assert_eq!(encoded, d);
 

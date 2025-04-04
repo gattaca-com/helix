@@ -1,7 +1,5 @@
-use ethereum_consensus::{
-    primitives::{BlsPublicKey, ExecutionAddress, Hash32, U256},
-    serde::as_str,
-};
+use alloy_primitives::{Address, B256, U256};
+use helix_types::{BlsPublicKey, Slot};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -9,7 +7,7 @@ pub struct BidFilters {
     pub slot: Option<u64>,
     pub cursor: Option<u64>,
     pub limit: Option<u64>,
-    pub block_hash: Option<Hash32>,
+    pub block_hash: Option<B256>,
     pub block_number: Option<u64>,
     pub proposer_pubkey: Option<BlsPublicKey>,
     pub builder_pubkey: Option<BlsPublicKey>,
@@ -21,7 +19,7 @@ pub struct ProposerPayloadDeliveredParams {
     pub slot: Option<u64>,
     pub cursor: Option<u64>,
     pub limit: Option<u64>,
-    pub block_hash: Option<Hash32>,
+    pub block_hash: Option<B256>,
     pub block_number: Option<u64>,
     pub proposer_pubkey: Option<BlsPublicKey>,
     pub builder_pubkey: Option<BlsPublicKey>,
@@ -52,29 +50,28 @@ impl From<ProposerPayloadDeliveredParams> for BidFilters {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeliveredPayloadsResponse {
-    #[serde(with = "as_str")]
-    pub slot: u64,
-    pub parent_hash: Hash32,
-    pub block_hash: Hash32,
+    pub slot: Slot,
+    pub parent_hash: B256,
+    pub block_hash: B256,
     pub builder_pubkey: BlsPublicKey,
     pub proposer_pubkey: BlsPublicKey,
-    pub proposer_fee_recipient: ExecutionAddress,
-    #[serde(with = "as_str")]
+    pub proposer_fee_recipient: Address,
+    #[serde(with = "serde_utils::quoted_u64")]
     pub gas_limit: u64,
-    #[serde(with = "as_str")]
+    #[serde(with = "serde_utils::quoted_u64")]
     pub gas_used: u64,
-    #[serde(with = "as_str")]
+    #[serde(with = "serde_utils::quoted_u256")]
     pub value: U256,
-    #[serde(with = "as_str")]
+    #[serde(with = "serde_utils::quoted_u64")]
     pub block_number: u64,
-    #[serde(with = "as_str")]
-    pub num_tx: usize,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub num_tx: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct BuilderBlocksReceivedParams {
     pub slot: Option<u64>,
-    pub block_hash: Option<Hash32>,
+    pub block_hash: Option<B256>,
     pub block_number: Option<u64>,
     pub builder_pubkey: Option<BlsPublicKey>,
     pub limit: Option<u64>,
@@ -97,26 +94,25 @@ impl From<BuilderBlocksReceivedParams> for BidFilters {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReceivedBlocksResponse {
-    #[serde(with = "as_str")]
-    pub slot: u64,
-    pub parent_hash: Hash32,
-    pub block_hash: Hash32,
+    pub slot: Slot,
+    pub parent_hash: B256,
+    pub block_hash: B256,
     pub builder_pubkey: BlsPublicKey,
     pub proposer_pubkey: BlsPublicKey,
-    pub proposer_fee_recipient: ExecutionAddress,
-    #[serde(with = "as_str")]
+    pub proposer_fee_recipient: Address,
+    #[serde(with = "serde_utils::quoted_u64")]
     pub gas_limit: u64,
-    #[serde(with = "as_str")]
+    #[serde(with = "serde_utils::quoted_u64")]
     pub gas_used: u64,
-    #[serde(with = "as_str")]
+    #[serde(with = "serde_utils::quoted_u256")]
     pub value: U256,
-    #[serde(with = "as_str")]
+    #[serde(with = "serde_utils::quoted_u64")]
     pub block_number: u64,
-    #[serde(with = "as_str")]
-    pub num_tx: usize,
-    #[serde(with = "as_str")]
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub num_tx: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
     pub timestamp: u64,
-    #[serde(with = "as_str")]
+    #[serde(with = "serde_utils::quoted_u64")]
     pub timestamp_ms: u64,
 }
 

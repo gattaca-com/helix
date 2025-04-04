@@ -51,9 +51,8 @@ mod proposer_api_tests {
             proposer_api::ValidatorRegistrationInfo, PATH_GET_PAYLOAD, PATH_PROPOSER_API,
             PATH_REGISTER_VALIDATORS,
         },
-        capella,
+        blob_sidecars, capella,
         chain_info::ChainInfo,
-        deneb,
         versioned_payload::PayloadAndBlobs,
         SignedBuilderBid, ValidatorPreferences,
     };
@@ -892,7 +891,7 @@ mod proposer_api_tests {
         let req_url =
             format!("{}{}{}", http_config.base_url(), PATH_PROPOSER_API, PATH_GET_PAYLOAD);
 
-        let mut signed_blinded_beacon_block = deneb::SignedBlindedBeaconBlock::default();
+        let mut signed_blinded_beacon_block = blob_sidecars::SignedBlindedBeaconBlock::default();
         signed_blinded_beacon_block.message.proposer_index = 1;
         signed_blinded_beacon_block.message.slot = current_slot + 1;
 

@@ -1,7 +1,7 @@
 #![allow(clippy::doc_lazy_continuation)]
 
+use alloy_primitives::U256;
 use bytes::BufMut;
-use ethereum_consensus::primitives::U256;
 use tokio_postgres::types::{FromSql, ToSql};
 
 #[derive(Debug, Clone)]
@@ -43,7 +43,7 @@ impl<'a> FromSql<'a> for PostgresNumeric {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
                     "Not enough bytes to read",
-                ))
+                ));
             }
             let value = u16::from_be_bytes([raw[*offset], raw[*offset + 1]]);
             *offset += 2;
@@ -132,7 +132,8 @@ impl ToSql for PostgresNumeric {
 }
 #[cfg(test)]
 mod tests {
-    use ethereum_consensus::primitives::U256;
+
+    use alloy_primitives::U256;
 
     use super::*;
     use crate::postgres::postgres_db_u256_parsing::PostgresNumeric;

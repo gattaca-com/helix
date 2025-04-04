@@ -1,7 +1,6 @@
 use std::{io::Error, net::SocketAddr, sync::Arc};
 
 use axum::response::IntoResponse;
-use ethereum_consensus::ssz;
 use helix_common::{
     bid_submission::v3::header_submission_v3::{
         HeaderSubmissionV3, MessageHeader, MessageHeaderFlags, MessageType, SubmissionV3Error,
@@ -11,6 +10,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_utils::utcnow_ns;
+use ssz::{Decode, Encode};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -20,6 +20,8 @@ use crate::{
     builder::{api::BuilderApi, traits::BlockSimulator},
     gossiper::traits::GossipClientTrait,
 };
+
+use super::V3Error;
 
 pub async fn run_api<A, DB, S, G>(
     listening_port: u16,
@@ -118,15 +120,15 @@ async fn handle_builder_connection<A, DB, S, G>(
     tracing::info!(?remote_addr, "builder connection disconnected");
 }
 
-fn decode_message(header: &MessageHeader, payload: &[u8]) -> Result<HeaderSubmissionV3, Error> {
+fn decode_message(header: &MessageHeader, payload: &[u8]) -> Result<HeaderSubmissionV3, V3Error> {
     if header.message_flags.contains(MessageHeaderFlags::CBOR_ENCODED) {
-        cbor4ii::serde::from_slice(payload).map_err(Error::other)
+        cbor4ii::serde::from_slice(payload).map_err(V3Error::Cbor)
     } else if header.message_flags.contains(MessageHeaderFlags::SSZ_ENCODED) {
-        ssz::prelude::deserialize(payload).map_err(Error::other)
+        HeaderSubmissionV3::from_ssz_bytes(payload).map_err(V3Error::Ssz)
     } else if header.message_flags.contains(MessageHeaderFlags::JSON_ENCODED) {
-        serde_json::from_slice(payload).map_err(Error::other)
+        serde_json::from_slice(payload).map_err(V3Error::Json)
     } else {
-        Err(Error::other(format!("Unknown message encoding: {header:?}")))
+        Err(V3Error::Unknown(*header))
     }
 }
 
@@ -136,7 +138,7 @@ fn encode_error(header: &MessageHeader, status: u16) -> Result<Vec<u8>, Error> {
         let vec = vec![];
         cbor4ii::serde::to_vec(vec, &error).map_err(Error::other)
     } else if header.message_flags.contains(MessageHeaderFlags::SSZ_ENCODED) {
-        ssz::prelude::serialize(&error).map_err(Error::other)
+        Ok(error.as_ssz_bytes())
     } else if header.message_flags.contains(MessageHeaderFlags::JSON_ENCODED) {
         serde_json::to_vec(&error).map_err(Error::other)
     } else {

@@ -1,19 +1,7 @@
 use std::sync::Arc;
 
-use alloy_primitives::hex;
-use ethereum_consensus::{
-    electra::ExecutionRequests, primitives::BlsSignature, ssz::prelude::*,
-    types::mainnet::ExecutionPayload,
-};
-use helix_common::{
-    bid_submission::{
-        BidTrace, SignedBidSubmission, SignedBidSubmissionCapella, SignedBidSubmissionElectra,
-    },
-    deneb::BlobsBundle,
-    electra::SignedBeaconBlock,
-    simulator::BlockSimError,
-    BuilderInfo, ValidatorPreferences,
-};
+use alloy_primitives::{hex, B256};
+use helix_common::{simulator::BlockSimError, BuilderInfo, ValidatorPreferences};
 use reqwest::Client;
 use serde_json::json;
 
@@ -29,7 +17,7 @@ fn get_simulator(endpoint: &str) -> RpcSimulator {
     RpcSimulator::new(http, endpoint.to_string())
 }
 
-fn get_byte_vector_32_for_hex(hex: &str) -> ByteVector<32> {
+fn get_byte_vector_32_for_hex(hex: &str) -> B256 {
     let bytes = hex::decode(&hex[2..]).unwrap();
     ByteVector::try_from(bytes.as_ref()).unwrap()
 }

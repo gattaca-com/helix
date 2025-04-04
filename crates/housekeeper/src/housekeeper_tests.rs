@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use alloy_rpc_types::beacon::BlsPublicKey;
 use helix_beacon_client::{
     mock_multi_beacon_client::MockMultiBeaconClient, MultiBeaconClientTrait,
 };

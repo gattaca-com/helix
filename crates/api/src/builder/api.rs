@@ -5,29 +5,18 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use alloy_primitives::B256;
+use alloy_primitives::{B256, U256};
 use axum::{
     body::{to_bytes, Body},
-    extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
-        Query,
-    },
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::{Request, StatusCode},
-    response::{
-        sse::{Event, KeepAlive},
-        IntoResponse, Response, Sse,
-    },
+    response::{IntoResponse, Response},
     Extension, Json,
 };
 use bytes::Bytes;
-use ethereum_consensus::{
-    configs::mainnet::CAPELLA_FORK_EPOCH,
-    phase0::mainnet::SLOTS_PER_EPOCH,
-    primitives::{BlsPublicKey, Hash32},
-    ssz::{self, prelude::*},
-};
+
 use flate2::read::GzDecoder;
-use futures::{Stream, StreamExt};
+use futures::StreamExt;
 use helix_common::{
     api::{
         builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
@@ -35,37 +24,33 @@ use helix_common::{
     },
     bid_submission::{
         cancellation::SignedCancellation, v2::header_submission::SignedHeaderSubmission,
-        v3::header_submission_v3::PayloadSocketAddress, BidSubmission, BidTrace,
-        SignedBidSubmission,
+        v3::header_submission_v3::PayloadSocketAddress, BidSubmission,
     },
     chain_info::ChainInfo,
     metrics::{BUILDER_GOSSIP_QUEUE, DB_QUEUE},
-    proofs::{
-        verify_multiproofs, InclusionProofs, SignedConstraints, SignedConstraintsWithProofData,
-    },
     signing::RelaySigningContext,
     simulator::BlockSimError,
-    task, validator_preferences,
-    versioned_payload::PayloadAndBlobs,
-    BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, RelayConfig,
-    SignedBuilderBid, SubmissionTrace,
+    task, validator_preferences, BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace,
+    HeaderSubmissionTrace, RelayConfig, SubmissionTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-use helix_types::eth_consensus_hash_to_alloy;
-use helix_utils::{extract_request_id, get_payload_attributes_key, has_reached_fork, utcnow_ns};
+use helix_types::{
+    BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid, SLOTS_PER_EPOCH,
+};
+use helix_utils::{extract_request_id, get_payload_attributes_key, utcnow_ns};
 use hyper::HeaderMap;
 use serde::Deserialize;
+use ssz::Decode;
 use tokio::{
     sync::{
-        broadcast,
         mpsc::{self, error::SendError, Receiver, Sender},
         RwLock,
     },
     time::{self},
 };
-use tokio_stream::wrappers::BroadcastStream;
+
 use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 
@@ -73,7 +58,6 @@ use crate::{
     builder::{
         error::BuilderApiError, traits::BlockSimulator, BlockSimRequest, DbInfo, OptimisticVersion,
     },
-    constraints::api::ConstraintsHandle,
     gossiper::{
         traits::GossipClientTrait,
         types::{
@@ -106,7 +90,6 @@ where
     signing_context: Arc<RelaySigningContext>,
     relay_config: Arc<RelayConfig>,
     db_sender: Sender<DbInfo>,
-    constraints_tx: broadcast::Sender<SignedConstraints>,
 
     /// Information about the current head slot and next proposer duty
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
@@ -135,9 +118,8 @@ where
         slot_update_subscription: Sender<Sender<ChainUpdate>>,
         gossip_receiver: Receiver<GossipedMessage>,
         validator_preferences: Arc<validator_preferences::ValidatorPreferences>,
-    ) -> (Self, ConstraintsHandle) {
+    ) -> Self {
         let (db_sender, db_receiver) = mpsc::channel::<DbInfo>(10_000);
-        let (constraints_tx, _) = broadcast::channel(128);
 
         // Spin up db processing task
         let db_clone = db.clone();
@@ -155,7 +137,6 @@ where
             relay_config: Arc::new(relay_config),
 
             db_sender,
-            constraints_tx: constraints_tx.clone(),
 
             curr_slot_info: Arc::new(RwLock::new((0, None))),
             proposer_duties_response: Arc::new(RwLock::new(None)),
@@ -178,7 +159,7 @@ where
             }
         });
 
-        (api, ConstraintsHandle { constraints_tx })
+        api
     }
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/getValidators>
@@ -194,106 +175,6 @@ where
                 .into_response(),
             None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
-    }
-
-    /// This endpoint returns a list of signed constraints for a given `slot`.
-    ///
-    /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/relay#constraints>
-    #[tracing::instrument(skip_all, fields(slot = slot.slot))]
-    pub async fn constraints(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
-        Query(slot): Query<SlotQuery>,
-    ) -> Result<impl IntoResponse, BuilderApiError> {
-        let slot = slot.slot;
-        info!("builder requested constraints for slot");
-
-        let head_slot = api.curr_slot_info.read().await.0;
-
-        if slot < head_slot || slot > head_slot + 32 {
-            return Err(BuilderApiError::IncorrectSlot(slot));
-        }
-
-        match api.auctioneer.get_constraints(slot).await {
-            Ok(Some(cache)) => {
-                let constraints = cache
-                    .into_iter()
-                    .map(|data| data.signed_constraints)
-                    .collect::<Vec<SignedConstraints>>();
-
-                info!(len = constraints.len(), "returning constraints to builder");
-                Ok(Json(constraints))
-            }
-            Ok(None) => {
-                debug!("No constraints found for slot");
-                Ok(Json(vec![])) // Return an empty vector if no delegations found
-            }
-            Err(err) => {
-                warn!(%err, "Failed to get constraints");
-                Err(BuilderApiError::AuctioneerError(err))
-            }
-        }
-    }
-
-    /// This endpoint returns a stream of signed constraints for a given `slot`.
-    ///
-    /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/relay#constraints-stream>
-    #[tracing::instrument(skip_all)]
-    pub async fn constraints_stream(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
-    ) -> Sse<impl Stream<Item = Result<Event, BuilderApiError>>> {
-        let constraints_rx = api.constraints_tx.subscribe();
-        let stream = BroadcastStream::new(constraints_rx);
-
-        let filtered = stream.map(|result| match result {
-            Ok(constraint) => match serde_json::to_string(&vec![constraint]) {
-                Ok(json) => Ok(Event::default()
-                    .data(json)
-                    .event("signed_constraint")
-                    .retry(Duration::from_millis(50))),
-                Err(err) => {
-                    warn!(error = %err, "Failed to serialize constraint");
-                    Err(BuilderApiError::SszSerializeError)
-                }
-            },
-            Err(err) => {
-                warn!(error = %err, "Error receiving constraint message");
-                Err(BuilderApiError::InternalError)
-            }
-        });
-
-        Sse::new(filtered).keep_alive(KeepAlive::default())
-    }
-
-    /// This endpoint returns the active delegations for the validator scheduled to propose
-    /// at the provided `slot`. The delegations are returned as a list of BLS pubkeys.
-    ///
-    /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/relay#delegations>
-    #[tracing::instrument(skip_all, fields(slot = slot.slot))]
-    pub async fn delegations(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
-        Query(slot): Query<SlotQuery>,
-    ) -> Result<impl IntoResponse, BuilderApiError> {
-        let slot = slot.slot;
-
-        let Some(duty_bytes) = &*api.proposer_duties_response.read().await else {
-            warn!("could not find slot duty");
-            return Err(BuilderApiError::ProposerDutyNotFound);
-        };
-        let Ok(proposer_duties) =
-            serde_json::from_slice::<Vec<BuilderGetValidatorsResponse>>(duty_bytes)
-        else {
-            return Err(BuilderApiError::DeserializeError);
-        };
-
-        let duty = proposer_duties
-            .iter()
-            .find(|duty| duty.slot == slot)
-            .ok_or(BuilderApiError::ProposerDutyNotFound)?;
-
-        let pubkey = duty.entry.message.public_key.clone();
-        let delegations = Json(api.auctioneer.get_validator_delegations(pubkey).await?);
-
-        Ok(delegations)
     }
 
     /// Handles the submission of a new block by performing various checks and verifications
@@ -324,7 +205,7 @@ where
         let block_hash = payload.message().block_hash.clone();
 
         info!(
-            slot = payload.slot(),
+            slot = %payload.slot(),
             builder_pub_key = ?payload.builder_public_key(),
             block_value = %payload.value(),
             ?block_hash,
@@ -337,7 +218,7 @@ where
 
             return Err(BuilderApiError::SubmissionForPastSlot {
                 current_slot: head_slot,
-                submission_slot: payload.slot(),
+                submission_slot: payload.slot().as_u64(),
             });
         }
 
@@ -350,14 +231,14 @@ where
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes = api
-            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &block_hash)
+            .fetch_payload_attributes(payload.slot().as_u64(), payload.parent_hash(), &block_hash)
             .await?;
 
         // Handle duplicates.
         if let Err(err) = api
             .check_for_duplicate_block_hash(
                 &block_hash,
-                payload.slot(),
+                payload.slot().as_u64(),
                 payload.parent_hash(),
                 payload.proposer_public_key(),
             )
@@ -382,7 +263,7 @@ where
         // Verify the payload value is above the floor bid
         let floor_bid_value = api
             .check_if_bid_is_below_floor(
-                payload.slot(),
+                payload.slot().into(),
                 payload.parent_hash(),
                 payload.proposer_public_key(),
                 payload.builder_public_key(),
@@ -445,33 +326,6 @@ where
             )
             .await?;
 
-        // If constraints from the [Constraints API](https://docs.boltprotocol.xyz/technical-docs/api/relay#blocks_with_proofs)
-        // are available, verify inclusion proofs and save them to cache
-        //
-        // NOTE: this check must always be performed because otherwise a builder might trick
-        // the relay into accepting as best bid a block without invalid inclusion proofs when they
-        // are needed.
-        if let Some(constraints) = api.auctioneer.get_constraints(payload.slot()).await? {
-            let should_verify_and_save_proofs = api
-                .relay_config
-                .constraints_api_config
-                .max_block_value_to_verify_wei
-                .map_or(true, |max_block_value_to_verify| {
-                    payload.value() <= max_block_value_to_verify
-                });
-            if should_verify_and_save_proofs {
-                if let Err(err) = api.verify_and_save_inclusion_proofs(&payload, constraints).await
-                {
-                    warn!(%err, "failed to verify and save inclusion proofs");
-                    return Err(err);
-                }
-            } else {
-                info!(block_value = %payload.value(), "block value is greater than max value to verify, inclusion proof verification and saving is skipped");
-            }
-        } else {
-            info!("no constraints found for slot, proof verification is not needed");
-        }
-
         // If cancellations are enabled, then abort now if there is a later submission
         if is_cancellations_enabled {
             if let Err(err) = api.check_for_later_submissions(&payload, trace.receive).await {
@@ -481,8 +335,8 @@ where
                 if let Err(err) = api
                     .auctioneer
                     .save_execution_payload(
-                        payload.slot(),
-                        &payload.message().proposer_public_key,
+                        payload.slot().into(),
+                        &payload.message().proposer_pubkey,
                         payload.block_hash(),
                         &payload.payload_and_blobs(),
                     )
@@ -607,7 +461,7 @@ where
 
     pub(crate) async fn handle_submit_header(
         api: &Arc<BuilderApi<A, DB, S, G>>,
-        mut payload: SignedHeaderSubmission,
+        payload: SignedHeaderSubmission,
         payload_address: Option<PayloadSocketAddress>,
         is_cancellations_enabled: bool,
         mut trace: HeaderSubmissionTrace,
@@ -624,12 +478,12 @@ where
             );
             return Err(BuilderApiError::SubmissionForPastSlot {
                 current_slot: head_slot,
-                submission_slot: payload.slot(),
+                submission_slot: payload.slot().as_u64(),
             });
         }
 
         info!(
-            slot = payload.slot(),
+            slot = %payload.slot(),
             builder_pub_key = ?payload.builder_public_key(),
             block_value = %payload.value(),
             ?block_hash,
@@ -645,7 +499,7 @@ where
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes = api
-            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &block_hash)
+            .fetch_payload_attributes(payload.slot().into(), payload.parent_hash(), &block_hash)
             .await?;
 
         // Fetch builder info
@@ -662,7 +516,7 @@ where
         if let Err(err) = api
             .check_for_duplicate_block_hash(
                 &block_hash,
-                payload.slot(),
+                payload.slot().as_u64(),
                 payload.parent_hash(),
                 payload.proposer_public_key(),
             )
@@ -682,8 +536,8 @@ where
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional() &&
-            !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional()
+            && !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering and builder is not optimistic for regional filtering, discarding optimistic v2 submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
@@ -744,7 +598,7 @@ where
         // Verify the payload value is above the floor bid
         let floor_bid_value = api
             .check_if_bid_is_below_floor(
-                payload.slot(),
+                payload.slot().as_u64(),
                 payload.parent_hash(),
                 payload.proposer_public_key(),
                 payload.builder_public_key(),
@@ -790,7 +644,7 @@ where
                 // Save pending block header to auctioneer
                 api.auctioneer
                     .save_pending_block_header(
-                        payload.slot(),
+                        payload.slot().as_u64(),
                         payload.builder_public_key(),
                         payload.block_hash(),
                         trace.receive / 1_000_000, // convert to ms
@@ -854,7 +708,7 @@ where
         let (payload, _) = decode_payload(req, &mut trace).await?;
 
         info!(
-            slot = payload.slot(),
+            slot = %payload.slot(),
             builder_pub_key = ?payload.builder_public_key(),
             block_value = %payload.value(),
             block_hash = ?payload.block_hash(),
@@ -864,7 +718,7 @@ where
         // Save pending block payload to auctioneer
         api.auctioneer
             .save_pending_block_payload(
-                payload.slot(),
+                payload.slot().as_u64(),
                 payload.builder_public_key(),
                 payload.block_hash(),
                 trace.receive / 1_000_000, // convert to ms
@@ -894,7 +748,7 @@ where
             debug!(?block_hash, "submission is for a past slot",);
             return Err(BuilderApiError::SubmissionForPastSlot {
                 current_slot: head_slot,
-                submission_slot: payload.slot(),
+                submission_slot: payload.slot().as_u64(),
             });
         }
 
@@ -909,7 +763,7 @@ where
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes = api
-            .fetch_payload_attributes(payload.slot(), payload.parent_hash(), &block_hash)
+            .fetch_payload_attributes(payload.slot().as_u64(), payload.parent_hash(), &block_hash)
             .await?;
 
         // Fetch builder info
@@ -924,8 +778,8 @@ where
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional() &&
-            !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional()
+            && !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering enabled, discarding optimistic v2 submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
@@ -1011,8 +865,8 @@ where
         if let Err(err) = api
             .auctioneer
             .save_execution_payload(
-                payload.slot(),
-                &payload.message().proposer_public_key,
+                payload.slot().as_u64(),
+                &payload.message().proposer_pubkey,
                 payload.block_hash(),
                 &payload.payload_and_blobs(),
             )
@@ -1062,7 +916,7 @@ where
     pub async fn cancel_bid(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
         headers: HeaderMap,
-        Json(mut signed_cancellation): Json<SignedCancellation>,
+        Json(signed_cancellation): Json<SignedCancellation>,
     ) -> Result<StatusCode, BuilderApiError> {
         let request_id = extract_request_id(&headers);
         tracing::Span::current().record("id", request_id.to_string());
@@ -1101,7 +955,7 @@ where
         if let Err(err) = api
             .auctioneer
             .delete_builder_bid(
-                slot,
+                slot.as_u64(),
                 &signed_cancellation.message.parent_hash,
                 &signed_cancellation.message.proposer_public_key,
                 &signed_cancellation.message.builder_public_key,
@@ -1150,7 +1004,8 @@ where
 {
     #[tracing::instrument(skip_all, fields(id = %Uuid::new_v4()))]
     pub async fn process_gossiped_header(&self, req: BroadcastHeaderParams) {
-        debug!(block_hash = ?req.signed_builder_bid.block_hash(), "received gossiped header");
+        let block_hash = req.signed_builder_bid.message.header().block_hash().0;
+        debug!(?block_hash, "received gossiped header");
 
         let mut trace = GossipedHeaderTrace {
             on_receive: req.on_receive,
@@ -1168,7 +1023,7 @@ where
         // Handle duplicates.
         if self
             .check_for_duplicate_block_hash(
-                req.signed_builder_bid.block_hash(),
+                &block_hash,
                 req.slot,
                 &req.parent_hash,
                 &req.proposer_pub_key,
@@ -1200,7 +1055,7 @@ where
                 &req.parent_hash,
                 &req.proposer_pub_key,
                 &req.builder_pub_key,
-                req.signed_builder_bid.value(),
+                *req.signed_builder_bid.message.value(),
                 req.is_cancellations_enabled,
             )
             .await
@@ -1260,7 +1115,9 @@ where
 
     #[tracing::instrument(skip_all, fields(id = %Uuid::new_v4()))]
     pub async fn process_gossiped_payload(&self, req: BroadcastPayloadParams) {
-        debug!(block_hash = ?req.execution_payload.execution_payload.block_hash(), "received gossiped payload");
+        let block_hash = req.execution_payload.execution_payload.block_hash().0;
+
+        debug!(?block_hash, "received gossiped payload");
 
         let mut trace = GossipedPayloadTrace {
             receive: get_nanos_timestamp().unwrap_or_default(),
@@ -1296,7 +1153,7 @@ where
             .save_execution_payload(
                 req.slot,
                 &req.proposer_pub_key,
-                req.execution_payload.execution_payload.block_hash(),
+                &req.execution_payload.execution_payload.block_hash().0,
                 &req.execution_payload,
             )
             .await
@@ -1312,13 +1169,7 @@ where
         // Save gossiped payload trace to db
         let db = self.db.clone();
         task::spawn(file!(), line!(), async move {
-            if let Err(err) = db
-                .save_gossiped_payload_trace(
-                    req.execution_payload.execution_payload.block_hash().clone(),
-                    trace,
-                )
-                .await
-            {
+            if let Err(err) = db.save_gossiped_payload_trace(block_hash, trace).await {
                 error!(%err, "failed to store gossiped payload trace")
             }
         });
@@ -1355,7 +1206,7 @@ where
         if let Err(err) = self
             .auctioneer
             .delete_builder_bid(
-                slot,
+                slot.as_u64(),
                 &req.signed_cancellation.message.parent_hash,
                 &req.signed_cancellation.message.proposer_public_key,
                 &req.signed_cancellation.message.builder_public_key,
@@ -1427,8 +1278,8 @@ where
             bid_trace: bid_trace.clone(),
             slot: bid_trace.slot,
             parent_hash: bid_trace.parent_hash.clone(),
-            proposer_pub_key: bid_trace.proposer_public_key.clone(),
-            builder_pub_key: bid_trace.builder_public_key.clone(),
+            proposer_pub_key: bid_trace.proposer_pubkey.clone(),
+            builder_pub_key: bid_trace.builder_pubkey.clone(),
             is_cancellations_enabled,
             on_receive,
             payload_address,
@@ -1445,7 +1296,7 @@ where
     ) {
         let params = BroadcastPayloadParams {
             execution_payload,
-            slot: payload.slot(),
+            slot: payload.slot().as_u64(),
             proposer_pub_key: payload.proposer_public_key().clone(),
         };
         if let Err(err) = self.gossiper.broadcast_payload(params).await {
@@ -1481,7 +1332,7 @@ where
     /// Returns: the bid submission in an Arc.
     async fn verify_submitted_block(
         &self,
-        mut payload: SignedBidSubmission,
+        payload: SignedBidSubmission,
         next_duty: BuilderGetValidatorsResponseEntry,
         builder_info: &BuilderInfo,
         trace: &mut SubmissionTrace,
@@ -1515,9 +1366,9 @@ where
     /// This function should not be called by functions that only process the payload.
     async fn check_for_duplicate_block_hash(
         &self,
-        block_hash: &Hash32,
+        block_hash: &B256,
         slot: u64,
-        parent_hash: &Hash32,
+        parent_hash: &B256,
         proposer_public_key: &BlsPublicKey,
     ) -> Result<(), BuilderApiError> {
         match self
@@ -1543,19 +1394,13 @@ where
     ) -> Result<(), BuilderApiError> {
         match self.auctioneer.get_header_tx_root(payload.block_hash()).await {
             Ok(Some(expected_tx_root)) => {
-                let tx_root = match payload.transactions_root() {
-                    Some(tx_root) => tx_root,
-                    None => {
-                        warn!("no tx root found in payload");
-                        return Err(BuilderApiError::MissingTransactions);
-                    }
-                };
+                let tx_root = payload.transactions_root();
 
                 if expected_tx_root != tx_root {
                     warn!("tx root mismatch");
                     return Err(BuilderApiError::TransactionsRootMismatch {
-                        got: Hash32::try_from(tx_root.as_ref()).unwrap(),
-                        expected: Hash32::try_from(expected_tx_root.as_ref()).unwrap(),
+                        got: tx_root,
+                        expected: expected_tx_root,
                     });
                 }
             }
@@ -1581,7 +1426,7 @@ where
     async fn check_if_bid_is_below_floor(
         &self,
         slot: u64,
-        parent_hash: &Hash32,
+        parent_hash: &B256,
         proposer_public_key: &BlsPublicKey,
         builder_public_key: &BlsPublicKey,
         value: U256,
@@ -1672,7 +1517,11 @@ where
         let mut is_top_bid = false;
         match self
             .auctioneer
-            .get_top_bid_value(payload.slot(), payload.parent_hash(), payload.proposer_public_key())
+            .get_top_bid_value(
+                payload.slot().as_u64(),
+                payload.parent_hash(),
+                payload.proposer_public_key(),
+            )
             .await
         {
             Ok(top_bid_value) => {
@@ -1756,25 +1605,6 @@ where
         }
     }
 
-    /// This function saves the inclusion proof to the auctioneer.
-    async fn save_inclusion_proof(
-        &self,
-        slot: u64,
-        proposer_pub_key: &BlsPublicKey,
-        bid_block_hash: &Hash32,
-        inclusion_proof: &InclusionProofs,
-    ) -> Result<(), BuilderApiError> {
-        if let Err(err) = self
-            .auctioneer
-            .save_inclusion_proof(slot, proposer_pub_key, bid_block_hash, inclusion_proof)
-            .await
-        {
-            error!(%err, "failed to save inclusion proof");
-            return Err(BuilderApiError::InternalError);
-        }
-        Ok(())
-    }
-
     async fn save_header_bid_to_auctioneer(
         &self,
         payload: Arc<SignedHeaderSubmission>,
@@ -1817,11 +1647,10 @@ where
     async fn fetch_payload_attributes(
         &self,
         slot: u64,
-        parent_hash: &Hash32,
-        block_hash: &Hash32,
+        parent_hash: &B256,
+        block_hash: &B256,
     ) -> Result<PayloadAttributesUpdate, BuilderApiError> {
-        let payload_attributes_key =
-            get_payload_attributes_key(&eth_consensus_hash_to_alloy(parent_hash), slot);
+        let payload_attributes_key = get_payload_attributes_key(&parent_hash, slot);
         let payload_attributes =
             self.payload_attributes.read().await.get(&payload_attributes_key).cloned().ok_or_else(
                 || {
@@ -1858,7 +1687,7 @@ where
         match self
             .auctioneer
             .get_builder_latest_payload_received_at(
-                payload.slot(),
+                payload.slot().as_u64(),
                 payload.builder_public_key(),
                 payload.parent_hash(),
                 payload.proposer_public_key(),
@@ -1939,7 +1768,7 @@ where
     pub(crate) async fn demote_builder(
         &self,
         builder: &BlsPublicKey,
-        block_hash: &Hash32,
+        block_hash: &B256,
         err: &BuilderApiError,
     ) {
         if let BuilderApiError::BlockValidationError(sim_err) = err {
@@ -1957,45 +1786,6 @@ where
         if let Err(err) = self.db.db_demote_builder(builder, block_hash, err.to_string()).await {
             error!(%err,  %builder, "Failed to demote builder in database");
         }
-    }
-
-    /// Fetch constraints, and if available verify inclusion proofs and save them to cache.
-    async fn verify_and_save_inclusion_proofs(
-        &self,
-        payload: &SignedBidSubmission,
-        constraints: Vec<SignedConstraintsWithProofData>,
-    ) -> Result<(), BuilderApiError> {
-        let transactions_root: B256 = payload
-            .transactions()
-            .clone()
-            .hash_tree_root()?
-            .to_vec()
-            .as_slice()
-            .try_into()
-            .map_err(|error| {
-                error!(?error, "failed to convert root to hash32");
-                BuilderApiError::InternalError
-            })?;
-        let proofs = payload.proofs().ok_or(BuilderApiError::InclusionProofsNotFound)?;
-        let constraints_proofs: Vec<_> = constraints.iter().map(|c| &c.proof_data).collect();
-
-        verify_multiproofs(constraints_proofs.as_slice(), proofs, transactions_root).map_err(
-            |err| {
-                error!(%err, "failed to verify inclusion proofs");
-                BuilderApiError::InclusionProofVerificationFailed(err)
-            },
-        )?;
-
-        // Save inclusion proof to auctioneer.
-        self.save_inclusion_proof(
-            payload.slot(),
-            payload.proposer_public_key(),
-            payload.block_hash(),
-            proofs,
-        )
-        .await?;
-        info!("inclusion proofs verified and saved to auctioneer");
-        Ok(())
     }
 }
 
@@ -2162,11 +1952,11 @@ pub async fn decode_payload(
 
     // Decode payload
     let payload: SignedBidSubmission = if is_ssz {
-        match ssz::prelude::deserialize(&body_bytes) {
+        match SignedBidSubmission::from_ssz_bytes(&body_bytes) {
             Ok(payload) => payload,
             Err(err) => {
                 // Fallback to JSON
-                warn!(%err, "failed to decode payload using SSZ; falling back to JSON");
+                warn!(?err, "failed to decode payload using SSZ; falling back to JSON");
                 serde_json::from_slice(&body_bytes)?
             }
         }
@@ -2311,11 +2101,11 @@ pub async fn decode_header_submission(
 
     // Decode header
     let header: SignedHeaderSubmission = if is_ssz {
-        match ssz::prelude::deserialize(&body_bytes) {
+        match SignedHeaderSubmission::from_ssz_bytes(&body_bytes) {
             Ok(header) => header,
             Err(err) => {
                 // Fallback to JSON
-                warn!(%err, "Failed to decode header using SSZ; falling back to JSON");
+                warn!(?err, "Failed to decode header using SSZ; falling back to JSON");
                 serde_json::from_slice(&body_bytes)?
             }
         }
@@ -2367,13 +2157,16 @@ fn sanity_check_block_submission(
     }
 
     if payload.slot() != next_duty.slot {
-        return Err(BuilderApiError::SlotMismatch { got: payload.slot(), expected: next_duty.slot });
+        return Err(BuilderApiError::SlotMismatch {
+            got: payload.slot().into(),
+            expected: next_duty.slot.into(),
+        });
     }
 
-    if next_duty.entry.registration.message.public_key != bid_trace.proposer_public_key {
+    if next_duty.entry.registration.message.pubkey != bid_trace.proposer_pubkey {
         return Err(BuilderApiError::ProposerPublicKeyMismatch {
-            got: bid_trace.proposer_public_key.clone(),
-            expected: next_duty.entry.registration.message.public_key.clone(),
+            got: bid_trace.proposer_pubkey.clone(),
+            expected: next_duty.entry.registration.message.pubkey.clone(),
         });
     }
 
@@ -2385,35 +2178,27 @@ fn sanity_check_block_submission(
         });
     }
 
-    if has_reached_fork(payload.slot(), CAPELLA_FORK_EPOCH) {
-        if payload.is_full_payload() {
-            let withdrawals_root = match payload.withdrawals_root() {
-                Some(w) => w,
-                None => return Err(BuilderApiError::MissingWithdrawls),
-            };
+    if payload.is_full_payload() {
+        let withdrawals_root = payload.withdrawals_root();
 
-            let expected_withdrawals_root = payload_attributes.withdrawals_root;
+        let expected_withdrawals_root = payload_attributes.withdrawals_root;
 
-            if *withdrawals_root != *expected_withdrawals_root {
-                return Err(BuilderApiError::WithdrawalsRootMismatch {
-                    got: Hash32::try_from(withdrawals_root.as_ref()).unwrap(),
-                    expected: Hash32::try_from(expected_withdrawals_root.as_ref()).unwrap(),
-                });
-            }
-        } else {
-            let expected_withdrawals_root = payload_attributes.withdrawals_root;
+        if *withdrawals_root != *expected_withdrawals_root {
+            return Err(BuilderApiError::WithdrawalsRootMismatch {
+                got: withdrawals_root,
+                expected: expected_withdrawals_root,
+            });
+        }
+    } else {
+        let expected_withdrawals_root = payload_attributes.withdrawals_root;
 
-            let payload_withdrawals_root = match payload.withdrawals_root() {
-                Some(wr) => wr,
-                None => return Err(BuilderApiError::MissingWithdrawlsRoot),
-            };
+        let payload_withdrawals_root = payload.withdrawals_root();
 
-            if *payload_withdrawals_root != *expected_withdrawals_root {
-                return Err(BuilderApiError::WithdrawalsRootMismatch {
-                    got: Hash32::try_from(payload_withdrawals_root.as_ref()).unwrap(),
-                    expected: Hash32::try_from(expected_withdrawals_root.as_ref()).unwrap(),
-                });
-            }
+        if *payload_withdrawals_root != *expected_withdrawals_root {
+            return Err(BuilderApiError::WithdrawalsRootMismatch {
+                got: payload_withdrawals_root,
+                expected: expected_withdrawals_root,
+            });
         }
     }
 
@@ -2713,7 +2498,7 @@ mod tests {
     #[tokio::test]
     async fn test_decode_payload_ssz() {
         let ssz_payload: Vec<u8> = vec![];
-        match ssz::prelude::deserialize::<SignedBidSubmission>(&ssz_payload) {
+        match SignedBidSubmission::from_ssz_bytes(&ssz_payload) {
             Ok(res) => {
                 println!("THIS IS THE RESULT: {:?}", res);
             }
@@ -2804,7 +2589,7 @@ mod tests {
             193, 186, 168, 250, 166, 41, 129, 156, 42, 209, 28, 29, 0, 0, 0, 0, 0,
         ];
 
-        match ssz::prelude::deserialize::<SignedBidSubmission>(&ssz_payload) {
+        match SignedBidSubmission::from_ssz_bytes(&ssz_payload) {
             Ok(res) => {
                 println!("THIS IS THE RESULT: {:?}", res);
             }

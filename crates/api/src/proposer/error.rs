@@ -1,16 +1,15 @@
 use std::{error::Error, fmt};
 
+use alloy_primitives::{Address, B256};
 use axum::{
     http::{self, StatusCode},
     response::{IntoResponse, Response},
 };
-use ethereum_consensus::{
-    primitives::{BlsPublicKey, ExecutionAddress, Hash32, Slot},
-    ssz::prelude::MerkleizationError,
-};
+
 use helix_beacon_client::error::BeaconClientError;
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
+use helix_types::{BlsPublicKey, Slot};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -44,7 +43,7 @@ pub enum ProposerApiError {
     MissingProposer(Slot),
 
     #[error("not the expected proposer index. expected {expected}, got {actual}")]
-    UnexpectedProposerIndex { expected: usize, actual: usize },
+    UnexpectedProposerIndex { expected: u64, actual: u64 },
 
     #[error("no validators could be registered")]
     NoValidatorsCouldBeRegistered,
@@ -53,7 +52,7 @@ pub enum ProposerApiError {
     MissingPreferences(BlsPublicKey),
 
     #[error("no payload returned for opened bid with block hash {0:?}")]
-    MissingPayload(Hash32),
+    MissingPayload(B256),
 
     #[error("payload gas limit does not match the proposer's preference")]
     InvalidGasLimit,
@@ -71,7 +70,7 @@ pub enum ProposerApiError {
     UnknownBid,
 
     #[error("validator {0} does not have {1} fee recipient")]
-    UnknownFeeRecipient(BlsPublicKey, ExecutionAddress),
+    UnknownFeeRecipient(BlsPublicKey, Address),
 
     #[error("validator with public key {0:?} is not currently registered")]
     ValidatorNotRegistered(BlsPublicKey),
@@ -79,8 +78,8 @@ pub enum ProposerApiError {
     #[error("validator with public key {0:?} is unknown")]
     UnknownValidator(BlsPublicKey),
 
-    #[error("invalid signature: {0}")]
-    InvalidSignature(#[from] ethereum_consensus::Error),
+    #[error("invalid signature")]
+    InvalidSignature,
 
     #[error("invalid api key")]
     InvalidApiKey,
@@ -120,12 +119,6 @@ pub enum ProposerApiError {
 
     #[error("could not verify payload signature")]
     InvalidExecutionPayloadSignature,
-
-    #[error("invalid execution payload header: {0}")]
-    InvalidExecutionPayloadHeader(ethereum_consensus::Error),
-
-    #[error("merkleization error: {0}")]
-    MerkleizationError(#[from] MerkleizationError),
 
     #[error("invalid beacon chain version")]
     InvalidBeaconChainVersion,
@@ -169,10 +162,7 @@ pub enum ProposerApiError {
     InvalidBlindedBlockSlot { internal_slot: u64, blinded_block_slot: u64 },
 
     #[error("expected parent hash: {expected_parent_hash:?} does not match blinded block parent hash: {blinded_block_parent_hash:?}")]
-    InvalidBlindedBlockParentHash {
-        expected_parent_hash: Hash32,
-        blinded_block_parent_hash: Hash32,
-    },
+    InvalidBlindedBlockParentHash { expected_parent_hash: B256, blinded_block_parent_hash: B256 },
 
     #[error("parent hash unknown for slot: {slot}")]
     ParentHashUnknownForSlot { slot: u64 },
@@ -252,9 +242,9 @@ impl IntoResponse for ProposerApiError {
             },
             ProposerApiError::UnknownValidator(pubkey) => {
                 (StatusCode::BAD_REQUEST, format!("Validator with public key {pubkey:?} is unknown")).into_response()
-            }
-            ProposerApiError::InvalidSignature(err) => {
-                (StatusCode::BAD_REQUEST, format!("Invalid signature. {err:?}")).into_response()
+            },
+            ProposerApiError::InvalidSignature => {
+                (StatusCode::BAD_REQUEST, "Invalid signature").into_response()
             },
             ProposerApiError::ProposerNotRegistered => {
                 (StatusCode::BAD_REQUEST, "proposer not registered").into_response()
@@ -294,12 +284,6 @@ impl IntoResponse for ProposerApiError {
             },
             ProposerApiError::InvalidExecutionPayloadSignature => {
                 (StatusCode::BAD_REQUEST, "Could not verify execution payload signature").into_response()
-            },
-            ProposerApiError::InvalidExecutionPayloadHeader(err) => {
-                (StatusCode::BAD_REQUEST, format!("Invalid execution payload header: {err}")).into_response()
-            },
-            ProposerApiError::MerkleizationError(err) => {
-                (StatusCode::BAD_REQUEST, format!("Merkleization error: {err}")).into_response()
             },
             ProposerApiError::InvalidBeaconChainVersion => {
                 (StatusCode::BAD_REQUEST, "Invalid beacon chain version").into_response()

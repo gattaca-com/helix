@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use ethereum_consensus::Fork;
-use helix_common::signed_proposal::VersionedSignedProposal;
+use helix_types::VersionedSignedProposal;
 
 use crate::{error::BeaconClientError, types::BroadcastValidation};
 
@@ -13,7 +12,6 @@ impl MockBlockBroadcaster {
         &self,
         _block: Arc<VersionedSignedProposal>,
         _broadcast_validation: Option<BroadcastValidation>,
-        _consensus_version: Fork,
     ) -> Result<(), BeaconClientError> {
         Ok(())
     }

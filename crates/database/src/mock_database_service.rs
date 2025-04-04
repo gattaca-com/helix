@@ -3,25 +3,21 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use alloy_primitives::{B256, U256};
 use async_trait::async_trait;
-use ethereum_consensus::{
-    primitives::{BlsPublicKey, Hash32},
-    ssz::prelude::*,
-};
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
-    bid_submission::{
-        v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
-    },
-    deneb::SignedValidatorRegistration,
+    bid_submission::v2::header_submission::SignedHeaderSubmission,
     simulator::BlockSimError,
-    versioned_payload::PayloadAndBlobs,
     BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace,
     HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace,
     ValidatorPreferences, ValidatorSummary,
+};
+use helix_types::{
+    BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
 };
 
 use crate::{
@@ -72,17 +68,19 @@ impl DatabaseService for MockDatabaseService {
         &self,
         _pub_key: BlsPublicKey,
     ) -> Result<SignedValidatorRegistrationEntry, DatabaseError> {
-        Ok(SignedValidatorRegistrationEntry::default())
+        todo!()
+        // Ok(SignedValidatorRegistrationEntry::default())
     }
     async fn get_validator_registrations_for_pub_keys(
         &self,
-        pub_keys: Vec<BlsPublicKey>,
+        _pub_keys: Vec<BlsPublicKey>,
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError> {
-        let mut entries = vec![];
-        for _pub_key in pub_keys {
-            entries.push(SignedValidatorRegistrationEntry::default());
-        }
-        Ok(entries)
+        todo!()
+        // let mut entries = vec![];
+        // for _pub_key in pub_keys {
+        //     entries.push(SignedValidatorRegistrationEntry::default());
+        // }
+        // Ok(entries)
     }
 
     async fn get_validator_registration_timestamp(
@@ -130,7 +128,7 @@ impl DatabaseService for MockDatabaseService {
         &self,
         _slot: u64,
         _proposer_pub_key: &BlsPublicKey,
-        _payload_hash: &Hash32,
+        _payload_hash: &B256,
         _message_received: u64,
         _payload_fetched: u64,
     ) -> Result<(), DatabaseError> {
@@ -193,7 +191,7 @@ impl DatabaseService for MockDatabaseService {
     async fn db_demote_builder(
         &self,
         _builder_pub_key: &BlsPublicKey,
-        _block_hash: &Hash32,
+        _block_hash: &B256,
         _reason: String,
     ) -> Result<(), DatabaseError> {
         Ok(())
@@ -201,7 +199,7 @@ impl DatabaseService for MockDatabaseService {
 
     async fn save_simulation_result(
         &self,
-        _block_hash: ByteVector<32>,
+        _block_hash: B256,
         _block_sim_result: Result<(), BlockSimError>,
     ) -> Result<(), DatabaseError> {
         Ok(())
@@ -212,7 +210,7 @@ impl DatabaseService for MockDatabaseService {
         _filters: &BidFilters,
         _validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<BidSubmissionDocument>, DatabaseError> {
-        let mut bid = BidSubmissionDocument::default();
+        let mut bid = BidSubmissionDocument::random_for_test();
         bid.bid_trace.value = U256::from(1000);
         Ok(vec![bid])
     }
@@ -222,18 +220,22 @@ impl DatabaseService for MockDatabaseService {
         _filters: &BidFilters,
         _validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
-        let doc =
-            DeliveredPayloadDocument { bid_trace: Default::default(), block_number: 0, num_txs: 0 };
+        todo!()
+        // let doc = DeliveredPayloadDocument {
+        //     bid_trace: BidTrace::random_for_test(),
+        //     block_number: 0,
+        //     num_txs: 0,
+        // };
 
-        Ok(vec![doc])
+        // Ok(vec![doc])
     }
 
     async fn save_get_header_call(
         &self,
         _slot: u64,
-        _parent_hash: ByteVector<32>,
+        _parent_hash: B256,
         _public_key: BlsPublicKey,
-        _best_block_hash: ByteVector<32>,
+        _best_block_hash: B256,
         _trace: GetHeaderTrace,
 
         _mev_boost: bool,
@@ -245,7 +247,7 @@ impl DatabaseService for MockDatabaseService {
     async fn save_failed_get_payload(
         &self,
         _slot: u64,
-        _block_hash: ByteVector<32>,
+        _block_hash: B256,
         _error: String,
         _trace: GetPayloadTrace,
     ) -> Result<(), DatabaseError> {
@@ -261,7 +263,7 @@ impl DatabaseService for MockDatabaseService {
 
     async fn save_gossiped_header_trace(
         &self,
-        _block_hash: ByteVector<32>,
+        _block_hash: B256,
         _trace: GossipedHeaderTrace,
     ) -> Result<(), DatabaseError> {
         Ok(())
@@ -269,7 +271,7 @@ impl DatabaseService for MockDatabaseService {
 
     async fn save_gossiped_payload_trace(
         &self,
-        _block_hash: ByteVector<32>,
+        _block_hash: B256,
         _trace: GossipedPayloadTrace,
     ) -> Result<(), DatabaseError> {
         Ok(())

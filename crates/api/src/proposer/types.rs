@@ -1,11 +1,9 @@
-use ethereum_consensus::{
-    bellatrix, capella, deneb, electra,
-    primitives::{BlsPublicKey, Hash32},
-    types::mainnet::{SignedBeaconBlock, SignedBlindedBeaconBlock},
-};
-use helix_common::{
-    deneb::SignedBlockContents, signed_proposal::VersionedSignedProposal,
-    versioned_payload::PayloadAndBlobs, Filtering,
+use alloy_primitives::B256;
+use helix_common::Filtering;
+use helix_types::{
+    BeaconBlockBodyDeneb, BeaconBlockBodyElectra, BeaconBlockDeneb, BeaconBlockElectra,
+    BlsPublicKey, PayloadAndBlobs, SignedBeaconBlock, SignedBeaconBlockDeneb,
+    SignedBeaconBlockElectra, SignedBlindedBeaconBlock, VersionedSignedProposal,
 };
 use serde::Deserialize;
 
@@ -16,7 +14,7 @@ pub const GET_HEADER_REQUEST_CUTOFF_MS: i64 = 3000;
 #[derive(Debug, Deserialize)]
 pub struct GetHeaderParams {
     pub slot: u64,
-    pub parent_hash: Hash32,
+    pub parent_hash: B256,
     #[serde(rename = "pubkey")]
     pub public_key: BlsPublicKey,
 }
@@ -26,95 +24,37 @@ pub fn unblind_beacon_block(
     versioned_execution_payload: &PayloadAndBlobs,
 ) -> Result<VersionedSignedProposal, ProposerApiError> {
     match signed_blinded_beacon_block {
-        SignedBlindedBeaconBlock::Bellatrix(blinded_block) => {
-            let signature = blinded_block.signature.clone();
-            let block = &blinded_block.message;
-            let body = &block.body;
-            let execution_payload = versioned_execution_payload
-                .execution_payload
-                .bellatrix()
-                .ok_or(ProposerApiError::PayloadTypeMismatch)?;
-
-            let inner = bellatrix::SignedBeaconBlock {
-                message: bellatrix::BeaconBlock {
-                    slot: block.slot,
-                    proposer_index: block.proposer_index,
-                    parent_root: block.parent_root,
-                    state_root: block.state_root,
-                    body: bellatrix::BeaconBlockBody {
-                        randao_reveal: body.randao_reveal.clone(),
-                        eth1_data: body.eth1_data.clone(),
-                        graffiti: body.graffiti.clone(),
-                        proposer_slashings: body.proposer_slashings.clone(),
-                        attester_slashings: body.attester_slashings.clone(),
-                        attestations: body.attestations.clone(),
-                        deposits: body.deposits.clone(),
-                        voluntary_exits: body.voluntary_exits.clone(),
-                        sync_aggregate: body.sync_aggregate.clone(),
-                        execution_payload: execution_payload.clone(),
-                    },
-                },
-                signature,
-            };
-            Ok(VersionedSignedProposal::Bellatrix(SignedBeaconBlock::Bellatrix(inner)))
+        SignedBlindedBeaconBlock::Altair(_)
+        | SignedBlindedBeaconBlock::Base(_)
+        | SignedBlindedBeaconBlock::Bellatrix(_)
+        | SignedBlindedBeaconBlock::Capella(_)
+        | SignedBlindedBeaconBlock::Fulu(_) => {
+            return Err(ProposerApiError::UnsupportedBeaconChainVersion);
         }
-        SignedBlindedBeaconBlock::Capella(blinded_block) => {
-            let signature = blinded_block.signature.clone();
-            let block = &blinded_block.message;
-            let body = &block.body;
-            let execution_payload = versioned_execution_payload
-                .execution_payload
-                .capella()
-                .ok_or(ProposerApiError::PayloadTypeMismatch)?;
 
-            let inner = capella::SignedBeaconBlock {
-                message: capella::BeaconBlock {
-                    slot: block.slot,
-                    proposer_index: block.proposer_index,
-                    parent_root: block.parent_root,
-                    state_root: block.state_root,
-                    body: capella::BeaconBlockBody {
-                        randao_reveal: body.randao_reveal.clone(),
-                        eth1_data: body.eth1_data.clone(),
-                        graffiti: body.graffiti.clone(),
-                        proposer_slashings: body.proposer_slashings.clone(),
-                        attester_slashings: body.attester_slashings.clone(),
-                        attestations: body.attestations.clone(),
-                        deposits: body.deposits.clone(),
-                        voluntary_exits: body.voluntary_exits.clone(),
-                        sync_aggregate: body.sync_aggregate.clone(),
-                        execution_payload: execution_payload.clone(),
-                        bls_to_execution_changes: body.bls_to_execution_changes.clone(),
-                    },
-                },
-                signature,
-            };
-            Ok(VersionedSignedProposal::Capella(SignedBeaconBlock::Capella(inner)))
-        }
         SignedBlindedBeaconBlock::Deneb(blinded_block) => {
             let signature = blinded_block.signature.clone();
             let block = &blinded_block.message;
             let body = &block.body;
             let execution_payload = versioned_execution_payload
                 .execution_payload
-                .deneb()
-                .ok_or(ProposerApiError::PayloadTypeMismatch)?;
-            let blobs_bundle = versioned_execution_payload
-                .blobs_bundle
-                .clone()
-                .ok_or(ProposerApiError::PayloadTypeMismatch)?;
+                .as_deneb()
+                .map_err(|_| ProposerApiError::PayloadTypeMismatch)?
+                .clone();
+
+            let blobs_bundle = &versioned_execution_payload.blobs_bundle;
 
             if body.blob_kzg_commitments.len() != blobs_bundle.blobs.len() {
-                return Err(ProposerApiError::BlindedBlobsBundleLengthMismatch)
+                return Err(ProposerApiError::BlindedBlobsBundleLengthMismatch);
             }
 
-            let inner = deneb::SignedBeaconBlock {
-                message: deneb::BeaconBlock {
+            let inner = SignedBeaconBlockDeneb {
+                message: BeaconBlockDeneb {
                     slot: block.slot,
                     proposer_index: block.proposer_index,
                     parent_root: block.parent_root,
                     state_root: block.state_root,
-                    body: deneb::BeaconBlockBody {
+                    body: BeaconBlockBodyDeneb {
                         randao_reveal: body.randao_reveal.clone(),
                         eth1_data: body.eth1_data.clone(),
                         graffiti: body.graffiti.clone(),
@@ -124,18 +64,21 @@ pub fn unblind_beacon_block(
                         deposits: body.deposits.clone(),
                         voluntary_exits: body.voluntary_exits.clone(),
                         sync_aggregate: body.sync_aggregate.clone(),
-                        execution_payload: execution_payload.clone(),
+                        execution_payload: execution_payload.into(),
                         bls_to_execution_changes: body.bls_to_execution_changes.clone(),
                         blob_kzg_commitments: body.blob_kzg_commitments.clone(),
                     },
                 },
                 signature,
             };
-            Ok(VersionedSignedProposal::Deneb(SignedBlockContents {
-                signed_block: SignedBeaconBlock::Deneb(inner),
+
+            let signed_block = SignedBeaconBlock::Deneb(inner).into();
+
+            Ok(VersionedSignedProposal {
+                signed_block,
                 kzg_proofs: blobs_bundle.proofs.clone(),
                 blobs: blobs_bundle.blobs.clone(),
-            }))
+            })
         }
         SignedBlindedBeaconBlock::Electra(blinded_block) => {
             let signature = blinded_block.signature.clone();
@@ -143,24 +86,23 @@ pub fn unblind_beacon_block(
             let body = &block.body;
             let execution_payload = versioned_execution_payload
                 .execution_payload
-                .electra()
-                .ok_or(ProposerApiError::PayloadTypeMismatch)?;
-            let blobs_bundle = versioned_execution_payload
-                .blobs_bundle
-                .clone()
-                .ok_or(ProposerApiError::PayloadTypeMismatch)?;
+                .as_electra()
+                .map_err(|_| ProposerApiError::PayloadTypeMismatch)?
+                .clone();
+
+            let blobs_bundle = &versioned_execution_payload.blobs_bundle;
 
             if body.blob_kzg_commitments.len() != blobs_bundle.blobs.len() {
-                return Err(ProposerApiError::BlindedBlobsBundleLengthMismatch)
+                return Err(ProposerApiError::BlindedBlobsBundleLengthMismatch);
             }
 
-            let inner = electra::SignedBeaconBlock {
-                message: electra::BeaconBlock {
+            let inner = SignedBeaconBlockElectra {
+                message: BeaconBlockElectra {
                     slot: block.slot,
                     proposer_index: block.proposer_index,
                     parent_root: block.parent_root,
                     state_root: block.state_root,
-                    body: electra::BeaconBlockBody {
+                    body: BeaconBlockBodyElectra {
                         randao_reveal: body.randao_reveal.clone(),
                         eth1_data: body.eth1_data.clone(),
                         graffiti: body.graffiti.clone(),
@@ -170,7 +112,7 @@ pub fn unblind_beacon_block(
                         deposits: body.deposits.clone(),
                         voluntary_exits: body.voluntary_exits.clone(),
                         sync_aggregate: body.sync_aggregate.clone(),
-                        execution_payload: execution_payload.clone(),
+                        execution_payload: execution_payload.into(),
                         bls_to_execution_changes: body.bls_to_execution_changes.clone(),
                         blob_kzg_commitments: body.blob_kzg_commitments.clone(),
                         execution_requests: body.execution_requests.clone(),
@@ -178,11 +120,14 @@ pub fn unblind_beacon_block(
                 },
                 signature,
             };
-            Ok(VersionedSignedProposal::Electra(SignedBlockContents {
-                signed_block: SignedBeaconBlock::Electra(inner),
+
+            let signed_block = SignedBeaconBlock::Electra(inner).into();
+
+            Ok(VersionedSignedProposal {
+                signed_block,
                 kzg_proofs: blobs_bundle.proofs.clone(),
                 blobs: blobs_bundle.blobs.clone(),
-            }))
+            })
         }
     }
 }

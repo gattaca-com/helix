@@ -1,6 +1,5 @@
 use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 
-use ethereum_consensus::crypto::SecretKey;
 use helix_beacon_client::{
     beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
     multi_beacon_client::MultiBeaconClient, BlockBroadcaster, MultiBeaconClientTrait,
@@ -12,6 +11,7 @@ use helix_common::{
 use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
 use helix_datastore::redis::redis_cache::RedisCache;
 use helix_housekeeper::{ChainEventUpdater, EthereumPrimevService, Housekeeper};
+use helix_types::{BlsKeypair, BlsSecretKey};
 use moka::sync::Cache;
 use tokio::{
     sync::{broadcast, mpsc},
@@ -24,7 +24,7 @@ use crate::{
     builder::{multi_simulator::MultiSimulator, optimistic_simulator::OptimisticSimulator},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     relay_data::{BidsCache, DeliveredPayloadsCache},
-    router::{build_router, BuilderApiProd, ConstraintsApiProd, DataApiProd, ProposerApiProd},
+    router::{build_router, BuilderApiProd, DataApiProd, ProposerApiProd},
 };
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -80,18 +80,10 @@ impl ApiService {
 
         let chain_info = Arc::new(match config.network_config {
             NetworkConfig::Mainnet => ChainInfo::for_mainnet(),
-            NetworkConfig::Goerli => ChainInfo::for_goerli(),
             NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
             NetworkConfig::Holesky => ChainInfo::for_holesky(),
             NetworkConfig::Custom { ref dir_path, ref genesis_validator_root, genesis_time } => {
-                match ChainInfo::for_custom(dir_path.clone(), *genesis_validator_root, genesis_time)
-                {
-                    Ok(chain_info) => chain_info,
-                    Err(err) => {
-                        error!("Failed to load custom chain info: {:?}", err);
-                        std::process::exit(1);
-                    }
-                }
+                ChainInfo::for_custom(dir_path.clone(), *genesis_validator_root, genesis_time)
             }
         });
         let primev_service = if let Some(primev_config) = config.primev_config.clone() {
@@ -119,14 +111,15 @@ impl ApiService {
 
         // Initialise relay signing context
         let signing_key_str = env::var("RELAY_KEY").expect("could not find RELAY_KEY in env");
-        let signing_key = SecretKey::try_from(signing_key_str)
+        let signing_key_bytes =
+            alloy_primitives::hex::decode(signing_key_str).expect("invalid RELAY_KEY bytes");
+        let signing_key = BlsSecretKey::deserialize(signing_key_bytes.as_slice())
             .expect("could not convert env signing key to SecretKey");
         let public_key = signing_key.public_key();
         info!(relay_pub_key = ?public_key);
         let relay_signing_context = Arc::new(RelaySigningContext {
-            signing_key,
-            public_key,
-            context: chain_info.context.clone(),
+            keypair: BlsKeypair::from_components(public_key, signing_key),
+            context: chain_info.clone(),
         });
 
         let client =
@@ -170,7 +163,7 @@ impl ApiService {
         let (builder_gossip_sender, builder_gossip_receiver) = tokio::sync::mpsc::channel(10_000);
         let (proposer_gossip_sender, proposer_gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
-        let (builder_api, constraints_handle) = BuilderApiProd::new(
+        let builder_api = BuilderApiProd::new(
             auctioneer.clone(),
             db.clone(),
             chain_info.clone(),
@@ -184,7 +177,9 @@ impl ApiService {
         );
         let builder_api = Arc::new(builder_api);
 
-        gossiper.start_server(builder_gossip_sender, proposer_gossip_sender).await;
+        gossiper
+            .start_server(builder_gossip_sender, proposer_gossip_sender, chain_info.clone())
+            .await;
 
         let (v3_payload_request_send, v3_payload_request_recv) = mpsc::channel(32);
         if let Some(v3_port) = config.v3_port {
@@ -212,16 +207,6 @@ impl ApiService {
 
         let data_api = Arc::new(DataApiProd::new(validator_preferences.clone(), db.clone()));
 
-        let constraints_api_config = Arc::new(config.constraints_api_config);
-
-        let constraints_api = Arc::new(ConstraintsApiProd::new(
-            auctioneer.clone(),
-            chain_info.clone(),
-            slot_update_sender.clone(),
-            constraints_handle,
-            constraints_api_config,
-        ));
-
         let bids_cache: Arc<BidsCache> = Arc::new(
             Cache::builder()
                 .time_to_live(Duration::from_secs(10))
@@ -241,7 +226,6 @@ impl ApiService {
             builder_api,
             proposer_api,
             data_api,
-            constraints_api,
             bids_cache,
             delivered_payloads_cache,
         );
@@ -291,8 +275,7 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
 // add test module
 #[cfg(test)]
 mod test {
-    use std::convert::TryFrom;
-
+    use alloy_primitives::hex;
     use helix_common::BeaconClientConfig;
     use url::Url;
 
@@ -300,8 +283,8 @@ mod test {
 
     #[test]
     fn test() {
-        let signing_key = SecretKey::try_from(
-            "0x123456789573772b8ffd9deddb468017a73cae08451ef05e604194705a1bade8".to_string(),
+        let signing_key = BlsSecretKey::deserialize(
+            hex!("123456789573772b8ffd9deddb468017a73cae08451ef05e604194705a1bade8").as_slice(),
         )
         .expect("could not convert env signing key to SecretKey");
         let public_key = signing_key.public_key();

@@ -2,7 +2,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use ethereum_consensus::{primitives::BlsPublicKey, ssz};
+use helix_types::{BlsPublicKey, CryptoError};
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use crate::redis::error::RedisCacheError;
@@ -14,6 +14,9 @@ pub enum AuctioneerError {
 
     #[error("broadcast stream recv error")]
     BroadcastStreamRecvError(#[from] BroadcastStreamRecvError),
+
+    #[error("crypto error: {0:?}")]
+    CryptoError(CryptoError),
 
     #[error("redis error: {0}")]
     RedisError(#[from] RedisCacheError),
@@ -33,23 +36,17 @@ pub enum AuctioneerError {
     #[error("another payload already delivered for slot")]
     AnotherPayloadAlreadyDeliveredForSlot,
 
-    #[error("ssz deserialize error: {0}")]
-    SszDeserializeError(#[from] ssz::prelude::DeserializeError),
+    #[error("ssz deserialize error: {0:?}")]
+    SszDeserializeError(ssz::DecodeError),
 
-    #[error("ssz serialize error: {0}")]
-    SszSerializeError(#[from] ssz::prelude::SerializeError),
+    #[error("Slice conversion error: {0:?}")]
+    SliceConversionError(#[from] core::array::TryFromSliceError),
 
     #[error("no execution payload for this request")]
     ExecutionPayloadNotFound,
 
     #[error("builder not found for pub key {pub_key:?}")]
     BuilderNotFound { pub_key: BlsPublicKey },
-
-    #[error("ethereum consensus error: {0}")]
-    EthereumConsensusError(#[from] ethereum_consensus::Error),
-
-    #[error("ethereum consensus crypto error: {0}")]
-    EthereumConsensusCryptoError(#[from] ethereum_consensus::crypto::bls::Error),
 }
 
 impl IntoResponse for AuctioneerError {
@@ -78,10 +75,10 @@ impl IntoResponse for AuctioneerError {
                     .into_response()
             }
             AuctioneerError::SszDeserializeError(err) => {
-                (StatusCode::BAD_REQUEST, format!("SSZ deserialize error: {err}")).into_response()
+                (StatusCode::BAD_REQUEST, format!("SSZ deserialize error: {err:?}")).into_response()
             }
-            AuctioneerError::SszSerializeError(err) => {
-                (StatusCode::BAD_REQUEST, format!("SSZ serialize error: {err}")).into_response()
+            AuctioneerError::SliceConversionError(_) => {
+                (StatusCode::BAD_REQUEST, self.to_string()).into_response()
             }
             AuctioneerError::ExecutionPayloadNotFound => {
                 (StatusCode::BAD_REQUEST, "No execution payload for this request".to_string())
@@ -91,17 +88,12 @@ impl IntoResponse for AuctioneerError {
                 (StatusCode::BAD_REQUEST, format!("Builder not found for public key: {pub_key:?}"))
                     .into_response()
             }
-            AuctioneerError::EthereumConsensusError(err) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Ethereum consensus error: {err:?}"))
-                    .into_response()
-            }
             AuctioneerError::BroadcastStreamRecvError(err) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, format!("Broadcast stream recv error: {err}"))
                     .into_response()
             }
-            AuctioneerError::EthereumConsensusCryptoError(err) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Ethereum consensus error: {err:?}"))
-                    .into_response()
+            AuctioneerError::CryptoError(error) => {
+                (StatusCode::BAD_REQUEST, format!("Crypto error: {error:?}")).into_response()
             }
         }
     }

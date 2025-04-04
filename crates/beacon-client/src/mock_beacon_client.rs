@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use alloy_primitives::B256;
 use async_trait::async_trait;
-use ethereum_consensus::{primitives::Root, ssz::prelude::*};
 use helix_common::{beacon_api::PublishBlobsRequest, ProposerDuty, ValidatorSummary};
+use helix_types::ForkName;
+use ssz::Encode;
 use tokio::sync::broadcast::Sender;
 
 use crate::{
@@ -15,7 +17,7 @@ use crate::{
 pub struct MockBeaconClient {
     sync_status: SyncStatus,
     state_validators: Vec<ValidatorSummary>,
-    proposer_duties: (Root, Vec<ProposerDuty>),
+    proposer_duties: (B256, Vec<ProposerDuty>),
     publish_block_response_code: u16,
 }
 
@@ -24,7 +26,7 @@ impl MockBeaconClient {
         Self {
             sync_status: SyncStatus { head_slot: 10, sync_distance: 0, is_syncing: false },
             state_validators: Vec::new(),
-            proposer_duties: (Root::default(), Vec::new()),
+            proposer_duties: (B256::default(), Vec::new()),
             publish_block_response_code: 200,
         }
     }
@@ -39,7 +41,7 @@ impl MockBeaconClient {
         self
     }
 
-    pub fn with_proposer_duties(mut self, proposer_duties: (Root, Vec<ProposerDuty>)) -> Self {
+    pub fn with_proposer_duties(mut self, proposer_duties: (B256, Vec<ProposerDuty>)) -> Self {
         self.proposer_duties = proposer_duties;
         self
     }
@@ -84,7 +86,7 @@ impl BeaconClientTrait for MockBeaconClient {
     async fn get_proposer_duties(
         &self,
         _epoch: u64,
-    ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError> {
+    ) -> Result<(B256, Vec<ProposerDuty>), BeaconClientError> {
         Ok(self.proposer_duties.clone())
     }
 
@@ -92,11 +94,11 @@ impl BeaconClientTrait for MockBeaconClient {
         "test_uri".to_string()
     }
 
-    async fn publish_block<SignedBeaconBlock: Send + Sync + Serializable>(
+    async fn publish_block<SignedBeaconBlock: Send + Sync + Encode>(
         &self,
         _block: Arc<SignedBeaconBlock>,
         _broadcast_validation: Option<BroadcastValidation>,
-        _fork: ethereum_consensus::Fork,
+        _fork: ForkName,
     ) -> Result<u16, BeaconClientError> {
         Ok(self.publish_block_response_code)
     }

@@ -1,3 +1,4 @@
+use alloy_primitives::B256;
 use ethereum_consensus::{
     primitives::{Bytes32, Root, Slot},
     serde::{as_str, try_bytes_from_hex_str},
@@ -119,8 +120,8 @@ pub struct PayloadAttributesEventData {
 pub struct PayloadAttributes {
     #[serde(with = "as_str")]
     pub timestamp: u64,
-    pub prev_randao: Bytes32,
+    pub prev_randao: B256,
     pub suggested_fee_recipient: String,
     pub withdrawals: Vec<Withdrawal>,
-    pub parent_beacon_block_root: Option<Bytes32>,
+    pub parent_beacon_block_root: Option<B256>,
 }

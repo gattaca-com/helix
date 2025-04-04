@@ -5,19 +5,18 @@ use std::{
     time::SystemTime,
 };
 
-use ethereum_consensus::{primitives::Hash32, ssz};
+use alloy_primitives::B256;
 use helix_common::{
-    bid_submission::{
-        v3::header_submission_v3::{
-            GetPayloadV3, MessageHeader, MessageHeaderFlags, MessageType, PayloadSocketAddress,
-        },
-        SignedBidSubmission,
+    bid_submission::v3::header_submission_v3::{
+        GetPayloadV3, MessageHeader, MessageHeaderFlags, MessageType, PayloadSocketAddress,
     },
     SubmissionTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
+use helix_types::SignedBidSubmission;
 use helix_utils::utcnow_ms;
+use ssz::Decode;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -33,10 +32,12 @@ use crate::{
     gossiper::traits::GossipClientTrait,
 };
 
+use super::V3Error;
+
 /// A task that fetches builder blocks for optimistic v3 submissions.
 pub async fn fetch_builder_blocks<A, DB, S, G>(
     api: Arc<BuilderApi<A, DB, S, G>>,
-    mut receiver: Receiver<(Hash32, PayloadSocketAddress)>,
+    mut receiver: Receiver<(B256, PayloadSocketAddress)>,
 ) where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
@@ -71,7 +72,7 @@ pub async fn fetch_builder_blocks<A, DB, S, G>(
                 api.demote_builder(
                     builder_address.builder_pubkey(),
                     &block_hash,
-                    &BuilderApiError::IOError(e),
+                    &BuilderApiError::PayloadError(e),
                 )
                 .await;
             }
@@ -80,11 +81,11 @@ pub async fn fetch_builder_blocks<A, DB, S, G>(
 }
 
 async fn fetch_block(
-    block_hash: Hash32,
+    block_hash: B256,
     payload_address: &PayloadSocketAddress,
     header_buffer: &mut [u8],
     payload_buffer: &mut Vec<u8>,
-) -> Result<SignedBidSubmission, Error> {
+) -> Result<SignedBidSubmission, V3Error> {
     let request_ts = utcnow_ms();
     let mut connection = connection(payload_address).await?;
 
@@ -120,13 +121,13 @@ async fn fetch_block(
     connection.read_exact(payload_buffer.as_mut_slice()).await?;
 
     if rsp_header.message_flags.contains(MessageHeaderFlags::CBOR_ENCODED) {
-        cbor4ii::serde::from_slice(payload_buffer.as_slice()).map_err(Error::other)
+        cbor4ii::serde::from_slice(payload_buffer.as_slice()).map_err(V3Error::Cbor)
     } else if rsp_header.message_flags.contains(MessageHeaderFlags::SSZ_ENCODED) {
-        ssz::prelude::deserialize(payload_buffer.as_slice()).map_err(Error::other)
+        SignedBidSubmission::from_ssz_bytes(payload_buffer.as_slice()).map_err(V3Error::Ssz)
     } else if header.message_flags.contains(MessageHeaderFlags::JSON_ENCODED) {
-        serde_json::from_slice(payload_buffer.as_slice()).map_err(Error::other)
+        serde_json::from_slice(payload_buffer.as_slice()).map_err(V3Error::Json)
     } else {
-        Err(Error::other(format!("Unknown message encoding: {header:?}")))
+        Err(V3Error::Unknown(header))
     }
 }
 

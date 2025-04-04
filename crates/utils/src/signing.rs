@@ -36,37 +36,16 @@ pub fn verify_signed_consensus_message<T: HashTreeRoot>(
     Ok(())
 }
 
-pub fn verify_signed_builder_message<T: HashTreeRoot>(
+pub fn verify_signed_builder_message<T: TreeHash>(
     message: &mut T,
     signature: &BlsSignature,
     public_key: &BlsPublicKey,
     context: &Context,
 ) -> Result<(), Error> {
-    let domain = compute_builder_domain(context)?;
-    verify_signed_data(message, signature, public_key, domain)?;
+    todo!();
+    // let domain = compute_builder_domain(context)?;
+    // verify_signed_data(message, signature, public_key, domain)?;
     Ok(())
-}
-
-pub fn compute_signing_root_custom(object_root: [u8; 32], signing_domain: [u8; 32]) -> [u8; 32] {
-    #[derive(Default, Debug, TreeHash)]
-    struct SigningData {
-        object_root: [u8; 32],
-        signing_domain: [u8; 32],
-    }
-
-    let signing_data = SigningData { object_root, signing_domain };
-    signing_data.tree_hash_root().0
-}
-
-pub fn verify_signed_message<T: HashTreeRoot>(
-    message: &T,
-    signature: &BlsSignature,
-    public_key: &BlsPublicKey,
-    domain_mask: [u8; 4],
-    context: &Context,
-) -> Result<(), Error> {
-    let domain = compute_domain_custom(context, domain_mask);
-    verify_signed_data(message, signature, public_key, domain)
 }
 
 // NOTE: this currently works only for builder domain signatures and
@@ -89,32 +68,6 @@ pub fn compute_domain_custom(chain: &Context, domain_mask: [u8; 4]) -> [u8; 32] 
     domain[4..].copy_from_slice(&fork_data_root[..28]);
 
     domain
-}
-
-pub fn compute_consensus_signing_root<T: HashTreeRoot>(
-    data: &mut T,
-    slot: Slot,
-    genesis_validators_root: &Root,
-    context: &Context,
-) -> Result<Root, Error> {
-    let fork = context.fork_for(slot);
-    let fork_version = context.fork_version_for(fork);
-    let domain = compute_domain(
-        DomainType::BeaconProposer,
-        Some(fork_version),
-        Some(*genesis_validators_root),
-        context,
-    )?;
-    compute_signing_root(data, domain)
-}
-
-pub fn sign_builder_message<T: HashTreeRoot>(
-    message: &mut T,
-    signing_key: &SecretKey,
-    context: &Context,
-) -> Result<BlsSignature, Error> {
-    let domain = compute_builder_domain(context)?;
-    sign_with_domain(message, signing_key, domain)
 }
 
 pub fn compute_builder_signing_root<T: HashTreeRoot>(

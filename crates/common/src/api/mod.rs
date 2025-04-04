@@ -1,5 +1,4 @@
 pub mod builder_api;
-pub mod constraints_api;
 pub mod data_api;
 pub mod proposer_api;
 
@@ -12,9 +11,6 @@ pub const PATH_SUBMIT_BLOCK_OPTIMISTIC_V2: &str = "/blocks_optimistic_v2";
 pub const PATH_CANCEL_BID: &str = "/cancel_bid";
 pub const PATH_SUBMIT_HEADER: &str = "/headers";
 pub const PATH_GET_TOP_BID: &str = "/top_bid";
-pub const PATH_BUILDER_CONSTRAINTS: &str = "/constraints";
-pub const PATH_BUILDER_CONSTRAINTS_STREAM: &str = "/constraints_stream";
-pub const PATH_BUILDER_DELEGATIONS: &str = "/delegations";
 
 pub const PATH_PROPOSER_API: &str = "/eth/v1/builder";
 
@@ -29,9 +25,3 @@ pub const PATH_DATA_API: &str = "/relay/v1/data";
 pub const PATH_PROPOSER_PAYLOAD_DELIVERED: &str = "/bidtraces/proposer_payload_delivered";
 pub const PATH_BUILDER_BIDS_RECEIVED: &str = "/bidtraces/builder_blocks_received";
 pub const PATH_VALIDATOR_REGISTRATION: &str = "/validator_registration";
-
-pub const PATH_CONSTRAINTS_API: &str = "/constraints/v1";
-
-pub const PATH_SUBMIT_BUILDER_CONSTRAINTS: &str = "/builder/constraints";
-pub const PATH_DELEGATE_SUBMISSION_RIGHTS: &str = "/builder/delegate";
-pub const PATH_REVOKE_SUBMISSION_RIGHTS: &str = "/builder/revoke";

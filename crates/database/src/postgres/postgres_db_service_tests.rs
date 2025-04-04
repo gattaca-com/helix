@@ -1,31 +1,20 @@
 #[cfg(test)]
 mod tests {
-    use std::{default::Default, ops::DerefMut, str::FromStr, sync::Arc, time::Duration};
+    use std::{default::Default, ops::DerefMut, sync::Arc, time::Duration};
 
+    use alloy_primitives::B256;
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
-    use ethereum_consensus::{
-        builder::{SignedValidatorRegistration, ValidatorRegistration},
-        clock::get_current_unix_time_in_nanos,
-        crypto::{PublicKey, SecretKey},
-        phase0::Validator,
-        primitives::U256,
-    };
+
     use helix_common::{
         api::{
             builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
         },
-        bellatrix::{ByteList, ByteVector, List},
-        bid_submission::{
-            v2::header_submission::{
-                HeaderSubmissionCapella, SignedHeaderSubmission, SignedHeaderSubmissionCapella,
-            },
-            BidTrace, SignedBidSubmission,
-        },
+        bid_submission::v2::header_submission::SignedHeaderSubmission,
         simulator::BlockSimError,
         validator_preferences::ValidatorPreferences,
-        versioned_payload::PayloadAndBlobs,
         Filtering, GetPayloadTrace, HeaderSubmissionTrace, SubmissionTrace, ValidatorSummary,
     };
+    use helix_types::{BlsKeypair, SignedValidatorRegistration, Validator, ValidatorRegistration};
     use helix_utils::utcnow_sec;
     use rand::{seq::SliceRandom, thread_rng, Rng};
     use tokio::time::sleep;
@@ -89,19 +78,18 @@ mod tests {
     }
 
     fn get_randomized_signed_validator_registration() -> ValidatorRegistrationInfo {
-        let mut rng = rand::thread_rng();
         let timestamp = utcnow_sec();
         let gas_limit = 0;
-        let key = SecretKey::random(&mut rng).unwrap();
-        let signature = key.sign("message".as_bytes());
-        let public_key = key.public_key();
+        let key = BlsKeypair::random();
+        let signature = key.sk.sign(B256::ZERO);
+        let pubkey = key.pk;
         ValidatorRegistrationInfo {
             registration: SignedValidatorRegistration {
                 message: ValidatorRegistration {
                     fee_recipient: Default::default(),
                     timestamp,
                     gas_limit,
-                    public_key: public_key.clone(),
+                    pubkey: pubkey.into(),
                 },
                 signature,
             },
@@ -131,7 +119,9 @@ mod tests {
         sleep(Duration::from_secs(5)).await;
 
         let result = db_service
-            .get_validator_registration(registration.registration.message.public_key)
+            .get_validator_registration(
+                registration.registration.message.pubkey.decompress().unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -161,7 +151,9 @@ mod tests {
 
         for registration in registrations {
             let result = db_service
-                .get_validator_registration(registration.registration.message.public_key)
+                .get_validator_registration(
+                    registration.registration.message.pubkey.decompress().unwrap(),
+                )
                 .await
                 .unwrap();
             assert_eq!(
@@ -195,7 +187,7 @@ mod tests {
             .get_validator_registrations_for_pub_keys(
                 registrations
                     .iter()
-                    .map(|r| r.registration.message.public_key.clone())
+                    .map(|r| r.registration.message.pubkey.decompress().unwrap().clone())
                     .collect::<Vec<_>>(),
             )
             .await
@@ -205,8 +197,8 @@ mod tests {
             let result = result
                 .iter()
                 .find(|r| {
-                    r.registration_info.registration.message.public_key ==
-                        registration.registration.message.public_key
+                    r.registration_info.registration.message.pubkey
+                        == registration.registration.message.pubkey
                 })
                 .unwrap();
             assert_eq!(
@@ -232,7 +224,7 @@ mod tests {
         sleep(Duration::from_secs(5)).await;
 
         let result = db_service
-            .get_validator_registration_timestamp(registration.registration.message.public_key)
+            .get_validator_registration_timestamp(registration.registration.message.pubkey)
             .await;
         assert!(result.is_ok());
     }
@@ -251,8 +243,8 @@ mod tests {
                 .unwrap();
 
             proposer_duties.push(BuilderGetValidatorsResponseEntry {
-                slot: i,
-                validator_index: i as usize,
+                slot: i.into(),
+                validator_index: i,
                 entry: registration.clone(),
             });
         }
@@ -273,16 +265,15 @@ mod tests {
         let mut validator_summaries = Vec::new();
 
         for i in 0..100 {
-            let mut rng = rand::thread_rng();
-            let key = SecretKey::random(&mut rng).unwrap();
-            let public_key = key.public_key();
+            let key = BlsKeypair::random();
+            let public_key = key.pk;
 
             let validator_summary = helix_common::ValidatorSummary {
                 index: i,
                 balance: 0,
                 status: helix_common::ValidatorStatus::Active,
                 validator: Validator {
-                    public_key: public_key.clone(),
+                    pubkey: public_key.clone(),
                     withdrawal_credentials: Default::default(),
                     effective_balance: 0,
                     slashed: false,

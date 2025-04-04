@@ -1,8 +1,8 @@
-use ethereum_consensus::{primitives::U256, serde::as_str};
+use alloy_primitives::U256;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, Eq, PartialEq)]
 pub struct BuilderInfo {
-    #[serde(with = "as_str")]
+    #[serde(with = "serde_utils::quoted_u256")]
     pub collateral: U256,
     pub is_optimistic: bool,
     /// Whether the builder is optimistic for regional filtering.

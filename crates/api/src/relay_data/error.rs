@@ -2,7 +2,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use ethereum_consensus::primitives::BlsPublicKey;
+use helix_types::BlsPublicKey;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DataApiError {

@@ -9,7 +9,6 @@ version.workspace = true
 [dependencies]
 alloy-eips.workspace = true
 alloy-primitives.workspace = true
-alloy-rpc-types.workspace = true
 async-trait.workspace = true
 ethers.workspace = true
 helix-beacon-client.workspace = true
