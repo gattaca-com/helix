@@ -1,3 +1,5 @@
+use lh_types::test_utils::{TestRandom, XorShiftRng};
+use rand::SeedableRng;
 use serde_json::Value;
 use ssz::{Decode, Encode};
 
@@ -31,9 +33,17 @@ pub fn test_encode_decode_ssz<T: Encode + Decode>(d: &[u8]) -> T {
 }
 
 pub fn random_bls_pubkey() -> BlsPublicKey {
-    use lh_types::test_utils::{TestRandom, XorShiftRng};
-    use rand::SeedableRng;
-
-    let rng = &mut XorShiftRng::from_seed([42; 16]);
-    BlsPublicKey::random_for_test(rng)
+    BlsPublicKey::test_random()
 }
+
+pub trait TestRandomSeed: TestRandom {
+    fn test_random() -> Self
+    where
+        Self: Sized,
+    {
+        let mut rng = XorShiftRng::from_seed([42; 16]);
+        Self::random_for_test(&mut rng)
+    }
+}
+
+impl<T: TestRandom> TestRandomSeed for T {}

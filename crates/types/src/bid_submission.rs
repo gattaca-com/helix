@@ -1,4 +1,6 @@
 use alloy_primitives::{Address, B256, U256};
+use lh_test_random::TestRandom;
+use lh_types::test_utils::TestRandom;
 use lh_types::{ExecutionPayloadDeneb, ExecutionPayloadElectra, MainnetEthSpec, SignedRoot, Slot};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
@@ -9,7 +11,9 @@ use crate::{
     ExecutionRequests, PayloadAndBlobs,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash, TestRandom,
+)]
 pub struct BidTrace {
     /// The slot associated with the block.
     #[serde(with = "serde_utils::quoted_u64")]
@@ -38,23 +42,6 @@ pub struct BidTrace {
 impl BidTrace {
     pub fn slot(&self) -> Slot {
         Slot::from(self.slot)
-    }
-
-    #[cfg(test)]
-    pub fn random_for_test() -> Self {
-        use crate::random_bls_pubkey;
-
-        Self {
-            slot: 0,
-            parent_hash: B256::ZERO,
-            block_hash: B256::ZERO,
-            builder_pubkey: random_bls_pubkey(),
-            proposer_pubkey: random_bls_pubkey(),
-            proposer_fee_recipient: Address::ZERO,
-            gas_limit: 0,
-            gas_used: 0,
-            value: U256::ZERO,
-        }
     }
 }
 

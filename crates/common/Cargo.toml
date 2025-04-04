@@ -21,7 +21,6 @@ eyre.workspace = true
 helix-types.workspace = true
 helix-utils.workspace = true
 lazy_static.workspace = true
-merkle_proof.workspace = true
 prometheus.workspace = true
 reqwest.workspace = true
 serde.workspace = true

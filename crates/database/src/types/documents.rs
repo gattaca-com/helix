@@ -7,7 +7,7 @@ use helix_common::{
     simulator::BlockSimError,
     BuilderConfig, SubmissionTrace,
 };
-use helix_types::{BidTrace, BlsPublicKey};
+use helix_types::{BidTrace, BlsPublicKey, TestRandom};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
@@ -93,7 +93,7 @@ pub struct KnownValidatorsDocument {
     pub index: usize,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, TestRandom)]
 pub struct BidSubmissionDocument {
     pub timestamp: u64,
     pub bid_trace: BidTrace,
@@ -101,12 +101,6 @@ pub struct BidSubmissionDocument {
     pub num_txs: usize,
 }
 
-impl BidSubmissionDocument {
-    #[cfg(test)]
-    pub fn random_for_test() -> Self {
-        Self { timestamp: 0, bid_trace: BidTrace::random_for_test(), block_number: 0, num_txs: 0 }
-    }
-}
 impl From<BidSubmissionDocument> for ReceivedBlocksResponse {
     fn from(value: BidSubmissionDocument) -> Self {
         ReceivedBlocksResponse {

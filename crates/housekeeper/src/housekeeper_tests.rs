@@ -15,6 +15,7 @@ use helix_common::{
 };
 use helix_database::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
+use helix_types::BlsPublicKey;
 use tokio::{sync::broadcast, task};
 
 use crate::{
@@ -156,8 +157,8 @@ async fn test_primev_enabled_housekeeper() {
     let vars = get_housekeeper();
 
     // Create mock Primev service with test data
-    let test_validator_pubkey = BlsPublicKey::try_from(vec![1; 48].as_slice()).unwrap();
-    let test_builder_pubkey = BlsPublicKey::try_from(vec![2; 48].as_slice()).unwrap();
+    let test_validator_pubkey = BlsPublicKey::deserialize(vec![1; 48].as_slice()).unwrap();
+    let test_builder_pubkey = BlsPublicKey::deserialize(vec![2; 48].as_slice()).unwrap();
 
     let mut mock_primev = MockPrimevService::new()
         .with_validators(vec![test_validator_pubkey.clone()])
@@ -265,16 +266,16 @@ async fn test_primev_real_contract_integration() {
 
             // Use the simplified ABI that we know works
             let validator_abi_str = r#"[{
-                "inputs": [{"name":"valBLSPubKeys","type":"bytes[]"}],
-                "name": "areValidatorsOptedIn", 
-                "outputs": [{"components":[
-                    {"name":"isVanillaOptedIn","type":"bool"},
-                    {"name":"isAvsOptedIn","type":"bool"},
-                    {"name":"isMiddlewareOptedIn","type":"bool"}
-                ],"name":"","type":"tuple[]"}],
-                "stateMutability": "view",
-                "type": "function"
-            }]"#;
+                    "inputs": [{"name":"valBLSPubKeys","type":"bytes[]"}],
+                    "name": "areValidatorsOptedIn", 
+                    "outputs": [{"components":[
+                        {"name":"isVanillaOptedIn","type":"bool"},
+                        {"name":"isAvsOptedIn","type":"bool"},
+                        {"name":"isMiddlewareOptedIn","type":"bool"}
+                    ],"name":"","type":"tuple[]"}],
+                    "stateMutability": "view",
+                    "type": "function"
+                }]"#;
 
             let validator_abi: Abi = serde_json::from_str(validator_abi_str).unwrap();
             let validator_contract =

@@ -18,6 +18,7 @@ use helix_common::{
 };
 use helix_types::{
     BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
+    TestRandomSeed,
 };
 
 use crate::{
@@ -210,7 +211,7 @@ impl DatabaseService for MockDatabaseService {
         _filters: &BidFilters,
         _validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<BidSubmissionDocument>, DatabaseError> {
-        let mut bid = BidSubmissionDocument::random_for_test();
+        let mut bid = BidSubmissionDocument::test_random();
         bid.bid_trace.value = U256::from(1000);
         Ok(vec![bid])
     }

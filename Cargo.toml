@@ -65,8 +65,8 @@ lh-bls = { package = "bls", git = "https://github.com/ltitanb/lighthouse", rev =
 lh-eth2 = { package = "eth2", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
 lh-kzg = { package = "kzg", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
 lh-slot-clock = { package = "slot_clock", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
+lh-test-random = { package = "test_random_derive", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
 lh-types = { package = "types", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
-merkle_proof = { package = "merkle_proof", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
 mockito = "1.1.1"
 moka = "0.9"
 num-format = "0.4.4"
