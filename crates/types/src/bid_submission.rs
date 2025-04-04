@@ -59,7 +59,6 @@ impl BidTrace {
     }
 }
 
-// TODO: refactor with superstruct?
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
 #[serde(deny_unknown_fields)]
 pub struct SignedBidSubmissionDeneb {
@@ -79,6 +78,7 @@ pub struct SignedBidSubmissionElectra {
     pub signature: BlsSignature,
 }
 
+/// Request object of POST `/relay/v1/builder/blocks`
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
 #[ssz(enum_behaviour = "transparent")]
 #[tree_hash(enum_behaviour = "transparent")]
@@ -175,29 +175,51 @@ impl SignedBidSubmission {
     }
 }
 
-// TODO: SSZ tests
 #[cfg(test)]
 mod tests {
-    use crate::signed_bid_submission::SignedBidSubmission;
+
+    use ssz::Encode;
+
+    use super::*;
+    use crate::test_utils::{test_encode_decode_json, test_encode_decode_ssz};
 
     #[test]
-    // from alloy
+    // from the relay API spec, adding the blob and the proposer_pubkey field
     fn deneb_bid_submission() {
-        let s = r#"{"message":{"slot":"1","parent_hash":"0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2","block_hash":"0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2","builder_pubkey":"0x93247f2209abcacf57b75a51dafae777f9dd38bc7053d1af526f220a7489a6d3a2753e5f3e8b1cfe39b56f43611df74a", "proposer_pubkey": "0x93247f2209abcacf57b75a51dafae777f9dd38bc7053d1af526f220a7489a6d3a2753e5f3e8b1cfe39b56f43611df74a","proposer_fee_recipient":"0xabcf8e0d4e9587369b2301d0790347320302cc09","gas_limit":"1","gas_used":"1","value":"1"},"execution_payload":{"parent_hash":"0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2","fee_recipient":"0xabcf8e0d4e9587369b2301d0790347320302cc09","state_root":"0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2","receipts_root":"0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2","logs_bloom":"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000","prev_randao":"0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2","block_number":"1","gas_limit":"1","gas_used":"1","timestamp":"1","extra_data":"0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2","base_fee_per_gas":"1","block_hash":"0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2","transactions":["0x02f878831469668303f51d843b9ac9f9843b9aca0082520894c93269b73096998db66be0441e836d873535cb9c8894a19041886f000080c001a031cc29234036afbf9a1fb9476b463367cb1f957ac0b919b69bbc798436e604aaa018c4e9c3914eb27aadd0b91e10b18655739fcf8c1fc398763a9f1beecb8ddc86"],"withdrawals":[{"index":"1","validator_index":"1","address":"0xabcf8e0d4e9587369b2301d0790347320302cc09","amount":"32000000000"}], "blob_gas_used":"1","excess_blob_gas":"1"},"blobs_bundle":{"commitments":[],"proofs":[],"blobs":[]},"signature":"0x88274f2d78d30ae429cc16f5c64657b491ccf26291c821cf953da34f16d60947d4f245decdce4a492e8d8f949482051b184aaa890d5dd97788387689335a1fee37cbe55c0227f81b073ce6e93b45f96169f497ed322d3d384d79ccaa7846d5ab"}"#;
-
-        let bid = serde_json::from_str::<SignedBidSubmission>(s).unwrap();
-        assert!(matches!(bid, SignedBidSubmission::Deneb(_)));
-        let json: serde_json::Value = serde_json::from_str(s).unwrap();
-        assert_eq!(json, serde_json::to_value(bid).unwrap());
+        let data_json = include_str!("testdata/signed-bid-submission-deneb.json");
+        let s = test_encode_decode_json::<SignedBidSubmission>(&data_json);
+        assert!(matches!(s, SignedBidSubmission::Deneb(_)));
     }
 
     #[test]
     // from alloy
+    fn deneb_bid_submission_2() {
+        let data_json = include_str!("testdata/signed-bid-submission-deneb-2.json");
+        let s = test_encode_decode_json::<SignedBidSubmission>(&data_json);
+        assert!(matches!(s, SignedBidSubmission::Deneb(_)));
+
+        let data_ssz = include_bytes!("testdata/signed-bid-submission-deneb-2.ssz");
+        test_encode_decode_ssz::<SignedBidSubmission>(data_ssz);
+        assert_eq!(data_ssz, s.as_ssz_bytes().as_slice());
+    }
+
+    #[test]
+    // from the relay API spec, adding the blob and the proposer_pubkey field
     fn electra_bid_submission() {
-        let s = include_str!("relay_builder_block_validation_request_v4.json");
-        let bid = serde_json::from_str::<SignedBidSubmission>(s).unwrap();
-        assert!(matches!(bid, SignedBidSubmission::Electra(_)));
-        let json: serde_json::Value = serde_json::from_str(s).unwrap();
-        assert_eq!(json, serde_json::to_value(bid).unwrap());
+        let data_json = include_str!("testdata/signed-bid-submission-electra.json");
+        let s = test_encode_decode_json::<SignedBidSubmission>(&data_json);
+        assert!(matches!(s, SignedBidSubmission::Electra(_)));
+    }
+
+    #[test]
+    // from alloy
+    fn electra_bid_submission_2() {
+        let data_json = include_str!("testdata/signed-bid-submission-electra-2.json");
+        let s = test_encode_decode_json::<SignedBidSubmission>(&data_json);
+        assert!(matches!(s, SignedBidSubmission::Electra(_)));
+
+        let data_ssz = include_bytes!("testdata/signed-bid-submission-electra-2.bin");
+        test_encode_decode_ssz::<SignedBidSubmission>(data_ssz);
+        assert_eq!(data_ssz, s.as_ssz_bytes().as_slice());
     }
 }

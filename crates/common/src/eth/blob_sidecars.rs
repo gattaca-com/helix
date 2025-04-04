@@ -70,20 +70,6 @@ pub fn blob_sidecars_from_unblinded_payload(
 //         test_encode_decode_json::<PayloadAndBlobs>(&data_json);
 //     }
 
-//     #[test]
-//     // this is from the relay API spec, addging the blob and the proposer_pubkey field
-//     fn test_submit_block() {
-//         let data_json = include_str!("testdata/signed-bid-submission-deneb.json");
-//         test_encode_decode_json::<SignedBidSubmissionDeneb>(&data_json);
-//     }
-
-//     #[test]
-//     // this is random data
-//     fn test_submit_block_2() {
-//         let data_ssz = include_bytes!("testdata/signed-bid-submission-deneb-2.ssz");
-//         let data_ssz = alloy_primitives::hex::decode(data_ssz).unwrap();
-//         test_encode_decode_ssz::<SignedBidSubmissionDeneb>(&data_ssz);
-//     }
 // }
 
 // #[cfg(test)]
@@ -206,18 +192,4 @@ pub fn blob_sidecars_from_unblinded_payload(
 //         assert_eq!(encoded, data_ssz);
 //     }
 
-//     #[test]
-//     // this is from the relay API spec, addging the blob and the proposer_pubkey field
-//     fn test_submit_block() {
-//         let data_json = include_str!("testdata/signed-bid-submission-electra.json");
-//         test_encode_decode_json::<SignedBidSubmissionElectra>(&data_json);
-//     }
-
-//     #[test]
-//     // this is random data
-//     fn test_submit_block_2() {
-//         let data_ssz = include_bytes!("testdata/signed-bid-submission-electra-2.ssz");
-//         let data_ssz = alloy_primitives::hex::decode(data_ssz).unwrap();
-//         test_encode_decode_ssz::<SignedBidSubmissionElectra>(&data_ssz);
-//     }
 // }
