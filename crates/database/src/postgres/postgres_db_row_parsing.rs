@@ -141,7 +141,7 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                         )?,
                         gas_limit: parse_i32_to_u64(row.get::<&str, i32>("gas_limit"))?,
                         timestamp: parse_i64_to_u64(row.get::<&str, i64>("timestamp"))?,
-                        pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?.into(),
+                        pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?,
                     },
                     signature: parse_bytes_to_signature(row.get::<&str, &[u8]>("signature"))?,
                 },
@@ -206,7 +206,7 @@ impl FromRow for SignedValidatorRegistration {
                 fee_recipient: parse_bytes_to_address(row.get::<&str, &[u8]>("fee_recipient"))?,
                 gas_limit: parse_i32_to_u64(row.get::<&str, i32>("gas_limit"))?,
                 timestamp: parse_i64_to_u64(row.get::<&str, i64>("timestamp"))?,
-                pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?.into(),
+                pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?,
             },
             signature: parse_bytes_to_signature(row.get::<&str, &[u8]>("signature"))?,
         })

@@ -71,7 +71,7 @@ pub enum BuilderApiError {
     FeeRecipientMismatch { got: Address, expected: Address },
 
     #[error("proposer public key mismatch. got: {got:?}, expected: {expected:?}")]
-    ProposerPublicKeyMismatch { got: BlsPublicKey, expected: BlsPublicKey },
+    ProposerPublicKeyMismatch { got: Box<BlsPublicKey>, expected: Box<BlsPublicKey> },
 
     #[error("slot mismatch. got: {got}, expected: {expected}")]
     SlotMismatch { got: u64, expected: u64 },
@@ -135,7 +135,7 @@ pub enum BuilderApiError {
         collateral: {collateral:?}, collateral required: {collateral_required:?}"
     )]
     NotEnoughOptimisticCollateral {
-        builder_pub_key: BlsPublicKey,
+        builder_pub_key: Box<BlsPublicKey>,
         collateral: U256,
         collateral_required: U256,
         is_optimistic: bool,

@@ -130,4 +130,10 @@ mod tests {
         let hash_2 = eth_consensus_hash_to_alloy(&alloy_hash_to_eth_consensus(&hash));
         assert_eq!(hash, hash_2);
     }
+
+    #[test]
+    fn t() {
+        let x = std::mem::size_of::<BlsSignature>();
+        println!("x: {}", x);
+    }
 }

@@ -40,7 +40,7 @@ impl DeliveredPayloadDocument {
 impl From<DeliveredPayloadDocument> for DeliveredPayloadsResponse {
     fn from(doc: DeliveredPayloadDocument) -> Self {
         Self {
-            slot: doc.bid_trace.slot().into(),
+            slot: doc.bid_trace.slot(),
             parent_hash: doc.bid_trace.parent_hash,
             block_hash: doc.bid_trace.block_hash,
             builder_pubkey: doc.bid_trace.builder_pubkey,

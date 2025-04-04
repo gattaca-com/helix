@@ -253,7 +253,7 @@ where
 
         let mut handles = Vec::with_capacity(registrations.len());
 
-        for mut registration in registrations {
+        for registration in registrations {
             let proposer_api_clone = proposer_api.clone();
             let start_time = Instant::now();
 
@@ -284,7 +284,7 @@ where
             }
 
             let handle = tokio::task::spawn_blocking(move || {
-                let res = match proposer_api_clone.validate_registration(&mut registration) {
+                let res = match proposer_api_clone.validate_registration(&registration) {
                     Ok(_) => Some(registration),
                     Err(err) => {
                         warn!(%err, ?pub_key, "Failed to register validator");
@@ -661,7 +661,7 @@ where
 
         if let Ok(Some(payload_address)) = self.auctioneer.get_payload_address(&block_hash).await {
             // Fetch v3 optimistic payload from builder. This will complete asynchronously.
-            let _ = self.v3_payload_request.send((block_hash.clone(), payload_address)).await;
+            let _ = self.v3_payload_request.send((block_hash, payload_address)).await;
         }
 
         // Get execution payload from auctioneer
@@ -987,7 +987,7 @@ where
         let body = message.body();
 
         let local_header =
-            try_execution_header_from_payload(&mut local_versioned_payload.execution_payload);
+            try_execution_header_from_payload(&local_versioned_payload.execution_payload);
 
         info!(
             local_header = ?local_header,
@@ -1059,7 +1059,7 @@ where
 
         let valid = signed_blinded_beacon_block.verify_signature(
             None,
-            &public_key,
+            public_key,
             &fork,
             genesis_validators_root,
             context,
@@ -1222,8 +1222,8 @@ where
                     warn!("execution payload not found");
                     if first_try && request_missing_payload {
                         let proposer_pubkey_clone = pub_key.clone();
-                        let block_hash_clone = block_hash.clone();
                         let self_clone = self.clone();
+                        let block_hash = *block_hash;
 
                         task::spawn(
                             file!(),
@@ -1234,7 +1234,7 @@ where
                                     .request_payload(RequestPayloadParams {
                                         slot,
                                         proposer_pub_key: proposer_pubkey_clone,
-                                        block_hash: block_hash_clone,
+                                        block_hash,
                                     })
                                     .await
                                 {
@@ -1411,7 +1411,7 @@ where
 
     /// Handle a new slot update.
     /// Updates the next proposer duty for the new slot.
-    async fn handle_new_slot(&self, slot_update: SlotUpdate) {
+    async fn handle_new_slot(&self, slot_update: Box<SlotUpdate>) {
         let epoch = slot_update.slot / self.chain_info.seconds_per_slot;
         info!(
             epoch = epoch,

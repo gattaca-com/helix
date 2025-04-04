@@ -7,7 +7,6 @@ use helix_common::{
     task,
 };
 
-use helix_types::SlotClockTrait;
 use prost::Message;
 use tokio::{sync::mpsc::Sender, time::sleep};
 use tonic::{transport::Channel, Request, Response, Status};

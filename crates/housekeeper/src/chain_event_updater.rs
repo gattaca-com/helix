@@ -36,7 +36,7 @@ pub struct SlotUpdate {
 
 #[derive(Clone, Debug)]
 pub enum ChainUpdate {
-    SlotUpdate(SlotUpdate),
+    SlotUpdate(Box<SlotUpdate>),
     PayloadAttributesUpdate(PayloadAttributesUpdate),
 }
 
@@ -187,7 +187,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         // Get the next proposer duty for the new slot.
         let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
 
-        let update = ChainUpdate::SlotUpdate(SlotUpdate { slot, new_duties, next_duty });
+        let update = ChainUpdate::SlotUpdate(Box::new(SlotUpdate { slot, new_duties, next_duty }));
         self.send_update_to_subscribers(update).await;
     }
 

@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[allow(clippy::result_large_err)]
 pub enum ProposerApiError {
     #[error("hyper error: {0}")]
     HyperError(#[from] hyper::Error),
@@ -25,7 +26,7 @@ pub enum ProposerApiError {
     ToStrError(#[from] hyper::header::ToStrError),
 
     #[error("bid public key {bid:?} does not match relay public key {relay:?}")]
-    BidPublicKeyMismatch { bid: BlsPublicKey, relay: BlsPublicKey },
+    BidPublicKeyMismatch { bid: Box<BlsPublicKey>, relay: Box<BlsPublicKey> },
 
     #[error("no bid prepared for request")]
     NoBidPrepared,

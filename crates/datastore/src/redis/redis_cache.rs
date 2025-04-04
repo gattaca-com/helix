@@ -780,8 +780,8 @@ impl Auctioneer for RedisCache {
         state.set_latency_save_payload();
 
         // Sign builder bid with relay pubkey.
-        let mut cloned_submission = (*submission).clone();
-        let builder_bid = bid_submission_to_builder_bid(&mut cloned_submission, signing_context);
+        let cloned_submission = (*submission).clone();
+        let builder_bid = bid_submission_to_builder_bid(&cloned_submission, signing_context);
 
         // Save builder bid and update top bid/ floor keys if possible.
         self.save_signed_builder_bid_and_update_top_bid(
@@ -1102,7 +1102,7 @@ impl Auctioneer for RedisCache {
         self.set(&key, &submission.transactions_root(), Some(24)).await?;
 
         // Sign builder bid with relay pubkey.
-        let builder_bid = header_submission_to_builder_bid(submission, &signing_context);
+        let builder_bid = header_submission_to_builder_bid(submission, signing_context);
 
         // Save builder bid and update top bid/ floor keys if possible.
         self.save_signed_builder_bid_and_update_top_bid(

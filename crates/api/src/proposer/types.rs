@@ -28,9 +28,7 @@ pub fn unblind_beacon_block(
         | SignedBlindedBeaconBlock::Base(_)
         | SignedBlindedBeaconBlock::Bellatrix(_)
         | SignedBlindedBeaconBlock::Capella(_)
-        | SignedBlindedBeaconBlock::Fulu(_) => {
-            return Err(ProposerApiError::UnsupportedBeaconChainVersion);
-        }
+        | SignedBlindedBeaconBlock::Fulu(_) => Err(ProposerApiError::UnsupportedBeaconChainVersion),
 
         SignedBlindedBeaconBlock::Deneb(blinded_block) => {
             let signature = blinded_block.signature.clone();
@@ -57,7 +55,7 @@ pub fn unblind_beacon_block(
                     body: BeaconBlockBodyDeneb {
                         randao_reveal: body.randao_reveal.clone(),
                         eth1_data: body.eth1_data.clone(),
-                        graffiti: body.graffiti.clone(),
+                        graffiti: body.graffiti,
                         proposer_slashings: body.proposer_slashings.clone(),
                         attester_slashings: body.attester_slashings.clone(),
                         attestations: body.attestations.clone(),
@@ -105,7 +103,7 @@ pub fn unblind_beacon_block(
                     body: BeaconBlockBodyElectra {
                         randao_reveal: body.randao_reveal.clone(),
                         eth1_data: body.eth1_data.clone(),
-                        graffiti: body.graffiti.clone(),
+                        graffiti: body.graffiti,
                         proposer_slashings: body.proposer_slashings.clone(),
                         attester_slashings: body.attester_slashings.clone(),
                         attestations: body.attestations.clone(),

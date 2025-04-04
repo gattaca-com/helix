@@ -49,10 +49,7 @@ impl BroadcastHeaderParams {
             builder_pub_key: self.builder_pub_key.serialize().to_vec(),
             is_cancellations_enabled: self.is_cancellations_enabled,
             on_receive: self.on_receive,
-            payload_address: self
-                .payload_address
-                .as_ref()
-                .map(|p| PayloadSocketAddress::as_ssz_bytes(p)),
+            payload_address: self.payload_address.as_ref().map(PayloadSocketAddress::as_ssz_bytes),
         }
     }
 }

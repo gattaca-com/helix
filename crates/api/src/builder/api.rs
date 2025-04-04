@@ -14,7 +14,6 @@ use axum::{
     Extension, Json,
 };
 use bytes::Bytes;
-
 use flate2::read::GzDecoder;
 use futures::StreamExt;
 use helix_common::{
@@ -41,7 +40,6 @@ use helix_types::{
 };
 use helix_utils::{extract_request_id, get_payload_attributes_key, utcnow_ns};
 use hyper::HeaderMap;
-use serde::Deserialize;
 use ssz::Decode;
 use tokio::{
     sync::{
@@ -50,7 +48,6 @@ use tokio::{
     },
     time::{self},
 };
-
 use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 
@@ -68,11 +65,6 @@ use crate::{
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
-
-#[derive(Deserialize)]
-pub struct SlotQuery {
-    slot: u64,
-}
 
 #[derive(Clone)]
 pub struct BuilderApi<A, DB, S, G>
@@ -202,7 +194,7 @@ where
 
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) = decode_payload(req, &mut trace).await?;
-        let block_hash = payload.message().block_hash.clone();
+        let block_hash = payload.message().block_hash;
 
         info!(
             slot = %payload.slot(),
@@ -468,7 +460,7 @@ where
     ) -> Result<StatusCode, BuilderApiError> {
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
 
-        let block_hash = payload.block_hash().clone();
+        let block_hash = payload.block_hash();
 
         // Verify the payload is for the current slot
         if payload.slot() <= head_slot {
@@ -499,7 +491,7 @@ where
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes = api
-            .fetch_payload_attributes(payload.slot().into(), payload.parent_hash(), &block_hash)
+            .fetch_payload_attributes(payload.slot().into(), payload.parent_hash(), block_hash)
             .await?;
 
         // Fetch builder info
@@ -515,7 +507,7 @@ where
         // Handle duplicates.
         if let Err(err) = api
             .check_for_duplicate_block_hash(
-                &block_hash,
+                block_hash,
                 payload.slot().as_u64(),
                 payload.parent_hash(),
                 payload.proposer_public_key(),
@@ -741,7 +733,7 @@ where
         debug!(head_slot, timestamp_request_start = trace.receive);
 
         let builder_pub_key = payload.builder_public_key().clone();
-        let block_hash = payload.message().block_hash.clone();
+        let block_hash = payload.message().block_hash;
 
         // Verify the payload is for the current slot
         if payload.slot() <= head_slot {
@@ -1277,7 +1269,7 @@ where
             signed_builder_bid: builder_bid,
             bid_trace: bid_trace.clone(),
             slot: bid_trace.slot,
-            parent_hash: bid_trace.parent_hash.clone(),
+            parent_hash: bid_trace.parent_hash,
             proposer_pub_key: bid_trace.proposer_pubkey.clone(),
             builder_pub_key: bid_trace.builder_pubkey.clone(),
             is_cancellations_enabled,
@@ -1379,7 +1371,7 @@ where
             Ok(false) => Ok(()),
             Ok(true) => {
                 debug!(?block_hash, "duplicate block hash");
-                Err(BuilderApiError::DuplicateBlockHash { block_hash: block_hash.clone() })
+                Err(BuilderApiError::DuplicateBlockHash { block_hash: *block_hash })
             }
             Err(err) => {
                 error!(%err, "failed to call seen_or_insert_block_hash");
@@ -1540,7 +1532,7 @@ where
             registration_info.registration.message.gas_limit,
             payload.clone(),
             registration_info.preferences,
-            payload_attributes.payload_attributes.parent_beacon_block_root.clone(),
+            payload_attributes.payload_attributes.parent_beacon_block_root,
         );
         let result = self
             .simulator
@@ -1650,7 +1642,7 @@ where
         parent_hash: &B256,
         block_hash: &B256,
     ) -> Result<PayloadAttributesUpdate, BuilderApiError> {
-        let payload_attributes_key = get_payload_attributes_key(&parent_hash, slot);
+        let payload_attributes_key = get_payload_attributes_key(parent_hash, slot);
         let payload_attributes =
             self.payload_attributes.read().await.get(&payload_attributes_key).cloned().ok_or_else(
                 || {
@@ -1733,7 +1725,7 @@ where
                 "builder does not have enough collateral"
             );
             return Err(BuilderApiError::NotEnoughOptimisticCollateral {
-                builder_pub_key: payload.builder_public_key().clone(),
+                builder_pub_key: payload.builder_public_key().clone().into(),
                 collateral: builder_info.collateral,
                 collateral_required: payload.value(),
                 is_optimistic: builder_info.is_optimistic,
@@ -1822,7 +1814,7 @@ where
 
     /// Handle a new slot update.
     /// Updates the next proposer duty and prepares the get_validators() response.
-    async fn handle_new_slot(&self, slot_update: SlotUpdate) {
+    async fn handle_new_slot(&self, slot_update: Box<SlotUpdate>) {
         let epoch = slot_update.slot / SLOTS_PER_EPOCH;
         info!(
             epoch = epoch,
@@ -2151,8 +2143,8 @@ fn sanity_check_block_submission(
     // Check duty
     if next_duty.entry.registration.message.fee_recipient != *payload.proposer_fee_recipient() {
         return Err(BuilderApiError::FeeRecipientMismatch {
-            got: payload.proposer_fee_recipient().clone(),
-            expected: next_duty.entry.registration.message.fee_recipient.clone(),
+            got: *payload.proposer_fee_recipient(),
+            expected: next_duty.entry.registration.message.fee_recipient,
         });
     }
 
@@ -2165,16 +2157,16 @@ fn sanity_check_block_submission(
 
     if next_duty.entry.registration.message.pubkey != bid_trace.proposer_pubkey {
         return Err(BuilderApiError::ProposerPublicKeyMismatch {
-            got: bid_trace.proposer_pubkey.clone(),
-            expected: next_duty.entry.registration.message.pubkey.clone(),
+            got: bid_trace.proposer_pubkey.clone().into(),
+            expected: next_duty.entry.registration.message.pubkey.clone().into(),
         });
     }
 
     // Check payload attrs
     if *payload.prev_randao() != payload_attributes.payload_attributes.prev_randao {
         return Err(BuilderApiError::PrevRandaoMismatch {
-            got: payload.prev_randao().clone(),
-            expected: payload_attributes.payload_attributes.prev_randao.clone(),
+            got: *payload.prev_randao(),
+            expected: payload_attributes.payload_attributes.prev_randao,
         });
     }
 
@@ -2209,15 +2201,15 @@ fn sanity_check_block_submission(
 
     if bid_trace.block_hash != *payload.block_hash() {
         return Err(BuilderApiError::BlockHashMismatch {
-            message: bid_trace.block_hash.clone(),
-            payload: payload.block_hash().clone(),
+            message: bid_trace.block_hash,
+            payload: *payload.block_hash(),
         });
     }
 
     if bid_trace.parent_hash != *payload.parent_hash() {
         return Err(BuilderApiError::ParentHashMismatch {
-            message: bid_trace.parent_hash.clone(),
-            payload: payload.parent_hash().clone(),
+            message: bid_trace.parent_hash,
+            payload: *payload.parent_hash(),
         });
     }
 

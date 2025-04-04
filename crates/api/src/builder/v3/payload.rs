@@ -51,13 +51,8 @@ pub async fn fetch_builder_blocks<A, DB, S, G>(
         let receive = get_nanos_from(SystemTime::now()).unwrap_or_default();
         let trace = SubmissionTrace { receive, ..Default::default() };
 
-        match fetch_block(
-            block_hash.clone(),
-            &builder_address,
-            &mut header_buffer,
-            &mut payload_buffer,
-        )
-        .await
+        match fetch_block(block_hash, &builder_address, &mut header_buffer, &mut payload_buffer)
+            .await
         {
             Ok(block) => match BuilderApi::handle_optimistic_payload(api.clone(), block, trace)
                 .await
