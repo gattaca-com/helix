@@ -20,7 +20,6 @@ use uuid::Uuid;
 
 pub mod request_encoding;
 pub mod serde;
-pub mod signing;
 
 pub fn has_reached_fork(slot: u64, fork_epoch: u64) -> bool {
     if fork_epoch == 0 {
