@@ -1,6 +1,7 @@
+use alloy_rpc_types::beacon::BlsPublicKey;
 use ethereum_consensus::{
     builder::{SignedValidatorRegistration, ValidatorRegistration},
-    primitives::{BlsPublicKey, BlsSignature, U256},
+    primitives::{BlsSignature, U256},
 };
 use helix_common::{
     api::{
@@ -281,7 +282,7 @@ impl FromRow for ProposerInfo {
     {
         Ok(ProposerInfo {
             name: row.get::<&str, &str>("name").to_string(),
-            pub_key: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("pub_key"))?,
+            pub_key: parse_bytes_to_pubkey_alloy(row.get::<&str, &[u8]>("pub_key"))?,
         })
     }
 }
@@ -321,8 +322,15 @@ pub fn parse_bytes_to_hash<const N: usize>(hash: &[u8]) -> Result<ByteVector<N>,
     ByteVector::try_from(hash).map_err(|e| DatabaseError::RowParsingError(Box::new(e)))
 }
 
-pub fn parse_bytes_to_pubkey(pubkey: &[u8]) -> Result<BlsPublicKey, DatabaseError> {
+pub fn parse_bytes_to_pubkey_alloy(pubkey: &[u8]) -> Result<BlsPublicKey, DatabaseError> {
     BlsPublicKey::try_from(pubkey).map_err(|e| DatabaseError::RowParsingError(Box::new(e)))
+}
+
+pub fn parse_bytes_to_pubkey(
+    pubkey: &[u8],
+) -> Result<ethereum_consensus::primitives::BlsPublicKey, DatabaseError> {
+    ethereum_consensus::primitives::BlsPublicKey::try_from(pubkey)
+        .map_err(|e| DatabaseError::RowParsingError(Box::new(e)))
 }
 
 pub fn parse_bytes_to_signature(signature: &[u8]) -> Result<BlsSignature, DatabaseError> {

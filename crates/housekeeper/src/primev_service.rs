@@ -2,8 +2,8 @@
 use std::sync::Mutex;
 use std::{convert::TryFrom, sync::Arc};
 
+use alloy_rpc_types::beacon::BlsPublicKey;
 use async_trait::async_trait;
-use ethereum_consensus::primitives::BlsPublicKey;
 use ethers::{
     abi::{Abi, AbiParser, Address, Bytes},
     contract::{Contract, EthEvent},
@@ -288,7 +288,7 @@ impl PrimevService for EthereumPrimevService {
         for (index, status) in opted_in_statuses.iter().enumerate() {
             if status.0 || status.1 || status.2 {
                 if let Some(duty) = proposer_duties.get(index) {
-                    opted_in_validators.push(duty.public_key.clone());
+                    opted_in_validators.push(duty.public_key);
                 }
             }
         }

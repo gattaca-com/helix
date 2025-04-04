@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use alloy_primitives::hex;
+use alloy_primitives::{b256, hex, B256};
 use axum::http::{header, Method, Request, Uri};
 use ethereum_consensus::{
     builder::{SignedValidatorRegistration, ValidatorRegistration},
@@ -177,10 +177,8 @@ fn get_dummy_payload_attributes() -> PayloadAttributes {
 fn get_dummy_payload_attributes_update(submission_slot: Option<u64>) -> PayloadAttributesUpdate {
     PayloadAttributesUpdate {
         slot: submission_slot.unwrap_or(SUBMISSION_SLOT),
-        parent_hash: get_byte_vector_32_for_hex(
-            "0xbd3291854dc822b7ec585925cda0e18f06af28fa2886e15f52d52dd4b6f94ed6",
-        ),
-        withdrawals_root: None,
+        parent_hash: b256!("bd3291854dc822b7ec585925cda0e18f06af28fa2886e15f52d52dd4b6f94ed6"),
+        withdrawals_root: B256::ZERO,
         payload_attributes: get_dummy_payload_attributes(),
     }
 }

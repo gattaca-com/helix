@@ -53,6 +53,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
+use helix_types::eth_consensus_hash_to_alloy;
 use helix_utils::{extract_request_id, get_payload_attributes_key, has_reached_fork, utcnow_ns};
 use hyper::HeaderMap;
 use serde::Deserialize;
@@ -1819,7 +1820,8 @@ where
         parent_hash: &Hash32,
         block_hash: &Hash32,
     ) -> Result<PayloadAttributesUpdate, BuilderApiError> {
-        let payload_attributes_key = get_payload_attributes_key(parent_hash, slot);
+        let payload_attributes_key =
+            get_payload_attributes_key(&eth_consensus_hash_to_alloy(parent_hash), slot);
         let payload_attributes =
             self.payload_attributes.read().await.get(&payload_attributes_key).cloned().ok_or_else(
                 || {
@@ -2390,29 +2392,23 @@ fn sanity_check_block_submission(
                 None => return Err(BuilderApiError::MissingWithdrawls),
             };
 
-            let expected_withdrawals_root = match payload_attributes.withdrawals_root {
-                Some(wr) => wr,
-                None => return Err(BuilderApiError::MissingWithdrawls),
-            };
+            let expected_withdrawals_root = payload_attributes.withdrawals_root;
 
-            if withdrawals_root != expected_withdrawals_root {
+            if *withdrawals_root != *expected_withdrawals_root {
                 return Err(BuilderApiError::WithdrawalsRootMismatch {
                     got: Hash32::try_from(withdrawals_root.as_ref()).unwrap(),
                     expected: Hash32::try_from(expected_withdrawals_root.as_ref()).unwrap(),
                 });
             }
         } else {
-            let expected_withdrawals_root = match payload_attributes.withdrawals_root {
-                Some(wr) => wr,
-                None => return Err(BuilderApiError::MissingWithdrawlsRoot),
-            };
+            let expected_withdrawals_root = payload_attributes.withdrawals_root;
 
             let payload_withdrawals_root = match payload.withdrawals_root() {
                 Some(wr) => wr,
                 None => return Err(BuilderApiError::MissingWithdrawlsRoot),
             };
 
-            if payload_withdrawals_root != expected_withdrawals_root {
+            if *payload_withdrawals_root != *expected_withdrawals_root {
                 return Err(BuilderApiError::WithdrawalsRootMismatch {
                     got: Hash32::try_from(payload_withdrawals_root.as_ref()).unwrap(),
                     expected: Hash32::try_from(expected_withdrawals_root.as_ref()).unwrap(),

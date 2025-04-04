@@ -21,6 +21,7 @@ helix-common.workspace = true
 helix-database.workspace = true
 helix-datastore.workspace = true
 helix-housekeeper.workspace = true
+helix-types.workspace = true
 helix-utils.workspace = true
 hyper.workspace = true
 mockito.workspace = true

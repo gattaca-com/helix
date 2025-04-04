@@ -1,21 +1,17 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use ethereum_consensus::{
-    configs::goerli::CAPELLA_FORK_EPOCH, deneb::Withdrawal, primitives::Bytes32,
-};
+use alloy_primitives::B256;
 use helix_beacon_client::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
-use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry,
-    bellatrix::{HashTreeRoot, List, Node},
-    chain_info::ChainInfo,
-};
+use helix_common::{api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo};
 use helix_database::DatabaseService;
-use helix_utils::{get_payload_attributes_key, has_reached_fork, utcnow_sec};
+use helix_types::{eth_consensus_hash_to_alloy, Withdrawals};
+use helix_utils::{get_payload_attributes_key, utcnow_sec};
 use tokio::{
     sync::{broadcast, mpsc},
     time::{interval_at, sleep, Instant},
 };
 use tracing::{error, info, warn};
+use tree_hash::TreeHash;
 
 // Do not accept slots more than 60 seconds in the future
 const MAX_DISTANCE_FOR_FUTURE_SLOT: u64 = 60;
@@ -25,8 +21,8 @@ const CUTT_OFF_TIME: u64 = 4;
 #[derive(Clone, Debug, Default)]
 pub struct PayloadAttributesUpdate {
     pub slot: u64,
-    pub parent_hash: Bytes32,
-    pub withdrawals_root: Option<Node>,
+    pub parent_hash: B256,
+    pub withdrawals_root: B256,
     pub payload_attributes: PayloadAttributes,
 }
 
@@ -203,8 +199,10 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         }
 
         // Discard payload attributes if already known
-        let payload_attributes_key =
-            get_payload_attributes_key(&event.data.parent_block_hash, event.data.proposal_slot);
+        let payload_attributes_key = get_payload_attributes_key(
+            &eth_consensus_hash_to_alloy(&event.data.parent_block_hash),
+            event.data.proposal_slot,
+        );
         if self.known_payload_attributes.contains_key(&payload_attributes_key) {
             return;
         }
@@ -222,16 +220,14 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
             "Processing payload attribute event",
         );
 
-        let mut withdrawals_root = None;
-        if has_reached_fork(event.data.proposal_slot, CAPELLA_FORK_EPOCH) {
-            let withdrawals_list: List<Withdrawal, 16> =
-                event.data.payload_attributes.withdrawals.clone().try_into().unwrap();
-            withdrawals_root = withdrawals_list.hash_tree_root().ok();
-        }
+        // FIXME(alloy)
+        let withdrawals_list: Withdrawals =
+            event.data.payload_attributes.withdrawals.clone().into();
+        let withdrawals_root = withdrawals_list.tree_hash_root();
 
         let update = ChainUpdate::PayloadAttributesUpdate(PayloadAttributesUpdate {
             slot: event.data.proposal_slot,
-            parent_hash: event.data.parent_block_hash,
+            parent_hash: event.data.parent_block_hash.as_ref().try_into().unwrap(),
             withdrawals_root,
             payload_attributes: event.data.payload_attributes,
         });

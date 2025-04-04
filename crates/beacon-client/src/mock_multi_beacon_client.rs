@@ -3,11 +3,9 @@ use std::sync::{
     Arc,
 };
 
+use alloy_rpc_types::beacon::BlsPublicKey;
 use async_trait::async_trait;
-use ethereum_consensus::{
-    phase0::Validator,
-    primitives::{BlsPublicKey, Root},
-};
+use ethereum_consensus::{phase0::Validator, primitives::Root};
 use helix_common::{
     beacon_api::PublishBlobsRequest, bellatrix::Serializable, ProposerDuty, ValidatorStatus,
     ValidatorSummary,
@@ -92,7 +90,7 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
     ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError> {
         self.proposer_duties_has_been_read.store(true, std::sync::atomic::Ordering::Relaxed);
         Ok((Root::default(), vec![ProposerDuty {
-            public_key: BlsPublicKey::default(),
+            public_key: BlsPublicKey::ZERO,
             validator_index: 1,
             slot: 19,
         }]))

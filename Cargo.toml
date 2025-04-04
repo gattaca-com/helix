@@ -7,6 +7,7 @@ members = [
   "crates/database",
   "crates/datastore",
   "crates/housekeeper",
+  "crates/types",
   "crates/utils",
   "crates/website",
 ]
@@ -40,7 +41,6 @@ deadpool-postgres = "0.11.0"
 deadpool-redis = { version = "0.12.0", features = ["rt_tokio_1"] }
 env_logger = "0.9"
 ethereum-consensus = { git = "https://github.com/gattaca-com/ethereum-consensus" }
-ethereum-types = "0.14.1"
 ethers = "2.0.14"
 eyre = "0.6.12"
 fiber = { git = "https://github.com/chainbound/fiber-rs.git", tag = "v0.8.0" }
@@ -53,12 +53,14 @@ helix-common = { path = "crates/common" }
 helix-database = { path = "./crates/database" }
 helix-datastore = { path = "./crates/datastore" }
 helix-housekeeper = { path = "./crates/housekeeper" }
+helix-types = { path = "./crates/types" }
 helix-utils = { path = "./crates/utils" }
 helix-website = { path = "./crates/website" }
 http = "1.0.0"
 hyper = "1.1.0"
 lazy_static = "1.5.0"
-merkle_proof = { git = "https://github.com/sigp/lighthouse.git", tag = "v5.3.0" }
+lh-types = { package = "types", git = "https://github.com/sigp/lighthouse.git", tag = "v6.0.1" }
+merkle_proof = { git = "https://github.com/sigp/lighthouse.git", tag = "v6.0.1" }
 mockito = "1.1.1"
 moka = "0.9"
 num-format = "0.4.4"
@@ -90,7 +92,7 @@ tower_governor = { version = "0.6.0", features = ["axum"] }
 tracing = "0.1.37"
 tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
-tree_hash = "0.6.0"
-tree_hash_derive = "0.6.0"
+tree_hash = "0.8.0"
+tree_hash_derive = "0.8.0"
 url = "2.4"
 uuid = { version = "1.5", features = ["fast-rng", "v4"] }

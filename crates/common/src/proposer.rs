@@ -1,6 +1,7 @@
+use alloy_rpc_types::beacon::BlsPublicKey;
 use ethereum_consensus::{
     builder::SignedValidatorRegistration,
-    primitives::{BlsPublicKey, Slot, ValidatorIndex},
+    primitives::{Slot, ValidatorIndex},
     serde::as_str,
 };
 use serde::{Deserialize, Serialize};
