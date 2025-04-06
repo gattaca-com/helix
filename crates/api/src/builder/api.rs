@@ -180,7 +180,6 @@ where
     /// 6. Saves the bid to auctioneer and db.
     ///
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
-    /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/relay#blocks_with_proofs>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
@@ -528,8 +527,8 @@ where
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional() &&
-            !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional()
+            && !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering and builder is not optimistic for regional filtering, discarding optimistic v2 submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
@@ -770,8 +769,8 @@ where
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional() &&
-            !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional()
+            && !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering enabled, discarding optimistic v2 submission");
             return Err(BuilderApiError::BuilderNotOptimistic {

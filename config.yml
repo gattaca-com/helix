@@ -62,9 +62,6 @@ router_config:
     - route: Status
       rate_limit: null
 target_get_payload_propagation_duration_ms: 0
-constraints_api_config:
-  check_constraints_signature: true
-  max_block_value_to_verify_wei: null
 primev_config: null
 skip_floor_bid_builder_pubkeys: []
 discord_webhook_url: null

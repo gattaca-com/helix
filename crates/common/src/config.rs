@@ -240,7 +240,7 @@ impl RouterConfig {
             self.extend([Route::BuilderApi, Route::ProposerApi, Route::DataApi]);
         }
 
-        // Replace BuilderApi, ProposerApi, DataApi, ConstraintsApi with their real routes
+        // Replace BuilderApi, ProposerApi, DataApi with their real routes
         self.replace_condensed_with_real(Route::BuilderApi, &[
             Route::GetValidators,
             Route::SubmitBlock,
