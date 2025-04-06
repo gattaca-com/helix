@@ -94,6 +94,16 @@ impl ChainInfo {
         }
     }
 
+    pub fn genesis_time(&self) -> u64 {
+        match self.network {
+            Network::Mainnet => self.genesis_time_in_secs,
+            Network::Sepolia => self.genesis_time_in_secs,
+            Network::Goerli => self.genesis_time_in_secs,
+            Network::Holesky => self.genesis_time_in_secs,
+            Network::Custom(_) => self.genesis_time_in_secs + self.context.genesis_delay,
+        }
+    }
+
     pub fn for_sepolia() -> Self {
         Self {
             network: Network::Sepolia,
@@ -146,11 +156,9 @@ impl ChainInfo {
     ) -> Result<Self, Error> {
         let context = Context::try_from_file(&config)?;
         let network = Network::Custom(config.clone());
-        let clock = from_system_time(
-            genesis_time_in_secs,
-            context.seconds_per_slot,
-            context.slots_per_epoch,
-        );
+        let genesis_time = context.min_genesis_time + context.genesis_delay;
+        let clock =
+            from_system_time(genesis_time, context.seconds_per_slot, context.slots_per_epoch);
         let seconds_per_slot = context.seconds_per_slot;
 
         Ok(Self {
