@@ -13,7 +13,7 @@ use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
     config::PrimevConfig, RelayConfig, ValidatorSummary,
 };
-use helix_database::MockDatabaseService;
+use helix_database::mock_database_service::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
 use helix_types::BlsPublicKey;
 use tokio::{sync::broadcast, task};

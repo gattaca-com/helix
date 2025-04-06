@@ -1,7 +1,9 @@
 use alloy_primitives::{Address, B256, U256};
 use lh_test_random::TestRandom;
-use lh_types::test_utils::TestRandom;
-use lh_types::{ExecutionPayloadDeneb, ExecutionPayloadElectra, MainnetEthSpec, SignedRoot, Slot};
+use lh_types::{
+    test_utils::TestRandom, ExecutionPayloadDeneb, ExecutionPayloadElectra, MainnetEthSpec,
+    SignedRoot, Slot,
+};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
@@ -45,7 +47,7 @@ impl BidTrace {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash, TestRandom)]
 #[serde(deny_unknown_fields)]
 pub struct SignedBidSubmissionDeneb {
     pub message: BidTrace,
@@ -54,7 +56,7 @@ pub struct SignedBidSubmissionDeneb {
     pub signature: BlsSignature,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash, TestRandom)]
 #[serde(deny_unknown_fields)]
 pub struct SignedBidSubmissionElectra {
     pub message: BidTrace,
@@ -72,6 +74,18 @@ pub struct SignedBidSubmissionElectra {
 pub enum SignedBidSubmission {
     Deneb(SignedBidSubmissionDeneb),
     Electra(SignedBidSubmissionElectra),
+}
+
+impl From<SignedBidSubmissionDeneb> for SignedBidSubmission {
+    fn from(value: SignedBidSubmissionDeneb) -> Self {
+        SignedBidSubmission::Deneb(value)
+    }
+}
+
+impl From<SignedBidSubmissionElectra> for SignedBidSubmission {
+    fn from(value: SignedBidSubmissionElectra) -> Self {
+        SignedBidSubmission::Electra(value)
+    }
 }
 
 impl SignedBidSubmission {

@@ -2,34 +2,42 @@ use alloy_primitives::{Address, B256, U256};
 use helix_types::{
     Bloom, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayloadHeader,
     ExecutionPayloadHeaderDeneb, ExecutionPayloadHeaderElectra, ExecutionRequests, ExtraData,
-    KzgCommittments, SigError, SignedMessage, SignedRoot, Slot,
+    KzgCommitments, SigError, SignedMessage, SignedRoot, Slot, TestRandom,
 };
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
 use crate::bid_submission::{BidSubmission, BidTrace};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode, TreeHash)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode, TreeHash, TestRandom,
+)]
 pub struct HeaderSubmissionDeneb {
     pub bid_trace: BidTrace,
     pub execution_payload_header: ExecutionPayloadHeaderDeneb,
-    pub commitments: KzgCommittments,
+    pub commitments: KzgCommitments,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode, TreeHash)]
+pub type SignedHeaderSubmissionDeneb = SignedMessage<HeaderSubmissionDeneb>;
+
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode, TreeHash, TestRandom,
+)]
 pub struct HeaderSubmissionElectra {
     pub bid_trace: BidTrace,
     pub execution_payload_header: ExecutionPayloadHeaderElectra,
     pub execution_requests: ExecutionRequests,
-    pub commitments: KzgCommittments,
+    pub commitments: KzgCommitments,
 }
+
+pub type SignedHeaderSubmissionElectra = SignedMessage<HeaderSubmissionElectra>;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Encode, Decode)]
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]
 pub enum SignedHeaderSubmission {
-    Deneb(SignedMessage<HeaderSubmissionDeneb>),
-    Electra(SignedMessage<HeaderSubmissionElectra>),
+    Deneb(SignedHeaderSubmissionDeneb),
+    Electra(SignedHeaderSubmissionElectra),
 }
 
 impl BidSubmission for SignedHeaderSubmission {
@@ -242,7 +250,7 @@ impl SignedHeaderSubmission {
         }
     }
 
-    pub fn commitments(&self) -> &KzgCommittments {
+    pub fn commitments(&self) -> &KzgCommitments {
         match self {
             Self::Deneb(signed_header_submission) => &signed_header_submission.message.commitments,
             Self::Electra(signed_header_submission) => {

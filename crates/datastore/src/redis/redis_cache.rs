@@ -1385,7 +1385,11 @@ fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {
 #[cfg(test)]
 mod tests {
     use alloy_primitives::U256;
-    use helix_types::random_bls_pubkey;
+    use helix_types::{
+        BlsSignature, BuilderBid, BuilderBidDeneb, ExecutionPayloadDeneb,
+        ExecutionPayloadHeaderDeneb, KzgCommitments, SignedBidSubmissionDeneb, TestRandomSeed,
+    };
+    use helix_utils::utcnow_ns;
     use serde::{Deserialize, Serialize};
     use serial_test::serial;
 
@@ -1552,13 +1556,13 @@ mod tests {
         // Current slot key
         let slot = 5_u64;
         let parent_hash = B256::default();
-        let proposer_pub_key = random_bls_pubkey();
+        let proposer_pub_key = BlsPublicKey::test_random();
         let key = get_builder_latest_bid_value_key(slot, &parent_hash, &proposer_pub_key);
 
         // Bid info
-        let pub_key_1 = random_bls_pubkey();
-        let pub_key_2 = random_bls_pubkey();
-        let pub_key_3 = random_bls_pubkey();
+        let pub_key_1 = BlsPublicKey::test_random();
+        let pub_key_2 = BlsPublicKey::test_random();
+        let pub_key_3 = BlsPublicKey::test_random();
 
         let bids = vec![
             (pub_key_1, U256::from(50)),
@@ -1592,23 +1596,21 @@ mod tests {
         // Block info
         let slot = 23894;
         let parent_hash = B256::default();
-        let proposer_pub_key = BlsPublicKey::default();
+        let proposer_pub_key = BlsPublicKey::deserialize(&[1u8; 48].as_ref()).unwrap();
 
         // Save prev best bid
-        let prev_builder_pubkey = BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap();
-        let mut capella_builder_bid = helix_common::eth::capella::BuilderBid {
-            header: ExecutionPayloadHeader::default(),
+        let prev_builder_pubkey = BlsPublicKey::test_random();
+        let mut deneb_builder_bid = BuilderBidDeneb {
+            pubkey: prev_builder_pubkey.clone().into(),
+            header: ExecutionPayloadHeaderDeneb::test_random(),
             value: U256::from(60),
-            public_key: prev_builder_pubkey.clone(),
+            blob_kzg_commitments: Default::default(),
         };
 
-        let prev_best_bid = SignedBuilderBid::Capella(
-            capella::SignedBuilderBid {
-                message: capella_builder_bid.clone(),
-                ..Default::default()
-            },
-            None,
-        );
+        let prev_best_bid = SignedBuilderBid {
+            message: deneb_builder_bid.clone().into(),
+            signature: BlsSignature::test_random(),
+        };
 
         let res = cache
             .save_builder_bid(
@@ -1669,14 +1671,12 @@ mod tests {
 
         // Test with floor_value greater than top_bid_value
         let higher_floor_value = U256::from(70);
-        capella_builder_bid.value = higher_floor_value;
-        let floor_bid = SignedBuilderBid::Capella(
-            capella::SignedBuilderBid {
-                message: capella_builder_bid.clone(),
-                ..Default::default()
-            },
-            None,
-        );
+
+        deneb_builder_bid.value = higher_floor_value;
+        let floor_bid = SignedBuilderBid {
+            message: deneb_builder_bid.into(),
+            signature: BlsSignature::test_random(),
+        };
 
         let key_floor_bid = get_floor_bid_key(slot, &parent_hash, &proposer_pub_key);
         let res = cache.set(&key_floor_bid, &floor_bid, None).await;
@@ -1788,13 +1788,21 @@ mod tests {
 
         let slot = 42;
         let parent_hash = B256::default();
-        let proposer_pub_key = BlsPublicKey::default();
+        let proposer_pub_key = BlsPublicKey::test_random();
 
-        let mut capella_bid = capella::SignedBuilderBid::default();
-        capella_bid.message.value = U256::from(1999);
-        let best_bid = SignedBuilderBid::Capella(capella_bid, None);
-        let wrapper =
-            SignedBuilderBidWrapper::new(best_bid.clone(), slot, proposer_pub_key.clone(), 0);
+        let bid = SignedBuilderBid {
+            message: BuilderBid::Deneb(BuilderBidDeneb {
+                value: U256::from(1999),
+                header: ExecutionPayloadHeaderDeneb::test_random(),
+                blob_kzg_commitments: KzgCommitments::test_random(),
+                pubkey: BlsPublicKey::test_random().into(),
+            }),
+            signature: BlsSignature::test_random(),
+        };
+
+        let best_bid = bid.into();
+
+        let wrapper = SignedBuilderBidWrapper::new(best_bid, slot, proposer_pub_key.clone(), 0);
 
         // Save the best bid
         let key = get_cache_get_header_response_key(slot, &parent_hash, &proposer_pub_key);
@@ -1808,7 +1816,11 @@ mod tests {
         assert!(get_result.as_ref().unwrap().is_some(), "Best bid was None");
 
         let fetched_builder_bid = get_result.unwrap().unwrap();
-        assert_eq!(fetched_builder_bid.value(), U256::from(1999), "Best bid value mismatch");
+        assert_eq!(
+            fetched_builder_bid.message.value(),
+            &U256::from(1999),
+            "Best bid value mismatch"
+        );
     }
 
     #[tokio::test]
@@ -1818,15 +1830,13 @@ mod tests {
         cache.clear_cache().await.unwrap();
 
         let slot = 42;
-        let proposer_pub_key = BlsPublicKey::default();
-        let block_hash = B256::default();
+        let proposer_pub_key = BlsPublicKey::test_random();
+        let block_hash = B256::test_random();
 
-        let capella_payload = capella::ExecutionPayload { gas_limit: 999, ..Default::default() };
+        let deneb_payload = ExecutionPayloadDeneb { gas_limit: 999, ..Default::default() };
         let versioned_execution_payload = PayloadAndBlobs {
-            execution_payload: ethereum_consensus::types::mainnet::ExecutionPayload::Capella(
-                capella_payload,
-            ),
-            blobs_bundle: None,
+            execution_payload: deneb_payload.into(),
+            blobs_bundle: Default::default(),
         };
 
         // Save the execution payload
@@ -1863,18 +1873,25 @@ mod tests {
         // Test data
         let slot = 1;
         let parent_hash = B256::default();
-        let proposer_pub_key = BlsPublicKey::default();
-        let builder_pub_key = BlsPublicKey::try_from([1u8; 48].as_ref()).unwrap();
+        let proposer_pub_key = BlsPublicKey::test_random();
+        let builder_pub_key = BlsPublicKey::test_random();
         let received_at = 1616237123000u128;
         let value = U256::from(100);
         let block_hash = B256::try_from([4u8; 32].as_ref()).unwrap();
 
-        let mut bid = capella::SignedBuilderBid {
-            message: helix_common::eth::capella::BuilderBid { value, ..Default::default() },
-            ..Default::default()
+        let mut header = ExecutionPayloadHeaderDeneb::test_random();
+        header.block_hash = block_hash.into();
+        let bid = SignedBuilderBid {
+            message: BuilderBid::Deneb(BuilderBidDeneb {
+                value,
+                header,
+                blob_kzg_commitments: KzgCommitments::test_random(),
+                pubkey: BlsPublicKey::test_random().into(),
+            }),
+            signature: BlsSignature::test_random(),
         };
-        bid.message.header.block_hash = block_hash;
-        let builder_bid = SignedBuilderBid::Capella(bid, None);
+
+        let builder_bid = bid.into();
 
         // Test: save_builder_bid
         let res = cache
@@ -1899,8 +1916,8 @@ mod tests {
         let fetched_bid = fetched_bid.unwrap().unwrap().bid;
 
         assert_eq!(
-            fetched_bid.block_hash(),
-            builder_bid.block_hash(),
+            fetched_bid.message.header().block_hash(),
+            builder_bid.message.header().block_hash(),
             "Mismatch in saved builder bid"
         );
 
@@ -1933,7 +1950,7 @@ mod tests {
 
         let slot = 42;
         let parent_hash = B256::default();
-        let proposer_pub_key = BlsPublicKey::default();
+        let proposer_pub_key = BlsPublicKey::test_random();
         let floor_bid_value = U256::from(1000);
 
         // Set the floor value
@@ -1956,8 +1973,8 @@ mod tests {
 
         let slot = 42;
         let parent_hash = B256::default();
-        let proposer_pub_key = BlsPublicKey::default();
-        let builder_pub_key = BlsPublicKey::default();
+        let proposer_pub_key = BlsPublicKey::test_random();
+        let builder_pub_key = BlsPublicKey::test_random();
         let latest_value = U256::from(100);
 
         // Set the latest value
@@ -1981,8 +1998,8 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
-        let builder_pub_key = BlsPublicKey::default();
-        let unknown_builder_pub_key = BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap();
+        let builder_pub_key = BlsPublicKey::test_random();
+        let unknown_builder_pub_key = BlsPublicKey::test_random();
 
         let builder_info = BuilderInfo {
             collateral: U256::from(12),
@@ -2020,50 +2037,38 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random()).await.unwrap();
         assert!(!is_trusted, "Failed to check trusted proposer");
 
         cache
             .update_trusted_proposers(vec![
-                ProposerInfo { name: "test".to_string(), pub_key: AlloyBlsPublicKey::ZERO },
-                ProposerInfo {
-                    name: "test2".to_string(),
-                    pub_key: AlloyBlsPublicKey::try_from([23u8; 48].as_ref()).unwrap(),
-                },
+                ProposerInfo { name: "test".to_string(), pub_key: BlsPublicKey::test_random() },
+                ProposerInfo { name: "test2".to_string(), pub_key: BlsPublicKey::test_random() },
             ])
             .await
             .unwrap();
 
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random()).await.unwrap();
         assert!(is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache
-            .is_trusted_proposer(&BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap())
-            .await
-            .unwrap();
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random()).await.unwrap();
         assert!(is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache
-            .is_trusted_proposer(&BlsPublicKey::try_from([24u8; 48].as_ref()).unwrap())
-            .await
-            .unwrap();
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random()).await.unwrap();
         assert!(!is_trusted, "Failed to check trusted proposer");
 
         cache
             .update_trusted_proposers(vec![ProposerInfo {
                 name: "test2".to_string(),
-                pub_key: AlloyBlsPublicKey::try_from([25u8; 48].as_ref()).unwrap(),
+                pub_key: BlsPublicKey::test_random(),
             }])
             .await
             .unwrap();
 
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::default()).await.unwrap();
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random()).await.unwrap();
         assert!(!is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache
-            .is_trusted_proposer(&BlsPublicKey::try_from([25u8; 48].as_ref()).unwrap())
-            .await
-            .unwrap();
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random()).await.unwrap();
         assert!(is_trusted, "Failed to check trusted proposer");
     }
 
@@ -2072,7 +2077,7 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
-        let builder_pub_key = BlsPublicKey::try_from([23u8; 48].as_ref()).unwrap();
+        let builder_pub_key = BlsPublicKey::test_random();
         let builder_info = BuilderInfo {
             collateral: U256::from(12),
             is_optimistic: false,
@@ -2097,7 +2102,7 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
-        let builder_pub_key_optimistic = BlsPublicKey::try_from([11u8; 48].as_ref()).unwrap();
+        let builder_pub_key_optimistic = BlsPublicKey::test_random();
         let builder_info = BuilderInfo {
             collateral: U256::from(12),
             is_optimistic: true,
@@ -2133,33 +2138,25 @@ mod tests {
         // Default vals
         let slot = 1;
         let parent_hash = B256::default();
-        let proposer_pub_key = BlsPublicKey::default();
+        let proposer_pub_key = BlsPublicKey::test_random();
         let received_at = 12;
 
         // Save 2 builder bids. builder bid 1 > builder bid 2
-        let builder_pub_key_1 = BlsPublicKey::try_from([1u8; 48].as_ref()).unwrap();
-        let builder_bid_1 = SignedBuilderBid::Capella(
-            capella::SignedBuilderBid {
-                message: helix_common::eth::capella::BuilderBid {
-                    value: U256::from(100),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            None,
-        );
+        let builder_pub_key_1 = BlsPublicKey::test_random();
+        let builder_bid_1 = SignedBuilderBid {
+            message: BuilderBidDeneb {
+                value: U256::from(100),
+                header: ExecutionPayloadHeaderDeneb::test_random(),
+                blob_kzg_commitments: KzgCommitments::test_random(),
+                pubkey: BlsPublicKey::test_random().into(),
+            }
+            .into(),
+            signature: BlsSignature::test_random(),
+        };
 
-        let builder_pub_key_2 = BlsPublicKey::try_from([2u8; 48].as_ref()).unwrap();
-        let builder_bid_2 = SignedBuilderBid::Capella(
-            capella::SignedBuilderBid {
-                message: helix_common::eth::capella::BuilderBid {
-                    value: U256::from(50),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            None,
-        );
+        let builder_pub_key_2 = BlsPublicKey::test_random();
+        let mut builder_bid_2 = builder_bid_1.clone();
+        *builder_bid_2.message.value_mut() = U256::from(50);
 
         // Save both builder bids
         let set_result = cache
@@ -2210,7 +2207,7 @@ mod tests {
 
         let top_bid = cache.get_best_bid(slot, &parent_hash, &proposer_pub_key).await;
         assert!(top_bid.is_ok(), "Failed to get best bid");
-        assert_eq!(top_bid.unwrap().unwrap().value(), U256::from(100), "Top bid mismatch");
+        assert_eq!(top_bid.unwrap().unwrap().message.value(), &U256::from(100), "Top bid mismatch");
 
         // Test: Delete best builder bid
         let delete_result = cache
@@ -2221,7 +2218,7 @@ mod tests {
         // Validate: builder bid 2 is now the best bid
         let top_bid = cache.get_best_bid(slot, &parent_hash, &proposer_pub_key).await;
         assert!(top_bid.is_ok(), "Failed to get best bid");
-        assert_eq!(top_bid.unwrap().unwrap().value(), U256::from(50), "Top bid mismatch");
+        assert_eq!(top_bid.unwrap().unwrap().message.value(), &U256::from(50), "Top bid mismatch");
     }
 
     #[tokio::test]
@@ -2271,7 +2268,7 @@ mod tests {
             .get_floor_bid_value(
                 submission.message().slot,
                 &submission.message().parent_hash,
-                &submission.message().proposer_public_key,
+                &submission.message().proposer_pubkey,
             )
             .await
             .unwrap()
@@ -2305,7 +2302,7 @@ mod tests {
             .get_floor_bid_value(
                 submission.message().slot,
                 &submission.message().parent_hash,
-                &submission.message().proposer_public_key,
+                &submission.message().proposer_pubkey,
             )
             .await
             .unwrap()
@@ -2339,7 +2336,7 @@ mod tests {
             .get_floor_bid_value(
                 submission.message().slot,
                 &submission.message().parent_hash,
-                &submission.message().proposer_public_key,
+                &submission.message().proposer_pubkey,
             )
             .await
             .unwrap()
@@ -2353,8 +2350,7 @@ mod tests {
         let (cache, mut submission, floor_value, received_at) = setup_save_and_update_test().await;
 
         // Save top bid from different builder. Cancellations enabled so won't set new floor.
-        submission.message_mut().builder_public_key =
-            BlsPublicKey::try_from([53u8; 48].as_ref()).unwrap();
+        submission.message_mut().builder_pubkey = BlsPublicKey::test_random();
         submission.message_mut().value = floor_value + U256::from(2);
         let mut state = SaveBidAndUpdateTopBidResponse::default();
         let result = cache
@@ -2371,7 +2367,7 @@ mod tests {
 
         // Save bid below top bid but above floor.
         submission.message_mut().value = floor_value + U256::from(1);
-        submission.message_mut().builder_public_key = BlsPublicKey::default();
+        submission.message_mut().builder_pubkey = BlsPublicKey::test_random();
         let mut state = SaveBidAndUpdateTopBidResponse::default();
 
         let result = cache
@@ -2397,16 +2393,14 @@ mod tests {
         let received_at = 1000;
 
         let mut state = SaveBidAndUpdateTopBidResponse::default();
-        let mut submission = SignedBidSubmission::default();
-        submission.message_mut().slot = 1;
+        let mut submission = SignedBidSubmissionDeneb::test_random();
 
         // Save floor value
-        submission.message_mut().builder_public_key =
-            BlsPublicKey::try_from([12u8; 48].as_ref()).unwrap();
-        submission.message_mut().value = floor_value;
+
+        submission.message.value = floor_value;
         cache
             .save_bid_and_update_top_bid(
-                &submission,
+                &submission.clone().into(),
                 received_at,
                 false,
                 U256::ZERO,
@@ -2417,10 +2411,10 @@ mod tests {
             .unwrap();
 
         // Reset submission values
-        submission.message_mut().builder_public_key = BlsPublicKey::default();
-        submission.message_mut().value = U256::from(10);
+        submission.message.builder_pubkey = BlsPublicKey::test_random();
+        submission.message.value = U256::from(10);
 
-        (cache, submission, floor_value, received_at)
+        (cache, submission.into(), floor_value, received_at)
     }
 
     #[tokio::test]
@@ -2438,7 +2432,7 @@ mod tests {
                 &block_hash,
                 slot,
                 &B256::default(),
-                &BlsPublicKey::default(),
+                &BlsPublicKey::test_random(),
             )
             .await;
         assert!(seen_result.is_ok(), "Failed to check if block hash was seen");
@@ -2450,7 +2444,7 @@ mod tests {
                 &block_hash,
                 slot,
                 &B256::default(),
-                &BlsPublicKey::default(),
+                &BlsPublicKey::test_random(),
             )
             .await;
         assert!(seen_result_again.is_ok(), "Failed to check if block hash was seen after insert");
@@ -2463,7 +2457,7 @@ mod tests {
                 &block_hash_2,
                 slot,
                 &B256::default(),
-                &BlsPublicKey::default(),
+                &BlsPublicKey::test_random(),
             )
             .await;
         assert!(seen_result.is_ok(), "Failed to check if block hash was seen");
@@ -2476,7 +2470,7 @@ mod tests {
                 &block_hash,
                 slot,
                 &B256::default(),
-                &BlsPublicKey::default(),
+                &BlsPublicKey::test_random(),
             )
             .await;
         assert!(seen_result_again.is_ok(), "Failed to check if block hash was seen after insert");
@@ -2533,14 +2527,14 @@ mod tests {
                 builder_id: None,
                 builder_ids: None,
             },
-            pub_key: BlsPublicKey::default(),
+            pub_key: BlsPublicKey::test_random(),
         }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
 
         let slot = 42;
         let block_hash = B256::try_from([5u8; 32].as_ref()).unwrap();
-        let builder_pub_key = BlsPublicKey::default();
+        let builder_pub_key = BlsPublicKey::test_random();
         let time = 1616237123000u64;
 
         cache.save_pending_block_header(slot, &builder_pub_key, &block_hash, time).await.unwrap();
@@ -2572,7 +2566,7 @@ mod tests {
                 builder_id: None,
                 builder_ids: None,
             },
-            pub_key: BlsPublicKey::default(),
+            pub_key: BlsPublicKey::test_random(),
         }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
@@ -2582,8 +2576,8 @@ mod tests {
         for i in 0..10 {
             let slot = i as u64;
             let block_hash = B256::try_from([i; 32].as_ref()).unwrap();
-            let builder_pub_key = BlsPublicKey::default();
-            let time = get_current_unix_time_in_nanos() as u64;
+            let builder_pub_key = BlsPublicKey::test_random();
+            let time = utcnow_ns();
 
             cache
                 .save_pending_block_header(slot, &builder_pub_key, &block_hash, time)
@@ -2638,14 +2632,14 @@ mod tests {
                 builder_id: None,
                 builder_ids: None,
             },
-            pub_key: BlsPublicKey::default(),
+            pub_key: BlsPublicKey::test_random(),
         }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
 
         let slot = 42;
         let block_hash = B256::try_from([5u8; 32].as_ref()).unwrap();
-        let builder_pub_key = BlsPublicKey::default();
+        let builder_pub_key = BlsPublicKey::test_random();
         let time = 1616237123000u64;
 
         cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash, time).await.unwrap();
@@ -2675,14 +2669,14 @@ mod tests {
                 builder_id: None,
                 builder_ids: None,
             },
-            pub_key: BlsPublicKey::default(),
+            pub_key: BlsPublicKey::test_random(),
         }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
 
         let slot = 42;
         let block_hash = B256::try_from([5u8; 32].as_ref()).unwrap();
-        let builder_pub_key = BlsPublicKey::default();
+        let builder_pub_key = BlsPublicKey::test_random();
         let time = 1616237123000u64;
 
         cache.save_pending_block_header(slot, &builder_pub_key, &block_hash, time).await.unwrap();
@@ -2712,14 +2706,14 @@ mod tests {
                 builder_id: None,
                 builder_ids: None,
             },
-            pub_key: BlsPublicKey::default(),
+            pub_key: BlsPublicKey::test_random(),
         }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
 
         let slot = 42;
         let block_hash = B256::try_from([5u8; 32].as_ref()).unwrap();
-        let builder_pub_key = BlsPublicKey::default();
+        let builder_pub_key = BlsPublicKey::test_random();
         let time = 1616237123000u64;
 
         cache.save_pending_block_header(slot, &builder_pub_key, &block_hash, time).await.unwrap();

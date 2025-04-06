@@ -2,19 +2,23 @@
 mod tests {
     use std::{default::Default, ops::DerefMut, sync::Arc, time::Duration};
 
-    use alloy_primitives::B256;
+    use alloy_primitives::{b256, B256, U256};
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
     use helix_common::{
         api::{
             builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
         },
-        bid_submission::v2::header_submission::SignedHeaderSubmission,
+        bid_submission::v2::header_submission::{HeaderSubmissionDeneb, SignedHeaderSubmission},
         simulator::BlockSimError,
         validator_preferences::ValidatorPreferences,
         Filtering, GetPayloadTrace, HeaderSubmissionTrace, SubmissionTrace, ValidatorSummary,
     };
-    use helix_types::{BlsKeypair, SignedValidatorRegistration, Validator, ValidatorRegistration};
-    use helix_utils::utcnow_sec;
+    use helix_types::{
+        BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsSecretKey, BlsSignature,
+        ExecutionPayloadDeneb, PayloadAndBlobs, SignedBidSubmissionDeneb, SignedMessage,
+        SignedValidatorRegistration, TestRandomSeed, Validator, ValidatorRegistration, Withdrawal,
+    };
+    use helix_utils::{utcnow_ns, utcnow_sec};
     use rand::{seq::SliceRandom, thread_rng, Rng};
     use tokio::time::sleep;
     use tokio_postgres::NoTls;
@@ -118,9 +122,7 @@ mod tests {
         sleep(Duration::from_secs(5)).await;
 
         let result = db_service
-            .get_validator_registration(
-                registration.registration.message.pubkey.decompress().unwrap(),
-            )
+            .get_validator_registration(registration.registration.message.pubkey)
             .await
             .unwrap();
         assert_eq!(
@@ -150,9 +152,7 @@ mod tests {
 
         for registration in registrations {
             let result = db_service
-                .get_validator_registration(
-                    registration.registration.message.pubkey.decompress().unwrap(),
-                )
+                .get_validator_registration(registration.registration.message.pubkey)
                 .await
                 .unwrap();
             assert_eq!(
@@ -186,7 +186,7 @@ mod tests {
             .get_validator_registrations_for_pub_keys(
                 registrations
                     .iter()
-                    .map(|r| r.registration.message.pubkey.decompress().unwrap().clone())
+                    .map(|r| r.registration.message.pubkey.clone())
                     .collect::<Vec<_>>(),
             )
             .await
@@ -271,16 +271,7 @@ mod tests {
                 index: i,
                 balance: 0,
                 status: helix_common::ValidatorStatus::Active,
-                validator: Validator {
-                    pubkey: public_key.clone(),
-                    withdrawal_credentials: Default::default(),
-                    effective_balance: 0,
-                    slashed: false,
-                    activation_eligibility_epoch: 0,
-                    activation_epoch: 0,
-                    exit_epoch: 0,
-                    withdrawable_epoch: 0,
-                },
+                validator: Validator { pubkey: public_key.clone(), ..Validator::test_random() },
             };
 
             validator_summaries.push(validator_summary);
@@ -294,24 +285,14 @@ mod tests {
         let mut new_validator_summaries = Vec::new();
 
         for i in 0..10 {
-            let mut rng = rand::thread_rng();
-            let key = SecretKey::random(&mut rng).unwrap();
-            let public_key = key.public_key();
+            let key = BlsSecretKey::random();
+            let pubkey = key.public_key();
 
             let validator_summary = helix_common::ValidatorSummary {
                 index: i,
                 balance: 0,
                 status: helix_common::ValidatorStatus::Active,
-                validator: Validator {
-                    public_key: public_key.clone(),
-                    withdrawal_credentials: Default::default(),
-                    effective_balance: 0,
-                    slashed: false,
-                    activation_eligibility_epoch: 0,
-                    activation_epoch: 0,
-                    exit_epoch: 0,
-                    withdrawable_epoch: 0,
-                },
+                validator: Validator { pubkey, ..Validator::test_random() },
             };
 
             new_validator_summaries.push(validator_summary);
@@ -331,9 +312,8 @@ mod tests {
 
         // Check that the removed validators are no longer known
         for removed_validator in removed {
-            let result = db_service
-                .check_known_validators(vec![removed_validator.validator.public_key])
-                .await;
+            let result =
+                db_service.check_known_validators(vec![removed_validator.validator.pubkey]).await;
             assert!(result.is_ok());
             assert!(result.unwrap().is_empty());
         }
@@ -341,7 +321,7 @@ mod tests {
         // Check that all validators in the final list are known
         for new_validator in final_list {
             let result =
-                db_service.check_known_validators(vec![new_validator.validator.public_key]).await;
+                db_service.check_known_validators(vec![new_validator.validator.pubkey]).await;
             assert!(result.is_ok());
             assert!(!result.unwrap().is_empty());
         }
@@ -353,27 +333,17 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
-        let mut rng = rand::thread_rng();
         let mut validator_summaries = Vec::new();
 
         for i in 0..200_000 {
-            let key = SecretKey::random(&mut rng).unwrap();
-            let public_key = key.public_key();
+            let key = BlsSecretKey::random();
+            let pubkey = key.public_key();
 
             let validator_summary = helix_common::ValidatorSummary {
                 index: i,
                 balance: 0,
                 status: helix_common::ValidatorStatus::Active,
-                validator: Validator {
-                    public_key: public_key.clone(),
-                    withdrawal_credentials: Default::default(),
-                    effective_balance: 0,
-                    slashed: false,
-                    activation_eligibility_epoch: 0,
-                    activation_epoch: 0,
-                    exit_epoch: 0,
-                    withdrawable_epoch: 0,
-                },
+                validator: Validator { pubkey, ..Validator::test_random() },
             };
 
             validator_summaries.push(validator_summary);
@@ -389,9 +359,9 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
-        let public_key = PublicKey::try_from(alloy_primitives::hex::decode("8C266FD5CB50B5D9431DAA69C4BE17BC9A79A85D172112DA09E0AC3E2D0DCF785021D49B6DF57827D6BC61EBA086A507").unwrap().as_ref()).unwrap();
+        let public_key = BlsPublicKey::deserialize(&alloy_primitives::hex!("8C266FD5CB50B5D9431DAA69C4BE17BC9A79A85D172112DA09E0AC3E2D0DCF785021D49B6DF57827D6BC61EBA086A507")).unwrap();
         let builder_info = helix_common::BuilderInfo {
-            collateral: U256::from_str("1000000000000000000000000000").unwrap(),
+            collateral: U256::from(10000000000000000000u64),
             is_optimistic: false,
             is_optimistic_for_regional_filtering: false,
             builder_id: None,
@@ -413,8 +383,8 @@ mod tests {
     async fn test_demotion() {
         let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
-        let mut rng = rand::thread_rng();
-        let key = SecretKey::random(&mut rng).unwrap();
+
+        let key = BlsSecretKey::random();
         let public_key = key.public_key();
 
         let builder_info = helix_common::BuilderInfo {
@@ -451,43 +421,25 @@ mod tests {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
-        let mut rng = rand::thread_rng(); // Get a random number generator
-        let random_bytes: [u8; 32] = rng.gen();
+        let pubkey = BlsPublicKey::deserialize(alloy_primitives::hex!("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").as_ref()).unwrap();
 
-        let bid_trace = BidTrace {
-            slot: 1235,
-            parent_hash: Default::default(),
-            block_hash: ByteVector::<32>::try_from(random_bytes.as_slice()).unwrap(),
-            builder_public_key: Default::default(),
-            proposer_public_key:  PublicKey::try_from(alloy_primitives::hex::decode("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").unwrap().as_ref()).unwrap(),
-            proposer_fee_recipient: Default::default(),
-            gas_limit: 0,
-            gas_used: 0,
-            value: U256::from(1234),
-        };
-        let mut signed_bid_submission = SignedBidSubmission::default();
-        match &mut signed_bid_submission {
-            SignedBidSubmission::Electra(submission) => {
-                submission.message = bid_trace.clone();
-            }
-            SignedBidSubmission::Deneb(submission) => {
-                submission.message = bid_trace.clone();
-            }
-            SignedBidSubmission::DenebWithProofs(submission) => {
-                submission.message = bid_trace.clone();
-            }
-            SignedBidSubmission::Capella(submission) => {
-                submission.message = bid_trace.clone();
-            }
-        }
+        let bid_trace = BidTrace { proposer_pubkey: pubkey, ..BidTrace::test_random() };
 
-        let submission_trace = SubmissionTrace {
-            receive: get_current_unix_time_in_nanos() as u64,
-            ..Default::default()
+        let signed_bid_submission = SignedBidSubmissionDeneb {
+            message: bid_trace.clone(),
+            execution_payload: ExecutionPayloadDeneb::default(),
+            blobs_bundle: BlobsBundle::default(),
+            signature: BlsSignature::test_random(),
         };
+
+        let submission_trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
 
         db_service
-            .store_block_submission(Arc::new(signed_bid_submission), Arc::new(submission_trace), 0)
+            .store_block_submission(
+                Arc::new(signed_bid_submission.into()),
+                Arc::new(submission_trace),
+                0,
+            )
             .await?;
         Ok(())
     }
@@ -517,34 +469,8 @@ mod tests {
     #[ignore = "TODO: to fix"]
     async fn test_save_delivered_payloads() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
-        let extra_data = [0u8; 32];
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
-        let mut execution_payload = ethereum_consensus::types::ExecutionPayload::Capella(
-            ethereum_consensus::capella::ExecutionPayload {
-                parent_hash: ByteVector::default(),
-                fee_recipient: ByteVector::default(),
-                state_root: ByteVector::default(),
-                receipts_root: ByteVector::default(),
-                logs_bloom: ByteVector::default(),
-                prev_randao: ByteVector::default(),
-                block_number: 1234,
-                gas_limit: 0,
-                gas_used: 0,
-                timestamp: 0,
-                extra_data: ByteList::try_from(extra_data.as_slice()).unwrap(),
-                base_fee_per_gas: U256::from(1234),
-                block_hash: ByteVector::try_from(
-                    alloy_primitives::hex::decode(
-                        "6AD0CC0183284A1F2CEBB5188DC68F49EC6D522D9E99706DA097EF2BD8148D88",
-                    )
-                    .unwrap()
-                    .as_slice(),
-                )
-                .unwrap(),
-                transactions: List::default(),
-                withdrawals: Default::default(),
-            },
-        );
+        let mut execution_payload = ExecutionPayloadDeneb::test_random();
 
         // execution_payload
         //     .transactions_mut()
@@ -553,30 +479,27 @@ mod tests {
         // execution_payload
         //     .transactions_mut()
         //     .push(ethereum_consensus::capella::Transaction::default());
-        execution_payload.withdrawals_mut().unwrap().push(
-            ethereum_consensus::capella::Withdrawal {
+        execution_payload
+            .withdrawals
+            .push(Withdrawal {
                 index: 0,
                 validator_index: 0,
                 amount: 0,
                 address: Default::default(),
-            },
-        );
+            })
+            .unwrap();
 
-        let bid_trace =  BidTrace {
+        let bid_trace = BidTrace {
             slot: 1235,
-            block_hash: ByteVector::try_from(
-            alloy_primitives::hex::decode("6AD0CC0183284A1F2CEBB5188DC68F49EC6D522D9E99706DA097EF2BD8148D88")
-                .unwrap()
-                .as_slice(),
-        )
-        .unwrap(),
-            proposer_public_key: PublicKey::try_from(
-                alloy_primitives::hex::decode("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").unwrap().as_ref()).unwrap(),
-            ..Default::default() };
+            block_hash: b256!("6AD0CC0183284A1F2CEBB5188DC68F49EC6D522D9E99706DA097EF2BD8148D88"),
+            ..BidTrace::test_random()
+        };
         let latency_trace = GetPayloadTrace::default();
 
-        let payload_and_blobs =
-            PayloadAndBlobs { execution_payload: execution_payload.clone(), blobs_bundle: None };
+        let payload_and_blobs = PayloadAndBlobs {
+            execution_payload: execution_payload.into(),
+            blobs_bundle: Default::default(),
+        };
 
         db_service
             .save_delivered_payload(&bid_trace, Arc::new(payload_and_blobs), &latency_trace, None)
@@ -617,7 +540,7 @@ mod tests {
         let reg = get_randomized_signed_validator_registration().registration;
 
         db_service
-            .save_too_late_get_payload(1, &reg.message.public_key, &Default::default(), 0, 0)
+            .save_too_late_get_payload(1, &reg.message.pubkey, &Default::default(), 0, 0)
             .await?;
 
         Ok(())
@@ -635,7 +558,7 @@ mod tests {
             .save_get_header_call(
                 1,
                 Default::default(),
-                reg.message.public_key,
+                reg.message.pubkey,
                 Default::default(),
                 Default::default(),
                 false,
@@ -667,24 +590,10 @@ mod tests {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
-        let signed_bid_submission =
-            SignedHeaderSubmission::Capella(SignedHeaderSubmissionCapella {
-                message: HeaderSubmissionCapella {
-                    bid_trace: BidTrace {
-                        slot: 1234,
-                        parent_hash: Default::default(),
-                        block_hash: Default::default(),
-                        builder_public_key: Default::default(),
-                        proposer_public_key: Default::default(),
-                        proposer_fee_recipient: Default::default(),
-                        gas_limit: 0,
-                        gas_used: 0,
-                        value: U256::from(1234),
-                    },
-                    execution_payload_header: Default::default(),
-                },
-                signature: Default::default(),
-            });
+        let bid_submission = HeaderSubmissionDeneb::test_random();
+        let signed =
+            SignedMessage { message: bid_submission, signature: BlsSignature::test_random() };
+        let signed_bid_submission = SignedHeaderSubmission::Deneb(signed);
 
         db_service
             .store_header_submission(

@@ -1,6 +1,7 @@
 use alloy_primitives::{Address, B256};
 use lh_bls::{PublicKey, Signature};
-use lh_types::{ChainSpec, Epoch, SignedRoot};
+use lh_test_random::TestRandom;
+use lh_types::{test_utils::TestRandom, ChainSpec, Epoch, SignedRoot};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
@@ -58,7 +59,9 @@ impl SignedValidatorRegistrationData {
 /// Information about a `BeaconChain` validator.
 ///
 /// Spec v0.12.1
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash, TestRandom,
+)]
 pub struct Validator {
     pub pubkey: PublicKey,
     pub withdrawal_credentials: B256,

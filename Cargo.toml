@@ -61,12 +61,12 @@ helix-website = { path = "./crates/website" }
 http = "1.0.0"
 hyper = "1.1.0"
 lazy_static = "1.5.0"
-lh-bls = { package = "bls", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
-lh-eth2 = { package = "eth2", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
-lh-kzg = { package = "kzg", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
-lh-slot-clock = { package = "slot_clock", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
-lh-test-random = { package = "test_random_derive", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
-lh-types = { package = "types", git = "https://github.com/ltitanb/lighthouse", rev = "f40433985e66fe2675512bd6ccb8a19027c43b0e" }
+lh-bls = { package = "bls", git = "https://github.com/ltitanb/lighthouse", rev = "7159716bd5c82f699badf707f811a704523309a6" }
+lh-eth2 = { package = "eth2", git = "https://github.com/ltitanb/lighthouse", rev = "7159716bd5c82f699badf707f811a704523309a6" }
+lh-kzg = { package = "kzg", git = "https://github.com/ltitanb/lighthouse", rev = "7159716bd5c82f699badf707f811a704523309a6" }
+lh-slot-clock = { package = "slot_clock", git = "https://github.com/ltitanb/lighthouse", rev = "7159716bd5c82f699badf707f811a704523309a6" }
+lh-test-random = { package = "test_random_derive", git = "https://github.com/ltitanb/lighthouse", rev = "7159716bd5c82f699badf707f811a704523309a6" }
+lh-types = { package = "types", git = "https://github.com/ltitanb/lighthouse", rev = "7159716bd5c82f699badf707f811a704523309a6" }
 mockito = "1.1.1"
 moka = "0.9"
 num-format = "0.4.4"

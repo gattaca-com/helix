@@ -36,6 +36,10 @@ pub fn random_bls_pubkey() -> BlsPublicKey {
     BlsPublicKey::test_random()
 }
 
+pub fn get_fixed_pubkey() -> BlsPublicKey {
+    BlsPublicKey::deserialize(&[0; 48]).unwrap()
+}
+
 pub trait TestRandomSeed: TestRandom {
     fn test_random() -> Self
     where

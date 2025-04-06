@@ -26,4 +26,5 @@ tokio-stream.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+helix-utils.workspace = true
 serial_test.workspace = true
