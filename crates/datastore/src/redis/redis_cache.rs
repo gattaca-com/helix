@@ -1386,7 +1386,7 @@ fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {
 mod tests {
     use alloy_primitives::U256;
     use helix_types::{
-        BlsSignature, BuilderBid, BuilderBidDeneb, ExecutionPayloadDeneb,
+        get_fixed_pubkey, BlsSignature, BuilderBid, BuilderBidDeneb, ExecutionPayloadDeneb,
         ExecutionPayloadHeaderDeneb, KzgCommitments, SignedBidSubmissionDeneb, TestRandomSeed,
     };
     use helix_utils::utcnow_ns;
@@ -1596,7 +1596,7 @@ mod tests {
         // Block info
         let slot = 23894;
         let parent_hash = B256::default();
-        let proposer_pub_key = BlsPublicKey::deserialize(&[1u8; 48].as_ref()).unwrap();
+        let proposer_pub_key = BlsPublicKey::test_random();
 
         // Save prev best bid
         let prev_builder_pubkey = BlsPublicKey::test_random();
@@ -2042,25 +2042,25 @@ mod tests {
 
         cache
             .update_trusted_proposers(vec![
-                ProposerInfo { name: "test".to_string(), pub_key: BlsPublicKey::test_random() },
-                ProposerInfo { name: "test2".to_string(), pub_key: BlsPublicKey::test_random() },
+                ProposerInfo { name: "test".to_string(), pub_key: get_fixed_pubkey(Some(0)) },
+                ProposerInfo { name: "test2".to_string(), pub_key: get_fixed_pubkey(Some(1)) },
             ])
             .await
             .unwrap();
 
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random()).await.unwrap();
+        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(Some(0))).await.unwrap();
         assert!(is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random()).await.unwrap();
+        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(Some(1))).await.unwrap();
         assert!(is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random()).await.unwrap();
+        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(Some(2))).await.unwrap();
         assert!(!is_trusted, "Failed to check trusted proposer");
 
         cache
             .update_trusted_proposers(vec![ProposerInfo {
                 name: "test2".to_string(),
-                pub_key: BlsPublicKey::test_random(),
+                pub_key: get_fixed_pubkey(Some(3)),
             }])
             .await
             .unwrap();
@@ -2068,7 +2068,7 @@ mod tests {
         let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random()).await.unwrap();
         assert!(!is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random()).await.unwrap();
+        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(Some(3))).await.unwrap();
         assert!(is_trusted, "Failed to check trusted proposer");
     }
 
@@ -2424,55 +2424,32 @@ mod tests {
         cache.clear_cache().await.unwrap();
 
         let slot = 42;
-        let block_hash = B256::try_from([5u8; 32].as_ref()).unwrap();
+        let block_hash = B256::random();
+        let pubkey = get_fixed_pubkey(Some(0));
 
         // Test: Check if block hash has been seen before (should be false initially)
-        let seen_result = cache
-            .seen_or_insert_block_hash(
-                &block_hash,
-                slot,
-                &B256::default(),
-                &BlsPublicKey::test_random(),
-            )
-            .await;
+        let seen_result =
+            cache.seen_or_insert_block_hash(&block_hash, slot, &B256::default(), &pubkey).await;
         assert!(seen_result.is_ok(), "Failed to check if block hash was seen");
         assert!(!seen_result.unwrap(), "Block hash was incorrectly seen before");
 
         // Test: Insert the block hash and check again (should be true after insert)
-        let seen_result_again = cache
-            .seen_or_insert_block_hash(
-                &block_hash,
-                slot,
-                &B256::default(),
-                &BlsPublicKey::test_random(),
-            )
-            .await;
+        let seen_result_again =
+            cache.seen_or_insert_block_hash(&block_hash, slot, &B256::default(), &pubkey).await;
         assert!(seen_result_again.is_ok(), "Failed to check if block hash was seen after insert");
         assert!(seen_result_again.unwrap(), "Block hash was not seen after insert");
 
         // Test: Add a different new block hash (should be false initially)
-        let block_hash_2 = B256::try_from([6u8; 32].as_ref()).unwrap();
-        let seen_result = cache
-            .seen_or_insert_block_hash(
-                &block_hash_2,
-                slot,
-                &B256::default(),
-                &BlsPublicKey::test_random(),
-            )
-            .await;
+        let block_hash_2 = B256::random();
+        let seen_result =
+            cache.seen_or_insert_block_hash(&block_hash_2, slot, &B256::default(), &pubkey).await;
         assert!(seen_result.is_ok(), "Failed to check if block hash was seen");
         assert!(!seen_result.unwrap(), "Block hash was incorrectly seen before");
 
         // Test: Insert the original block hash again, ensure it wasn't overwritten (should be true
         // after insert)
-        let seen_result_again = cache
-            .seen_or_insert_block_hash(
-                &block_hash,
-                slot,
-                &B256::default(),
-                &BlsPublicKey::test_random(),
-            )
-            .await;
+        let seen_result_again =
+            cache.seen_or_insert_block_hash(&block_hash, slot, &B256::default(), &pubkey).await;
         assert!(seen_result_again.is_ok(), "Failed to check if block hash was seen after insert");
         assert!(seen_result_again.unwrap(), "Block hash was not seen after insert");
     }
