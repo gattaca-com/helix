@@ -612,7 +612,7 @@ impl DatabaseService for PostgresDatabaseService {
                     validator_preferences.gossip_blobs,
                     validator_registrations.inserted_at,
                     validator_registrations.user_agent,
-                    validator_preferences.delay_ms,
+                    validator_preferences.delay_ms
                 FROM validator_registrations
                 INNER JOIN validator_preferences ON validator_registrations.public_key = validator_preferences.public_key
                 WHERE validator_registrations.public_key = $1 AND validator_registrations.active = true
