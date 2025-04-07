@@ -527,8 +527,8 @@ where
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional() &&
-            !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional()
+            && !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering and builder is not optimistic for regional filtering, discarding optimistic v2 submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
@@ -769,8 +769,8 @@ where
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional() &&
-            !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional()
+            && !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering enabled, discarding optimistic v2 submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
@@ -2169,28 +2169,15 @@ fn sanity_check_block_submission(
         });
     }
 
-    if payload.is_full_payload() {
-        let withdrawals_root = payload.withdrawals_root();
+    let withdrawals_root = payload.withdrawals_root();
 
-        let expected_withdrawals_root = payload_attributes.withdrawals_root;
+    let expected_withdrawals_root = payload_attributes.withdrawals_root;
 
-        if *withdrawals_root != *expected_withdrawals_root {
-            return Err(BuilderApiError::WithdrawalsRootMismatch {
-                got: withdrawals_root,
-                expected: expected_withdrawals_root,
-            });
-        }
-    } else {
-        let expected_withdrawals_root = payload_attributes.withdrawals_root;
-
-        let payload_withdrawals_root = payload.withdrawals_root();
-
-        if *payload_withdrawals_root != *expected_withdrawals_root {
-            return Err(BuilderApiError::WithdrawalsRootMismatch {
-                got: payload_withdrawals_root,
-                expected: expected_withdrawals_root,
-            });
-        }
+    if withdrawals_root != expected_withdrawals_root {
+        return Err(BuilderApiError::WithdrawalsRootMismatch {
+            got: withdrawals_root,
+            expected: expected_withdrawals_root,
+        });
     }
 
     // Misc. sanity checks
