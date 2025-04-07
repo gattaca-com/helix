@@ -62,7 +62,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_run_migrations_async() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let mut conn = setup_test_conn().await?;
@@ -107,7 +106,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_validator_registration() {
         let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
@@ -132,7 +130,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_validator_registrations() {
         let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
@@ -163,7 +160,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_validator_registrations_for_pub_keys() {
         let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
@@ -208,7 +204,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_validator_registration_timestamp() {
         let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
@@ -229,7 +224,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_proposer_duties() {
         let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
@@ -256,7 +250,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_known_validators() {
         let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
@@ -328,7 +321,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_large_batch() {
         let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
@@ -354,7 +346,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_builder_info() {
         let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
@@ -379,7 +370,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_demotion() {
         let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
@@ -404,7 +394,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_simulation_result() {
         let _ = env_logger::builder().is_test(true).try_init();
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
@@ -416,7 +405,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_store_block_submission() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
@@ -445,7 +433,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_get_bids() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
@@ -466,7 +453,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_delivered_payloads() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
@@ -508,7 +494,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_get_delivered_payloads() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
@@ -532,7 +517,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_late_payloads() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
@@ -547,7 +531,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_get_header() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
@@ -570,7 +553,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_failed_payloads() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
@@ -585,7 +567,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_store_header_submission() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
@@ -605,7 +586,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_gossiped_header() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
@@ -615,7 +595,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_gossiped_payload() -> Result<(), Box<dyn std::error::Error>> {
         env_logger::builder().is_test(true).try_init()?;
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;

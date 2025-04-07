@@ -177,7 +177,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_to_sql_from_sql() {
         for value in get_values().into_iter() {
             let mut bytes = bytes::BytesMut::new();
