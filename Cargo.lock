@@ -3984,6 +3984,7 @@ dependencies = [
  "helix-beacon-client",
  "helix-common",
  "helix-database",
+ "helix-datastore",
  "helix-housekeeper",
  "helix-types",
  "helix-utils",
