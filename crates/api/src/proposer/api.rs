@@ -988,23 +988,25 @@ where
 
         let local_header = local_versioned_payload.execution_payload.to_ref().into();
 
-        info!(
-            local_header = ?local_header,
-            // provided_header = ?provided_header,
-            // provided_version = %provided_signed_blinded_block.version(),
-            "validating block equality",
-        );
-
         match local_header {
             ExecutionPayloadHeader::Bellatrix(_) |
             ExecutionPayloadHeader::Capella(_) |
-            ExecutionPayloadHeader::Fulu(_) => return Err(ProposerApiError::PayloadTypeMismatch),
+            ExecutionPayloadHeader::Fulu(_) => {
+                return Err(ProposerApiError::UnsupportedBeaconChainVersion)
+            }
 
             ExecutionPayloadHeader::Deneb(local_header) => {
                 let provided_header = &body
                     .execution_payload_deneb()
                     .map_err(|_| ProposerApiError::PayloadTypeMismatch)?
                     .execution_payload_header;
+
+                info!(
+                    local_header = ?local_header,
+                    provided_header = ?provided_header,
+                    provided_version = %provided_signed_blinded_block.fork_name_unchecked(),
+                    "validating block equality",
+                );
 
                 if &local_header != provided_header {
                     return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
@@ -1025,6 +1027,13 @@ where
                     .execution_payload_electra()
                     .map_err(|_| ProposerApiError::PayloadTypeMismatch)?
                     .execution_payload_header;
+
+                info!(
+                    local_header = ?local_header,
+                    provided_header = ?provided_header,
+                    provided_version = %provided_signed_blinded_block.fork_name_unchecked(),
+                    "validating block equality",
+                );
 
                 if &local_header != provided_header {
                     return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
