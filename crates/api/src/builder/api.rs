@@ -527,8 +527,8 @@ where
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional()
-            && !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional() &&
+            !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering and builder is not optimistic for regional filtering, discarding optimistic v2 submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
@@ -769,8 +769,8 @@ where
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional()
-            && !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional() &&
+            !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering enabled, discarding optimistic v2 submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
@@ -1316,9 +1316,8 @@ where
     G: GossipClientTrait + 'static,
 {
     /// This function verifies:
-    /// 1. Runs some basic sanity checks on the payload.
-    /// 2. Verifies the payload signature.
-    /// 3. Simulates the submission
+    /// 1. Verifies the payload signature.
+    /// 2. Simulates the submission
     ///
     /// Returns: the bid submission in an Arc.
     async fn verify_submitted_block(

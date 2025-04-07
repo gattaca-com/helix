@@ -566,9 +566,13 @@ where
                 }
             };
 
-        // TODO: remove unwrap
-        let block_hash =
-            signed_blinded_block.message().body().execution_payload().unwrap().block_hash().0;
+        let block_hash = signed_blinded_block
+            .message()
+            .body()
+            .execution_payload()
+            .map_err(|_| ProposerApiError::InvalidFork)? // this should never happen as post altair there's always an execution payload
+            .block_hash()
+            .0;
 
         let slot = signed_blinded_block.message().slot();
 
@@ -1090,8 +1094,7 @@ where
             let block = signed_block.clone();
             let broadcast_validation = broadcast_validation.clone();
 
-            // TODO: remove unwrap and bubble up error
-            let fork_name = block.signed_block.fork_name(&self.chain_info.context).unwrap();
+            let fork_name = block.signed_block.fork_name_unchecked();
 
             task::spawn(file!(), line!(), async move {
                 info!(broadcaster = %broadcaster.identifier(), "broadcast_signed_block");
