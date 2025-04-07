@@ -340,7 +340,7 @@ impl PostgresDatabaseService {
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql =
                 String::from("INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay, gossip_blobs) VALUES ");
-            let num_params_per_row = 6;
+            let num_params_per_row = 5;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -454,7 +454,7 @@ impl DatabaseService for PostgresDatabaseService {
         transaction
             .execute(
                 "INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay, gossip_blobs)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (public_key)
             DO UPDATE SET
                 filtering = excluded.filtering, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay, gossip_blobs = excluded.gossip_blobs
