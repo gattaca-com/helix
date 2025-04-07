@@ -306,7 +306,7 @@ impl PostgresDatabaseService {
 
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql = String::from("INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at, user_agent) VALUES ");
-            let num_params_per_row = 8;
+            let num_params_per_row = 7;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -613,7 +613,7 @@ impl DatabaseService for PostgresDatabaseService {
                     validator_preferences.gossip_blobs,
                     validator_registrations.inserted_at,
                     validator_registrations.user_agent,
-                    validator_preferences.delay_ms,
+                    validator_preferences.delay_ms
                 FROM validator_registrations
                 INNER JOIN validator_preferences ON validator_registrations.public_key = validator_preferences.public_key
                 WHERE validator_registrations.public_key = $1 AND validator_registrations.active = true
