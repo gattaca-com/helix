@@ -15,9 +15,9 @@ pub use lh_test_random::TestRandom;
 pub use lh_types::{
     blob_sidecar::BlobSidecarError, fork_name::ForkName,
     fork_versioned_response::ForkVersionDecode, payload::ExecPayload, test_utils::TestRandom,
-    MainnetEthSpec, SignedRoot,
+    EthSpec, MainnetEthSpec, SignedRoot,
 };
-use lh_types::{BlindedPayload, EthSpec, FixedVector, VariableList};
+use lh_types::{BlindedPayload, FixedVector, VariableList};
 use serde::{Deserialize, Serialize};
 pub use spec::*;
 use ssz_derive::{Decode, Encode};

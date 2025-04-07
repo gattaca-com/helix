@@ -35,9 +35,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-use helix_types::{
-    BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid, SLOTS_PER_EPOCH,
-};
+use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
 use helix_utils::{extract_request_id, get_payload_attributes_key, utcnow_ns};
 use hyper::HeaderMap;
 use ssz::Decode;
@@ -1813,11 +1811,11 @@ where
     /// Handle a new slot update.
     /// Updates the next proposer duty and prepares the get_validators() response.
     async fn handle_new_slot(&self, slot_update: Box<SlotUpdate>) {
-        let epoch = slot_update.slot / SLOTS_PER_EPOCH;
+        let epoch = slot_update.slot / self.chain_info.slots_per_epoch();
         info!(
             epoch = epoch,
             slot_head = slot_update.slot,
-            slot_start_next_epoch = (epoch + 1) * SLOTS_PER_EPOCH,
+            slot_start_next_epoch = (epoch + 1) * self.chain_info.slots_per_epoch(),
             next_proposer_duty = ?slot_update.next_duty,
             "updated head slot",
         );
@@ -2130,7 +2128,7 @@ fn sanity_check_block_submission(
     chain_info: &ChainInfo,
 ) -> Result<(), BuilderApiError> {
     let expected_timestamp =
-        chain_info.genesis_time_in_secs + (bid_trace.slot * chain_info.seconds_per_slot);
+        chain_info.genesis_time_in_secs + (bid_trace.slot * chain_info.seconds_per_slot());
     if payload.timestamp() != expected_timestamp {
         return Err(BuilderApiError::IncorrectTimestamp {
             got: payload.timestamp(),

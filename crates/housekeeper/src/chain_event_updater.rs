@@ -90,7 +90,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
             self.chain_info.clock.duration_to_next_slot().unwrap() +
             Duration::from_secs(CUTT_OFF_TIME);
         let mut timer =
-            interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
+            interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot()));
         loop {
             tokio::select! {
                 head_event_result = head_event_rx.recv() => {
@@ -147,7 +147,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         // Validate this isn't a faulty head slot
 
         let slot_timestamp =
-            self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot);
+            self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot());
         if slot_timestamp > utcnow_sec() + MAX_DISTANCE_FOR_FUTURE_SLOT {
             warn!(head_slot = slot, "slot is too far in the future",);
             return;

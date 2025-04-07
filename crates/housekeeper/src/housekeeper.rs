@@ -135,7 +135,7 @@ impl<
                 self.chain_info.clock.duration_to_next_slot().unwrap() +
                 Duration::from_secs(CUTT_OFF_TIME);
             let mut timer =
-                interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
+                interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot()));
 
             tokio::select! {
                 head_event_result = head_event_receiver.recv() => {

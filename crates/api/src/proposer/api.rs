@@ -27,7 +27,7 @@ use helix_housekeeper::{ChainUpdate, SlotUpdate};
 use helix_types::{
     BlsPublicKey, ChainSpec, ExecPayload, ExecutionPayloadHeader, GetPayloadResponse,
     PayloadAndBlobs, SigError, SignedBlindedBeaconBlock, SignedValidatorRegistration,
-    SlotClockTrait, VersionedSignedProposal, SLOTS_PER_EPOCH,
+    SlotClockTrait, VersionedSignedProposal,
 };
 use helix_utils::{extract_request_id, utcnow_ms, utcnow_ns, utcnow_sec};
 use serde_json::json;
@@ -761,8 +761,8 @@ where
             };
         let payload = Arc::new(versioned_payload);
 
-        if self.validator_preferences.gossip_blobs
-            || !matches!(self.chain_info.network, Network::Mainnet)
+        if self.validator_preferences.gossip_blobs ||
+            !matches!(self.chain_info.network, Network::Mainnet)
         {
             info!("gossip blobs: about to gossip blobs");
             let self_clone = self.clone();
@@ -917,8 +917,8 @@ where
     /// Returns how many ms we are into the slot if ok.
     fn validate_bid_request_time(&self, bid_request: &BidRequest) -> Result<u64, ProposerApiError> {
         let curr_timestamp_ms = utcnow_ms() as i64;
-        let slot_start_timestamp = self.chain_info.genesis_time_in_secs
-            + (bid_request.slot.as_u64() * self.chain_info.seconds_per_slot);
+        let slot_start_timestamp = self.chain_info.genesis_time_in_secs +
+            (bid_request.slot.as_u64() * self.chain_info.seconds_per_slot());
         let ms_into_slot = curr_timestamp_ms.saturating_sub((slot_start_timestamp * 1000) as i64);
 
         if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {
@@ -997,9 +997,9 @@ where
         );
 
         match local_header {
-            ExecutionPayloadHeader::Bellatrix(_)
-            | ExecutionPayloadHeader::Capella(_)
-            | ExecutionPayloadHeader::Fulu(_) => return Err(ProposerApiError::PayloadTypeMismatch),
+            ExecutionPayloadHeader::Bellatrix(_) |
+            ExecutionPayloadHeader::Capella(_) |
+            ExecutionPayloadHeader::Fulu(_) => return Err(ProposerApiError::PayloadTypeMismatch),
 
             ExecutionPayloadHeader::Deneb(local_header) => {
                 let provided_header = &body
@@ -1054,7 +1054,7 @@ where
         context: &ChainSpec,
     ) -> Result<(), SigError> {
         let slot = signed_blinded_beacon_block.message().slot();
-        let epoch = slot.epoch(SLOTS_PER_EPOCH);
+        let epoch = slot.epoch(self.chain_info.slots_per_epoch());
         let fork = context.fork_at_epoch(epoch);
 
         let valid = signed_blinded_beacon_block.verify_signature(
@@ -1209,7 +1209,7 @@ where
         const RETRY_DELAY: Duration = Duration::from_millis(20);
 
         let slot_time =
-            self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot);
+            self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot());
         let slot_cutoff_millis = (slot_time * 1000) + GET_PAYLOAD_REQUEST_CUTOFF_MS as u64;
 
         let mut last_error: Option<ProposerApiError> = None;
@@ -1411,11 +1411,11 @@ where
     /// Handle a new slot update.
     /// Updates the next proposer duty for the new slot.
     async fn handle_new_slot(&self, slot_update: Box<SlotUpdate>) {
-        let epoch = slot_update.slot / self.chain_info.seconds_per_slot;
+        let epoch = slot_update.slot / self.chain_info.seconds_per_slot();
         info!(
             epoch = epoch,
             slot = slot_update.slot,
-            slot_start_next_epoch = (epoch + 1) * SLOTS_PER_EPOCH,
+            slot_start_next_epoch = (epoch + 1) * self.chain_info.slots_per_epoch(),
             next_proposer_duty = ?slot_update.next_duty,
             "Updated head slot",
         );
@@ -1431,7 +1431,7 @@ fn calculate_slot_time_info(
     request_time: u64,
 ) -> (i64, Duration) {
     let slot_start_timestamp_in_secs =
-        chain_info.genesis_time_in_secs + (slot * chain_info.seconds_per_slot);
+        chain_info.genesis_time_in_secs + (slot * chain_info.seconds_per_slot());
     let ms_into_slot =
         (request_time / 1_000_000) as i64 - (slot_start_timestamp_in_secs * 1000) as i64;
     // TODO: check this

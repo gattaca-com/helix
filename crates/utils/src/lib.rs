@@ -11,7 +11,6 @@ use ::serde::de;
 use alloy_primitives::B256;
 use ethereum_consensus::{
     altair::Slot,
-    phase0::mainnet::SLOTS_PER_EPOCH,
     ssz::{self, prelude::Serializable},
 };
 use http::HeaderMap;
@@ -20,15 +19,6 @@ use uuid::Uuid;
 
 pub mod request_encoding;
 pub mod serde;
-
-pub fn has_reached_fork(slot: u64, fork_epoch: u64) -> bool {
-    if fork_epoch == 0 {
-        return false;
-    }
-
-    let current_epoch = slot / SLOTS_PER_EPOCH;
-    current_epoch >= fork_epoch
-}
 
 pub fn try_decode_into<T>(is_ssz: bool, body_bytes: &[u8], json_fallback: bool) -> Option<T>
 where
