@@ -26,7 +26,7 @@ use helix_datastore::{error::AuctioneerError, Auctioneer};
 use helix_housekeeper::{ChainUpdate, SlotUpdate};
 use helix_types::{
     BlsPublicKey, ChainSpec, ExecPayload, ExecutionPayloadHeader, GetPayloadResponse,
-    PayloadAndBlobs, SigError, SignedBlindedBeaconBlock, SignedValidatorRegistration,
+    PayloadAndBlobs, SigError, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot,
     SlotClockTrait, VersionedSignedProposal,
 };
 use helix_utils::{extract_request_id, utcnow_ms, utcnow_ns, utcnow_sec};
@@ -1261,22 +1261,31 @@ where
     async fn await_and_validate_slot_start_time(
         &self,
         signed_blinded_block: &SignedBlindedBeaconBlock,
-        request_time: u64,
+        request_time_ns: u64,
     ) -> Result<(), ProposerApiError> {
-        let (ms_into_slot, duration_until_slot_start) = calculate_slot_time_info(
+        let Some((since_slot_start, until_slot_start)) = calculate_slot_time_info(
             &self.chain_info,
-            signed_blinded_block.message().slot().into(),
-            request_time,
-        );
+            signed_blinded_block.message().slot(),
+            request_time_ns,
+        ) else {
+            error!(
+                request_time_ns,
+                slot = %signed_blinded_block.message().slot(),
+                "slot time info not found"
+            );
+            return Err(ProposerApiError::SlotTooNew);
+        };
 
-        if duration_until_slot_start.as_millis() > 0 {
-            info!("waiting until slot start t=0: {} ms", duration_until_slot_start.as_millis());
-            sleep(duration_until_slot_start).await;
-        } else if ms_into_slot > GET_PAYLOAD_REQUEST_CUTOFF_MS {
-            return Err(ProposerApiError::GetPayloadRequestTooLate {
-                cutoff: GET_PAYLOAD_REQUEST_CUTOFF_MS as u64,
-                request_time: ms_into_slot as u64,
-            });
+        if let Some(until_slot_start) = until_slot_start {
+            info!("waiting until slot start t=0: {} ms", until_slot_start.as_millis());
+            sleep(until_slot_start).await;
+        } else if let Some(since_slot_start) = since_slot_start {
+            if since_slot_start.as_millis() > GET_PAYLOAD_REQUEST_CUTOFF_MS as u128 {
+                return Err(ProposerApiError::GetPayloadRequestTooLate {
+                    cutoff: GET_PAYLOAD_REQUEST_CUTOFF_MS as u64,
+                    request_time: since_slot_start.as_millis() as u64,
+                });
+            }
         }
         Ok(())
     }
@@ -1427,17 +1436,15 @@ where
 /// Calculates the time information for a given slot.
 fn calculate_slot_time_info(
     chain_info: &ChainInfo,
-    slot: u64,
-    request_time: u64,
-) -> (i64, Duration) {
-    let slot_start_timestamp_in_secs =
-        chain_info.genesis_time_in_secs + (slot * chain_info.seconds_per_slot());
-    let ms_into_slot =
-        (request_time / 1_000_000) as i64 - (slot_start_timestamp_in_secs * 1000) as i64;
-    // TODO: check this
-    let duration_until_slot_start = chain_info.clock.duration_to_slot(slot.into()).unwrap();
+    slot: Slot,
+    request_time_ns: u64,
+) -> Option<(Option<Duration>, Option<Duration>)> {
+    let until_slot_start = chain_info.clock.duration_to_slot(slot); // None if we're past slot time
 
-    (ms_into_slot, duration_until_slot_start)
+    let slot_start = chain_info.clock.start_of(slot)?;
+    let since_slot_start = Duration::from_nanos(request_time_ns).checked_sub(slot_start); // None if we're before slot time
+
+    Some((since_slot_start, until_slot_start))
 }
 
 pub fn is_mev_boost_client(client_name: &str) -> bool {
