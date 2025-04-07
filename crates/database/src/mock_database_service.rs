@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{Address, B256, U256};
 use async_trait::async_trait;
 use helix_common::{
     api::{
@@ -17,8 +17,8 @@ use helix_common::{
     ValidatorPreferences, ValidatorSummary,
 };
 use helix_types::{
-    BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
-    TestRandomSeed,
+    BidTrace, BlsPublicKey, BlsSignature, PayloadAndBlobs, SignedBidSubmission,
+    SignedValidatorRegistration, TestRandomSeed, ValidatorRegistrationData,
 };
 
 use crate::{
@@ -67,21 +67,37 @@ impl DatabaseService for MockDatabaseService {
     }
     async fn get_validator_registration(
         &self,
-        _pub_key: BlsPublicKey,
+        pubkey: BlsPublicKey,
     ) -> Result<SignedValidatorRegistrationEntry, DatabaseError> {
-        todo!()
-        // Ok(SignedValidatorRegistrationEntry::default())
+        let registration = SignedValidatorRegistration {
+            message: ValidatorRegistrationData {
+                fee_recipient: Address::test_random(),
+                gas_limit: 1000000,
+                timestamp: 1000000,
+                pubkey,
+            },
+            signature: BlsSignature::test_random(),
+        };
+
+        Ok(SignedValidatorRegistrationEntry {
+            registration_info: ValidatorRegistrationInfo {
+                registration,
+                preferences: ValidatorPreferences::default(),
+            },
+            inserted_at: 0,
+            pool_name: None,
+            user_agent: None,
+        })
     }
     async fn get_validator_registrations_for_pub_keys(
         &self,
-        _pub_keys: Vec<BlsPublicKey>,
+        pubkeys: Vec<BlsPublicKey>,
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError> {
-        todo!()
-        // let mut entries = vec![];
-        // for _pub_key in pub_keys {
-        //     entries.push(SignedValidatorRegistrationEntry::default());
-        // }
-        // Ok(entries)
+        let mut entries = vec![];
+        for pubkey in pubkeys {
+            entries.push(self.get_validator_registration(pubkey).await?);
+        }
+        Ok(entries)
     }
 
     async fn get_validator_registration_timestamp(

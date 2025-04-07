@@ -107,7 +107,7 @@ fn get_valid_payload_register_validator(
                         fee_recipient: address!("5cc0dde14e7256340cc820415a6022a7d1c93a35"),
                         gas_limit: 30000000,
                         timestamp: SUBMISSION_TIMESTAMP,
-                        pubkey: get_fixed_pubkey(),
+                        pubkey: get_fixed_pubkey(Some(0)),
                     },
                     signature: BlsSignature::deserialize(hex::decode(&"0xaf12df007a0c78abb5575067e5f8b089cfcc6227e4a91db7dd8cf517fe86fb944ead859f0781277d9b78c672e4a18c5d06368b603374673cf2007966cece9540f3a1b3f6f9e1bf421d779c4e8010368e6aac134649c7a009210780d401a778a5").unwrap().as_slice()).unwrap(),
                 },

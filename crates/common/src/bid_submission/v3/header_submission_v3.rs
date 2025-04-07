@@ -139,26 +139,6 @@ impl From<&mut [u8]> for &mut MessageHeader {
     }
 }
 
-impl From<&SocketAddr> for PayloadSocketAddress {
-    fn from(_value: &SocketAddr) -> Self {
-        todo!()
-        // match value {
-        //     SocketAddr::V4(v4) => PayloadSocketAddress::IpV4(PayloadSocketAddressIpV4 {
-        //         ip: v4.ip().to_bits(),
-        //         port: v4.port(),
-        //         sequence: 0,
-        //         builder_pubkey: BlsPublicKey::,
-        //     }),
-        //     SocketAddr::V6(v6) => PayloadSocketAddress::IpV6(PayloadSocketAddressIpV6 {
-        //         ip: v6.ip().to_bits(),
-        //         port: v6.port(),
-        //         sequence: 0,
-        //         builder_pubkey: BlsPublicKey::ZERO,
-        //     }),
-        // }
-    }
-}
-
 impl From<&PayloadSocketAddress> for SocketAddr {
     fn from(value: &PayloadSocketAddress) -> Self {
         match value {

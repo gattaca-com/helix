@@ -56,6 +56,10 @@ pub fn get_fixed_secret(i: Option<usize>) -> BlsSecretKey {
     key
 }
 
+pub fn initialize_test_tracing() {
+    tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).init();
+}
+
 pub trait TestRandomSeed: TestRandom {
     fn test_random() -> Self
     where

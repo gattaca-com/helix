@@ -15,7 +15,7 @@ use helix_common::{
 };
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
-use helix_types::BlsPublicKey;
+use helix_types::get_fixed_pubkey;
 use tokio::{sync::broadcast, task};
 
 use crate::{
@@ -119,17 +119,15 @@ async fn test_known_validators_are_set() {
 }
 
 #[tokio::test]
-#[ignore = "TODO: to fix"]
 async fn test_proposer_duties_set() {
     let vars = get_housekeeper();
     start_housekeeper(vars.housekeeper.clone(), vars.beacon_client).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // TODO: here the value is two
-    assert!(vars.proposer_duties.lock().unwrap().len() == 1);
+    assert_eq!(vars.proposer_duties.lock().unwrap().len(), 2);
     let proposer_duties = vars.proposer_duties.lock().unwrap();
-    assert!(proposer_duties[0].validator_index == 1);
-    assert!(proposer_duties[0].slot == 19);
+    assert_eq!(proposer_duties[0].validator_index, 1);
+    assert_eq!(proposer_duties[0].slot, 19);
 }
 
 #[tokio::test]
@@ -157,8 +155,8 @@ async fn test_primev_enabled_housekeeper() {
     let vars = get_housekeeper();
 
     // Create mock Primev service with test data
-    let test_validator_pubkey = BlsPublicKey::deserialize(vec![1; 48].as_slice()).unwrap();
-    let test_builder_pubkey = BlsPublicKey::deserialize(vec![2; 48].as_slice()).unwrap();
+    let test_validator_pubkey = get_fixed_pubkey(Some(0));
+    let test_builder_pubkey = get_fixed_pubkey(Some(1));
 
     let mut mock_primev = MockPrimevService::new()
         .with_validators(vec![test_validator_pubkey.clone()])

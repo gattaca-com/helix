@@ -109,7 +109,7 @@ mod proposer_api_tests {
                         fee_recipient: address!("5cc0dde14e7256340cc820415a6022a7d1c93a35"),
                         gas_limit: 30000000,
                         timestamp: SUBMISSION_TIMESTAMP,
-                        pubkey: get_fixed_pubkey(),
+                        pubkey: get_fixed_pubkey(Some(0)),
                     },
                     signature: BlsSignature::test_random(),
                 },

@@ -8,22 +8,13 @@ use tree_hash_derive::TreeHash;
 
 /// From Lighthouse, replacing PublicKeyBytes with PublicKey
 /// Validator registration, for use in interacting with servers implementing the builder API.
-#[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Encode, Decode)]
+#[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Encode, Decode, TestRandom)]
 pub struct SignedValidatorRegistrationData {
     pub message: ValidatorRegistrationData,
     pub signature: Signature,
 }
 
-impl SignedValidatorRegistrationData {
-    #[cfg(test)]
-    pub fn random_for_test() -> Self {
-        Self {
-            message: ValidatorRegistrationData::random_for_test(),
-            signature: Signature::empty(),
-        }
-    }
-}
-#[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Encode, Decode, TreeHash)]
+#[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Encode, Decode, TreeHash, TestRandom)]
 pub struct ValidatorRegistrationData {
     pub fee_recipient: Address,
     #[serde(with = "serde_utils::quoted_u64")]
@@ -31,20 +22,6 @@ pub struct ValidatorRegistrationData {
     #[serde(with = "serde_utils::quoted_u64")]
     pub timestamp: u64,
     pub pubkey: PublicKey,
-}
-
-impl ValidatorRegistrationData {
-    #[cfg(test)]
-    pub fn random_for_test() -> Self {
-        use crate::random_bls_pubkey;
-
-        Self {
-            fee_recipient: Address::ZERO,
-            gas_limit: 0,
-            timestamp: 0,
-            pubkey: random_bls_pubkey(),
-        }
-    }
 }
 
 impl SignedValidatorRegistrationData {
