@@ -38,7 +38,6 @@ clap = { version = "4.2.7", features = ["derive"] }
 dashmap = { version = "5.5.3", features = [] }
 deadpool-postgres = "0.11.0"
 deadpool-redis = { version = "0.12.0", features = ["rt_tokio_1"] }
-env_logger = "0.9"
 ethereum-consensus = { git = "https://github.com/gattaca-com/ethereum-consensus" }
 ethereum_serde_utils = "0.7"
 ethereum_ssz = "0.8"

@@ -11,7 +11,8 @@ mod tests {
         bid_submission::v2::header_submission::{HeaderSubmissionDeneb, SignedHeaderSubmission},
         simulator::BlockSimError,
         validator_preferences::ValidatorPreferences,
-        Filtering, GetPayloadTrace, HeaderSubmissionTrace, SubmissionTrace, ValidatorSummary,
+        Filtering, GetPayloadTrace, HeaderSubmissionTrace, PostgresConfig, SubmissionTrace,
+        ValidatorSummary,
     };
     use helix_types::{
         BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsSecretKey, BlsSignature,
@@ -20,7 +21,7 @@ mod tests {
     };
     use helix_utils::{utcnow_ns, utcnow_sec};
     use rand::{seq::SliceRandom, thread_rng, Rng};
-    use tokio::time::sleep;
+    use tokio::{sync::OnceCell, time::sleep};
     use tokio_postgres::NoTls;
 
     use crate::{
@@ -30,15 +31,18 @@ mod tests {
         DatabaseService,
     };
 
-    /// These tests depend on a local instance of postgres running on port 5433
+    const REGION: i16 = 1;
+    const REGION_NAME: &str = "LOCAL";
+
+    /// These tests depend on a local instance of postgres running on port 5432
     /// e.g. to start a local postgres instance in docker:
-    /// docker run -d --name postgres -e POSTGRES_PASSWORD=password -p 5433:5432
+    /// docker run -d --name postgres -e POSTGRES_PASSWORD=password -p 5432:5432
     /// timescale/timescaledb-ha:pg16 https://docs.timescale.com/self-hosted/latest/install/installation-docker/
 
     fn test_config() -> Config {
         let mut cfg = Config::new();
         cfg.host = Some("localhost".to_string());
-        cfg.port = Some(5433);
+        cfg.port = Some(5432);
         cfg.dbname = Some("postgres".to_string());
         cfg.user = Some("postgres".to_string());
         cfg.password = Some("password".to_string());
@@ -46,38 +50,54 @@ mod tests {
         cfg
     }
 
+    // TODO: cleanup config
+    fn test_postgres_config() -> PostgresConfig {
+        PostgresConfig {
+            hostname: "localhost".to_string(),
+            port: 5432,
+            db_name: "postgres".to_string(),
+            user: "postgres".to_string(),
+            password: "password".to_string(),
+            region: REGION,
+            region_name: REGION_NAME.to_string(),
+        }
+    }
+
+    static SETUP: OnceCell<()> = OnceCell::const_new();
+    async fn run_setup() {
+        SETUP.get_or_init(|| async { setup_test_conn().await.unwrap() }).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
     fn setup_test_pool() -> Result<Pool, Box<dyn std::error::Error>> {
         Ok(test_config().create_pool(None, NoTls)?)
     }
 
-    async fn setup_test_conn() -> Result<deadpool_postgres::Client, Box<dyn std::error::Error>> {
+    async fn setup_test_conn() -> Result<(), Box<dyn std::error::Error>> {
         let pool = setup_test_pool()?;
-        let client = pool.get().await?;
+        let mut client = pool.get().await?;
 
         // ping the database to make sure we're connected
         let resp = client.query_one("SELECT 1", &[]).await?;
         assert!(resp.get::<_, i32>(0) == 1);
 
-        Ok(client)
-    }
-
-    #[tokio::test]
-    #[ignore = "TODO: to fix"]
-    async fn test_run_migrations_async() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
-        let mut conn = setup_test_conn().await?;
-        let client = conn.deref_mut().deref_mut();
+        let client = client.deref_mut().deref_mut();
         match run_migrations_async(client).await {
             Ok(report) => {
                 println!("Applied migrations: {}", report.applied_migrations().len());
                 println!("Migrations: {:?}", report);
-                Ok(())
             }
             Err(e) => {
                 println!("Error applying migrations: {}", e);
-                Err(e)
+                return Err(e);
             }
         }
+
+        // init region
+        let db_service = PostgresDatabaseService::new(&test_config(), REGION)?;
+        db_service.init_region(&test_postgres_config()).await;
+
+        Ok(())
     }
 
     fn get_randomized_signed_validator_registration() -> ValidatorRegistrationInfo {
@@ -107,9 +127,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_validator_registration() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         db_service.start_registration_processor().await;
 
@@ -132,9 +152,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_validator_registrations() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         db_service.start_registration_processor().await;
 
@@ -163,9 +183,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_validator_registrations_for_pub_keys() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         db_service.start_registration_processor().await;
 
@@ -208,9 +228,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_validator_registration_timestamp() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         db_service.start_registration_processor().await;
 
@@ -229,9 +249,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_proposer_duties() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         let mut proposer_duties = Vec::new();
         for i in 0..10 {
@@ -256,9 +276,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_known_validators() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
         let mut validator_summaries = Vec::new();
@@ -328,9 +348,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_large_batch() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
         let mut validator_summaries = Vec::new();
@@ -354,9 +374,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_builder_info() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
         let public_key = BlsPublicKey::deserialize(&alloy_primitives::hex!("8C266FD5CB50B5D9431DAA69C4BE17BC9A79A85D172112DA09E0AC3E2D0DCF785021D49B6DF57827D6BC61EBA086A507")).unwrap();
@@ -379,9 +399,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_demotion() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
         let key = BlsSecretKey::random();
@@ -404,9 +424,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_simulation_result() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         let block_hash = Default::default();
         let block_sim_result = Err(BlockSimError::Timeout);
@@ -416,9 +436,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_store_block_submission() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
         let pubkey = BlsPublicKey::deserialize(alloy_primitives::hex!("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").as_ref()).unwrap();
@@ -445,9 +465,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_get_bids() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
         let filter = helix_common::api::data_api::BidFilters {
             slot: Some(1234),
@@ -466,10 +486,11 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_delivered_payloads() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+
         let mut execution_payload = ExecutionPayloadDeneb::test_random();
 
         // execution_payload
@@ -508,9 +529,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_get_delivered_payloads() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
         let filter = helix_common::api::data_api::BidFilters {
             slot: None,
@@ -532,9 +553,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_late_payloads() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
 
         let reg = get_randomized_signed_validator_registration().registration;
@@ -547,9 +568,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_get_header() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
         let reg = get_randomized_signed_validator_registration().registration;
@@ -570,9 +591,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_failed_payloads() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
         let _reg = get_randomized_signed_validator_registration().registration;
@@ -585,9 +606,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_store_header_submission() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
         let bid_submission = HeaderSubmissionDeneb::test_random();
@@ -605,9 +626,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_gossiped_header() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
         db_service.save_gossiped_header_trace(Default::default(), Default::default()).await?;
 
@@ -615,10 +636,12 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_gossiped_payload() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+        db_service.init_region(&test_postgres_config()).await;
+
         db_service.save_gossiped_payload_trace(Default::default(), Default::default()).await?;
 
         Ok(())

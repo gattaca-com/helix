@@ -12,7 +12,6 @@ async-trait.workspace = true
 bytes.workspace = true
 dashmap.workspace = true
 deadpool-postgres.workspace = true
-env_logger.workspace = true
 helix-common.workspace = true
 helix-types.workspace = true
 helix-utils.workspace = true

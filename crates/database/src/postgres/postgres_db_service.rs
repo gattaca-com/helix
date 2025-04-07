@@ -18,7 +18,7 @@ use helix_common::{
     metrics::DbMetricRecord,
     simulator::BlockSimError,
     BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace,
-    GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig,
+    GossipedPayloadTrace, HeaderSubmissionTrace, PostgresConfig, ProposerInfo, RelayConfig,
     SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
 };
 use helix_types::{
@@ -129,7 +129,7 @@ impl PostgresDatabaseService {
         }
     }
 
-    pub async fn init_region(&self, config: &RelayConfig) {
+    pub async fn init_region(&self, config: &PostgresConfig) {
         let client = self.pool.get().await.unwrap();
         match client
             .execute(
@@ -139,15 +139,15 @@ impl PostgresDatabaseService {
                 ON CONFLICT (id)
                 DO NOTHING
             ",
-                &[&(config.postgres.region), &(config.postgres.region_name)],
+                &[&(config.region), &(config.region_name)],
             )
             .await
         {
             Ok(_) => {
-                info!("Region {} initialized", config.postgres.region);
+                info!("Region {} initialized", config.region);
             }
             Err(e) => {
-                panic!("Error initializing region {}: {}", config.postgres.region, e);
+                panic!("Error initializing region {}: {}", config.region, e);
             }
         };
     }
@@ -306,7 +306,7 @@ impl PostgresDatabaseService {
 
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql = String::from("INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at, user_agent) VALUES ");
-            let num_params_per_row = 8;
+            let num_params_per_row = 7;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -339,7 +339,7 @@ impl PostgresDatabaseService {
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql =
                 String::from("INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay, gossip_blobs) VALUES ");
-            let num_params_per_row = 6;
+            let num_params_per_row = 5;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -453,7 +453,7 @@ impl DatabaseService for PostgresDatabaseService {
         transaction
             .execute(
                 "INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay, gossip_blobs)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (public_key)
             DO UPDATE SET
                 filtering = excluded.filtering, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay, gossip_blobs = excluded.gossip_blobs
@@ -613,7 +613,7 @@ impl DatabaseService for PostgresDatabaseService {
                     validator_preferences.gossip_blobs,
                     validator_registrations.inserted_at,
                     validator_registrations.user_agent,
-                    validator_preferences.delay_ms,
+                    validator_preferences.delay_ms
                 FROM validator_registrations
                 INNER JOIN validator_preferences ON validator_registrations.public_key = validator_preferences.public_key
                 WHERE validator_registrations.public_key = $1 AND validator_registrations.active = true
