@@ -18,7 +18,7 @@ use helix_common::{
     metrics::DbMetricRecord,
     simulator::BlockSimError,
     BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace,
-    GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo, RelayConfig,
+    GossipedPayloadTrace, HeaderSubmissionTrace, PostgresConfig, ProposerInfo, RelayConfig,
     SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
 };
 use helix_types::{
@@ -129,7 +129,7 @@ impl PostgresDatabaseService {
         }
     }
 
-    pub async fn init_region(&self, config: &RelayConfig) {
+    pub async fn init_region(&self, config: &PostgresConfig) {
         let client = self.pool.get().await.unwrap();
         match client
             .execute(
@@ -139,15 +139,15 @@ impl PostgresDatabaseService {
                 ON CONFLICT (id)
                 DO NOTHING
             ",
-                &[&(config.postgres.region), &(config.postgres.region_name)],
+                &[&(config.region), &(config.region_name)],
             )
             .await
         {
             Ok(_) => {
-                info!("Region {} initialized", config.postgres.region);
+                info!("Region {} initialized", config.region);
             }
             Err(e) => {
-                panic!("Error initializing region {}: {}", config.postgres.region, e);
+                panic!("Error initializing region {}: {}", config.region, e);
             }
         };
     }

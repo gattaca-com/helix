@@ -38,7 +38,7 @@ pub struct ApiService {}
 
 impl ApiService {
     pub async fn run(mut config: RelayConfig, postgres_db: PostgresDatabaseService) {
-        postgres_db.init_region(&config).await;
+        postgres_db.init_region(&config.postgres).await;
         postgres_db
             .store_builders_info(&config.builders)
             .await
