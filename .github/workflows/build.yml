@@ -50,7 +50,6 @@ jobs:
         with:
           context: .
           push: true
-          platforms: linux/amd64,linux/arm64
           tags: |
             ghcr.io/gattaca-com/helix:${{ env.IMAGE_NAME }}
           cache-from: type=registry,ref=ghcr.io/gattaca-com/helix:buildcache
