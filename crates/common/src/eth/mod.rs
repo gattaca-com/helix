@@ -2,9 +2,8 @@ pub mod blob_sidecars;
 
 use alloy_primitives::B256;
 use helix_types::{
-    BlsPublicKey, BuilderBid, BuilderBidDeneb, BuilderBidElectra, ExecutionPayload,
-    ExecutionPayloadHeader, ExecutionPayloadHeaderDeneb, ExecutionPayloadHeaderElectra,
-    SignedBidSubmission, SignedBuilderBid, Slot,
+    BlsPublicKey, BuilderBid, BuilderBidDeneb, BuilderBidElectra, ExecutionPayloadHeaderDeneb,
+    ExecutionPayloadHeaderElectra, SignedBidSubmission, SignedBuilderBid, Slot,
 };
 
 use crate::{
@@ -104,12 +103,6 @@ pub fn header_submission_to_builder_bid(
             SignedBuilderBid { message, signature: sig }
         }
     }
-}
-
-pub fn try_execution_header_from_payload(
-    execution_payload: &ExecutionPayload,
-) -> ExecutionPayloadHeader {
-    execution_payload.to_ref().into()
 }
 
 // #[cfg(test)]

@@ -18,8 +18,8 @@ use helix_common::{
     blob_sidecars::blob_sidecars_from_unblinded_payload,
     chain_info::{ChainInfo, Network},
     metrics::{GetHeaderMetric, PROPOSER_GOSSIP_QUEUE},
-    task, try_execution_header_from_payload, BidRequest, Filtering, GetHeaderTrace,
-    GetPayloadTrace, RegisterValidatorsTrace, RelayConfig, ValidatorPreferences,
+    task, BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace,
+    RelayConfig, ValidatorPreferences,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
@@ -986,8 +986,7 @@ where
         let message = provided_signed_blinded_block.message();
         let body = message.body();
 
-        let local_header =
-            try_execution_header_from_payload(&local_versioned_payload.execution_payload);
+        let local_header = local_versioned_payload.execution_payload.to_ref().into();
 
         info!(
             local_header = ?local_header,
