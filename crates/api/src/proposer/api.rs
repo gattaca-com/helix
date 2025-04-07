@@ -611,16 +611,13 @@ where
         trace: &mut GetPayloadTrace,
         user_agent: Option<String>,
     ) -> Result<GetPayloadResponse, ProposerApiError> {
-        // let block_hash = signed_blinded_block
-        //     .message()
-        //     .body()
-        //     .execution_payload()
-        //     .unwrap()
-
-        //     .clone()
-
-        // FIXME
-        let block_hash = B256::ZERO;
+        let block_hash = signed_blinded_block
+            .message()
+            .body()
+            .execution_payload()
+            .map_err(|_| ProposerApiError::InvalidFork)?
+            .block_hash()
+            .0;
 
         let (head_slot, slot_duty) = self.curr_slot_info.read().await.clone();
 
@@ -764,8 +761,8 @@ where
             };
         let payload = Arc::new(versioned_payload);
 
-        if self.validator_preferences.gossip_blobs ||
-            !matches!(self.chain_info.network, Network::Mainnet)
+        if self.validator_preferences.gossip_blobs
+            || !matches!(self.chain_info.network, Network::Mainnet)
         {
             info!("gossip blobs: about to gossip blobs");
             let self_clone = self.clone();
@@ -920,8 +917,8 @@ where
     /// Returns how many ms we are into the slot if ok.
     fn validate_bid_request_time(&self, bid_request: &BidRequest) -> Result<u64, ProposerApiError> {
         let curr_timestamp_ms = utcnow_ms() as i64;
-        let slot_start_timestamp = self.chain_info.genesis_time_in_secs +
-            (bid_request.slot.as_u64() * self.chain_info.seconds_per_slot);
+        let slot_start_timestamp = self.chain_info.genesis_time_in_secs
+            + (bid_request.slot.as_u64() * self.chain_info.seconds_per_slot);
         let ms_into_slot = curr_timestamp_ms.saturating_sub((slot_start_timestamp * 1000) as i64);
 
         if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {
@@ -1000,9 +997,9 @@ where
         );
 
         match local_header {
-            ExecutionPayloadHeader::Bellatrix(_) |
-            ExecutionPayloadHeader::Capella(_) |
-            ExecutionPayloadHeader::Fulu(_) => return Err(ProposerApiError::PayloadTypeMismatch),
+            ExecutionPayloadHeader::Bellatrix(_)
+            | ExecutionPayloadHeader::Capella(_)
+            | ExecutionPayloadHeader::Fulu(_) => return Err(ProposerApiError::PayloadTypeMismatch),
 
             ExecutionPayloadHeader::Deneb(local_header) => {
                 let provided_header = &body
