@@ -70,6 +70,8 @@ pub type BeaconBlockBodyElectra =
 // Execution payload
 pub type ExecutionPayloadHeader =
     lh_types::execution_payload_header::ExecutionPayloadHeader<MainnetEthSpec>;
+pub type ExecutionPayloadHeaderRef<'a> =
+    lh_types::execution_payload_header::ExecutionPayloadHeaderRef<'a, MainnetEthSpec>;
 pub type ExecutionPayloadBellatrix =
     lh_types::execution_payload::ExecutionPayloadBellatrix<MainnetEthSpec>;
 pub type ExecutionPayloadHeaderDeneb =
@@ -80,6 +82,10 @@ pub type ExecutionPayload = lh_types::execution_payload::ExecutionPayload<Mainne
 pub type ExecutionPayloadDeneb = lh_types::execution_payload::ExecutionPayloadDeneb<MainnetEthSpec>;
 pub type ExecutionPayloadElectra =
     lh_types::execution_payload::ExecutionPayloadElectra<MainnetEthSpec>;
+pub type ExecutionPayloadRef<'a> =
+    lh_types::execution_payload::ExecutionPayloadRef<'a, MainnetEthSpec>;
+pub type ExecutionPayloadRefMut<'a> =
+    lh_types::execution_payload::ExecutionPayloadRefMut<'a, MainnetEthSpec>;
 
 // Get header
 pub type BuilderBid = lh_types::builder_bid::BuilderBid<MainnetEthSpec>;

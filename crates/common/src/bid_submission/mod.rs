@@ -54,4 +54,25 @@ pub trait BidSubmission {
 
     /// True if full submission payload, false if not (e.g. Optimistic V2)
     fn is_full_payload(&self) -> bool;
+
+    /// Validates that the bid trace and execution payload are consistent
+    fn validate(&self) -> Result<(), BidValidationError>;
+}
+
+#[derive(Debug, Clone, thiserror::Error)]
+pub enum BidValidationError {
+    #[error("block hash mismatch: message: {message:?}, payload: {payload:?}")]
+    BlockHashMismatch { message: B256, payload: B256 },
+
+    #[error("parent hash mismatch. message: {message:?}, payload: {payload:?}")]
+    ParentHashMismatch { message: B256, payload: B256 },
+
+    #[error("gas limit mismatch. message: {message:?}, payload: {payload:?}")]
+    GasLimitMismatch { message: u64, payload: u64 },
+
+    #[error("gas used mismatch. message: {message:?}, payload: {payload:?}")]
+    GasUsedMismatch { message: u64, payload: u64 },
+
+    #[error("zero value block")]
+    ZeroValueBlock,
 }

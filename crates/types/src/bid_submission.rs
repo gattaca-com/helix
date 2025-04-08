@@ -9,8 +9,8 @@ use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    error::SigError, BlobsBundle, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayload,
-    ExecutionRequests, PayloadAndBlobs,
+    error::SigError, BlobsBundle, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayloadRef,
+    ExecutionPayloadRefMut, ExecutionRequests, PayloadAndBlobs,
 };
 
 #[derive(
@@ -147,20 +147,31 @@ impl SignedBidSubmission {
         }
     }
 
-    pub fn execution_payload(&self) -> ExecutionPayload {
+    pub fn execution_payload_mut(&mut self) -> ExecutionPayloadRefMut {
         match self {
-            SignedBidSubmission::Electra(signed_bid_submission) => {
-                signed_bid_submission.execution_payload.clone().into()
-            }
             SignedBidSubmission::Deneb(signed_bid_submission) => {
-                signed_bid_submission.execution_payload.clone().into()
+                ExecutionPayloadRefMut::Deneb(&mut signed_bid_submission.execution_payload)
+            }
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                ExecutionPayloadRefMut::Electra(&mut signed_bid_submission.execution_payload)
+            }
+        }
+    }
+
+    pub fn execution_payload(&self) -> ExecutionPayloadRef {
+        match self {
+            SignedBidSubmission::Deneb(signed_bid_submission) => {
+                (&signed_bid_submission.execution_payload).into()
+            }
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                (&signed_bid_submission.execution_payload).into()
             }
         }
     }
 
     pub fn payload_and_blobs(&self) -> PayloadAndBlobs {
         PayloadAndBlobs {
-            execution_payload: self.execution_payload().clone(),
+            execution_payload: self.execution_payload().clone_from_ref(),
             blobs_bundle: self.blobs_bundle().clone(),
         }
     }

@@ -42,7 +42,7 @@ impl BlockSimRequest {
         Self {
             registered_gas_limit,
             message: block.bid_trace().clone(),
-            execution_payload: block.execution_payload().clone(),
+            execution_payload: block.execution_payload().clone_from_ref(),
             signature: block.signature().clone(),
             proposer_preferences,
             blobs_bundle: Some(block.blobs_bundle().clone()),

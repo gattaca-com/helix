@@ -295,7 +295,6 @@ where
         // Sanity check the payload
         if let Err(err) = sanity_check_block_submission(
             &payload,
-            payload.bid_trace(),
             &next_duty,
             &payload_attributes,
             &api.chain_info,
@@ -537,7 +536,6 @@ where
         // Validate basic information about the payload
         if let Err(err) = sanity_check_block_submission(
             &payload,
-            payload.bid_trace(),
             &next_duty,
             &payload_attributes,
             &api.chain_info,
@@ -822,7 +820,6 @@ where
         // Sanity check the payload
         if let Err(err) = sanity_check_block_submission(
             &payload,
-            payload.bid_trace(),
             &next_duty,
             &payload_attributes,
             &api.chain_info,
@@ -2122,11 +2119,15 @@ pub async fn decode_header_submission(
 /// - Validates that the parent hash in the payload and message are the same.
 fn sanity_check_block_submission(
     payload: &impl BidSubmission,
-    bid_trace: &BidTrace,
     next_duty: &BuilderGetValidatorsResponseEntry,
     payload_attributes: &PayloadAttributesUpdate,
     chain_info: &ChainInfo,
 ) -> Result<(), BuilderApiError> {
+    // checks internal consistency of the payload
+    payload.validate()?;
+
+    let bid_trace = payload.bid_trace();
+
     let expected_timestamp =
         chain_info.genesis_time_in_secs + (bid_trace.slot * chain_info.seconds_per_slot());
     if payload.timestamp() != expected_timestamp {
@@ -2174,25 +2175,6 @@ fn sanity_check_block_submission(
         return Err(BuilderApiError::WithdrawalsRootMismatch {
             got: withdrawals_root,
             expected: expected_withdrawals_root,
-        });
-    }
-
-    // Misc. sanity checks
-    if payload.value() == U256::ZERO {
-        return Err(BuilderApiError::ZeroValueBlock);
-    }
-
-    if bid_trace.block_hash != *payload.block_hash() {
-        return Err(BuilderApiError::BlockHashMismatch {
-            message: bid_trace.block_hash,
-            payload: *payload.block_hash(),
-        });
-    }
-
-    if bid_trace.parent_hash != *payload.parent_hash() {
-        return Err(BuilderApiError::ParentHashMismatch {
-            message: bid_trace.parent_hash,
-            payload: *payload.parent_hash(),
         });
     }
 

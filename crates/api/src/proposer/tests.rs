@@ -106,7 +106,7 @@ mod proposer_api_tests {
             entry: ValidatorRegistrationInfo {
                 registration: SignedValidatorRegistration {
                     message: ValidatorRegistration {
-                        fee_recipient: address!("5cc0dde14e7256340cc820415a6022a7d1c93a35"),
+                        fee_recipient: address!("abcf8e0d4e9587369b2301d0790347320302cc09"),
                         gas_limit: 30000000,
                         timestamp: SUBMISSION_TIMESTAMP,
                         pubkey: get_fixed_pubkey(Some(0)),
