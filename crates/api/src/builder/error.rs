@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use helix_common::simulator::BlockSimError;
+use helix_common::{bid_submission::BidValidationError, simulator::BlockSimError};
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
 use helix_types::BlsPublicKey;
@@ -59,6 +59,9 @@ pub enum BuilderApiError {
 
     #[error("payload slot mismatches with current payload attributes slot. got: {got}, expected: {expected}")]
     PayloadSlotMismatchWithPayloadAttributes { got: u64, expected: u64 },
+
+    #[error("{0}")]
+    BidValidationError(#[from] BidValidationError),
 
     #[error("block hash mismatch. message: {message:?}, payload: {payload:?}")]
     BlockHashMismatch { message: B256, payload: B256 },
@@ -293,7 +296,10 @@ impl IntoResponse for BuilderApiError {
             },
             BuilderApiError::PayloadError(v3_error) => {
                 (StatusCode::BAD_REQUEST, format!("payload error: {v3_error}")).into_response()
-            }
+            },
+            BuilderApiError::BidValidationError(err) => {
+                (StatusCode::BAD_REQUEST, format!("bid validation error: {err}")).into_response()
+            },
         }
     }
 }

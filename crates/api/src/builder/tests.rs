@@ -1,18 +1,11 @@
-// +++ IMPORTS +++
 use core::panic;
 use std::{
-    convert::Infallible,
-    future::pending,
-    io::{Read, Write},
-    pin::Pin,
-    str::FromStr,
-    sync::Arc,
+    convert::Infallible, future::pending, io::Write, pin::Pin, str::FromStr, sync::Arc,
     time::Duration,
 };
 
-use alloy_primitives::{address, b256, hex, B256};
+use alloy_primitives::{address, b256, hex, B256, U256};
 use axum::http::{header, Method, Request, Uri};
-use flate2::bufread::GzDecoder;
 use futures::{stream::FuturesOrdered, Future, SinkExt, StreamExt};
 use helix_beacon_client::types::PayloadAttributes;
 use helix_common::{
@@ -22,19 +15,22 @@ use helix_common::{
         },
         proposer_api::ValidatorRegistrationInfo,
     },
-    bid_submission::v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionDeneb},
+    bid_submission::{
+        v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionDeneb},
+        BidSubmission,
+    },
     HeaderSubmissionTrace, Route, SubmissionTrace, ValidatorPreferences,
 };
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
 use helix_types::{
-    get_fixed_pubkey, BlsSignature, ExecutionPayload, ForkName, SignedBidSubmission,
-    SignedBidSubmissionElectra, SignedValidatorRegistration, ValidatorRegistration,
+    get_fixed_pubkey, get_fixed_secret, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayloadRef,
+    ForkName, SignedBidSubmission, SignedBidSubmissionElectra, SignedRoot,
+    SignedValidatorRegistration, TestRandomSeed, ValidatorRegistration,
 };
 use helix_utils::request_encoding::Encoding;
 use reqwest::{Client, Response};
-use serde_json::json;
 use serial_test::serial;
 use ssz::{Decode, Encode};
 use tokio::sync::{
@@ -57,15 +53,12 @@ use crate::{
     test_utils::builder_api_app,
 };
 
-// +++ HELPER VARIABLES +++
 const ADDRESS: &str = "0.0.0.0";
 const PORT: u16 = 3000;
 const HEAD_SLOT: u64 = 32; //ethereum_consensus::configs::mainnet::CAPELLA_FORK_EPOCH;
 const SUBMISSION_SLOT: u64 = HEAD_SLOT + 1;
 const SUBMISSION_TIMESTAMP: u64 = 1606824419;
 const VALIDATOR_INDEX: usize = 1;
-
-// +++ HELPER FUNCTIONS +++
 
 #[derive(Debug, Clone)]
 struct HttpServiceConfig {
@@ -104,7 +97,7 @@ fn get_valid_payload_register_validator(
             entry: ValidatorRegistrationInfo {
                 registration: SignedValidatorRegistration {
                     message: ValidatorRegistration {
-                        fee_recipient: address!("5cc0dde14e7256340cc820415a6022a7d1c93a35"),
+                        fee_recipient: address!("abcf8e0d4e9587369b2301d0790347320302cc09"),
                         gas_limit: 30000000,
                         timestamp: SUBMISSION_TIMESTAMP,
                         pubkey: get_fixed_pubkey(Some(0)),
@@ -128,8 +121,8 @@ fn get_dummy_slot_update(head_slot: Option<u64>, submission_slot: Option<u64>) -
 fn get_dummy_payload_attributes() -> PayloadAttributes {
     PayloadAttributes {
         timestamp: SUBMISSION_TIMESTAMP,
-        prev_randao: b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e4"),
-        suggested_fee_recipient: "0x5cc0dde14e7256340cc820415a6022a7d1c93a35".to_string(),
+        prev_randao: b256!("cf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2"),
+        suggested_fee_recipient: "0xabcf8e0d4e9587369b2301d0790347320302cc09".to_string(),
         withdrawals: vec![],
         parent_beacon_block_root: None,
     }
@@ -138,8 +131,8 @@ fn get_dummy_payload_attributes() -> PayloadAttributes {
 fn get_dummy_payload_attributes_update(submission_slot: Option<u64>) -> PayloadAttributesUpdate {
     PayloadAttributesUpdate {
         slot: submission_slot.unwrap_or(SUBMISSION_SLOT),
-        parent_hash: b256!("bd3291854dc822b7ec585925cda0e18f06af28fa2886e15f52d52dd4b6f94ed6"),
-        withdrawals_root: B256::ZERO,
+        parent_hash: b256!("cf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2"),
+        withdrawals_root: b256!("da05bc3e664422b7afec68e9497343e818d8eced24ccc103069c897987d0a6d8"),
         payload_attributes: get_dummy_payload_attributes(),
     }
 }
@@ -169,49 +162,39 @@ async fn send_dummy_payload_attributes_update(
 }
 
 fn load_bid_submission() -> SignedBidSubmission {
-    let bytes = include_bytes!("../../test_data/submitBlockPayloadCapella_Goerli.json.gz");
-    let req_payload_bytes = deocde_gzipped_bytes(bytes);
-    let mut signed_bid_submission: SignedBidSubmission =
-        serde_json::from_slice(&req_payload_bytes).unwrap();
+    let bytes = include_bytes!("../../test_data/signed-bid-submission-deneb-2.json");
+    let mut signed_bid_submission: SignedBidSubmission = serde_json::from_slice(bytes).unwrap();
 
     // set the slot and timestamp
     signed_bid_submission.message_mut().slot = SUBMISSION_SLOT;
-    signed_bid_submission.execution_payload().as_deneb_mut().unwrap().timestamp =
-        SUBMISSION_TIMESTAMP;
+    *signed_bid_submission.execution_payload_mut().timestamp_mut() = SUBMISSION_TIMESTAMP;
+
+    resign_bid_submission(&mut signed_bid_submission);
 
     signed_bid_submission
 }
 
-fn load_bid_submission_from_file(
-    filename: &str,
-    submission_slot: Option<u64>,
-    submission_timestamp: Option<u64>,
-) -> SignedBidSubmission {
-    let mut current_dir = std::env::current_dir().expect("Failed to get current directory");
-    if !current_dir.ends_with("api") {
-        current_dir.push("crates/api/");
+fn resign_bid_submission(bid: &mut SignedBidSubmission) {
+    let kp = get_fixed_secret(Some(0));
+
+    assert_eq!(&kp.public_key(), bid.builder_public_key());
+
+    match bid {
+        SignedBidSubmission::Deneb(ref mut sub) => {
+            let domain = ChainSpec::mainnet().get_builder_domain();
+            let root = sub.message.signing_root(domain);
+            let sig = kp.sign(root);
+
+            sub.signature = sig;
+        }
+        SignedBidSubmission::Electra(ref mut sub) => {
+            let domain = ChainSpec::mainnet().get_builder_domain();
+            let root = sub.message.signing_root(domain);
+            let sig = kp.sign(root);
+
+            sub.signature = sig;
+        }
     }
-    current_dir.push("test_data/");
-    current_dir.push(filename);
-    let req_payload_bytes = std::fs::read(&current_dir).expect("Failed to read file");
-
-    let mut signed_bid_submission: SignedBidSubmission =
-        serde_json::from_slice(&req_payload_bytes).unwrap();
-
-    // set the slot and timestamp
-    signed_bid_submission.message_mut().slot = submission_slot.unwrap_or(SUBMISSION_SLOT);
-    signed_bid_submission.execution_payload().as_deneb_mut().unwrap().timestamp =
-        submission_timestamp.unwrap_or(SUBMISSION_TIMESTAMP);
-
-    signed_bid_submission
-}
-
-fn deocde_gzipped_bytes(bytes: &[u8]) -> Vec<u8> {
-    let mut decoder = GzDecoder::new(bytes);
-    let mut decoded_buffer = Vec::new();
-    decoder.read_to_end(&mut decoded_buffer).unwrap();
-
-    decoded_buffer
 }
 
 async fn start_api_server() -> (
@@ -241,48 +224,6 @@ async fn start_api_server() -> (
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     (tx, http_config, api, slot_update_receiver)
-}
-
-fn _get_req_body_submit_block_json() -> serde_json::Value {
-    json!({
-        "message": {
-            "slot": "1",
-            "parent_hash": "0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2",
-            "block_hash": "0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2",
-            "builder_pubkey": "0x93247f2209abcacf57b75a51dafae777f9dd38bc7053d1af526f220a7489a6d3a2753e5f3e8b1cfe39b56f43611df74a",
-            "proposer_fee_recipient": "0xabcf8e0d4e9587369b2301d0790347320302cc09",
-            "gas_limit": "1",
-            "gas_used": "1",
-            "value": "1"
-        },
-        "execution_payload": {
-            "parent_hash": "0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2",
-            "fee_recipient": "0xabcf8e0d4e9587369b2301d0790347320302cc09",
-            "state_root": "0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2",
-            "receipts_root": "0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2",
-            "logs_bloom": "0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-            "prev_randao": "0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2",
-            "block_number": "1",
-            "gas_limit": "1",
-            "gas_used": "1",
-            "timestamp": "1",
-            "extra_data": "0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2",
-            "base_fee_per_gas": "1",
-            "block_hash": "0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2",
-            "transactions": [
-                "0x02f878831469668303f51d843b9ac9f9843b9aca0082520894c93269b73096998db66be0441e836d873535cb9c8894a19041886f000080c001a031cc29234036afbf9a1fb9476b463367cb1f957ac0b919b69bbc798436e604aaa018c4e9c3914eb27aadd0b91e10b18655739fcf8c1fc398763a9f1beecb8ddc86"
-            ],
-            "withdrawals": [
-                {
-                    "index": "1",
-                    "validator_index": "1",
-                    "address": "0xabcf8e0d4e9587369b2301d0790347320302cc09",
-                    "amount": "32000000000"
-                }
-            ]
-        },
-        "signature": "0x1b66ac1fb663c9bc59509846d6ec05345bd908eda73e670af888da41af171505cc411d61252fb6cb3fa0017b679f8bb2305b26a285fa2737f175668d0dff91cc1b66ac1fb663c9bc59509846d6ec05345bd908eda73e670af888da41af171505"
-    })
 }
 
 pub fn generate_request(
@@ -320,10 +261,8 @@ pub fn generate_request(
     request_builder.body(body).unwrap()
 }
 
-// +++ TESTS +++
-
-#[tokio::test]
-async fn test_header_submission_decoding_json_deneb() {
+#[test]
+fn test_header_submission_decoding_json_deneb() {
     let req_payload_bytes = include_bytes!("../../test_data/submitBlockPayloadHeaderDeneb.json");
     let decoded_submission: SignedHeaderSubmissionDeneb =
         serde_json::from_slice(req_payload_bytes.as_slice()).unwrap();
@@ -333,7 +272,7 @@ async fn test_header_submission_decoding_json_deneb() {
 
 #[tokio::test]
 async fn test_header_submission_decoding_ssz_deneb() {
-    let req_payload_bytes = include_bytes!("../../test_data/header_submission_deneb_ssz_bytes");
+    let req_payload_bytes = include_bytes!("../../test_data/header_v2-deneb.ssz");
 
     let mut header_submission_trace = HeaderSubmissionTrace::default();
 
@@ -353,19 +292,20 @@ async fn test_signed_bid_submission_decoding_deneb() {
     let (decoded_submission, _) = decode_payload(request, &mut submission_trace).await.unwrap();
 
     assert_eq!(decoded_submission.message().slot, 5552306);
-    assert!(matches!(decoded_submission.execution_payload(), ExecutionPayload::Deneb(_)));
-    assert!(matches!(decoded_submission.execution_payload().fork_name(), ForkName::Deneb));
-    let deneb_payload = decoded_submission.execution_payload().as_deneb().unwrap().clone();
-    assert_eq!(deneb_payload.blob_gas_used, 100);
-    assert_eq!(deneb_payload.excess_blob_gas, 50);
+    assert!(matches!(decoded_submission.execution_payload(), ExecutionPayloadRef::Deneb(_)));
+    assert!(matches!(
+        decoded_submission.execution_payload().clone_from_ref().fork_name(),
+        ForkName::Deneb
+    ));
+    let payload = decoded_submission.execution_payload();
+    assert_eq!(payload.blob_gas_used().unwrap(), 100);
+    assert_eq!(payload.excess_blob_gas().unwrap(), 50);
 }
 
 #[tokio::test]
 async fn test_signed_bid_submission_decoding_electra_gzip() {
     let bytes = b"x\x04\x01\0\0\0\0\0\x06_*\xc7!\xad\xeb\xfdI\x8b\xe6\x89\x81\xae,\xe0\x96\xf1\xeb\x13\xc4\xe40|\x0b\x13\xb1Mf-\x96\n\xbc\xb1Be\x94.\xab\x8f\x91G\xbb\xb1\xb0\xe5\x81\xb7^X+\x08\xa1\xde\xc9\x9d\x9aK\x9b\x99Yx\xef\xae\xa9zn-S4\xf8\x89\n\xbf\x9fH\xc0n\xd8\xd6\xb98!\xcf&\xd8\x9c/VM\xe6\xa0 \x95\x8a\x9a\xca\x14v{\xc7\x90\xe1Y\x85Eij\xf6\xe7S\x88\xb9\xefIA)\xdf\xe9%A\xa1`}\xdey\x02_\xec\xe5\xc7\x01\x9fZ3T:aO\xdb\xea\x87\x17Xh]\x12\xc8\x06&\xd9\t\xec\xe9\0\xd5B\xeeqT\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\0Q%\x02\0\0\0\0}\xd06\x01\0\0\0\0\x8b\x14l\x84\xb3{\x06\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0X\x01\0\0s\r\0\0\x7f\r\0\0\x93\xe5\xfd\x8a\x1d\x0f\x06\xe8\xe9@\xa2'\xb5\xbdPI\xcf|\xa9\xdeF\xe2\xd4!\xdb\x80;\xa0\x1e'S\xdf!\x13\xdf[\x8e\xf3\x868&\x07\x7f\xab\x82\xe5IP\x07\xa9\xe1\x9c\xa5\xc4\x02\xc2[\xd8\x80\xe4\x07\xa7\xb6\x99\x0f\xb2/\xaa\x05\x89I\x81hk\xf5:5\xd7\xd7\x19\x15\xf4\x8f\xe7Y\xeb\xa6\x8c%\xa1\xd87\xb2\xbekH\x06_*\xc7!\xad\xeb\xfdI\x8b\xe6\x89\x81\xae,\xe0\x96\xf1\xeb\x13\xc4\xe40|\x0b\x13\xb1Mf-\x96\nVw~\xd8>\xea\x1f]\xf3\x16,\xf1\x01\xe8\x852\xcet\xb5\x1e\xe3\xbaL)\xb5\xda|\r\xf8\x8b\xbe\xea\xd2\x94\x0eBJ\"_\x93\x05+\xf4\x83\x1e\xe6\xaa\xa9\x08\xb16\xddb\xbdS\xdf\xc5\xc6yqL/m\xd1%\x14\xad\x1c\xa0\xb2\xc8\xee\x04\xce\x18U\xe1u\xc5\xf8\x0e\xc2\xf1W\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\xe7\xd7\xb56\xfc\xb3TPoG\xaf\xf3\x04\x04\xe2\xab\xf0\xf2\xc8l\x89\x05\xfb\x81/@\0!\x97\xab\x1a\x9c/\xf0\0\0\0\0\0\0\0Q%\x02\0\0\0\0}\xd06\x01\0\0\0\0\xb8F\xe4g\0\0\0\0\x10\x02\0\0I|\xa56\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\xbc\xb1Be\x94.\xab\x8f\x91G\xbb\xb1\xb0\xe5\x81\xb7^X+\x08\xa1\xde\xc9\x9d\x9aK\x9b\x99Yx\xef\xae\x14\x02\0\0[\t\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\xf0\x9f\x8c\x8a(\0\0\0\x1c\x02\0\0\xb3\x02\0\0J\x03\0\0\xe1\x03\0\0x\x04\0\0\x0f\x05\0\0\xa6\x05\0\0=\x06\0\0\xd4\x06\0\0\xf9\x01\xf1\x80\x84~l\xb5\xf0\x83\x02y\"\x80\x80\xb9\x01\x9c`\x80`@R4\x80\x15a\0\x10W`\0\x80\xfd[Pa\x01|\x80a\0 `\09`\0\xf3\xfe`\x80`@R4\x80\x15a\0\x10W`\0\x80\xfd[P`\x046\x10a\0+W`\05`\xe0\x1c\x80cSW\x94C\x14a\00W[`\0\x80\xfd[a\08a\0NV[`@Qa\0E\x91\x90a\0\xc4V[`@Q\x80\x91\x03\x90\xf3[```@Q\x80`@\x01`@R\x80`\n\x81R` \x01\x7fjgqspelekh\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x81RP\x90P\x90V[`\0a\0\x96\x82a\0\xe6V[a\0\xa0\x81\x85a\0\xf1V[\x93Pa\0\xb0\x81\x85` \x86\x01a\x01\x02V[a\0\xb9\x81a\x015V[\x84\x01\x91PP\x92\x91PPV[`\0` \x82\x01\x90P\x81\x81\x03`\0\x83\x01Ra\0\xde\x81\x84a\0\x8bV[\x90P\x92\x91PPV[`\0\x81Q\x90P\x91\x90PV[`\0\x82\x82R` \x82\x01\x90P\x92\x91PPV[`\0[\x83\x81\x10\x15a\x01 W\x80\x82\x01Q\x81\x84\x01R` \x81\x01\x90Pa\x01\x05V[\x83\x81\x11\x15a\x01/W`\0\x84\x84\x01R[PPPPV[`\0`\x1f\x19`\x1f\x83\x01\x16\x90P\x91\x90PV\xfe\xa2dipfsX\"\x12 e\xc9+\x992\x14\xa1\x8f\xa7t\x88\xe7\x95\xae\x8a\x8a\xd8D\xa5\xb2\x8d\x19\xed=\xee\x06\x83\x9f\x08;`\xfadsolcC\0\x08\0\03\x83\x11\x17\x84\xa0\xceB\xc4W\x91R\xce\x05l\xb7\x8c\xf2:\xda\xf2\xca?\xad?'\xf1\x89\xb0\xad\x02:\xbe\xa5\x160\xa8.\xa0V\xb8N\xc2\xcb~\xb9\xd1I\xa5:\xa6\xd2\x17\xcc\xa9\x08U5\x8a\xadq\xfe.N\x80\x8f\xf9%N\xb1>\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1dl\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x80\xa0^\x88M\x07\xd1K\xd4R\xabW\xe7j|\xa3\xae)\x05\x1e\x03\x1eG\xb1\xe0\xac\xab\x1b\xc7\xf2N\xea\xa8\x84\xa0D_\xa5\x11S`\xf9\x9b^\xdf\xa3\x0ce\x92\xea'\x14r\xe5\x8b`\xfd,\x1c#p3\x9bN\xbdg\xcb\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1dc\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x80\xa0\x83\xd1\xdb\x91\xed)\xedm\xd4\x18z\xd8?\xb9n3\xe6\x04\xe0\x12E\x83\xbd\xf3\xf6\xdb\xc5&'\x063\xb8\xa0\x11\xf2\x88\x9b\xcd\x10aU\xe1\xcbB$\x11Aw\xa5p\x82\xef\xb0\xf4\xf2\xe1\xfd\x02\xde\xfb\xff/\x82\x19\x9b\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1d]\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x80\xa0i]\x02\x9aj\x8e\xcd\x13\xe0c\x9c\x13\x12\x93\x93\x0e\xde\x86T\xdf\xce/\xb8v\x87\xd5\x0c\xf7J\x0c\xd3[\xa0\x0f\x91Q\x05yq\xa3\xed\xa7\x1b\xc5\xc8\x83\x17p#\xd0Q\x18\x02\xd6a\x05\x89\x08\x8c\x95z\x8e\xad\xfe9\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1dZ\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x80\xa0\x9a\xa5\x8c\xfe\x15\xf6\x98I\x05G\xc8\x11l\xd1\xcdS\xf4\xb9\xd0\xed\xaa\x1b\xa16\x05\x97c\x07\x01\x93B\xd4\xa0z\xd8\xb2+\x9fG\xd6*\xaf\x05\x0e\xab\xe4\x90{\xf3D\xa2\x96x+y\xc5\xa6\x93Rz\xa2\x9a\xc8)c\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1d\\\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x01\xa0-\xf5\x90N]\xea\xa3\x81@\xbb\x99\xb5\xc0\x95:H\xac\x1e^\x11\xb1\x1a\x12\x0b\xca\0Y\x11\xbc9\xcd\xa5\xa0>y,\x1dw509\xa3s\xb6\x8a+Qe\x84\xf9f\x12m\xa34x\x12\xbe\x06Dm/\xbdb\xb0\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1da\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x80\xa0\xcf\xf6<\xf9\xd4\xc0\xbd\nr\xb4w\0\xe8sT\x99\xf7\xa9\x0evf\xfc\xb8\x1eV\x96\xf3\xbc;\xfc\xb4,\xa0qJ\xff\x03\x1e\xce\xa3\xbb\xe7\x18\x8avO\">\xbd\x03KK\x93\xf0\xb2\x0bOL\x01A\xf1s\x80\xb8W\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1d_\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x01\xa0\xfacd\xb7\xb27\x14\xd6Ug\x89\x94\xa7\xd1~\x89Mv\r\xcfnSb)9\x83k;QG\xede\xa0$\x9f<\xc9\xf3^\xa4\xad\xd3,\x0b\xc9W\xd6W\xe6\xf9\xd3e\x80\x9eR\n\xfd6\xbf\x9bX,4\xfe\x9f\x02\xf8\x94\x83\x08\x8b\xb0\x82\x1dX\x84;\x9a\xca\0\x84;\x9a\xca\0\x83&\xe0\xbf\x940\xaef\xdcQ\xb2\t\xdf\xee\xfeO\x97\xca\x9b\x14\xb5;\x95Kn\x80\xa4AXsY\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0&%\xa0\xc0\x80\xa0\xe2\x11\x9d\xcf\x0c\x96\xda4\x82\xf3\x1dWh\xab<x\xe2,\x96\x1e<A}\xf8\x9b\xd7W\x18\xd0\x87\x06 \xa0+0\x82\x90\xc6S\xefr\x80Z\xc3\xa6&TMj)\xa1\xfajkm\xddW}\xcd\x1cO:${\x86\x02\xf8p\x83\x08\x8b\xb0\x10\x80\x846\xa5|I\x82R\x08\x94\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\x87\x06{\xb3\x84l\x14\x8b\x80\xc0\x80\xa0\x85\x80\xe3\xe9\xe4\x11\x10\xa5\xe7/a\x07\xe0\xcf%\x1a^\xec\xf8\xa2Y\xc1\xff\xbdZa\xbe\xbc\xf7\xcb\x88\xd7\xa0Xn\xb3\x7f\xca@\xd7\x03\x08\xc2\xd0\0\xf1\x08\xe9\xcb\xbb\xce\xde\xad\xa6\xec\xc3\xa0\xe3\x81S\xe8\x90.\x9bG\x86\xd2\x0e\0\0\0\0\0(a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\x10\xc6\x16\0\0\0\0\0\x87\xd2\x0e\0\0\0\0\0)a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30U'\x17\0\0\0\0\0\x88\xd2\x0e\0\0\0\0\0*a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30Z\xff\x16\0\0\0\0\0\x89\xd2\x0e\0\0\0\0\0+a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\xa1\xcf\x16\0\0\0\0\0\x8a\xd2\x0e\0\0\0\0\0,a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30F\xe8\x16\0\0\0\0\0\x8b\xd2\x0e\0\0\0\0\0-a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\\\xe9\x16\0\0\0\0\0\x8c\xd2\x0e\0\0\0\0\0.a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\xa8\xfd\x16\0\0\0\0\0\x8d\xd2\x0e\0\0\0\0\0/a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc302\x08\x17\0\0\0\0\0\x8e\xd2\x0e\0\0\0\0\00a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc309\xef\x16\0\0\0\0\0\x8f\xd2\x0e\0\0\0\0\01a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30E\x02\x17\0\0\0\0\0\x90\xd2\x0e\0\0\0\0\02a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\xe7\xc5\x16\0\0\0\0\0\x91\xd2\x0e\0\0\0\0\03a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\x15\xe6\x16\0\0\0\0\0\x92\xd2\x0e\0\0\0\0\04a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\xfe\xdc\x16\0\0\0\0\0\x93\xd2\x0e\0\0\0\0\05a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\x05\0\x17\0\0\0\0\0\x94\xd2\x0e\0\0\0\0\06a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30%\x17\x17\0\0\0\0\0\x95\xd2\x0e\0\0\0\0\07a\x0f\0\0\0\0\0\xe5\x06\x1f\xe5\xb4\xd0\xbd&\x0f\x1f\xf8\x0f\xa9\x19\xe39\xf1\xf5\xc30\xd2\xe5\x16\0\0\0\0\0\x0c\0\0\0\x0c\0\0\0\x0c\0\0\0\x0c\0\0\0\x0c\0\0\0\x0c\0\0\0";
-    let payload = SignedBidSubmissionElectra::from_ssz_bytes(bytes).unwrap();
-
-    println!("Payload: {:?}", payload);
+    assert!(SignedBidSubmissionElectra::from_ssz_bytes(bytes).is_ok());
 }
 
 #[tokio::test]
@@ -440,6 +380,11 @@ async fn test_submit_block_invalid_signature() {
     signed_bid_submission.message_mut().proposer_pubkey =
         get_valid_payload_register_validator(None).entry.registration.message.pubkey;
 
+    match &mut signed_bid_submission {
+        SignedBidSubmission::Deneb(bid) => bid.signature = BlsSignature::test_random(),
+        SignedBidSubmission::Electra(bid) => bid.signature = BlsSignature::test_random(),
+    }
+
     // Send JSON encoded request
     let resp =
         send_request(&req_url, Encoding::Json, serde_json::to_vec(&signed_bid_submission).unwrap())
@@ -511,7 +456,7 @@ async fn test_submit_block_fee_recipient_mismatch() {
         .unwrap();
 
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
-    assert_eq!(resp.text().await.unwrap(), "Fee recipient mismatch. got: 0x1230dde14e7256340cc820415a6022a7d1c93a35, expected: 0x5cc0dde14e7256340cc820415a6022a7d1c93a35");
+    assert_eq!(resp.text().await.unwrap(), "Fee recipient mismatch. got: 0x1230dde14e7256340cc820415a6022a7d1c93a35, expected: 0xabcf8e0d4e9587369b2301d0790347320302cc09");
 
     // Shut down the server
     let _ = tx.send(());
@@ -553,10 +498,7 @@ async fn test_submit_block_submission_for_past_slot() {
     let _ = tx.send(());
 }
 
-// TODO: fix this test. This test no longer works as we now check the signature
-// before we sanity check
 #[tokio::test]
-#[ignore]
 #[serial]
 async fn test_submit_block_unknown_proposer_duty() {
     // Start the server
@@ -571,7 +513,8 @@ async fn test_submit_block_unknown_proposer_duty() {
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
     let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
-    signed_bid_submission.message_mut().slot = 1;
+    signed_bid_submission.message_mut().slot = 31;
+    resign_bid_submission(&mut signed_bid_submission);
 
     // Send JSON encoded request
     let resp = reqwest::Client::new()
@@ -584,7 +527,10 @@ async fn test_submit_block_unknown_proposer_duty() {
         .unwrap();
 
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
-    assert_eq!(resp.text().await.unwrap(), "Could not find proposer duty for slot");
+    assert_eq!(
+        resp.text().await.unwrap(),
+        "Submission for past slot. current slot: 32, submission slot: 31"
+    );
 
     // Shut down the server
     let _ = tx.send(());
@@ -604,8 +550,8 @@ async fn test_submit_block_incorrect_timestamp() {
     // Prepare the request
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-    let signed_bid_submission: SignedBidSubmission = load_bid_submission();
-    signed_bid_submission.execution_payload().as_deneb_mut().unwrap().timestamp = 1;
+    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    *signed_bid_submission.execution_payload_mut().timestamp_mut() = 1;
 
     // Send JSON encoded request
     let resp = reqwest::Client::new()
@@ -626,7 +572,6 @@ async fn test_submit_block_incorrect_timestamp() {
 
 #[tokio::test]
 #[serial]
-#[ignore]
 async fn test_submit_block_slot_mismatch() {
     // Start the server
     let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
@@ -673,7 +618,7 @@ async fn test_submit_prev_randao_mismatch() {
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
     let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
-    signed_bid_submission.execution_payload().as_deneb_mut().unwrap().prev_randao =
+    *signed_bid_submission.execution_payload_mut().prev_randao_mut() =
         b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5");
 
     signed_bid_submission.message_mut().proposer_pubkey =
@@ -690,7 +635,7 @@ async fn test_submit_prev_randao_mismatch() {
         .unwrap();
 
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
-    assert_eq!(resp.text().await.unwrap(), "Prev randao mismatch. got: 0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5, expected: 0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e4");
+    assert_eq!(resp.text().await.unwrap(), "Prev randao mismatch. got: 0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5, expected: 0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2");
 
     // Shut down the server
     let _ = tx.send(());
@@ -771,10 +716,7 @@ async fn test_submit_block_max_payload_length_exceeded() {
     let _ = tx.send(());
 }
 
-// TODO: fix this test. This test no longer works as we now check the signature
-// before we sanity check
 #[tokio::test]
-#[ignore]
 #[serial]
 async fn test_submit_block_zero_value_block() {
     // Start the server
@@ -788,11 +730,9 @@ async fn test_submit_block_zero_value_block() {
     // Prepare the request
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-    let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
-        "submitBlockPayloadCapella_Goerli_zero_value.json",
-        None,
-        None,
-    );
+    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    signed_bid_submission.message_mut().value = U256::ZERO;
+    resign_bid_submission(&mut signed_bid_submission);
 
     // Send JSON encoded request
     let resp = reqwest::Client::new()
@@ -804,19 +744,16 @@ async fn test_submit_block_zero_value_block() {
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
-    assert_eq!(resp.text().await.unwrap(), "Zero value block");
+    // below floor,
+    assert_eq!(resp.status(), reqwest::StatusCode::ACCEPTED);
 
     // Shut down the server
     let _ = tx.send(());
 }
 
-// TODO: fix this test. This test no longer works as we now check the signature
-// before we sanity check
 #[tokio::test]
-#[ignore]
 #[serial]
-async fn test_submit_block_empty_transactiions() {
+async fn test_submit_block_zero_value() {
     // Start the server
     let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
 
@@ -828,11 +765,17 @@ async fn test_submit_block_empty_transactiions() {
     // Prepare the request
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-    let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
-        "submitBlockPayloadCapella_Goerli_empty_transactions.json",
-        None,
-        None,
-    );
+    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+
+    match signed_bid_submission {
+        SignedBidSubmission::Deneb(ref mut deneb_submission) => {
+            deneb_submission.execution_payload.transactions = Default::default();
+            deneb_submission.message.value = U256::ZERO;
+        }
+        _ => panic!("Invalid signed bid submission"),
+    }
+
+    resign_bid_submission(&mut signed_bid_submission);
 
     // Send JSON encoded request
     let resp = reqwest::Client::new()
@@ -844,17 +787,15 @@ async fn test_submit_block_empty_transactiions() {
         .await
         .unwrap();
 
-    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
-    assert_eq!(resp.text().await.unwrap(), "Zero value block");
+    // now we check floor before sanity checks
+    assert_eq!(resp.status(), reqwest::StatusCode::ACCEPTED);
+    assert_eq!(resp.text().await.unwrap(), "Bid below floor, skipped validation");
 
     // Shut down the server
     let _ = tx.send(());
 }
 
-// TODO: fix this test. This test no longer works as we now check the signature
-// before we sanity check
 #[tokio::test]
-#[ignore]
 #[serial]
 async fn test_submit_block_incorrect_block_hash() {
     // Start the server
@@ -868,11 +809,9 @@ async fn test_submit_block_incorrect_block_hash() {
     // Prepare the request
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-    let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
-        "submitBlockPayloadCapella_Goerli_incorrect_block_hash.json",
-        None,
-        None,
-    );
+    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    signed_bid_submission.message_mut().block_hash = B256::ZERO;
+    resign_bid_submission(&mut signed_bid_submission);
 
     // Send JSON encoded request
     let resp = reqwest::Client::new()
@@ -885,16 +824,13 @@ async fn test_submit_block_incorrect_block_hash() {
         .unwrap();
 
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
-    assert_eq!(resp.text().await.unwrap(), "Block hash mismatch. message: 0x2bafdc454116b605005364976b134d761dd736cb4788d25c835783b46daeb121, payload: 0x1bafdc454116b605005364976b134d761dd736cb4788d25c835783b46daeb121");
+    assert_eq!(resp.text().await.unwrap(), "bid validation error: block hash mismatch: message: 0x0000000000000000000000000000000000000000000000000000000000000000, payload: 0xcf8e0d4e9587369b2301d0790347320302cc0943d5a1884560367e8208d920f2");
 
     // Shut down the server
     let _ = tx.send(());
 }
 
-// TODO: fix this test. This test no longer works as we now check the signature
-// before we sanity check
 #[tokio::test]
-#[ignore]
 #[serial]
 async fn test_submit_block_incorrect_parent_hash() {
     // Start the server
@@ -908,11 +844,9 @@ async fn test_submit_block_incorrect_parent_hash() {
     // Prepare the request
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
 
-    let signed_bid_submission: SignedBidSubmission = load_bid_submission_from_file(
-        "submitBlockPayloadCapella_Goerli_incorrect_parent_hash.json",
-        None,
-        None,
-    );
+    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    signed_bid_submission.message_mut().parent_hash = B256::ZERO;
+    resign_bid_submission(&mut signed_bid_submission);
 
     // Send JSON encoded request
     let resp = reqwest::Client::new()
@@ -925,7 +859,7 @@ async fn test_submit_block_incorrect_parent_hash() {
         .unwrap();
 
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
-    assert_eq!(resp.text().await.unwrap(), "Parent hash mismatch. message: 0xbd3291854dc822b7ec585925cda0e18f06af28fa2886e15f52d52dd4b6f94ed6, payload: 0xcd3291854dc822b7ec585925cda0e18f06af28fa2886e15f52d52dd4b6f94ed6");
+    assert_eq!(resp.text().await.unwrap(), "payload attributes not yet known");
 
     // Shut down the server
     let _ = tx.send(());
@@ -961,9 +895,12 @@ async fn test_housekeep() {
 
     // Test payload attributes is updated
     let req_url = format!("{}{}", http_config.base_url(), Route::SubmitBlock.path());
-    let signed_bid_submission: SignedBidSubmission = load_bid_submission();
-    signed_bid_submission.execution_payload().as_deneb_mut().unwrap().prev_randao =
+    let mut signed_bid_submission: SignedBidSubmission = load_bid_submission();
+    *signed_bid_submission.execution_payload_mut().prev_randao_mut() =
         b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5");
+
+    let random_pubkey = BlsPublicKey::test_random();
+    signed_bid_submission.message_mut().proposer_pubkey = random_pubkey.clone();
 
     // Send JSON encoded request
     let resp = reqwest::Client::new()
@@ -976,7 +913,7 @@ async fn test_housekeep() {
         .unwrap();
 
     assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
-    assert_eq!(resp.text().await.unwrap(), "Proposer public key mismatch. got: 0x8559727ee65c295279332198029c939557f4d2aba0751fc55f71d0733b8aa17cd0301232a7f21a895f81eacf55c97ec4, expected: 0x84e975405f8691ad7118527ee9ee4ed2e4e8bae973f6e29aa9ca9ee4aea83605ae3536d22acc9aa1af0545064eacf82e");
+    assert_eq!(resp.text().await.unwrap(), format!("Proposer public key mismatch. got: {:?}, expected: 0xb34cde46f57a246f10dd73ed8714c665dc187b2888353f0b8676c8790e1599de0e96e2a7d515db99126f8d62b7d44ca1", random_pubkey));
 
     // Shut down the server
     let _ = tx.send(());
@@ -1075,7 +1012,7 @@ async fn websocket_test() {
                 match msg {
                     Message::Binary(msg) => {
                         let payload = TopBidUpdate::from_ssz_bytes(&msg).unwrap();
-                        assert_eq!(payload.slot, 0);
+                        assert_eq!(payload.builder_pubkey, get_fixed_pubkey(Some(0)));
                     }
                     Message::Text(_msg) => {}
                     Message::Ping(_) => {

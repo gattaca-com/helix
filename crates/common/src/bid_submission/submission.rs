@@ -1,9 +1,11 @@
 use alloy_primitives::{Address, B256, U256};
 use helix_types::{
-    BidTrace, Bloom, BlsPublicKey, BlsSignature, ExtraData, SignedBidSubmission, Slot,
+    BidTrace, Bloom, BlsPublicKey, BlsSignature, ExecutionPayloadRef, ExtraData,
+    SignedBidSubmission, Slot,
 };
 use tree_hash::TreeHash;
 
+use super::BidValidationError;
 use crate::bid_submission::BidSubmission;
 
 impl BidSubmission for SignedBidSubmission {
@@ -203,5 +205,47 @@ impl BidSubmission for SignedBidSubmission {
 
     fn is_full_payload(&self) -> bool {
         true
+    }
+
+    fn validate(&self) -> Result<(), super::BidValidationError> {
+        let bid_trace = self.bid_trace();
+        let execution_payload: ExecutionPayloadRef = match self {
+            SignedBidSubmission::Deneb(bid) => (&bid.execution_payload).into(),
+            SignedBidSubmission::Electra(bid) => (&bid.execution_payload).into(),
+        };
+
+        if bid_trace.parent_hash != execution_payload.parent_hash().0 {
+            return Err(BidValidationError::ParentHashMismatch {
+                message: bid_trace.parent_hash,
+                payload: execution_payload.parent_hash().0,
+            });
+        }
+
+        if bid_trace.block_hash != execution_payload.block_hash().0 {
+            return Err(BidValidationError::BlockHashMismatch {
+                message: bid_trace.block_hash,
+                payload: execution_payload.block_hash().0,
+            });
+        }
+
+        if bid_trace.gas_limit != execution_payload.gas_limit() {
+            return Err(BidValidationError::GasLimitMismatch {
+                message: bid_trace.gas_limit,
+                payload: execution_payload.gas_limit(),
+            });
+        }
+
+        if bid_trace.gas_used != execution_payload.gas_used() {
+            return Err(BidValidationError::GasUsedMismatch {
+                message: bid_trace.gas_used,
+                payload: execution_payload.gas_used(),
+            });
+        }
+
+        if bid_trace.value == U256::ZERO {
+            return Err(BidValidationError::ZeroValueBlock);
+        }
+
+        Ok(())
     }
 }

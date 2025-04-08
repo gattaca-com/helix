@@ -3,6 +3,7 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use alloy_primitives::{B256, U256};
 use async_trait::async_trait;
 use helix_common::{
+    api::builder_api::TopBidUpdate,
     bid_submission::{
         v2::header_submission::SignedHeaderSubmission,
         v3::header_submission_v3::PayloadSocketAddress,
@@ -12,7 +13,11 @@ use helix_common::{
     BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
-use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
+use helix_types::{
+    get_fixed_pubkey, BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission,
+    SignedBuilderBid, TestRandomSeed,
+};
+use ssz::Encode;
 use tokio_stream::Stream;
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse, Auctioneer};
@@ -66,7 +71,10 @@ impl Auctioneer for MockAuctioneer {
     async fn get_best_bids(
         &self,
     ) -> Box<dyn Stream<Item = Result<Vec<u8>, AuctioneerError>> + Send + Unpin> {
-        Box::new(tokio_stream::iter(vec![Ok(vec![0; 188]), Ok(vec![0; 188]), Ok(vec![0; 188])]))
+        let mut bid = TopBidUpdate::test_random();
+        bid.builder_pubkey = get_fixed_pubkey(Some(0));
+        let bid = bid.as_ssz_bytes();
+        Box::new(tokio_stream::iter(vec![Ok(bid.clone()), Ok(bid.clone()), Ok(bid)]))
     }
 
     async fn save_execution_payload(

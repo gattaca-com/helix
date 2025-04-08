@@ -1,13 +1,14 @@
 use alloy_primitives::{Address, B256, U256};
 use helix_types::{
     Bloom, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayloadHeader,
-    ExecutionPayloadHeaderDeneb, ExecutionPayloadHeaderElectra, ExecutionRequests, ExtraData,
-    KzgCommitments, SigError, SignedMessage, SignedRoot, Slot, TestRandom,
+    ExecutionPayloadHeaderDeneb, ExecutionPayloadHeaderElectra, ExecutionPayloadHeaderRef,
+    ExecutionRequests, ExtraData, KzgCommitments, SigError, SignedMessage, SignedRoot, Slot,
+    TestRandom,
 };
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
-use crate::bid_submission::{BidSubmission, BidTrace};
+use crate::bid_submission::{BidSubmission, BidTrace, BidValidationError};
 
 #[derive(
     Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode, TreeHash, TestRandom,
@@ -214,6 +215,49 @@ impl BidSubmission for SignedHeaderSubmission {
 
     fn is_full_payload(&self) -> bool {
         false
+    }
+
+    fn validate(&self) -> Result<(), BidValidationError> {
+        let bid_trace = self.bid_trace();
+
+        let execution_payload_header: ExecutionPayloadHeaderRef = match self {
+            SignedHeaderSubmission::Deneb(bid) => (&bid.message.execution_payload_header).into(),
+            SignedHeaderSubmission::Electra(bid) => (&bid.message.execution_payload_header).into(),
+        };
+
+        if bid_trace.parent_hash != execution_payload_header.parent_hash().0 {
+            return Err(BidValidationError::ParentHashMismatch {
+                message: bid_trace.parent_hash,
+                payload: execution_payload_header.parent_hash().0,
+            });
+        }
+
+        if bid_trace.block_hash != execution_payload_header.block_hash().0 {
+            return Err(BidValidationError::BlockHashMismatch {
+                message: bid_trace.block_hash,
+                payload: execution_payload_header.block_hash().0,
+            });
+        }
+
+        if bid_trace.gas_limit != execution_payload_header.gas_limit() {
+            return Err(BidValidationError::GasLimitMismatch {
+                message: bid_trace.gas_limit,
+                payload: execution_payload_header.gas_limit(),
+            });
+        }
+
+        if bid_trace.gas_used != execution_payload_header.gas_used() {
+            return Err(BidValidationError::GasUsedMismatch {
+                message: bid_trace.gas_used,
+                payload: execution_payload_header.gas_used(),
+            });
+        }
+
+        if bid_trace.value == U256::ZERO {
+            return Err(BidValidationError::ZeroValueBlock);
+        }
+
+        Ok(())
     }
 }
 

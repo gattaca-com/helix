@@ -1,5 +1,5 @@
 use alloy_primitives::{Address, B256, U256};
-use helix_types::{BlsPublicKey, SignedValidatorRegistration, Slot};
+use helix_types::{BlsPublicKey, SignedValidatorRegistration, Slot, TestRandom};
 use ssz_derive::{Decode, Encode};
 
 use crate::{api::proposer_api::ValidatorRegistrationInfo, BuilderValidatorPreferences};
@@ -32,7 +32,7 @@ impl From<BuilderGetValidatorsResponseEntry> for BuilderGetValidatorsResponse {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode)]
+#[derive(Clone, Debug, Encode, Decode, TestRandom)]
 pub struct TopBidUpdate {
     pub timestamp: u64,
     pub slot: u64,
