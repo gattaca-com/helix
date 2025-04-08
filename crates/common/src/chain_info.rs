@@ -1,15 +1,8 @@
-use alloy_primitives::hex;
-use ethereum_consensus::{
-    clock::{
-        for_goerli, for_holesky, for_mainnet, for_sepolia, from_system_time, Clock,
-        SystemTimeProvider, GOERLI_GENESIS_TIME, HOLESKY_GENESIS_TIME, MAINNET_GENESIS_TIME,
-        SEPOLIA_GENESIS_TIME,
-    },
-    configs,
-    primitives::Root,
-    ssz::prelude::*,
-    state_transition::Context,
-    Error,
+use alloy_primitives::B256;
+use helix_types::{
+    custom_slot_clock, holesky_slot_clock, holesky_spec, mainnet_slot_clock, sepolia_slot_clock,
+    sepolia_spec, spec_from_file, ChainSpec, EthSpec, ForkName, MainnetEthSpec, SlotClock,
+    SlotClockTrait, HOLESKY_GENESIS_TIME, MAINNET_GENESIS_TIME, SEPOLIA_GENESIS_TIME,
 };
 
 pub(crate) const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
@@ -19,10 +12,6 @@ pub(crate) const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
 pub(crate) const SEPOLIA_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
     216, 234, 23, 31, 60, 148, 174, 162, 30, 188, 66, 161, 237, 97, 5, 42, 207, 63, 146, 9, 192,
     14, 78, 251, 170, 221, 172, 9, 237, 155, 128, 120,
-];
-pub(crate) const GOERLI_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
-    4, 61, 176, 217, 168, 56, 19, 85, 30, 226, 243, 52, 80, 210, 55, 151, 117, 125, 67, 9, 17, 169,
-    50, 5, 48, 173, 138, 14, 171, 196, 62, 251,
 ];
 pub(crate) const HOLESKY_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
     145, 67, 170, 124, 97, 90, 127, 113, 21, 226, 182, 170, 195, 25, 192, 53, 41, 223, 130, 66,
@@ -35,7 +24,6 @@ pub enum Network {
     #[default]
     Mainnet,
     Sepolia,
-    Goerli,
     Holesky,
     Custom(String),
 }
@@ -45,121 +33,80 @@ impl std::fmt::Display for Network {
         match self {
             Self::Mainnet => write!(f, "mainnet"),
             Self::Sepolia => write!(f, "sepolia"),
-            Self::Goerli => write!(f, "goerli"),
             Self::Holesky => write!(f, "holesky"),
             Self::Custom(config) => write!(f, "custom network with config at `{config}`"),
         }
     }
 }
 
-impl TryFrom<&Network> for Context {
-    type Error = Error;
-
-    fn try_from(network: &Network) -> Result<Self, Self::Error> {
-        match network {
-            Network::Mainnet => Ok(Context::for_mainnet()),
-            Network::Sepolia => Ok(Context::for_sepolia()),
-            Network::Goerli => Ok(Context::for_goerli()),
-            Network::Holesky => Ok(Context::for_holesky()),
-            Network::Custom(config) => Context::try_from_file(config),
-        }
-    }
-}
-
+/// Runtime config with all chain specific information
 #[derive(Clone)]
 pub struct ChainInfo {
     pub network: Network,
-    pub genesis_validators_root: Root,
-    pub context: Context,
-    pub clock: Clock<SystemTimeProvider>,
+    pub genesis_validators_root: B256,
+    // TODO: load this from beacon on startup?
+    pub context: ChainSpec,
+    pub clock: SlotClock,
+    // TODO: remove?
     pub genesis_time_in_secs: u64,
-    pub seconds_per_slot: u64,
 }
 
 impl ChainInfo {
     pub fn for_mainnet() -> Self {
-        let mut cxt = Context::for_mainnet();
-        // override the deneb fork epoch and version as library defaults are incorrect
-        // TODO: remove this once the library defaults are fixed
-        cxt.deneb_fork_epoch = 269568;
-
+        let context = ChainSpec::mainnet();
         Self {
             network: Network::Mainnet,
-            genesis_validators_root: Node::try_from(MAINNET_GENESIS_VALIDATOR_ROOT.as_ref())
-                .unwrap(),
-            context: cxt,
-            clock: for_mainnet(),
+            genesis_validators_root: B256::from(MAINNET_GENESIS_VALIDATOR_ROOT),
+            clock: mainnet_slot_clock(context.seconds_per_slot),
+            context,
             genesis_time_in_secs: MAINNET_GENESIS_TIME,
-            seconds_per_slot: configs::mainnet::SECONDS_PER_SLOT,
         }
     }
 
     pub fn for_sepolia() -> Self {
+        let context = sepolia_spec();
         Self {
             network: Network::Sepolia,
-            genesis_validators_root: Node::try_from(SEPOLIA_GENESIS_VALIDATOR_ROOT.as_ref())
-                .unwrap(),
-            context: Context::for_sepolia(),
-            clock: for_sepolia(),
+            genesis_validators_root: B256::from(SEPOLIA_GENESIS_VALIDATOR_ROOT),
+            clock: sepolia_slot_clock(context.seconds_per_slot),
+            context,
             genesis_time_in_secs: SEPOLIA_GENESIS_TIME,
-            seconds_per_slot: configs::sepolia::SECONDS_PER_SLOT,
-        }
-    }
-
-    pub fn for_goerli() -> Self {
-        Self {
-            network: Network::Goerli,
-            genesis_validators_root: Node::try_from(GOERLI_GENESIS_VALIDATOR_ROOT.as_ref())
-                .unwrap(),
-            context: Context::for_goerli(),
-            clock: for_goerli(),
-            genesis_time_in_secs: GOERLI_GENESIS_TIME,
-            seconds_per_slot: configs::goerli::SECONDS_PER_SLOT,
         }
     }
 
     pub fn for_holesky() -> Self {
-        let mut cxt = Context::for_holesky();
-        // override the deneb fork epoch and version as library defaults are incorrect
-        // TODO: remove this once the library defaults are fixed
-        cxt.deneb_fork_epoch = 29696;
-        cxt.deneb_fork_version = [5, 1, 112, 0];
-
-        cxt.electra_fork_epoch = 115968;
-        cxt.electra_fork_version = hex!("06017000");
-
+        let context = holesky_spec();
         Self {
             network: Network::Holesky,
-            genesis_validators_root: Node::try_from(HOLESKY_GENESIS_VALIDATOR_ROOT.as_ref())
-                .unwrap(),
-            context: cxt,
-            clock: for_holesky(),
+            genesis_validators_root: B256::from(HOLESKY_GENESIS_VALIDATOR_ROOT),
+            clock: holesky_slot_clock(context.seconds_per_slot),
+            context,
             genesis_time_in_secs: HOLESKY_GENESIS_TIME,
-            seconds_per_slot: configs::holesky::SECONDS_PER_SLOT,
         }
     }
 
     pub fn for_custom(
         config: String,
-        genesis_validators_root: Node,
+        genesis_validators_root: B256,
         genesis_time_in_secs: u64,
-    ) -> Result<Self, Error> {
-        let context = Context::try_from_file(&config)?;
+    ) -> Self {
+        let context = spec_from_file(&config);
         let network = Network::Custom(config.clone());
-        let clock = from_system_time(
-            genesis_time_in_secs,
-            context.seconds_per_slot,
-            context.slots_per_epoch,
-        );
-        let seconds_per_slot = context.seconds_per_slot;
+        let clock = custom_slot_clock(genesis_time_in_secs, context.seconds_per_slot);
 
-        Ok(Self {
-            network,
-            genesis_validators_root,
-            context,
-            clock,
-            genesis_time_in_secs,
-            seconds_per_slot,
-        })
+        Self { network, genesis_validators_root, context, clock, genesis_time_in_secs }
+    }
+
+    pub fn current_fork_name(&self) -> ForkName {
+        let current_slot = self.clock.now().unwrap();
+        self.context.fork_name_at_slot::<MainnetEthSpec>(current_slot)
+    }
+
+    pub fn seconds_per_slot(&self) -> u64 {
+        self.context.seconds_per_slot
+    }
+
+    pub fn slots_per_epoch(&self) -> u64 {
+        MainnetEthSpec::slots_per_epoch()
     }
 }

@@ -1,9 +1,7 @@
 #[cfg(test)]
 mod data_api_tests {
-    // *** IMPORTS ***
     use std::{sync::Arc, time::Duration};
 
-    use ethereum_consensus::{builder::SignedValidatorRegistration, primitives::BlsPublicKey};
     use helix_common::api::{
         data_api::{
             BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
@@ -11,7 +9,8 @@ mod data_api_tests {
         },
         PATH_DATA_API,
     };
-    use helix_database::MockDatabaseService;
+    use helix_database::mock_database_service::MockDatabaseService;
+    use helix_types::{BlsPublicKey, SignedValidatorRegistration, TestRandomSeed};
     use reqwest::StatusCode;
     use serial_test::serial;
     use tokio::sync::oneshot;
@@ -103,7 +102,7 @@ mod data_api_tests {
     }
 
     fn get_test_validator_registration_params() -> ValidatorRegistrationParams {
-        ValidatorRegistrationParams { pubkey: BlsPublicKey::default() }
+        ValidatorRegistrationParams { pubkey: BlsPublicKey::test_random() }
     }
 
     // *** TESTS ***

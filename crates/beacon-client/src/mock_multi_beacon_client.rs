@@ -3,13 +3,13 @@ use std::sync::{
     Arc,
 };
 
-use alloy_rpc_types::beacon::BlsPublicKey;
+use alloy_primitives::B256;
 use async_trait::async_trait;
-use ethereum_consensus::{phase0::Validator, primitives::Root};
 use helix_common::{
-    beacon_api::PublishBlobsRequest, bellatrix::Serializable, ProposerDuty, ValidatorStatus,
-    ValidatorSummary,
+    beacon_api::PublishBlobsRequest, ProposerDuty, ValidatorStatus, ValidatorSummary,
 };
+use helix_types::{BlsPublicKey, ForkName, TestRandomSeed, Validator};
+use ssz::Encode;
 use tokio::sync::broadcast::Sender;
 
 use crate::{
@@ -81,25 +81,25 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
             index: 1,
             balance: 1,
             status: ValidatorStatus::Active,
-            validator: Validator::default(),
+            validator: Validator::test_random(),
         }])
     }
     async fn get_proposer_duties(
         &self,
         _epoch: u64,
-    ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError> {
+    ) -> Result<(B256, Vec<ProposerDuty>), BeaconClientError> {
         self.proposer_duties_has_been_read.store(true, std::sync::atomic::Ordering::Relaxed);
-        Ok((Root::default(), vec![ProposerDuty {
-            public_key: BlsPublicKey::ZERO,
+        Ok((B256::default(), vec![ProposerDuty {
+            public_key: BlsPublicKey::test_random(),
             validator_index: 1,
             slot: 19,
         }]))
     }
-    async fn publish_block<VersionedSignedProposal: Serializable + Send + Sync + 'static>(
+    async fn publish_block<VersionedSignedProposal: Encode + Send + Sync + 'static>(
         &self,
         _block: Arc<VersionedSignedProposal>,
         _broadcast_validation: Option<BroadcastValidation>,
-        _fork: ethereum_consensus::Fork,
+        _fork: ForkName,
     ) -> Result<(), BeaconClientError> {
         Ok(())
     }

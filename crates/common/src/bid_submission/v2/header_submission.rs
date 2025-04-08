@@ -1,172 +1,81 @@
-use ethereum_consensus::{
-    altair::Bytes32,
-    capella::Withdrawal,
-    crypto::KzgCommitment,
-    deneb::mainnet::{BYTES_PER_LOGS_BLOOM, MAX_BLOB_COMMITMENTS_PER_BLOCK, MAX_EXTRA_DATA_BYTES},
-    primitives::{BlsPublicKey, BlsSignature, ExecutionAddress, Hash32, Slot, U256},
-    ssz::prelude::*,
-    types::mainnet::ExecutionPayloadHeader,
-    Fork,
+use alloy_primitives::{Address, B256, U256};
+use helix_types::{
+    Bloom, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayloadHeader,
+    ExecutionPayloadHeaderDeneb, ExecutionPayloadHeaderElectra, ExecutionRequests, ExtraData,
+    KzgCommitments, SigError, SignedMessage, SignedRoot, Slot, TestRandom,
 };
-use helix_utils::signing::verify_signed_builder_message;
+use ssz_derive::{Decode, Encode};
+use tree_hash_derive::TreeHash;
 
-use crate::{
-    bid_submission::{BidSubmission, BidTrace},
-    capella,
-    deneb::{self, BlobsBundle},
-    electra::ExecutionRequests,
-    proofs::InclusionProofs,
-    versioned_payload_header::VersionedExecutionPayloadHeader,
-};
+use crate::bid_submission::{BidSubmission, BidTrace};
 
-#[derive(Default, Debug, Clone, Serializable, serde::Serialize, serde::Deserialize)]
-pub struct HeaderSubmission {
-    pub bid_trace: BidTrace,
-    #[serde(flatten)]
-    pub versioned_execution_payload: VersionedExecutionPayloadHeader,
-}
-
-#[derive(Default, Debug, Clone, Serializable, serde::Serialize, serde::Deserialize)]
-pub struct HeaderSubmissionCapella {
-    pub bid_trace: BidTrace,
-    pub execution_payload_header: capella::ExecutionPayloadHeader,
-}
-
-#[derive(Default, Debug, Clone, Serializable, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode, TreeHash, TestRandom,
+)]
 pub struct HeaderSubmissionDeneb {
     pub bid_trace: BidTrace,
-    pub execution_payload_header: deneb::ExecutionPayloadHeader,
-    pub blobs_bundle: BlobsBundle,
+    pub execution_payload_header: ExecutionPayloadHeaderDeneb,
+    pub commitments: KzgCommitments,
 }
 
-#[derive(Default, Debug, Clone, Serializable, serde::Serialize, serde::Deserialize)]
-pub struct HeaderSubmissionDenebV2 {
-    pub bid_trace: BidTrace,
-    pub execution_payload_header: deneb::ExecutionPayloadHeader,
-    pub commitments: List<KzgCommitment, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
-}
+pub type SignedHeaderSubmissionDeneb = SignedMessage<HeaderSubmissionDeneb>;
 
-#[derive(Default, Debug, Clone, Serializable, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode, TreeHash, TestRandom,
+)]
 pub struct HeaderSubmissionElectra {
     pub bid_trace: BidTrace,
-    pub execution_payload_header: deneb::ExecutionPayloadHeader,
-    pub commitments: List<KzgCommitment, MAX_BLOB_COMMITMENTS_PER_BLOCK>,
+    pub execution_payload_header: ExecutionPayloadHeaderElectra,
     pub execution_requests: ExecutionRequests,
+    pub commitments: KzgCommitments,
 }
 
-// TODO: remove HeaderSubmissionDeneb when we roll out with just commitments
-#[derive(Clone, Debug, Serializable, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-#[ssz(transparent)]
-pub enum HeaderSubmissionMessage {
-    V1(HeaderSubmissionDeneb),
-    V2(HeaderSubmissionDenebV2),
-}
+pub type SignedHeaderSubmissionElectra = SignedMessage<HeaderSubmissionElectra>;
 
-impl Default for HeaderSubmissionMessage {
-    fn default() -> Self {
-        HeaderSubmissionMessage::V1(HeaderSubmissionDeneb::default())
-    }
-}
-
-impl HeaderSubmissionMessage {
-    pub fn bid_trace(&self) -> &BidTrace {
-        match self {
-            Self::V1(header_submission) => &header_submission.bid_trace,
-            Self::V2(header_submission) => &header_submission.bid_trace,
-        }
-    }
-
-    pub fn execution_payload_header(&self) -> &deneb::ExecutionPayloadHeader {
-        match self {
-            Self::V1(header_submission) => &header_submission.execution_payload_header,
-            Self::V2(header_submission) => &header_submission.execution_payload_header,
-        }
-    }
-
-    pub fn commitments(&self) -> Option<&List<KzgCommitment, MAX_BLOB_COMMITMENTS_PER_BLOCK>> {
-        match self {
-            Self::V1(header_submission) => Some(&header_submission.blobs_bundle.commitments),
-            Self::V2(header_submission) => Some(&header_submission.commitments),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serializable, serde::Serialize, serde::Deserialize)]
-#[ssz(transparent)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Encode, Decode)]
+#[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]
 pub enum SignedHeaderSubmission {
-    Electra(SignedHeaderSubmissionElectra),
     Deneb(SignedHeaderSubmissionDeneb),
-    Capella(SignedHeaderSubmissionCapella),
-}
-
-impl Default for SignedHeaderSubmission {
-    fn default() -> Self {
-        Self::Capella(SignedHeaderSubmissionCapella::default())
-    }
-}
-
-#[derive(Clone, Debug, Default, Serializable, serde::Serialize, serde::Deserialize)]
-pub struct SignedHeaderSubmissionCapella {
-    pub message: HeaderSubmissionCapella,
-    pub signature: BlsSignature,
-}
-
-#[derive(Clone, Debug, Default, Serializable, serde::Serialize, serde::Deserialize)]
-pub struct SignedHeaderSubmissionDeneb {
-    pub message: HeaderSubmissionMessage,
-    pub signature: BlsSignature,
-}
-
-#[derive(Clone, Debug, Default, Serializable, serde::Serialize, serde::Deserialize)]
-pub struct SignedHeaderSubmissionElectra {
-    pub message: HeaderSubmissionElectra,
-    pub signature: BlsSignature,
+    Electra(SignedHeaderSubmissionElectra),
 }
 
 impl BidSubmission for SignedHeaderSubmission {
-    fn proofs(&self) -> Option<&InclusionProofs> {
-        None
-    }
-
     fn bid_trace(&self) -> &BidTrace {
         match self {
-            Self::Capella(signed_header_submission) => &signed_header_submission.message.bid_trace,
-            Self::Deneb(signed_header_submission) => signed_header_submission.message.bid_trace(),
+            Self::Deneb(signed_header_submission) => &signed_header_submission.message.bid_trace,
             Self::Electra(signed_header_submission) => &signed_header_submission.message.bid_trace,
         }
     }
 
     fn signature(&self) -> &BlsSignature {
         match self {
-            Self::Capella(signed_header_submission) => &signed_header_submission.signature,
             Self::Deneb(signed_header_submission) => &signed_header_submission.signature,
             Self::Electra(signed_header_submission) => &signed_header_submission.signature,
         }
     }
 
     fn slot(&self) -> Slot {
-        self.bid_trace().slot
+        self.bid_trace().slot()
     }
 
-    fn parent_hash(&self) -> &Hash32 {
+    fn parent_hash(&self) -> &B256 {
         &self.bid_trace().parent_hash
     }
 
-    fn block_hash(&self) -> &Hash32 {
+    fn block_hash(&self) -> &B256 {
         &self.bid_trace().block_hash
     }
 
     fn builder_public_key(&self) -> &BlsPublicKey {
-        &self.bid_trace().builder_public_key
+        &self.bid_trace().builder_pubkey
     }
 
     fn proposer_public_key(&self) -> &BlsPublicKey {
-        &self.bid_trace().proposer_public_key
+        &self.bid_trace().proposer_pubkey
     }
 
-    fn proposer_fee_recipient(&self) -> &ExecutionAddress {
+    fn proposer_fee_recipient(&self) -> &Address {
         &self.bid_trace().proposer_fee_recipient
     }
 
@@ -182,27 +91,21 @@ impl BidSubmission for SignedHeaderSubmission {
         self.bid_trace().value
     }
 
-    fn fee_recipient(&self) -> &ExecutionAddress {
+    fn fee_recipient(&self) -> Address {
         match self {
-            Self::Capella(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header.fee_recipient
-            }
             Self::Deneb(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header().fee_recipient
+                signed_header_submission.message.execution_payload_header.fee_recipient
             }
             Self::Electra(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header.fee_recipient
+                signed_header_submission.message.execution_payload_header.fee_recipient
             }
         }
     }
 
-    fn state_root(&self) -> &Bytes32 {
+    fn state_root(&self) -> &B256 {
         match self {
-            Self::Capella(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header.state_root
-            }
             Self::Deneb(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header().state_root
+                &signed_header_submission.message.execution_payload_header.state_root
             }
             Self::Electra(signed_header_submission) => {
                 &signed_header_submission.message.execution_payload_header.state_root
@@ -210,13 +113,10 @@ impl BidSubmission for SignedHeaderSubmission {
         }
     }
 
-    fn receipts_root(&self) -> &Bytes32 {
+    fn receipts_root(&self) -> &B256 {
         match self {
-            Self::Capella(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header.receipts_root
-            }
             Self::Deneb(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header().receipts_root
+                &signed_header_submission.message.execution_payload_header.receipts_root
             }
             Self::Electra(signed_header_submission) => {
                 &signed_header_submission.message.execution_payload_header.receipts_root
@@ -224,13 +124,10 @@ impl BidSubmission for SignedHeaderSubmission {
         }
     }
 
-    fn logs_bloom(&self) -> &ByteVector<BYTES_PER_LOGS_BLOOM> {
+    fn logs_bloom(&self) -> &Bloom {
         match self {
-            Self::Capella(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header.logs_bloom
-            }
             Self::Deneb(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header().logs_bloom
+                &signed_header_submission.message.execution_payload_header.logs_bloom
             }
             Self::Electra(signed_header_submission) => {
                 &signed_header_submission.message.execution_payload_header.logs_bloom
@@ -238,13 +135,10 @@ impl BidSubmission for SignedHeaderSubmission {
         }
     }
 
-    fn prev_randao(&self) -> &Bytes32 {
+    fn prev_randao(&self) -> &B256 {
         match self {
-            Self::Capella(signed_header_submission) => {
+            Self::Deneb(signed_header_submission) => {
                 &signed_header_submission.message.execution_payload_header.prev_randao
-            }
-            Self::Deneb(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header().prev_randao
             }
             Self::Electra(signed_header_submission) => {
                 &signed_header_submission.message.execution_payload_header.prev_randao
@@ -254,11 +148,8 @@ impl BidSubmission for SignedHeaderSubmission {
 
     fn block_number(&self) -> u64 {
         match self {
-            Self::Capella(signed_header_submission) => {
-                signed_header_submission.message.execution_payload_header.block_number
-            }
             Self::Deneb(signed_header_submission) => {
-                signed_header_submission.message.execution_payload_header().block_number
+                signed_header_submission.message.execution_payload_header.block_number
             }
             Self::Electra(signed_header_submission) => {
                 signed_header_submission.message.execution_payload_header.block_number
@@ -268,11 +159,8 @@ impl BidSubmission for SignedHeaderSubmission {
 
     fn timestamp(&self) -> u64 {
         match self {
-            Self::Capella(signed_header_submission) => {
-                signed_header_submission.message.execution_payload_header.timestamp
-            }
             Self::Deneb(signed_header_submission) => {
-                signed_header_submission.message.execution_payload_header().timestamp
+                signed_header_submission.message.execution_payload_header.timestamp
             }
             Self::Electra(signed_header_submission) => {
                 signed_header_submission.message.execution_payload_header.timestamp
@@ -280,13 +168,10 @@ impl BidSubmission for SignedHeaderSubmission {
         }
     }
 
-    fn extra_data(&self) -> &ByteList<MAX_EXTRA_DATA_BYTES> {
+    fn extra_data(&self) -> &ExtraData {
         match self {
-            Self::Capella(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header.extra_data
-            }
             Self::Deneb(signed_header_submission) => {
-                &signed_header_submission.message.execution_payload_header().extra_data
+                &signed_header_submission.message.execution_payload_header.extra_data
             }
             Self::Electra(signed_header_submission) => {
                 &signed_header_submission.message.execution_payload_header.extra_data
@@ -296,11 +181,8 @@ impl BidSubmission for SignedHeaderSubmission {
 
     fn base_fee_per_gas(&self) -> U256 {
         match self {
-            Self::Capella(signed_header_submission) => {
-                signed_header_submission.message.execution_payload_header.base_fee_per_gas
-            }
             Self::Deneb(signed_header_submission) => {
-                signed_header_submission.message.execution_payload_header().base_fee_per_gas
+                signed_header_submission.message.execution_payload_header.base_fee_per_gas
             }
             Self::Electra(signed_header_submission) => {
                 signed_header_submission.message.execution_payload_header.base_fee_per_gas
@@ -308,43 +190,25 @@ impl BidSubmission for SignedHeaderSubmission {
         }
     }
 
-    fn withdrawals(&self) -> Option<&[Withdrawal]> {
-        None
-    }
-
-    fn withdrawals_root(&self) -> Option<Node> {
+    fn withdrawals_root(&self) -> B256 {
         match self {
-            Self::Capella(signed_header_submission) => {
-                Some(signed_header_submission.message.execution_payload_header.withdrawals_root)
-            }
             Self::Deneb(signed_header_submission) => {
-                Some(signed_header_submission.message.execution_payload_header().withdrawals_root)
+                signed_header_submission.message.execution_payload_header.withdrawals_root
             }
             Self::Electra(signed_header_submission) => {
-                Some(signed_header_submission.message.execution_payload_header.withdrawals_root)
+                signed_header_submission.message.execution_payload_header.withdrawals_root
             }
         }
     }
 
-    fn transactions_root(&self) -> Option<Node> {
+    fn transactions_root(&self) -> B256 {
         match self {
-            Self::Capella(signed_header_submission) => {
-                Some(signed_header_submission.message.execution_payload_header.transactions_root)
-            }
             Self::Deneb(signed_header_submission) => {
-                Some(signed_header_submission.message.execution_payload_header().transactions_root)
+                signed_header_submission.message.execution_payload_header.transactions_root
             }
             Self::Electra(signed_header_submission) => {
-                Some(signed_header_submission.message.execution_payload_header.transactions_root)
+                signed_header_submission.message.execution_payload_header.transactions_root
             }
-        }
-    }
-
-    fn consensus_version(&self) -> Fork {
-        match self {
-            Self::Capella(_) => Fork::Capella,
-            Self::Deneb(_) => Fork::Deneb,
-            Self::Electra(_) => Fork::Electra,
         }
     }
 
@@ -354,50 +218,56 @@ impl BidSubmission for SignedHeaderSubmission {
 }
 
 impl SignedHeaderSubmission {
-    pub fn verify_signature(
-        &mut self,
-        context: &ethereum_consensus::state_transition::Context,
-    ) -> Result<(), ethereum_consensus::Error> {
-        let mut bid_trace = self.bid_trace().clone();
-        let public_key = &self.bid_trace().builder_public_key;
-        verify_signed_builder_message(&mut bid_trace, self.signature(), public_key, context)
+    pub fn verify_signature(&self, spec: &ChainSpec) -> Result<(), SigError> {
+        let domain = spec.get_builder_domain();
+        let valid = match self {
+            SignedHeaderSubmission::Deneb(bid) => {
+                let message = bid.message.signing_root(domain);
+                bid.signature.verify(&bid.message.bid_trace.builder_pubkey, message)
+            }
+            SignedHeaderSubmission::Electra(bid) => {
+                let message = bid.message.signing_root(domain);
+                bid.signature.verify(&bid.message.bid_trace.builder_pubkey, message)
+            }
+        };
+
+        if !valid {
+            return Err(SigError::InvalidBlsSignature);
+        }
+
+        Ok(())
     }
 
     pub fn execution_payload_header(&self) -> ExecutionPayloadHeader {
         match self {
-            Self::Capella(signed_header_submission) => ExecutionPayloadHeader::Capella(
-                signed_header_submission.message.execution_payload_header.clone(),
-            ),
-            Self::Deneb(signed_header_submission) => ExecutionPayloadHeader::Deneb(
-                signed_header_submission.message.execution_payload_header().clone(),
-            ),
-            Self::Electra(signed_header_submission) => ExecutionPayloadHeader::Deneb(
-                signed_header_submission.message.execution_payload_header.clone(),
-            ),
+            Self::Deneb(signed_header_submission) => {
+                signed_header_submission.message.execution_payload_header.clone().into()
+            }
+
+            Self::Electra(signed_header_submission) => {
+                signed_header_submission.message.execution_payload_header.clone().into()
+            }
         }
     }
 
-    pub fn commitments(&self) -> Option<&List<KzgCommitment, MAX_BLOB_COMMITMENTS_PER_BLOCK>> {
+    pub fn commitments(&self) -> &KzgCommitments {
         match self {
-            Self::Capella(_) => None,
-            Self::Deneb(signed_header_submission) => signed_header_submission.message.commitments(),
+            Self::Deneb(signed_header_submission) => &signed_header_submission.message.commitments,
             Self::Electra(signed_header_submission) => {
-                Some(&signed_header_submission.message.commitments)
+                &signed_header_submission.message.commitments
             }
         }
     }
 
     pub fn bid_trace(&self) -> &BidTrace {
         match self {
-            Self::Capella(signed_header_submission) => &signed_header_submission.message.bid_trace,
-            Self::Deneb(signed_header_submission) => signed_header_submission.message.bid_trace(),
+            Self::Deneb(signed_header_submission) => &signed_header_submission.message.bid_trace,
             Self::Electra(signed_header_submission) => &signed_header_submission.message.bid_trace,
         }
     }
 
     pub fn execution_requests(&self) -> Option<&ExecutionRequests> {
         match self {
-            Self::Capella(_) => None,
             Self::Deneb(_) => None,
             Self::Electra(signed_header_submission) => {
                 Some(&signed_header_submission.message.execution_requests)
@@ -408,6 +278,8 @@ impl SignedHeaderSubmission {
 
 #[cfg(test)]
 mod tests {
+    use ssz::Decode;
+
     use super::*;
 
     #[test]
@@ -450,7 +322,7 @@ mod tests {
             0, 0, 0,
         ];
 
-        let result = SignedHeaderSubmission::deserialize(&bytes);
+        let result = SignedHeaderSubmission::from_ssz_bytes(&bytes);
         assert!(result.is_ok());
         println!("{:?}", result.unwrap());
     }

@@ -6,11 +6,12 @@ use std::{
     time::Duration,
 };
 
+use alloy_primitives::B256;
 use async_trait::async_trait;
-use ethereum_consensus::primitives::{BlsPublicKey, Hash32};
 use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, task, BuilderInfo};
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
+use helix_types::BlsPublicKey;
 use reqwest::Client;
 use tokio::{
     sync::{mpsc::Sender, RwLock},
@@ -77,11 +78,11 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             if builder_info.is_optimistic {
                 if err.is_aleady_known() {
                     warn!(
-                        builder=%request.message.builder_public_key,
+                        builder=%request.message.builder_pubkey,
                         block_hash=%request.execution_payload.block_hash(),
                         "Block already known. Skipping demotion"
                     );
-                    return Ok(())
+                    return Ok(());
                 }
 
                 if err.is_temporary() {
@@ -89,28 +90,28 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
 
                     // Pause optimistic simulations until the node is synced
                     warn!(
-                        builder=%request.message.builder_public_key,
+                        builder=%request.message.builder_pubkey,
                         block_hash=%request.execution_payload.block_hash(),
                         err=%err,
                         "Block simulation resulted in a temporary error. Pausing optimistic simulations...",
                     );
-                    return Err(err)
+                    return Err(err);
                 }
 
                 warn!(
-                    builder=%request.message.builder_public_key,
+                    builder=%request.message.builder_pubkey,
                     block_hash=%request.execution_payload.block_hash(),
                     err=%err,
                     "Block simulation resulted in an error. Demoting builder...",
                 );
                 self.demote_builder_due_to_error(
-                    &request.message.builder_public_key,
-                    request.execution_payload.block_hash(),
+                    &request.message.builder_pubkey,
+                    &request.execution_payload.block_hash().0,
                     err.to_string(),
                 )
                 .await;
             }
-            return Err(err)
+            return Err(err);
         }
 
         Ok(())
@@ -122,7 +123,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
     async fn demote_builder_due_to_error(
         &self,
         builder_public_key: &BlsPublicKey,
-        block_hash: &Hash32,
+        block_hash: &B256,
         reason: String,
     ) {
         SimulatorMetrics::demotion_count();
@@ -161,28 +162,28 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             if request.proposer_preferences.filtering.is_regional() &&
                 !builder_info.can_process_regional_slot_optimistically()
             {
-                return false
+                return false;
             }
 
             if *self.failsafe_triggered.read().await {
                 warn!(
-                    builder=%request.message.builder_public_key,
+                    builder=%request.message.builder_pubkey,
                     block_hash=%request.execution_payload.block_hash(),
                     "Failsafe triggered. Skipping optimistic simulation"
                 );
-                return false
+                return false;
             }
 
             if self.optimistic_state.is_paused() {
                 warn!(
-                    builder=%request.message.builder_public_key,
+                    builder=%request.message.builder_pubkey,
                     block_hash=%request.execution_payload.block_hash(),
                     "Optimistic simulation paused. Skipping simulation"
                 );
-                return false
+                return false;
             }
 
-            return true
+            return true;
         }
 
         false

@@ -8,15 +8,15 @@ version.workspace = true
 
 [dependencies]
 alloy-primitives.workspace = true
-alloy-rpc-types.workspace = true
 async-trait.workspace = true
 auto_impl.workspace = true
 axum.workspace = true
 deadpool-redis.workspace = true
-ethereum-consensus.workspace = true
+ethereum_ssz.workspace = true
 futures-util.workspace = true
 helix-common.workspace = true
 helix-database.workspace = true
+helix-types.workspace = true
 redis.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -26,4 +26,5 @@ tokio-stream.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+helix-utils.workspace = true
 serial_test.workspace = true

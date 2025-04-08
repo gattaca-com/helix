@@ -1,5 +1,5 @@
 use deadpool_postgres::PoolError;
-use ethereum_consensus::primitives::BlsPublicKey;
+use helix_types::{BlsPublicKey, CryptoError, SszError};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -37,14 +37,17 @@ pub enum DatabaseError {
     #[error("serde_json error: {0}")]
     SerdeJsonError(#[from] serde_json::Error),
 
-    #[error("ethereum common error: {0}")]
-    EthereumTypesError(#[from] ethereum_consensus::crypto::kzg::Error),
-
     #[error("Block submission already exists")]
     BlockSubmissionAlreadyExists,
 
     #[error("Block submission not found")]
     RowParsingError(#[from] Box<dyn std::error::Error + Sync + Send>),
+
+    #[error("SSZ error: {0:?}")]
+    SszError(SszError),
+
+    #[error("Crypto error: {0:?}")]
+    CryptoError(CryptoError),
 
     #[error("General error")]
     GeneralError,

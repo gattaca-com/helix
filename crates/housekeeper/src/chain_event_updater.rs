@@ -4,7 +4,8 @@ use alloy_primitives::B256;
 use helix_beacon_client::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo};
 use helix_database::DatabaseService;
-use helix_types::{eth_consensus_hash_to_alloy, Withdrawals};
+use helix_datastore::Auctioneer;
+use helix_types::{eth_consensus_hash_to_alloy, SlotClockTrait, Withdrawals};
 use helix_utils::{get_payload_attributes_key, utcnow_sec};
 use tokio::{
     sync::{broadcast, mpsc},
@@ -36,12 +37,12 @@ pub struct SlotUpdate {
 
 #[derive(Clone, Debug)]
 pub enum ChainUpdate {
-    SlotUpdate(SlotUpdate),
+    SlotUpdate(Box<SlotUpdate>),
     PayloadAttributesUpdate(PayloadAttributesUpdate),
 }
 
 /// Manages the update of head slots and the fetching of new proposer duties.
-pub struct ChainEventUpdater<D: DatabaseService> {
+pub struct ChainEventUpdater<D: DatabaseService, A: Auctioneer> {
     subscribers: Vec<mpsc::Sender<ChainUpdate>>,
 
     head_slot: u64,
@@ -50,13 +51,15 @@ pub struct ChainEventUpdater<D: DatabaseService> {
     proposer_duties: Vec<BuilderGetValidatorsResponseEntry>,
 
     database: Arc<D>,
+    auctioneer: Arc<A>,
     subscription_channel: mpsc::Receiver<mpsc::Sender<ChainUpdate>>,
     chain_info: Arc<ChainInfo>,
 }
 
-impl<D: DatabaseService> ChainEventUpdater<D> {
+impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
     pub fn new_with_channel(
         database: Arc<D>,
+        auctioneer: Arc<A>,
         subscription_channel: mpsc::Receiver<mpsc::Sender<ChainUpdate>>,
         chain_info: Arc<ChainInfo>,
     ) -> Self {
@@ -65,6 +68,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
             head_slot: 0,
             known_payload_attributes: Default::default(),
             database,
+            auctioneer,
             subscription_channel,
             proposer_duties: Vec::new(),
             chain_info,
@@ -73,10 +77,11 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
 
     pub fn new(
         database: Arc<D>,
+        auctioneer: Arc<A>,
         chain_info: Arc<ChainInfo>,
     ) -> (Self, mpsc::Sender<mpsc::Sender<ChainUpdate>>) {
         let (tx, rx) = mpsc::channel(200);
-        let updater = Self::new_with_channel(database, rx, chain_info);
+        let updater = Self::new_with_channel(database, auctioneer, rx, chain_info);
         (updater, tx)
     }
 
@@ -87,10 +92,10 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         mut payload_attributes_rx: broadcast::Receiver<PayloadAttributesEvent>,
     ) {
         let start_instant = Instant::now() +
-            self.chain_info.clock.duration_until_next_slot() +
+            self.chain_info.clock.duration_to_next_slot().unwrap() +
             Duration::from_secs(CUTT_OFF_TIME);
         let mut timer =
-            interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
+            interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot()));
         loop {
             tokio::select! {
                 head_event_result = head_event_rx.recv() => {
@@ -125,8 +130,8 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
                 }
                 _ = timer.tick() => {
                     info!("4 seconds into slot. Attempting to slot update...");
-                    match self.chain_info.clock.current_slot() {
-                        Some(slot) => self.process_slot(slot).await,
+                    match self.chain_info.clock.now() {
+                        Some(slot) => self.process_slot(slot.as_u64()).await,
                         None => {
                             error!("could not get current slot");
                         }
@@ -147,7 +152,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         // Validate this isn't a faulty head slot
 
         let slot_timestamp =
-            self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot);
+            self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot());
         if slot_timestamp > utcnow_sec() + MAX_DISTANCE_FOR_FUTURE_SLOT {
             warn!(head_slot = slot, "slot is too far in the future",);
             return;
@@ -164,7 +169,7 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
 
         // Give housekeeper some time to update proposer duties
         sleep(std::time::Duration::from_secs(1)).await;
-        let new_duties = match self.database.get_proposer_duties().await {
+        let mut new_duties = match self.database.get_proposer_duties().await {
             Ok(new_duties) => {
                 info!(
                     head_slot = slot,
@@ -180,14 +185,40 @@ impl<D: DatabaseService> ChainEventUpdater<D> {
         };
 
         // Update local cache if new duties were fetched.
-        if let Some(new_duties) = &new_duties {
+        if let Some(new_duties) = &mut new_duties {
+            for duty in new_duties.iter_mut() {
+                match self
+                    .auctioneer
+                    .is_primev_proposer(&duty.entry.registration.message.pubkey)
+                    .await
+                {
+                    Ok(is_primev) => {
+                        if is_primev {
+                            info!(head_slot = slot, "Primev proposer duty found");
+                            match &mut duty.entry.preferences.trusted_builders {
+                                Some(trusted_builders) => {
+                                    trusted_builders.push("PrimevBuilder".to_string());
+                                }
+                                None => {
+                                    duty.entry.preferences.trusted_builders =
+                                        Some(vec!["".to_string()]);
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        error!(error = %err, "Failed to check if proposer is primev");
+                    }
+                }
+            }
+
             self.proposer_duties.clone_from(new_duties);
         }
 
         // Get the next proposer duty for the new slot.
         let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
 
-        let update = ChainUpdate::SlotUpdate(SlotUpdate { slot, new_duties, next_duty });
+        let update = ChainUpdate::SlotUpdate(Box::new(SlotUpdate { slot, new_duties, next_duty }));
         self.send_update_to_subscribers(update).await;
     }
 

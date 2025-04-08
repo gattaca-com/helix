@@ -2,7 +2,6 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_eips::merge::EPOCH_SLOTS;
 use alloy_primitives::{map::HashSet, U256};
-use alloy_rpc_types::beacon::BlsPublicKey;
 use helix_beacon_client::{
     error::BeaconClientError,
     types::{HeadEventData, StateId},
@@ -15,7 +14,7 @@ use helix_common::{
 };
 use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
-use helix_types::{alloy_pubkey_to_eth_consensus, eth_consensus_pubkey_to_alloy};
+use helix_types::{BlsPublicKey, SlotClockTrait};
 use helix_utils::utcnow_ms;
 use tokio::{
     sync::{broadcast, Mutex},
@@ -133,10 +132,10 @@ impl<
         self.process_new_slot(best_sync_status.head_slot).await;
         loop {
             let start_instant = Instant::now() +
-                self.chain_info.clock.duration_until_next_slot() +
+                self.chain_info.clock.duration_to_next_slot().unwrap() +
                 Duration::from_secs(CUTT_OFF_TIME);
             let mut timer =
-                interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
+                interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot()));
 
             tokio::select! {
                 head_event_result = head_event_receiver.recv() => {
@@ -154,8 +153,8 @@ impl<
                     }
                 }
                 _ = timer.tick() => {
-                    match self.chain_info.clock.current_slot() {
-                        Some(slot) => self.process_new_slot(slot).await,
+                    match self.chain_info.clock.now() {
+                        Some(slot) => self.process_new_slot(slot.as_u64()).await,
                         None => {
                             error!("could not get current slot");
                         }
@@ -452,7 +451,7 @@ impl<
 
         // Check if signed validator registrations exist for each proposer duty
         let pub_keys: Vec<BlsPublicKey> =
-            proposer_duties.iter().map(|duty| duty.public_key).collect();
+            proposer_duties.iter().map(|duty| duty.public_key.clone()).collect();
         let signed_validator_registrations =
             match self.fetch_signed_validator_registrations(pub_keys).await {
                 Ok(signed_validator_registrations) => signed_validator_registrations,
@@ -497,16 +496,12 @@ impl<
 
         for duty in proposer_duties {
             if let Some(reg) = signed_validator_registrations.get(&duty.public_key) {
-                if duty.public_key !=
-                    eth_consensus_pubkey_to_alloy(
-                        &reg.registration_info.registration.message.public_key,
-                    )
-                {
+                if duty.public_key != reg.registration_info.registration.message.pubkey {
                     error!(?duty, ?reg, "mismatch in duty vs registration")
                 }
 
                 formatted_proposer_duties.push(BuilderGetValidatorsResponseEntry {
-                    slot: duty.slot,
+                    slot: duty.slot.into(),
                     validator_index: duty.validator_index,
                     entry: reg.registration_info.clone(),
                 });
@@ -558,7 +553,7 @@ impl<
         for builder_pubkey in primev_builders {
             info!(builder_pubkey = %builder_pubkey, "PrimevBuilder");
             self.db
-                .store_builder_info(&alloy_pubkey_to_eth_consensus(&builder_pubkey), &BuilderInfo {
+                .store_builder_info(&builder_pubkey, &BuilderInfo {
                     collateral: U256::ZERO,
                     is_optimistic: false,
                     is_optimistic_for_regional_filtering: false,
@@ -568,17 +563,10 @@ impl<
                 .await?;
         }
 
-        let primev_validators = primev_service
-            .get_registered_primev_validators(proposer_duties)
-            .await
-            .into_iter()
-            .map(|p| alloy_pubkey_to_eth_consensus(&p))
-            .collect::<Vec<_>>();
+        let primev_validators =
+            primev_service.get_registered_primev_validators(proposer_duties).await;
 
         self.auctioneer.update_primev_proposers(&primev_validators).await?;
-
-        let primev_builder_pref = vec!["PrimevBuilder".to_string()];
-        self.db.update_trusted_builders(&primev_validators, &primev_builder_pref).await?;
 
         Ok(())
     }
@@ -660,15 +648,10 @@ impl<
         self: &SharedHousekeeper<DB, BeaconClient, A, P>,
         pubkeys: Vec<BlsPublicKey>,
     ) -> Result<HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>, DatabaseError> {
-        let pubkeys = pubkeys.iter().map(alloy_pubkey_to_eth_consensus).collect();
-
         let registrations: Vec<SignedValidatorRegistrationEntry> =
             self.db.get_validator_registrations_for_pub_keys(pubkeys).await?;
 
-        Ok(registrations
-            .into_iter()
-            .map(|entry| (eth_consensus_pubkey_to_alloy(entry.public_key()), entry))
-            .collect())
+        Ok(registrations.into_iter().map(|entry| (entry.public_key().clone(), entry)).collect())
     }
 }
 

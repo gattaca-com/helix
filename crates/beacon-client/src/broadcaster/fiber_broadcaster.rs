@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use ethereum_consensus::{clock::get_current_unix_time_in_nanos, Fork};
-use helix_common::signed_proposal::VersionedSignedProposal;
+use ethereum_consensus::clock::get_current_unix_time_in_nanos;
+use helix_types::VersionedSignedProposal;
 use helix_utils::request_encoding::Encoding;
+use ssz::Encode;
 use tracing::debug;
 
 use crate::{error::BeaconClientError, types::BroadcastValidation};
@@ -29,33 +30,29 @@ impl FiberBroadcaster {
         &self,
         block: Arc<VersionedSignedProposal>,
         _broadcast_validation: Option<BroadcastValidation>,
-        _consensus_version: Fork,
     ) -> Result<(), BeaconClientError> {
         let ts_before_ssz = get_current_unix_time_in_nanos();
-        match block.get_ssz_bytes_to_publish() {
-            Ok(ssz_block) => {
-                let ts_after_ssz = get_current_unix_time_in_nanos();
-                match self.client.publish_block(ssz_block).await {
-                    Ok(_) => {
-                        let ts_after_publish = get_current_unix_time_in_nanos();
-                        let latency_ssz = ts_after_ssz - ts_before_ssz;
-                        let latency_publish = ts_after_publish - ts_after_ssz;
-                        let latency_total = ts_after_publish - ts_before_ssz;
-                        debug!(
-                            start = %ts_before_ssz,
-                            end_ssz = %ts_after_ssz,
-                            end_publish = %ts_after_publish,
-                            latency_ssz = %latency_ssz,
-                            latency_publish = %latency_publish,
-                            latency_total = %latency_total,
-                            "FiberBroadcaster: block publishing",
-                        );
-                        Ok(())
-                    }
-                    Err(err) => Err(BeaconClientError::BlockPublishError(err.to_string())),
-                }
+        let ssz_block = block.as_ssz_bytes();
+
+        let ts_after_ssz = get_current_unix_time_in_nanos();
+        match self.client.publish_block(ssz_block).await {
+            Ok(_) => {
+                let ts_after_publish = get_current_unix_time_in_nanos();
+                let latency_ssz = ts_after_ssz - ts_before_ssz;
+                let latency_publish = ts_after_publish - ts_after_ssz;
+                let latency_total = ts_after_publish - ts_before_ssz;
+                debug!(
+                    start = %ts_before_ssz,
+                    end_ssz = %ts_after_ssz,
+                    end_publish = %ts_after_publish,
+                    latency_ssz = %latency_ssz,
+                    latency_publish = %latency_publish,
+                    latency_total = %latency_total,
+                    "FiberBroadcaster: block publishing",
+                );
+                Ok(())
             }
-            Err(err) => Err(BeaconClientError::SszSerializationError(err)),
+            Err(err) => Err(BeaconClientError::BlockPublishError(err.to_string())),
         }
     }
 

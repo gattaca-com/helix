@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use alloy_rpc_types::beacon::BlsPublicKey;
 use helix_beacon_client::{
     mock_multi_beacon_client::MockMultiBeaconClient, MultiBeaconClientTrait,
 };
@@ -14,8 +13,9 @@ use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
     config::PrimevConfig, RelayConfig, ValidatorSummary,
 };
-use helix_database::MockDatabaseService;
+use helix_database::mock_database_service::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
+use helix_types::get_fixed_pubkey;
 use tokio::{sync::broadcast, task};
 
 use crate::{
@@ -119,17 +119,15 @@ async fn test_known_validators_are_set() {
 }
 
 #[tokio::test]
-#[ignore = "TODO: to fix"]
 async fn test_proposer_duties_set() {
     let vars = get_housekeeper();
     start_housekeeper(vars.housekeeper.clone(), vars.beacon_client).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // TODO: here the value is two
-    assert!(vars.proposer_duties.lock().unwrap().len() == 1);
+    assert_eq!(vars.proposer_duties.lock().unwrap().len(), 2);
     let proposer_duties = vars.proposer_duties.lock().unwrap();
-    assert!(proposer_duties[0].validator_index == 1);
-    assert!(proposer_duties[0].slot == 19);
+    assert_eq!(proposer_duties[0].validator_index, 1);
+    assert_eq!(proposer_duties[0].slot, 19);
 }
 
 #[tokio::test]
@@ -157,8 +155,8 @@ async fn test_primev_enabled_housekeeper() {
     let vars = get_housekeeper();
 
     // Create mock Primev service with test data
-    let test_validator_pubkey = BlsPublicKey::try_from(vec![1; 48].as_slice()).unwrap();
-    let test_builder_pubkey = BlsPublicKey::try_from(vec![2; 48].as_slice()).unwrap();
+    let test_validator_pubkey = get_fixed_pubkey(Some(0));
+    let test_builder_pubkey = get_fixed_pubkey(Some(1));
 
     let mut mock_primev = MockPrimevService::new()
         .with_validators(vec![test_validator_pubkey.clone()])
@@ -266,16 +264,16 @@ async fn test_primev_real_contract_integration() {
 
             // Use the simplified ABI that we know works
             let validator_abi_str = r#"[{
-                "inputs": [{"name":"valBLSPubKeys","type":"bytes[]"}],
-                "name": "areValidatorsOptedIn", 
-                "outputs": [{"components":[
-                    {"name":"isVanillaOptedIn","type":"bool"},
-                    {"name":"isAvsOptedIn","type":"bool"},
-                    {"name":"isMiddlewareOptedIn","type":"bool"}
-                ],"name":"","type":"tuple[]"}],
-                "stateMutability": "view",
-                "type": "function"
-            }]"#;
+                    "inputs": [{"name":"valBLSPubKeys","type":"bytes[]"}],
+                    "name": "areValidatorsOptedIn", 
+                    "outputs": [{"components":[
+                        {"name":"isVanillaOptedIn","type":"bool"},
+                        {"name":"isAvsOptedIn","type":"bool"},
+                        {"name":"isMiddlewareOptedIn","type":"bool"}
+                    ],"name":"","type":"tuple[]"}],
+                    "stateMutability": "view",
+                    "type": "function"
+                }]"#;
 
             let validator_abi: Abi = serde_json::from_str(validator_abi_str).unwrap();
             let validator_contract =

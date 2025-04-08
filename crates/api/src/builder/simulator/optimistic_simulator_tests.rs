@@ -2,20 +2,14 @@
 mod simulator_tests {
     use std::sync::{atomic::AtomicBool, Arc};
 
-    use alloy_primitives::hex;
-    use ethereum_consensus::{
-        primitives::{BlsPublicKey, BlsSignature},
-        ssz::prelude::*,
-        types::mainnet::ExecutionPayload,
-    };
-    use helix_common::{
-        bid_submission::{BidTrace, SignedBidSubmission, SignedBidSubmissionCapella},
-        simulator::BlockSimError,
-        BuilderInfo, ValidatorPreferences,
-    };
-    use helix_database::MockDatabaseService;
+    use alloy_primitives::{b256, U256};
+    use helix_common::{simulator::BlockSimError, BuilderInfo, ValidatorPreferences};
+    use helix_database::mock_database_service::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
-    use rand::Rng;
+    use helix_types::{
+        BidTrace, BlobsBundle, BlsPublicKey, BlsSignature, ExecutionPayloadDeneb,
+        SignedBidSubmissionDeneb, TestRandomSeed,
+    };
     use reqwest::Client;
     use serde_json::json;
 
@@ -42,49 +36,28 @@ mod simulator_tests {
         OptimisticSimulator::new(Arc::new(auctioneer), Arc::new(db), http, endpoint.to_string())
     }
 
-    fn get_byte_vector_32_for_hex(hex: &str) -> ByteVector<32> {
-        let bytes = hex::decode(&hex[2..]).unwrap();
-        ByteVector::try_from(bytes.as_ref()).unwrap()
-    }
-
-    fn get_test_pub_key_bytes(random: bool) -> [u8; 48] {
-        if random {
-            let mut pubkey_array = [0u8; 48];
-            rand::thread_rng().fill(&mut pubkey_array[..]);
-            pubkey_array
-        } else {
-            let pubkey_hex = "0x84e975405f8691ad7118527ee9ee4ed2e4e8bae973f6e29aa9ca9ee4aea83605ae3536d22acc9aa1af0545064eacf82e";
-            let pubkey_bytes = hex::decode(&pubkey_hex[2..]).unwrap();
-            let mut pubkey_array = [0u8; 48];
-            pubkey_array.copy_from_slice(&pubkey_bytes);
-            pubkey_array
-        }
-    }
-
     fn get_sim_req() -> BlockSimRequest {
-        let capella_exec_payload = ethereum_consensus::capella::ExecutionPayload {
-            block_hash: get_byte_vector_32_for_hex(
-                "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
-            ),
+        let deneb_exec_payload = ExecutionPayloadDeneb {
+            block_hash: b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5")
+                .into(),
             ..Default::default()
         };
-        let execution_payload = ExecutionPayload::Capella(capella_exec_payload);
+
         let bid_trace = BidTrace {
-            builder_public_key: BlsPublicKey::try_from(&get_test_pub_key_bytes(false)[..]).unwrap(),
-            block_hash: get_byte_vector_32_for_hex(
-                "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
-            ),
-            ..Default::default()
+            builder_pubkey: BlsPublicKey::test_random(),
+            block_hash: b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5"),
+            ..BidTrace::test_random()
         };
-        let signed_bid_submission = SignedBidSubmission::Capella(SignedBidSubmissionCapella {
+        let signed_bid_submission = SignedBidSubmissionDeneb {
             message: bid_trace,
-            execution_payload,
-            signature: BlsSignature::default(),
-        });
+            execution_payload: deneb_exec_payload.into(),
+            signature: BlsSignature::test_random(),
+            blobs_bundle: BlobsBundle::default(),
+        };
 
         BlockSimRequest::new(
             0,
-            Arc::new(signed_bid_submission),
+            Arc::new(signed_bid_submission.into()),
             ValidatorPreferences::default(),
             None,
         )

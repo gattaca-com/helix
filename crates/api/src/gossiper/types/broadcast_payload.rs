@@ -1,5 +1,5 @@
-use ethereum_consensus::{primitives::BlsPublicKey, ssz};
-use helix_common::versioned_payload::PayloadAndBlobs;
+use helix_types::{BlsPublicKey, ForkName, ForkVersionDecode, PayloadAndBlobs};
+use ssz::Encode;
 
 use crate::grpc;
 
@@ -11,19 +11,24 @@ pub struct BroadcastPayloadParams {
 }
 
 impl BroadcastPayloadParams {
-    pub fn from_proto(proto_params: grpc::BroadcastPayloadParams) -> Self {
+    pub fn from_proto(proto_params: grpc::BroadcastPayloadParams, fork_name: ForkName) -> Self {
+        // TODO: double check this logic
         Self {
-            execution_payload: ssz::prelude::deserialize(&proto_params.execution_payload).unwrap(),
+            execution_payload: PayloadAndBlobs::from_ssz_bytes_by_fork(
+                &proto_params.execution_payload,
+                fork_name,
+            )
+            .unwrap(),
             slot: proto_params.slot,
-            proposer_pub_key: BlsPublicKey::try_from(proto_params.proposer_pub_key.as_slice())
+            proposer_pub_key: BlsPublicKey::deserialize(proto_params.proposer_pub_key.as_slice())
                 .unwrap(),
         }
     }
     pub fn to_proto(&self) -> grpc::BroadcastPayloadParams {
         grpc::BroadcastPayloadParams {
-            execution_payload: ssz::prelude::serialize(&self.execution_payload).unwrap(),
+            execution_payload: self.execution_payload.as_ssz_bytes(),
             slot: self.slot,
-            proposer_pub_key: self.proposer_pub_key.to_vec(),
+            proposer_pub_key: self.proposer_pub_key.serialize().to_vec(),
         }
     }
 }

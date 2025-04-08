@@ -1,18 +1,20 @@
-use ethereum_consensus::primitives::Root;
-
-use crate::deneb::BlobSidecars;
+use alloy_primitives::B256;
+use helix_types::BlobSidecars;
 
 /// Struct used in the custom `publish_blobs` beacon chain api.
 /// Beacon chain expects this JSON serialised.
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct PublishBlobsRequest {
     pub blob_sidecars: BlobSidecars,
-    pub beacon_root: Root,
+    pub beacon_root: B256,
 }
 
 #[test]
 fn test_serde() {
-    let blobs = PublishBlobsRequest::default();
+    let blobs = PublishBlobsRequest {
+        blob_sidecars: BlobSidecars::new(vec![], 6).unwrap(),
+        beacon_root: B256::ZERO,
+    };
     let json = serde_json::to_vec(&blobs).unwrap();
 
     println!("{:?}", json);

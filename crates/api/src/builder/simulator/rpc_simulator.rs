@@ -95,13 +95,13 @@ impl RpcSimulator {
     /// Processes the response from the RPC call.
     pub async fn process_rpc_response(response: Response) -> Result<(), BlockSimError> {
         if response.status() != StatusCode::OK {
-            return Err(BlockSimError::RpcError(response.status().to_string()))
+            return Err(BlockSimError::RpcError(response.status().to_string()));
         }
 
         match response.json::<BlockSimRpcResponse>().await {
             Ok(rpc_response) => {
                 if let Some(error) = rpc_response.error {
-                    return Err(BlockSimError::BlockValidationFailed(error.message))
+                    return Err(BlockSimError::BlockValidationFailed(error.message));
                 }
                 Ok(())
             }
@@ -121,10 +121,10 @@ impl BlockSimulator for RpcSimulator {
     ) -> Result<bool, BlockSimError> {
         let timer = SimulatorMetrics::timer();
 
-        let block_hash = request.execution_payload.block_hash().clone();
+        let block_hash = request.execution_payload.block_hash().0;
         debug!(
             %block_hash,
-            builder_pub_key = %request.message.builder_public_key,
+            builder_pub_key = %request.message.builder_pubkey,
             "RpcSimulator::process_request",
         );
 
@@ -173,7 +173,7 @@ impl BlockSimulator for RpcSimulator {
                 Ok(response) => response,
                 Err(err) => {
                     error!("Error sending eth_syncing request: {:?}", err);
-                    return Err(BlockSimError::RpcError(err.to_string()))
+                    return Err(BlockSimError::RpcError(err.to_string()));
                 }
             };
 
@@ -181,7 +181,7 @@ impl BlockSimulator for RpcSimulator {
             Ok(json_response) => json_response,
             Err(err) => {
                 error!("Error parsing eth_syncing response: {:?}", err);
-                return Err(BlockSimError::RpcError(err.to_string()))
+                return Err(BlockSimError::RpcError(err.to_string()));
             }
         };
 

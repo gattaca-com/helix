@@ -7,11 +7,12 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-alloy-rpc-types.workspace = true
+alloy-primitives.workspace = true
 async-trait.workspace = true
 auto_impl.workspace = true
 axum.workspace = true
 ethereum-consensus.workspace = true
+ethereum_ssz.workspace = true
 fiber.workspace = true
 futures.workspace = true
 helix-common.workspace = true

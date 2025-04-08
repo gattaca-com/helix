@@ -10,3 +10,6 @@ fmt-check:
 
 clippy:
   cargo clippy --all-features --no-deps -- -D warnings
+
+test:
+  cargo test --workspace --all-features

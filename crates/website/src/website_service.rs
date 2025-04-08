@@ -6,8 +6,8 @@ use helix_beacon_client::{
 };
 use helix_common::{chain_info::ChainInfo, NetworkConfig, RelayConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
+use helix_datastore::MockAuctioneer; // Import MockAuctioneer from the appropriate module
 use helix_housekeeper::{ChainEventUpdater, ChainUpdate};
-use helix_utils::signing::compute_builder_domain;
 use tokio::{
     net::TcpListener,
     sync::{broadcast, mpsc, RwLock},
@@ -48,12 +48,11 @@ impl WebsiteService {
         // ChainInfo
         let chain_info = Arc::new(match config.network_config {
             NetworkConfig::Mainnet => ChainInfo::for_mainnet(),
-            NetworkConfig::Goerli => ChainInfo::for_goerli(),
+
             NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
             NetworkConfig::Holesky => ChainInfo::for_holesky(),
             NetworkConfig::Custom { ref dir_path, ref genesis_validator_root, genesis_time } => {
                 ChainInfo::for_custom(dir_path.clone(), *genesis_validator_root, genesis_time)
-                    .expect("Failed to load custom chain info")
             }
         });
 
@@ -80,7 +79,7 @@ impl WebsiteService {
 
         // Create the ChainEventUpdater and subscription
         let (mut chain_updater, chain_update_subscription) =
-            ChainEventUpdater::new(db.clone(), chain_info.clone());
+            ChainEventUpdater::new(db.clone(), Arc::new(MockAuctioneer::new()), chain_info.clone());
         info!("ChainEventUpdater initialized");
 
         let (head_event_tx, head_event_rx) = broadcast::channel(100);
@@ -289,9 +288,7 @@ impl WebsiteService {
             genesis_validators_root: alloy_primitives::hex::encode(
                 state.chain_info.genesis_validators_root.as_ref() as &[u8],
             ),
-            builder_signing_domain: compute_builder_domain(&state.chain_info.context)
-                .map(alloy_primitives::hex::encode)
-                .unwrap_or_else(|_e| String::from("Error computing builder domain")),
+            builder_signing_domain: state.chain_info.context.get_builder_domain().to_string(),
         })
     }
 }
