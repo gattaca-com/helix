@@ -565,7 +565,6 @@ impl<
 
         let primev_validators =
             primev_service.get_registered_primev_validators(proposer_duties).await;
-
         self.auctioneer.update_primev_proposers(&primev_validators).await?;
 
         Ok(())
