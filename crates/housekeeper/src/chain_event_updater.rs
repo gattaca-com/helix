@@ -5,7 +5,7 @@ use helix_beacon_client::types::{HeadEventData, PayloadAttributes, PayloadAttrib
 use helix_common::{api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo};
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::{eth_consensus_hash_to_alloy, SlotClockTrait, Withdrawals};
+use helix_types::{SlotClockTrait, Withdrawals};
 use helix_utils::{get_payload_attributes_key, utcnow_sec};
 use tokio::{
     sync::{broadcast, mpsc},
@@ -101,8 +101,8 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
                 head_event_result = head_event_rx.recv() => {
                     match head_event_result {
                         Ok(head_event) => {
-                            info!(head_slot = head_event.slot, "Received head event");
-                            self.process_slot(head_event.slot).await
+                            info!(head_slot =% head_event.slot, "Received head event");
+                            self.process_slot(head_event.slot.into()).await
                         },
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("head events lagged by {n} events");
@@ -147,7 +147,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
             return;
         }
 
-        info!(head_slot = slot, "Processing slot",);
+        info!(head_slot =% slot, "Processing slot",);
 
         // Validate this isn't a faulty head slot
 
@@ -225,15 +225,13 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
     // Handles a new payload attributes event
     async fn process_payload_attributes(&mut self, event: PayloadAttributesEvent) {
         // require new proposal slot in the future
-        if self.head_slot >= event.data.proposal_slot {
+        if self.head_slot >= event.data.proposal_slot.as_u64() {
             return;
         }
 
         // Discard payload attributes if already known
-        let payload_attributes_key = get_payload_attributes_key(
-            &eth_consensus_hash_to_alloy(&event.data.parent_block_hash),
-            event.data.proposal_slot,
-        );
+        let payload_attributes_key =
+            get_payload_attributes_key(&event.data.parent_block_hash, event.data.proposal_slot);
         if self.known_payload_attributes.contains_key(&payload_attributes_key) {
             return;
         }
@@ -246,7 +244,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
 
         info!(
             head_slot = self.head_slot,
-            payload_attribute_slot = event.data.proposal_slot,
+            payload_attribute_slot =% event.data.proposal_slot,
             payload_attribute_parent = ?event.data.parent_block_hash,
             "Processing payload attribute event",
         );
@@ -257,8 +255,8 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         let withdrawals_root = withdrawals_list.tree_hash_root();
 
         let update = ChainUpdate::PayloadAttributesUpdate(PayloadAttributesUpdate {
-            slot: event.data.proposal_slot,
-            parent_hash: event.data.parent_block_hash.as_ref().try_into().unwrap(),
+            slot: event.data.proposal_slot.as_u64(),
+            parent_hash: event.data.parent_block_hash,
             withdrawals_root,
             payload_attributes: event.data.payload_attributes,
         });

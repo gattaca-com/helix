@@ -7,7 +7,7 @@ use futures::StreamExt;
 use helix_common::{
     beacon_api::PublishBlobsRequest, BeaconClientConfig, ProposerDuty, ValidatorSummary,
 };
-use helix_types::{ForkName, VersionedSignedProposal};
+use helix_types::{ForkName, Slot, VersionedSignedProposal};
 use reqwest::header::CONTENT_TYPE;
 use reqwest_eventsource::EventSource;
 use tokio::{sync::broadcast::Sender, time::sleep};
@@ -142,7 +142,7 @@ impl BeaconClientTrait for BeaconClient {
         Ok(response.data)
     }
 
-    async fn current_slot(&self) -> Result<u64, BeaconClientError> {
+    async fn current_slot(&self) -> Result<Slot, BeaconClientError> {
         let sync_status = self.sync_status().await?;
         Ok(sync_status.head_slot)
     }

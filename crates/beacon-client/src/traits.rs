@@ -3,7 +3,7 @@ use std::sync::Arc;
 use alloy_primitives::B256;
 use async_trait::async_trait;
 use helix_common::{beacon_api::PublishBlobsRequest, ProposerDuty, ValidatorSummary};
-use helix_types::ForkName;
+use helix_types::{ForkName, Slot};
 use serde::{de::DeserializeOwned, Serialize};
 use ssz::Encode;
 use tokio::sync::broadcast::Sender;
@@ -16,7 +16,7 @@ use crate::{
 #[async_trait]
 pub trait BeaconClientTrait: Send + Sync + Clone {
     async fn sync_status(&self) -> Result<SyncStatus, BeaconClientError>;
-    async fn current_slot(&self) -> Result<u64, BeaconClientError>;
+    async fn current_slot(&self) -> Result<Slot, BeaconClientError>;
 
     async fn subscribe_to_head_events(
         &self,

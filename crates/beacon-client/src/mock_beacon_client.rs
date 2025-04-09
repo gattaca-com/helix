@@ -3,7 +3,7 @@ use std::sync::Arc;
 use alloy_primitives::B256;
 use async_trait::async_trait;
 use helix_common::{beacon_api::PublishBlobsRequest, ProposerDuty, ValidatorSummary};
-use helix_types::ForkName;
+use helix_types::{ForkName, Slot};
 use ssz::Encode;
 use tokio::sync::broadcast::Sender;
 
@@ -24,7 +24,11 @@ pub struct MockBeaconClient {
 impl MockBeaconClient {
     pub fn new() -> Self {
         Self {
-            sync_status: SyncStatus { head_slot: 10, sync_distance: 0, is_syncing: false },
+            sync_status: SyncStatus {
+                head_slot: 10u64.into(),
+                sync_distance: 0,
+                is_syncing: false,
+            },
             state_validators: Vec::new(),
             proposer_duties: (B256::default(), Vec::new()),
             publish_block_response_code: 200,
@@ -58,7 +62,7 @@ impl BeaconClientTrait for MockBeaconClient {
         Ok(self.sync_status.clone())
     }
 
-    async fn current_slot(&self) -> Result<u64, BeaconClientError> {
+    async fn current_slot(&self) -> Result<Slot, BeaconClientError> {
         Ok(self.sync_status.head_slot)
     }
 

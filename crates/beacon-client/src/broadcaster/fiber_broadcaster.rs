@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use ethereum_consensus::clock::get_current_unix_time_in_nanos;
 use helix_types::VersionedSignedProposal;
-use helix_utils::request_encoding::Encoding;
+use helix_utils::{request_encoding::Encoding, utcnow_ns};
 use ssz::Encode;
 use tracing::debug;
 
@@ -31,13 +30,13 @@ impl FiberBroadcaster {
         block: Arc<VersionedSignedProposal>,
         _broadcast_validation: Option<BroadcastValidation>,
     ) -> Result<(), BeaconClientError> {
-        let ts_before_ssz = get_current_unix_time_in_nanos();
+        let ts_before_ssz = utcnow_ns();
         let ssz_block = block.as_ssz_bytes();
 
-        let ts_after_ssz = get_current_unix_time_in_nanos();
+        let ts_after_ssz = utcnow_ns();
         match self.client.publish_block(ssz_block).await {
             Ok(_) => {
-                let ts_after_publish = get_current_unix_time_in_nanos();
+                let ts_after_publish = utcnow_ns();
                 let latency_ssz = ts_after_ssz - ts_before_ssz;
                 let latency_publish = ts_after_publish - ts_after_ssz;
                 let latency_total = ts_after_publish - ts_before_ssz;

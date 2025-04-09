@@ -120,33 +120,3 @@ pub struct SignedMessage<T: ssz::Encode + ssz::Decode> {
     pub message: T,
     pub signature: BlsSignature,
 }
-
-pub fn eth_consensus_hash_to_alloy(
-    hash: &ethereum_consensus::primitives::Bytes32,
-) -> alloy_primitives::B256 {
-    alloy_primitives::B256::from_slice(hash.as_ref())
-}
-
-pub fn alloy_hash_to_eth_consensus(
-    hash: &alloy_primitives::B256,
-) -> ethereum_consensus::primitives::Bytes32 {
-    ethereum_consensus::primitives::Bytes32::try_from(hash.as_ref()).unwrap()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_eth_consensus_hash_to_alloy() {
-        let hash = alloy_primitives::B256::random();
-        let hash_2 = eth_consensus_hash_to_alloy(&alloy_hash_to_eth_consensus(&hash));
-        assert_eq!(hash, hash_2);
-    }
-
-    #[test]
-    fn t() {
-        let x = std::mem::size_of::<BlsSignature>();
-        println!("x: {}", x);
-    }
-}

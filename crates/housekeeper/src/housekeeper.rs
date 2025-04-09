@@ -129,7 +129,7 @@ impl<
     ) -> Result<(), BeaconClientError> {
         let best_sync_status = self.beacon_client.best_sync_status().await?;
 
-        self.process_new_slot(best_sync_status.head_slot).await;
+        self.process_new_slot(best_sync_status.head_slot.as_u64()).await;
         loop {
             let start_instant = Instant::now() +
                 self.chain_info.clock.duration_to_next_slot().unwrap() +
@@ -141,7 +141,7 @@ impl<
                 head_event_result = head_event_receiver.recv() => {
                     match head_event_result {
                         Ok(head_event) => {
-                            self.process_new_slot(head_event.slot).await;
+                            self.process_new_slot(head_event.slot.as_u64()).await;
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("head events lagged by {n} events");

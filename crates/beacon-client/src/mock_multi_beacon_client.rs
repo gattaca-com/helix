@@ -55,7 +55,7 @@ impl MultiBeaconClientTrait for MockMultiBeaconClient {
 
         // send a dummy event
         let head_event = HeadEventData {
-            slot: 19,
+            slot: 19u64.into(),
             block: "test_block".to_string(),
             state: "test_state".to_string(),
         };

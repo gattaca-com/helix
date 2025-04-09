@@ -1,9 +1,5 @@
-use alloy_primitives::B256;
-use ethereum_consensus::{
-    primitives::{Bytes32, Root, Slot},
-    serde::{as_str, try_bytes_from_hex_str},
-};
-use helix_types::Withdrawal;
+use alloy_primitives::{hex, B256};
+use helix_types::{Slot, Withdrawal};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -12,7 +8,7 @@ pub enum BlockId {
     Genesis,
     Finalized,
     Slot(Slot),
-    Root(Root),
+    Root(B256),
 }
 
 impl std::fmt::Display for BlockId {
@@ -35,7 +31,7 @@ pub enum StateId {
     Finalized,
     Justified,
     Slot(Slot),
-    Root(Root),
+    Root(B256),
 }
 
 impl std::fmt::Display for StateId {
@@ -63,9 +59,9 @@ impl std::str::FromStr for StateId {
             "genesis" => Ok(StateId::Genesis),
             _ => match s.parse::<Slot>() {
                 Ok(slot) => Ok(Self::Slot(slot)),
-                Err(_) => match try_bytes_from_hex_str(s) {
+                Err(_) => match hex::decode(s) {
                     Ok(root_data) => {
-                        let root = Root::try_from(root_data.as_ref() as &[u8]).map_err(|err| format!("could not parse state identifier by root from the provided argument {s}: {err}"))?;
+                        let root = B256::try_from(root_data.as_slice()).map_err(|err| format!("could not parse state identifier by root from the provided argument {s}: {err}"))?;
                         Ok(Self::Root(root))
                     }
                     Err(err) => {
@@ -80,10 +76,9 @@ impl std::str::FromStr for StateId {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct SyncStatus {
-    #[serde(with = "as_str")]
     pub head_slot: Slot,
-    #[serde(with = "as_str")]
-    pub sync_distance: usize,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub sync_distance: u64,
     pub is_syncing: bool,
 }
 
@@ -91,8 +86,7 @@ pub struct SyncStatus {
 // {"slot":"827256","block":"0x56b683afa68170c775f3c9debc18a6a72caea9055584d037333a6fe43c8ceb83","state":"0x419e2965320d69c4213782dae73941de802a4f436408fddd6f68b671b3ff4e55","epoch_transition":false,"execution_optimistic":false,"previous_duty_dependent_root":"0x5b81a526839b7fb67c3896f1125451755088fb578ad27c2690b3209f3d7c6b54","current_duty_dependent_root":"0x5f3232c0d5741e27e13754e1d88285c603b07dd6164b35ca57e94344a9e42942"}
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct HeadEventData {
-    #[serde(with = "as_str")]
-    pub slot: u64,
+    pub slot: Slot,
     pub block: String,
     pub state: String,
 }
@@ -105,20 +99,19 @@ pub struct PayloadAttributesEvent {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct PayloadAttributesEventData {
-    #[serde(with = "as_str")]
+    #[serde(with = "serde_utils::quoted_u64")]
     pub proposer_index: u64,
-    #[serde(with = "as_str")]
-    pub proposal_slot: u64,
-    #[serde(with = "as_str")]
+    pub proposal_slot: Slot,
+    #[serde(with = "serde_utils::quoted_u64")]
     pub parent_block_number: u64,
     pub parent_block_root: String,
-    pub parent_block_hash: Bytes32,
+    pub parent_block_hash: B256,
     pub payload_attributes: PayloadAttributes,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct PayloadAttributes {
-    #[serde(with = "as_str")]
+    #[serde(with = "serde_utils::quoted_u64")]
     pub timestamp: u64,
     pub prev_randao: B256,
     pub suggested_fee_recipient: String,

@@ -1635,7 +1635,7 @@ where
         parent_hash: &B256,
         block_hash: &B256,
     ) -> Result<PayloadAttributesUpdate, BuilderApiError> {
-        let payload_attributes_key = get_payload_attributes_key(parent_hash, slot);
+        let payload_attributes_key = get_payload_attributes_key(parent_hash, slot.into());
         let payload_attributes =
             self.payload_attributes.read().await.get(&payload_attributes_key).cloned().ok_or_else(
                 || {
@@ -1847,8 +1847,10 @@ where
         );
 
         // Discard payload attributes if already known
-        let payload_attributes_key =
-            get_payload_attributes_key(&payload_attributes.parent_hash, payload_attributes.slot);
+        let payload_attributes_key = get_payload_attributes_key(
+            &payload_attributes.parent_hash,
+            payload_attributes.slot.into(),
+        );
         let mut all_payload_attributes = self.payload_attributes.write().await;
         if all_payload_attributes.contains_key(&payload_attributes_key) {
             return;
