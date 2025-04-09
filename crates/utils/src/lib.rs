@@ -7,38 +7,14 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use ::serde::de;
 use alloy_primitives::B256;
-use ethereum_consensus::{
-    altair::Slot,
-    ssz::{self, prelude::Serializable},
-};
+use helix_types::Slot;
 use http::HeaderMap;
 use tracing::{error, info};
 use uuid::Uuid;
 
 pub mod request_encoding;
 pub mod serde;
-
-pub fn try_decode_into<T>(is_ssz: bool, body_bytes: &[u8], json_fallback: bool) -> Option<T>
-where
-    T: Serializable + de::DeserializeOwned,
-{
-    if is_ssz {
-        match ssz::prelude::deserialize::<T>(body_bytes).ok() {
-            Some(decoded) => Some(decoded),
-            None => {
-                if json_fallback {
-                    serde_json::from_slice(body_bytes).ok()
-                } else {
-                    None
-                }
-            }
-        }
-    } else {
-        serde_json::from_slice(body_bytes).ok()
-    }
-}
 
 pub fn get_payload_attributes_key(parent_hash: &B256, slot: Slot) -> String {
     format!("{parent_hash:?}:{slot}")

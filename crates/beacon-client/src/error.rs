@@ -5,7 +5,6 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use ethereum_consensus::ssz;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error)]
@@ -39,9 +38,6 @@ pub enum BeaconClientError {
 
     #[error("channel error")]
     ChannelError,
-
-    #[error("block ssz-serialization error: {0}")]
-    SszSerializationError(#[from] ssz::prelude::SerializeError),
 
     #[error("Error publishing block: {0}")]
     BlockPublishError(String),

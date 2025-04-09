@@ -291,12 +291,12 @@ mod multi_beacon_client_tests {
     #[tokio::test]
     async fn test_best_sync_status() {
         let client1 = MockBeaconClient::new().with_sync_status(SyncStatus {
-            head_slot: 10,
+            head_slot: 10u64.into(),
             sync_distance: 0,
             is_syncing: false,
         });
         let client2 = MockBeaconClient::new().with_sync_status(SyncStatus {
-            head_slot: 20,
+            head_slot: 20u64.into(),
             sync_distance: 0,
             is_syncing: false,
         });

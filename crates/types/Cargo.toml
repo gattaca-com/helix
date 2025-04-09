@@ -9,7 +9,6 @@ version.workspace = true
 [dependencies]
 alloy-eips.workspace = true
 alloy-primitives.workspace = true
-ethereum-consensus.workspace = true
 ethereum_serde_utils.workspace = true
 ethereum_ssz.workspace = true
 ethereum_ssz_derive.workspace = true
