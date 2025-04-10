@@ -46,7 +46,7 @@ use tokio::{
     },
     time::{self},
 };
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{debug, error, info, warn, Instrument, Level};
 use uuid::Uuid;
 
 use crate::{
@@ -178,7 +178,7 @@ where
     /// 6. Saves the bid to auctioneer and db.
     ///
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err, ret(level = Level::DEBUG))]
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
         headers: HeaderMap,
@@ -1930,10 +1930,9 @@ pub async fn decode_payload(
 
     info!(
         payload_size = body_bytes.len(),
-        is_gzip = is_gzip,
-        is_ssz = is_ssz,
+        is_gzip,
+        is_ssz,
         headers = ?headers,
-        bytes = ?body_bytes,
         "received payload",
     );
 

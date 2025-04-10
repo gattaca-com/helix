@@ -159,7 +159,7 @@ where
     /// If all registrations in the batch fail validation, an error is returned.
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/registerValidator>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn register_validators(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
         headers: HeaderMap,
@@ -351,7 +351,7 @@ where
     /// The function returns a JSON response containing the best bid if found.
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/getHeader>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
         headers: HeaderMap,
