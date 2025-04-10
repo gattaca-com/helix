@@ -3,8 +3,6 @@ name: build
 on:
   push:
     branches: [main, staging, develop, alloy-migration]
-  pull_request:
-    branches: [alloy-migration]
 
 env:
   CARGO_TERM_COLOR: always

@@ -975,11 +975,6 @@ where
         let message = provided_signed_blinded_block.message();
         let body = message.body();
 
-        let local_v = serde_json::to_string(local_versioned_payload).unwrap();
-        let provided_v = serde_json::to_string(provided_signed_blinded_block).unwrap();
-
-        debug!(local_v, provided_v, "validate_block_equality");
-
         let local_header = local_versioned_payload.execution_payload.to_ref().into();
 
         match local_header {
