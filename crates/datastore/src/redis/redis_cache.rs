@@ -19,7 +19,10 @@ use helix_common::{
     BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
-use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
+use helix_types::{
+    maybe_upgrade_execution_payload, BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs,
+    SignedBidSubmission, SignedBuilderBid,
+};
 use redis::{AsyncCommands, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use ssz::Encode;
@@ -626,11 +629,15 @@ impl Auctioneer for RedisCache {
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
+        fork_name: ForkName,
     ) -> Result<Option<PayloadAndBlobs>, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_execution_payload");
 
         let key = get_execution_payload_key(slot, proposer_pub_key, block_hash);
-        let execution_payload = self.get(&key).await?;
+        let execution_payload = self.get::<PayloadAndBlobs>(&key).await?.map(|p| PayloadAndBlobs {
+            execution_payload: maybe_upgrade_execution_payload(p.execution_payload, fork_name),
+            blobs_bundle: p.blobs_bundle,
+        });
 
         record.record_success();
         Ok(execution_payload)
@@ -708,8 +715,8 @@ impl Auctioneer for RedisCache {
 
         let serialised_bid =
             serde_json::to_string(&wrapped_builder_bid).map_err(RedisCacheError::from)?;
-        let serialised_value =
-            serde_json::to_string(&builder_bid.message.value()).map_err(RedisCacheError::from)?;
+        let serialised_value = serde_json::to_string(&builder_bid.data.message.value())
+            .map_err(RedisCacheError::from)?;
 
         let key_latest_bid =
             get_latest_bid_by_builder_key(slot, parent_hash, proposer_pub_key, builder_pub_key);
@@ -986,7 +993,7 @@ impl Auctioneer for RedisCache {
         let mut record = RedisMetricRecord::new("save_signed_builder_bid_and_update_top_bid");
 
         // Exit early if cancellations aren't enabled and the bid is below the floor.
-        let is_bid_above_floor = builder_bid.message.value() > &floor_value;
+        let is_bid_above_floor = builder_bid.data.message.value() > &floor_value;
         if !cancellations_enabled && !is_bid_above_floor {
             record.record_success();
             return Ok(());
@@ -1021,7 +1028,7 @@ impl Auctioneer for RedisCache {
         .await?;
         state.was_bid_saved = true;
         builder_bids
-            .insert(format!("{:?}", bid_trace.builder_pubkey), *builder_bid.message.value());
+            .insert(format!("{:?}", bid_trace.builder_pubkey), *builder_bid.data.message.value());
         state.set_latency_save_bid();
 
         // Save the bid trace
@@ -1046,7 +1053,7 @@ impl Auctioneer for RedisCache {
             floor_value,
         )
         .await?;
-        state.is_new_top_bid = builder_bid.message.value() == &state.top_bid_value;
+        state.is_new_top_bid = builder_bid.data.message.value() == &state.top_bid_value;
         state.set_latency_update_top_bid();
 
         // Handle floor value updates only if needed.
@@ -1056,7 +1063,7 @@ impl Auctioneer for RedisCache {
             return Ok(());
         }
         self.set_new_floor(
-            *builder_bid.message.value(),
+            *builder_bid.data.message.value(),
             bid_trace.slot,
             &bid_trace.parent_hash,
             &bid_trace.proposer_pubkey,
@@ -1387,7 +1394,8 @@ mod tests {
     use alloy_primitives::U256;
     use helix_types::{
         get_fixed_pubkey, BlsSignature, BuilderBid, BuilderBidDeneb, ExecutionPayloadDeneb,
-        ExecutionPayloadHeaderDeneb, KzgCommitments, SignedBidSubmissionDeneb, TestRandomSeed,
+        ExecutionPayloadHeaderDeneb, ForkName, KzgCommitments, SignedBidSubmissionDeneb,
+        SignedBuilderBidInner, TestRandomSeed,
     };
     use helix_utils::utcnow_ns;
     use serde::{Deserialize, Serialize};
@@ -1607,10 +1615,11 @@ mod tests {
             blob_kzg_commitments: Default::default(),
         };
 
-        let prev_best_bid = SignedBuilderBid {
-            message: deneb_builder_bid.clone().into(),
-            signature: BlsSignature::test_random(),
-        };
+        let prev_best_bid =
+            SignedBuilderBid::new_no_metadata(Some(ForkName::Deneb), SignedBuilderBidInner {
+                message: deneb_builder_bid.clone().into(),
+                signature: BlsSignature::test_random(),
+            });
 
         let res = cache
             .save_builder_bid(
@@ -1673,10 +1682,11 @@ mod tests {
         let higher_floor_value = U256::from(70);
 
         deneb_builder_bid.value = higher_floor_value;
-        let floor_bid = SignedBuilderBid {
-            message: deneb_builder_bid.into(),
-            signature: BlsSignature::test_random(),
-        };
+        let floor_bid =
+            SignedBuilderBid::new_no_metadata(Some(ForkName::Deneb), SignedBuilderBidInner {
+                message: deneb_builder_bid.into(),
+                signature: BlsSignature::test_random(),
+            });
 
         let key_floor_bid = get_floor_bid_key(slot, &parent_hash, &proposer_pub_key);
         let res = cache.set(&key_floor_bid, &floor_bid, None).await;
@@ -1790,7 +1800,7 @@ mod tests {
         let parent_hash = B256::default();
         let proposer_pub_key = BlsPublicKey::test_random();
 
-        let bid = SignedBuilderBid {
+        let bid = SignedBuilderBid::new_no_metadata(Some(ForkName::Deneb), SignedBuilderBidInner {
             message: BuilderBid::Deneb(BuilderBidDeneb {
                 value: U256::from(1999),
                 header: ExecutionPayloadHeaderDeneb::test_random(),
@@ -1798,7 +1808,7 @@ mod tests {
                 pubkey: BlsPublicKey::test_random().into(),
             }),
             signature: BlsSignature::test_random(),
-        };
+        });
 
         let best_bid = bid.into();
 
@@ -1817,7 +1827,7 @@ mod tests {
 
         let fetched_builder_bid = get_result.unwrap().unwrap();
         assert_eq!(
-            fetched_builder_bid.message.value(),
+            fetched_builder_bid.data.message.value(),
             &U256::from(1999),
             "Best bid value mismatch"
         );
@@ -1851,8 +1861,9 @@ mod tests {
         assert!(save_result.is_ok(), "Failed to save the execution payload");
 
         // Test: Get the execution payload
-        let get_result: Result<Option<PayloadAndBlobs>, _> =
-            cache.get_execution_payload(slot, &proposer_pub_key, &block_hash).await;
+        let get_result: Result<Option<PayloadAndBlobs>, _> = cache
+            .get_execution_payload(slot, &proposer_pub_key, &block_hash, ForkName::Deneb)
+            .await;
         assert!(get_result.is_ok(), "Failed to get the execution payload");
         assert!(get_result.as_ref().unwrap().is_some(), "Execution payload is None");
 
@@ -1881,7 +1892,7 @@ mod tests {
 
         let mut header = ExecutionPayloadHeaderDeneb::test_random();
         header.block_hash = block_hash.into();
-        let bid = SignedBuilderBid {
+        let bid = SignedBuilderBid::new_no_metadata(Some(ForkName::Deneb), SignedBuilderBidInner {
             message: BuilderBid::Deneb(BuilderBidDeneb {
                 value,
                 header,
@@ -1889,7 +1900,7 @@ mod tests {
                 pubkey: BlsPublicKey::test_random().into(),
             }),
             signature: BlsSignature::test_random(),
-        };
+        });
 
         let builder_bid = bid.into();
 
@@ -1916,8 +1927,8 @@ mod tests {
         let fetched_bid = fetched_bid.unwrap().unwrap().bid;
 
         assert_eq!(
-            fetched_bid.message.header().block_hash(),
-            builder_bid.message.header().block_hash(),
+            fetched_bid.data.message.header().block_hash(),
+            builder_bid.data.message.header().block_hash(),
             "Mismatch in saved builder bid"
         );
 
@@ -2143,20 +2154,21 @@ mod tests {
 
         // Save 2 builder bids. builder bid 1 > builder bid 2
         let builder_pub_key_1 = BlsPublicKey::test_random();
-        let builder_bid_1 = SignedBuilderBid {
-            message: BuilderBidDeneb {
-                value: U256::from(100),
-                header: ExecutionPayloadHeaderDeneb::test_random(),
-                blob_kzg_commitments: KzgCommitments::test_random(),
-                pubkey: BlsPublicKey::test_random().into(),
-            }
-            .into(),
-            signature: BlsSignature::test_random(),
-        };
+        let builder_bid_1 =
+            SignedBuilderBid::new_no_metadata(Some(ForkName::Deneb), SignedBuilderBidInner {
+                message: BuilderBidDeneb {
+                    value: U256::from(100),
+                    header: ExecutionPayloadHeaderDeneb::test_random(),
+                    blob_kzg_commitments: KzgCommitments::test_random(),
+                    pubkey: BlsPublicKey::test_random().into(),
+                }
+                .into(),
+                signature: BlsSignature::test_random(),
+            });
 
         let builder_pub_key_2 = BlsPublicKey::test_random();
         let mut builder_bid_2 = builder_bid_1.clone();
-        *builder_bid_2.message.value_mut() = U256::from(50);
+        *builder_bid_2.data.message.value_mut() = U256::from(50);
 
         // Save both builder bids
         let set_result = cache
@@ -2207,7 +2219,11 @@ mod tests {
 
         let top_bid = cache.get_best_bid(slot, &parent_hash, &proposer_pub_key).await;
         assert!(top_bid.is_ok(), "Failed to get best bid");
-        assert_eq!(top_bid.unwrap().unwrap().message.value(), &U256::from(100), "Top bid mismatch");
+        assert_eq!(
+            top_bid.unwrap().unwrap().data.message.value(),
+            &U256::from(100),
+            "Top bid mismatch"
+        );
 
         // Test: Delete best builder bid
         let delete_result = cache
@@ -2218,7 +2234,11 @@ mod tests {
         // Validate: builder bid 2 is now the best bid
         let top_bid = cache.get_best_bid(slot, &parent_hash, &proposer_pub_key).await;
         assert!(top_bid.is_ok(), "Failed to get best bid");
-        assert_eq!(top_bid.unwrap().unwrap().message.value(), &U256::from(50), "Top bid mismatch");
+        assert_eq!(
+            top_bid.unwrap().unwrap().data.message.value(),
+            &U256::from(50),
+            "Top bid mismatch"
+        );
     }
 
     #[tokio::test]

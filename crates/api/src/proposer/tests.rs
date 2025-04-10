@@ -44,9 +44,9 @@ mod proposer_api_tests {
     use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
     use helix_types::{
         get_fixed_pubkey, BlobsBundle, BlsPublicKey, BlsSignature, BuilderBidDeneb,
-        ExecutionPayload, ExecutionPayloadDeneb, PayloadAndBlobs, SignedBlindedBeaconBlock,
-        SignedBlindedBeaconBlockDeneb, SignedBuilderBid, SignedValidatorRegistration,
-        TestRandomSeed, ValidatorRegistration,
+        ExecutionPayload, ExecutionPayloadDeneb, ForkName, PayloadAndBlobs,
+        SignedBlindedBeaconBlock, SignedBlindedBeaconBlockDeneb, SignedBuilderBid,
+        SignedBuilderBidInner, SignedValidatorRegistration, TestRandomSeed, ValidatorRegistration,
     };
     use helix_utils::utcnow_ns;
     use reqwest::StatusCode;
@@ -207,10 +207,10 @@ mod proposer_api_tests {
     }
 
     fn get_signed_builder_bid(value: U256) -> SignedBuilderBid {
-        SignedBuilderBid {
+        SignedBuilderBid::new_no_metadata(Some(ForkName::Deneb), SignedBuilderBidInner {
             message: BuilderBidDeneb { value, ..BuilderBidDeneb::test_random() }.into(),
             signature: BlsSignature::test_random(),
-        }
+        })
     }
 
     fn get_blinded_beacon_block(slot: u64, proposer_index: usize) -> SignedBlindedBeaconBlock {
@@ -504,7 +504,7 @@ mod proposer_api_tests {
         // and assert it can be deserialized into a SignedBuilderBid
         let body = resp.text().await.unwrap();
         let bid: SignedBuilderBid = serde_json::from_str(&body).unwrap();
-        assert_eq!(bid.message.value(), builder_bid.message.value());
+        assert_eq!(bid.data.message.value(), builder_bid.data.message.value());
 
         // Shut down the server
         let _ = tx.send(());

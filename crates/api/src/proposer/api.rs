@@ -159,7 +159,7 @@ where
     /// If all registrations in the batch fail validation, an error is returned.
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/registerValidator>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn register_validators(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
         headers: HeaderMap,
@@ -351,7 +351,7 @@ where
     /// The function returns a JSON response containing the best bid if found.
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/getHeader>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
         headers: HeaderMap,
@@ -460,14 +460,14 @@ where
 
         match get_best_bid_res {
             Ok(Some(bid)) => {
-                if bid.message.value() == &U256::ZERO {
+                if bid.data.message.value() == &U256::ZERO {
                     warn!("best bid value is 0");
                     return Err(ProposerApiError::BidValueZero);
                 }
 
                 debug!(
-                    value = ?bid.message.value(),
-                    block_hash = ?bid.message.header().block_hash(),
+                    value = ?bid.data.message.value(),
+                    block_hash = ?bid.data.message.header().block_hash(),
                     "delivering bid",
                 );
 
@@ -477,7 +477,7 @@ where
                         slot,
                         bid_request.parent_hash,
                         bid_request.public_key.clone(),
-                        bid.message.header().block_hash().0,
+                        bid.data.message.header().block_hash().0,
                         trace,
                         mev_boost,
                         user_agent.clone(),
@@ -485,7 +485,7 @@ where
                     .await;
 
                 let proposer_pubkey_clone = bid_request.public_key;
-                let block_hash = bid.message.header().block_hash().0;
+                let block_hash = bid.data.message.header().block_hash().0;
                 if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
                     // Request payload in the background
                     task::spawn(file!(), line!(), async move {
@@ -664,7 +664,7 @@ where
             )
             .await;
 
-        let mut versioned_payload = match payload_result {
+        let versioned_payload = match payload_result {
             Ok(p) => p,
             Err(err) => {
                 error!(
@@ -729,9 +729,7 @@ where
             return Err(err);
         }
 
-        if let Err(err) =
-            self.validate_block_equality(&mut versioned_payload, &signed_blinded_block)
-        {
+        if let Err(err) = self.validate_block_equality(&versioned_payload, &signed_blinded_block) {
             error!(
                 %err,
                 "execution payload invalid, does not match known ExecutionPayload",
@@ -741,11 +739,12 @@ where
 
         trace.validation_complete = utcnow_ns();
 
+        // TODO: merge logic with validate_block_equality
         let unblinded_payload =
             match unblind_beacon_block(&signed_blinded_block, &versioned_payload) {
                 Ok(unblinded_payload) => Arc::new(unblinded_payload),
                 Err(err) => {
-                    warn!(%err, "payload type mismatch");
+                    warn!(%err, "payload type mismatch in unblind block");
                     return Err(ProposerApiError::PayloadTypeMismatch);
                 }
             };
@@ -970,7 +969,7 @@ where
     /// - Returns `Err(ProposerApiError)` for mismatching or invalid headers.
     fn validate_block_equality(
         &self,
-        local_versioned_payload: &mut PayloadAndBlobs,
+        local_versioned_payload: &PayloadAndBlobs,
         provided_signed_blinded_block: &SignedBlindedBeaconBlock,
     ) -> Result<(), ProposerApiError> {
         let message = provided_signed_blinded_block.message();
@@ -1213,7 +1212,16 @@ where
         let mut last_error: Option<ProposerApiError> = None;
         let mut first_try = true; // Try at least once to cover case where get_payload is called too late.
         while first_try || utcnow_ms() < slot_cutoff_millis {
-            match self.auctioneer.get_execution_payload(slot, pub_key, block_hash).await {
+            match self
+                .auctioneer
+                .get_execution_payload(
+                    slot,
+                    pub_key,
+                    block_hash,
+                    self.chain_info.current_fork_name(),
+                )
+                .await
+            {
                 Ok(Some(versioned_payload)) => return Ok(versioned_payload),
                 Ok(None) => {
                     warn!("execution payload not found");

@@ -6,6 +6,7 @@ use helix_website::website_service::WebsiteService;
 use tikv_jemallocator::Jemalloc;
 use tokio::runtime::Builder;
 use tracing_appender::rolling::Rotation;
+use tracing_subscriber::EnvFilter;
 
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
@@ -28,9 +29,12 @@ async fn run() {
                 config.discord_webhook_url.clone(),
                 None,
             );
-            let filter_layer = tracing_subscriber::EnvFilter::from_default_env();
 
-            tracing_subscriber::fmt().with_env_filter(filter_layer).init();
+            let log_level = std::env::var("RUST_LOG")
+                .map(|lev| lev.parse().expect("invalid RUST_LOG, change to eg 'info'"))
+                .unwrap_or(tracing::Level::INFO);
+
+            tracing_subscriber::fmt().with_env_filter(get_crate_filter(log_level)).init();
         }
         LoggingConfig::File { dir_path, file_name } => {
             set_panic_hook(
@@ -47,10 +51,12 @@ async fn run() {
 
             let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-            let filter_layer = tracing_subscriber::EnvFilter::from_default_env();
+            let log_level = std::env::var("RUST_LOG")
+                .map(|lev| lev.parse().expect("invalid RUST_LOG, change to eg 'info'"))
+                .unwrap_or(tracing::Level::INFO);
 
             tracing_subscriber::fmt()
-                .with_env_filter(filter_layer)
+                .with_env_filter(get_crate_filter(log_level))
                 .with_writer(non_blocking)
                 .init();
             _guard = Some(guard);
@@ -97,4 +103,29 @@ fn main() {
         .unwrap();
 
     rt.block_on(run());
+}
+
+const CRATES: &[&str] = &[
+    "api",
+    "beacon_client",
+    "cmd",
+    "common",
+    "database",
+    "datastore",
+    "housekeeper",
+    "types",
+    "utils",
+    "website",
+];
+
+/// Make sure we only get logs for our crates and exlude the others
+fn get_crate_filter(crates_level: tracing::Level) -> EnvFilter {
+    let mut env_filter = EnvFilter::new("info");
+
+    for crate_name in CRATES {
+        env_filter =
+            env_filter.add_directive(format!("helix_{crate_name}={crates_level}").parse().unwrap())
+    }
+
+    env_filter
 }

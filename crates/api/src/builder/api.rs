@@ -46,7 +46,7 @@ use tokio::{
     },
     time::{self},
 };
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{debug, error, info, warn, Instrument, Level};
 use uuid::Uuid;
 
 use crate::{
@@ -178,7 +178,7 @@ where
     /// 6. Saves the bid to auctioneer and db.
     ///
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err, ret(level = Level::DEBUG))]
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
         headers: HeaderMap,
@@ -990,7 +990,7 @@ where
 {
     #[tracing::instrument(skip_all, fields(id = %Uuid::new_v4()))]
     pub async fn process_gossiped_header(&self, req: BroadcastHeaderParams) {
-        let block_hash = req.signed_builder_bid.message.header().block_hash().0;
+        let block_hash = req.signed_builder_bid.data.message.header().block_hash().0;
         debug!(?block_hash, "received gossiped header");
 
         let mut trace = GossipedHeaderTrace {
@@ -1041,7 +1041,7 @@ where
                 &req.parent_hash,
                 &req.proposer_pub_key,
                 &req.builder_pub_key,
-                *req.signed_builder_bid.message.value(),
+                *req.signed_builder_bid.data.message.value(),
                 req.is_cancellations_enabled,
             )
             .await
@@ -1930,10 +1930,9 @@ pub async fn decode_payload(
 
     info!(
         payload_size = body_bytes.len(),
-        is_gzip = is_gzip,
-        is_ssz = is_ssz,
+        is_gzip,
+        is_ssz,
         headers = ?headers,
-        bytes = ?body_bytes,
         "received payload",
     );
 

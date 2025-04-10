@@ -3,7 +3,8 @@ pub mod blob_sidecars;
 use alloy_primitives::B256;
 use helix_types::{
     BlsPublicKey, BuilderBid, BuilderBidDeneb, BuilderBidElectra, ExecutionPayloadHeaderDeneb,
-    ExecutionPayloadHeaderElectra, SignedBidSubmission, SignedBuilderBid, Slot,
+    ExecutionPayloadHeaderElectra, ForkName, SignedBidSubmission, SignedBuilderBid,
+    SignedBuilderBidInner, Slot,
 };
 
 use crate::{
@@ -48,7 +49,11 @@ pub fn bid_submission_to_builder_bid(
             .into();
 
             let sig = signing_ctx.sign_builder_message(&message);
-            SignedBuilderBid { message, signature: sig }
+            let fork = ForkName::Deneb;
+            SignedBuilderBid::new_no_metadata(Some(fork), SignedBuilderBidInner {
+                message,
+                signature: sig,
+            })
         }
         SignedBidSubmission::Electra(bid) => {
             let header: ExecutionPayloadHeaderElectra = (&bid.execution_payload).into();
@@ -63,7 +68,11 @@ pub fn bid_submission_to_builder_bid(
             .into();
 
             let sig = signing_ctx.sign_builder_message(&message);
-            SignedBuilderBid { message, signature: sig }
+            let fork = ForkName::Electra;
+            SignedBuilderBid::new_no_metadata(Some(fork), SignedBuilderBidInner {
+                message,
+                signature: sig,
+            })
         }
     }
 }
@@ -86,7 +95,11 @@ pub fn header_submission_to_builder_bid(
             .into();
 
             let sig = signing_ctx.sign_builder_message(&message);
-            SignedBuilderBid { message, signature: sig }
+            let fork = ForkName::Deneb;
+            SignedBuilderBid::new_no_metadata(Some(fork), SignedBuilderBidInner {
+                message,
+                signature: sig,
+            })
         }
         SignedHeaderSubmission::Electra(bid) => {
             let header = bid.message.execution_payload_header.clone();
@@ -100,7 +113,11 @@ pub fn header_submission_to_builder_bid(
             .into();
 
             let sig = signing_ctx.sign_builder_message(&message);
-            SignedBuilderBid { message, signature: sig }
+            let fork = ForkName::Electra;
+            SignedBuilderBid::new_no_metadata(Some(fork), SignedBuilderBidInner {
+                message,
+                signature: sig,
+            })
         }
     }
 }

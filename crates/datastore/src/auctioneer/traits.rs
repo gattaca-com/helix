@@ -11,7 +11,9 @@ use helix_common::{
     ProposerInfo,
 };
 use helix_database::BuilderInfoDocument;
-use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
+use helix_types::{
+    BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid,
+};
 use tokio_stream::Stream;
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse};
@@ -49,6 +51,7 @@ pub trait Auctioneer: Send + Sync + Clone {
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
+        fork_name: ForkName,
     ) -> Result<Option<PayloadAndBlobs>, AuctioneerError>;
 
     async fn get_bid_trace(

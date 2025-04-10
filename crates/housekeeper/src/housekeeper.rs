@@ -184,7 +184,7 @@ impl<
         let cloned_self = self.clone();
         task::spawn(file!(), line!(), async move {
             if let Err(err) = cloned_self.demote_builders_with_expired_pending_blocks().await {
-                error!(err = %err, "failed to demote builders with expired pending blocks");
+                error!(%err, "failed to demote builders with expired pending blocks");
             }
         });
 
