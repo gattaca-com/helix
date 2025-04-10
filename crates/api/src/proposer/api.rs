@@ -739,11 +739,12 @@ where
 
         trace.validation_complete = utcnow_ns();
 
+        // TODO: merge logic with validate_block_equality
         let unblinded_payload =
             match unblind_beacon_block(&signed_blinded_block, &versioned_payload) {
                 Ok(unblinded_payload) => Arc::new(unblinded_payload),
                 Err(err) => {
-                    warn!(%err, "payload type mismatch");
+                    warn!(%err, "payload type mismatch in unblind block");
                     return Err(ProposerApiError::PayloadTypeMismatch);
                 }
             };
@@ -1216,7 +1217,16 @@ where
         let mut last_error: Option<ProposerApiError> = None;
         let mut first_try = true; // Try at least once to cover case where get_payload is called too late.
         while first_try || utcnow_ms() < slot_cutoff_millis {
-            match self.auctioneer.get_execution_payload(slot, pub_key, block_hash).await {
+            match self
+                .auctioneer
+                .get_execution_payload(
+                    slot,
+                    pub_key,
+                    block_hash,
+                    self.chain_info.current_fork_name(),
+                )
+                .await
+            {
                 Ok(Some(versioned_payload)) => return Ok(versioned_payload),
                 Ok(None) => {
                     warn!("execution payload not found");

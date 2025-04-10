@@ -177,9 +177,7 @@ impl ApiService {
         );
         let builder_api = Arc::new(builder_api);
 
-        gossiper
-            .start_server(builder_gossip_sender, proposer_gossip_sender, chain_info.clone())
-            .await;
+        gossiper.start_server(builder_gossip_sender, proposer_gossip_sender).await;
 
         let (v3_payload_request_send, v3_payload_request_recv) = mpsc::channel(32);
         if let Some(v3_port) = config.v3_port {

@@ -19,7 +19,10 @@ use helix_common::{
     BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
-use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
+use helix_types::{
+    maybe_upgrade_execution_payload, BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs,
+    SignedBidSubmission, SignedBuilderBid,
+};
 use redis::{AsyncCommands, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use ssz::Encode;
@@ -626,11 +629,15 @@ impl Auctioneer for RedisCache {
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
+        fork_name: ForkName,
     ) -> Result<Option<PayloadAndBlobs>, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_execution_payload");
 
         let key = get_execution_payload_key(slot, proposer_pub_key, block_hash);
-        let execution_payload = self.get(&key).await?;
+        let execution_payload = self.get::<PayloadAndBlobs>(&key).await?.map(|p| PayloadAndBlobs {
+            execution_payload: maybe_upgrade_execution_payload(p.execution_payload, fork_name),
+            blobs_bundle: p.blobs_bundle,
+        });
 
         record.record_success();
         Ok(execution_payload)
@@ -1854,8 +1861,9 @@ mod tests {
         assert!(save_result.is_ok(), "Failed to save the execution payload");
 
         // Test: Get the execution payload
-        let get_result: Result<Option<PayloadAndBlobs>, _> =
-            cache.get_execution_payload(slot, &proposer_pub_key, &block_hash).await;
+        let get_result: Result<Option<PayloadAndBlobs>, _> = cache
+            .get_execution_payload(slot, &proposer_pub_key, &block_hash, ForkName::Deneb)
+            .await;
         assert!(get_result.is_ok(), "Failed to get the execution payload");
         assert!(get_result.as_ref().unwrap().is_some(), "Execution payload is None");
 

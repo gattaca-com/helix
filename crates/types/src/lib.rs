@@ -122,3 +122,34 @@ pub struct SignedMessage<T: ssz::Encode + ssz::Decode> {
     pub message: T,
     pub signature: BlsSignature,
 }
+
+pub fn maybe_upgrade_execution_payload(
+    payload: ExecutionPayload,
+    fork_name: ForkName,
+) -> ExecutionPayload {
+    if fork_name.electra_enabled() {
+        if let ExecutionPayload::Deneb(d) = payload {
+            return ExecutionPayload::Electra(ExecutionPayloadElectra {
+                parent_hash: d.parent_hash,
+                fee_recipient: d.fee_recipient,
+                state_root: d.state_root,
+                receipts_root: d.receipts_root,
+                logs_bloom: d.logs_bloom,
+                prev_randao: d.prev_randao,
+                block_number: d.block_number,
+                gas_limit: d.gas_limit,
+                gas_used: d.gas_used,
+                timestamp: d.timestamp,
+                extra_data: d.extra_data,
+                base_fee_per_gas: d.base_fee_per_gas,
+                block_hash: d.block_hash,
+                transactions: d.transactions,
+                withdrawals: d.withdrawals,
+                blob_gas_used: d.blob_gas_used,
+                excess_blob_gas: d.excess_blob_gas,
+            });
+        }
+    }
+
+    payload
+}

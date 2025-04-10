@@ -14,7 +14,7 @@ use helix_common::{
 };
 use helix_database::types::BuilderInfoDocument;
 use helix_types::{
-    get_fixed_pubkey, BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission,
+    get_fixed_pubkey, BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, SignedBidSubmission,
     SignedBuilderBid, TestRandomSeed,
 };
 use ssz::Encode;
@@ -91,6 +91,7 @@ impl Auctioneer for MockAuctioneer {
         _slot: u64,
         _proposer_pub_key: &BlsPublicKey,
         _block_hash: &B256,
+        _fork_name: ForkName,
     ) -> Result<Option<PayloadAndBlobs>, AuctioneerError> {
         Ok(self.versioned_execution_payload.lock().unwrap().clone())
     }

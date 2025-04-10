@@ -2,7 +2,6 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use helix_common::{
-    chain_info::ChainInfo,
     metrics::{GossipMetrics, BUILDER_GOSSIP_QUEUE, PROPOSER_GOSSIP_QUEUE},
     task,
 };
@@ -298,9 +297,8 @@ impl GrpcGossiperClientManager {
         &self,
         builder_api_sender: Sender<GossipedMessage>,
         proposer_api_sender: Sender<GossipedMessage>,
-        chain_info: Arc<ChainInfo>,
     ) {
-        let service = GrpcGossiperService { builder_api_sender, proposer_api_sender, chain_info };
+        let service = GrpcGossiperService { builder_api_sender, proposer_api_sender };
 
         let addr = "0.0.0.0:50051".parse().unwrap();
         task::spawn(file!(), line!(), async move {
@@ -402,7 +400,6 @@ impl GossipClientTrait for GrpcGossiperClientManager {
 pub struct GrpcGossiperService {
     builder_api_sender: Sender<GossipedMessage>,
     proposer_api_sender: Sender<GossipedMessage>,
-    chain_info: Arc<ChainInfo>,
 }
 
 #[tonic::async_trait]
@@ -436,9 +433,7 @@ impl GossipService for GrpcGossiperService {
         let size = inner.encoded_len();
         GossipMetrics::in_size(PAYLOAD_ID, size);
 
-        let fork_name = self.chain_info.current_fork_name();
-
-        let request = BroadcastPayloadParams::from_proto(inner, fork_name);
+        let request = BroadcastPayloadParams::from_proto(inner);
         if let Err(err) =
             self.builder_api_sender.send(GossipedMessage::Payload(Box::new(request))).await
         {
