@@ -664,7 +664,7 @@ where
             )
             .await;
 
-        let mut versioned_payload = match payload_result {
+        let versioned_payload = match payload_result {
             Ok(p) => p,
             Err(err) => {
                 error!(
@@ -729,9 +729,7 @@ where
             return Err(err);
         }
 
-        if let Err(err) =
-            self.validate_block_equality(&mut versioned_payload, &signed_blinded_block)
-        {
+        if let Err(err) = self.validate_block_equality(&versioned_payload, &signed_blinded_block) {
             error!(
                 %err,
                 "execution payload invalid, does not match known ExecutionPayload",
@@ -970,11 +968,16 @@ where
     /// - Returns `Err(ProposerApiError)` for mismatching or invalid headers.
     fn validate_block_equality(
         &self,
-        local_versioned_payload: &mut PayloadAndBlobs,
+        local_versioned_payload: &PayloadAndBlobs,
         provided_signed_blinded_block: &SignedBlindedBeaconBlock,
     ) -> Result<(), ProposerApiError> {
         let message = provided_signed_blinded_block.message();
         let body = message.body();
+
+        let local_v = serde_json::to_string(local_versioned_payload).unwrap();
+        let provided_v = serde_json::to_string(provided_signed_blinded_block).unwrap();
+
+        debug!(local_v, provided_v, "validate_block_equality");
 
         let local_header = local_versioned_payload.execution_payload.to_ref().into();
 
