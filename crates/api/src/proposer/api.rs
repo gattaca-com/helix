@@ -460,14 +460,14 @@ where
 
         match get_best_bid_res {
             Ok(Some(bid)) => {
-                if bid.message.value() == &U256::ZERO {
+                if bid.data.message.value() == &U256::ZERO {
                     warn!("best bid value is 0");
                     return Err(ProposerApiError::BidValueZero);
                 }
 
                 debug!(
-                    value = ?bid.message.value(),
-                    block_hash = ?bid.message.header().block_hash(),
+                    value = ?bid.data.message.value(),
+                    block_hash = ?bid.data.message.header().block_hash(),
                     "delivering bid",
                 );
 
@@ -477,7 +477,7 @@ where
                         slot,
                         bid_request.parent_hash,
                         bid_request.public_key.clone(),
-                        bid.message.header().block_hash().0,
+                        bid.data.message.header().block_hash().0,
                         trace,
                         mev_boost,
                         user_agent.clone(),
@@ -485,7 +485,7 @@ where
                     .await;
 
                 let proposer_pubkey_clone = bid_request.public_key;
-                let block_hash = bid.message.header().block_hash().0;
+                let block_hash = bid.data.message.header().block_hash().0;
                 if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
                     // Request payload in the background
                     task::spawn(file!(), line!(), async move {

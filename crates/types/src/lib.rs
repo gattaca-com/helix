@@ -91,8 +91,10 @@ pub type ExecutionPayloadRefMut<'a> =
 pub type BuilderBid = lh_types::builder_bid::BuilderBid<MainnetEthSpec>;
 pub type BuilderBidDeneb = lh_types::builder_bid::BuilderBidDeneb<MainnetEthSpec>;
 pub type BuilderBidElectra = lh_types::builder_bid::BuilderBidElectra<MainnetEthSpec>;
+pub type SignedBuilderBidInner = lh_types::builder_bid::SignedBuilderBid<MainnetEthSpec>;
+// TODO: change names , below should be GetHeaderResponse
 /// Response object of GET `/eth/v1/builder/header/{slot}/{parent_hash}/{pubkey}`
-pub type SignedBuilderBid = lh_types::builder_bid::SignedBuilderBid<MainnetEthSpec>;
+pub type SignedBuilderBid = lh_types::ForkVersionedResponse<SignedBuilderBidInner>;
 
 // Get payload
 /// Request object of POST `/eth/v1/builder/blinded_blocks`

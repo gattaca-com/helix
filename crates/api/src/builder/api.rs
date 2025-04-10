@@ -990,7 +990,7 @@ where
 {
     #[tracing::instrument(skip_all, fields(id = %Uuid::new_v4()))]
     pub async fn process_gossiped_header(&self, req: BroadcastHeaderParams) {
-        let block_hash = req.signed_builder_bid.message.header().block_hash().0;
+        let block_hash = req.signed_builder_bid.data.message.header().block_hash().0;
         debug!(?block_hash, "received gossiped header");
 
         let mut trace = GossipedHeaderTrace {
@@ -1041,7 +1041,7 @@ where
                 &req.parent_hash,
                 &req.proposer_pub_key,
                 &req.builder_pub_key,
-                *req.signed_builder_bid.message.value(),
+                *req.signed_builder_bid.data.message.value(),
                 req.is_cancellations_enabled,
             )
             .await

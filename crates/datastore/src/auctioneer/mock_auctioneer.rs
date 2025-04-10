@@ -62,7 +62,7 @@ impl Auctioneer for MockAuctioneer {
     ) -> Result<Option<SignedBuilderBid>, AuctioneerError> {
         // check if the value is 9999 and than return an error for testing
         if let Some(bid) = self.best_bid.lock().unwrap().clone() {
-            if bid.message.value() == &U256::from(9999) {
+            if bid.data.message.value() == &U256::from(9999) {
                 return Err(AuctioneerError::UnexpectedValueType);
             }
         }

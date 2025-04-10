@@ -27,12 +27,12 @@ impl From<SignedBuilderBidWrapper> for TopBidUpdate {
         TopBidUpdate {
             timestamp: val.received_at_ms,
             slot: val.slot,
-            block_number: val.bid.message.header().block_number(),
-            block_hash: val.bid.message.header().block_hash().0,
-            parent_hash: val.bid.message.header().parent_hash().0,
+            block_number: val.bid.data.message.header().block_number(),
+            block_hash: val.bid.data.message.header().block_hash().0,
+            parent_hash: val.bid.data.message.header().parent_hash().0,
             builder_pubkey: val.builder_pub_key,
-            fee_recipient: val.bid.message.header().fee_recipient(),
-            value: *val.bid.message.value(),
+            fee_recipient: val.bid.data.message.header().fee_recipient(),
+            value: *val.bid.data.message.value(),
         }
     }
 }
