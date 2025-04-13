@@ -113,7 +113,6 @@ pub type BlindedPayloadElectra = lh_types::payload::BlindedPayloadElectra<Mainne
 pub type PayloadAndBlobs = lh_eth2::types::ExecutionPayloadAndBlobs<MainnetEthSpec>;
 /// Response object of POST `/eth/v1/builder/blinded_blocks`
 pub type GetPayloadResponse = lh_types::ForkVersionedResponse<Arc<PayloadAndBlobs>>;
-pub type GetPayloadResponse2 = lh_types::ForkVersionedResponse<PayloadAndBlobs>;
 
 // Registration
 pub type ValidatorRegistration = validator::ValidatorRegistrationData;
