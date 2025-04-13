@@ -319,8 +319,8 @@ impl MockPrimevService {
         use helix_types::get_fixed_pubkey;
 
         // Create default test values
-        let default_validator = get_fixed_pubkey(Some(0));
-        let default_builder = get_fixed_pubkey(Some(1));
+        let default_validator = get_fixed_pubkey(0);
+        let default_builder = get_fixed_pubkey(1);
 
         Self {
             mock_validators: vec![default_validator],
