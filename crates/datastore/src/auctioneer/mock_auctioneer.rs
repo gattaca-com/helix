@@ -72,7 +72,7 @@ impl Auctioneer for MockAuctioneer {
         &self,
     ) -> Box<dyn Stream<Item = Result<Vec<u8>, AuctioneerError>> + Send + Unpin> {
         let mut bid = TopBidUpdate::test_random();
-        bid.builder_pubkey = get_fixed_pubkey(Some(0));
+        bid.builder_pubkey = get_fixed_pubkey(0);
         let bid = bid.as_ssz_bytes();
         Box::new(tokio_stream::iter(vec![Ok(bid.clone()), Ok(bid.clone()), Ok(bid)]))
     }

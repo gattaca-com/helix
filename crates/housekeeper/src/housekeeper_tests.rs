@@ -155,8 +155,8 @@ async fn test_primev_enabled_housekeeper() {
     let vars = get_housekeeper();
 
     // Create mock Primev service with test data
-    let test_validator_pubkey = get_fixed_pubkey(Some(0));
-    let test_builder_pubkey = get_fixed_pubkey(Some(1));
+    let test_validator_pubkey = get_fixed_pubkey(0);
+    let test_builder_pubkey = get_fixed_pubkey(1);
 
     let mut mock_primev = MockPrimevService::new()
         .with_validators(vec![test_validator_pubkey.clone()])

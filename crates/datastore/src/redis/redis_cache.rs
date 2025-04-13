@@ -2053,25 +2053,25 @@ mod tests {
 
         cache
             .update_trusted_proposers(vec![
-                ProposerInfo { name: "test".to_string(), pub_key: get_fixed_pubkey(Some(0)) },
-                ProposerInfo { name: "test2".to_string(), pub_key: get_fixed_pubkey(Some(1)) },
+                ProposerInfo { name: "test".to_string(), pub_key: get_fixed_pubkey(0) },
+                ProposerInfo { name: "test2".to_string(), pub_key: get_fixed_pubkey(1) },
             ])
             .await
             .unwrap();
 
-        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(Some(0))).await.unwrap();
+        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(0)).await.unwrap();
         assert!(is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(Some(1))).await.unwrap();
+        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(1)).await.unwrap();
         assert!(is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(Some(2))).await.unwrap();
+        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(2)).await.unwrap();
         assert!(!is_trusted, "Failed to check trusted proposer");
 
         cache
             .update_trusted_proposers(vec![ProposerInfo {
                 name: "test2".to_string(),
-                pub_key: get_fixed_pubkey(Some(3)),
+                pub_key: get_fixed_pubkey(3),
             }])
             .await
             .unwrap();
@@ -2079,7 +2079,7 @@ mod tests {
         let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random()).await.unwrap();
         assert!(!is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(Some(3))).await.unwrap();
+        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(3)).await.unwrap();
         assert!(is_trusted, "Failed to check trusted proposer");
     }
 
@@ -2445,7 +2445,7 @@ mod tests {
 
         let slot = 42;
         let block_hash = B256::random();
-        let pubkey = get_fixed_pubkey(Some(0));
+        let pubkey = get_fixed_pubkey(0);
 
         // Test: Check if block hash has been seen before (should be false initially)
         let seen_result =

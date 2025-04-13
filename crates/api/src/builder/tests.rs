@@ -100,7 +100,7 @@ fn get_valid_payload_register_validator(
                         fee_recipient: address!("abcf8e0d4e9587369b2301d0790347320302cc09"),
                         gas_limit: 30000000,
                         timestamp: SUBMISSION_TIMESTAMP,
-                        pubkey: get_fixed_pubkey(Some(0)),
+                        pubkey: get_fixed_pubkey(0),
                     },
                     signature: BlsSignature::deserialize(hex::decode(&"0xaf12df007a0c78abb5575067e5f8b089cfcc6227e4a91db7dd8cf517fe86fb944ead859f0781277d9b78c672e4a18c5d06368b603374673cf2007966cece9540f3a1b3f6f9e1bf421d779c4e8010368e6aac134649c7a009210780d401a778a5").unwrap().as_slice()).unwrap(),
                 },
@@ -175,7 +175,7 @@ fn load_bid_submission() -> SignedBidSubmission {
 }
 
 fn resign_bid_submission(bid: &mut SignedBidSubmission) {
-    let kp = get_fixed_secret(Some(0));
+    let kp = get_fixed_secret(0);
 
     assert_eq!(&kp.public_key(), bid.builder_public_key());
 
@@ -1012,7 +1012,7 @@ async fn websocket_test() {
                 match msg {
                     Message::Binary(msg) => {
                         let payload = TopBidUpdate::from_ssz_bytes(&msg).unwrap();
-                        assert_eq!(payload.builder_pubkey, get_fixed_pubkey(Some(0)));
+                        assert_eq!(payload.builder_pubkey, get_fixed_pubkey(0));
                     }
                     Message::Text(_msg) => {}
                     Message::Ping(_) => {

@@ -1,10 +1,13 @@
 use alloy_primitives::{b256, B256};
-use lh_types::test_utils::{TestRandom, XorShiftRng};
+use lh_types::{
+    test_utils::{TestRandom, XorShiftRng},
+    BeaconBlockDeneb, BlindedPayload, FullPayload, MainnetEthSpec,
+};
 use rand::SeedableRng;
 use serde_json::Value;
 use ssz::{Decode, Encode};
 
-use crate::{BlsPublicKey, BlsSecretKey};
+use crate::{Blob, BlobsBundle, BlsPublicKey, BlsSecretKey, ExecutionPayloadDeneb};
 
 /// Test that the encoding and decoding works, returns the decoded struct
 pub fn test_encode_decode_json<T: serde::Serialize + serde::de::DeserializeOwned>(d: &str) -> T {
@@ -37,12 +40,12 @@ pub fn random_bls_pubkey() -> BlsPublicKey {
     BlsPublicKey::test_random()
 }
 
-pub fn get_fixed_pubkey(i: Option<usize>) -> BlsPublicKey {
+pub fn get_fixed_pubkey(i: usize) -> BlsPublicKey {
     let key = get_fixed_secret(i);
     key.public_key()
 }
 
-pub fn get_fixed_secret(i: Option<usize>) -> BlsSecretKey {
+pub fn get_fixed_secret(i: usize) -> BlsSecretKey {
     const KEYS: [B256; 5] = [
         b256!("64496d4e301e541a6e1237d6ef13a8f8b8b6cb82be9d8ac90073a833dfc2af11"),
         b256!("34c83cb0949c5f8d6e3142392b3b268de111b82004e48cc8f3049a4546753f81"),
@@ -51,9 +54,30 @@ pub fn get_fixed_secret(i: Option<usize>) -> BlsSecretKey {
         b256!("0433221d4c34d24a71e8a137c6a96b4b81b92bc6c6b56bfda1dc9d4057466506"),
     ];
 
-    let key = KEYS[i.unwrap_or(0)];
+    let key = KEYS[i];
     let key = BlsSecretKey::deserialize(key.as_slice()).unwrap();
     key
+}
+
+pub fn get_payload_deneb() -> (
+    ExecutionPayloadDeneb,
+    BeaconBlockDeneb<MainnetEthSpec, BlindedPayload<MainnetEthSpec>>,
+    BlobsBundle,
+) {
+    let mut full_payload: BeaconBlockDeneb<MainnetEthSpec, FullPayload<MainnetEthSpec>> =
+        BeaconBlockDeneb::test_random();
+
+    full_payload.body.blob_kzg_commitments = Default::default();
+
+    let execution_payload = full_payload.clone().body.execution_payload.execution_payload;
+    let blinded = full_payload.clone_as_blinded();
+
+    let mut blobs_bundle = BlobsBundle::test_random();
+    blobs_bundle.commitments = blinded.body.blob_kzg_commitments.clone();
+    blobs_bundle.blobs =
+        blobs_bundle.commitments.iter().map(|_| Blob::test_random()).collect::<Vec<_>>().into();
+
+    (execution_payload, blinded, blobs_bundle)
 }
 
 pub fn initialize_test_tracing() {

@@ -108,9 +108,12 @@ pub type SignedBlindedBeaconBlockElectra = lh_types::signed_beacon_block::Signed
     MainnetEthSpec,
     BlindedPayload<MainnetEthSpec>,
 >;
+pub type BlindedPayloadDeneb = lh_types::payload::BlindedPayloadDeneb<MainnetEthSpec>;
+pub type BlindedPayloadElectra = lh_types::payload::BlindedPayloadElectra<MainnetEthSpec>;
 pub type PayloadAndBlobs = lh_eth2::types::ExecutionPayloadAndBlobs<MainnetEthSpec>;
 /// Response object of POST `/eth/v1/builder/blinded_blocks`
 pub type GetPayloadResponse = lh_types::ForkVersionedResponse<Arc<PayloadAndBlobs>>;
+pub type GetPayloadResponse2 = lh_types::ForkVersionedResponse<PayloadAndBlobs>;
 
 // Registration
 pub type ValidatorRegistration = validator::ValidatorRegistrationData;
