@@ -1,22 +1,18 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use ethereum_consensus::{
-    configs::goerli::CAPELLA_FORK_EPOCH, deneb::Withdrawal, primitives::Bytes32,
-};
+use alloy_primitives::B256;
 use helix_beacon_client::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
-use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry,
-    bellatrix::{HashTreeRoot, List, Node},
-    chain_info::ChainInfo,
-};
+use helix_common::{api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo};
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_utils::{get_payload_attributes_key, has_reached_fork, utcnow_sec};
+use helix_types::{SlotClockTrait, Withdrawals};
+use helix_utils::{get_payload_attributes_key, utcnow_sec};
 use tokio::{
     sync::{broadcast, mpsc},
     time::{interval_at, sleep, Instant},
 };
 use tracing::{error, info, warn};
+use tree_hash::TreeHash;
 
 // Do not accept slots more than 60 seconds in the future
 const MAX_DISTANCE_FOR_FUTURE_SLOT: u64 = 60;
@@ -26,8 +22,8 @@ const CUTT_OFF_TIME: u64 = 4;
 #[derive(Clone, Debug, Default)]
 pub struct PayloadAttributesUpdate {
     pub slot: u64,
-    pub parent_hash: Bytes32,
-    pub withdrawals_root: Option<Node>,
+    pub parent_hash: B256,
+    pub withdrawals_root: B256,
     pub payload_attributes: PayloadAttributes,
 }
 
@@ -41,7 +37,7 @@ pub struct SlotUpdate {
 
 #[derive(Clone, Debug)]
 pub enum ChainUpdate {
-    SlotUpdate(SlotUpdate),
+    SlotUpdate(Box<SlotUpdate>),
     PayloadAttributesUpdate(PayloadAttributesUpdate),
 }
 
@@ -96,17 +92,17 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         mut payload_attributes_rx: broadcast::Receiver<PayloadAttributesEvent>,
     ) {
         let start_instant = Instant::now() +
-            self.chain_info.clock.duration_until_next_slot() +
+            self.chain_info.clock.duration_to_next_slot().unwrap() +
             Duration::from_secs(CUTT_OFF_TIME);
         let mut timer =
-            interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
+            interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot()));
         loop {
             tokio::select! {
                 head_event_result = head_event_rx.recv() => {
                     match head_event_result {
                         Ok(head_event) => {
-                            info!(head_slot = head_event.slot, "Received head event");
-                            self.process_slot(head_event.slot).await
+                            info!(head_slot =% head_event.slot, "Received head event");
+                            self.process_slot(head_event.slot.into()).await
                         },
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("head events lagged by {n} events");
@@ -134,8 +130,8 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
                 }
                 _ = timer.tick() => {
                     info!("4 seconds into slot. Attempting to slot update...");
-                    match self.chain_info.clock.current_slot() {
-                        Some(slot) => self.process_slot(slot).await,
+                    match self.chain_info.clock.now() {
+                        Some(slot) => self.process_slot(slot.as_u64()).await,
                         None => {
                             error!("could not get current slot");
                         }
@@ -151,12 +147,12 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
             return;
         }
 
-        info!(head_slot = slot, "Processing slot",);
+        info!(head_slot =% slot, "Processing slot",);
 
         // Validate this isn't a faulty head slot
 
         let slot_timestamp =
-            self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot);
+            self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot());
         if slot_timestamp > utcnow_sec() + MAX_DISTANCE_FOR_FUTURE_SLOT {
             warn!(head_slot = slot, "slot is too far in the future",);
             return;
@@ -193,7 +189,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
             for duty in new_duties.iter_mut() {
                 match self
                     .auctioneer
-                    .is_primev_proposer(&duty.entry.registration.message.public_key)
+                    .is_primev_proposer(&duty.entry.registration.message.pubkey)
                     .await
                 {
                     Ok(is_primev) => {
@@ -222,14 +218,14 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         // Get the next proposer duty for the new slot.
         let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
 
-        let update = ChainUpdate::SlotUpdate(SlotUpdate { slot, new_duties, next_duty });
+        let update = ChainUpdate::SlotUpdate(Box::new(SlotUpdate { slot, new_duties, next_duty }));
         self.send_update_to_subscribers(update).await;
     }
 
     // Handles a new payload attributes event
     async fn process_payload_attributes(&mut self, event: PayloadAttributesEvent) {
         // require new proposal slot in the future
-        if self.head_slot >= event.data.proposal_slot {
+        if self.head_slot >= event.data.proposal_slot.as_u64() {
             return;
         }
 
@@ -248,20 +244,18 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
 
         info!(
             head_slot = self.head_slot,
-            payload_attribute_slot = event.data.proposal_slot,
+            payload_attribute_slot =% event.data.proposal_slot,
             payload_attribute_parent = ?event.data.parent_block_hash,
             "Processing payload attribute event",
         );
 
-        let mut withdrawals_root = None;
-        if has_reached_fork(event.data.proposal_slot, CAPELLA_FORK_EPOCH) {
-            let withdrawals_list: List<Withdrawal, 16> =
-                event.data.payload_attributes.withdrawals.clone().try_into().unwrap();
-            withdrawals_root = withdrawals_list.hash_tree_root().ok();
-        }
+        // FIXME(alloy)
+        let withdrawals_list: Withdrawals =
+            event.data.payload_attributes.withdrawals.clone().into();
+        let withdrawals_root = withdrawals_list.tree_hash_root();
 
         let update = ChainUpdate::PayloadAttributesUpdate(PayloadAttributesUpdate {
-            slot: event.data.proposal_slot,
+            slot: event.data.proposal_slot.as_u64(),
             parent_hash: event.data.parent_block_hash,
             withdrawals_root,
             payload_attributes: event.data.payload_attributes,

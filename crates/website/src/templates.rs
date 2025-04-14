@@ -4,9 +4,8 @@ use crate::models::DeliveredPayload;
 
 //Askama filters
 pub mod filters {
-    use alloy::primitives::utils::format_units;
-    use askama::{Error, Result};
-    use ethereum_consensus::primitives::U256;
+    use alloy_primitives::{utils::format_ether, U256};
+    use askama::Result;
     use num_format::{Locale, ToFormattedString};
 
     pub fn pretty_int<T>(i: &T) -> Result<String>
@@ -17,8 +16,7 @@ pub mod filters {
     }
 
     pub fn wei_to_eth(wei: &U256) -> Result<String> {
-        let eth = format_units(*wei, "ether").map_err(|_| Error::Fmt(std::fmt::Error))?;
-        Ok(format!("{:.6}", eth)) // Format to 6 decimal places
+        Ok(format!("{:.6}", format_ether(*wei))) // Format to 6 decimal places
     }
 }
 

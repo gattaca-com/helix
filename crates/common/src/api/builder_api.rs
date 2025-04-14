@@ -1,27 +1,22 @@
-use ethereum_consensus::{
-    builder::SignedValidatorRegistration,
-    primitives::{BlsPublicKey, ExecutionAddress, Hash32, Slot, U256},
-    serde::as_str,
-    ssz::prelude::*,
-};
+use alloy_primitives::{Address, B256, U256};
+use helix_types::{BlsPublicKey, SignedValidatorRegistration, Slot, TestRandom};
+use ssz_derive::{Decode, Encode};
 
 use crate::{api::proposer_api::ValidatorRegistrationInfo, BuilderValidatorPreferences};
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BuilderGetValidatorsResponseEntry {
-    #[serde(with = "as_str")]
     pub slot: Slot,
-    #[serde(with = "as_str")]
-    pub validator_index: usize,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub validator_index: u64,
     pub entry: ValidatorRegistrationInfo,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BuilderGetValidatorsResponse {
-    #[serde(with = "as_str")]
     pub slot: Slot,
-    #[serde(with = "as_str")]
-    pub validator_index: usize,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub validator_index: u64,
     pub entry: SignedValidatorRegistration,
     pub preferences: BuilderValidatorPreferences,
 }
@@ -37,14 +32,14 @@ impl From<BuilderGetValidatorsResponseEntry> for BuilderGetValidatorsResponse {
     }
 }
 
-#[derive(Clone, Default, Debug, Serializable)]
+#[derive(Clone, Debug, Encode, Decode, TestRandom)]
 pub struct TopBidUpdate {
     pub timestamp: u64,
     pub slot: u64,
     pub block_number: u64,
-    pub block_hash: Hash32,
-    pub parent_hash: Hash32,
+    pub block_hash: B256,
+    pub parent_hash: B256,
     pub builder_pubkey: BlsPublicKey,
-    pub fee_recipient: ExecutionAddress,
+    pub fee_recipient: Address,
     pub value: U256,
 }

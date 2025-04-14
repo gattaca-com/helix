@@ -3,12 +3,12 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
 };
 
+use alloy_primitives::B256;
 use bitflags::bitflags;
-use ethereum_consensus::{altair::BlsPublicKey, primitives::Hash32, ssz::prelude::*};
+use helix_types::BlsPublicKey;
+use ssz_derive::{Decode, Encode};
 
-use crate::{
-    bellatrix::SimpleSerialize, bid_submission::v2::header_submission::SignedHeaderSubmission,
-};
+use crate::bid_submission::v2::header_submission::SignedHeaderSubmission;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -37,7 +37,7 @@ impl Debug for MessageHeaderFlags {
 }
 
 /// Message header for messages between builder and relay for V3 optimistic submission.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct MessageHeader {
     /// The message type.
@@ -57,7 +57,7 @@ pub struct MessageHeader {
     pub message_flags: MessageHeaderFlags,
 }
 
-#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode)]
 pub struct PayloadSocketAddressIpV4 {
     pub ip: u32,
     pub port: u16,
@@ -65,7 +65,7 @@ pub struct PayloadSocketAddressIpV4 {
     pub builder_pubkey: BlsPublicKey,
 }
 
-#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode)]
 pub struct PayloadSocketAddressIpV6 {
     pub ip: u128,
     pub port: u16,
@@ -73,7 +73,8 @@ pub struct PayloadSocketAddressIpV6 {
     pub builder_pubkey: BlsPublicKey,
 }
 
-#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode)]
+#[ssz(enum_behaviour = "transparent")]
 pub enum PayloadSocketAddress {
     IpV4(PayloadSocketAddressIpV4),
     IpV6(PayloadSocketAddressIpV6),
@@ -102,19 +103,19 @@ impl PayloadSocketAddress {
     }
 }
 
-#[derive(Debug, Clone, Serializable, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode)]
 pub struct HeaderSubmissionV3 {
     pub payload_socket_address: PayloadSocketAddress,
     pub submission: SignedHeaderSubmission,
 }
 
-#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode)]
 pub struct GetPayloadV3 {
-    pub block_hash: Hash32,
+    pub block_hash: B256,
     pub request_ts: u64,
 }
 
-#[derive(Debug, Clone, SimpleSerialize, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode)]
 pub struct SubmissionV3Error {
     pub status: u16,
 }
@@ -135,25 +136,6 @@ impl From<&[u8]> for &MessageHeader {
 impl From<&mut [u8]> for &mut MessageHeader {
     fn from(value: &mut [u8]) -> Self {
         unsafe { &mut *(value.as_ptr() as *mut MessageHeader) }
-    }
-}
-
-impl From<&SocketAddr> for PayloadSocketAddress {
-    fn from(value: &SocketAddr) -> Self {
-        match value {
-            SocketAddr::V4(v4) => PayloadSocketAddress::IpV4(PayloadSocketAddressIpV4 {
-                ip: v4.ip().to_bits(),
-                port: v4.port(),
-                sequence: 0,
-                builder_pubkey: BlsPublicKey::default(),
-            }),
-            SocketAddr::V6(v6) => PayloadSocketAddress::IpV6(PayloadSocketAddressIpV6 {
-                ip: v6.ip().to_bits(),
-                port: v6.port(),
-                sequence: 0,
-                builder_pubkey: BlsPublicKey::default(),
-            }),
-        }
     }
 }
 

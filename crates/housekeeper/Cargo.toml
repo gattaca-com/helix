@@ -7,17 +7,19 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-alloy.workspace = true
+alloy-eips.workspace = true
+alloy-primitives.workspace = true
 async-trait.workspace = true
-ethereum-consensus.workspace = true
 ethers.workspace = true
 helix-beacon-client.workspace = true
 helix-common.workspace = true
 helix-database.workspace = true
 helix-datastore.workspace = true
+helix-types.workspace = true
 helix-utils.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+tree_hash.workspace = true
 uuid.workspace = true

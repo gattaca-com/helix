@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
+use alloy_primitives::B256;
 use async_trait::async_trait;
-use ethereum_consensus::primitives::Root;
-use helix_common::{
-    beacon_api::PublishBlobsRequest, bellatrix::Serializable, ProposerDuty, ValidatorSummary,
-};
+use helix_common::{beacon_api::PublishBlobsRequest, ProposerDuty, ValidatorSummary};
+use helix_types::{ForkName, Slot};
 use serde::{de::DeserializeOwned, Serialize};
+use ssz::Encode;
 use tokio::sync::broadcast::Sender;
 
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
 #[async_trait]
 pub trait BeaconClientTrait: Send + Sync + Clone {
     async fn sync_status(&self) -> Result<SyncStatus, BeaconClientError>;
-    async fn current_slot(&self) -> Result<u64, BeaconClientError>;
+    async fn current_slot(&self) -> Result<Slot, BeaconClientError>;
 
     async fn subscribe_to_head_events(
         &self,
@@ -34,12 +34,12 @@ pub trait BeaconClientTrait: Send + Sync + Clone {
     async fn get_proposer_duties(
         &self,
         epoch: u64,
-    ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError>;
-    async fn publish_block<VersionedSignedProposal: Send + Sync + Serializable>(
+    ) -> Result<(B256, Vec<ProposerDuty>), BeaconClientError>;
+    async fn publish_block<VersionedSignedProposal: Send + Sync + Encode>(
         &self,
         block: Arc<VersionedSignedProposal>,
         broadcast_validation: Option<BroadcastValidation>,
-        fork: ethereum_consensus::Fork,
+        fork: ForkName,
     ) -> Result<u16, BeaconClientError>;
     async fn publish_blobs(
         &self,
@@ -61,14 +61,14 @@ pub trait MultiBeaconClientTrait: Send + Sync + Clone {
     async fn get_proposer_duties(
         &self,
         epoch: u64,
-    ) -> Result<(Root, Vec<ProposerDuty>), BeaconClientError>;
+    ) -> Result<(B256, Vec<ProposerDuty>), BeaconClientError>;
     async fn publish_block<
-        VersionedSignedProposal: Serialize + DeserializeOwned + Send + Sync + 'static + Serializable,
+        VersionedSignedProposal: Serialize + DeserializeOwned + Send + Sync + 'static + Encode,
     >(
         &self,
         block: Arc<VersionedSignedProposal>,
         broadcast_validation: Option<BroadcastValidation>,
-        fork: ethereum_consensus::Fork,
+        fork: ForkName,
     ) -> Result<(), BeaconClientError>;
     async fn publish_blobs(
         &self,

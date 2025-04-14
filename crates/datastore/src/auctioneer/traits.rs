@@ -1,21 +1,19 @@
+use alloy_primitives::{B256, U256};
 use async_trait::async_trait;
-use ethereum_consensus::primitives::{BlsPublicKey, Hash32, U256};
 use helix_common::{
-    api::constraints_api::{SignedDelegation, SignedRevocation},
-    bellatrix::Node,
     bid_submission::{
         v2::header_submission::SignedHeaderSubmission,
-        v3::header_submission_v3::PayloadSocketAddress, BidTrace, SignedBidSubmission,
+        v3::header_submission_v3::PayloadSocketAddress,
     },
     builder_info::BuilderInfo,
-    eth::SignedBuilderBid,
     pending_block::PendingBlock,
-    proofs::{InclusionProofs, SignedConstraintsWithProofData},
     signing::RelaySigningContext,
-    versioned_payload::PayloadAndBlobs,
     ProposerInfo,
 };
 use helix_database::BuilderInfoDocument;
+use helix_types::{
+    BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid,
+};
 use tokio_stream::Stream;
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse};
@@ -23,56 +21,17 @@ use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse};
 #[async_trait]
 #[auto_impl::auto_impl(Arc)]
 pub trait Auctioneer: Send + Sync + Clone {
-    async fn get_validator_delegations(
-        &self,
-        pub_key: BlsPublicKey,
-    ) -> Result<Vec<SignedDelegation>, AuctioneerError>;
-
-    async fn save_validator_delegations(
-        &self,
-        signed_delegations: Vec<SignedDelegation>,
-    ) -> Result<(), AuctioneerError>;
-
-    async fn revoke_validator_delegations(
-        &self,
-        signed_revocations: Vec<SignedRevocation>,
-    ) -> Result<(), AuctioneerError>;
-
-    async fn save_constraints(
-        &self,
-        slot: u64,
-        constraints: SignedConstraintsWithProofData,
-    ) -> Result<(), AuctioneerError>;
-    async fn get_constraints(
-        &self,
-        slot: u64,
-    ) -> Result<Option<Vec<SignedConstraintsWithProofData>>, AuctioneerError>;
-
-    async fn save_inclusion_proof(
-        &self,
-        slot: u64,
-        proposer_pub_key: &BlsPublicKey,
-        bid_block_hash: &Hash32,
-        inclusion_proof: &InclusionProofs,
-    ) -> Result<(), AuctioneerError>;
-    async fn get_inclusion_proof(
-        &self,
-        slot: u64,
-        proposer_pub_key: &BlsPublicKey,
-        bid_block_hash: &Hash32,
-    ) -> Result<Option<InclusionProofs>, AuctioneerError>;
-
     async fn get_last_slot_delivered(&self) -> Result<Option<u64>, AuctioneerError>;
     async fn check_and_set_last_slot_and_hash_delivered(
         &self,
         slot: u64,
-        hash: &Hash32,
+        hash: &B256,
     ) -> Result<(), AuctioneerError>;
 
     async fn get_best_bid(
         &self,
         slot: u64,
-        parent_hash: &Hash32,
+        parent_hash: &B256,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<Option<SignedBuilderBid>, AuctioneerError>;
 
@@ -84,21 +43,22 @@ pub trait Auctioneer: Send + Sync + Clone {
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
-        block_hash: &Hash32,
+        block_hash: &B256,
         versioned_execution_payload: &PayloadAndBlobs,
     ) -> Result<(), AuctioneerError>;
     async fn get_execution_payload(
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
-        block_hash: &Hash32,
+        block_hash: &B256,
+        fork_name: ForkName,
     ) -> Result<Option<PayloadAndBlobs>, AuctioneerError>;
 
     async fn get_bid_trace(
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
-        block_hash: &Hash32,
+        block_hash: &B256,
     ) -> Result<Option<BidTrace>, AuctioneerError>;
     async fn save_bid_trace(&self, bid_trace: &BidTrace) -> Result<(), AuctioneerError>;
 
@@ -106,14 +66,14 @@ pub trait Auctioneer: Send + Sync + Clone {
         &self,
         slot: u64,
         builder_pub_key: &BlsPublicKey,
-        parent_hash: &Hash32,
+        parent_hash: &B256,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<Option<u64>, AuctioneerError>;
 
     async fn save_builder_bid(
         &self,
         slot: u64,
-        parent_hash: &Hash32,
+        parent_hash: &B256,
         proposer_pub_key: &BlsPublicKey,
         builder_pub_key: &BlsPublicKey,
         received_at: u128,
@@ -133,27 +93,27 @@ pub trait Auctioneer: Send + Sync + Clone {
     async fn get_top_bid_value(
         &self,
         slot: u64,
-        parent_hash: &Hash32,
+        parent_hash: &B256,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<Option<U256>, AuctioneerError>;
     async fn get_builder_latest_value(
         &self,
         slot: u64,
-        parent_hash: &Hash32,
+        parent_hash: &B256,
         proposer_pub_key: &BlsPublicKey,
         builder_pub_key: &BlsPublicKey,
     ) -> Result<Option<U256>, AuctioneerError>;
     async fn get_floor_bid_value(
         &self,
         slot: u64,
-        parent_hash: &Hash32,
+        parent_hash: &B256,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<Option<U256>, AuctioneerError>;
 
     async fn delete_builder_bid(
         &self,
         slot: u64,
-        parent_hash: &Hash32,
+        parent_hash: &B256,
         proposer_pub_key: &BlsPublicKey,
         builder_pub_key: &BlsPublicKey,
     ) -> Result<(), AuctioneerError>;
@@ -171,9 +131,9 @@ pub trait Auctioneer: Send + Sync + Clone {
 
     async fn seen_or_insert_block_hash(
         &self,
-        block_hash: &Hash32,
+        block_hash: &B256,
         slot: u64,
-        parent_hash: &Hash32,
+        parent_hash: &B256,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<bool, AuctioneerError>;
 
@@ -213,7 +173,7 @@ pub trait Auctioneer: Send + Sync + Clone {
         &self,
         slot: u64,
         builder_pub_key: &BlsPublicKey,
-        block_hash: &Hash32,
+        block_hash: &B256,
         timestamp_ms: u64,
     ) -> Result<(), AuctioneerError>;
 
@@ -221,19 +181,19 @@ pub trait Auctioneer: Send + Sync + Clone {
         &self,
         slot: u64,
         builder_pub_key: &BlsPublicKey,
-        block_hash: &Hash32,
+        block_hash: &B256,
         timestamp_ms: u64,
     ) -> Result<(), AuctioneerError>;
 
     async fn save_payload_address(
         &self,
-        block_hash: &Hash32,
+        block_hash: &B256,
         payload_socket_address: PayloadSocketAddress,
     ) -> Result<(), AuctioneerError>;
 
     async fn get_payload_address(
         &self,
-        block_hash: &Hash32,
+        block_hash: &B256,
     ) -> Result<Option<PayloadSocketAddress>, AuctioneerError>;
 
     /// Try to acquire or renew leadership for the housekeeper.
@@ -250,10 +210,7 @@ pub trait Auctioneer: Send + Sync + Clone {
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<bool, AuctioneerError>;
 
-    async fn get_header_tx_root(
-        &self,
-        block_hash: &Hash32,
-    ) -> Result<Option<Node>, AuctioneerError>;
+    async fn get_header_tx_root(&self, block_hash: &B256) -> Result<Option<B256>, AuctioneerError>;
 
     async fn kill_switch_enabled(&self) -> Result<bool, AuctioneerError>;
 

@@ -1,7 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
 pub mod builder;
-pub mod constraints;
 pub mod gossiper;
 pub mod integration_tests;
 pub mod middleware;

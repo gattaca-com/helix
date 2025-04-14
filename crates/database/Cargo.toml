@@ -7,14 +7,13 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
-alloy.workspace = true
+alloy-primitives.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 dashmap.workspace = true
 deadpool-postgres.workspace = true
-env_logger.workspace = true
-ethereum-consensus.workspace = true
 helix-common.workspace = true
+helix-types.workspace = true
 helix-utils.workspace = true
 rand.workspace = true
 refinery.workspace = true

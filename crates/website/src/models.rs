@@ -1,5 +1,5 @@
 use deadpool_postgres::tokio_postgres::{Error, Row};
-use helix_common::bid_submission::BidTrace;
+use helix_types::BidTrace;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -1,17 +1,17 @@
 use async_trait::async_trait;
 use deadpool_postgres::tokio_postgres;
-use helix_common::bid_submission::BidTrace;
 use helix_database::{
     error::DatabaseError,
     postgres::{
         postgres_db_row_parsing::{
-            parse_bytes_to_hash, parse_bytes_to_pubkey, parse_i32_to_u64, parse_i32_to_usize,
-            parse_numeric_to_u256, parse_rows, FromRow,
+            parse_bytes_to_address, parse_bytes_to_hash, parse_bytes_to_pubkey, parse_i32_to_u64,
+            parse_i32_to_usize, parse_numeric_to_u256, parse_rows, FromRow,
         },
         postgres_db_service::PostgresDatabaseService,
         postgres_db_u256_parsing::PostgresNumeric,
     },
 };
+use helix_types::BidTrace;
 
 use crate::models::DeliveredPayload;
 
@@ -31,15 +31,11 @@ impl FromRow for DeliveredPayload {
         Ok(DeliveredPayload {
             bid_trace: BidTrace {
                 slot: parse_i32_to_u64(row.get::<&str, i32>("slot_number"))?,
-                parent_hash: parse_bytes_to_hash::<32>(row.get::<&str, &[u8]>("parent_hash"))?,
-                block_hash: parse_bytes_to_hash::<32>(row.get::<&str, &[u8]>("block_hash"))?,
-                builder_public_key: parse_bytes_to_pubkey(
-                    row.get::<&str, &[u8]>("builder_pubkey"),
-                )?,
-                proposer_public_key: parse_bytes_to_pubkey(
-                    row.get::<&str, &[u8]>("proposer_pubkey"),
-                )?,
-                proposer_fee_recipient: parse_bytes_to_hash::<20>(
+                parent_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("parent_hash"))?,
+                block_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("block_hash"))?,
+                builder_pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("builder_pubkey"))?,
+                proposer_pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("proposer_pubkey"))?,
+                proposer_fee_recipient: parse_bytes_to_address(
                     row.get::<&str, &[u8]>("proposer_fee_recipient"),
                 )?,
                 gas_limit: parse_i32_to_u64(row.get::<&str, i32>("gas_limit"))?,

@@ -1,19 +1,10 @@
-// ++++ IMPORTS ++++
 use std::sync::Arc;
 
-use alloy::hex;
-use ethereum_consensus::{
-    electra::ExecutionRequests, primitives::BlsSignature, ssz::prelude::*,
-    types::mainnet::ExecutionPayload,
-};
-use helix_common::{
-    bid_submission::{
-        BidTrace, SignedBidSubmission, SignedBidSubmissionCapella, SignedBidSubmissionElectra,
-    },
-    deneb::BlobsBundle,
-    electra::SignedBeaconBlock,
-    simulator::BlockSimError,
-    BuilderInfo, ValidatorPreferences,
+use alloy_primitives::b256;
+use helix_common::{simulator::BlockSimError, BuilderInfo, ValidatorPreferences};
+use helix_types::{
+    BidTrace, BlobsBundle, BlsSignature, ExecutionPayloadDeneb, ExecutionRequests,
+    SignedBeaconBlock, SignedBidSubmissionDeneb, SignedBidSubmissionElectra, TestRandomSeed,
 };
 use reqwest::Client;
 use serde_json::json;
@@ -30,12 +21,7 @@ fn get_simulator(endpoint: &str) -> RpcSimulator {
     RpcSimulator::new(http, endpoint.to_string())
 }
 
-fn get_byte_vector_32_for_hex(hex: &str) -> ByteVector<32> {
-    let bytes = hex::decode(&hex[2..]).unwrap();
-    ByteVector::try_from(bytes.as_ref()).unwrap()
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 struct BlockResponse {
     version: String,
     execution_optimistic: bool,
@@ -52,52 +38,57 @@ async fn get_block(slot_number: u64) -> BlockSimRequest {
     let response = client.get(&url).send().await.unwrap();
     let block_response: BlockResponse = response.json().await.unwrap();
 
-    let electra_exec_payload =
-        ExecutionPayload::Electra(block_response.data.message.body.execution_payload);
+    let electra_exec_payload = block_response
+        .data
+        .message()
+        .body()
+        .execution_payload_electra()
+        .unwrap()
+        .execution_payload
+        .clone();
 
-    let bid_trace = BidTrace { ..Default::default() };
-    let signed_bid_submission = SignedBidSubmission::Electra(SignedBidSubmissionElectra {
+    let bid_trace = BidTrace::test_random();
+    let signed_bid_submission = SignedBidSubmissionElectra {
         message: bid_trace,
-        signature: block_response.data.signature,
-        execution_payload: electra_exec_payload,
+        signature: block_response.data.signature().clone(),
+        execution_payload: electra_exec_payload.into(),
         blobs_bundle: BlobsBundle::default(),
         execution_requests: ExecutionRequests::default(),
-    });
+    };
 
     BlockSimRequest::new(
         30000000,
-        Arc::new(signed_bid_submission),
+        Arc::new(signed_bid_submission.into()),
         ValidatorPreferences::default(),
-        Some(
-            helix_common::bellatrix::ByteVector::try_from(
-                block_response.data.message.parent_root.as_ref(),
-            )
-            .unwrap(),
-        ),
+        Some(block_response.data.message().parent_root()),
     )
 }
 
 fn get_sim_req() -> BlockSimRequest {
-    let capella_exec_payload = ethereum_consensus::capella::ExecutionPayload {
-        block_hash: get_byte_vector_32_for_hex(
-            "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
-        ),
+    let deneb_exec_payload = ExecutionPayloadDeneb {
+        block_hash: b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5")
+            .into(),
         ..Default::default()
     };
-    let execution_payload = ExecutionPayload::Capella(capella_exec_payload);
-    let bid_trace = BidTrace {
-        block_hash: get_byte_vector_32_for_hex(
-            "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5",
-        ),
-        ..Default::default()
-    };
-    let signed_bid_submission = SignedBidSubmission::Capella(SignedBidSubmissionCapella {
-        message: bid_trace,
-        signature: BlsSignature::default(),
-        execution_payload,
-    });
 
-    BlockSimRequest::new(0, Arc::new(signed_bid_submission), ValidatorPreferences::default(), None)
+    let bid_trace = BidTrace {
+        block_hash: b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5"),
+        ..BidTrace::test_random()
+    };
+
+    let signed_bid_submission = SignedBidSubmissionDeneb {
+        message: bid_trace,
+        signature: BlsSignature::test_random(),
+        execution_payload: deneb_exec_payload.into(),
+        blobs_bundle: BlobsBundle::default(),
+    };
+
+    BlockSimRequest::new(
+        0,
+        Arc::new(signed_bid_submission.into()),
+        ValidatorPreferences::default(),
+        None,
+    )
 }
 
 // ++++ TESTS ++++
@@ -123,9 +114,7 @@ async fn test_process_request_ok() {
         DbInfo::SimulationResult { block_hash, block_sim_result } => {
             assert_eq!(
                 block_hash,
-                get_byte_vector_32_for_hex(
-                    "0x9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5"
-                )
+                b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5")
             );
             assert!(block_sim_result.is_ok());
         }

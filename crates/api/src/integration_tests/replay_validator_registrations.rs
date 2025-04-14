@@ -1,10 +1,5 @@
 use std::{collections::HashMap, time::Duration};
 
-use ethereum_consensus::{
-    builder::SignedValidatorRegistration,
-    primitives::{BlsPublicKey, Slot},
-    serde::as_str,
-};
 use helix_beacon_client::{beacon_client::BeaconClient, BeaconClientTrait};
 use helix_common::{
     api::{
@@ -12,18 +7,18 @@ use helix_common::{
     },
     BeaconClientConfig,
 };
+use helix_types::{BlsPublicKey, SignedValidatorRegistration, Slot};
 use reqwest::{Error, Response};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::mpsc::channel, time::sleep};
 use tracing::{error, info};
 use url::Url;
 
-#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BuilderGetValidatorsResponseEntryExternal {
-    #[serde(with = "as_str")]
     pub slot: Slot,
-    #[serde(with = "as_str")]
-    pub validator_index: usize,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub validator_index: u64,
     pub entry: SignedValidatorRegistration,
 }
 
@@ -79,7 +74,7 @@ async fn fetch_and_aggregate_validators(
             match result {
                 Ok(entries) => {
                     for entry in entries {
-                        let key = entry.entry.registration.message.public_key.clone();
+                        let key = entry.entry.registration.message.pubkey.clone();
                         all_validators.entry(key).or_insert(entry.entry.clone());
                     }
                 }
@@ -148,7 +143,7 @@ async fn run() {
     while let Ok(head_event) = head_event_receiver.recv().await {
         info!("New head event: {}", head_event.slot);
         if head_event.slot % 5 != 0 && first_fetch_complete {
-            continue
+            continue;
         }
         first_fetch_complete = true;
 
@@ -157,7 +152,7 @@ async fn run() {
         match fetch_and_aggregate_validators(&endpoints).await {
             Ok(validators) => {
                 let pubkeys: Vec<BlsPublicKey> =
-                    validators.iter().map(|v| v.registration.message.public_key.clone()).collect();
+                    validators.iter().map(|v| v.registration.message.pubkey.clone()).collect();
                 info!(?pubkeys, "{} validators fetched", validators.len());
 
                 sleep(Duration::from_secs(60)).await;

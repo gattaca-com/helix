@@ -1,0 +1,29 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "helix-types"
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+alloy-eips.workspace = true
+alloy-primitives.workspace = true
+ethereum_serde_utils.workspace = true
+ethereum_ssz.workspace = true
+ethereum_ssz_derive.workspace = true
+lh-bls.workspace = true
+lh-eth2.workspace = true
+lh-kzg.workspace = true
+lh-slot-clock.workspace = true
+lh-test-random.workspace = true
+lh-types.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ssz_types.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tree_hash.workspace = true
+tree_hash_derive.workspace = true

@@ -20,7 +20,7 @@ jobs:
         env:
           POSTGRES_PASSWORD: password
         ports:
-          - 5433:5432
+          - 5432:5432
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 10s
@@ -62,6 +62,6 @@ jobs:
       # Run unit tests
       - name: Run unit tests
         env:
-          DATABASE_URL: "postgres://postgres:password@localhost:5433/postgres"
+          DATABASE_URL: "postgres://postgres:password@localhost:5432/postgres"
         run: cargo test --workspace --all-features
         working-directory: ./repos/${{ secrets.REPO_NAME }}

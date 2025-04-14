@@ -1,34 +1,27 @@
 #[cfg(test)]
 mod tests {
-    use std::{default::Default, ops::DerefMut, str::FromStr, sync::Arc, time::Duration};
+    use std::{default::Default, ops::DerefMut, sync::Arc, time::Duration};
 
+    use alloy_primitives::{b256, B256, U256};
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
-    use ethereum_consensus::{
-        builder::{SignedValidatorRegistration, ValidatorRegistration},
-        clock::get_current_unix_time_in_nanos,
-        crypto::{PublicKey, SecretKey},
-        phase0::Validator,
-        primitives::U256,
-    };
     use helix_common::{
         api::{
             builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
         },
-        bellatrix::{ByteList, ByteVector, List},
-        bid_submission::{
-            v2::header_submission::{
-                HeaderSubmissionCapella, SignedHeaderSubmission, SignedHeaderSubmissionCapella,
-            },
-            BidTrace, SignedBidSubmission,
-        },
+        bid_submission::v2::header_submission::{HeaderSubmissionDeneb, SignedHeaderSubmission},
         simulator::BlockSimError,
         validator_preferences::ValidatorPreferences,
-        versioned_payload::PayloadAndBlobs,
-        Filtering, GetPayloadTrace, HeaderSubmissionTrace, SubmissionTrace, ValidatorSummary,
+        Filtering, GetPayloadTrace, HeaderSubmissionTrace, PostgresConfig, SubmissionTrace,
+        ValidatorSummary,
     };
-    use helix_utils::utcnow_sec;
+    use helix_types::{
+        BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsSecretKey, BlsSignature,
+        ExecutionPayloadDeneb, PayloadAndBlobs, SignedBidSubmissionDeneb, SignedMessage,
+        SignedValidatorRegistration, TestRandomSeed, Validator, ValidatorRegistration, Withdrawal,
+    };
+    use helix_utils::{utcnow_ns, utcnow_sec};
     use rand::{seq::SliceRandom, thread_rng, Rng};
-    use tokio::time::sleep;
+    use tokio::{sync::OnceCell, time::sleep};
     use tokio_postgres::NoTls;
 
     use crate::{
@@ -38,15 +31,18 @@ mod tests {
         DatabaseService,
     };
 
-    /// These tests depend on a local instance of postgres running on port 5433
+    const REGION: i16 = 1;
+    const REGION_NAME: &str = "LOCAL";
+
+    /// These tests depend on a local instance of postgres running on port 5432
     /// e.g. to start a local postgres instance in docker:
-    /// docker run -d --name postgres -e POSTGRES_PASSWORD=password -p 5433:5432
+    /// docker run -d --name postgres -e POSTGRES_PASSWORD=password -p 5432:5432
     /// timescale/timescaledb-ha:pg16 https://docs.timescale.com/self-hosted/latest/install/installation-docker/
 
     fn test_config() -> Config {
         let mut cfg = Config::new();
         cfg.host = Some("localhost".to_string());
-        cfg.port = Some(5433);
+        cfg.port = Some(5432);
         cfg.dbname = Some("postgres".to_string());
         cfg.user = Some("postgres".to_string());
         cfg.password = Some("password".to_string());
@@ -54,54 +50,69 @@ mod tests {
         cfg
     }
 
+    // TODO: cleanup config
+    fn test_postgres_config() -> PostgresConfig {
+        PostgresConfig {
+            hostname: "localhost".to_string(),
+            port: 5432,
+            db_name: "postgres".to_string(),
+            user: "postgres".to_string(),
+            password: "password".to_string(),
+            region: REGION,
+            region_name: REGION_NAME.to_string(),
+        }
+    }
+
+    static SETUP: OnceCell<()> = OnceCell::const_new();
+    async fn run_setup() {
+        SETUP.get_or_init(|| async { setup_test_conn().await.unwrap() }).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
     fn setup_test_pool() -> Result<Pool, Box<dyn std::error::Error>> {
         Ok(test_config().create_pool(None, NoTls)?)
     }
 
-    async fn setup_test_conn() -> Result<deadpool_postgres::Client, Box<dyn std::error::Error>> {
+    async fn setup_test_conn() -> Result<(), Box<dyn std::error::Error>> {
         let pool = setup_test_pool()?;
-        let client = pool.get().await?;
+        let mut client = pool.get().await?;
 
         // ping the database to make sure we're connected
         let resp = client.query_one("SELECT 1", &[]).await?;
         assert!(resp.get::<_, i32>(0) == 1);
 
-        Ok(client)
-    }
-
-    #[tokio::test]
-    #[ignore = "TODO: to fix"]
-    async fn test_run_migrations_async() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
-        let mut conn = setup_test_conn().await?;
-        let client = conn.deref_mut().deref_mut();
+        let client = client.deref_mut().deref_mut();
         match run_migrations_async(client).await {
             Ok(report) => {
                 println!("Applied migrations: {}", report.applied_migrations().len());
                 println!("Migrations: {:?}", report);
-                Ok(())
             }
             Err(e) => {
                 println!("Error applying migrations: {}", e);
-                Err(e)
+                return Err(e);
             }
         }
+
+        // init region
+        let db_service = PostgresDatabaseService::new(&test_config(), REGION)?;
+        db_service.init_region(&test_postgres_config()).await;
+
+        Ok(())
     }
 
     fn get_randomized_signed_validator_registration() -> ValidatorRegistrationInfo {
-        let mut rng = rand::thread_rng();
         let timestamp = utcnow_sec();
         let gas_limit = 0;
-        let key = SecretKey::random(&mut rng).unwrap();
-        let signature = key.sign("message".as_bytes());
-        let public_key = key.public_key();
+        let key = BlsKeypair::random();
+        let signature = key.sk.sign(B256::ZERO);
+        let pubkey = key.pk;
         ValidatorRegistrationInfo {
             registration: SignedValidatorRegistration {
                 message: ValidatorRegistration {
                     fee_recipient: Default::default(),
                     timestamp,
                     gas_limit,
-                    public_key: public_key.clone(),
+                    pubkey: pubkey.into(),
                 },
                 signature,
             },
@@ -116,9 +127,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_validator_registration() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         db_service.start_registration_processor().await;
 
@@ -131,7 +142,7 @@ mod tests {
         sleep(Duration::from_secs(5)).await;
 
         let result = db_service
-            .get_validator_registration(registration.registration.message.public_key)
+            .get_validator_registration(registration.registration.message.pubkey)
             .await
             .unwrap();
         assert_eq!(
@@ -141,9 +152,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_validator_registrations() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         db_service.start_registration_processor().await;
 
@@ -161,7 +172,7 @@ mod tests {
 
         for registration in registrations {
             let result = db_service
-                .get_validator_registration(registration.registration.message.public_key)
+                .get_validator_registration(registration.registration.message.pubkey)
                 .await
                 .unwrap();
             assert_eq!(
@@ -172,9 +183,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_validator_registrations_for_pub_keys() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         db_service.start_registration_processor().await;
 
@@ -195,7 +206,7 @@ mod tests {
             .get_validator_registrations_for_pub_keys(
                 registrations
                     .iter()
-                    .map(|r| r.registration.message.public_key.clone())
+                    .map(|r| r.registration.message.pubkey.clone())
                     .collect::<Vec<_>>(),
             )
             .await
@@ -205,8 +216,8 @@ mod tests {
             let result = result
                 .iter()
                 .find(|r| {
-                    r.registration_info.registration.message.public_key ==
-                        registration.registration.message.public_key
+                    r.registration_info.registration.message.pubkey ==
+                        registration.registration.message.pubkey
                 })
                 .unwrap();
             assert_eq!(
@@ -217,9 +228,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_validator_registration_timestamp() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         db_service.start_registration_processor().await;
 
@@ -232,15 +243,15 @@ mod tests {
         sleep(Duration::from_secs(5)).await;
 
         let result = db_service
-            .get_validator_registration_timestamp(registration.registration.message.public_key)
+            .get_validator_registration_timestamp(registration.registration.message.pubkey)
             .await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_proposer_duties() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         let mut proposer_duties = Vec::new();
         for i in 0..10 {
@@ -251,8 +262,8 @@ mod tests {
                 .unwrap();
 
             proposer_duties.push(BuilderGetValidatorsResponseEntry {
-                slot: i,
-                validator_index: i as usize,
+                slot: i.into(),
+                validator_index: i,
                 entry: registration.clone(),
             });
         }
@@ -265,32 +276,22 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_known_validators() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
         let mut validator_summaries = Vec::new();
 
         for i in 0..100 {
-            let mut rng = rand::thread_rng();
-            let key = SecretKey::random(&mut rng).unwrap();
-            let public_key = key.public_key();
+            let key = BlsKeypair::random();
+            let public_key = key.pk;
 
             let validator_summary = helix_common::ValidatorSummary {
                 index: i,
                 balance: 0,
                 status: helix_common::ValidatorStatus::Active,
-                validator: Validator {
-                    public_key: public_key.clone(),
-                    withdrawal_credentials: Default::default(),
-                    effective_balance: 0,
-                    slashed: false,
-                    activation_eligibility_epoch: 0,
-                    activation_epoch: 0,
-                    exit_epoch: 0,
-                    withdrawable_epoch: 0,
-                },
+                validator: Validator { pubkey: public_key.clone(), ..Validator::test_random() },
             };
 
             validator_summaries.push(validator_summary);
@@ -304,24 +305,14 @@ mod tests {
         let mut new_validator_summaries = Vec::new();
 
         for i in 0..10 {
-            let mut rng = rand::thread_rng();
-            let key = SecretKey::random(&mut rng).unwrap();
-            let public_key = key.public_key();
+            let key = BlsSecretKey::random();
+            let pubkey = key.public_key();
 
             let validator_summary = helix_common::ValidatorSummary {
                 index: i,
                 balance: 0,
                 status: helix_common::ValidatorStatus::Active,
-                validator: Validator {
-                    public_key: public_key.clone(),
-                    withdrawal_credentials: Default::default(),
-                    effective_balance: 0,
-                    slashed: false,
-                    activation_eligibility_epoch: 0,
-                    activation_epoch: 0,
-                    exit_epoch: 0,
-                    withdrawable_epoch: 0,
-                },
+                validator: Validator { pubkey, ..Validator::test_random() },
             };
 
             new_validator_summaries.push(validator_summary);
@@ -341,9 +332,8 @@ mod tests {
 
         // Check that the removed validators are no longer known
         for removed_validator in removed {
-            let result = db_service
-                .check_known_validators(vec![removed_validator.validator.public_key])
-                .await;
+            let result =
+                db_service.check_known_validators(vec![removed_validator.validator.pubkey]).await;
             assert!(result.is_ok());
             assert!(result.unwrap().is_empty());
         }
@@ -351,39 +341,29 @@ mod tests {
         // Check that all validators in the final list are known
         for new_validator in final_list {
             let result =
-                db_service.check_known_validators(vec![new_validator.validator.public_key]).await;
+                db_service.check_known_validators(vec![new_validator.validator.pubkey]).await;
             assert!(result.is_ok());
             assert!(!result.unwrap().is_empty());
         }
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_large_batch() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
-        let mut rng = rand::thread_rng();
         let mut validator_summaries = Vec::new();
 
         for i in 0..200_000 {
-            let key = SecretKey::random(&mut rng).unwrap();
-            let public_key = key.public_key();
+            let key = BlsSecretKey::random();
+            let pubkey = key.public_key();
 
             let validator_summary = helix_common::ValidatorSummary {
                 index: i,
                 balance: 0,
                 status: helix_common::ValidatorStatus::Active,
-                validator: Validator {
-                    public_key: public_key.clone(),
-                    withdrawal_credentials: Default::default(),
-                    effective_balance: 0,
-                    slashed: false,
-                    activation_eligibility_epoch: 0,
-                    activation_epoch: 0,
-                    exit_epoch: 0,
-                    withdrawable_epoch: 0,
-                },
+                validator: Validator { pubkey, ..Validator::test_random() },
             };
 
             validator_summaries.push(validator_summary);
@@ -394,14 +374,14 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_and_get_builder_info() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
-        let public_key = PublicKey::try_from(alloy::hex::decode("8C266FD5CB50B5D9431DAA69C4BE17BC9A79A85D172112DA09E0AC3E2D0DCF785021D49B6DF57827D6BC61EBA086A507").unwrap().as_ref()).unwrap();
+        let public_key = BlsPublicKey::deserialize(&alloy_primitives::hex!("8C266FD5CB50B5D9431DAA69C4BE17BC9A79A85D172112DA09E0AC3E2D0DCF785021D49B6DF57827D6BC61EBA086A507")).unwrap();
         let builder_info = helix_common::BuilderInfo {
-            collateral: U256::from_str("1000000000000000000000000000").unwrap(),
+            collateral: U256::from(10000000000000000000u64),
             is_optimistic: false,
             is_optimistic_for_regional_filtering: false,
             builder_id: None,
@@ -419,12 +399,12 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_demotion() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
-        let mut rng = rand::thread_rng();
-        let key = SecretKey::random(&mut rng).unwrap();
+
+        let key = BlsSecretKey::random();
         let public_key = key.public_key();
 
         let builder_info = helix_common::BuilderInfo {
@@ -444,9 +424,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_simulation_result() {
-        let _ = env_logger::builder().is_test(true).try_init();
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         let block_hash = Default::default();
         let block_sim_result = Err(BlockSimError::Timeout);
@@ -456,56 +436,38 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_store_block_submission() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
-        let mut rng = rand::thread_rng(); // Get a random number generator
-        let random_bytes: [u8; 32] = rng.gen();
+        let pubkey = BlsPublicKey::deserialize(alloy_primitives::hex!("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").as_ref()).unwrap();
 
-        let bid_trace = BidTrace {
-            slot: 1235,
-            parent_hash: Default::default(),
-            block_hash: ByteVector::<32>::try_from(random_bytes.as_slice()).unwrap(),
-            builder_public_key: Default::default(),
-            proposer_public_key:  PublicKey::try_from(alloy::hex::decode("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").unwrap().as_ref()).unwrap(),
-            proposer_fee_recipient: Default::default(),
-            gas_limit: 0,
-            gas_used: 0,
-            value: U256::from(1234),
-        };
-        let mut signed_bid_submission = SignedBidSubmission::default();
-        match &mut signed_bid_submission {
-            SignedBidSubmission::Electra(submission) => {
-                submission.message = bid_trace.clone();
-            }
-            SignedBidSubmission::Deneb(submission) => {
-                submission.message = bid_trace.clone();
-            }
-            SignedBidSubmission::DenebWithProofs(submission) => {
-                submission.message = bid_trace.clone();
-            }
-            SignedBidSubmission::Capella(submission) => {
-                submission.message = bid_trace.clone();
-            }
-        }
+        let bid_trace = BidTrace { proposer_pubkey: pubkey, ..BidTrace::test_random() };
 
-        let submission_trace = SubmissionTrace {
-            receive: get_current_unix_time_in_nanos() as u64,
-            ..Default::default()
+        let signed_bid_submission = SignedBidSubmissionDeneb {
+            message: bid_trace.clone(),
+            execution_payload: ExecutionPayloadDeneb::default(),
+            blobs_bundle: BlobsBundle::default(),
+            signature: BlsSignature::test_random(),
         };
+
+        let submission_trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
 
         db_service
-            .store_block_submission(Arc::new(signed_bid_submission), Arc::new(submission_trace), 0)
+            .store_block_submission(
+                Arc::new(signed_bid_submission.into()),
+                Arc::new(submission_trace),
+                0,
+            )
             .await?;
         Ok(())
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_get_bids() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
         let filter = helix_common::api::data_api::BidFilters {
             slot: Some(1234),
@@ -524,37 +486,12 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_save_delivered_payloads() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
-        let extra_data = [0u8; 32];
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
-        let mut execution_payload = ethereum_consensus::types::ExecutionPayload::Capella(
-            ethereum_consensus::capella::ExecutionPayload {
-                parent_hash: ByteVector::default(),
-                fee_recipient: ByteVector::default(),
-                state_root: ByteVector::default(),
-                receipts_root: ByteVector::default(),
-                logs_bloom: ByteVector::default(),
-                prev_randao: ByteVector::default(),
-                block_number: 1234,
-                gas_limit: 0,
-                gas_used: 0,
-                timestamp: 0,
-                extra_data: ByteList::try_from(extra_data.as_slice()).unwrap(),
-                base_fee_per_gas: U256::from(1234),
-                block_hash: ByteVector::try_from(
-                    alloy::hex::decode(
-                        "6AD0CC0183284A1F2CEBB5188DC68F49EC6D522D9E99706DA097EF2BD8148D88",
-                    )
-                    .unwrap()
-                    .as_slice(),
-                )
-                .unwrap(),
-                transactions: List::default(),
-                withdrawals: Default::default(),
-            },
-        );
+
+        let mut execution_payload = ExecutionPayloadDeneb::test_random();
 
         // execution_payload
         //     .transactions_mut()
@@ -563,30 +500,27 @@ mod tests {
         // execution_payload
         //     .transactions_mut()
         //     .push(ethereum_consensus::capella::Transaction::default());
-        execution_payload.withdrawals_mut().unwrap().push(
-            ethereum_consensus::capella::Withdrawal {
+        execution_payload
+            .withdrawals
+            .push(Withdrawal {
                 index: 0,
                 validator_index: 0,
                 amount: 0,
                 address: Default::default(),
-            },
-        );
+            })
+            .unwrap();
 
-        let bid_trace =  BidTrace {
+        let bid_trace = BidTrace {
             slot: 1235,
-            block_hash: ByteVector::try_from(
-            alloy::hex::decode("6AD0CC0183284A1F2CEBB5188DC68F49EC6D522D9E99706DA097EF2BD8148D88")
-                .unwrap()
-                .as_slice(),
-        )
-        .unwrap(),
-            proposer_public_key: PublicKey::try_from(
-                alloy::hex::decode("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").unwrap().as_ref()).unwrap(),
-            ..Default::default() };
+            block_hash: b256!("6AD0CC0183284A1F2CEBB5188DC68F49EC6D522D9E99706DA097EF2BD8148D88"),
+            ..BidTrace::test_random()
+        };
         let latency_trace = GetPayloadTrace::default();
 
-        let payload_and_blobs =
-            PayloadAndBlobs { execution_payload: execution_payload.clone(), blobs_bundle: None };
+        let payload_and_blobs = PayloadAndBlobs {
+            execution_payload: execution_payload.into(),
+            blobs_bundle: Default::default(),
+        };
 
         db_service
             .save_delivered_payload(&bid_trace, Arc::new(payload_and_blobs), &latency_trace, None)
@@ -595,9 +529,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_get_delivered_payloads() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
         let filter = helix_common::api::data_api::BidFilters {
             slot: None,
@@ -619,24 +553,24 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_late_payloads() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 0)?;
 
         let reg = get_randomized_signed_validator_registration().registration;
 
         db_service
-            .save_too_late_get_payload(1, &reg.message.public_key, &Default::default(), 0, 0)
+            .save_too_late_get_payload(1, &reg.message.pubkey, &Default::default(), 0, 0)
             .await?;
 
         Ok(())
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_get_header() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
         let reg = get_randomized_signed_validator_registration().registration;
@@ -645,7 +579,7 @@ mod tests {
             .save_get_header_call(
                 1,
                 Default::default(),
-                reg.message.public_key,
+                reg.message.pubkey,
                 Default::default(),
                 Default::default(),
                 false,
@@ -657,9 +591,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_failed_payloads() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
         let _reg = get_randomized_signed_validator_registration().registration;
@@ -672,29 +606,15 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_store_header_submission() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
-        let signed_bid_submission =
-            SignedHeaderSubmission::Capella(SignedHeaderSubmissionCapella {
-                message: HeaderSubmissionCapella {
-                    bid_trace: BidTrace {
-                        slot: 1234,
-                        parent_hash: Default::default(),
-                        block_hash: Default::default(),
-                        builder_public_key: Default::default(),
-                        proposer_public_key: Default::default(),
-                        proposer_fee_recipient: Default::default(),
-                        gas_limit: 0,
-                        gas_used: 0,
-                        value: U256::from(1234),
-                    },
-                    execution_payload_header: Default::default(),
-                },
-                signature: Default::default(),
-            });
+        let bid_submission = HeaderSubmissionDeneb::test_random();
+        let signed =
+            SignedMessage { message: bid_submission, signature: BlsSignature::test_random() };
+        let signed_bid_submission = SignedHeaderSubmission::Deneb(signed);
 
         db_service
             .store_header_submission(
@@ -706,9 +626,9 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_gossiped_header() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
         db_service.save_gossiped_header_trace(Default::default(), Default::default()).await?;
 
@@ -716,10 +636,12 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "TODO: to fix"]
     async fn test_gossiped_payload() -> Result<(), Box<dyn std::error::Error>> {
-        env_logger::builder().is_test(true).try_init()?;
+        run_setup().await;
+
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+        db_service.init_region(&test_postgres_config()).await;
+
         db_service.save_gossiped_payload_trace(Default::default(), Default::default()).await?;
 
         Ok(())

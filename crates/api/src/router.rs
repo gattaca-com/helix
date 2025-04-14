@@ -29,7 +29,6 @@ use crate::{
         multi_simulator::MultiSimulator,
         optimistic_simulator::OptimisticSimulator,
     },
-    constraints::api::ConstraintsApi,
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     middleware::{inner_metrics_middleware, outer_metrics_middleware},
     proposer::api::ProposerApi,
@@ -53,14 +52,11 @@ pub type ProposerApiProd = ProposerApi<
 
 pub type DataApiProd = DataApi<PostgresDatabaseService>;
 
-pub type ConstraintsApiProd = ConstraintsApi<RedisCache>;
-
 pub fn build_router(
     router_config: &mut RouterConfig,
     builder_api: Arc<BuilderApiProd>,
     proposer_api: Arc<ProposerApiProd>,
     data_api: Arc<DataApiProd>,
-    constraints_api: Arc<ConstraintsApiProd>,
     bids_cache: Arc<BidsCache>,
     delivered_payloads_cache: Arc<DeliveredPayloadsCache>,
 ) -> Router {
@@ -74,24 +70,16 @@ pub fn build_router(
             Route::GetValidators => get(BuilderApiProd::get_validators),
             Route::SubmitBlock => post(BuilderApiProd::submit_block),
             Route::SubmitBlockOptimistic => post(BuilderApiProd::submit_block_v2),
-            Route::SubmitBlockWithProofs => post(BuilderApiProd::submit_block),
             Route::SubmitHeader => post(BuilderApiProd::submit_header),
             Route::CancelBid => post(BuilderApiProd::cancel_bid),
             Route::GetTopBid => get(BuilderApiProd::get_top_bid),
-            Route::GetBuilderConstraints => get(BuilderApiProd::constraints),
-            Route::GetBuilderConstraintsStream => get(BuilderApiProd::constraints_stream),
-            Route::GetBuilderDelegations => get(BuilderApiProd::delegations),
             Route::Status => get(ProposerApiProd::status),
             Route::RegisterValidators => post(ProposerApiProd::register_validators),
             Route::GetHeader => get(ProposerApiProd::get_header),
-            Route::GetHeaderWithProofs => get(ProposerApiProd::get_header_with_proofs),
             Route::GetPayload => post(ProposerApiProd::get_payload),
             Route::ProposerPayloadDelivered => get(DataApiProd::proposer_payload_delivered),
             Route::BuilderBidsReceived => get(DataApiProd::builder_bids_received),
             Route::ValidatorRegistration => get(DataApiProd::validator_registration),
-            Route::SubmitBuilderConstraints => post(ConstraintsApiProd::submit_constraints),
-            Route::DelegateSubmissionRights => post(ConstraintsApiProd::delegate),
-            Route::RevokeSubmissionRights => post(ConstraintsApiProd::revoke),
             _ => {
                 panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route_info.route);
             }
@@ -157,7 +145,6 @@ pub fn build_router(
         .layer(Extension(builder_api))
         .layer(Extension(proposer_api))
         .layer(Extension(data_api))
-        .layer(Extension(constraints_api))
         .layer(Extension(bids_cache))
         .layer(Extension(delivered_payloads_cache));
 

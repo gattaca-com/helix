@@ -1,8 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use alloy::{eips::merge::EPOCH_SLOTS, primitives::map::HashSet};
-use ethereum_consensus::primitives::BlsPublicKey;
-use ethers::{abi::Address, contract::EthEvent, types::U256};
+use alloy_eips::merge::EPOCH_SLOTS;
+use alloy_primitives::{map::HashSet, U256};
 use helix_beacon_client::{
     error::BeaconClientError,
     types::{HeadEventData, StateId},
@@ -15,6 +14,7 @@ use helix_common::{
 };
 use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
+use helix_types::{BlsPublicKey, SlotClockTrait};
 use helix_utils::utcnow_ms;
 use tokio::{
     sync::{broadcast, Mutex},
@@ -129,19 +129,19 @@ impl<
     ) -> Result<(), BeaconClientError> {
         let best_sync_status = self.beacon_client.best_sync_status().await?;
 
-        self.process_new_slot(best_sync_status.head_slot).await;
+        self.process_new_slot(best_sync_status.head_slot.as_u64()).await;
         loop {
             let start_instant = Instant::now() +
-                self.chain_info.clock.duration_until_next_slot() +
+                self.chain_info.clock.duration_to_next_slot().unwrap() +
                 Duration::from_secs(CUTT_OFF_TIME);
             let mut timer =
-                interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot));
+                interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot()));
 
             tokio::select! {
                 head_event_result = head_event_receiver.recv() => {
                     match head_event_result {
                         Ok(head_event) => {
-                            self.process_new_slot(head_event.slot).await;
+                            self.process_new_slot(head_event.slot.as_u64()).await;
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("head events lagged by {n} events");
@@ -153,8 +153,8 @@ impl<
                     }
                 }
                 _ = timer.tick() => {
-                    match self.chain_info.clock.current_slot() {
-                        Some(slot) => self.process_new_slot(slot).await,
+                    match self.chain_info.clock.now() {
+                        Some(slot) => self.process_new_slot(slot.as_u64()).await,
                         None => {
                             error!("could not get current slot");
                         }
@@ -184,7 +184,7 @@ impl<
         let cloned_self = self.clone();
         task::spawn(file!(), line!(), async move {
             if let Err(err) = cloned_self.demote_builders_with_expired_pending_blocks().await {
-                error!(err = %err, "failed to demote builders with expired pending blocks");
+                error!(%err, "failed to demote builders with expired pending blocks");
             }
         });
 
@@ -496,12 +496,12 @@ impl<
 
         for duty in proposer_duties {
             if let Some(reg) = signed_validator_registrations.get(&duty.public_key) {
-                if duty.public_key != reg.registration_info.registration.message.public_key {
+                if duty.public_key != reg.registration_info.registration.message.pubkey {
                     error!(?duty, ?reg, "mismatch in duty vs registration")
                 }
 
                 formatted_proposer_duties.push(BuilderGetValidatorsResponseEntry {
-                    slot: duty.slot,
+                    slot: duty.slot.into(),
                     validator_index: duty.validator_index,
                     entry: reg.registration_info.clone(),
                 });
@@ -554,7 +554,7 @@ impl<
             info!(builder_pubkey = %builder_pubkey, "PrimevBuilder");
             self.db
                 .store_builder_info(&builder_pubkey, &BuilderInfo {
-                    collateral: ethereum_consensus::primitives::U256::from(0),
+                    collateral: U256::ZERO,
                     is_optimistic: false,
                     is_optimistic_for_regional_filtering: false,
                     builder_id: Some("PrimevBuilder".to_string()),
@@ -645,10 +645,10 @@ impl<
     /// Fetch validator registrations for `pub_keys` from database.
     async fn fetch_signed_validator_registrations(
         self: &SharedHousekeeper<DB, BeaconClient, A, P>,
-        pub_keys: Vec<BlsPublicKey>,
+        pubkeys: Vec<BlsPublicKey>,
     ) -> Result<HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>, DatabaseError> {
         let registrations: Vec<SignedValidatorRegistrationEntry> =
-            self.db.get_validator_registrations_for_pub_keys(pub_keys).await?;
+            self.db.get_validator_registrations_for_pub_keys(pubkeys).await?;
 
         Ok(registrations.into_iter().map(|entry| (entry.public_key().clone(), entry)).collect())
     }
@@ -670,17 +670,4 @@ fn v2_submission_late(pending_block: &PendingBlock, current_time: u64) -> bool {
                 MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
         }
     }
-}
-
-#[derive(Debug, EthEvent)]
-#[ethevent(
-    abi = "ProviderRegistered(address indexed provider, uint256 stakedAmount, bytes blsPublicKey)"
-)]
-pub struct ValueChanged {
-    #[ethevent(indexed, name = "provider")]
-    pub provider: Address,
-    #[ethevent(name = "stakedAmount")]
-    pub staked_amount: U256,
-    #[ethevent(name = "blsPublicKey")]
-    pub bls_public_key: Vec<u8>,
 }

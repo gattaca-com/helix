@@ -8,7 +8,6 @@ use helix_common::{chain_info::ChainInfo, NetworkConfig, RelayConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::MockAuctioneer; // Import MockAuctioneer from the appropriate module
 use helix_housekeeper::{ChainEventUpdater, ChainUpdate};
-use helix_utils::signing::compute_builder_domain;
 use tokio::{
     net::TcpListener,
     sync::{broadcast, mpsc, RwLock},
@@ -49,12 +48,11 @@ impl WebsiteService {
         // ChainInfo
         let chain_info = Arc::new(match config.network_config {
             NetworkConfig::Mainnet => ChainInfo::for_mainnet(),
-            NetworkConfig::Goerli => ChainInfo::for_goerli(),
+
             NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
             NetworkConfig::Holesky => ChainInfo::for_holesky(),
             NetworkConfig::Custom { ref dir_path, ref genesis_validator_root, genesis_time } => {
                 ChainInfo::for_custom(dir_path.clone(), *genesis_validator_root, genesis_time)
-                    .expect("Failed to load custom chain info")
             }
         });
 
@@ -278,17 +276,19 @@ impl WebsiteService {
             link_beaconchain: state.website_config.link_beaconchain.clone(),
             link_etherscan: state.website_config.link_etherscan.clone(),
             link_data_api: state.website_config.link_data_api.clone(),
-            capella_fork_version: alloy::hex::encode(state.chain_info.context.capella_fork_version),
-            bellatrix_fork_version: alloy::hex::encode(
+            capella_fork_version: alloy_primitives::hex::encode(
+                state.chain_info.context.capella_fork_version,
+            ),
+            bellatrix_fork_version: alloy_primitives::hex::encode(
                 state.chain_info.context.bellatrix_fork_version,
             ),
-            genesis_fork_version: alloy::hex::encode(state.chain_info.context.genesis_fork_version),
-            genesis_validators_root: alloy::hex::encode(
+            genesis_fork_version: alloy_primitives::hex::encode(
+                state.chain_info.context.genesis_fork_version,
+            ),
+            genesis_validators_root: alloy_primitives::hex::encode(
                 state.chain_info.genesis_validators_root.as_ref() as &[u8],
             ),
-            builder_signing_domain: compute_builder_domain(&state.chain_info.context)
-                .map(alloy::hex::encode)
-                .unwrap_or_else(|_e| String::from("Error computing builder domain")),
+            builder_signing_domain: state.chain_info.context.get_builder_domain().to_string(),
         })
     }
 }

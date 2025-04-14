@@ -1,25 +1,21 @@
 use std::{collections::HashSet, sync::Arc};
 
+use alloy_primitives::B256;
 use async_trait::async_trait;
-use ethereum_consensus::{
-    primitives::{BlsPublicKey, Hash32},
-    ssz::prelude::*,
-};
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
-    bid_submission::{
-        v2::header_submission::SignedHeaderSubmission, BidTrace, SignedBidSubmission,
-    },
+    bid_submission::v2::header_submission::SignedHeaderSubmission,
     builder_info::BuilderInfo,
-    deneb::SignedValidatorRegistration,
     simulator::BlockSimError,
-    versioned_payload::PayloadAndBlobs,
     GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace,
     HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace,
     ValidatorPreferences, ValidatorSummary,
+};
+use helix_types::{
+    BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
 };
 
 use crate::{
@@ -88,7 +84,7 @@ pub trait DatabaseService: Send + Sync + Clone {
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
-        payload_hash: &Hash32,
+        payload_hash: &B256,
         message_received: u64,
         payload_fetched: u64,
     ) -> Result<(), DatabaseError>;
@@ -131,13 +127,13 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn db_demote_builder(
         &self,
         builder_pub_key: &BlsPublicKey,
-        block_hash: &Hash32,
+        block_hash: &B256,
         reason: String,
     ) -> Result<(), DatabaseError>;
 
     async fn save_simulation_result(
         &self,
-        block_hash: ByteVector<32>,
+        block_hash: B256,
         block_sim_result: Result<(), BlockSimError>,
     ) -> Result<(), DatabaseError>;
 
@@ -157,9 +153,9 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn save_get_header_call(
         &self,
         slot: u64,
-        parent_hash: ByteVector<32>,
+        parent_hash: B256,
         public_key: BlsPublicKey,
-        best_block_hash: ByteVector<32>,
+        best_block_hash: B256,
         trace: GetHeaderTrace,
 
         mev_boost: bool,
@@ -169,7 +165,7 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn save_failed_get_payload(
         &self,
         slot: u64,
-        block_hash: ByteVector<32>,
+        block_hash: B256,
         error: String,
         trace: GetPayloadTrace,
     ) -> Result<(), DatabaseError>;
@@ -182,13 +178,13 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn save_gossiped_header_trace(
         &self,
-        block_hash: ByteVector<32>,
+        block_hash: B256,
         trace: GossipedHeaderTrace,
     ) -> Result<(), DatabaseError>;
 
     async fn save_gossiped_payload_trace(
         &self,
-        block_hash: ByteVector<32>,
+        block_hash: B256,
         trace: GossipedPayloadTrace,
     ) -> Result<(), DatabaseError>;
 

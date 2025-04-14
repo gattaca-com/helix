@@ -1,14 +1,14 @@
+use alloy_primitives::{Address, B256, U256};
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use ethereum_consensus::{
-    primitives::{BlsPublicKey, Bytes32, Hash32},
-    ssz::{self, prelude::*},
-};
-use helix_common::{proofs::ProofError, simulator::BlockSimError};
+use helix_common::{bid_submission::BidValidationError, simulator::BlockSimError};
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
+use helix_types::BlsPublicKey;
+
+use super::v3::V3Error;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuilderApiError {
@@ -24,8 +24,8 @@ pub enum BuilderApiError {
     #[error("IO error: {0}")]
     IOError(#[from] std::io::Error),
 
-    #[error("ssz deserialize error: {0}")]
-    SszDeserializeError(#[from] ssz::prelude::DeserializeError),
+    #[error("payload error: {0}")]
+    PayloadError(#[from] V3Error),
 
     #[error("ssz serialize error")]
     SszSerializeError,
@@ -60,17 +60,20 @@ pub enum BuilderApiError {
     #[error("payload slot mismatches with current payload attributes slot. got: {got}, expected: {expected}")]
     PayloadSlotMismatchWithPayloadAttributes { got: u64, expected: u64 },
 
+    #[error("{0}")]
+    BidValidationError(#[from] BidValidationError),
+
     #[error("block hash mismatch. message: {message:?}, payload: {payload:?}")]
-    BlockHashMismatch { message: Hash32, payload: Hash32 },
+    BlockHashMismatch { message: B256, payload: B256 },
 
     #[error("parent hash mismatch. message: {message:?}, payload: {payload:?}")]
-    ParentHashMismatch { message: Hash32, payload: Hash32 },
+    ParentHashMismatch { message: B256, payload: B256 },
 
     #[error("fee recipient mismatch. got: {got:?}, expected: {expected:?}")]
-    FeeRecipientMismatch { got: ByteVector<20>, expected: ByteVector<20> },
+    FeeRecipientMismatch { got: Address, expected: Address },
 
     #[error("proposer public key mismatch. got: {got:?}, expected: {expected:?}")]
-    ProposerPublicKeyMismatch { got: BlsPublicKey, expected: BlsPublicKey },
+    ProposerPublicKeyMismatch { got: Box<BlsPublicKey>, expected: Box<BlsPublicKey> },
 
     #[error("slot mismatch. got: {got}, expected: {expected}")]
     SlotMismatch { got: u64, expected: u64 },
@@ -88,7 +91,7 @@ pub enum BuilderApiError {
     MissingWithdrawlsRoot,
 
     #[error("withdrawls root mismatch. got: {got:?}, expected: {expected:?}")]
-    WithdrawalsRootMismatch { got: Hash32, expected: Hash32 },
+    WithdrawalsRootMismatch { got: B256, expected: B256 },
 
     #[error("missing transactions")]
     MissingTransactions,
@@ -97,7 +100,7 @@ pub enum BuilderApiError {
     MissingTransactionsRoot,
 
     #[error("transactions root mismatch. got: {got:?}, expected: {expected:?}")]
-    TransactionsRootMismatch { got: Hash32, expected: Hash32 },
+    TransactionsRootMismatch { got: B256, expected: B256 },
 
     #[error("signature verification failed")]
     SignatureVerificationFailed,
@@ -124,17 +127,17 @@ pub enum BuilderApiError {
     DatabaseError(#[from] DatabaseError),
 
     #[error("incorrect prev_randao - got: {got:?}, expected: {expected:?}")]
-    PrevRandaoMismatch { got: Bytes32, expected: Bytes32 },
+    PrevRandaoMismatch { got: B256, expected: B256 },
 
     #[error("block already received: {block_hash:?}")]
-    DuplicateBlockHash { block_hash: Hash32 },
+    DuplicateBlockHash { block_hash: B256 },
 
     #[error(
         "not enough optimistic collateral. builder_pub_key: {builder_pub_key:?}. 
         collateral: {collateral:?}, collateral required: {collateral_required:?}"
     )]
     NotEnoughOptimisticCollateral {
-        builder_pub_key: BlsPublicKey,
+        builder_pub_key: Box<BlsPublicKey>,
         collateral: U256,
         collateral_required: U256,
         is_optimistic: bool,
@@ -145,24 +148,6 @@ pub enum BuilderApiError {
 
     #[error("builder not in proposer's trusted list: {proposer_trusted_builders:?}")]
     BuilderNotInProposersTrustedList { proposer_trusted_builders: Vec<String> },
-
-    #[error("no constraints found")]
-    NoConstraintsFound,
-
-    #[error("inclusion proof verification failed: {0}")]
-    InclusionProofVerificationFailed(#[from] ProofError),
-
-    #[error("inclusion proofs not found")]
-    InclusionProofsNotFound,
-
-    #[error("failed to compute hash tree root for transaction: {0}")]
-    HashTreeRootError(#[from] MerkleizationError),
-
-    #[error("failed to get constraints for slot {0}")]
-    ConstraintsError(u64),
-
-    #[error("incorrect slot for constraints request {0}")]
-    IncorrectSlot(u64),
 }
 
 impl IntoResponse for BuilderApiError {
@@ -173,9 +158,6 @@ impl IntoResponse for BuilderApiError {
             },
             BuilderApiError::IOError(err) => {
                 (StatusCode::BAD_REQUEST, format!("IO error: {err}")).into_response()
-            },
-            BuilderApiError::SszDeserializeError(err) => {
-                (StatusCode::BAD_REQUEST, format!("SSZ deserialize error: {err}")).into_response()
             },
             BuilderApiError::SszSerializeError => {
                 (StatusCode::BAD_REQUEST, "SSZ serialize error".to_string()).into_response()
@@ -312,24 +294,12 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders } => {
                 (StatusCode::BAD_REQUEST, format!("builder not in proposer's trusted list: {proposer_trusted_builders:?}")).into_response()
             },
-            BuilderApiError::NoConstraintsFound => {
-                (StatusCode::BAD_REQUEST, "no constraints found").into_response()
-            }
-            BuilderApiError::InclusionProofVerificationFailed(err) => {
-                (StatusCode::BAD_REQUEST, format!("inclusion proof verifcation failed: {err}")).into_response()
-            }
-            BuilderApiError::InclusionProofsNotFound => {
-                (StatusCode::BAD_REQUEST, "inclusion proofs not found".to_string()).into_response()
-            }
-            BuilderApiError::HashTreeRootError(err) => {
-                (StatusCode::BAD_REQUEST, format!("failed to compute hash tree root for transaction: {err}")).into_response()
-            }
-            BuilderApiError::ConstraintsError(slot) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to get constraints for slot {slot}")).into_response()
-            }
-            BuilderApiError::IncorrectSlot(slot) => {
-                (StatusCode::BAD_REQUEST, format!("incorrect slot for constraints request {slot}")).into_response()
-            }
+            BuilderApiError::PayloadError(v3_error) => {
+                (StatusCode::BAD_REQUEST, format!("payload error: {v3_error}")).into_response()
+            },
+            BuilderApiError::BidValidationError(err) => {
+                (StatusCode::BAD_REQUEST, format!("bid validation error: {err}")).into_response()
+            },
         }
     }
 }

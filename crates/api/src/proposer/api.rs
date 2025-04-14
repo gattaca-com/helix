@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use alloy_primitives::{B256, U256};
 use axum::{
     body::{to_bytes, Body},
     extract::{Json, Path},
@@ -7,41 +8,28 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
-use ethereum_consensus::{
-    altair::Hash32,
-    builder::SignedValidatorRegistration,
-    clock::get_current_unix_time_in_nanos,
-    deneb::{Context, Root},
-    phase0::mainnet::SLOTS_PER_EPOCH,
-    primitives::BlsPublicKey,
-    ssz::prelude::*,
-    types::mainnet::{ExecutionPayloadHeader, SignedBeaconBlock, SignedBlindedBeaconBlock},
-};
 use helix_beacon_client::{types::BroadcastValidation, BlockBroadcaster, MultiBeaconClientTrait};
 use helix_common::{
     api::{
-        builder_api::BuilderGetValidatorsResponseEntry,
-        proposer_api::{GetPayloadResponse, ValidatorRegistrationInfo},
+        builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
     },
     beacon_api::PublishBlobsRequest,
     bid_submission::v3::header_submission_v3::PayloadSocketAddress,
+    blob_sidecars::blob_sidecars_from_unblinded_payload,
     chain_info::{ChainInfo, Network},
-    deneb::{BlobSidecars, BuildBlobSidecarError},
     metrics::{GetHeaderMetric, PROPOSER_GOSSIP_QUEUE},
-    signed_proposal::VersionedSignedProposal,
-    task, try_execution_header_from_payload,
-    versioned_payload::PayloadAndBlobs,
-    BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace, RelayConfig,
-    ValidatorPreferences,
+    task, BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace,
+    RelayConfig, ValidatorPreferences,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
 use helix_housekeeper::{ChainUpdate, SlotUpdate};
-use helix_utils::{
-    extract_request_id,
-    signing::{verify_signed_builder_message, verify_signed_consensus_message},
-    utcnow_ms, utcnow_ns,
+use helix_types::{
+    BlsPublicKey, ChainSpec, ExecPayload, ExecutionPayloadHeader, GetPayloadResponse,
+    PayloadAndBlobs, SigError, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot,
+    SlotClockTrait, VersionedSignedProposal,
 };
+use helix_utils::{extract_request_id, utcnow_ms, utcnow_ns, utcnow_sec};
 use serde_json::json;
 use tokio::{
     sync::{
@@ -94,7 +82,7 @@ where
     relay_config: RelayConfig,
 
     /// Channel on which to send v3 payload fetch requests.
-    v3_payload_request: Sender<(Hash32, PayloadSocketAddress)>,
+    v3_payload_request: Sender<(B256, PayloadSocketAddress)>,
 }
 
 impl<A, DB, M, G> ProposerApi<A, DB, M, G>
@@ -115,7 +103,7 @@ where
         validator_preferences: Arc<ValidatorPreferences>,
         gossip_receiver: Receiver<GossipedMessage>,
         relay_config: RelayConfig,
-        v3_payload_request: Sender<(Hash32, PayloadSocketAddress)>,
+        v3_payload_request: Sender<(B256, PayloadSocketAddress)>,
     ) -> Self {
         let api = Self {
             auctioneer,
@@ -171,7 +159,7 @@ where
     /// If all registrations in the batch fail validation, an error is returned.
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/registerValidator>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn register_validators(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
         headers: HeaderMap,
@@ -256,7 +244,7 @@ where
 
         // Bulk check if the validators are known
         let registration_pub_keys =
-            registrations.iter().map(|r| r.message.public_key.clone()).collect();
+            registrations.iter().map(|r| r.message.pubkey.clone()).collect();
         let known_pub_keys = proposer_api.db.check_known_validators(registration_pub_keys).await?;
 
         // Check each registration
@@ -264,11 +252,11 @@ where
 
         let mut handles = Vec::with_capacity(registrations.len());
 
-        for mut registration in registrations {
+        for registration in registrations {
             let proposer_api_clone = proposer_api.clone();
             let start_time = Instant::now();
 
-            let pub_key = registration.message.public_key.clone();
+            let pub_key = registration.message.pubkey.clone();
 
             trace!(
                 pub_key = ?pub_key,
@@ -295,7 +283,7 @@ where
             }
 
             let handle = tokio::task::spawn_blocking(move || {
-                let res = match proposer_api_clone.validate_registration(&mut registration) {
+                let res = match proposer_api_clone.validate_registration(&registration) {
                     Ok(_) => Some(registration),
                     Err(err) => {
                         warn!(%err, ?pub_key, "Failed to register validator");
@@ -363,7 +351,7 @@ where
     /// The function returns a JSON response containing the best bid if found.
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/getHeader>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
         headers: HeaderMap,
@@ -384,13 +372,13 @@ where
             public_key = ?public_key,
         );
 
-        let bid_request = BidRequest { slot, parent_hash, public_key };
+        let bid_request = BidRequest { slot: slot.into(), parent_hash, public_key };
 
         // Dont allow requests for past slots
         if bid_request.slot < head_slot {
             debug!("request for past slot");
             return Err(ProposerApiError::RequestForPastSlot {
-                request_slot: bid_request.slot,
+                request_slot: bid_request.slot.into(),
                 head_slot,
             });
         }
@@ -461,21 +449,25 @@ where
         // Get best bid from auctioneer
         let get_best_bid_res = proposer_api
             .auctioneer
-            .get_best_bid(bid_request.slot, &bid_request.parent_hash, &bid_request.public_key)
+            .get_best_bid(
+                bid_request.slot.into(),
+                &bid_request.parent_hash,
+                &bid_request.public_key,
+            )
             .await;
         trace.best_bid_fetched = utcnow_ns();
         debug!(trace = ?trace, "best bid fetched");
 
         match get_best_bid_res {
             Ok(Some(bid)) => {
-                if bid.value() == U256::ZERO {
+                if bid.data.message.value() == &U256::ZERO {
                     warn!("best bid value is 0");
                     return Err(ProposerApiError::BidValueZero);
                 }
 
                 debug!(
-                    value = ?bid.value(),
-                    block_hash = ?bid.block_hash(),
+                    value = ?bid.data.message.value(),
+                    block_hash = ?bid.data.message.header().block_hash(),
                     "delivering bid",
                 );
 
@@ -485,7 +477,7 @@ where
                         slot,
                         bid_request.parent_hash,
                         bid_request.public_key.clone(),
-                        bid.block_hash().clone(),
+                        bid.data.message.header().block_hash().0,
                         trace,
                         mev_boost,
                         user_agent.clone(),
@@ -493,7 +485,7 @@ where
                     .await;
 
                 let proposer_pubkey_clone = bid_request.public_key;
-                let block_hash_clone = bid.block_hash().clone();
+                let block_hash = bid.data.message.header().block_hash().0;
                 if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
                     // Request payload in the background
                     task::spawn(file!(), line!(), async move {
@@ -502,7 +494,7 @@ where
                             .request_payload(RequestPayloadParams {
                                 slot,
                                 proposer_pub_key: proposer_pubkey_clone,
-                                block_hash: block_hash_clone,
+                                block_hash,
                             })
                             .await
                         {
@@ -514,146 +506,6 @@ where
                 info!(bid = %json!(bid), "delivering bid");
 
                 // Return header
-                Ok(axum::Json(bid))
-            }
-            Ok(None) => {
-                warn!("no bid found");
-                Err(ProposerApiError::NoBidPrepared)
-            }
-            Err(err) => {
-                error!(%err, "error getting bid");
-                Err(ProposerApiError::InternalServerError)
-            }
-        }
-    }
-
-    /// Retrieves the best bid header (with inclusion proof) for the specified slot, parent hash,
-    /// and public key.
-    ///
-    /// This function accepts a slot number, parent hash and public_key.
-    /// 1. Validates that the request's slot is not older than the head slot.
-    /// 2. Validates the request timestamp to ensure it's not too late.
-    /// 3. Fetches the best bid for the given parameters from the auctioneer.
-    /// 4. Fetches the inclusion proof for the best bid.
-    ///
-    /// The function returns a JSON response containing the best bid and inclusion proofs if found.
-    ///
-    /// Implements this API: <https://docs.boltprotocol.xyz/technical-docs/api/builder#get_header_with_proofs>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
-    pub async fn get_header_with_proofs(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
-        headers: HeaderMap,
-        Path(GetHeaderParams { slot, parent_hash, public_key }): Path<GetHeaderParams>,
-    ) -> Result<impl IntoResponse, ProposerApiError> {
-        let mut trace = GetHeaderTrace { receive: utcnow_ns(), ..Default::default() };
-
-        let (head_slot, _) = *proposer_api.curr_slot_info.read().await;
-        debug!(head_slot, request_ts = trace.receive, slot, ?parent_hash, ?public_key,);
-
-        let bid_request = BidRequest { slot, parent_hash, public_key };
-
-        // Dont allow requests for past slots
-        if bid_request.slot < head_slot {
-            warn!("request for past slot");
-            return Err(ProposerApiError::RequestForPastSlot {
-                request_slot: bid_request.slot,
-                head_slot,
-            });
-        }
-
-        if let Err(err) = proposer_api.validate_bid_request_time(&bid_request) {
-            warn!(%err, "invalid bid request time");
-            return Err(err);
-        }
-        trace.validation_complete = utcnow_ns();
-
-        // Get best bid from auctioneer
-        let get_best_bid_res = proposer_api
-            .auctioneer
-            .get_best_bid(bid_request.slot, &bid_request.parent_hash, &bid_request.public_key)
-            .await;
-        trace.best_bid_fetched = utcnow_ns();
-        info!(?trace, "best bid fetched");
-
-        let user_agent =
-            headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|v| v.to_string());
-
-        match get_best_bid_res {
-            Ok(Some(mut bid)) => {
-                if bid.value() == U256::ZERO {
-                    warn!("best bid value is 0");
-                    return Err(ProposerApiError::BidValueZero);
-                }
-
-                // Save trace to DB
-                proposer_api
-                    .save_get_header_call(
-                        slot,
-                        bid_request.parent_hash,
-                        bid_request.public_key.clone(),
-                        bid.block_hash().clone(),
-                        trace,
-                        false,
-                        user_agent,
-                    )
-                    .await;
-
-                // If the block value is greater than the max value to verify, return the bid
-                // without proofs.
-                let value_above_max_to_verify = proposer_api
-                    .relay_config
-                    .constraints_api_config
-                    .max_block_value_to_verify_wei
-                    .map_or(false, |max| bid.value() > max);
-                if value_above_max_to_verify {
-                    info!(
-                        slot,
-                        value = ?bid.value(),
-                        "block value is greater than max value to verify, returning bid without proofs",
-                    );
-                    return Ok(axum::Json(bid));
-                }
-
-                // Get inclusion proofs
-                let proofs = proposer_api
-                    .auctioneer
-                    .get_inclusion_proof(slot, &bid_request.public_key, bid.block_hash())
-                    .await?;
-
-                // Attach the proofs to the bid before sending it back
-                if let Some(proofs) = proofs {
-                    bid.set_inclusion_proofs(proofs);
-
-                    info!(
-                        slot,
-                        value = ?bid.value(),
-                        block_hash = ?bid.block_hash(),
-                        "delivering bid with proofs",
-                    );
-                } else {
-                    // Check whether we had constraints saved in the auctioneer.
-                    // If so, this is an internal error and we cannot return a valid bid.
-                    let constraints =
-                        proposer_api.auctioneer.get_constraints(slot).await?.unwrap_or_default();
-
-                    if !constraints.is_empty() {
-                        error!(
-                            slot,
-                            block_hash = ?bid.block_hash(),
-                            "no inclusion proofs found from auctioneer for bid, but constraints were saved",
-                        );
-                        return Err(ProposerApiError::InternalServerError);
-                    }
-
-                    info!(
-                        slot,
-                        value = ?bid.value(),
-                        block_hash = ?bid.block_hash(),
-                        "delivering bid with empty proofs, no constraints found",
-                    );
-                }
-
-                // Return header with proofs
                 Ok(axum::Json(bid))
             }
             Ok(None) => {
@@ -704,8 +556,13 @@ where
                 }
             };
 
-        let block_hash =
-            signed_blinded_block.message().body().execution_payload_header().block_hash().clone();
+        let block_hash = signed_blinded_block
+            .message()
+            .body()
+            .execution_payload()
+            .map_err(|_| ProposerApiError::InvalidFork)? // this should never happen as post altair there's always an execution payload
+            .block_hash()
+            .0;
 
         let slot = signed_blinded_block.message().slot();
 
@@ -727,7 +584,7 @@ where
                 // Save error to DB
                 if let Err(err) = proposer_api
                     .db
-                    .save_failed_get_payload(slot, block_hash, err.to_string(), trace)
+                    .save_failed_get_payload(slot.into(), block_hash, err.to_string(), trace)
                     .await
                 {
                     error!(err = ?err, "error saving failed get payload");
@@ -744,8 +601,13 @@ where
         trace: &mut GetPayloadTrace,
         user_agent: Option<String>,
     ) -> Result<GetPayloadResponse, ProposerApiError> {
-        let block_hash =
-            signed_blinded_block.message().body().execution_payload_header().block_hash().clone();
+        let block_hash = signed_blinded_block
+            .message()
+            .body()
+            .execution_payload()
+            .map_err(|_| ProposerApiError::InvalidFork)?
+            .block_hash()
+            .0;
 
         let (head_slot, slot_duty) = self.curr_slot_info.read().await.clone();
 
@@ -755,7 +617,7 @@ where
         if signed_blinded_block.message().slot() <= head_slot {
             warn!("request for past slot");
             return Err(ProposerApiError::RequestForPastSlot {
-                request_slot: signed_blinded_block.message().slot(),
+                request_slot: signed_blinded_block.message().slot().into(),
                 head_slot,
             });
         }
@@ -775,7 +637,7 @@ where
         }
         trace.proposer_index_validated = utcnow_ns();
 
-        let proposer_public_key = slot_duty.entry.registration.message.public_key;
+        let proposer_public_key = slot_duty.entry.registration.message.pubkey;
         if let Err(err) = self.verify_signed_blinded_block_signature(
             &mut signed_blinded_block,
             &proposer_public_key,
@@ -783,30 +645,30 @@ where
             &self.chain_info.context,
         ) {
             warn!(%err, "invalid signature");
-            return Err(ProposerApiError::InvalidSignature(err));
+            return Err(ProposerApiError::InvalidSignature);
         }
         trace.signature_validated = utcnow_ns();
 
         if let Ok(Some(payload_address)) = self.auctioneer.get_payload_address(&block_hash).await {
             // Fetch v3 optimistic payload from builder. This will complete asynchronously.
-            let _ = self.v3_payload_request.send((block_hash.clone(), payload_address)).await;
+            let _ = self.v3_payload_request.send((block_hash, payload_address)).await;
         }
 
         // Get execution payload from auctioneer
         let payload_result = self
             .get_execution_payload(
-                signed_blinded_block.message().slot(),
+                signed_blinded_block.message().slot().into(),
                 &proposer_public_key,
                 &block_hash,
                 true,
             )
             .await;
 
-        let mut versioned_payload = match payload_result {
+        let versioned_payload = match payload_result {
             Ok(p) => p,
             Err(err) => {
                 error!(
-                    slot = signed_blinded_block.message().slot(),
+                    slot = %signed_blinded_block.message().slot(),
                     proposer_public_key = ?proposer_public_key,
                     block_hash = ?block_hash,
                     %err,
@@ -822,7 +684,7 @@ where
         if let Err(err) = self
             .auctioneer
             .check_and_set_last_slot_and_hash_delivered(
-                signed_blinded_block.message().slot(),
+                signed_blinded_block.message().slot().into(),
                 &block_hash,
             )
             .await
@@ -853,7 +715,7 @@ where
             if let Err(err) = self
                 .db
                 .save_too_late_get_payload(
-                    signed_blinded_block.message().slot(),
+                    signed_blinded_block.message().slot().into(),
                     &proposer_public_key,
                     &block_hash,
                     trace.receive,
@@ -867,9 +729,7 @@ where
             return Err(err);
         }
 
-        if let Err(err) =
-            self.validate_block_equality(&mut versioned_payload, &signed_blinded_block)
-        {
+        if let Err(err) = self.validate_block_equality(&versioned_payload, &signed_blinded_block) {
             error!(
                 %err,
                 "execution payload invalid, does not match known ExecutionPayload",
@@ -879,11 +739,12 @@ where
 
         trace.validation_complete = utcnow_ns();
 
+        // TODO: merge logic with validate_block_equality
         let unblinded_payload =
             match unblind_beacon_block(&signed_blinded_block, &versioned_payload) {
                 Ok(unblinded_payload) => Arc::new(unblinded_payload),
                 Err(err) => {
-                    warn!(%err, "payload type mismatch");
+                    warn!(%err, "payload type mismatch in unblind block");
                     return Err(ProposerApiError::PayloadTypeMismatch);
                 }
             };
@@ -909,7 +770,7 @@ where
         let is_trusted_proposer = self.is_trusted_proposer(&proposer_public_key).await?;
 
         // Publish and validate payload with multi-beacon-client
-        let fork = unblinded_payload.version();
+        let fork = unblinded_payload.signed_block.fork_name_unchecked();
 
         let (tx, rx) = oneshot::channel();
 
@@ -980,16 +841,7 @@ where
             }
         }
 
-        let get_payload_response = match GetPayloadResponse::try_from_execution_payload(&payload) {
-            Some(get_payload_response) => get_payload_response,
-            None => {
-                error!(
-                    "payload type mismatch getting payload response from execution payload.
-                    All previous validation steps have passed, this should not happen",
-                );
-                return Err(ProposerApiError::PayloadTypeMismatch);
-            }
-        };
+        let get_payload_response = GetPayloadResponse::new_no_metadata(Some(fork), payload);
 
         // Return response
         info!(?trace, timestamp = utcnow_ns(), "delivering payload");
@@ -1008,21 +860,14 @@ where
     /// Validate a single registration.
     pub fn validate_registration(
         &self,
-        registration: &mut SignedValidatorRegistration,
+        registration: &SignedValidatorRegistration,
     ) -> Result<(), ProposerApiError> {
         // Validate registration time
         self.validate_registration_time(registration)?;
 
         // Verify the signature
-        let message = &mut registration.message;
-        let public_key = &message.public_key.clone();
-        if let Err(err) = verify_signed_builder_message(
-            message,
-            &registration.signature,
-            public_key,
-            &self.chain_info.context,
-        ) {
-            return Err(ProposerApiError::InvalidSignature(err));
+        if !registration.verify_signature(&self.chain_info.context) {
+            return Err(ProposerApiError::InvalidSignature);
         }
 
         Ok(())
@@ -1036,19 +881,18 @@ where
         &self,
         registration: &SignedValidatorRegistration,
     ) -> Result<(), ProposerApiError> {
-        let registration_timestamp = registration.message.timestamp as i64;
-        let registration_timestamp_upper_bound =
-            (get_current_unix_time_in_nanos() / 1_000_000_000) as i64 + 10;
+        let registration_timestamp = registration.message.timestamp;
+        let registration_timestamp_upper_bound = utcnow_sec() + 10;
 
-        if registration_timestamp < self.chain_info.genesis_time_in_secs as i64 {
+        if registration_timestamp < self.chain_info.genesis_time_in_secs {
             return Err(ProposerApiError::TimestampTooEarly {
-                timestamp: registration_timestamp as u64,
+                timestamp: registration_timestamp,
                 min_timestamp: self.chain_info.genesis_time_in_secs,
             });
         } else if registration_timestamp > registration_timestamp_upper_bound {
             return Err(ProposerApiError::TimestampTooFarInTheFuture {
-                timestamp: registration_timestamp as u64,
-                max_timestamp: registration_timestamp_upper_bound as u64,
+                timestamp: registration_timestamp,
+                max_timestamp: registration_timestamp_upper_bound,
             });
         }
 
@@ -1063,11 +907,11 @@ where
     fn validate_bid_request_time(&self, bid_request: &BidRequest) -> Result<u64, ProposerApiError> {
         let curr_timestamp_ms = utcnow_ms() as i64;
         let slot_start_timestamp = self.chain_info.genesis_time_in_secs +
-            (bid_request.slot * self.chain_info.seconds_per_slot);
+            (bid_request.slot.as_u64() * self.chain_info.seconds_per_slot());
         let ms_into_slot = curr_timestamp_ms.saturating_sub((slot_start_timestamp * 1000) as i64);
 
         if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {
-            warn!(curr_timestamp_ms = curr_timestamp_ms, slot = bid_request.slot, "get_request");
+            warn!(curr_timestamp_ms = curr_timestamp_ms, slot = %bid_request.slot, "get_request");
 
             return Err(ProposerApiError::GetHeaderRequestTooLate {
                 ms_into_slot: ms_into_slot as u64,
@@ -1099,17 +943,17 @@ where
             });
         }
 
-        if head_slot + 1 != slot_duty.slot {
+        if head_slot + 1 != slot_duty.slot.as_u64() {
             return Err(ProposerApiError::InternalSlotMismatchesWithSlotDuty {
                 internal_slot: head_slot,
-                slot_duty_slot: slot_duty.slot,
+                slot_duty_slot: slot_duty.slot.into(),
             });
         }
 
         if slot_duty.slot != signed_blinded_block.message().slot() {
             return Err(ProposerApiError::InvalidBlindedBlockSlot {
-                internal_slot: slot_duty.slot,
-                blinded_block_slot: signed_blinded_block.message().slot(),
+                internal_slot: slot_duty.slot.into(),
+                blinded_block_slot: signed_blinded_block.message().slot().into(),
             });
         }
 
@@ -1125,85 +969,70 @@ where
     /// - Returns `Err(ProposerApiError)` for mismatching or invalid headers.
     fn validate_block_equality(
         &self,
-        local_versioned_payload: &mut PayloadAndBlobs,
+        local_versioned_payload: &PayloadAndBlobs,
         provided_signed_blinded_block: &SignedBlindedBeaconBlock,
     ) -> Result<(), ProposerApiError> {
         let message = provided_signed_blinded_block.message();
         let body = message.body();
-        let provided_header = body.execution_payload_header();
 
-        let local_header =
-            match try_execution_header_from_payload(&mut local_versioned_payload.execution_payload)
-            {
-                Ok(header) => header,
-                Err(err) => {
-                    error!(
-                        %err,
-                        "error converting execution payload to header",
-                    );
-                    return Err(err.into());
-                }
-            };
-
-        info!(
-            local_header = ?local_header,
-            provided_header = ?provided_header,
-            provided_version = %provided_signed_blinded_block.version(),
-            "validating block equality",
-        );
+        let local_header = local_versioned_payload.execution_payload.to_ref().into();
 
         match local_header {
-            ExecutionPayloadHeader::Bellatrix(local_header) => {
-                let provided_header =
-                    provided_header.bellatrix().ok_or(ProposerApiError::PayloadTypeMismatch)?;
-                if local_header != *provided_header {
-                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
-                }
+            ExecutionPayloadHeader::Bellatrix(_) |
+            ExecutionPayloadHeader::Capella(_) |
+            ExecutionPayloadHeader::Fulu(_) => {
+                return Err(ProposerApiError::UnsupportedBeaconChainVersion)
             }
-            ExecutionPayloadHeader::Capella(local_header) => {
-                let provided_header =
-                    provided_header.capella().ok_or(ProposerApiError::PayloadTypeMismatch)?;
-                if local_header != *provided_header {
-                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
-                }
-            }
+
             ExecutionPayloadHeader::Deneb(local_header) => {
-                let provided_header =
-                    provided_header.deneb().ok_or(ProposerApiError::PayloadTypeMismatch)?;
-                if local_header != *provided_header {
+                let provided_header = &body
+                    .execution_payload_deneb()
+                    .map_err(|_| ProposerApiError::PayloadTypeMismatch)?
+                    .execution_payload_header;
+
+                info!(
+                    local_header = ?local_header,
+                    provided_header = ?provided_header,
+                    provided_version = %provided_signed_blinded_block.fork_name_unchecked(),
+                    "validating block equality",
+                );
+
+                if &local_header != provided_header {
                     return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
                 }
 
-                let local_kzg_commitments = local_versioned_payload
-                    .blobs_bundle
-                    .as_ref()
-                    .map(|bundle| &bundle.commitments)
-                    .ok_or(ProposerApiError::BlobKzgCommitmentsMismatch)?;
+                let local_kzg_commitments = &local_versioned_payload.blobs_bundle.commitments;
 
                 let provided_kzg_commitments = body
                     .blob_kzg_commitments()
-                    .ok_or(ProposerApiError::BlobKzgCommitmentsMismatch)?;
+                    .map_err(|_| ProposerApiError::BlobKzgCommitmentsMismatch)?;
 
                 if local_kzg_commitments != provided_kzg_commitments {
                     return Err(ProposerApiError::BlobKzgCommitmentsMismatch);
                 }
             }
             ExecutionPayloadHeader::Electra(local_header) => {
-                let provided_header =
-                    provided_header.electra().ok_or(ProposerApiError::PayloadTypeMismatch)?;
-                if local_header != *provided_header {
+                let provided_header = &body
+                    .execution_payload_electra()
+                    .map_err(|_| ProposerApiError::PayloadTypeMismatch)?
+                    .execution_payload_header;
+
+                info!(
+                    local_header = ?local_header,
+                    provided_header = ?provided_header,
+                    provided_version = %provided_signed_blinded_block.fork_name_unchecked(),
+                    "validating block equality",
+                );
+
+                if &local_header != provided_header {
                     return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
                 }
 
-                let local_kzg_commitments = local_versioned_payload
-                    .blobs_bundle
-                    .as_ref()
-                    .map(|bundle| &bundle.commitments)
-                    .ok_or(ProposerApiError::BlobKzgCommitmentsMismatch)?;
+                let local_kzg_commitments = &local_versioned_payload.blobs_bundle.commitments;
 
                 let provided_kzg_commitments = body
                     .blob_kzg_commitments()
-                    .ok_or(ProposerApiError::BlobKzgCommitmentsMismatch)?;
+                    .map_err(|_| ProposerApiError::BlobKzgCommitmentsMismatch)?;
 
                 if local_kzg_commitments != provided_kzg_commitments {
                     return Err(ProposerApiError::BlobKzgCommitmentsMismatch);
@@ -1218,44 +1047,28 @@ where
         &self,
         signed_blinded_beacon_block: &mut SignedBlindedBeaconBlock,
         public_key: &BlsPublicKey,
-        genesis_validators_root: Root,
-        context: &Context,
-    ) -> Result<(), ethereum_consensus::Error> {
+        genesis_validators_root: B256,
+        context: &ChainSpec,
+    ) -> Result<(), SigError> {
         let slot = signed_blinded_beacon_block.message().slot();
-        match signed_blinded_beacon_block {
-            SignedBlindedBeaconBlock::Bellatrix(block) => verify_signed_consensus_message(
-                &mut block.message,
-                &block.signature,
-                public_key,
-                context,
-                Some(slot),
-                Some(genesis_validators_root),
-            ),
-            SignedBlindedBeaconBlock::Capella(block) => verify_signed_consensus_message(
-                &mut block.message,
-                &block.signature,
-                public_key,
-                context,
-                Some(slot),
-                Some(genesis_validators_root),
-            ),
-            SignedBlindedBeaconBlock::Deneb(block) => verify_signed_consensus_message(
-                &mut block.message,
-                &block.signature,
-                public_key,
-                context,
-                Some(slot),
-                Some(genesis_validators_root),
-            ),
-            SignedBlindedBeaconBlock::Electra(block) => verify_signed_consensus_message(
-                &mut block.message,
-                &block.signature,
-                public_key,
-                context,
-                Some(slot),
-                Some(genesis_validators_root),
-            ),
+        let epoch = slot.epoch(self.chain_info.slots_per_epoch());
+        let fork = context.fork_at_epoch(epoch);
+
+        debug!(%slot, %epoch, expected_fork_name = ?context.fork_name_at_epoch(epoch), message_fork_name = ?signed_blinded_beacon_block.fork_name_unchecked(), %public_key, "verifying signed blinded beacon");
+
+        let valid = signed_blinded_beacon_block.verify_signature(
+            None,
+            public_key,
+            &fork,
+            genesis_validators_root,
+            context,
+        );
+
+        if !valid {
+            return Err(SigError::InvalidBlsSignature);
         }
+
+        Ok(())
     }
 
     /// `broadcast_signed_block` sends the provided signed block to all registered broadcasters
@@ -1276,14 +1089,14 @@ where
             let broadcaster = broadcaster.clone();
             let block = signed_block.clone();
             let broadcast_validation = broadcast_validation.clone();
-            let consensus_version = get_consensus_version(block.beacon_block());
+
+            let fork_name = block.signed_block.fork_name_unchecked();
 
             task::spawn(file!(), line!(), async move {
                 info!(broadcaster = %broadcaster.identifier(), "broadcast_signed_block");
 
-                if let Err(err) = broadcaster
-                    .broadcast_block(block, broadcast_validation, consensus_version)
-                    .await
+                if let Err(err) =
+                    broadcaster.broadcast_block(block, broadcast_validation, fork_name).await
                 {
                     warn!(
                         broadcaster = broadcaster.identifier(),
@@ -1298,30 +1111,20 @@ where
     /// If there are blobs in the unblinded payload, this function will send them directly to the
     /// beacon chain to be propagated async to the full block.
     async fn gossip_blobs(&self, unblinded_payload: Arc<VersionedSignedProposal>) {
-        let blob_sidecars =
-            match BlobSidecars::try_from_unblinded_payload(unblinded_payload.clone()) {
-                Ok(blob_sidecars) => blob_sidecars,
-                Err(err) => {
-                    match err {
-                        BuildBlobSidecarError::NoBlobsInPayload |
-                        BuildBlobSidecarError::PayloadVersionBeforeBlobs => {}
-                        error => {
-                            error!(
-                                ?error,
-                                "gossip blobs: failed to build blob sidecars for async gossiping"
-                            );
-                        }
-                    }
-                    return;
-                }
-            };
+        let blob_sidecars = match blob_sidecars_from_unblinded_payload(&unblinded_payload) {
+            Ok(blob_sidecars) => blob_sidecars,
+            Err(err) => {
+                error!(?err, "gossip blobs: failed to build blob sidecars for async gossiping");
+                return;
+            }
+        };
 
         info!("gossip blobs: successfully built blob sidecars for request. Gossiping async..");
 
         // Send blob sidecars to beacon clients.
         let publish_blob_request = PublishBlobsRequest {
             blob_sidecars,
-            beacon_root: unblinded_payload.beacon_block().message().parent_root(),
+            beacon_root: unblinded_payload.signed_block.parent_root(),
         };
         if let Err(error) = self.multi_beacon_client.publish_blobs(publish_blob_request).await {
             error!(?error, "gossip blobs: failed to gossip blob sidecars");
@@ -1399,26 +1202,35 @@ where
         &self,
         slot: u64,
         pub_key: &BlsPublicKey,
-        block_hash: &ByteVector<32>,
+        block_hash: &B256,
         request_missing_payload: bool,
     ) -> Result<PayloadAndBlobs, ProposerApiError> {
         const RETRY_DELAY: Duration = Duration::from_millis(20);
 
         let slot_time =
-            self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot);
+            self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot());
         let slot_cutoff_millis = (slot_time * 1000) + GET_PAYLOAD_REQUEST_CUTOFF_MS as u64;
 
         let mut last_error: Option<ProposerApiError> = None;
         let mut first_try = true; // Try at least once to cover case where get_payload is called too late.
         while first_try || utcnow_ms() < slot_cutoff_millis {
-            match self.auctioneer.get_execution_payload(slot, pub_key, block_hash).await {
+            match self
+                .auctioneer
+                .get_execution_payload(
+                    slot,
+                    pub_key,
+                    block_hash,
+                    self.chain_info.current_fork_name(),
+                )
+                .await
+            {
                 Ok(Some(versioned_payload)) => return Ok(versioned_payload),
                 Ok(None) => {
                     warn!("execution payload not found");
                     if first_try && request_missing_payload {
                         let proposer_pubkey_clone = pub_key.clone();
-                        let block_hash_clone = block_hash.clone();
                         let self_clone = self.clone();
+                        let block_hash = *block_hash;
 
                         task::spawn(
                             file!(),
@@ -1429,7 +1241,7 @@ where
                                     .request_payload(RequestPayloadParams {
                                         slot,
                                         proposer_pub_key: proposer_pubkey_clone,
-                                        block_hash: block_hash_clone,
+                                        block_hash,
                                     })
                                     .await
                                 {
@@ -1457,22 +1269,31 @@ where
     async fn await_and_validate_slot_start_time(
         &self,
         signed_blinded_block: &SignedBlindedBeaconBlock,
-        request_time: u64,
+        request_time_ns: u64,
     ) -> Result<(), ProposerApiError> {
-        let (ms_into_slot, duration_until_slot_start) = calculate_slot_time_info(
+        let Some((since_slot_start, until_slot_start)) = calculate_slot_time_info(
             &self.chain_info,
             signed_blinded_block.message().slot(),
-            request_time,
-        );
+            request_time_ns,
+        ) else {
+            error!(
+                request_time_ns,
+                slot = %signed_blinded_block.message().slot(),
+                "slot time info not found"
+            );
+            return Err(ProposerApiError::SlotTooNew);
+        };
 
-        if duration_until_slot_start.as_millis() > 0 {
-            info!("waiting until slot start t=0: {} ms", duration_until_slot_start.as_millis());
-            sleep(duration_until_slot_start).await;
-        } else if ms_into_slot > GET_PAYLOAD_REQUEST_CUTOFF_MS {
-            return Err(ProposerApiError::GetPayloadRequestTooLate {
-                cutoff: GET_PAYLOAD_REQUEST_CUTOFF_MS as u64,
-                request_time: ms_into_slot as u64,
-            });
+        if let Some(until_slot_start) = until_slot_start {
+            info!("waiting until slot start t=0: {} ms", until_slot_start.as_millis());
+            sleep(until_slot_start).await;
+        } else if let Some(since_slot_start) = since_slot_start {
+            if since_slot_start.as_millis() > GET_PAYLOAD_REQUEST_CUTOFF_MS as u128 {
+                return Err(ProposerApiError::GetPayloadRequestTooLate {
+                    cutoff: GET_PAYLOAD_REQUEST_CUTOFF_MS as u64,
+                    request_time: since_slot_start.as_millis() as u64,
+                });
+            }
         }
         Ok(())
     }
@@ -1488,9 +1309,9 @@ where
         let bid_trace = match self
             .auctioneer
             .get_bid_trace(
-                signed_blinded_block.message().slot(),
+                signed_blinded_block.message().slot().into(),
                 proposer_public_key,
-                payload.execution_payload.block_hash(),
+                &payload.execution_payload.block_hash().0,
             )
             .await
         {
@@ -1519,9 +1340,9 @@ where
     async fn save_get_header_call(
         &self,
         slot: u64,
-        parent_hash: ByteVector<32>,
+        parent_hash: B256,
         public_key: BlsPublicKey,
-        best_block_hash: ByteVector<32>,
+        best_block_hash: B256,
         trace: GetHeaderTrace,
         mev_boost: bool,
         user_agent: Option<String>,
@@ -1606,12 +1427,12 @@ where
 
     /// Handle a new slot update.
     /// Updates the next proposer duty for the new slot.
-    async fn handle_new_slot(&self, slot_update: SlotUpdate) {
-        let epoch = slot_update.slot / self.chain_info.seconds_per_slot;
+    async fn handle_new_slot(&self, slot_update: Box<SlotUpdate>) {
+        let epoch = slot_update.slot / self.chain_info.seconds_per_slot();
         info!(
             epoch = epoch,
             slot = slot_update.slot,
-            slot_start_next_epoch = (epoch + 1) * SLOTS_PER_EPOCH,
+            slot_start_next_epoch = (epoch + 1) * self.chain_info.slots_per_epoch(),
             next_proposer_duty = ?slot_update.next_duty,
             "Updated head slot",
         );
@@ -1623,27 +1444,15 @@ where
 /// Calculates the time information for a given slot.
 fn calculate_slot_time_info(
     chain_info: &ChainInfo,
-    slot: u64,
-    request_time: u64,
-) -> (i64, Duration) {
-    let slot_start_timestamp_in_secs =
-        chain_info.genesis_time_in_secs + (slot * chain_info.seconds_per_slot);
-    let ms_into_slot =
-        (request_time / 1_000_000) as i64 - (slot_start_timestamp_in_secs * 1000) as i64;
-    let duration_until_slot_start = chain_info.clock.duration_until_slot(slot);
+    slot: Slot,
+    request_time_ns: u64,
+) -> Option<(Option<Duration>, Option<Duration>)> {
+    let until_slot_start = chain_info.clock.duration_to_slot(slot); // None if we're past slot time
 
-    (ms_into_slot, duration_until_slot_start)
-}
+    let slot_start = chain_info.clock.start_of(slot)?;
+    let since_slot_start = Duration::from_nanos(request_time_ns).checked_sub(slot_start); // None if we're before slot time
 
-fn get_consensus_version(block: &SignedBeaconBlock) -> ethereum_consensus::Fork {
-    match block {
-        SignedBeaconBlock::Phase0(_) => ethereum_consensus::Fork::Phase0,
-        SignedBeaconBlock::Altair(_) => ethereum_consensus::Fork::Altair,
-        SignedBeaconBlock::Bellatrix(_) => ethereum_consensus::Fork::Bellatrix,
-        SignedBeaconBlock::Capella(_) => ethereum_consensus::Fork::Capella,
-        SignedBeaconBlock::Deneb(_) => ethereum_consensus::Fork::Deneb,
-        SignedBeaconBlock::Electra(_) => ethereum_consensus::Fork::Electra,
-    }
+    Some((since_slot_start, until_slot_start))
 }
 
 pub fn is_mev_boost_client(client_name: &str) -> bool {

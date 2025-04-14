@@ -1,26 +1,21 @@
-use ethereum_consensus::{
-    builder::SignedValidatorRegistration,
-    primitives::{BlsPublicKey, Slot, ValidatorIndex},
-    serde::as_str,
-};
+use helix_types::{BlsPublicKey, SignedValidatorRegistration, Slot};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ProposerDuty {
     #[serde(rename = "pubkey")]
     pub public_key: BlsPublicKey,
-    #[serde(with = "as_str")]
-    pub validator_index: ValidatorIndex,
-    #[serde(with = "as_str")]
-    pub slot: Slot,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub validator_index: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub slot: u64,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProposerSchedule {
-    #[serde(with = "as_str")]
     pub slot: Slot,
-    #[serde(with = "as_str")]
-    pub validator_index: ValidatorIndex,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub validator_index: u64,
     pub entry: SignedValidatorRegistration,
 }
 

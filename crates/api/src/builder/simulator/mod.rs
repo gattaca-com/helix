@@ -1,7 +1,10 @@
 pub mod mock_simulator;
 pub mod multi_simulator;
 pub mod optimistic_simulator;
+
+#[cfg(test)]
 mod optimistic_simulator_tests;
+
 pub mod rpc_simulator;
 pub mod traits;
 
@@ -10,19 +13,15 @@ mod simulator_tests;
 
 use std::sync::Arc;
 
-use ethereum_consensus::{
-    deneb::Bytes32, primitives::BlsSignature, serde::as_str, types::mainnet::ExecutionPayload,
-};
-use helix_common::{
-    bid_submission::{BidSubmission, BidTrace, SignedBidSubmission},
-    deneb::BlobsBundle,
-    electra::ExecutionRequests,
-    ValidatorPreferences,
+use alloy_primitives::B256;
+use helix_common::{bid_submission::BidSubmission, ValidatorPreferences};
+use helix_types::{
+    BidTrace, BlobsBundle, BlsSignature, ExecutionPayload, ExecutionRequests, SignedBidSubmission,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockSimRequest {
-    #[serde(with = "as_str")]
+    #[serde(with = "serde_utils::quoted_u64")]
     pub registered_gas_limit: u64,
     pub message: BidTrace,
     pub execution_payload: ExecutionPayload,
@@ -30,7 +29,7 @@ pub struct BlockSimRequest {
     pub proposer_preferences: ValidatorPreferences,
     pub blobs_bundle: Option<BlobsBundle>,
     pub execution_requests: Option<ExecutionRequests>,
-    pub parent_beacon_block_root: Option<Bytes32>,
+    pub parent_beacon_block_root: Option<B256>,
 }
 
 impl BlockSimRequest {
@@ -38,15 +37,15 @@ impl BlockSimRequest {
         registered_gas_limit: u64,
         block: Arc<SignedBidSubmission>,
         proposer_preferences: ValidatorPreferences,
-        parent_beacon_block_root: Option<Bytes32>,
+        parent_beacon_block_root: Option<B256>,
     ) -> Self {
         Self {
             registered_gas_limit,
             message: block.bid_trace().clone(),
-            execution_payload: block.execution_payload().clone(),
+            execution_payload: block.execution_payload().clone_from_ref(),
             signature: block.signature().clone(),
             proposer_preferences,
-            blobs_bundle: block.blobs_bundle().cloned(),
+            blobs_bundle: Some(block.blobs_bundle().clone()),
             execution_requests: block.execution_requests().cloned(),
             parent_beacon_block_root,
         }
