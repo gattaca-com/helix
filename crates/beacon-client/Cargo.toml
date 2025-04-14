@@ -1,7 +1,7 @@
 [package]
 edition.workspace = true
 license.workspace = true
-name = "helix-beacon-client"
+name = "helix-beacon"
 repository.workspace = true
 rust-version.workspace = true
 version.workspace = true

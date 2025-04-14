@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_eips::merge::EPOCH_SLOTS;
 use alloy_primitives::{map::HashSet, U256};
-use helix_beacon_client::{
+use helix_beacon::{
     error::BeaconClientError,
     types::{HeadEventData, StateId},
     MultiBeaconClientTrait,

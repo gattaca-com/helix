@@ -8,7 +8,7 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
-use helix_beacon_client::{types::BroadcastValidation, BlockBroadcaster, MultiBeaconClientTrait};
+use helix_beacon::{types::BroadcastValidation, BlockBroadcaster, MultiBeaconClientTrait};
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,

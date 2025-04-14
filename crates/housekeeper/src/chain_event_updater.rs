@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
-use helix_beacon_client::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
+use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo};
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
