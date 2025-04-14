@@ -1054,6 +1054,8 @@ where
         let epoch = slot.epoch(self.chain_info.slots_per_epoch());
         let fork = context.fork_at_epoch(epoch);
 
+        debug!(%slot, %epoch, expected_fork_name = ?context.fork_name_at_epoch(epoch), message_fork_name = ?signed_blinded_beacon_block.fork_name_unchecked(), %public_key, "verifying signed blinded beacon");
+
         let valid = signed_blinded_beacon_block.verify_signature(
             None,
             public_key,

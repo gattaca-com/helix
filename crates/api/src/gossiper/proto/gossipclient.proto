@@ -28,11 +28,13 @@ message BroadcastPayloadParams {
   bytes execution_payload = 1;
   uint64 slot = 2;
   bytes proposer_pub_key = 3;
+  optional string fork_name = 4;
 }
 
 message BroadcastGetPayloadParams {
   bytes signed_blinded_beacon_block = 1;
   bytes request_id = 2;
+  optional string fork_name = 3;
 }
 
 message BroadcastCancellationParams {

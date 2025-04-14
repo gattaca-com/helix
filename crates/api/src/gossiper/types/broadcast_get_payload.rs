@@ -1,4 +1,4 @@
-use helix_types::SignedBlindedBeaconBlock;
+use helix_types::{ForkName, ForkVersionDecode, SignedBlindedBeaconBlock};
 use ssz::Encode;
 use uuid::Uuid;
 
@@ -12,10 +12,11 @@ pub struct BroadcastGetPayloadParams {
 
 impl BroadcastGetPayloadParams {
     pub fn from_proto(proto_params: grpc::BroadcastGetPayloadParams) -> Self {
+        let fork_name = proto_params.fork_name.and_then(|s| s.parse::<ForkName>().ok());
         Self {
-            // TODO: pass chain spec
-            signed_blinded_beacon_block: SignedBlindedBeaconBlock::any_from_ssz_bytes(
+            signed_blinded_beacon_block: decode_ssz_signed_blinded_beacon_block(
                 &proto_params.signed_blinded_beacon_block,
+                fork_name,
             )
             .unwrap(),
             request_id: Uuid::from_slice(&proto_params.request_id).unwrap(),
@@ -27,6 +28,25 @@ impl BroadcastGetPayloadParams {
                 &self.signed_blinded_beacon_block,
             ),
             request_id: self.request_id.as_bytes().to_vec(),
+            fork_name: Some(self.signed_blinded_beacon_block.fork_name_unchecked().to_string()),
         }
+    }
+}
+
+// TODO: pass around getpayload response instead of payload and blobs
+fn decode_ssz_signed_blinded_beacon_block(
+    bytes: &[u8],
+    fork_name: Option<ForkName>,
+) -> Result<SignedBlindedBeaconBlock, ssz::DecodeError> {
+    if let Some(fork_name) = fork_name {
+        return SignedBlindedBeaconBlock::from_ssz_bytes_by_fork(bytes, fork_name);
+    }
+
+    if let Ok(signed_blinded_beacon_block) =
+        SignedBlindedBeaconBlock::from_ssz_bytes_by_fork(bytes, ForkName::Electra)
+    {
+        Ok(signed_blinded_beacon_block)
+    } else {
+        SignedBlindedBeaconBlock::from_ssz_bytes_by_fork(bytes, ForkName::Deneb)
     }
 }
