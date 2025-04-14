@@ -12,7 +12,7 @@ pub enum AuctioneerError {
     #[error("unexpected value type")]
     UnexpectedValueType,
 
-    #[error("broadcast stream recv error")]
+    #[error("broadcast stream recv error {0}")]
     BroadcastStreamRecvError(#[from] BroadcastStreamRecvError),
 
     #[error("crypto error: {0:?}")]
@@ -45,56 +45,30 @@ pub enum AuctioneerError {
     #[error("no execution payload for this request")]
     ExecutionPayloadNotFound,
 
-    #[error("builder not found for pub key {pub_key:?}")]
+    #[error("builder not found for pubkey {pub_key:?}")]
     BuilderNotFound { pub_key: BlsPublicKey },
 }
 
 impl IntoResponse for AuctioneerError {
     fn into_response(self) -> Response {
-        match self {
-            AuctioneerError::UnexpectedValueType => {
-                (StatusCode::BAD_REQUEST, "Unexpected value type".to_string()).into_response()
+        let code = match self {
+            AuctioneerError::UnexpectedValueType |
+            AuctioneerError::CryptoError(_) |
+            AuctioneerError::FromUtf8Error(_) |
+            AuctioneerError::ParseIntError(_) |
+            AuctioneerError::FromHexError(_) |
+            AuctioneerError::PastSlotAlreadyDelivered |
+            AuctioneerError::AnotherPayloadAlreadyDeliveredForSlot |
+            AuctioneerError::SszDeserializeError(_) |
+            AuctioneerError::SliceConversionError(_) |
+            AuctioneerError::ExecutionPayloadNotFound |
+            AuctioneerError::BuilderNotFound { .. } => StatusCode::BAD_REQUEST,
+
+            AuctioneerError::BroadcastStreamRecvError(_) | AuctioneerError::RedisError(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
             }
-            AuctioneerError::RedisError(err) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Redis error: {err}")).into_response()
-            }
-            AuctioneerError::FromUtf8Error(err) => {
-                (StatusCode::BAD_REQUEST, format!("UTF-8 error: {err}")).into_response()
-            }
-            AuctioneerError::ParseIntError(err) => {
-                (StatusCode::BAD_REQUEST, format!("Parse Int error: {err}")).into_response()
-            }
-            AuctioneerError::FromHexError(err) => {
-                (StatusCode::BAD_REQUEST, format!("From Hex error: {err}")).into_response()
-            }
-            AuctioneerError::PastSlotAlreadyDelivered => {
-                (StatusCode::BAD_REQUEST, "Past slot already delivered".to_string()).into_response()
-            }
-            AuctioneerError::AnotherPayloadAlreadyDeliveredForSlot => {
-                (StatusCode::BAD_REQUEST, "Another payload already delivered for slot".to_string())
-                    .into_response()
-            }
-            AuctioneerError::SszDeserializeError(err) => {
-                (StatusCode::BAD_REQUEST, format!("SSZ deserialize error: {err:?}")).into_response()
-            }
-            AuctioneerError::SliceConversionError(_) => {
-                (StatusCode::BAD_REQUEST, self.to_string()).into_response()
-            }
-            AuctioneerError::ExecutionPayloadNotFound => {
-                (StatusCode::BAD_REQUEST, "No execution payload for this request".to_string())
-                    .into_response()
-            }
-            AuctioneerError::BuilderNotFound { pub_key } => {
-                (StatusCode::BAD_REQUEST, format!("Builder not found for public key: {pub_key:?}"))
-                    .into_response()
-            }
-            AuctioneerError::BroadcastStreamRecvError(err) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Broadcast stream recv error: {err}"))
-                    .into_response()
-            }
-            AuctioneerError::CryptoError(error) => {
-                (StatusCode::BAD_REQUEST, format!("Crypto error: {error:?}")).into_response()
-            }
-        }
+        };
+
+        (code, self.to_string()).into_response()
     }
 }

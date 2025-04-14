@@ -152,154 +152,60 @@ pub enum BuilderApiError {
 
 impl IntoResponse for BuilderApiError {
     fn into_response(self) -> Response {
-        match self {
-            BuilderApiError::SerdeDecodeError(err) => {
-                (StatusCode::BAD_REQUEST, format!("Serde decode error: {err}")).into_response()
+        let code = match self {
+            BuilderApiError::BidBelowFloor => StatusCode::ACCEPTED,
+
+            BuilderApiError::SerdeDecodeError(_) |
+            BuilderApiError::IOError(_) |
+            BuilderApiError::SszSerializeError |
+            BuilderApiError::DeserializeError |
+            BuilderApiError::FailedToDecodeHeaderSubmission |
+            BuilderApiError::HyperError(_) |
+            BuilderApiError::AxumError(_) |
+            BuilderApiError::PayloadTooLarge { .. } |
+            BuilderApiError::SubmissionForPastSlot { .. } |
+            BuilderApiError::BuilderBlacklisted { .. } |
+            BuilderApiError::IncorrectTimestamp { .. } |
+            BuilderApiError::ProposerDutyNotFound |
+            BuilderApiError::PayloadSlotMismatchWithPayloadAttributes { .. } |
+            BuilderApiError::BlockHashMismatch { .. } |
+            BuilderApiError::ParentHashMismatch { .. } |
+            BuilderApiError::ProposerPublicKeyMismatch { .. } |
+            BuilderApiError::ZeroValueBlock |
+            BuilderApiError::SignatureVerificationFailed |
+            BuilderApiError::PayloadAlreadyDelivered |
+            BuilderApiError::AlreadyProcessingNewerPayload |
+            BuilderApiError::FeeRecipientMismatch { .. } |
+            BuilderApiError::SlotMismatch { .. } |
+            BuilderApiError::MissingWithdrawls |
+            BuilderApiError::InvalidWithdrawlsRoot |
+            BuilderApiError::MissingWithdrawlsRoot |
+            BuilderApiError::WithdrawalsRootMismatch { .. } |
+            BuilderApiError::MissingTransactions |
+            BuilderApiError::MissingTransactionsRoot |
+            BuilderApiError::TransactionsRootMismatch { .. } |
+            BuilderApiError::PayloadAttributesNotYetKnown |
+            BuilderApiError::PrevRandaoMismatch { .. } |
+            BuilderApiError::DuplicateBlockHash { .. } |
+            BuilderApiError::NotEnoughOptimisticCollateral { .. } |
+            BuilderApiError::BuilderNotOptimistic { .. } |
+            BuilderApiError::BuilderNotInProposersTrustedList { .. } |
+            BuilderApiError::PayloadError(_) |
+            BuilderApiError::BidValidationError(_) => StatusCode::BAD_REQUEST,
+
+            BuilderApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
+
+            BuilderApiError::InternalError |
+            BuilderApiError::AuctioneerError(_) |
+            BuilderApiError::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+
+            BuilderApiError::BlockValidationError(ref err) => match err {
+                BlockSimError::Timeout => StatusCode::GATEWAY_TIMEOUT,
+
+                _ => StatusCode::BAD_REQUEST,
             },
-            BuilderApiError::IOError(err) => {
-                (StatusCode::BAD_REQUEST, format!("IO error: {err}")).into_response()
-            },
-            BuilderApiError::SszSerializeError => {
-                (StatusCode::BAD_REQUEST, "SSZ serialize error".to_string()).into_response()
-            },
-            BuilderApiError::DeserializeError => {
-                (StatusCode::BAD_REQUEST, "Failed to deserialize").into_response()
-            },
-            BuilderApiError::FailedToDecodeHeaderSubmission => {
-                (StatusCode::BAD_REQUEST, "Failed to decode header submission").into_response()
-            },
-            BuilderApiError::HyperError(err) => {
-                (StatusCode::BAD_REQUEST, format!("Hyper error: {err}")).into_response()
-            },
-            BuilderApiError::AxumError(err) => {
-                (StatusCode::BAD_REQUEST, format!("Axum error: {err}")).into_response()
-            },
-            BuilderApiError::PayloadTooLarge{ max_size, size } => {
-                (StatusCode::BAD_REQUEST, format!("Payload too large. max size: {max_size}, size: {size}")).into_response()
-            },
-            BuilderApiError::SubmissionForPastSlot { current_slot, submission_slot } => {
-                (
-                    StatusCode::BAD_REQUEST,
-                    format!("Submission for past slot. current slot: {current_slot}, submission slot: {submission_slot}"),
-                ).into_response()
-            },
-            BuilderApiError::BuilderBlacklisted{ pubkey } => {
-                (StatusCode::BAD_REQUEST, format!("Builder blacklisted. pubkey: {pubkey:?}")).into_response()
-            },
-            BuilderApiError::IncorrectTimestamp { got, expected } => {
-                (StatusCode::BAD_REQUEST, format!("Incorrect timestamp. got: {got}, expected: {expected}")).into_response()
-            },
-            BuilderApiError::ProposerDutyNotFound => {
-                (StatusCode::BAD_REQUEST, "Could not find proposer duty for slot").into_response()
-            },
-            BuilderApiError::PayloadSlotMismatchWithPayloadAttributes { got, expected } => {
-                (StatusCode::BAD_REQUEST, format!("payload slot mismatches with current payload attributes slot. got: {got}, expected: {expected}")).into_response()
-            },
-            BuilderApiError::BlockHashMismatch { message, payload } => {
-                (StatusCode::BAD_REQUEST, format!("Block hash mismatch. message: {message:?}, payload: {payload:?}")).into_response()
-            },
-            BuilderApiError::ParentHashMismatch { message, payload } => {
-                (StatusCode::BAD_REQUEST, format!("Parent hash mismatch. message: {message:?}, payload: {payload:?}")).into_response()
-            },
-            BuilderApiError::ProposerPublicKeyMismatch { got, expected } => {
-                (StatusCode::BAD_REQUEST, format!("Proposer public key mismatch. got: {got:?}, expected: {expected:?}")).into_response()
-            },
-            BuilderApiError::ZeroValueBlock => {
-                (StatusCode::BAD_REQUEST, "Zero value block").into_response()
-            },
-            BuilderApiError::SignatureVerificationFailed => {
-                (StatusCode::BAD_REQUEST, "Signature verification failed").into_response()
-            },
-            BuilderApiError::PayloadAlreadyDelivered => {
-                (StatusCode::BAD_REQUEST, "Payload already delivered").into_response()
-            },
-            BuilderApiError::BidBelowFloor => {
-                (StatusCode::ACCEPTED, "Bid below floor, skipped validation").into_response()
-            },
-            BuilderApiError::InvalidApiKey => {
-                (StatusCode::UNAUTHORIZED, "Invalid api key").into_response()
-            },
-            BuilderApiError::InternalError => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
-            },
-            BuilderApiError::BlockValidationError(err) => {
-                match err {
-                    BlockSimError::Timeout => {
-                        (StatusCode::GATEWAY_TIMEOUT, "Block validation timeout").into_response()
-                    },
-                    _ => {
-                        (StatusCode::BAD_REQUEST, format!("Block validation error: {err}")).into_response()
-                    }
-                }
-            },
-            BuilderApiError::AlreadyProcessingNewerPayload => {
-                (StatusCode::BAD_REQUEST, "Already processing newer payload").into_response()
-            },
-            BuilderApiError::AuctioneerError(err) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Auctioneer error: {err}")).into_response()
-            },
-            BuilderApiError::DatabaseError(err) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Database error: {err}")).into_response()
-            },
-            BuilderApiError::FeeRecipientMismatch { got, expected } => {
-                (StatusCode::BAD_REQUEST, format!("Fee recipient mismatch. got: {got:?}, expected: {expected:?}")).into_response()
-            },
-            BuilderApiError::SlotMismatch { got, expected } => {
-                (StatusCode::BAD_REQUEST, format!("Slot mismatch. got: {got}, expected: {expected}")).into_response()
-            },
-            BuilderApiError::MissingWithdrawls => {
-                (StatusCode::BAD_REQUEST, "missing withdrawals").into_response()
-            },
-            BuilderApiError::InvalidWithdrawlsRoot => {
-                (StatusCode::BAD_REQUEST, "invalid withdrawals root").into_response()
-            },
-            BuilderApiError::MissingWithdrawlsRoot => {
-                (StatusCode::BAD_REQUEST, "missing withdrawals root").into_response()
-            },
-            BuilderApiError::WithdrawalsRootMismatch { got, expected } => {
-                (StatusCode::BAD_REQUEST, format!("Withdrawals root mismatch. got: {got:?}, expected: {expected:?}")).into_response()
-            },
-            BuilderApiError::MissingTransactions => {
-                (StatusCode::BAD_REQUEST, "missing transactions").into_response()
-            },
-            BuilderApiError::MissingTransactionsRoot => {
-                (StatusCode::BAD_REQUEST, "missing transactions root").into_response()
-            },
-            BuilderApiError::TransactionsRootMismatch { got, expected } => {
-                (StatusCode::BAD_REQUEST, format!("transactions root mismatch. got: {got:?}, expected: {expected:?}")).into_response()
-            },
-            BuilderApiError::PayloadAttributesNotYetKnown => {
-                (StatusCode::BAD_REQUEST, "payload attributes not yet known").into_response()
-            },
-            BuilderApiError::PrevRandaoMismatch { got, expected } => {
-                (StatusCode::BAD_REQUEST, format!("Prev randao mismatch. got: {got:?}, expected: {expected:?}")).into_response()
-            },
-            BuilderApiError::DuplicateBlockHash { block_hash } => {
-                (StatusCode::BAD_REQUEST, format!("block already received: {block_hash:?}")).into_response()
-            },
-            BuilderApiError::NotEnoughOptimisticCollateral {
-                builder_pub_key,
-                collateral,
-                collateral_required,
-                is_optimistic,
-             } => {
-                (StatusCode::BAD_REQUEST, format!(
-                    "not enough optimistic collateral. builder_pub_key: {builder_pub_key:?}. 
-                    collateral: {collateral:?}, collateral required: {collateral_required:?}. is_optimistic: {is_optimistic}"
-                )).into_response()
-            },
-            BuilderApiError::BuilderNotOptimistic { builder_pub_key } => {
-                (StatusCode::BAD_REQUEST, format!("builder is not optimistic. builder_pub_key: {builder_pub_key:?}")).into_response()
-            },
-            BuilderApiError::BuilderNotInProposersTrustedList { proposer_trusted_builders } => {
-                (StatusCode::BAD_REQUEST, format!("builder not in proposer's trusted list: {proposer_trusted_builders:?}")).into_response()
-            },
-            BuilderApiError::PayloadError(v3_error) => {
-                (StatusCode::BAD_REQUEST, format!("payload error: {v3_error}")).into_response()
-            },
-            BuilderApiError::BidValidationError(err) => {
-                (StatusCode::BAD_REQUEST, format!("bid validation error: {err}")).into_response()
-            },
-        }
+        };
+
+        (code, self.to_string()).into_response()
     }
 }
