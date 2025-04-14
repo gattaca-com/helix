@@ -56,6 +56,7 @@ helix-housekeeper = { path = "./crates/housekeeper" }
 helix-types = { path = "./crates/types" }
 helix-website = { path = "./crates/website" }
 http = "1.0.0"
+httpmock = "0.7.0"
 hyper = "1.1.0"
 lazy_static = "1.5.0"
 lh-bls = { package = "bls", git = "https://github.com/ltitanb/lighthouse", rev = "c9259dda2a66764738789581a982349001249a80" }

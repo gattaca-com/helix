@@ -1,5 +1,4 @@
 pub mod fiber_broadcaster;
-pub mod mock_block_broadcaster;
 
 use std::sync::Arc;
 
@@ -7,13 +6,12 @@ use helix_types::{ForkName, VersionedSignedProposal};
 
 use crate::{
     beacon_client::BeaconClient, error::BeaconClientError, fiber_broadcaster::FiberBroadcaster,
-    mock_block_broadcaster::MockBlockBroadcaster, types::BroadcastValidation,
+    types::BroadcastValidation,
 };
 
 pub enum BlockBroadcaster {
     Fiber(FiberBroadcaster),
     BeaconClient(BeaconClient),
-    Mock(MockBlockBroadcaster),
 }
 
 impl BlockBroadcaster {
@@ -28,7 +26,6 @@ impl BlockBroadcaster {
             BlockBroadcaster::BeaconClient(b) => {
                 b.broadcast_block(block, broadcast_validation, consensus_version).await
             }
-            BlockBroadcaster::Mock(b) => b.broadcast_block(block, broadcast_validation).await,
         }
     }
 
@@ -36,7 +33,6 @@ impl BlockBroadcaster {
         match self {
             BlockBroadcaster::Fiber(f) => f.identifier(),
             BlockBroadcaster::BeaconClient(b) => b.identifier(),
-            BlockBroadcaster::Mock(b) => b.identifier(),
         }
     }
 }

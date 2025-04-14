@@ -8,7 +8,6 @@ version.workspace = true
 
 [dependencies]
 alloy-primitives.workspace = true
-async-trait.workspace = true
 auto_impl.workspace = true
 axum.workspace = true
 ethereum_serde_utils.workspace = true
@@ -18,6 +17,7 @@ futures.workspace = true
 helix-common.workspace = true
 helix-types.workspace = true
 http.workspace = true
+httpmock.workspace = true
 mockito.workspace = true
 reqwest.workspace = true
 reqwest-eventsource.workspace = true

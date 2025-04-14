@@ -35,7 +35,7 @@ mod proposer_api_tests {
     };
 
     use alloy_primitives::{address, b256, hex, U256};
-    use helix_beacon::mock_multi_beacon_client::MockMultiBeaconClient;
+    use helix_beacon::multi_beacon_client::MultiBeaconClient;
     use helix_common::{
         api::{
             builder_api::BuilderGetValidatorsResponseEntry,
@@ -200,7 +200,7 @@ mod proposer_api_tests {
     async fn start_api_server() -> (
         oneshot::Sender<()>,
         HttpServiceConfig,
-        Arc<ProposerApi<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient, MockGossiper>>,
+        Arc<ProposerApi<MockAuctioneer, MockDatabaseService, MockGossiper>>,
         Receiver<Sender<ChainUpdate>>,
         Arc<MockAuctioneer>,
     ) {
@@ -926,17 +926,12 @@ mod proposer_api_tests {
         let (v3_sender, _v3_receiver) = channel(32);
         let auctioneer = Arc::new(MockAuctioneer::default());
 
-        let prop_api = ProposerApi::<
-            MockAuctioneer,
-            MockDatabaseService,
-            MockMultiBeaconClient,
-            MockGossiper,
-        >::new(
+        let prop_api = ProposerApi::<MockAuctioneer, MockDatabaseService, MockGossiper>::new(
             auctioneer.clone(),
             Arc::new(MockDatabaseService::default()),
             Arc::new(MockGossiper::new().unwrap()),
             vec![],
-            Arc::new(MockMultiBeaconClient::default()),
+            Arc::new(MultiBeaconClient::new(vec![])),
             Arc::new(ChainInfo::for_mainnet()),
             slot_update_sender.clone(),
             Arc::new(ValidatorPreferences::default()),

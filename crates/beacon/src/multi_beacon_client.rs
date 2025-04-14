@@ -4,22 +4,20 @@ use std::sync::{
 };
 
 use alloy_primitives::B256;
-use async_trait::async_trait;
 use futures::future::join_all;
 use helix_common::{beacon_api::PublishBlobsRequest, task, ProposerDuty, ValidatorSummary};
 use helix_types::{ForkName, VersionedSignedProposal};
-use ssz::Encode;
 use tokio::{sync::broadcast::Sender, task::JoinError};
 use tracing::{error, warn};
 
 use crate::{
+    beacon_client::BeaconClient,
     error::BeaconClientError,
-    traits::{BeaconClientTrait, MultiBeaconClientTrait},
     types::{BroadcastValidation, HeadEventData, PayloadAttributesEvent, StateId, SyncStatus},
 };
 
 #[derive(Clone)]
-pub struct MultiBeaconClient<BeaconClient: BeaconClientTrait + 'static> {
+pub struct MultiBeaconClient {
     /// Vec of all beacon clients with a fixed usize ID used when
     /// fetching: `beacon_clients_by_last_response`
     pub beacon_clients: Vec<(usize, Arc<BeaconClient>)>,
@@ -27,7 +25,7 @@ pub struct MultiBeaconClient<BeaconClient: BeaconClientTrait + 'static> {
     pub best_beacon_instance: Arc<AtomicUsize>,
 }
 
-impl<BeaconClient: BeaconClientTrait> MultiBeaconClient<BeaconClient> {
+impl MultiBeaconClient {
     pub fn new(beacon_clients: Vec<Arc<BeaconClient>>) -> Self {
         let beacon_clients_with_index = beacon_clients.into_iter().enumerate().collect();
 
@@ -65,13 +63,12 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClient<BeaconClient> {
     }
 }
 
-#[async_trait]
-impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClient<BeaconClient> {
+impl MultiBeaconClient {
     /// Retrieves the sync status from multiple beacon clients and selects the best one.
     ///
     /// The function spawns async tasks to fetch the sync status from each beacon client.
     /// It then selects the sync status with the highest `head_slot`.
-    async fn best_sync_status(&self) -> Result<SyncStatus, BeaconClientError> {
+    pub async fn best_sync_status(&self) -> Result<SyncStatus, BeaconClientError> {
         let clients = self.beacon_clients_by_last_response();
 
         let handles = clients
@@ -110,7 +107,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
     ///
     /// This function swaps async tasks for all beacon clients. Therefore,
     /// a single head event will be received multiple times, likely once for every beacon node.
-    async fn subscribe_to_head_events(&self, chan: Sender<HeadEventData>) {
+    pub async fn subscribe_to_head_events(&self, chan: Sender<HeadEventData>) {
         let clients = self.beacon_clients_by_last_response();
 
         for (_, client) in clients {
@@ -128,7 +125,10 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
     ///
     /// This function swaps async tasks for all beacon clients. Therefore,
     /// a single payload event will be received multiple times, likely once for every beacon node.
-    async fn subscribe_to_payload_attributes_events(&self, chan: Sender<PayloadAttributesEvent>) {
+    pub async fn subscribe_to_payload_attributes_events(
+        &self,
+        chan: Sender<PayloadAttributesEvent>,
+    ) {
         let clients = self.beacon_clients_by_last_response();
 
         for (_, client) in clients {
@@ -141,7 +141,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
         }
     }
 
-    async fn get_state_validators(
+    pub async fn get_state_validators(
         &self,
         state_id: StateId,
     ) -> Result<Vec<ValidatorSummary>, BeaconClientError> {
@@ -163,7 +163,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
         Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
     }
 
-    async fn get_proposer_duties(
+    pub async fn get_proposer_duties(
         &self,
         epoch: u64,
     ) -> Result<(B256, Vec<ProposerDuty>), BeaconClientError> {
@@ -191,9 +191,9 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
     /// It will instantly return after the first successful response.
     ///
     /// Follows the spec: [Ethereum 2.0 Beacon APIs documentation](https://ethereum.github.io/beacon-APIs/#/ValidatorRequiredApi/publishBlock).
-    async fn publish_block<T: Send + Sync + 'static + Encode>(
+    pub async fn publish_block(
         &self,
-        block: Arc<T>,
+        block: Arc<VersionedSignedProposal>,
         broadcast_validation: Option<BroadcastValidation>,
         fork: ForkName,
     ) -> Result<(), BeaconClientError> {
@@ -243,7 +243,7 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
         Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
     }
 
-    async fn publish_blobs(
+    pub async fn publish_blobs(
         &self,
         blob_sidecars: PublishBlobsRequest,
     ) -> Result<u16, BeaconClientError> {
@@ -268,16 +268,28 @@ impl<BeaconClient: BeaconClientTrait> MultiBeaconClientTrait for MultiBeaconClie
 
 #[cfg(test)]
 mod multi_beacon_client_tests {
+    use helix_common::BeaconClientConfig;
+
     use super::*;
-    use crate::mock_beacon_client::MockBeaconClient;
+    use crate::beacon_client::mock_beacon_node::MockBeaconNode;
+
+    fn mock_beacon_client() -> Arc<BeaconClient> {
+        let config = BeaconClientConfig {
+            url: "http://do-not-call.xyz".parse().unwrap(),
+            gossip_blobs_enabled: false,
+        };
+
+        Arc::new(BeaconClient::from_config(config))
+    }
 
     #[tokio::test]
     async fn test_beacon_clients_by_last_response() {
-        let client1 = Arc::new(MockBeaconClient::new());
-        let client2 = Arc::new(MockBeaconClient::new());
-        let client3 = Arc::new(MockBeaconClient::new());
-        let client4 = Arc::new(MockBeaconClient::new());
-        let multi_client = MultiBeaconClient::new(vec![client1, client2, client3, client4]);
+        let multi_client = MultiBeaconClient::new(vec![
+            mock_beacon_client(),
+            mock_beacon_client(),
+            mock_beacon_client(),
+            mock_beacon_client(),
+        ]);
 
         multi_client.best_beacon_instance.store(2, Ordering::Relaxed);
         let clients = multi_client.beacon_clients_by_last_response();
@@ -290,12 +302,17 @@ mod multi_beacon_client_tests {
 
     #[tokio::test]
     async fn test_best_sync_status() {
-        let client1 = MockBeaconClient::new().with_sync_status(SyncStatus {
+        let mock_node_1 = MockBeaconNode::new();
+        let client1 = mock_node_1.beacon_client();
+        mock_node_1.with_sync_status(&SyncStatus {
             head_slot: 10u64.into(),
             sync_distance: 0,
             is_syncing: false,
         });
-        let client2 = MockBeaconClient::new().with_sync_status(SyncStatus {
+
+        let mock_node_2 = MockBeaconNode::new();
+        let client2 = mock_node_2.beacon_client();
+        mock_node_2.with_sync_status(&SyncStatus {
             head_slot: 20u64.into(),
             sync_distance: 0,
             is_syncing: false,

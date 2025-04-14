@@ -2,7 +2,6 @@ use std::{sync::Arc, time::Duration};
 
 use ::ssz::Encode;
 use alloy_primitives::B256;
-use async_trait::async_trait;
 use futures::StreamExt;
 use helix_common::{
     beacon_api::PublishBlobsRequest, BeaconClientConfig, ProposerDuty, ValidatorSummary,
@@ -15,7 +14,6 @@ use tracing::{debug, error, warn};
 
 use crate::{
     error::{ApiError, BeaconClientError},
-    traits::BeaconClientTrait,
     types::{
         ApiResult, BeaconResponse, BroadcastValidation, HeadEventData, PayloadAttributesEvent,
         StateId, SyncStatus,
@@ -135,26 +133,25 @@ impl BeaconClient {
     }
 }
 
-#[async_trait]
-impl BeaconClientTrait for BeaconClient {
-    async fn sync_status(&self) -> Result<SyncStatus, BeaconClientError> {
+impl BeaconClient {
+    pub async fn sync_status(&self) -> Result<SyncStatus, BeaconClientError> {
         let response: BeaconResponse<SyncStatus> = self.get("eth/v1/node/syncing").await?;
         Ok(response.data)
     }
 
-    async fn current_slot(&self) -> Result<Slot, BeaconClientError> {
+    pub async fn current_slot(&self) -> Result<Slot, BeaconClientError> {
         let sync_status = self.sync_status().await?;
         Ok(sync_status.head_slot)
     }
 
-    async fn subscribe_to_head_events(
+    pub async fn subscribe_to_head_events(
         &self,
         chan: Sender<HeadEventData>,
     ) -> Result<(), BeaconClientError> {
         self.subscribe_to_sse("head", chan).await
     }
 
-    async fn subscribe_to_payload_attributes_events(
+    pub async fn subscribe_to_payload_attributes_events(
         &self,
         chan: Sender<PayloadAttributesEvent>,
     ) -> Result<(), BeaconClientError> {
@@ -162,7 +159,7 @@ impl BeaconClientTrait for BeaconClient {
     }
 
     /// Fetch all known validators with an `active` status.
-    async fn get_state_validators(
+    pub async fn get_state_validators(
         &self,
         state_id: StateId,
     ) -> Result<Vec<ValidatorSummary>, BeaconClientError> {
@@ -171,7 +168,7 @@ impl BeaconClientTrait for BeaconClient {
         Ok(result.data)
     }
 
-    async fn get_proposer_duties(
+    pub async fn get_proposer_duties(
         &self,
         epoch: u64,
     ) -> Result<(B256, Vec<ProposerDuty>), BeaconClientError> {
@@ -188,9 +185,9 @@ impl BeaconClientTrait for BeaconClient {
 
     /// `publish_block` publishes the signed beacon block ssz-encoded via
     /// <https://ethereum.github.io/beacon-APIs/#/ValidatorRequiredApi/publishBlockV2>
-    async fn publish_block<SB: Send + Sync + Encode>(
+    pub async fn publish_block(
         &self,
-        block: Arc<SB>,
+        block: Arc<VersionedSignedProposal>,
         broadcast_validation: Option<BroadcastValidation>,
         fork: ForkName,
     ) -> Result<u16, BeaconClientError> {
@@ -202,6 +199,7 @@ impl BeaconClientTrait for BeaconClient {
             .body(body_bytes)
             .header(CONSENSUS_VERSION_HEADER, fork.to_string())
             .header(CONTENT_TYPE, "application/octet-stream");
+
         if let Some(validation) = broadcast_validation {
             request = request.query(&[("broadcast_validation", validation.to_string())]);
         }
@@ -227,7 +225,7 @@ impl BeaconClientTrait for BeaconClient {
         }
     }
 
-    async fn publish_blobs(
+    pub async fn publish_blobs(
         &self,
         blob_sidecars: PublishBlobsRequest,
     ) -> Result<u16, BeaconClientError> {
@@ -251,9 +249,57 @@ impl BeaconClientTrait for BeaconClient {
             }
         }
     }
+}
 
-    fn get_uri(&self) -> String {
-        self.config.url.to_string()
+pub mod mock_beacon_node {
+    use std::collections::HashMap;
+
+    use httpmock::Mock;
+    use serde::{de::DeserializeOwned, Serialize};
+
+    use super::*;
+
+    pub struct MockBeaconNode {
+        server: httpmock::MockServer,
+    }
+
+    impl Default for MockBeaconNode {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl MockBeaconNode {
+        pub fn new() -> Self {
+            Self { server: httpmock::MockServer::start() }
+        }
+
+        pub fn beacon_client(&self) -> BeaconClient {
+            BeaconClient::from_config(BeaconClientConfig {
+                url: self.server.base_url().parse().unwrap(),
+                gossip_blobs_enabled: false,
+            })
+        }
+
+        fn mock_api<T: Serialize + DeserializeOwned>(&self, path: &str, status: u16, body: T) {
+            self.server.mock(|when, then| {
+                when.path(path);
+                then.status(status)
+                    .header("content-type", "application/json")
+                    .json_body_obj(&BeaconResponse { data: body, meta: HashMap::new() });
+            });
+        }
+
+        pub fn with_sync_status(&self, sync_status: &SyncStatus) {
+            self.mock_api("/eth/v1/node/syncing", 200, sync_status.clone());
+        }
+
+        pub fn with_sse_event(&self, topic: &str) -> Mock {
+            self.server.mock(|when, then| {
+                when.path("/eth/v1/events").query_param("topics", topic);
+                then.status(200);
+            })
+        }
     }
 }
 
@@ -419,7 +465,7 @@ mod beacon_client_tests {
 
     #[tokio::test]
     #[ignore]
-    async fn test_get_live_response() {
+    pub async fn test_get_live_response() {
         let client = get_test_client();
         match client.sync_status().await {
             Ok(status) => {

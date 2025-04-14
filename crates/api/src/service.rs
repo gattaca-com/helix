@@ -2,7 +2,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use helix_beacon::{
     beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
-    multi_beacon_client::MultiBeaconClient, BlockBroadcaster, MultiBeaconClientTrait,
+    multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
 };
 use helix_common::{
     chain_info::ChainInfo, signing::RelaySigningContext, task, BroadcasterConfig, NetworkConfig,
@@ -73,7 +73,7 @@ impl ApiService {
         for cfg in &config.beacon_clients {
             beacon_clients.push(Arc::new(BeaconClient::from_config(cfg.clone())));
         }
-        let multi_beacon_client = Arc::new(MultiBeaconClient::<BeaconClient>::new(beacon_clients));
+        let multi_beacon_client = Arc::new(MultiBeaconClient::new(beacon_clients));
 
         // Subscribe to head and payload attribute events
         let (head_event_sender, head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
