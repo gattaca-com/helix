@@ -18,7 +18,6 @@ helix-database.workspace = true
 helix-datastore.workspace = true
 helix-housekeeper.workspace = true
 helix-types.workspace = true
-helix-utils.workspace = true
 num-format.workspace = true
 serde.workspace = true
 tokio.workspace = true

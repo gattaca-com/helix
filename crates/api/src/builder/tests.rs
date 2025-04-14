@@ -19,6 +19,7 @@ use helix_common::{
         v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionDeneb},
         BidSubmission,
     },
+    request_encoding::Encoding,
     HeaderSubmissionTrace, Route, SubmissionTrace, ValidatorPreferences,
 };
 use helix_database::mock_database_service::MockDatabaseService;
@@ -29,7 +30,6 @@ use helix_types::{
     ForkName, SignedBidSubmission, SignedBidSubmissionElectra, SignedRoot,
     SignedValidatorRegistration, TestRandomSeed, ValidatorRegistration,
 };
-use helix_utils::request_encoding::Encoding;
 use reqwest::{Client, Response};
 use serial_test::serial;
 use ssz::{Decode, Encode};

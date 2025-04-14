@@ -18,8 +18,10 @@ use helix_common::{
     blob_sidecars::blob_sidecars_from_unblinded_payload,
     chain_info::{ChainInfo, Network},
     metrics::{GetHeaderMetric, PROPOSER_GOSSIP_QUEUE},
-    task, BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace,
-    RelayConfig, ValidatorPreferences,
+    task,
+    utils::{extract_request_id, utcnow_ms, utcnow_ns, utcnow_sec},
+    BidRequest, Filtering, GetHeaderTrace, GetPayloadTrace, RegisterValidatorsTrace, RelayConfig,
+    ValidatorPreferences,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
@@ -29,7 +31,6 @@ use helix_types::{
     PayloadAndBlobs, SigError, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot,
     SlotClockTrait, VersionedSignedProposal,
 };
-use helix_utils::{extract_request_id, utcnow_ms, utcnow_ns, utcnow_sec};
 use serde_json::json;
 use tokio::{
     sync::{

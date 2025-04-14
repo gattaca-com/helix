@@ -10,12 +10,12 @@ use helix_common::{
     bid_submission::v3::header_submission_v3::{
         GetPayloadV3, MessageHeader, MessageHeaderFlags, MessageType, PayloadSocketAddress,
     },
+    utils::utcnow_ms,
     SubmissionTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::SignedBidSubmission;
-use helix_utils::utcnow_ms;
 use ssz::Decode;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},

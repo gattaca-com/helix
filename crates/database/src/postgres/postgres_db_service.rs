@@ -17,6 +17,7 @@ use helix_common::{
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
     metrics::DbMetricRecord,
     simulator::BlockSimError,
+    utils::utcnow_ms,
     BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace,
     GossipedPayloadTrace, HeaderSubmissionTrace, PostgresConfig, ProposerInfo, RelayConfig,
     SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
@@ -24,7 +25,6 @@ use helix_common::{
 use helix_types::{
     BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
 };
-use helix_utils::utcnow_ms;
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{error, info};
 
@@ -112,6 +112,19 @@ impl PostgresDatabaseService {
             validator_pool_cache: Arc::new(DashMap::new()),
             region: relay_config.postgres.region,
             pool: Arc::new(pool),
+        }
+    }
+
+    /// Try to run database migrations until they succeed
+    pub async fn init_forever(&self) {
+        loop {
+            match self.run_migrations().await {
+                Ok(_) => return,
+                Err(err) => {
+                    error!(%err, "failed to run migrations! retrying..");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                }
+            }
         }
     }
 

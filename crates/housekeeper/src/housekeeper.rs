@@ -9,13 +9,12 @@ use helix_beacon::{
 };
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
-    pending_block::PendingBlock, task, BuilderInfo, ProposerDuty, RelayConfig,
+    pending_block::PendingBlock, task, utils::utcnow_ms, BuilderInfo, ProposerDuty, RelayConfig,
     SignedValidatorRegistrationEntry,
 };
 use helix_database::{error::DatabaseError, DatabaseService};
 use helix_datastore::Auctioneer;
 use helix_types::{BlsPublicKey, SlotClockTrait};
-use helix_utils::utcnow_ms;
 use tokio::{
     sync::{broadcast, Mutex},
     time::{interval_at, sleep, Instant},

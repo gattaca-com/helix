@@ -10,6 +10,7 @@ mod tests {
         },
         bid_submission::v2::header_submission::{HeaderSubmissionDeneb, SignedHeaderSubmission},
         simulator::BlockSimError,
+        utils::{utcnow_ns, utcnow_sec},
         validator_preferences::ValidatorPreferences,
         Filtering, GetPayloadTrace, HeaderSubmissionTrace, PostgresConfig, SubmissionTrace,
         ValidatorSummary,
@@ -19,7 +20,6 @@ mod tests {
         ExecutionPayloadDeneb, PayloadAndBlobs, SignedBidSubmissionDeneb, SignedMessage,
         SignedValidatorRegistration, TestRandomSeed, Validator, ValidatorRegistration, Withdrawal,
     };
-    use helix_utils::{utcnow_ns, utcnow_sec};
     use rand::{seq::SliceRandom, thread_rng, Rng};
     use tokio::{sync::OnceCell, time::sleep};
     use tokio_postgres::NoTls;

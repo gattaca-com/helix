@@ -63,13 +63,13 @@ impl IntoResponse for BeaconClientError {
 #[serde(untagged)]
 pub enum ApiError {
     IndexedError {
-        #[serde(with = "helix_utils::serde::axum_as_u16")]
+        #[serde(with = "helix_common::serde_utils::axum_as_u16")]
         code: StatusCode,
         message: String,
         failures: Vec<IndexedError>,
     },
     ErrorMessage {
-        #[serde(with = "helix_utils::serde::axum_as_u16")]
+        #[serde(with = "helix_common::serde_utils::axum_as_u16")]
         code: StatusCode,
         message: String,
     },

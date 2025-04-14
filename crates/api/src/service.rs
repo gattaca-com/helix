@@ -1,4 +1,4 @@
-use std::{env, net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use helix_beacon::{
     beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
@@ -11,7 +11,7 @@ use helix_common::{
 use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
 use helix_datastore::redis::redis_cache::RedisCache;
 use helix_housekeeper::{ChainEventUpdater, EthereumPrimevService, Housekeeper};
-use helix_types::{BlsKeypair, BlsSecretKey};
+use helix_types::BlsKeypair;
 use moka::sync::Cache;
 use tokio::{
     sync::{broadcast, mpsc},
@@ -34,10 +34,14 @@ const INIT_BROADCASTER_TIMEOUT: Duration = Duration::from_secs(30);
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PAYLOAD_ATTRIBUTE_CHANNEL_SIZE: usize = 300;
 
-pub struct ApiService {}
+pub struct ApiService;
 
 impl ApiService {
-    pub async fn run(mut config: RelayConfig, postgres_db: PostgresDatabaseService) {
+    pub async fn run(
+        mut config: RelayConfig,
+        postgres_db: PostgresDatabaseService,
+        keypair: BlsKeypair,
+    ) {
         postgres_db.init_region(&config.postgres).await;
         postgres_db
             .store_builders_info(&config.builders)
@@ -109,18 +113,8 @@ impl ApiService {
             }
         });
 
-        // Initialise relay signing context
-        let signing_key_str = env::var("RELAY_KEY").expect("could not find RELAY_KEY in env");
-        let signing_key_bytes =
-            alloy_primitives::hex::decode(signing_key_str).expect("invalid RELAY_KEY bytes");
-        let signing_key = BlsSecretKey::deserialize(signing_key_bytes.as_slice())
-            .expect("could not convert env signing key to SecretKey");
-        let public_key = signing_key.public_key();
-        info!(relay_pub_key = ?public_key);
-        let relay_signing_context = Arc::new(RelaySigningContext {
-            keypair: BlsKeypair::from_components(public_key, signing_key),
-            context: chain_info.clone(),
-        });
+        let relay_signing_context =
+            Arc::new(RelaySigningContext { keypair, context: chain_info.clone() });
 
         let client =
             reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
@@ -275,6 +269,7 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
 mod test {
     use alloy_primitives::hex;
     use helix_common::BeaconClientConfig;
+    use helix_types::BlsSecretKey;
     use url::Url;
 
     use super::*;

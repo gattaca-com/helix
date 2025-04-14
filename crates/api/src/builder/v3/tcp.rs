@@ -5,11 +5,11 @@ use helix_common::{
     bid_submission::v3::header_submission_v3::{
         HeaderSubmissionV3, MessageHeader, MessageHeaderFlags, MessageType, SubmissionV3Error,
     },
+    utils::utcnow_ns,
     HeaderSubmissionTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_utils::utcnow_ns;
 use ssz::{Decode, Encode};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},

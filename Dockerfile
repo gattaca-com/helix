@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
   && rm -rf /var/lib/apt/lists/*
 
 COPY . .
-RUN cargo build --release --bin helix-cmd
+RUN cargo build --release --bin helix
 
 FROM debian:stable-slim AS runtime
 WORKDIR /app
@@ -25,6 +25,6 @@ RUN apt-get update && apt-get install -y \
   ca-certificates && \
   rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/helix-cmd ./
+COPY --from=builder /app/target/release/helix ./
 
-ENTRYPOINT ["/app/helix-cmd"]
+ENTRYPOINT ["/app/helix"]

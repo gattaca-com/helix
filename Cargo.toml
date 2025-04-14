@@ -1,14 +1,14 @@
 [workspace]
 members = [
+  "bin/helix",
+
   "crates/api",
   "crates/beacon",
-  "crates/cmd",
   "crates/common",
   "crates/database",
   "crates/datastore",
   "crates/housekeeper",
   "crates/types",
-  "crates/utils",
   "crates/website",
 ]
 resolver = "2"
@@ -54,7 +54,6 @@ helix-database = { path = "./crates/database" }
 helix-datastore = { path = "./crates/datastore" }
 helix-housekeeper = { path = "./crates/housekeeper" }
 helix-types = { path = "./crates/types" }
-helix-utils = { path = "./crates/utils" }
 helix-website = { path = "./crates/website" }
 http = "1.0.0"
 hyper = "1.1.0"
@@ -68,7 +67,6 @@ lh-types = { package = "types", git = "https://github.com/ltitanb/lighthouse", r
 mockito = "1.1.1"
 moka = "0.9"
 num-format = "0.4.4"
-num_cpus = "1.16.0"
 prometheus = "0.13.4"
 prost = "0.12"
 rand = "0.8"
@@ -98,5 +96,5 @@ tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 tree_hash = "0.9"
 tree_hash_derive = "0.9"
-url = "2.4"
+url = { version = "2.4", features = ["serde"] }
 uuid = { version = "1.5", features = ["fast-rng", "v4"] }

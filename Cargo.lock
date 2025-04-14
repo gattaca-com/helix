@@ -3687,6 +3687,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "helix"
+version = "0.0.1"
+dependencies = [
+ "eyre",
+ "futures 0.3.31",
+ "helix-api",
+ "helix-common",
+ "helix-database",
+ "helix-types",
+ "helix-website",
+ "tikv-jemallocator",
+ "tokio",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "helix-api"
 version = "0.0.1"
 dependencies = [
@@ -3706,7 +3724,6 @@ dependencies = [
  "helix-datastore",
  "helix-housekeeper",
  "helix-types",
- "helix-utils",
  "hyper 1.6.0",
  "mockito",
  "moka",
@@ -3746,7 +3763,6 @@ dependencies = [
  "futures 0.3.31",
  "helix-common",
  "helix-types",
- "helix-utils",
  "http 1.3.1",
  "mockito",
  "reqwest 0.11.27",
@@ -3760,24 +3776,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "helix-cmd"
-version = "0.0.1"
-dependencies = [
- "futures 0.3.31",
- "helix-api",
- "helix-common",
- "helix-database",
- "helix-utils",
- "helix-website",
- "num_cpus",
- "tikv-jemallocator",
- "tokio",
- "tracing",
- "tracing-appender",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "helix-common"
 version = "0.0.1"
 dependencies = [
@@ -3786,6 +3784,7 @@ dependencies = [
  "alloy-rlp",
  "auto_impl",
  "axum 0.8.3",
+ "backtrace",
  "bitflags 2.9.0",
  "clap",
  "ethereum_serde_utils",
@@ -3793,7 +3792,7 @@ dependencies = [
  "ethereum_ssz_derive",
  "eyre",
  "helix-types",
- "helix-utils",
+ "http 1.3.1",
  "lazy_static",
  "prometheus",
  "rand 0.8.5",
@@ -3805,8 +3804,12 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
  "tree_hash",
  "tree_hash_derive",
+ "url",
+ "uuid 1.16.0",
 ]
 
 [[package]]
@@ -3820,7 +3823,6 @@ dependencies = [
  "deadpool-postgres",
  "helix-common",
  "helix-types",
- "helix-utils",
  "rand 0.8.5",
  "refinery",
  "serde",
@@ -3845,7 +3847,6 @@ dependencies = [
  "helix-common",
  "helix-database",
  "helix-types",
- "helix-utils",
  "redis",
  "serde",
  "serde_json",
@@ -3869,7 +3870,6 @@ dependencies = [
  "helix-database",
  "helix-datastore",
  "helix-types",
- "helix-utils",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",
@@ -3905,24 +3905,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "helix-utils"
-version = "0.0.1"
-dependencies = [
- "alloy-primitives 0.8.25",
- "axum 0.8.3",
- "backtrace",
- "helix-types",
- "http 1.3.1",
- "reqwest 0.11.27",
- "serde",
- "serde_json",
- "tracing",
- "tree_hash",
- "tree_hash_derive",
- "uuid 1.16.0",
-]
-
-[[package]]
 name = "helix-website"
 version = "0.0.1"
 dependencies = [
@@ -3937,7 +3919,6 @@ dependencies = [
  "helix-datastore",
  "helix-housekeeper",
  "helix-types",
- "helix-utils",
  "num-format",
  "serde",
  "tokio",
@@ -8424,6 +8405,7 @@ dependencies = [
  "form_urlencoded",
  "idna",
  "percent-encoding",
+ "serde",
 ]
 
 [[package]]

@@ -1392,12 +1392,12 @@ fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {
 #[cfg(test)]
 mod tests {
     use alloy_primitives::U256;
+    use helix_common::utils::utcnow_ns;
     use helix_types::{
         get_fixed_pubkey, BlsSignature, BuilderBid, BuilderBidDeneb, ExecutionPayloadDeneb,
         ExecutionPayloadHeaderDeneb, ForkName, KzgCommitments, SignedBidSubmissionDeneb,
         SignedBuilderBidInner, TestRandomSeed,
     };
-    use helix_utils::utcnow_ns;
     use serde::{Deserialize, Serialize};
     use serial_test::serial;
 
