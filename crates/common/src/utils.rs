@@ -88,7 +88,10 @@ pub fn init_panic_hook(
             info = info,
             backtrace = backtrace
         );
-        println!("{}", crash_log);
+
+        error!("{crash_log}");
+        eprintln!("{crash_log}");
+
         if let Some(crash_log_path) = crash_log_path.clone() {
             save_to_file(crash_log_path, crash_log.clone());
         }
