@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main, staging, develop, alloy-migration]
+    branches: [main, staging, develop, alloy-migration, od/block_mismatch_bug]
 
 env:
   CARGO_TERM_COLOR: always

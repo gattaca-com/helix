@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use axum::http::version;
 use helix_common::{
     metrics::{SimulatorMetrics, DB_QUEUE},
     simulator::BlockSimError,
@@ -77,6 +78,8 @@ impl RpcSimulator {
             request.message.slot,
             block_hash = %request.execution_payload.block_hash(),
             size = rpc_payload.to_string().len(),
+            rpc_version = rpc_payload.get("method").and_then(|v| v.as_str()),
+            execution_requests = format!("{:?}", request.execution_requests),
             "Sending RPC request",
         );
 
