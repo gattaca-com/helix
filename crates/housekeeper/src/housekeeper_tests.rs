@@ -6,9 +6,7 @@ use std::{
     time::Duration,
 };
 
-use helix_beacon_client::{
-    mock_multi_beacon_client::MockMultiBeaconClient, MultiBeaconClientTrait,
-};
+use helix_beacon::{mock_multi_beacon_client::MockMultiBeaconClient, MultiBeaconClientTrait};
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
     config::PrimevConfig, RelayConfig, ValidatorSummary,

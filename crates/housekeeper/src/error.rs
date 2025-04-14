@@ -1,4 +1,4 @@
-use helix_beacon_client::error::BeaconClientError;
+use helix_beacon::error::BeaconClientError;
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
 use thiserror::Error;

@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
     Extension, Router,
 };
-use helix_beacon_client::{beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient};
+use helix_beacon::{beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient};
 use helix_common::{Route, RouterConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;

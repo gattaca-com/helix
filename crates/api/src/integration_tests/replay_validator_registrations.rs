@@ -1,6 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
-use helix_beacon_client::{beacon_client::BeaconClient, BeaconClientTrait};
+use helix_beacon::{beacon_client::BeaconClient, BeaconClientTrait};
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
@@ -130,7 +130,7 @@ async fn run() {
     });
 
     let (head_event_sender, mut head_event_receiver) =
-        tokio::sync::broadcast::channel::<helix_beacon_client::types::HeadEventData>(100);
+        tokio::sync::broadcast::channel::<helix_beacon::types::HeadEventData>(100);
 
     tokio::spawn(async move {
         if let Err(err) = beacon_client.subscribe_to_head_events(head_event_sender).await {

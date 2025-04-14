@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
     BoxError, Extension, Router,
 };
-use helix_beacon_client::{
+use helix_beacon::{
     mock_block_broadcaster::MockBlockBroadcaster, mock_multi_beacon_client::MockMultiBeaconClient,
     BlockBroadcaster,
 };

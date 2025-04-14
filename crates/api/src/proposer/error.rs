@@ -5,7 +5,7 @@ use axum::{
     http::{self, StatusCode},
     response::{IntoResponse, Response},
 };
-use helix_beacon_client::error::BeaconClientError;
+use helix_beacon::error::BeaconClientError;
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
 use helix_types::{BlsPublicKey, Slot};

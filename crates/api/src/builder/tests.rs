@@ -7,7 +7,7 @@ use std::{
 use alloy_primitives::{address, b256, hex, B256, U256};
 use axum::http::{header, Method, Request, Uri};
 use futures::{stream::FuturesOrdered, Future, SinkExt, StreamExt};
-use helix_beacon_client::types::PayloadAttributes;
+use helix_beacon::types::PayloadAttributes;
 use helix_common::{
     api::{
         builder_api::{

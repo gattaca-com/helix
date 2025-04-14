@@ -35,7 +35,7 @@ mod proposer_api_tests {
     };
 
     use alloy_primitives::{address, b256, hex, U256};
-    use helix_beacon_client::mock_multi_beacon_client::MockMultiBeaconClient;
+    use helix_beacon::mock_multi_beacon_client::MockMultiBeaconClient;
     use helix_common::{
         api::{
             builder_api::BuilderGetValidatorsResponseEntry,

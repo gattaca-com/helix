@@ -1,6 +1,6 @@
 use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 
-use helix_beacon_client::{
+use helix_beacon::{
     beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
     multi_beacon_client::MultiBeaconClient, BlockBroadcaster, MultiBeaconClientTrait,
 };

@@ -48,7 +48,7 @@ flate2 = "1.0"
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
 helix-api = { path = "./crates/api" }
-helix-beacon-client = { path = "./crates/beacon-client" }
+helix-beacon = { path = "./crates/beacon-client" }
 helix-common = { path = "crates/common" }
 helix-database = { path = "./crates/database" }
 helix-datastore = { path = "./crates/datastore" }
