@@ -31,7 +31,12 @@ async fn main() {
     init_runtime();
     start_metrics_server();
 
-    info!(network =% config.network_config, pubkey =% keypair.pk, "starting relay");
+    info!(
+        region = config.postgres.region_name,
+        network =% config.network_config,
+        pubkey =% keypair.pk,
+        "starting relay"
+    );
 
     match run(config, keypair).await {
         Ok(_) => info!("relay exited"),
