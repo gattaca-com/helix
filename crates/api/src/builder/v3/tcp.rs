@@ -74,7 +74,7 @@ async fn handle_builder_connection<A, DB, S, G>(
                     match BuilderApi::handle_submit_header(
                         &builder_api,
                         header.submission,
-                        Some(header.payload_socket_address),
+                        Some(header.url),
                         msg_header.message_flags.contains(MessageHeaderFlags::CANCELLATION_ENABLED),
                         trace,
                     )

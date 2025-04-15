@@ -17,4 +17,8 @@ pub enum V3Error {
     Json(#[from] serde_json::Error),
     #[error("Unknown message encoding: {0:?}")]
     Unknown(MessageHeader),
+    #[error("Builder address error: {0}")]
+    BuilderAddressError(String),
+    #[error("Payload request error: {0}")]
+    PayloadRequestError(#[from] reqwest::Error),
 }
