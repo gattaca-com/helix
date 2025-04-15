@@ -8,7 +8,6 @@ service GossipService {
   rpc BroadcastHeader (BroadcastHeaderParams) returns (google.protobuf.Empty);
   rpc BroadcastPayload (BroadcastPayloadParams) returns (google.protobuf.Empty);
   rpc BroadcastGetPayload (BroadcastGetPayloadParams) returns (google.protobuf.Empty);
-  rpc BroadcastCancellation (BroadcastCancellationParams) returns (google.protobuf.Empty);
   rpc RequestPayload (RequestPayloadParams) returns (google.protobuf.Empty);
 }
 
@@ -35,11 +34,6 @@ message BroadcastGetPayloadParams {
   bytes signed_blinded_beacon_block = 1;
   bytes request_id = 2;
   optional string fork_name = 3;
-}
-
-message BroadcastCancellationParams {
-  bytes signed_cancellation = 1;
-  bytes request_id = 2;
 }
 
 message RequestPayloadParams {
