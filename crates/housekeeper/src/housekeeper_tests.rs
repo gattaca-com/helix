@@ -15,13 +15,9 @@ use helix_common::{
 };
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
-use helix_types::get_fixed_pubkey;
 use tokio::{sync::broadcast, task};
 
-use crate::{
-    housekeeper::{Housekeeper, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS},
-    primev_service::{EthereumPrimevService, MockPrimevService, PrimevService},
-};
+use crate::housekeeper::{Housekeeper, SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS};
 
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 
@@ -48,7 +44,7 @@ fn get_housekeeper() -> HelperVars {
         Arc::new(db),
         beacon_client.clone().into(),
         auctioneer,
-        Some(MockPrimevService::new()),
+        None,
         RelayConfig::default(),
         Arc::new(ChainInfo::for_mainnet()),
     );
@@ -66,7 +62,7 @@ fn get_housekeeper() -> HelperVars {
 }
 
 async fn start_housekeeper(
-    housekeeper: Arc<Housekeeper<MockDatabaseService, MockAuctioneer, MockPrimevService>>,
+    housekeeper: Arc<Housekeeper<MockDatabaseService, MockAuctioneer>>,
     beacon_client: MultiBeaconClient,
 ) {
     let (head_event_sender, mut head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
@@ -77,7 +73,7 @@ async fn start_housekeeper(
 }
 
 struct HelperVars {
-    pub housekeeper: Arc<Housekeeper<MockDatabaseService, MockAuctioneer, MockPrimevService>>,
+    pub housekeeper: Arc<Housekeeper<MockDatabaseService, MockAuctioneer>>,
     pub chan_head_events_capacity: Arc<AtomicUsize>,
     pub known_validators: Arc<Mutex<Vec<ValidatorSummary>>>,
     pub proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>>,
@@ -149,80 +145,81 @@ async fn test_state_validators_have_been_read() {
     assert!(vars.state_validators_has_been_read.load(std::sync::atomic::Ordering::Relaxed));
 }
 
-#[tokio::test]
-async fn test_primev_enabled_housekeeper() {
-    // Create a standard helper vars
-    let vars = get_housekeeper();
+// #[tokio::test]
+// async fn test_primev_enabled_housekeeper() {
+//     // Create a standard helper vars
+//     let vars = get_housekeeper();
 
-    // Create mock Primev service with test data
-    let test_validator_pubkey = get_fixed_pubkey(0);
-    let test_builder_pubkey = get_fixed_pubkey(1);
+//     // Create mock Primev service with test data
+//     let test_validator_pubkey = get_fixed_pubkey(0);
+//     let test_builder_pubkey = get_fixed_pubkey(1);
 
-    let mut mock_primev = MockPrimevService::new()
-        .with_validators(vec![test_validator_pubkey.clone()])
-        .with_builders(vec![test_builder_pubkey.clone()]);
+//     let mut mock_primev = MockPrimevService::new()
+//         .with_validators(vec![test_validator_pubkey.clone()])
+//         .with_builders(vec![test_builder_pubkey.clone()]);
 
-    // Create tracking for Primev operations
-    let primev_operations = Arc::new(Mutex::new(Vec::new()));
-    mock_primev.set_operation_tracker(primev_operations.clone());
+//     // Create tracking for Primev operations
+//     let primev_operations = Arc::new(Mutex::new(Vec::new()));
+//     mock_primev.set_operation_tracker(primev_operations.clone());
 
-    // Create a custom config with Primev enabled
-    let mut config = RelayConfig::default();
-    config.primev_config = Some(PrimevConfig {
-        builder_url: "http://localhost:8545".to_string(),
-        builder_contract: "0x1234567890123456789012345678901234567890".to_string(),
-        validator_url: "http://localhost:8545".to_string(),
-        validator_contract: "0x1234567890123456789012345678901234567890".to_string(),
-    });
-    let known_validators: Arc<Mutex<Vec<ValidatorSummary>>> = Arc::new(Mutex::new(vec![]));
-    let proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>> =
-        Arc::new(Mutex::new(vec![]));
-    // Create a tracked mock auctioneer
-    let mock_auctioneer = MockAuctioneer::new();
-    let db = Arc::new(MockDatabaseService::new(known_validators.clone(), proposer_duties.clone()));
+//     // Create a custom config with Primev enabled
+//     let mut config = RelayConfig::default();
+//     config.primev_config = Some(PrimevConfig {
+//         builder_url: "http://localhost:8545".to_string(),
+//         builder_contract: "0x1234567890123456789012345678901234567890".to_string(),
+//         validator_url: "http://localhost:8545".to_string(),
+//         validator_contract: "0x1234567890123456789012345678901234567890".to_string(),
+//     });
+//     let known_validators: Arc<Mutex<Vec<ValidatorSummary>>> = Arc::new(Mutex::new(vec![]));
+//     let proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>> =
+//         Arc::new(Mutex::new(vec![]));
+//     // Create a tracked mock auctioneer
+//     let mock_auctioneer = MockAuctioneer::new();
+//     let db = Arc::new(MockDatabaseService::new(known_validators.clone(),
+// proposer_duties.clone()));
 
-    // Create a new housekeeper with mocks
-    let housekeeper = Housekeeper::new(
-        Arc::clone(&db), // Use original DB to maintain tracking
-        vars.beacon_client.clone().into(),
-        mock_auctioneer,
-        Some(mock_primev),
-        config,
-        Arc::new(ChainInfo::for_mainnet()),
-    );
+//     // Create a new housekeeper with mocks
+//     let housekeeper = Housekeeper::new(
+//         Arc::clone(&db), // Use original DB to maintain tracking
+//         vars.beacon_client.clone().into(),
+//         mock_auctioneer,
+//         Some(mock_primev),
+//         config,
+//         Arc::new(ChainInfo::for_mainnet()),
+//     );
 
-    // Start the housekeeper
-    start_housekeeper(housekeeper.clone(), vars.beacon_client).await;
-    tokio::time::sleep(Duration::from_millis(200)).await;
+//     // Start the housekeeper
+//     start_housekeeper(housekeeper.clone(), vars.beacon_client).await;
+//     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // Verify Primev operations were performed
-    let ops = primev_operations.lock().unwrap();
-    assert!(ops.contains(&"get_registered_primev_builders"), "Primev builders should be fetched");
-    assert!(
-        ops.contains(&"get_registered_primev_validators"),
-        "Primev validators should be fetched"
-    );
-}
+//     // Verify Primev operations were performed
+//     let ops = primev_operations.lock().unwrap();
+//     assert!(ops.contains(&"get_registered_primev_builders"), "Primev builders should be
+// fetched");     assert!(
+//         ops.contains(&"get_registered_primev_validators"),
+//         "Primev validators should be fetched"
+//     );
+// }
 
-#[tokio::test]
-async fn test_primev_builder_fetch() {
-    // Create a custom config with Primev enabled - using the same URL and contract address as the
-    // working cast command
-    let config = PrimevConfig {
-        builder_url: "https://chainrpc.mev-commit.xyz/".to_string(),
-        builder_contract: "0xb772Add4718E5BD6Fe57Fb486A6f7f008E52167E".to_string(),
-        validator_url: "https://127.0.0.1:8545".to_string(),
-        validator_contract: "0x0000000000000000000000000000000000000000".to_string(),
-    };
+// #[tokio::test]
+// async fn test_primev_builder_fetch() {
+//     // Create a custom config with Primev enabled - using the same URL and contract address as
+// the     // working cast command
+//     let config = PrimevConfig {
+//         builder_url: "https://chainrpc.mev-commit.xyz/".to_string(),
+//         builder_contract: "0xb772Add4718E5BD6Fe57Fb486A6f7f008E52167E".to_string(),
+//         validator_url: "https://127.0.0.1:8545".to_string(),
+//         validator_contract: "0x0000000000000000000000000000000000000000".to_string(),
+//     };
 
-    let service = EthereumPrimevService::new(config.clone()).await.unwrap();
+//     let service = EthereumPrimevService::new(config.clone()).await.unwrap();
 
-    // Use the trait to call the method
-    let primev_service: &dyn PrimevService = &service;
-    let pubkeys = primev_service.get_registered_primev_builders().await;
+//     // Use the trait to call the method
+//     let primev_service: &dyn PrimevService = &service;
+//     let pubkeys = primev_service.get_registered_primev_builders().await;
 
-    assert!(pubkeys.len() > 0, "Expected at least one public key to be returned");
-}
+//     assert!(pubkeys.len() > 0, "Expected at least one public key to be returned");
+// }
 
 #[tokio::test]
 async fn test_primev_real_contract_integration() {

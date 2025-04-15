@@ -22,7 +22,7 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::{error::HousekeeperError, primev_service::PrimevService};
+use crate::{error::HousekeeperError, EthereumPrimevService};
 
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 1;
 
@@ -42,8 +42,7 @@ const MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS: u64 = 2_000;
 const MAX_DELAY_WITH_NO_V2_PAYLOAD_MS: u64 = 20_000;
 
 /// Arc wrapped Housekeeper type for convenience
-type SharedHousekeeper<Database, Auctioneer, PrimevService> =
-    Arc<Housekeeper<Database, Auctioneer, PrimevService>>;
+type SharedHousekeeper<Database, Auctioneer> = Arc<Housekeeper<Database, Auctioneer>>;
 
 /// Housekeeper Service.
 ///
@@ -51,15 +50,11 @@ type SharedHousekeeper<Database, Auctioneer, PrimevService> =
 /// Also responsible for keeping the Auctioneer builder info up to date after manual changes.
 /// If running multiple API instances in a single region only one housekeeper is needed as services
 /// will sync through db.
-pub struct Housekeeper<
-    DB: DatabaseService + 'static,
-    A: Auctioneer + 'static,
-    P: PrimevService + 'static,
-> {
+pub struct Housekeeper<DB: DatabaseService + 'static, A: Auctioneer + 'static> {
     db: Arc<DB>,
     beacon_client: Arc<MultiBeaconClient>,
     auctioneer: A,
-    primev_service: Option<P>,
+    primev_service: Option<EthereumPrimevService>,
 
     head_slot: Mutex<u64>,
 
@@ -84,12 +79,12 @@ pub struct Housekeeper<
     chain_info: Arc<ChainInfo>,
 }
 
-impl<DB: DatabaseService, A: Auctioneer, P: PrimevService> Housekeeper<DB, A, P> {
+impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     pub fn new(
         db: Arc<DB>,
         beacon_client: Arc<MultiBeaconClient>,
         auctioneer: A,
-        primev_service: Option<P>,
+        primev_service: Option<EthereumPrimevService>,
         config: RelayConfig,
         chain_info: Arc<ChainInfo>,
     ) -> Arc<Self> {
@@ -116,7 +111,7 @@ impl<DB: DatabaseService, A: Auctioneer, P: PrimevService> Housekeeper<DB, A, P>
 
     /// Start the Housekeeper service.
     pub async fn start(
-        self: &SharedHousekeeper<DB, A, P>,
+        self: &SharedHousekeeper<DB, A>,
         head_event_receiver: &mut broadcast::Receiver<HeadEventData>,
     ) -> Result<(), BeaconClientError> {
         let best_sync_status = self.beacon_client.best_sync_status().await?;
@@ -161,7 +156,7 @@ impl<DB: DatabaseService, A: Auctioneer, P: PrimevService> Housekeeper<DB, A, P>
     /// Process updates for the given slot.
     ///
     /// Skips slots that are older than the currently processed slot.
-    async fn process_new_slot(self: &SharedHousekeeper<DB, A, P>, head_slot: u64) {
+    async fn process_new_slot(self: &SharedHousekeeper<DB, A>, head_slot: u64) {
         let (is_new_block, prev_head_slot) = self.update_head_slot(head_slot).await;
         if !is_new_block {
             return;
@@ -285,7 +280,7 @@ impl<DB: DatabaseService, A: Auctioneer, P: PrimevService> Housekeeper<DB, A, P>
     /// This will lock `known_validators_lock` to ensure that only one task is refreshing the known
     /// validators at a time.
     async fn refresh_known_validators(
-        self: &SharedHousekeeper<DB, A, P>,
+        self: &SharedHousekeeper<DB, A>,
         head_slot: u64,
     ) -> Result<(), HousekeeperError> {
         let _guard = self.refresh_validators_lock.try_lock()?;
@@ -327,7 +322,7 @@ impl<DB: DatabaseService, A: Auctioneer, P: PrimevService> Housekeeper<DB, A, P>
 
     /// Synchronizes builder information changes.
     async fn sync_builder_info_changes(
-        self: &SharedHousekeeper<DB, A, P>,
+        self: &SharedHousekeeper<DB, A>,
         head_slot: u64,
     ) -> Result<(), HousekeeperError> {
         let _guard = self.re_sync_builder_info_lock.try_lock()?;
@@ -397,7 +392,7 @@ impl<DB: DatabaseService, A: Auctioneer, P: PrimevService> Housekeeper<DB, A, P>
 
     /// Determine if known validators should be refreshed for the given slot.
     async fn should_refresh_known_validators(
-        self: &SharedHousekeeper<DB, A, P>,
+        self: &SharedHousekeeper<DB, A>,
         head_slot: u64,
     ) -> bool {
         let last_refreshed_slot = *self.refreshed_validators_slot.lock().await;
@@ -423,7 +418,7 @@ impl<DB: DatabaseService, A: Auctioneer, P: PrimevService> Housekeeper<DB, A, P>
     /// Update proposer duties for `head_slot` and `head_slot` + 1.
     /// Returns the fetched proposer duties on success.
     async fn update_proposer_duties(
-        self: &SharedHousekeeper<DB, A, P>,
+        self: &SharedHousekeeper<DB, A>,
         head_slot: u64,
     ) -> Result<Vec<ProposerDuty>, HousekeeperError> {
         // Only allow one update_proposer_duties task at a time.
@@ -520,7 +515,7 @@ impl<DB: DatabaseService, A: Auctioneer, P: PrimevService> Housekeeper<DB, A, P>
     /// If the distance between the current `head_slot` and the last slot for which proposer
     /// duties were fetched (`proposer_duties_slot`) is greater than or equal to
     /// PROPOSER_DUTIES_UPDATE_FREQ, it will also return `true`.
-    async fn should_update_duties(self: &SharedHousekeeper<DB, A, P>, head_slot: u64) -> bool {
+    async fn should_update_duties(self: &SharedHousekeeper<DB, A>, head_slot: u64) -> bool {
         let proposer_duties_slot = *self.proposer_duties_slot.lock().await;
         let last_proposer_duty_distance = head_slot.saturating_sub(proposer_duties_slot);
         last_proposer_duty_distance >= PROPOSER_DUTIES_UPDATE_FREQ
@@ -528,7 +523,7 @@ impl<DB: DatabaseService, A: Auctioneer, P: PrimevService> Housekeeper<DB, A, P>
 
     /// Updates primev builders and validators using pre-fetched proposer duties
     async fn primev_update_with_duties(
-        self: &SharedHousekeeper<DB, A, P>,
+        self: &SharedHousekeeper<DB, A>,
         proposer_duties: Vec<ProposerDuty>,
     ) -> Result<(), HousekeeperError> {
         // Check if primev service exists, if not exit early
@@ -568,7 +563,7 @@ impl<DB: DatabaseService, A: Auctioneer, P: PrimevService> Housekeeper<DB, A, P>
     ///    proposers was refreshed (`refreshed_trusted_proposers_slot`) is greater than or equal to
     ///    `TRUSTED_PROPOSERS_UPDATE_FREQ`, it will also return `true`.
     async fn should_update_trusted_proposers(
-        self: &SharedHousekeeper<DB, A, P>,
+        self: &SharedHousekeeper<DB, A>,
         head_slot: u64,
     ) -> bool {
         let trusted_proposers_slot = *self.refreshed_trusted_proposers_slot.lock().await;
@@ -589,7 +584,7 @@ impl<DB: DatabaseService, A: Auctioneer, P: PrimevService> Housekeeper<DB, A, P>
     ///
     /// This function will return `Ok(())` if it completes successfully.
     async fn update_trusted_proposers(
-        self: &SharedHousekeeper<DB, A, P>,
+        self: &SharedHousekeeper<DB, A>,
         head_slot: u64,
     ) -> Result<(), HousekeeperError> {
         let _guard = self.refresh_trusted_proposers_lock.try_lock()?;
@@ -616,7 +611,7 @@ impl<DB: DatabaseService, A: Auctioneer, P: PrimevService> Housekeeper<DB, A, P>
     /// This function will error if it cannot fetch the duties for the current epoch
     /// but will continue if it fails to fetch epoch + 1.
     async fn fetch_duties(
-        self: &SharedHousekeeper<DB, A, P>,
+        self: &SharedHousekeeper<DB, A>,
         epoch: u64,
     ) -> Result<Vec<ProposerDuty>, BeaconClientError> {
         // Fetch duties for current epoch
@@ -633,7 +628,7 @@ impl<DB: DatabaseService, A: Auctioneer, P: PrimevService> Housekeeper<DB, A, P>
 
     /// Fetch validator registrations for `pub_keys` from database.
     async fn fetch_signed_validator_registrations(
-        self: &SharedHousekeeper<DB, A, P>,
+        self: &SharedHousekeeper<DB, A>,
         pubkeys: Vec<BlsPublicKey>,
     ) -> Result<HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>, DatabaseError> {
         let registrations: Vec<SignedValidatorRegistrationEntry> =
