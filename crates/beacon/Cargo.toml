@@ -17,7 +17,6 @@ fiber.workspace = true
 futures.workspace = true
 helix-common.workspace = true
 helix-types.workspace = true
-helix-utils.workspace = true
 http.workspace = true
 mockito.workspace = true
 reqwest.workspace = true

@@ -29,14 +29,15 @@ use helix_common::{
     metrics::{BUILDER_GOSSIP_QUEUE, DB_QUEUE},
     signing::RelaySigningContext,
     simulator::BlockSimError,
-    task, validator_preferences, BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace,
+    task,
+    utils::{extract_request_id, get_payload_attributes_key, utcnow_ns},
+    validator_preferences, BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace,
     HeaderSubmissionTrace, RelayConfig, SubmissionTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
 use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
-use helix_utils::{extract_request_id, get_payload_attributes_key, utcnow_ns};
 use hyper::HeaderMap;
 use ssz::Decode;
 use tokio::{

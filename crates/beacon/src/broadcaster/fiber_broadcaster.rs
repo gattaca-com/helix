@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use helix_common::{request_encoding::Encoding, utils::utcnow_ns};
 use helix_types::VersionedSignedProposal;
-use helix_utils::{request_encoding::Encoding, utcnow_ns};
 use ssz::Encode;
 use tracing::debug;
 

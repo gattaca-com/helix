@@ -14,7 +14,6 @@ dashmap.workspace = true
 deadpool-postgres.workspace = true
 helix-common.workspace = true
 helix-types.workspace = true
-helix-utils.workspace = true
 rand.workspace = true
 refinery.workspace = true
 serde.workspace = true

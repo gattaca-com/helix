@@ -1,8 +1,7 @@
 use helix_types::{BlsPublicKey, Validator};
-use helix_utils::utcnow_ms;
 use serde::{Deserialize, Serialize};
 
-use crate::api::proposer_api::ValidatorRegistrationInfo;
+use crate::{api::proposer_api::ValidatorRegistrationInfo, utils::utcnow_ms};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ValidatorSummary {

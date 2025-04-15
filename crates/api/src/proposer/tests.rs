@@ -1,7 +1,7 @@
+use helix_common::utils::utcnow_sec;
 use helix_types::{
     BlsKeypair, ChainSpec, SignedRoot, SignedValidatorRegistration, ValidatorRegistration,
 };
-use helix_utils::utcnow_sec;
 
 pub fn gen_signed_vr() -> SignedValidatorRegistration {
     let keypair = BlsKeypair::random();
@@ -43,6 +43,7 @@ mod proposer_api_tests {
             PATH_REGISTER_VALIDATORS,
         },
         chain_info::ChainInfo,
+        utils::utcnow_ns,
         ValidatorPreferences,
     };
     use helix_database::mock_database_service::MockDatabaseService;
@@ -55,7 +56,6 @@ mod proposer_api_tests {
         SignedBuilderBidInner, SignedRoot, SignedValidatorRegistration, TestRandomSeed,
         ValidatorRegistration,
     };
-    use helix_utils::utcnow_ns;
     use reqwest::StatusCode;
     use tokio::{
         sync::{

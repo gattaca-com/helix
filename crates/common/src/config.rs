@@ -1,16 +1,15 @@
-use std::{collections::HashSet, fs::File};
+use std::{collections::HashSet, fs::File, path::PathBuf};
 
 use alloy_primitives::B256;
 use clap::Parser;
-use helix_types::BlsPublicKey;
-use helix_utils::{
-    request_encoding::Encoding,
-    serde::{default_bool, deserialize_url, serialize_url},
-};
+use helix_types::{BlsKeypair, BlsPublicKey, BlsSecretKey};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
-use crate::{api::*, BuilderInfo, ValidatorPreferences};
+use crate::{
+    api::*, request_encoding::Encoding, serde_utils::default_bool, BuilderInfo,
+    ValidatorPreferences,
+};
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RelayConfig {
@@ -47,8 +46,7 @@ pub struct RelayConfig {
     /// This is useful when testing builder strategies.
     #[serde(default)]
     pub skip_floor_bid_builder_pubkeys: Vec<BlsPublicKey>,
-    #[serde(default)]
-    pub discord_webhook_url: Option<String>,
+    pub discord_webhook_url: Option<Url>,
     #[serde(default)]
     pub payload_gossip_enabled: bool,
     #[serde(default)]
@@ -96,13 +94,28 @@ impl Default for WebsiteConfig {
     }
 }
 
-impl RelayConfig {
-    pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
-        let start_config = StartConfig::parse();
-        let file = File::open(start_config.config)?;
-        let config: RelayConfig = serde_yaml::from_reader(file)?;
-        Ok(config)
-    }
+pub fn load_config() -> RelayConfig {
+    let start_config = StartConfig::parse();
+
+    let file = File::open(&start_config.config)
+        .unwrap_or_else(|_| panic!("unable to find config file: '{}'", start_config.config));
+
+    let config: RelayConfig = serde_yaml::from_reader(file).expect("failed to parse config file");
+
+    config
+}
+
+pub fn load_keypair() -> BlsKeypair {
+    let signing_key_str = std::env::var("RELAY_KEY").expect("could not find RELAY_KEY in env");
+    let signing_key_bytes =
+        alloy_primitives::hex::decode(signing_key_str).expect("invalid RELAY_KEY bytes");
+
+    let signing_key = BlsSecretKey::deserialize(signing_key_bytes.as_slice())
+        .expect("could not convert env signing key to SecretKey");
+
+    let public_key = signing_key.public_key();
+
+    BlsKeypair::from_components(public_key, signing_key)
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -165,7 +178,6 @@ pub struct SimulatorConfig {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BeaconClientConfig {
-    #[serde(serialize_with = "serialize_url", deserialize_with = "deserialize_url")]
     pub url: Url,
     /// Bool representing if this beacon client is configured to
     /// handle async blob gossiping.
@@ -197,6 +209,19 @@ pub enum NetworkConfig {
     },
 }
 
+impl std::fmt::Display for NetworkConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NetworkConfig::Mainnet => write!(f, "mainnet"),
+            NetworkConfig::Sepolia => write!(f, "sepolia"),
+            NetworkConfig::Holesky => write!(f, "holesky"),
+            NetworkConfig::Custom { dir_path, genesis_validator_root, genesis_time } => {
+                write!(f, "custom ({}, {}, {})", dir_path, genesis_validator_root, genesis_time)
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct PrimevConfig {
     pub builder_url: String,
@@ -210,9 +235,19 @@ pub enum LoggingConfig {
     #[default]
     Console,
     File {
-        dir_path: String,
+        dir_path: PathBuf,
         file_name: String,
     },
+}
+
+// FIXME
+impl LoggingConfig {
+    pub fn dir_path(&self) -> Option<PathBuf> {
+        match self {
+            LoggingConfig::Console => None,
+            LoggingConfig::File { dir_path, .. } => Some(dir_path.clone()),
+        }
+    }
 }
 
 #[derive(Parser, Debug, Clone, Default, Serialize, Deserialize)]
@@ -378,7 +413,7 @@ fn test_config() {
         genesis_time: 1,
     };
     config.logging =
-        LoggingConfig::File { dir_path: "hello".to_string(), file_name: "test".to_string() };
+        LoggingConfig::File { dir_path: "hello".parse().unwrap(), file_name: "test".to_string() };
     config.validator_preferences = ValidatorPreferences {
         filtering: Filtering::Regional,
         trusted_builders: None,
