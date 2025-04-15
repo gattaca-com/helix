@@ -3,7 +3,7 @@ pub mod data_api;
 pub mod proposer_api;
 
 pub const PATH_BUILDER_API: &str = "/relay/v1/builder";
-
+pub const PATH_BUILDER_API_V3: &str = "/relay/v3/builder";
 pub const PATH_GET_VALIDATORS: &str = "/validators";
 pub const PATH_SUBMIT_BLOCK: &str = "/blocks";
 pub const PATH_SUBMIT_BLOCK_OPTIMISTIC_V2: &str = "/blocks_optimistic_v2";

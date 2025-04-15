@@ -73,6 +73,7 @@ pub fn build_router(
             Route::ProposerPayloadDelivered => get(DataApiProd::proposer_payload_delivered),
             Route::BuilderBidsReceived => get(DataApiProd::builder_bids_received),
             Route::ValidatorRegistration => get(DataApiProd::validator_registration),
+            Route::SubmitHeaderV3 => post(BuilderApiProd::submit_header_v3),
             _ => {
                 panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route_info.route);
             }

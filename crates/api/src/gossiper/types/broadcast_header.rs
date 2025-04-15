@@ -1,5 +1,4 @@
 use alloy_primitives::B256;
-use helix_common::bid_submission::v3::header_submission_v3::PayloadSocketAddress;
 use helix_types::{BidTrace, BlsPublicKey, SignedBuilderBid};
 use ssz::{Decode, Encode};
 
@@ -15,7 +14,7 @@ pub struct BroadcastHeaderParams {
     pub builder_pub_key: BlsPublicKey,
     pub is_cancellations_enabled: bool,
     pub on_receive: u64,
-    pub payload_address: Option<PayloadSocketAddress>,
+    pub payload_address: Option<Vec<u8>>,
 }
 
 impl BroadcastHeaderParams {
@@ -32,9 +31,7 @@ impl BroadcastHeaderParams {
                 .unwrap(),
             is_cancellations_enabled: proto_params.is_cancellations_enabled,
             on_receive: proto_params.on_receive,
-            payload_address: proto_params
-                .payload_address
-                .map(|vec| PayloadSocketAddress::from_ssz_bytes(&vec).unwrap()),
+            payload_address: proto_params.payload_address,
         }
     }
 
@@ -49,7 +46,7 @@ impl BroadcastHeaderParams {
             builder_pub_key: self.builder_pub_key.serialize().to_vec(),
             is_cancellations_enabled: self.is_cancellations_enabled,
             on_receive: self.on_receive,
-            payload_address: self.payload_address.as_ref().map(PayloadSocketAddress::as_ssz_bytes),
+            payload_address: self.payload_address.clone(),
         }
     }
 }

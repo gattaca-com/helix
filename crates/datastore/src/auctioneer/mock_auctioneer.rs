@@ -3,14 +3,8 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use alloy_primitives::{B256, U256};
 use async_trait::async_trait;
 use helix_common::{
-    api::builder_api::TopBidUpdate,
-    bid_submission::{
-        v2::header_submission::SignedHeaderSubmission,
-        v3::header_submission_v3::PayloadSocketAddress,
-    },
-    pending_block::PendingBlock,
-    signing::RelaySigningContext,
-    BuilderInfo, ProposerInfo,
+    api::builder_api::TopBidUpdate, bid_submission::v2::header_submission::SignedHeaderSubmission,
+    pending_block::PendingBlock, signing::RelaySigningContext, BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
 use helix_types::{
@@ -309,15 +303,16 @@ impl Auctioneer for MockAuctioneer {
     async fn save_payload_address(
         &self,
         _block_hash: &B256,
-        _payload_socket_address: PayloadSocketAddress,
+        _builder_pubkey: &BlsPublicKey,
+        _payload_socket_address: Vec<u8>,
     ) -> Result<(), AuctioneerError> {
         Ok(())
     }
 
-    async fn get_payload_address(
+    async fn get_payload_url(
         &self,
         _block_hash: &B256,
-    ) -> Result<Option<PayloadSocketAddress>, AuctioneerError> {
+    ) -> Result<Option<(BlsPublicKey, Vec<u8>)>, AuctioneerError> {
         Ok(None)
     }
 }

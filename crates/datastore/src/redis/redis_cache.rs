@@ -8,10 +8,7 @@ use deadpool_redis::{Config, CreatePoolError, Pool, Runtime};
 use futures_util::TryStreamExt;
 use helix_common::{
     api::builder_api::TopBidUpdate,
-    bid_submission::{
-        v2::header_submission::SignedHeaderSubmission,
-        v3::header_submission_v3::PayloadSocketAddress, BidSubmission,
-    },
+    bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
     bid_submission_to_builder_bid, header_submission_to_builder_bid,
     metrics::RedisMetricRecord,
     pending_block::PendingBlock,
@@ -1217,13 +1214,13 @@ impl Auctioneer for RedisCache {
         Ok(is_primev)
     }
 
-    async fn get_payload_address(
+    async fn get_payload_url(
         &self,
         block_hash: &B256,
-    ) -> Result<Option<PayloadSocketAddress>, AuctioneerError> {
-        let mut record = RedisMetricRecord::new("get_payload_address");
+    ) -> Result<Option<(BlsPublicKey, Vec<u8>)>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_payload_url");
         let key = format!("{PAYLOAD_ADDRESS_KEY}_{block_hash:?}");
-        let payload_address: Option<PayloadSocketAddress> = self.get(&key).await?;
+        let payload_address: Option<(BlsPublicKey, Vec<u8>)> = self.get(&key).await?;
         record.record_success();
         Ok(payload_address)
     }
@@ -1231,11 +1228,17 @@ impl Auctioneer for RedisCache {
     async fn save_payload_address(
         &self,
         block_hash: &B256,
-        payload_socket_address: PayloadSocketAddress,
+        builder_pub_key: &BlsPublicKey,
+        payload_socket_address: Vec<u8>,
     ) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("save_payload_address");
         let key = format!("{PAYLOAD_ADDRESS_KEY}_{block_hash:?}");
-        self.set(&key, &payload_socket_address, Some(PAYLOAD_ADDRESS_EXPIRY_S)).await?;
+        self.set(
+            &key,
+            &(builder_pub_key.clone(), payload_socket_address),
+            Some(PAYLOAD_ADDRESS_EXPIRY_S),
+        )
+        .await?;
         record.record_success();
         Ok(())
     }

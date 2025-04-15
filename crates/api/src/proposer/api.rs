@@ -16,7 +16,6 @@ use helix_common::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
     },
     beacon_api::PublishBlobsRequest,
-    bid_submission::v3::header_submission_v3::PayloadSocketAddress,
     blob_sidecars::blob_sidecars_from_unblinded_payload,
     chain_info::{ChainInfo, Network},
     metrics::{GetHeaderMetric, PROPOSER_GOSSIP_QUEUE},
@@ -84,7 +83,7 @@ where
     relay_config: RelayConfig,
 
     /// Channel on which to send v3 payload fetch requests.
-    v3_payload_request: Sender<(B256, PayloadSocketAddress)>,
+    v3_payload_request: Sender<(B256, BlsPublicKey, Vec<u8>)>,
 }
 
 impl<A, DB, G> ProposerApi<A, DB, G>
@@ -104,7 +103,7 @@ where
         validator_preferences: Arc<ValidatorPreferences>,
         gossip_receiver: Receiver<GossipedMessage>,
         relay_config: RelayConfig,
-        v3_payload_request: Sender<(B256, PayloadSocketAddress)>,
+        v3_payload_request: Sender<(B256, BlsPublicKey, Vec<u8>)>,
     ) -> Self {
         let api = Self {
             auctioneer,
@@ -650,9 +649,12 @@ where
         }
         trace.signature_validated = utcnow_ns();
 
-        if let Ok(Some(payload_address)) = self.auctioneer.get_payload_address(&block_hash).await {
+        if let Ok(Some((builder_pubkey, payload_address))) =
+            self.auctioneer.get_payload_url(&block_hash).await
+        {
             // Fetch v3 optimistic payload from builder. This will complete asynchronously.
-            let _ = self.v3_payload_request.send((block_hash, payload_address)).await;
+            let _ =
+                self.v3_payload_request.send((block_hash, builder_pubkey, payload_address)).await;
         }
 
         // Get execution payload from auctioneer
