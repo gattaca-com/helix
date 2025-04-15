@@ -16,6 +16,7 @@ helix-common.workspace = true
 helix-database.workspace = true
 helix-datastore.workspace = true
 helix-types.workspace = true
+httpmock.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

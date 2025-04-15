@@ -6,7 +6,9 @@ use std::{
     time::Duration,
 };
 
-use helix_beacon::{mock_multi_beacon_client::MockMultiBeaconClient, MultiBeaconClientTrait};
+use helix_beacon::{
+    beacon_client::mock_beacon_node::MockBeaconNode, multi_beacon_client::MultiBeaconClient,
+};
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
     config::PrimevConfig, RelayConfig, ValidatorSummary,
@@ -24,7 +26,8 @@ use crate::{
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 
 fn get_housekeeper() -> HelperVars {
-    let subscribed_to_head_events = Arc::new(AtomicBool::new(false));
+    let beacon_node = MockBeaconNode::new();
+
     let chan_head_events_capacity = Arc::new(AtomicUsize::new(0));
     let known_validators: Arc<Mutex<Vec<ValidatorSummary>>> = Arc::new(Mutex::new(vec![]));
     let proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>> =
@@ -32,16 +35,18 @@ fn get_housekeeper() -> HelperVars {
     let state_validators_has_been_read: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let proposer_duties_has_been_read: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let db = MockDatabaseService::new(known_validators.clone(), proposer_duties.clone());
-    let beacon_client = MockMultiBeaconClient::new(
-        subscribed_to_head_events.clone(),
-        chan_head_events_capacity.clone(),
-        state_validators_has_been_read.clone(),
-        proposer_duties_has_been_read.clone(),
-    );
+    let beacon_client = MultiBeaconClient::new(vec![beacon_node.beacon_client().into()]);
+    // let beacon_client = MultiBeaconClient::new(
+    //     subscribed_to_head_events.clone(),
+    //     chan_head_events_capacity.clone(),
+    //     state_validators_has_been_read.clone(),
+    //     proposer_duties_has_been_read.clone(),
+    // );
+
     let auctioneer = MockAuctioneer::new();
     let housekeeper = Housekeeper::new(
         Arc::new(db),
-        beacon_client.clone(),
+        beacon_client.clone().into(),
         auctioneer,
         Some(MockPrimevService::new()),
         RelayConfig::default(),
@@ -49,8 +54,8 @@ fn get_housekeeper() -> HelperVars {
     );
 
     HelperVars {
+        beacon_node,
         housekeeper,
-        subscribed_to_head_events,
         chan_head_events_capacity,
         known_validators,
         proposer_duties,
@@ -61,10 +66,8 @@ fn get_housekeeper() -> HelperVars {
 }
 
 async fn start_housekeeper(
-    housekeeper: Arc<
-        Housekeeper<MockDatabaseService, MockMultiBeaconClient, MockAuctioneer, MockPrimevService>,
-    >,
-    beacon_client: MockMultiBeaconClient,
+    housekeeper: Arc<Housekeeper<MockDatabaseService, MockAuctioneer, MockPrimevService>>,
+    beacon_client: MultiBeaconClient,
 ) {
     let (head_event_sender, mut head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
     beacon_client.subscribe_to_head_events(head_event_sender).await;
@@ -74,21 +77,20 @@ async fn start_housekeeper(
 }
 
 struct HelperVars {
-    pub housekeeper: Arc<
-        Housekeeper<MockDatabaseService, MockMultiBeaconClient, MockAuctioneer, MockPrimevService>,
-    >,
-    pub subscribed_to_head_events: Arc<AtomicBool>,
+    pub housekeeper: Arc<Housekeeper<MockDatabaseService, MockAuctioneer, MockPrimevService>>,
     pub chan_head_events_capacity: Arc<AtomicUsize>,
     pub known_validators: Arc<Mutex<Vec<ValidatorSummary>>>,
     pub proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>>,
     pub state_validators_has_been_read: Arc<AtomicBool>,
     pub proposer_duties_has_been_read: Arc<AtomicBool>,
-    pub beacon_client: MockMultiBeaconClient,
+    pub beacon_client: MultiBeaconClient,
+    pub beacon_node: MockBeaconNode,
 }
 
 #[tokio::test]
 async fn test_head_event_is_processed_by_housekeeper() {
     let vars = get_housekeeper();
+    let subscribed_to_head_events = vars.beacon_node.with_sse_event("head");
     start_housekeeper(vars.housekeeper.clone(), vars.beacon_client).await;
     tokio::time::sleep(Duration::from_millis(10)).await;
 
@@ -99,7 +101,7 @@ async fn test_head_event_is_processed_by_housekeeper() {
 
     // assert that the len of the channel is correct at 0 as the
     // housekeeper has processed the dummy event
-    assert!(vars.subscribed_to_head_events.load(std::sync::atomic::Ordering::Relaxed));
+    subscribed_to_head_events.assert();
     assert!(vars.chan_head_events_capacity.load(std::sync::atomic::Ordering::Relaxed) == 0);
 }
 
@@ -182,7 +184,7 @@ async fn test_primev_enabled_housekeeper() {
     // Create a new housekeeper with mocks
     let housekeeper = Housekeeper::new(
         Arc::clone(&db), // Use original DB to maintain tracking
-        vars.beacon_client.clone(),
+        vars.beacon_client.clone().into(),
         mock_auctioneer,
         Some(mock_primev),
         config,

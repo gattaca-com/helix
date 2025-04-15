@@ -2,7 +2,6 @@ use helix_api::service::ApiService;
 use helix_common::{
     load_config, load_keypair,
     metrics::start_metrics_server,
-    task::init_runtime,
     utils::{init_panic_hook, init_tracing_log},
     RelayConfig,
 };
@@ -28,7 +27,6 @@ async fn main() {
         config.discord_webhook_url.clone(),
         config.logging.dir_path(),
     );
-    init_runtime();
     start_metrics_server();
 
     info!(

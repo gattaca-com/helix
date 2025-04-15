@@ -1,6 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
-use helix_beacon::{beacon_client::BeaconClient, BeaconClientTrait};
+use helix_beacon::beacon_client::BeaconClient;
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,

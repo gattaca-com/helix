@@ -7,7 +7,7 @@ use axum::{
     BoxError, Extension, Router,
 };
 use helix_beacon::{
-    mock_block_broadcaster::MockBlockBroadcaster, mock_multi_beacon_client::MockMultiBeaconClient,
+    beacon_client::mock_beacon_node::MockBeaconNode, multi_beacon_client::MultiBeaconClient,
     BlockBroadcaster,
 };
 use helix_common::{
@@ -43,25 +43,23 @@ pub fn app() -> Router {
     let (slot_update_sender, _slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
     let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
     let (v3_sender, _v3_receiver) = channel(32);
+    let node = MockBeaconNode::new();
+    let client = node.beacon_client();
 
-    let api_service = Arc::new(ProposerApi::<
-        MockAuctioneer,
-        MockDatabaseService,
-        MockMultiBeaconClient,
-        MockGossiper,
-    >::new(
-        Arc::new(MockAuctioneer::default()),
-        Arc::new(MockDatabaseService::default()),
-        Arc::new(MockGossiper::new().unwrap()),
-        vec![Arc::new(BlockBroadcaster::Mock(MockBlockBroadcaster::default()))],
-        Arc::new(MockMultiBeaconClient::default()),
-        Arc::new(ChainInfo::for_mainnet()),
-        slot_update_sender,
-        Arc::new(ValidatorPreferences::default()),
-        gossip_receiver,
-        Default::default(),
-        v3_sender,
-    ));
+    let api_service =
+        Arc::new(ProposerApi::<MockAuctioneer, MockDatabaseService, MockGossiper>::new(
+            Arc::new(MockAuctioneer::default()),
+            Arc::new(MockDatabaseService::default()),
+            Arc::new(MockGossiper::new().unwrap()),
+            vec![Arc::new(BlockBroadcaster::BeaconClient(client))],
+            Arc::new(MultiBeaconClient::new(vec![])),
+            Arc::new(ChainInfo::for_mainnet()),
+            slot_update_sender,
+            Arc::new(ValidatorPreferences::default()),
+            gossip_receiver,
+            Default::default(),
+            v3_sender,
+        ));
 
     let data_api = Arc::new(DataApi::<MockDatabaseService>::new(
         Arc::new(ValidatorPreferences::default()),
@@ -74,7 +72,6 @@ pub fn app() -> Router {
             get(ProposerApi::<
                 MockAuctioneer,
                 MockDatabaseService,
-                MockMultiBeaconClient,
                 MockGossiper,
             >::status),
         )
@@ -84,7 +81,6 @@ pub fn app() -> Router {
                 ProposerApi::<
                     MockAuctioneer,
                     MockDatabaseService,
-                    MockMultiBeaconClient,
                     MockGossiper,
                 >::register_validators,
             ),
@@ -94,7 +90,6 @@ pub fn app() -> Router {
             get(ProposerApi::<
                 MockAuctioneer,
                 MockDatabaseService,
-                MockMultiBeaconClient,
                 MockGossiper,
             >::get_header),
         )
@@ -104,7 +99,6 @@ pub fn app() -> Router {
                 ProposerApi::<
                     MockAuctioneer,
                     MockDatabaseService,
-                    MockMultiBeaconClient,
                     MockGossiper,
                 >::get_payload,
             ),
@@ -185,7 +179,7 @@ pub fn builder_api_app() -> (
 #[allow(clippy::type_complexity)]
 pub fn proposer_api_app() -> (
     Router,
-    Arc<ProposerApi<MockAuctioneer, MockDatabaseService, MockMultiBeaconClient, MockGossiper>>,
+    Arc<ProposerApi<MockAuctioneer, MockDatabaseService, MockGossiper>>,
     Receiver<Sender<ChainUpdate>>,
     Arc<MockAuctioneer>,
 ) {
@@ -193,25 +187,23 @@ pub fn proposer_api_app() -> (
     let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
     let (v3_sender, _v3_receiver) = channel(32);
     let auctioneer = Arc::new(MockAuctioneer::default());
+    let node = MockBeaconNode::new();
+    let client = node.beacon_client();
 
-    let proposer_api_service = Arc::new(ProposerApi::<
-        MockAuctioneer,
-        MockDatabaseService,
-        MockMultiBeaconClient,
-        MockGossiper,
-    >::new(
-        auctioneer.clone(),
-        Arc::new(MockDatabaseService::default()),
-        Arc::new(MockGossiper::new().unwrap()),
-        vec![Arc::new(BlockBroadcaster::Mock(MockBlockBroadcaster::default()))],
-        Arc::new(MockMultiBeaconClient::default()),
-        Arc::new(ChainInfo::for_mainnet()),
-        slot_update_sender.clone(),
-        Arc::new(ValidatorPreferences::default()),
-        gossip_receiver,
-        Default::default(),
-        v3_sender,
-    ));
+    let proposer_api_service =
+        Arc::new(ProposerApi::<MockAuctioneer, MockDatabaseService, MockGossiper>::new(
+            auctioneer.clone(),
+            Arc::new(MockDatabaseService::default()),
+            Arc::new(MockGossiper::new().unwrap()),
+            vec![Arc::new(BlockBroadcaster::BeaconClient(client))],
+            Arc::new(MultiBeaconClient::new(vec![])),
+            Arc::new(ChainInfo::for_mainnet()),
+            slot_update_sender.clone(),
+            Arc::new(ValidatorPreferences::default()),
+            gossip_receiver,
+            Default::default(),
+            v3_sender,
+        ));
 
     let router = Router::new()
         .route(
@@ -219,7 +211,6 @@ pub fn proposer_api_app() -> (
             get(ProposerApi::<
                 MockAuctioneer,
                 MockDatabaseService,
-                MockMultiBeaconClient,
                 MockGossiper,
             >::get_header),
         )
@@ -229,7 +220,6 @@ pub fn proposer_api_app() -> (
                 ProposerApi::<
                     MockAuctioneer,
                     MockDatabaseService,
-                    MockMultiBeaconClient,
                     MockGossiper,
                 >::get_payload,
             ),
@@ -241,7 +231,6 @@ pub fn proposer_api_app() -> (
                 ProposerApi::<
                     MockAuctioneer,
                     MockDatabaseService,
-                    MockMultiBeaconClient,
                     MockGossiper,
                 >::register_validators,
             ),

@@ -7,7 +7,6 @@ use axum::{
     routing::{get, post},
     Extension, Router,
 };
-use helix_beacon::{beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient};
 use helix_common::{utils::extract_request_id, Route, RouterConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
@@ -42,12 +41,8 @@ pub type BuilderApiProd = BuilderApi<
     GrpcGossiperClientManager,
 >;
 
-pub type ProposerApiProd = ProposerApi<
-    RedisCache,
-    PostgresDatabaseService,
-    MultiBeaconClient<BeaconClient>,
-    GrpcGossiperClientManager,
->;
+pub type ProposerApiProd =
+    ProposerApi<RedisCache, PostgresDatabaseService, GrpcGossiperClientManager>;
 
 pub type DataApiProd = DataApi<PostgresDatabaseService>;
 

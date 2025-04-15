@@ -8,14 +8,3 @@ pub struct PublishBlobsRequest {
     pub blob_sidecars: BlobSidecars,
     pub beacon_root: B256,
 }
-
-#[test]
-fn test_serde() {
-    let blobs = PublishBlobsRequest {
-        blob_sidecars: BlobSidecars::new(vec![], 6).unwrap(),
-        beacon_root: B256::ZERO,
-    };
-    let json = serde_json::to_vec(&blobs).unwrap();
-
-    println!("{:?}", json);
-}

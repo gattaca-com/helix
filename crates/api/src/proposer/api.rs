@@ -8,7 +8,9 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
-use helix_beacon::{types::BroadcastValidation, BlockBroadcaster, MultiBeaconClientTrait};
+use helix_beacon::{
+    multi_beacon_client::MultiBeaconClient, types::BroadcastValidation, BlockBroadcaster,
+};
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
@@ -61,18 +63,17 @@ pub(crate) const MAX_BLINDED_BLOCK_LENGTH: usize = 1024 * 1024;
 pub(crate) const _MAX_VAL_REGISTRATIONS_LENGTH: usize = 425 * 10_000; // 425 bytes per registration (json) * 10,000 registrations
 
 #[derive(Clone)]
-pub struct ProposerApi<A, DB, M, G>
+pub struct ProposerApi<A, DB, G>
 where
     A: Auctioneer,
     DB: DatabaseService,
-    M: MultiBeaconClientTrait,
     G: GossipClientTrait + 'static,
 {
     auctioneer: Arc<A>,
     db: Arc<DB>,
     gossiper: Arc<G>,
     broadcasters: Vec<Arc<BlockBroadcaster>>,
-    multi_beacon_client: Arc<M>,
+    multi_beacon_client: Arc<MultiBeaconClient>,
 
     /// Information about the current head slot and next proposer duty
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
@@ -86,11 +87,10 @@ where
     v3_payload_request: Sender<(B256, PayloadSocketAddress)>,
 }
 
-impl<A, DB, M, G> ProposerApi<A, DB, M, G>
+impl<A, DB, G> ProposerApi<A, DB, G>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    M: MultiBeaconClientTrait + 'static,
     G: GossipClientTrait + 'static,
 {
     pub fn new(
@@ -98,7 +98,7 @@ where
         db: Arc<DB>,
         gossiper: Arc<G>,
         broadcasters: Vec<Arc<BlockBroadcaster>>,
-        multi_beacon_client: Arc<M>,
+        multi_beacon_client: Arc<MultiBeaconClient>,
         chain_info: Arc<ChainInfo>,
         slot_update_subscription: Sender<Sender<ChainUpdate>>,
         validator_preferences: Arc<ValidatorPreferences>,
@@ -142,7 +142,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/status>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn status(
-        Extension(_proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
+        Extension(_proposer_api): Extension<Arc<ProposerApi<A, DB, G>>>,
         headers: HeaderMap,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         Ok(StatusCode::OK)
@@ -162,7 +162,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/registerValidator>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn register_validators(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G>>>,
         headers: HeaderMap,
         Json(registrations): Json<Vec<SignedValidatorRegistration>>,
     ) -> Result<StatusCode, ProposerApiError> {
@@ -354,7 +354,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/getHeader>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn get_header(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G>>>,
         headers: HeaderMap,
         Path(GetHeaderParams { slot, parent_hash, public_key }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
@@ -533,7 +533,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlock>
     #[tracing::instrument(skip_all, fields(id))]
     pub async fn get_payload(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, M, G>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
@@ -850,12 +850,11 @@ where
     }
 }
 
-// HELPERS
-impl<A, DB, M, G> ProposerApi<A, DB, M, G>
+impl<A, DB, G> ProposerApi<A, DB, G>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    M: MultiBeaconClientTrait + 'static,
+
     G: GossipClientTrait + 'static,
 {
     /// Validate a single registration.
@@ -1398,11 +1397,10 @@ fn get_x_mev_boost_header_start_ms(header_map: &HeaderMap) -> Option<u64> {
 }
 
 // STATE SYNC
-impl<A, DB, M, G> ProposerApi<A, DB, M, G>
+impl<A, DB, G> ProposerApi<A, DB, G>
 where
     A: Auctioneer,
     DB: DatabaseService,
-    M: MultiBeaconClientTrait,
     G: GossipClientTrait + 'static,
 {
     /// Subscribes to slot head updater.
