@@ -23,7 +23,7 @@ use helix_common::{
     },
     bid_submission::{
         cancellation::SignedCancellation, v2::header_submission::SignedHeaderSubmission,
-        v3::header_submission_v3::PayloadSocketAddress, BidSubmission,
+        v3::header_submission_v3::HeaderSubmissionV3, BidSubmission,
     },
     chain_info::ChainInfo,
     metrics::{BUILDER_GOSSIP_QUEUE, DB_QUEUE},
@@ -448,10 +448,35 @@ where
         Self::handle_submit_header(&api, payload, None, is_cancellations_enabled, trace).await
     }
 
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
+    pub async fn submit_header_v3(
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        headers: HeaderMap,
+        req: Request<Body>,
+    ) -> Result<StatusCode, BuilderApiError> {
+        let mut trace =
+            HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+
+        debug!(timestamp_request_start = trace.receive,);
+
+        // Decode the incoming request body into a payload
+        let (payload, is_cancellations_enabled) =
+            decode_header_submission_v3(req, &mut trace).await?;
+
+        Self::handle_submit_header(
+            &api,
+            payload.submission,
+            Some(payload.url),
+            is_cancellations_enabled,
+            trace,
+        )
+        .await
+    }
+
     pub(crate) async fn handle_submit_header(
         api: &Arc<BuilderApi<A, DB, S, G>>,
         payload: SignedHeaderSubmission,
-        payload_address: Option<PayloadSocketAddress>,
+        payload_address: Option<Vec<u8>>,
         is_cancellations_enabled: bool,
         mut trace: HeaderSubmissionTrace,
     ) -> Result<StatusCode, BuilderApiError> {
@@ -645,7 +670,11 @@ where
             }
             Some(payload_addr) => {
                 api.auctioneer
-                    .save_payload_address(payload.block_hash(), payload_addr)
+                    .save_payload_address(
+                        payload.block_hash(),
+                        payload.builder_public_key(),
+                        payload_addr,
+                    )
                     .await
                     .map_err(|err| {
                         error!(%err, "failed to save payload address");
@@ -1077,7 +1106,11 @@ where
         if let Some(payload_address) = req.payload_address {
             if let Err(e) = self
                 .auctioneer
-                .save_payload_address(&req.bid_trace.block_hash, payload_address)
+                .save_payload_address(
+                    &req.bid_trace.block_hash,
+                    &req.builder_pub_key,
+                    payload_address,
+                )
                 .await
             {
                 warn!(%e, "failed to save payload address");
@@ -1258,7 +1291,7 @@ where
         bid_trace: &BidTrace,
         is_cancellations_enabled: bool,
         on_receive: u64,
-        payload_address: Option<PayloadSocketAddress>,
+        payload_address: Option<Vec<u8>>,
     ) {
         let params = BroadcastHeaderParams {
             signed_builder_bid: builder_bid,
@@ -2112,6 +2145,61 @@ pub async fn decode_header_submission(
     );
 
     Ok((header, is_cancellations_enabled))
+}
+
+pub async fn decode_header_submission_v3(
+    req: Request<Body>,
+    trace: &mut HeaderSubmissionTrace,
+) -> Result<(HeaderSubmissionV3, bool), BuilderApiError> {
+    // Extract the query parameters
+    let is_cancellations_enabled = req
+        .uri()
+        .query()
+        .unwrap_or("")
+        .split('&')
+        .find_map(|part| {
+            let mut split = part.splitn(2, '=');
+            if split.next()? == "cancellations" {
+                Some(split.next()? == "1")
+            } else {
+                None
+            }
+        })
+        .unwrap_or(false);
+
+    // Get content-type header
+    let content_type = req.headers().get("Content-Type").cloned();
+
+    // Read the body
+    let body = req.into_body();
+    let body_bytes = to_bytes(body, MAX_PAYLOAD_LENGTH).await?;
+    if body_bytes.len() > MAX_PAYLOAD_LENGTH {
+        return Err(BuilderApiError::PayloadTooLarge {
+            max_size: MAX_PAYLOAD_LENGTH,
+            size: body_bytes.len(),
+        });
+    }
+
+    let submission_v3 = match content_type.as_ref().and_then(|val| val.to_str().ok()) {
+        Some("application/octet-stream") => HeaderSubmissionV3::from_ssz_bytes(&body_bytes)
+            .map_err(|_| BuilderApiError::DeserializeError)?,
+        Some("application/cbor") => cbor4ii::serde::from_slice(&body_bytes)
+            .map_err(|_| BuilderApiError::DeserializeError)?,
+        _ => serde_json::from_slice(&body_bytes)?,
+    };
+
+    trace.decode = utcnow_ns();
+    debug!(
+        timestamp_after_decoding = trace.decode,
+        decode_latency_ns = trace.decode.saturating_sub(trace.receive),
+        builder_pub_key = ?submission_v3.submission.builder_public_key(),
+        block_hash = ?submission_v3.submission.block_hash(),
+        proposer_pubkey = ?submission_v3.submission.proposer_public_key(),
+        parent_hash = ?submission_v3.submission.parent_hash(),
+        value = ?submission_v3.submission.value(),
+    );
+
+    Ok((submission_v3, is_cancellations_enabled))
 }
 
 /// - Validates the expected block.timestamp.

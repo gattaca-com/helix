@@ -163,7 +163,7 @@ impl ApiService {
             chain_info.clone(),
             simulator,
             gossiper.clone(),
-            relay_signing_context,
+            relay_signing_context.clone(),
             config.clone(),
             slot_update_sender.clone(),
             builder_gossip_receiver,
@@ -180,6 +180,7 @@ impl ApiService {
             tokio::spawn(builder::v3::payload::fetch_builder_blocks(
                 builder_api.clone(),
                 v3_payload_request_recv,
+                relay_signing_context,
             ));
         }
 

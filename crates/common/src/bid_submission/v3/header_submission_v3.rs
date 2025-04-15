@@ -5,8 +5,9 @@ use std::{
 
 use alloy_primitives::B256;
 use bitflags::bitflags;
-use helix_types::BlsPublicKey;
+use helix_types::{BlsPublicKey, BlsSignature};
 use ssz_derive::{Decode, Encode};
+use tree_hash_derive::TreeHash;
 
 use crate::bid_submission::v2::header_submission::SignedHeaderSubmission;
 
@@ -105,14 +106,28 @@ impl PayloadSocketAddress {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode)]
 pub struct HeaderSubmissionV3 {
-    pub payload_socket_address: PayloadSocketAddress,
+    pub url: Vec<u8>,
     pub submission: SignedHeaderSubmission,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode)]
+/// Request sent to builders for block payloads.
+#[derive(Debug, serde::Deserialize, serde::Serialize, Encode, Decode, TreeHash)]
 pub struct GetPayloadV3 {
+    /// Hash of the block header from the `SignedHeaderSubmission`.
     pub block_hash: B256,
-    pub request_ts: u64,
+    /// Timestamp (in milliseconds) when the relay made this request.
+    pub request_ts_millis: u64,
+    /// Relay's public key
+    pub relay_pubkey: BlsPublicKey,
+}
+
+/// Builder block payload response.
+#[derive(Debug, serde::Deserialize, serde::Serialize, Encode, Decode)]
+pub struct SignedGetPayloadV3 {
+    pub message: GetPayloadV3,
+    /// Signature from the relay's key that it uses to sign the `get_header`
+    /// responses.
+    pub signature: BlsSignature,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode)]

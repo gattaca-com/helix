@@ -1,14 +1,8 @@
 use alloy_primitives::{B256, U256};
 use async_trait::async_trait;
 use helix_common::{
-    bid_submission::{
-        v2::header_submission::SignedHeaderSubmission,
-        v3::header_submission_v3::PayloadSocketAddress,
-    },
-    builder_info::BuilderInfo,
-    pending_block::PendingBlock,
-    signing::RelaySigningContext,
-    ProposerInfo,
+    bid_submission::v2::header_submission::SignedHeaderSubmission, builder_info::BuilderInfo,
+    pending_block::PendingBlock, signing::RelaySigningContext, ProposerInfo,
 };
 use helix_database::BuilderInfoDocument;
 use helix_types::{
@@ -188,13 +182,14 @@ pub trait Auctioneer: Send + Sync + Clone {
     async fn save_payload_address(
         &self,
         block_hash: &B256,
-        payload_socket_address: PayloadSocketAddress,
+        builder_pub_key: &BlsPublicKey,
+        payload_url: Vec<u8>,
     ) -> Result<(), AuctioneerError>;
 
-    async fn get_payload_address(
+    async fn get_payload_url(
         &self,
         block_hash: &B256,
-    ) -> Result<Option<PayloadSocketAddress>, AuctioneerError>;
+    ) -> Result<Option<(BlsPublicKey, Vec<u8>)>, AuctioneerError>;
 
     /// Try to acquire or renew leadership for the housekeeper.
     /// Returns: true if the housekeeper is the leader, false if it isn't.
