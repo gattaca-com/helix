@@ -9,4 +9,4 @@ pub use chain_event_updater::{
     ChainEventUpdater, ChainUpdate, PayloadAttributesUpdate, SlotUpdate,
 };
 pub use housekeeper::Housekeeper;
-pub use primev_service::{EthereumPrimevService, PrimevService};
+pub use primev_service::EthereumPrimevService;

@@ -1,8 +1,5 @@
-#[cfg(test)]
-use std::sync::Mutex;
 use std::{convert::TryFrom, sync::Arc};
 
-use async_trait::async_trait;
 use ethers::{
     abi::{Abi, AbiParser, Address, Bytes},
     contract::{Contract, EthEvent},
@@ -12,25 +9,6 @@ use ethers::{
 use helix_common::{PrimevConfig, ProposerDuty};
 use helix_types::BlsPublicKey;
 use tracing::{debug, error};
-
-/// Service for interacting with Primev contracts
-#[async_trait]
-pub trait PrimevService: Send + Sync + 'static {
-    /// Initialize the service with configuration
-    async fn initialize(
-        &mut self,
-        config: PrimevConfig,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
-
-    /// Fetch validators that have opted into Primev services
-    async fn get_registered_primev_validators(
-        &self,
-        proposer_duties: Vec<ProposerDuty>,
-    ) -> Vec<BlsPublicKey>;
-
-    /// Fetch builders registered with Primev
-    async fn get_registered_primev_builders(&self) -> Vec<BlsPublicKey>;
-}
 
 #[derive(Debug, EthEvent)]
 #[ethevent(abi = "BLSKeyAdded(address indexed provider, bytes blsPublicKey)")]
@@ -157,27 +135,10 @@ impl EthereumPrimevService {
 
         Ok(Self { builder_contract, validator_contract })
     }
-
-    /// Create an uninitialized service - only for compatibility with the PrimevService trait
-    fn uninitialized() -> Self {
-        panic!("EthereumPrimevService must be initialized with new() - cannot create uninitialized instance")
-    }
 }
 
-// We need to keep this implementation for the trait, but we'll make it panic
-// if someone tries to use it, forcing them to use new() instead
-#[async_trait]
-impl PrimevService for EthereumPrimevService {
-    async fn initialize(
-        &mut self,
-        _config: PrimevConfig,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        // This method exists only for trait compatibility
-        // It should never be called directly on EthereumPrimevService
-        panic!("EthereumPrimevService must be initialized with new() method, not through the trait")
-    }
-
-    async fn get_registered_primev_builders(&self) -> Vec<BlsPublicKey> {
+impl EthereumPrimevService {
+    pub async fn get_registered_primev_builders(&self) -> Vec<BlsPublicKey> {
         let event = self.builder_contract.event_for_name("BLSKeyAdded").unwrap().from_block(0);
 
         let providers: Vec<ValueChanged> = match event.query().await {
@@ -200,7 +161,7 @@ impl PrimevService for EthereumPrimevService {
         result
     }
 
-    async fn get_registered_primev_validators(
+    pub async fn get_registered_primev_validators(
         &self,
         proposer_duties: Vec<ProposerDuty>,
     ) -> Vec<BlsPublicKey> {
@@ -294,95 +255,5 @@ impl PrimevService for EthereumPrimevService {
         }
 
         opted_in_validators
-    }
-}
-
-// Implement Default for API compatibility, but make it clear it should not be used
-impl Default for EthereumPrimevService {
-    fn default() -> Self {
-        // For API compatibility only, will panic if used
-        Self::uninitialized()
-    }
-}
-
-#[cfg(test)]
-pub struct MockPrimevService {
-    pub mock_validators: Vec<BlsPublicKey>,
-    pub mock_builders: Vec<BlsPublicKey>,
-    operation_tracker: Option<Arc<Mutex<Vec<&'static str>>>>,
-    is_initialized: bool,
-}
-
-#[cfg(test)]
-impl MockPrimevService {
-    pub fn new() -> Self {
-        use helix_types::get_fixed_pubkey;
-
-        // Create default test values
-        let default_validator = get_fixed_pubkey(0);
-        let default_builder = get_fixed_pubkey(1);
-
-        Self {
-            mock_validators: vec![default_validator],
-            mock_builders: vec![default_builder],
-            operation_tracker: None,
-            is_initialized: false,
-        }
-    }
-
-    pub fn with_validators(mut self, validators: Vec<BlsPublicKey>) -> Self {
-        self.mock_validators = validators;
-        self
-    }
-
-    pub fn with_builders(mut self, builders: Vec<BlsPublicKey>) -> Self {
-        self.mock_builders = builders;
-        self
-    }
-
-    pub fn set_operation_tracker(&mut self, tracker: Arc<Mutex<Vec<&'static str>>>) {
-        self.operation_tracker = Some(tracker);
-    }
-}
-
-#[cfg(test)]
-#[async_trait]
-impl PrimevService for MockPrimevService {
-    async fn initialize(
-        &mut self,
-        _config: PrimevConfig,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        if let Some(tracker) = &self.operation_tracker {
-            tracker.lock().unwrap().push("initialize");
-        }
-        self.is_initialized = true;
-        Ok(())
-    }
-
-    async fn get_registered_primev_validators(
-        &self,
-        _proposer_duties: Vec<ProposerDuty>,
-    ) -> Vec<BlsPublicKey> {
-        if let Some(tracker) = &self.operation_tracker {
-            tracker.lock().unwrap().push("get_registered_primev_validators");
-        }
-
-        if !self.is_initialized {
-            debug!("Using default mock validators because service not initialized");
-        }
-
-        self.mock_validators.clone()
-    }
-
-    async fn get_registered_primev_builders(&self) -> Vec<BlsPublicKey> {
-        if let Some(tracker) = &self.operation_tracker {
-            tracker.lock().unwrap().push("get_registered_primev_builders");
-        }
-
-        if !self.is_initialized {
-            debug!("Using default mock builders because service not initialized");
-        }
-
-        self.mock_builders.clone()
     }
 }
