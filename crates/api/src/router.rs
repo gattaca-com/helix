@@ -65,7 +65,6 @@ pub fn build_router(
             Route::SubmitBlock => post(BuilderApiProd::submit_block),
             Route::SubmitBlockOptimistic => post(BuilderApiProd::submit_block_v2),
             Route::SubmitHeader => post(BuilderApiProd::submit_header),
-            Route::CancelBid => post(BuilderApiProd::cancel_bid),
             Route::GetTopBid => get(BuilderApiProd::get_top_bid),
             Route::Status => get(ProposerApiProd::status),
             Route::RegisterValidators => post(ProposerApiProd::register_validators),

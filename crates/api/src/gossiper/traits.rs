@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use crate::gossiper::{
     error::GossipError,
     types::{
-        broadcast_cancellation::BroadcastCancellationParams, BroadcastGetPayloadParams,
-        BroadcastHeaderParams, BroadcastPayloadParams, RequestPayloadParams,
+        BroadcastGetPayloadParams, BroadcastHeaderParams, BroadcastPayloadParams,
+        RequestPayloadParams,
     },
 };
 
@@ -26,12 +26,6 @@ pub trait GossipClientTrait: Send + Sync + Clone {
     async fn broadcast_get_payload(
         &self,
         request: BroadcastGetPayloadParams,
-    ) -> Result<(), GossipError>;
-
-    /// Broadcast a request for a cancellation. This builders bid will be canelled in all regions.
-    async fn broadcast_cancellation(
-        &self,
-        request: BroadcastCancellationParams,
     ) -> Result<(), GossipError>;
 
     async fn request_payload(&self, _request: RequestPayloadParams) -> Result<(), GossipError>;

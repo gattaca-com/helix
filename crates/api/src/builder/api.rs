@@ -11,7 +11,7 @@ use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::{Request, StatusCode},
     response::{IntoResponse, Response},
-    Extension, Json,
+    Extension,
 };
 use bytes::Bytes;
 use flate2::read::GzDecoder;
@@ -22,7 +22,7 @@ use helix_common::{
         proposer_api::ValidatorRegistrationInfo,
     },
     bid_submission::{
-        cancellation::SignedCancellation, v2::header_submission::SignedHeaderSubmission,
+        v2::header_submission::SignedHeaderSubmission,
         v3::header_submission_v3::PayloadSocketAddress, BidSubmission,
     },
     chain_info::ChainInfo,
@@ -56,10 +56,7 @@ use crate::{
     },
     gossiper::{
         traits::GossipClientTrait,
-        types::{
-            broadcast_cancellation::BroadcastCancellationParams, BroadcastHeaderParams,
-            BroadcastPayloadParams, GossipedMessage,
-        },
+        types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
     },
 };
 
@@ -896,68 +893,6 @@ where
         Ok(StatusCode::OK)
     }
 
-    /// Handles the cancellation of a bid for a builder. Builders currently cached bid in the
-    /// auctioneer is deleted, the top bid is recalculated, and the cancellation is gossiped to
-    /// all other relays.
-    #[tracing::instrument(skip_all, fields(id))]
-    pub async fn cancel_bid(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
-        headers: HeaderMap,
-        Json(signed_cancellation): Json<SignedCancellation>,
-    ) -> Result<StatusCode, BuilderApiError> {
-        let request_id = extract_request_id(&headers);
-        tracing::Span::current().record("id", request_id.to_string());
-
-        let (head_slot, _next_duty) = api.curr_slot_info.read().await.clone();
-
-        let slot = signed_cancellation.message.slot;
-
-        info!(head_slot, "processing cancellation");
-
-        // Verify the cancellation is for the current slot
-        if slot <= head_slot {
-            debug!("cancellation is for a past slot",);
-        }
-
-        // Verify the payload signature
-        if let Err(err) = signed_cancellation.verify_signature(&api.chain_info.context) {
-            warn!(%err, "failed to verify signature");
-            return Err(BuilderApiError::SignatureVerificationFailed);
-        }
-
-        // Verify payload has not already been delivered
-        match api.auctioneer.get_last_slot_delivered().await {
-            Ok(Some(del_slot)) => {
-                if slot <= del_slot {
-                    debug!("payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                error!(%err, "failed to get last slot delivered");
-            }
-        }
-
-        if let Err(err) = api
-            .auctioneer
-            .delete_builder_bid(
-                slot.as_u64(),
-                &signed_cancellation.message.parent_hash,
-                &signed_cancellation.message.proposer_public_key,
-                &signed_cancellation.message.builder_public_key,
-            )
-            .await
-        {
-            error!(%err, "Failed processing cancellable bid below floor. Could not delete builder bid.");
-            return Err(BuilderApiError::InternalError);
-        }
-
-        api.gossip_cancellation(signed_cancellation, &request_id).await;
-
-        Ok(StatusCode::OK)
-    }
-
     #[tracing::instrument(skip_all)]
     pub async fn get_top_bid(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
@@ -1162,48 +1097,6 @@ where
         });
     }
 
-    /// Processes a gossiped cancellation message. No need to verify the signature as the message
-    /// is gossiped internally and verification has been performed upstream.
-    #[tracing::instrument(skip_all, fields(id = %req.request_id))]
-    pub async fn process_gossiped_cancellation(&self, req: BroadcastCancellationParams) {
-        debug!("received gossiped cancellation",);
-
-        let (head_slot, _) = self.curr_slot_info.read().await.clone();
-
-        let slot = req.signed_cancellation.message.slot;
-
-        // Verify the cancellation is for the current slot
-        if slot <= head_slot {
-            warn!("cancellation is for a past slot",);
-        }
-
-        // Verify payload has not already been delivered
-        match self.auctioneer.get_last_slot_delivered().await {
-            Ok(Some(del_slot)) => {
-                if slot <= del_slot {
-                    debug!("payload already delivered");
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                error!(%err, "failed to get last slot delivered");
-            }
-        }
-
-        if let Err(err) = self
-            .auctioneer
-            .delete_builder_bid(
-                slot.as_u64(),
-                &req.signed_cancellation.message.parent_hash,
-                &req.signed_cancellation.message.proposer_public_key,
-                &req.signed_cancellation.message.builder_public_key,
-            )
-            .await
-        {
-            error!(%err, "Failed processing cancellable bid below floor. Could not delete builder bid.");
-        }
-    }
-
     /// This function should be run as a seperate async task.
     /// Will process new gossiped messages from
     async fn process_gossiped_info(&self, mut recveiver: Receiver<GossipedMessage>) {
@@ -1220,12 +1113,6 @@ where
                     let api_clone = self.clone();
                     task::spawn(file!(), line!(), async move {
                         api_clone.process_gossiped_payload(*payload).await;
-                    });
-                }
-                GossipedMessage::Cancellation(payload) => {
-                    let api_clone = self.clone();
-                    task::spawn(file!(), line!(), async move {
-                        api_clone.process_gossiped_cancellation(*payload).await;
                     });
                 }
                 _ => {}
@@ -1288,17 +1175,6 @@ where
         };
         if let Err(err) = self.gossiper.broadcast_payload(params).await {
             error!(%err, "failed to broadcast payload");
-        }
-    }
-
-    async fn gossip_cancellation(
-        &self,
-        signed_cancellation: SignedCancellation,
-        request_id: &Uuid,
-    ) {
-        let params = BroadcastCancellationParams { signed_cancellation, request_id: *request_id };
-        if let Err(err) = self.gossiper.broadcast_cancellation(params).await {
-            error!(request_id = %request_id, error = %err, "failed to broadcast header");
         }
     }
 }

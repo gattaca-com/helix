@@ -10,7 +10,6 @@ use tokio::{sync::mpsc::Sender, time::sleep};
 use tonic::{transport::Channel, Request, Response, Status};
 use tracing::error;
 
-use super::types::broadcast_cancellation::BroadcastCancellationParams;
 use crate::{
     gossiper::{
         error::GossipError,
@@ -30,7 +29,6 @@ use crate::{
 const HEADER_ID: &str = "header";
 const PAYLOAD_ID: &str = "payload";
 const GET_PAYLOAD_ID: &str = "get_payload";
-const CANCELLATION_ID: &str = "cancel";
 const REQUEST_PAYLOAD_ID: &str = "request_payload";
 
 #[derive(Clone)]
@@ -191,48 +189,6 @@ impl GrpcGossiperClient {
         }
     }
 
-    pub async fn broadcast_cancellation(
-        &self,
-        request: grpc::BroadcastCancellationParams,
-    ) -> Result<(), GossipError> {
-        let _timer = GossipMetrics::out_timer(CANCELLATION_ID);
-        let size = request.encoded_len();
-        GossipMetrics::out_size(CANCELLATION_ID, size);
-
-        let request = Request::new(request);
-        let client = {
-            let client_guard = self.client.read().await;
-            client_guard.clone()
-        };
-
-        if let Some(mut client) = client {
-            let result = tokio::time::timeout(
-                Duration::from_secs(5),
-                client.broadcast_cancellation(request),
-            )
-            .await;
-            match result {
-                Ok(Ok(_)) => {
-                    GossipMetrics::out_count(CANCELLATION_ID, true);
-                    Ok(())
-                }
-                Ok(Err(err)) => {
-                    error!(err = %err, "Client call failed.");
-                    GossipMetrics::out_count(CANCELLATION_ID, false);
-                    Err(GossipError::BroadcastError(err))
-                }
-                Err(_) => {
-                    error!("Client call timed out.");
-                    GossipMetrics::out_count(CANCELLATION_ID, false);
-                    Err(GossipError::TimeoutError)
-                }
-            }
-        } else {
-            GossipMetrics::out_count(CANCELLATION_ID, false);
-            Err(GossipError::ClientNotConnected)
-        }
-    }
-
     pub async fn request_payload(
         &self,
         request: grpc::RequestPayloadParams,
@@ -361,24 +317,6 @@ impl GossipClientTrait for GrpcGossiperClientManager {
         Ok(())
     }
 
-    async fn broadcast_cancellation(
-        &self,
-        request: BroadcastCancellationParams,
-    ) -> Result<(), GossipError> {
-        let request = request.to_proto();
-
-        for client in self.clients.iter() {
-            let client = client.clone();
-            let request = request.clone();
-            task::spawn(file!(), line!(), async move {
-                if let Err(err) = client.broadcast_cancellation(request).await {
-                    error!(err = %err, "failed to broadcast header");
-                }
-            });
-        }
-        Ok(())
-    }
-
     async fn request_payload(&self, request: RequestPayloadParams) -> Result<(), GossipError> {
         let request = request.to_proto();
 
@@ -464,26 +402,6 @@ impl GossipService for GrpcGossiperService {
         Ok(Response::new(()))
     }
 
-    async fn broadcast_cancellation(
-        &self,
-        request: Request<grpc::BroadcastCancellationParams>,
-    ) -> Result<Response<()>, Status> {
-        GossipMetrics::in_count(CANCELLATION_ID);
-        let inner = request.into_inner();
-        let size = inner.encoded_len();
-        GossipMetrics::in_size(CANCELLATION_ID, size);
-
-        let request = BroadcastCancellationParams::from_proto(inner);
-        if let Err(err) =
-            self.builder_api_sender.send(GossipedMessage::Cancellation(Box::new(request))).await
-        {
-            error!(err = %err, "failed to send cancellation to builder");
-        } else {
-            BUILDER_GOSSIP_QUEUE.inc();
-        }
-        Ok(Response::new(()))
-    }
-
     async fn request_payload(
         &self,
         request: Request<grpc::RequestPayloadParams>,
@@ -497,7 +415,7 @@ impl GossipService for GrpcGossiperService {
         if let Err(err) =
             self.proposer_api_sender.send(GossipedMessage::RequestPayload(Box::new(request))).await
         {
-            error!(err = %err, "failed to send cancellation to builder");
+            error!(err = %err, "failed to send payload to builder");
         } else {
             PROPOSER_GOSSIP_QUEUE.inc();
         }
