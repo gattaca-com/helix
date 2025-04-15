@@ -7,8 +7,8 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    api::*, request_encoding::Encoding, serde_utils::default_bool, BuilderInfo,
-    ValidatorPreferences,
+    api::*, chain_info::ChainInfo, request_encoding::Encoding, serde_utils::default_bool,
+    BuilderInfo, ValidatorPreferences,
 };
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -207,6 +207,19 @@ pub enum NetworkConfig {
         genesis_validator_root: B256,
         genesis_time: u64,
     },
+}
+
+impl NetworkConfig {
+    pub fn to_chain_info(&self) -> ChainInfo {
+        match self {
+            NetworkConfig::Mainnet => ChainInfo::for_mainnet(),
+            NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
+            NetworkConfig::Holesky => ChainInfo::for_holesky(),
+            NetworkConfig::Custom { ref dir_path, ref genesis_validator_root, genesis_time } => {
+                ChainInfo::for_custom(dir_path.clone(), *genesis_validator_root, *genesis_time)
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for NetworkConfig {

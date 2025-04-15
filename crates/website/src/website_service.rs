@@ -8,7 +8,7 @@ use helix_datastore::MockAuctioneer; // Import MockAuctioneer from the appropria
 use helix_housekeeper::{ChainEventUpdater, ChainUpdate};
 use tokio::{
     net::TcpListener,
-    sync::{broadcast, mpsc, RwLock},
+    sync::{broadcast, RwLock},
 };
 use tracing::{debug, error, info, warn};
 
@@ -20,12 +20,12 @@ use crate::{
     templates::IndexTemplate,
 };
 
-pub struct WebsiteService {}
+pub struct WebsiteService;
 
 impl WebsiteService {
-    pub async fn run_loop(config: RelayConfig, postgres_db: PostgresDatabaseService) {
+    pub async fn run_loop(config: RelayConfig, db: Arc<PostgresDatabaseService>) {
         loop {
-            match WebsiteService::run(config.clone(), postgres_db.clone()).await {
+            match WebsiteService::run(config.clone(), db.clone()).await {
                 Ok(_) => {
                     tracing::error!("Website service unexpectedly completed. Restarting...")
                 }
@@ -37,11 +37,9 @@ impl WebsiteService {
 
     async fn run(
         config: RelayConfig,
-        postgres_db: PostgresDatabaseService,
+        db: Arc<PostgresDatabaseService>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         info!("Starting WebsiteService");
-
-        let db = Arc::new(postgres_db);
 
         // ChainInfo
         let chain_info = Arc::new(match config.network_config {
@@ -75,9 +73,13 @@ impl WebsiteService {
             latest_slot: Arc::new(RwLock::new(0)),
         });
 
-        // Create the ChainEventUpdater and subscription
-        let (mut chain_updater, chain_update_subscription) =
-            ChainEventUpdater::new(db.clone(), Arc::new(MockAuctioneer::new()), chain_info.clone());
+        let (chain_update_tx, chain_update_rx) = broadcast::channel(100);
+        let chain_updater = ChainEventUpdater::new(
+            db.clone(),
+            Arc::new(MockAuctioneer::new()),
+            chain_update_tx,
+            chain_info.clone(),
+        );
         info!("ChainEventUpdater initialized");
 
         let (head_event_tx, head_event_rx) = broadcast::channel(100);
@@ -94,11 +96,9 @@ impl WebsiteService {
 
         // Start handling chain updates
         let update_state = state.clone();
-        let chain_update_subscription = chain_update_subscription.clone();
+
         tokio::spawn(async move {
-            if let Err(e) =
-                Self::handle_chain_updates(update_state, chain_update_subscription).await
-            {
+            if let Err(e) = Self::handle_chain_updates(update_state, chain_update_rx).await {
                 error!("Error handling chain updates: {:?}", e);
             }
         });
@@ -119,14 +119,11 @@ impl WebsiteService {
 
     async fn handle_chain_updates(
         state: Arc<AppState>,
-        chain_update_subscription: mpsc::Sender<mpsc::Sender<ChainUpdate>>,
+        mut chain_update_rx: broadcast::Receiver<ChainUpdate>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let (tx, mut rx) = mpsc::channel(20);
-        chain_update_subscription.send(tx).await?;
-
         info!("Subscribed to chain updates");
 
-        while let Some(update) = rx.recv().await {
+        while let Ok(update) = chain_update_rx.recv().await {
             match update {
                 ChainUpdate::SlotUpdate(slot_update) => {
                     info!("Received slot update: {}", slot_update.slot);

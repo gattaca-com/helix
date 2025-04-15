@@ -68,9 +68,7 @@ pub struct EthereumPrimevService {
 impl EthereumPrimevService {
     /// Create a new EthereumPrimevService with the given configuration
     /// This ensures the service is always initialized before use
-    pub async fn new(
-        config: PrimevConfig,
-    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn new(config: PrimevConfig) -> eyre::Result<Self> {
         // Initialize builder contract
         let builder_provider = Provider::<Http>::try_from(config.builder_url.as_str())?;
         let builder_provider = Arc::new(builder_provider);

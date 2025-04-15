@@ -10,6 +10,7 @@ version.workspace = true
 alloy-eips.workspace = true
 alloy-primitives.workspace = true
 ethers.workspace = true
+eyre.workspace = true
 helix-beacon.workspace = true
 helix-common.workspace = true
 helix-database.workspace = true

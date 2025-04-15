@@ -42,7 +42,8 @@ use hyper::HeaderMap;
 use ssz::Decode;
 use tokio::{
     sync::{
-        mpsc::{self, error::SendError, Receiver, Sender},
+        broadcast,
+        mpsc::{self, Receiver, Sender},
         RwLock,
     },
     time::{self},
@@ -103,7 +104,7 @@ where
         gossiper: Arc<G>,
         signing_context: Arc<RelaySigningContext>,
         relay_config: RelayConfig,
-        slot_update_subscription: Sender<Sender<ChainUpdate>>,
+        chain_update_rx: tokio::sync::broadcast::Receiver<ChainUpdate>,
         gossip_receiver: Receiver<GossipedMessage>,
         validator_preferences: Arc<validator_preferences::ValidatorPreferences>,
     ) -> Self {
@@ -141,11 +142,7 @@ where
         // Spin up the housekeep task.
         // This keeps the curr slot info variables up to date.
         let api_clone = api.clone();
-        task::spawn(file!(), line!(), async move {
-            if let Err(err) = api_clone.housekeep(slot_update_subscription.clone()).await {
-                error!(%err, "BuilderApi. housekeep task encountered an error");
-            }
-        });
+        task::spawn(file!(), line!(), api_clone.housekeep(chain_update_rx));
 
         api
     }
@@ -1684,7 +1681,6 @@ where
     }
 }
 
-// STATE SYNC
 impl<A, DB, S, G> BuilderApi<A, DB, S, G>
 where
     A: Auctioneer + 'static,
@@ -1694,14 +1690,8 @@ where
 {
     /// Subscribes to slot head updater.
     /// Updates the current slot, next proposer duty and prepares the get_validators() response.
-    pub async fn housekeep(
-        &self,
-        slot_update_subscription: Sender<Sender<ChainUpdate>>,
-    ) -> Result<(), SendError<Sender<ChainUpdate>>> {
-        let (tx, mut rx) = mpsc::channel(20);
-        slot_update_subscription.send(tx).await?;
-
-        while let Some(slot_update) = rx.recv().await {
+    pub async fn housekeep(self, mut rx: broadcast::Receiver<ChainUpdate>) {
+        while let Ok(slot_update) = rx.recv().await {
             match slot_update {
                 ChainUpdate::SlotUpdate(slot_update) => {
                     self.handle_new_slot(slot_update).await;
@@ -1712,7 +1702,7 @@ where
             }
         }
 
-        Ok(())
+        error!("builder API housekeep task disconnected!");
     }
 
     /// Handle a new slot update.

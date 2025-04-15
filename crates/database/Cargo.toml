@@ -12,6 +12,7 @@ async-trait.workspace = true
 bytes.workspace = true
 dashmap.workspace = true
 deadpool-postgres.workspace = true
+eyre.workspace = true
 helix-common.workspace = true
 helix-types.workspace = true
 rand.workspace = true

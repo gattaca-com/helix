@@ -74,7 +74,7 @@ pub struct Housekeeper<DB: DatabaseService + 'static, A: Auctioneer + 'static> {
 
     leader_id: String,
 
-    config: RelayConfig,
+    config: Arc<RelayConfig>,
 
     chain_info: Arc<ChainInfo>,
 }
@@ -84,10 +84,12 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         db: Arc<DB>,
         beacon_client: Arc<MultiBeaconClient>,
         auctioneer: A,
-        primev_service: Option<EthereumPrimevService>,
-        config: RelayConfig,
+        config: Arc<RelayConfig>,
         chain_info: Arc<ChainInfo>,
     ) -> Arc<Self> {
+        let primev_service =
+            config.primev_config.clone().map(|p| EthereumPrimevService::new(p).unwrap());
+
         Arc::new(Self {
             db,
             beacon_client,
