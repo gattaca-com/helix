@@ -110,7 +110,7 @@ async fn handle_builder_connection<A, DB, S, G>(
                 }
                 Err(e) => {
                     trace.decode = utcnow_ns();
-                    tracing::error!(error=?e, ?msg_header, "Failed to decode payload for header submission");
+                    tracing::error!(error=?e, ?msg_header, "Failed to decode payload for header submission: {}", String::from_utf8_lossy(&payload_buffer));
                     break;
                 }
             }
