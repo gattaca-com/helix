@@ -35,7 +35,8 @@ use helix_types::{
 use serde_json::json;
 use tokio::{
     sync::{
-        mpsc::{self, error::SendError, Receiver, Sender},
+        broadcast,
+        mpsc::{Receiver, Sender},
         oneshot, RwLock,
     },
     time::{sleep, Instant},
@@ -99,7 +100,7 @@ where
         broadcasters: Vec<Arc<BlockBroadcaster>>,
         multi_beacon_client: Arc<MultiBeaconClient>,
         chain_info: Arc<ChainInfo>,
-        slot_update_subscription: Sender<Sender<ChainUpdate>>,
+        chain_update_rx: broadcast::Receiver<ChainUpdate>,
         validator_preferences: Arc<ValidatorPreferences>,
         gossip_receiver: Receiver<GossipedMessage>,
         relay_config: RelayConfig,
@@ -126,14 +127,7 @@ where
 
         // Spin up the housekeep task
         let api_clone = api.clone();
-        task::spawn(file!(), line!(), async move {
-            if let Err(err) = api_clone.housekeep(slot_update_subscription).await {
-                error!(
-                    error = %err,
-                    "ProposerApi. housekeep task encountered an error",
-                );
-            }
-        });
+        task::spawn(file!(), line!(), api_clone.housekeep(chain_update_rx));
 
         api
     }
@@ -1407,14 +1401,8 @@ where
 {
     /// Subscribes to slot head updater.
     /// Updates the current slot and next proposer duty.
-    pub async fn housekeep(
-        &self,
-        slot_update_subscription: Sender<Sender<ChainUpdate>>,
-    ) -> Result<(), SendError<Sender<ChainUpdate>>> {
-        let (tx, mut rx) = mpsc::channel(20);
-        slot_update_subscription.send(tx).await?;
-
-        while let Some(slot_update) = rx.recv().await {
+    pub async fn housekeep(self, mut chain_update_rx: broadcast::Receiver<ChainUpdate>) {
+        while let Ok(slot_update) = chain_update_rx.recv().await {
             match slot_update {
                 ChainUpdate::SlotUpdate(slot_update) => {
                     self.handle_new_slot(slot_update).await;
@@ -1423,7 +1411,7 @@ where
             }
         }
 
-        Ok(())
+        error!("proposer API housekeep task disconnected!");
     }
 
     /// Handle a new slot update.

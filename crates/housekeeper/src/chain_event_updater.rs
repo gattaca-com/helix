@@ -11,7 +11,7 @@ use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::{SlotClockTrait, Withdrawals};
 use tokio::{
-    sync::{broadcast, mpsc},
+    sync::broadcast,
     time::{interval_at, sleep, Instant},
 };
 use tracing::{error, info, warn};
@@ -46,8 +46,6 @@ pub enum ChainUpdate {
 
 /// Manages the update of head slots and the fetching of new proposer duties.
 pub struct ChainEventUpdater<D: DatabaseService, A: Auctioneer> {
-    subscribers: Vec<mpsc::Sender<ChainUpdate>>,
-
     head_slot: u64,
     known_payload_attributes: HashMap<String, PayloadAttributesEvent>,
 
@@ -55,42 +53,31 @@ pub struct ChainEventUpdater<D: DatabaseService, A: Auctioneer> {
 
     database: Arc<D>,
     auctioneer: Arc<A>,
-    subscription_channel: mpsc::Receiver<mpsc::Sender<ChainUpdate>>,
+    chain_update_tx: broadcast::Sender<ChainUpdate>,
     chain_info: Arc<ChainInfo>,
 }
 
 impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
-    pub fn new_with_channel(
+    pub fn new(
         database: Arc<D>,
         auctioneer: Arc<A>,
-        subscription_channel: mpsc::Receiver<mpsc::Sender<ChainUpdate>>,
+        chain_update_tx: broadcast::Sender<ChainUpdate>,
         chain_info: Arc<ChainInfo>,
     ) -> Self {
         Self {
-            subscribers: Vec::new(),
             head_slot: 0,
             known_payload_attributes: Default::default(),
             database,
             auctioneer,
-            subscription_channel,
+            chain_update_tx,
             proposer_duties: Vec::new(),
             chain_info,
         }
     }
 
-    pub fn new(
-        database: Arc<D>,
-        auctioneer: Arc<A>,
-        chain_info: Arc<ChainInfo>,
-    ) -> (Self, mpsc::Sender<mpsc::Sender<ChainUpdate>>) {
-        let (tx, rx) = mpsc::channel(200);
-        let updater = Self::new_with_channel(database, auctioneer, rx, chain_info);
-        (updater, tx)
-    }
-
     /// Starts the updater and listens to head events and new subscriptions.
     pub async fn start(
-        &mut self,
+        mut self,
         mut head_event_rx: broadcast::Receiver<HeadEventData>,
         mut payload_attributes_rx: broadcast::Receiver<PayloadAttributesEvent>,
     ) {
@@ -128,9 +115,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
                         }
                     }
                 }
-                Some(sender) = self.subscription_channel.recv() => {
-                    self.subscribers.push(sender);
-                }
+
                 _ = timer.tick() => {
                     info!("4 seconds into slot. Attempting to slot update...");
                     match self.chain_info.clock.now() {
@@ -222,7 +207,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
 
         let update = ChainUpdate::SlotUpdate(Box::new(SlotUpdate { slot, new_duties, next_duty }));
-        self.send_update_to_subscribers(update).await;
+        let _ = self.chain_update_tx.send(update);
     }
 
     // Handles a new payload attributes event
@@ -264,28 +249,6 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
             payload_attributes: event.data.payload_attributes,
         });
 
-        self.send_update_to_subscribers(update).await;
-    }
-
-    async fn send_update_to_subscribers(&mut self, update: ChainUpdate) {
-        // Store subscribers that should be unsubscribed
-        let mut to_unsubscribe = Vec::new();
-
-        // Send updates to all subscribers
-        for (index, tx) in self.subscribers.iter().enumerate() {
-            if let Err(err) = tx.send(update.clone()).await {
-                error!(
-                    index = index,
-                    error = %err,
-                    "Failed to send update to subscriber",
-                );
-                to_unsubscribe.push(index);
-            }
-        }
-
-        // Unsubscribe any failed subscribers
-        for index in to_unsubscribe.into_iter().rev() {
-            self.subscribers.remove(index);
-        }
+        let _ = self.chain_update_tx.send(update);
     }
 }

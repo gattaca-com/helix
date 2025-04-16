@@ -5,17 +5,15 @@ use helix_beacon::{
     multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
 };
 use helix_common::{
-    chain_info::ChainInfo, signing::RelaySigningContext, task, BroadcasterConfig, NetworkConfig,
-    RelayConfig,
+    chain_info::ChainInfo, signing::RelaySigningContext, BroadcasterConfig, RelayConfig,
 };
-use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
+use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
-use helix_housekeeper::{ChainEventUpdater, EthereumPrimevService, Housekeeper};
-use helix_types::BlsKeypair;
+use helix_housekeeper::ChainUpdate;
 use moka::sync::Cache;
 use tokio::{
     sync::{broadcast, mpsc},
-    time::{sleep, timeout},
+    time::timeout,
 };
 use tracing::{error, info};
 
@@ -31,90 +29,19 @@ pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const INIT_BROADCASTER_TIMEOUT: Duration = Duration::from_secs(30);
 
-const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
-const PAYLOAD_ATTRIBUTE_CHANNEL_SIZE: usize = 300;
-
 pub struct ApiService;
 
 impl ApiService {
     pub async fn run(
         mut config: RelayConfig,
-        postgres_db: PostgresDatabaseService,
-        keypair: BlsKeypair,
+        db: Arc<PostgresDatabaseService>,
+        auctioneer: Arc<RedisCache>,
+        chain_update_rx: broadcast::Receiver<ChainUpdate>,
+        chain_info: Arc<ChainInfo>,
+        relay_signing_context: Arc<RelaySigningContext>,
+        multi_beacon_client: Arc<MultiBeaconClient>,
     ) {
-        postgres_db.init_region(&config.postgres).await;
-        postgres_db
-            .store_builders_info(&config.builders)
-            .await
-            .expect("failed to store builders info from config");
-        postgres_db.load_known_validators().await;
-        //postgres_db.load_validator_registrations().await;
-        postgres_db.start_registration_processor().await;
-
-        let db = Arc::new(postgres_db);
-
-        let builder_infos = db.get_all_builder_infos().await.expect("failed to load builder infos");
-
-        let auctioneer = Arc::new(RedisCache::new(&config.redis.url, builder_infos).await.unwrap());
-
-        let auctioneer_clone = auctioneer.clone();
-        task::spawn(file!(), line!(), async move {
-            loop {
-                if let Err(err) = auctioneer_clone.start_best_bid_listener().await {
-                    tracing::error!("Bid listener error: {}", err);
-                    sleep(Duration::from_secs(5)).await;
-                }
-            }
-        });
-
         let broadcasters = init_broadcasters(&config).await;
-
-        let mut beacon_clients = vec![];
-        for cfg in &config.beacon_clients {
-            beacon_clients.push(Arc::new(BeaconClient::from_config(cfg.clone())));
-        }
-        let multi_beacon_client = Arc::new(MultiBeaconClient::new(beacon_clients));
-
-        // Subscribe to head and payload attribute events
-        let (head_event_sender, head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
-        multi_beacon_client.subscribe_to_head_events(head_event_sender).await;
-        let (payload_attribute_sender, payload_attribute_receiver) =
-            broadcast::channel(PAYLOAD_ATTRIBUTE_CHANNEL_SIZE);
-        multi_beacon_client.subscribe_to_payload_attributes_events(payload_attribute_sender).await;
-
-        let chain_info = Arc::new(match config.network_config {
-            NetworkConfig::Mainnet => ChainInfo::for_mainnet(),
-            NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
-            NetworkConfig::Holesky => ChainInfo::for_holesky(),
-            NetworkConfig::Custom { ref dir_path, ref genesis_validator_root, genesis_time } => {
-                ChainInfo::for_custom(dir_path.clone(), *genesis_validator_root, genesis_time)
-            }
-        });
-        let primev_service = if let Some(primev_config) = config.primev_config.clone() {
-            Some(EthereumPrimevService::new(primev_config).await.unwrap())
-        } else {
-            None
-        };
-        let housekeeper = Housekeeper::new(
-            db.clone(),
-            multi_beacon_client.clone(),
-            auctioneer.clone(),
-            primev_service,
-            config.clone(),
-            chain_info.clone(),
-        );
-        let mut housekeeper_head_events = head_event_receiver.resubscribe();
-        task::spawn(file!(), line!(), async move {
-            loop {
-                if let Err(err) = housekeeper.start(&mut housekeeper_head_events).await {
-                    tracing::error!("Housekeeper error: {}", err);
-                    sleep(Duration::from_secs(5)).await;
-                }
-            }
-        });
-
-        let relay_signing_context =
-            Arc::new(RelaySigningContext { keypair, context: chain_info.clone() });
 
         let client =
             reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
@@ -132,17 +59,6 @@ impl ApiService {
         }
 
         let simulator = MultiSimulator::new(simulators);
-
-        let (mut chain_event_updater, slot_update_sender) =
-            ChainEventUpdater::new(db.clone(), auctioneer.clone(), chain_info.clone());
-
-        let chain_updater_head_events = head_event_receiver.resubscribe();
-        let chain_updater_payload_events = payload_attribute_receiver.resubscribe();
-        task::spawn(file!(), line!(), async move {
-            chain_event_updater
-                .start(chain_updater_head_events, chain_updater_payload_events)
-                .await;
-        });
 
         let gossiper = Arc::new(
             GrpcGossiperClientManager::new(
@@ -165,7 +81,7 @@ impl ApiService {
             gossiper.clone(),
             relay_signing_context.clone(),
             config.clone(),
-            slot_update_sender.clone(),
+            chain_update_rx.resubscribe(),
             builder_gossip_receiver,
             validator_preferences.clone(),
         );
@@ -189,9 +105,9 @@ impl ApiService {
             db.clone(),
             gossiper.clone(),
             broadcasters,
-            multi_beacon_client.clone(),
+            multi_beacon_client,
             chain_info.clone(),
-            slot_update_sender.clone(),
+            chain_update_rx,
             validator_preferences.clone(),
             proposer_gossip_receiver,
             config.clone(),

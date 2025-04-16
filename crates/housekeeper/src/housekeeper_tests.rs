@@ -44,8 +44,7 @@ fn get_housekeeper() -> HelperVars {
         Arc::new(db),
         beacon_client.clone().into(),
         auctioneer,
-        None,
-        RelayConfig::default(),
+        Arc::new(RelayConfig::default()),
         Arc::new(ChainInfo::for_mainnet()),
     );
 

@@ -33,10 +33,7 @@ use helix_types::{
 use reqwest::{Client, Response};
 use serial_test::serial;
 use ssz::{Decode, Encode};
-use tokio::sync::{
-    mpsc::{Receiver, Sender},
-    oneshot,
-};
+use tokio::sync::{broadcast, oneshot};
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{self, Message},
@@ -138,24 +135,24 @@ fn get_dummy_payload_attributes_update(submission_slot: Option<u64>) -> PayloadA
 }
 
 async fn send_dummy_slot_update(
-    slot_update_sender: Sender<ChainUpdate>,
+    slot_update_sender: broadcast::Sender<ChainUpdate>,
     head_slot: Option<u64>,
     submission_slot: Option<u64>,
 ) {
     let chain_update = ChainUpdate::SlotUpdate(get_dummy_slot_update(head_slot, submission_slot));
-    slot_update_sender.send(chain_update).await.unwrap();
+    slot_update_sender.send(chain_update).unwrap();
 
     // sleep for a bit to allow the api to process the slot update
     tokio::time::sleep(Duration::from_millis(100)).await;
 }
 
 async fn send_dummy_payload_attributes_update(
-    slot_update_sender: Sender<ChainUpdate>,
+    slot_update_sender: broadcast::Sender<ChainUpdate>,
     submission_slot: Option<u64>,
 ) {
     let chain_update =
         ChainUpdate::PayloadAttributesUpdate(get_dummy_payload_attributes_update(submission_slot));
-    slot_update_sender.send(chain_update).await.unwrap();
+    slot_update_sender.send(chain_update).unwrap();
 
     // sleep for a bit to allow the api to process the slot update
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -201,13 +198,13 @@ async fn start_api_server() -> (
     oneshot::Sender<()>,
     HttpServiceConfig,
     Arc<BuilderApi<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>>,
-    Receiver<Sender<ChainUpdate>>,
+    broadcast::Sender<ChainUpdate>,
 ) {
     let (tx, rx) = oneshot::channel();
     let http_config = HttpServiceConfig::new(ADDRESS, PORT);
     let bind_address = http_config.bind_address();
 
-    let (router, api, slot_update_receiver) = builder_api_app();
+    let (router, api, slot_update_sender) = builder_api_app();
 
     // Run the app in a background task
     tokio::spawn(async move {
@@ -223,7 +220,7 @@ async fn start_api_server() -> (
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    (tx, http_config, api, slot_update_receiver)
+    (tx, http_config, api, slot_update_sender)
 }
 
 pub fn generate_request(
@@ -327,11 +324,10 @@ async fn test_get_validators_internal_server_error() {
 #[tokio::test]
 #[serial]
 async fn test_get_validators_ok() {
-    let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send a slot update
     // wait for the slot update to be received
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender, None, None).await;
 
     // GET validators
@@ -360,10 +356,9 @@ async fn test_get_validators_ok() {
 #[serial]
 async fn test_submit_block_invalid_signature() {
     // Start the server
-    let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send slot & payload attributes updates
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
@@ -423,10 +418,9 @@ async fn test_submit_block_invalid_signature() {
 #[serial]
 async fn test_submit_block_fee_recipient_mismatch() {
     // Start the server
-    let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send slot & payload attributes updates
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
@@ -466,10 +460,9 @@ async fn test_submit_block_fee_recipient_mismatch() {
 #[serial]
 async fn test_submit_block_submission_for_past_slot() {
     // Start the server
-    let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send slot & payload attributes updates
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), Some(100), None).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
@@ -502,10 +495,9 @@ async fn test_submit_block_submission_for_past_slot() {
 #[serial]
 async fn test_submit_block_unknown_proposer_duty() {
     // Start the server
-    let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send slot & payload attributes updates
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
@@ -540,10 +532,9 @@ async fn test_submit_block_unknown_proposer_duty() {
 #[serial]
 async fn test_submit_block_incorrect_timestamp() {
     // Start the server
-    let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send slot & payload attributes updates
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
@@ -574,10 +565,9 @@ async fn test_submit_block_incorrect_timestamp() {
 #[serial]
 async fn test_submit_block_slot_mismatch() {
     // Start the server
-    let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send slot & payload attributes updates
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), None, Some(1)).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
@@ -607,10 +597,9 @@ async fn test_submit_block_slot_mismatch() {
 #[serial]
 async fn test_submit_prev_randao_mismatch() {
     // Start the server
-    let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send slot & payload attributes updates
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
@@ -645,10 +634,10 @@ async fn test_submit_prev_randao_mismatch() {
 // #[serial]
 // async fn test_submit_withdrawal_root_mismatch() {
 //     // Start the server
-//     let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+//     let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
 //     // Send slot & payload attributes updates
-//     let slot_update_sender = slot_update_receiver.recv().await.unwrap();
+
 //     send_dummy_slot_update(
 //         slot_update_sender.clone(),
 //         Some(CAPELLA_FORK_EPOCH * SLOTS_PER_EPOCH),
@@ -720,10 +709,9 @@ async fn test_submit_block_max_payload_length_exceeded() {
 #[serial]
 async fn test_submit_block_zero_value_block() {
     // Start the server
-    let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send slot & payload attributes updates
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
@@ -755,10 +743,9 @@ async fn test_submit_block_zero_value_block() {
 #[serial]
 async fn test_submit_block_zero_value() {
     // Start the server
-    let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send slot & payload attributes updates
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
@@ -799,10 +786,9 @@ async fn test_submit_block_zero_value() {
 #[serial]
 async fn test_submit_block_incorrect_block_hash() {
     // Start the server
-    let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send slot & payload attributes updates
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
@@ -834,10 +820,9 @@ async fn test_submit_block_incorrect_block_hash() {
 #[serial]
 async fn test_submit_block_incorrect_parent_hash() {
     // Start the server
-    let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send slot & payload attributes updates
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
@@ -868,11 +853,10 @@ async fn test_submit_block_incorrect_parent_hash() {
 #[tokio::test]
 #[serial]
 async fn test_housekeep() {
-    let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send a slot update
     // wait for the slot update to be received
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
@@ -923,10 +907,9 @@ async fn test_housekeep() {
 #[serial]
 async fn test_submit_block_timeout_triggered() {
     // Start the server
-    let (tx, http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send slot & payload attributes updates
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
@@ -982,11 +965,10 @@ async fn test_submit_block_timeout_triggered() {
 #[tokio::test]
 #[serial]
 async fn websocket_test() {
-    let (tx, _http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, _http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send a slot update
     // wait for the slot update to be received
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 
@@ -1040,11 +1022,10 @@ async fn websocket_test() {
 #[tokio::test]
 #[serial]
 async fn websocket_test_auth_fails() {
-    let (tx, _http_config, _api, mut slot_update_receiver) = start_api_server().await;
+    let (tx, _http_config, _api, slot_update_sender) = start_api_server().await;
 
     // Send a slot update
     // wait for the slot update to be received
-    let slot_update_sender = slot_update_receiver.recv().await.unwrap();
     send_dummy_slot_update(slot_update_sender.clone(), None, None).await;
     send_dummy_payload_attributes_update(slot_update_sender, None).await;
 

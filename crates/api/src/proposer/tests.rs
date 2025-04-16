@@ -58,10 +58,7 @@ mod proposer_api_tests {
     };
     use reqwest::StatusCode;
     use tokio::{
-        sync::{
-            mpsc::{channel, Receiver, Sender},
-            oneshot,
-        },
+        sync::{broadcast, mpsc::channel, oneshot},
         time::sleep,
     };
 
@@ -165,7 +162,7 @@ mod proposer_api_tests {
     }
 
     async fn send_dummy_slot_update(
-        slot_update_sender: Sender<ChainUpdate>,
+        slot_update_sender: broadcast::Sender<ChainUpdate>,
         head_slot: Option<u64>,
         submission_slot: Option<u64>,
         validator_index: Option<usize>,
@@ -175,14 +172,14 @@ mod proposer_api_tests {
             submission_slot,
             validator_index,
         )));
-        slot_update_sender.send(chain_update).await.unwrap();
+        let _ = slot_update_sender.send(chain_update);
 
         // sleep for a bit to allow the api to process the slot update
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
     async fn send_dummy_payload_attr_update(
-        slot_update_sender: Sender<ChainUpdate>,
+        slot_update_sender: broadcast::Sender<ChainUpdate>,
         submission_slot: u64,
     ) {
         let chain_update = ChainUpdate::PayloadAttributesUpdate(PayloadAttributesUpdate {
@@ -191,7 +188,7 @@ mod proposer_api_tests {
             withdrawals_root: Default::default(),
             payload_attributes: Default::default(),
         });
-        slot_update_sender.send(chain_update).await.unwrap();
+        let _ = slot_update_sender.send(chain_update);
 
         // sleep for a bit to allow the api to process the slot update
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -201,7 +198,7 @@ mod proposer_api_tests {
         oneshot::Sender<()>,
         HttpServiceConfig,
         Arc<ProposerApi<MockAuctioneer, MockDatabaseService, MockGossiper>>,
-        Receiver<Sender<ChainUpdate>>,
+        broadcast::Sender<ChainUpdate>,
         Arc<MockAuctioneer>,
     ) {
         let (tx, rx) = oneshot::channel();
@@ -281,11 +278,10 @@ mod proposer_api_tests {
     #[tokio::test]
     async fn test_get_header_for_past_slot() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, _auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, slot_update_sender, _auctioneer) = start_api_server().await;
 
         // Send slot & payload attributes updates
-        let slot_update_sender = slot_update_receiver.recv().await.unwrap();
+
         send_dummy_slot_update(slot_update_sender.clone(), None, None, None).await;
 
         // Prepare the request
@@ -319,11 +315,10 @@ mod proposer_api_tests {
     #[tokio::test]
     async fn test_get_header_too_far_into_slot() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, _auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, slot_update_sender, _auctioneer) = start_api_server().await;
 
         // Send slot & payload attributes updates
-        let slot_update_sender = slot_update_receiver.recv().await.unwrap();
+
         send_dummy_slot_update(slot_update_sender.clone(), None, None, None).await;
 
         // Prepare the request
@@ -354,11 +349,10 @@ mod proposer_api_tests {
     #[tokio::test]
     async fn test_get_header_for_current_slot_no_header() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, _auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, slot_update_sender, _auctioneer) = start_api_server().await;
 
         // Send slot & payload attributes updates
-        let slot_update_sender = slot_update_receiver.recv().await.unwrap();
+
         send_dummy_slot_update(slot_update_sender.clone(), None, None, None).await;
 
         let current_slot = calculate_current_slot();
@@ -391,15 +385,14 @@ mod proposer_api_tests {
     #[tokio::test]
     async fn test_get_header_for_current_slot_bid_value_zero() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, slot_update_sender, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::ZERO);
         let _ = auctioneer.best_bid.lock().unwrap().insert(builder_bid.clone());
 
         // Send slot & payload attributes updates
-        let slot_update_sender = slot_update_receiver.recv().await.unwrap();
+
         send_dummy_slot_update(slot_update_sender.clone(), None, None, None).await;
 
         let current_slot = calculate_current_slot();
@@ -432,15 +425,14 @@ mod proposer_api_tests {
     #[tokio::test]
     async fn test_get_header_for_current_slot_auctioneer_error() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, slot_update_sender, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(9999)); // special value that results in an auctioneer error
         let _ = auctioneer.best_bid.lock().unwrap().insert(builder_bid.clone());
 
         // Send slot & payload attributes updates
-        let slot_update_sender = slot_update_receiver.recv().await.unwrap();
+
         send_dummy_slot_update(slot_update_sender.clone(), None, None, None).await;
 
         let current_slot = calculate_current_slot();
@@ -473,15 +465,14 @@ mod proposer_api_tests {
     #[tokio::test]
     async fn test_get_header_for_current_slot_ok() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, slot_update_sender, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(10));
         let _ = auctioneer.best_bid.lock().unwrap().insert(builder_bid.clone());
 
         // Send slot & payload attributes updates
-        let slot_update_sender = slot_update_receiver.recv().await.unwrap();
+
         send_dummy_slot_update(slot_update_sender.clone(), None, None, None).await;
 
         let current_slot = calculate_current_slot();
@@ -553,15 +544,14 @@ mod proposer_api_tests {
     #[tokio::test]
     async fn test_get_payload_validator_index_mismatch() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, slot_update_sender, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(10));
         let _ = auctioneer.best_bid.lock().unwrap().insert(builder_bid.clone());
 
         // Send slot & payload attributes updates
-        let slot_update_sender = slot_update_receiver.recv().await.unwrap();
+
         send_dummy_slot_update(slot_update_sender.clone(), None, None, None).await;
 
         let current_slot = calculate_current_slot();
@@ -592,8 +582,7 @@ mod proposer_api_tests {
     #[tokio::test]
     async fn test_get_payload_invalid_signature() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, slot_update_sender, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(10));
@@ -602,7 +591,6 @@ mod proposer_api_tests {
         let current_slot = calculate_current_slot();
 
         // Send slot & payload attributes updates
-        let slot_update_sender = slot_update_receiver.recv().await.unwrap();
         send_dummy_slot_update(
             slot_update_sender.clone(),
             Some(current_slot - 1),
@@ -639,8 +627,7 @@ mod proposer_api_tests {
     #[tokio::test]
     async fn test_get_payload_not_found() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, slot_update_sender, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(10));
@@ -649,7 +636,7 @@ mod proposer_api_tests {
         let current_slot = calculate_current_slot();
 
         // Send slot & payload attributes updates
-        let slot_update_sender = slot_update_receiver.recv().await.unwrap();
+
         send_dummy_slot_update(
             slot_update_sender.clone(),
             Some(current_slot - 1),
@@ -686,8 +673,7 @@ mod proposer_api_tests {
     #[tokio::test]
     async fn test_get_payload_payload_header_mismatch() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, slot_update_sender, auctioneer) = start_api_server().await;
 
         // Set a SignedBuilderBid in the auctioneer
         let builder_bid = get_signed_builder_bid(U256::from(10));
@@ -700,7 +686,7 @@ mod proposer_api_tests {
         let current_slot = calculate_current_slot();
 
         // Send slot & payload attributes updates
-        let slot_update_sender = slot_update_receiver.recv().await.unwrap();
+
         send_dummy_slot_update(
             slot_update_sender.clone(),
             Some(current_slot),
@@ -743,8 +729,7 @@ mod proposer_api_tests {
     #[tokio::test]
     async fn test_get_payload_type_mismatch() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, slot_update_sender, auctioneer) = start_api_server().await;
 
         let current_slot = calculate_current_slot();
 
@@ -762,7 +747,7 @@ mod proposer_api_tests {
             .insert(versioned_execution_payload.clone());
 
         // Send slot & payload attributes updates
-        let slot_update_sender = slot_update_receiver.recv().await.unwrap();
+
         send_dummy_slot_update(
             slot_update_sender.clone(),
             Some(current_slot),
@@ -801,8 +786,7 @@ mod proposer_api_tests {
     #[tokio::test]
     async fn test_get_payload_ok() {
         // Start the server
-        let (tx, http_config, _api, mut slot_update_receiver, auctioneer) =
-            start_api_server().await;
+        let (tx, http_config, _api, slot_update_sender, auctioneer) = start_api_server().await;
 
         let current_slot = calculate_current_slot();
 
@@ -822,7 +806,7 @@ mod proposer_api_tests {
             .insert(versioned_execution_payload.clone());
 
         // Send slot & payload attributes updates
-        let slot_update_sender = slot_update_receiver.recv().await.unwrap();
+
         send_dummy_slot_update(
             slot_update_sender.clone(),
             Some(current_slot),
@@ -921,7 +905,7 @@ mod proposer_api_tests {
 
     #[tokio::test]
     async fn test_validate_registration() {
-        let (slot_update_sender, _slot_update_receiver) = channel::<Sender<ChainUpdate>>(32);
+        let (_slot_update_sender, slot_update_receiver) = broadcast::channel(32);
         let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
         let (v3_sender, _v3_receiver) = channel(32);
         let auctioneer = Arc::new(MockAuctioneer::default());
@@ -933,7 +917,7 @@ mod proposer_api_tests {
             vec![],
             Arc::new(MultiBeaconClient::new(vec![])),
             Arc::new(ChainInfo::for_mainnet()),
-            slot_update_sender.clone(),
+            slot_update_receiver,
             Arc::new(ValidatorPreferences::default()),
             gossip_receiver,
             Default::default(),

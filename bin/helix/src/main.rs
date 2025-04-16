@@ -1,11 +1,17 @@
-use helix_api::service::ApiService;
+use std::sync::Arc;
+
+use helix_api::start_api_service;
+use helix_beacon::start_beacon_client;
 use helix_common::{
     load_config, load_keypair,
     metrics::start_metrics_server,
+    signing::RelaySigningContext,
     utils::{init_panic_hook, init_tracing_log},
     RelayConfig,
 };
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
+use helix_database::start_db_service;
+use helix_datastore::start_auctioneer;
+use helix_housekeeper::start_housekeeper;
 use helix_types::BlsKeypair;
 use helix_website::website_service::WebsiteService;
 use tikv_jemallocator::Jemalloc;
@@ -46,14 +52,35 @@ async fn main() {
 }
 
 async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
-    let postgres_db = PostgresDatabaseService::from_relay_config(&config).await;
-    postgres_db.init_forever().await;
+    let chain_info = Arc::new(config.network_config.to_chain_info());
+    let relay_signing_context =
+        Arc::new(RelaySigningContext { keypair, context: chain_info.clone() });
 
-    tokio::spawn(ApiService::run(config.clone(), postgres_db.clone(), keypair));
+    let beacon_client = start_beacon_client(&config);
+    let db = start_db_service(&config).await?;
+    let auctioneer = start_auctioneer(&config, &db).await?;
 
-    // start the website service (if enabled)
+    let chain_update_rx = start_housekeeper(
+        db.clone(),
+        auctioneer.clone(),
+        config.clone().into(),
+        beacon_client.clone(),
+        chain_info.clone(),
+    )
+    .await?;
+
+    start_api_service(
+        config.clone(),
+        db.clone(),
+        auctioneer,
+        chain_update_rx,
+        chain_info,
+        relay_signing_context,
+        beacon_client,
+    );
+
     if config.website.enabled {
-        tokio::spawn(WebsiteService::run_loop(config.clone(), postgres_db.clone()));
+        tokio::spawn(WebsiteService::run_loop(config, db));
     }
 
     // wait for SIGTERM or SIGINT
