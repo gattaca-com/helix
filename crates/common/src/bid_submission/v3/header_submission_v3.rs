@@ -23,7 +23,7 @@ pub enum MessageType {
 
 bitflags! {
     #[derive(Clone, Copy)]
-    pub struct MessageHeaderFlags: u32 {
+    pub struct MessageHeaderFlags: u16 {
         const SSZ_ENCODED = 1 << 0;
         const JSON_ENCODED = 1 << 1;
         const CBOR_ENCODED = 1 << 2;
@@ -44,6 +44,8 @@ pub struct MessageHeader {
     /// The message type.
     pub message_type: MessageType,
     pub padding: u8,
+    /// Flags describing the message.
+    pub message_flags: MessageHeaderFlags,
     /// The encoded length of the message bytes that follow the `MessageHeader`. The message bytes
     /// for different message types are:
     ///  - `HeaderSubmission`: encoded `SignedHeaderSubmission`
@@ -54,8 +56,6 @@ pub struct MessageHeader {
     /// Submission sequence number set by the builder. The sequence number from the original
     /// `HeaderSubmission` is returned on the `HeaderSubmissionAck` and the `GetPayloadRequest`
     pub sequence_number: u32,
-    /// Flags describing the message.
-    pub message_flags: MessageHeaderFlags,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode)]
