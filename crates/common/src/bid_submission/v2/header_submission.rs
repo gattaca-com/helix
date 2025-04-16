@@ -266,11 +266,11 @@ impl SignedHeaderSubmission {
         let domain = spec.get_builder_domain();
         let valid = match self {
             SignedHeaderSubmission::Deneb(bid) => {
-                let message = bid.message.signing_root(domain);
+                let message = bid.message.bid_trace.signing_root(domain);
                 bid.signature.verify(&bid.message.bid_trace.builder_pubkey, message)
             }
             SignedHeaderSubmission::Electra(bid) => {
-                let message = bid.message.signing_root(domain);
+                let message = bid.message.bid_trace.signing_root(domain);
                 bid.signature.verify(&bid.message.bid_trace.builder_pubkey, message)
             }
         };
