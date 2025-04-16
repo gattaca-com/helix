@@ -34,6 +34,7 @@ pub fn start_api_service(
     chain_info: Arc<ChainInfo>,
     relay_signing_context: Arc<RelaySigningContext>,
     multi_beacon_client: Arc<MultiBeaconClient>,
+    metadata_provider: Arc<dyn helix_common::metadata_provider::MetadataProvider>,
 ) {
     tokio::spawn(ApiService::run(
         config.clone(),
@@ -43,5 +44,6 @@ pub fn start_api_service(
         chain_info,
         relay_signing_context,
         multi_beacon_client,
+        metadata_provider,
     ));
 }

@@ -5,7 +5,7 @@ use helix_beacon::{
     multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
 };
 use helix_common::{
-    chain_info::ChainInfo, signing::RelaySigningContext, BroadcasterConfig, RelayConfig,
+    chain_info::ChainInfo, metadata_provider::MetadataProvider, signing::RelaySigningContext, BroadcasterConfig, RelayConfig
 };
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
@@ -40,6 +40,7 @@ impl ApiService {
         chain_info: Arc<ChainInfo>,
         relay_signing_context: Arc<RelaySigningContext>,
         multi_beacon_client: Arc<MultiBeaconClient>,
+        metadata_provider: Arc<dyn MetadataProvider>,
     ) {
         let broadcasters = init_broadcasters(&config).await;
 
@@ -137,6 +138,7 @@ impl ApiService {
             data_api,
             bids_cache,
             delivered_payloads_cache,
+            metadata_provider,
         );
 
         let listener = tokio::net::TcpListener::bind("0.0.0.0:4040").await.unwrap();

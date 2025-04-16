@@ -7,7 +7,7 @@ use axum::{
     routing::{get, post},
     Extension, Router,
 };
-use helix_common::{utils::extract_request_id, Route, RouterConfig};
+use helix_common::{metadata_provider::MetadataProvider, utils::extract_request_id, Route, RouterConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
 use hyper::{HeaderMap, Uri};
@@ -53,6 +53,7 @@ pub fn build_router(
     data_api: Arc<DataApiProd>,
     bids_cache: Arc<BidsCache>,
     delivered_payloads_cache: Arc<DeliveredPayloadsCache>,
+    metadata_provider: Arc<dyn MetadataProvider>,
 ) -> Router {
     router_config.resolve_condensed_routes();
 
@@ -140,7 +141,8 @@ pub fn build_router(
         .layer(Extension(proposer_api))
         .layer(Extension(data_api))
         .layer(Extension(bids_cache))
-        .layer(Extension(delivered_payloads_cache));
+        .layer(Extension(delivered_payloads_cache))
+        .layer(Extension(metadata_provider));
 
     router
 }

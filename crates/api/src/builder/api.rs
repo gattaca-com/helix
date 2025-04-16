@@ -20,19 +20,10 @@ use helix_common::{
     api::{
         builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
         proposer_api::ValidatorRegistrationInfo,
-    },
-    bid_submission::{
+    }, bid_submission::{
         v2::header_submission::SignedHeaderSubmission,
         v3::header_submission_v3::HeaderSubmissionV3, BidSubmission,
-    },
-    chain_info::ChainInfo,
-    metrics::{BUILDER_GOSSIP_QUEUE, DB_QUEUE},
-    signing::RelaySigningContext,
-    simulator::BlockSimError,
-    task,
-    utils::{extract_request_id, get_payload_attributes_key, utcnow_ns},
-    validator_preferences, BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace,
-    HeaderSubmissionTrace, RelayConfig, SubmissionTrace,
+    }, chain_info::ChainInfo, metadata_provider::MetadataProvider, metrics::{BUILDER_GOSSIP_QUEUE, DB_QUEUE}, signing::RelaySigningContext, simulator::BlockSimError, task, utils::{extract_request_id, get_payload_attributes_key, utcnow_ns}, validator_preferences, BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, RelayConfig, SubmissionTrace
 };
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
@@ -176,11 +167,13 @@ where
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err, ret(level = Level::DEBUG))]
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        Extension(metadata_provider): Extension<Arc<dyn MetadataProvider>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
+        trace.metadata = metadata_provider.get_metadata(&headers);
 
         debug!(head_slot, timestamp_request_start = trace.receive);
 
@@ -428,11 +421,13 @@ where
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_header(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        Extension(metadata_provider): Extension<Arc<dyn MetadataProvider>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let mut trace =
             HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        trace.metadata = metadata_provider.get_metadata(&headers);
 
         debug!(timestamp_request_start = trace.receive,);
 
@@ -445,11 +440,13 @@ where
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_header_v3(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        Extension(metadata_provider): Extension<Arc<dyn MetadataProvider>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let mut trace =
             HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        trace.metadata = metadata_provider.get_metadata(&headers);
 
         debug!(timestamp_request_start = trace.receive,);
 
@@ -710,10 +707,12 @@ where
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_block_v2(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        Extension(metadata_provider): Extension<Arc<dyn MetadataProvider>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
+        trace.metadata = metadata_provider.get_metadata(&headers);
 
         // Decode the incoming request body into a payload
         let (payload, _) = decode_payload(req, &mut trace).await?;
