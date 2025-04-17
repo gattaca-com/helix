@@ -5,6 +5,7 @@ use helix_common::{
     bid_submission::v3::header_submission_v3::{
         HeaderSubmissionV3, MessageHeader, MessageHeaderFlags, MessageType, SubmissionV3Error,
     },
+    metadata_provider::MetadataProvider,
     utils::utcnow_ns,
     HeaderSubmissionTrace,
 };
@@ -22,15 +23,16 @@ use crate::{
     gossiper::traits::GossipClientTrait,
 };
 
-pub async fn run_api<A, DB, S, G>(
+pub async fn run_api<A, DB, S, G, MP>(
     listening_port: u16,
-    builder_api: Arc<BuilderApi<A, DB, S, G>>,
+    builder_api: Arc<BuilderApi<A, DB, S, G, MP>>,
 ) -> Result<(), Error>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
 {
     let tcp_listener = TcpListener::bind(format!("0.0.0.0:{listening_port}")).await?;
     while let Ok((socket, remote_addr)) = tcp_listener.accept().await {
@@ -40,15 +42,16 @@ where
     Err(Error::other("TCP API listener exited"))
 }
 
-async fn handle_builder_connection<A, DB, S, G>(
+async fn handle_builder_connection<A, DB, S, G, MP>(
     mut stream: TcpStream,
     remote_addr: SocketAddr,
-    builder_api: Arc<BuilderApi<A, DB, S, G>>,
+    builder_api: Arc<BuilderApi<A, DB, S, G, MP>>,
 ) where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
 {
     tracing::info!(?remote_addr, "builder connection connected");
 

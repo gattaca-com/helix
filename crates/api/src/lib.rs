@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
-use helix_common::{chain_info::ChainInfo, signing::RelaySigningContext, RelayConfig};
+use helix_common::{
+    chain_info::ChainInfo, metadata_provider::MetadataProvider, signing::RelaySigningContext,
+    RelayConfig,
+};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
 use helix_housekeeper::ChainUpdate;
@@ -26,7 +29,7 @@ mod grpc {
     include!(concat!(env!("OUT_DIR"), "/gossip.rs"));
 }
 
-pub fn start_api_service(
+pub fn start_api_service<MP: MetadataProvider>(
     config: RelayConfig,
     db: Arc<PostgresDatabaseService>,
     auctioneer: Arc<RedisCache>,
@@ -34,7 +37,7 @@ pub fn start_api_service(
     chain_info: Arc<ChainInfo>,
     relay_signing_context: Arc<RelaySigningContext>,
     multi_beacon_client: Arc<MultiBeaconClient>,
-    metadata_provider: Arc<dyn helix_common::metadata_provider::MetadataProvider>,
+    metadata_provider: Arc<MP>,
 ) {
     tokio::spawn(ApiService::run(
         config.clone(),

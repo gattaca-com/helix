@@ -3,7 +3,12 @@ use std::sync::Arc;
 use helix_api::start_api_service;
 use helix_beacon::start_beacon_client;
 use helix_common::{
-    load_config, load_keypair, metadata_provider::DefaultMetadataProvider, metrics::start_metrics_server, signing::RelaySigningContext, utils::{init_panic_hook, init_tracing_log}, RelayConfig
+    load_config, load_keypair,
+    metadata_provider::DefaultMetadataProvider,
+    metrics::start_metrics_server,
+    signing::RelaySigningContext,
+    utils::{init_panic_hook, init_tracing_log},
+    RelayConfig,
 };
 use helix_database::start_db_service;
 use helix_datastore::start_auctioneer;
@@ -73,7 +78,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         chain_info,
         relay_signing_context,
         beacon_client,
-        Arc::new(DefaultMetadataProvider{}),
+        Arc::new(DefaultMetadataProvider {}),
     );
 
     if config.website.enabled {
