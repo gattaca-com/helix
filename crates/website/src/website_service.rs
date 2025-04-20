@@ -5,7 +5,7 @@ use helix_beacon::{beacon_client::BeaconClient, multi_beacon_client::MultiBeacon
 use helix_common::{chain_info::ChainInfo, NetworkConfig, RelayConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::MockAuctioneer;
-use helix_housekeeper::{chain_event_updater::CurrentSlotInfo, ChainEventUpdater};
+use helix_housekeeper::{ChainEventUpdater, CurrentSlotInfo};
 use tokio::{
     net::TcpListener,
     sync::{broadcast, RwLock},

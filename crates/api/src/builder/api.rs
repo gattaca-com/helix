@@ -34,7 +34,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
-use helix_housekeeper::{chain_event_updater::CurrentSlotInfo, PayloadAttributesUpdate};
+use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
 use hyper::HeaderMap;
 use ssz::Decode;

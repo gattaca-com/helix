@@ -48,7 +48,7 @@ mod proposer_api_tests {
     };
     use helix_database::mock_database_service::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
-    use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
+    use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate, SlotUpdate};
     use helix_types::{
         get_fixed_pubkey, get_fixed_secret, get_payload_deneb, BlobsBundle, BlsPublicKey,
         BlsSignature, BuilderBidDeneb, ExecutionPayloadDeneb, ExecutionPayloadElectra, ForkName,
@@ -162,7 +162,7 @@ mod proposer_api_tests {
     }
 
     async fn send_dummy_slot_update(
-        slot_update_sender: broadcast::Sender<ChainUpdate>,
+        current_slot_info: CurrentSlotInfo,
         head_slot: Option<u64>,
         submission_slot: Option<u64>,
         validator_index: Option<usize>,
@@ -198,14 +198,14 @@ mod proposer_api_tests {
         oneshot::Sender<()>,
         HttpServiceConfig,
         Arc<ProposerApi<MockAuctioneer, MockDatabaseService, MockGossiper>>,
-        broadcast::Sender<ChainUpdate>,
+        CurrentSlotInfo,
         Arc<MockAuctioneer>,
     ) {
         let (tx, rx) = oneshot::channel();
         let http_config = HttpServiceConfig::new(ADDRESS);
         let bind_address = http_config.bind_address();
 
-        let (router, api, slot_update_receiver, auctioneer) = proposer_api_app();
+        let (router, api, current_slot_info, auctioneer) = proposer_api_app();
 
         // Run the app in a background task
         tokio::spawn(async move {
@@ -221,7 +221,7 @@ mod proposer_api_tests {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        (tx, http_config, api, slot_update_receiver, auctioneer)
+        (tx, http_config, api, current_slot_info, auctioneer)
     }
 
     fn calculate_current_slot() -> u64 {
@@ -278,7 +278,7 @@ mod proposer_api_tests {
     #[tokio::test]
     async fn test_get_header_for_past_slot() {
         // Start the server
-        let (tx, http_config, _api, slot_update_sender, _auctioneer) = start_api_server().await;
+        let (tx, http_config, _api, _auctioneer) = start_api_server().await;
 
         // Send slot & payload attributes updates
 

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use helix_common::{chain_info::ChainInfo, WebsiteConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_housekeeper::chain_event_updater::CurrentSlotInfo;
+use helix_housekeeper::CurrentSlotInfo;
 use tokio::sync::RwLock;
 
 use crate::templates::IndexTemplate;

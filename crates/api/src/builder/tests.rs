@@ -24,7 +24,7 @@ use helix_common::{
 };
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
-use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
+use helix_housekeeper::{PayloadAttributesUpdate, SlotUpdate};
 use helix_types::{
     get_fixed_pubkey, get_fixed_secret, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayloadRef,
     ForkName, SignedBidSubmission, SignedBidSubmissionElectra, SignedRoot,

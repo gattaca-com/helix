@@ -6,7 +6,7 @@ use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{chain_info::ChainInfo, signing::RelaySigningContext, RelayConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
-use helix_housekeeper::chain_event_updater::CurrentSlotInfo;
+use helix_housekeeper::CurrentSlotInfo;
 use service::ApiService;
 
 pub mod builder;

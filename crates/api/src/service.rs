@@ -9,7 +9,7 @@ use helix_common::{
 };
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
-use helix_housekeeper::chain_event_updater::CurrentSlotInfo;
+use helix_housekeeper::CurrentSlotInfo;
 use moka::sync::Cache;
 use tokio::{sync::mpsc, time::timeout};
 use tracing::{error, info};

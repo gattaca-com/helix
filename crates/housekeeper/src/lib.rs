@@ -4,10 +4,10 @@ pub mod housekeeper;
 #[cfg(test)]
 pub mod housekeeper_tests;
 pub mod primev_service;
+mod slot_info;
 
 use std::{sync::Arc, time::Duration};
 
-use chain_event_updater::CurrentSlotInfo;
 pub use chain_event_updater::{ChainEventUpdater, PayloadAttributesUpdate, SlotUpdate};
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{chain_info::ChainInfo, RelayConfig};
@@ -15,6 +15,7 @@ use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
 pub use housekeeper::Housekeeper;
 pub use primev_service::EthereumPrimevService;
+pub use slot_info::CurrentSlotInfo;
 use tokio::sync::broadcast;
 
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;

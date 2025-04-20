@@ -26,7 +26,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
-use helix_housekeeper::chain_event_updater::CurrentSlotInfo;
+use helix_housekeeper::CurrentSlotInfo;
 use helix_types::{
     BlsPublicKey, ChainSpec, ExecPayload, ExecutionPayloadHeader, GetPayloadResponse,
     PayloadAndBlobs, SigError, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot,

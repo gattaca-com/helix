@@ -21,7 +21,8 @@ use helix_common::{
 };
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
-use tokio::sync::{broadcast, mpsc::channel};
+use helix_housekeeper::CurrentSlotInfo;
+use tokio::sync::mpsc::channel;
 use tower::{buffer::BufferLayer, limit::RateLimitLayer, timeout::TimeoutLayer, ServiceBuilder};
 use tower_http::limit::RequestBodyLimitLayer;
 
@@ -120,7 +121,6 @@ pub fn app() -> Router {
 #[allow(clippy::type_complexity)]
 pub fn builder_api_app(
 ) -> (Router, Arc<BuilderApi<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>>) {
-    let (slot_update_sender, slot_update_receiver) = broadcast::channel(32);
     let (_gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10);
 
     let builder_api_service =
@@ -132,9 +132,9 @@ pub fn builder_api_app(
             Arc::new(MockGossiper::new().unwrap()),
             Arc::new(RelaySigningContext::default()),
             RelayConfig::default(),
-            slot_update_receiver,
             gossip_receiver,
             Arc::new(ValidatorPreferences::default()),
+            Default::default(),
         );
     let builder_api_service = Arc::new(builder_api_service);
 
@@ -168,23 +168,23 @@ pub fn builder_api_app(
             .layer(RateLimitLayer::new(100, Duration::from_secs(1))),
     );
 
-    (router, builder_api_service, slot_update_sender)
+    (router, builder_api_service)
 }
 
 #[allow(clippy::type_complexity)]
 pub fn proposer_api_app() -> (
     Router,
     Arc<ProposerApi<MockAuctioneer, MockDatabaseService, MockGossiper>>,
-    broadcast::Sender<ChainUpdate>,
+    CurrentSlotInfo,
     Arc<MockAuctioneer>,
 ) {
-    let (slot_update_sender, slot_update_receiver) = broadcast::channel(32);
     let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
     let (v3_sender, _v3_receiver) = channel(32);
     let auctioneer = Arc::new(MockAuctioneer::default());
     let node = MockBeaconNode::new();
     let client = node.beacon_client();
 
+    let current_slot_info = CurrentSlotInfo::new();
     let proposer_api_service =
         Arc::new(ProposerApi::<MockAuctioneer, MockDatabaseService, MockGossiper>::new(
             auctioneer.clone(),
@@ -193,11 +193,11 @@ pub fn proposer_api_app() -> (
             vec![Arc::new(BlockBroadcaster::BeaconClient(client))],
             Arc::new(MultiBeaconClient::new(vec![])),
             Arc::new(ChainInfo::for_mainnet()),
-            slot_update_receiver,
             Arc::new(ValidatorPreferences::default()),
             gossip_receiver,
             Default::default(),
             v3_sender,
+            current_slot_info.clone(),
         ));
 
     let router = Router::new()
@@ -233,7 +233,7 @@ pub fn proposer_api_app() -> (
         .layer(RequestBodyLimitLayer::new(_MAX_VAL_REGISTRATIONS_LENGTH))
         .layer(Extension(proposer_api_service.clone()));
 
-    (router, proposer_api_service, slot_update_sender, auctioneer)
+    (router, proposer_api_service, current_slot_info, auctioneer)
 }
 
 pub fn data_api_app() -> (Router, Arc<DataApi<MockDatabaseService>>, Arc<MockDatabaseService>) {
