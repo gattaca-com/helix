@@ -30,14 +30,16 @@ use helix_common::{
     signing::RelaySigningContext,
     simulator::BlockSimError,
     task,
-    utils::{extract_request_id, get_payload_attributes_key, utcnow_ns},
+    utils::{extract_request_id, utcnow_ns},
     validator_preferences, BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace,
     HeaderSubmissionTrace, RelayConfig, SubmissionTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
+use helix_types::{
+    BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid, Slot,
+};
 use hyper::HeaderMap;
 use ssz::Decode;
 use tokio::{
@@ -77,7 +79,7 @@ where
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
 
     proposer_duties_response: Arc<RwLock<Option<Vec<u8>>>>,
-    payload_attributes: Arc<RwLock<HashMap<String, PayloadAttributesUpdate>>>,
+    payload_attributes: Arc<RwLock<HashMap<(B256, Slot), PayloadAttributesUpdate>>>,
 
     _validator_preferences: Arc<validator_preferences::ValidatorPreferences>,
 }
@@ -244,7 +246,7 @@ where
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
 
         // Handle trusted builders check
-        if !api.check_if_trusted_builder(&next_duty, &builder_info).await {
+        if !Self::check_if_trusted_builder(&next_duty, &builder_info) {
             let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
             debug!(
                 builder_pub_key = ?payload.builder_public_key(),
@@ -498,7 +500,7 @@ where
 
         // Submit header can only be processed optimistically.
         // Make sure that the builder has enough collateral to cover the submission.
-        if let Err(err) = api.check_builder_collateral(&payload, &builder_info).await {
+        if let Err(err) = Self::check_builder_collateral(&payload, &builder_info) {
             warn!(%err, "builder has insufficient collateral");
             return Err(err);
         }
@@ -548,7 +550,7 @@ where
         }
 
         // Handle trusted builders check
-        if !api.check_if_trusted_builder(&next_duty, &builder_info).await {
+        if !Self::check_if_trusted_builder(&next_duty, &builder_info) {
             let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
             debug!(
                 builder_pub_key = ?payload.builder_public_key(),
@@ -765,7 +767,7 @@ where
 
         // submit_block_v2 can only be processed optimistically.
         // Make sure that the builder has enough collateral to cover the submission.
-        if let Err(err) = api.check_builder_collateral(&payload, &builder_info).await {
+        if let Err(err) = Self::check_builder_collateral(&payload, &builder_info) {
             warn!(%err, "builder has insufficient collateral");
             return Err(err);
         }
@@ -782,7 +784,7 @@ where
         }
 
         // Handle trusted builders check
-        if !api.check_if_trusted_builder(&next_duty, &builder_info).await {
+        if !Self::check_if_trusted_builder(&next_duty, &builder_info) {
             let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
             warn!(
                 builder_pub_key = ?payload.builder_public_key(),
@@ -1354,8 +1356,7 @@ where
     /// This function retrieves the ID associated with the builder's public key from the auctioneer.
     /// It then checks if this ID is included in the list of trusted builders specified by the
     /// proposer.
-    async fn check_if_trusted_builder(
-        &self,
+    fn check_if_trusted_builder(
         next_duty: &BuilderGetValidatorsResponseEntry,
         builder_info: &BuilderInfo,
     ) -> bool {
@@ -1522,9 +1523,9 @@ where
         parent_hash: &B256,
         block_hash: &B256,
     ) -> Result<PayloadAttributesUpdate, BuilderApiError> {
-        let payload_attributes_key = get_payload_attributes_key(parent_hash, slot.into());
+        let payload_attributes_key = &(*parent_hash, slot.into());
         let payload_attributes =
-            self.payload_attributes.read().await.get(&payload_attributes_key).cloned().ok_or_else(
+            self.payload_attributes.read().await.get(payload_attributes_key).cloned().ok_or_else(
                 || {
                     warn!(?block_hash, "payload attributes not yet known");
                     BuilderApiError::PayloadAttributesNotYetKnown
@@ -1584,8 +1585,7 @@ where
     ///
     /// This function compares the builder's collateral with the block value for a bid submission.
     /// If the builder's collateral is less than the required value, it returns an error.
-    async fn check_builder_collateral(
-        &self,
+    fn check_builder_collateral(
         payload: &impl BidSubmission,
         builder_info: &BuilderInfo,
     ) -> Result<(), BuilderApiError> {
@@ -1690,7 +1690,7 @@ where
     async fn handle_new_slot(&self, slot_update: Box<SlotUpdate>) {
         let epoch = slot_update.slot / self.chain_info.slots_per_epoch();
         info!(
-            epoch = epoch,
+            epoch,
             slot_head = slot_update.slot,
             slot_start_next_epoch = (epoch + 1) * self.chain_info.slots_per_epoch(),
             next_proposer_duty = ?slot_update.next_duty,
@@ -1727,10 +1727,8 @@ where
         );
 
         // Discard payload attributes if already known
-        let payload_attributes_key = get_payload_attributes_key(
-            &payload_attributes.parent_hash,
-            payload_attributes.slot.into(),
-        );
+        let payload_attributes_key =
+            &(payload_attributes.parent_hash, payload_attributes.slot.into());
         let mut all_payload_attributes = self.payload_attributes.write().await;
         if all_payload_attributes.contains_key(&payload_attributes_key) {
             return;
@@ -1740,7 +1738,7 @@ where
         all_payload_attributes.retain(|_, value| value.slot >= head_slot);
 
         // Save new one
-        all_payload_attributes.insert(payload_attributes_key, payload_attributes);
+        all_payload_attributes.insert(*payload_attributes_key, payload_attributes);
     }
 }
 

@@ -3,13 +3,11 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use alloy_primitives::B256;
 use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry,
-    chain_info::ChainInfo,
-    utils::{get_payload_attributes_key, utcnow_sec},
+    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, utils::utcnow_sec,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::{SlotClockTrait, Withdrawals};
+use helix_types::{Slot, SlotClockTrait, Withdrawals};
 use tokio::{
     sync::broadcast,
     time::{interval_at, sleep, Instant},
@@ -47,7 +45,7 @@ pub enum ChainUpdate {
 /// Manages the update of head slots and the fetching of new proposer duties.
 pub struct ChainEventUpdater<D: DatabaseService, A: Auctioneer> {
     head_slot: u64,
-    known_payload_attributes: HashMap<String, PayloadAttributesEvent>,
+    known_payload_attributes: HashMap<(B256, Slot), PayloadAttributesEvent>,
 
     proposer_duties: Vec<BuilderGetValidatorsResponseEntry>,
 
@@ -218,8 +216,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         }
 
         // Discard payload attributes if already known
-        let payload_attributes_key =
-            get_payload_attributes_key(&event.data.parent_block_hash, event.data.proposal_slot);
+        let payload_attributes_key = &(event.data.parent_block_hash, event.data.proposal_slot);
         if self.known_payload_attributes.contains_key(&payload_attributes_key) {
             return;
         }
@@ -228,7 +225,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         self.known_payload_attributes.retain(|_, value| value.data.proposal_slot >= self.head_slot);
 
         // Save new one
-        self.known_payload_attributes.insert(payload_attributes_key, event.clone());
+        self.known_payload_attributes.insert(*payload_attributes_key, event.clone());
 
         info!(
             head_slot = self.head_slot,
