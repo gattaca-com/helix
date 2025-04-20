@@ -8,13 +8,9 @@ use std::{
 
 use async_trait::async_trait;
 use helix_common::{simulator::BlockSimError, BuilderInfo};
-use tokio::{
-    sync::{mpsc::Sender, RwLock},
-    time::sleep,
-};
+use tokio::{sync::RwLock, time::sleep};
 
 use super::{traits::BlockSimulator, BlockSimRequest};
-use crate::builder::DbInfo;
 
 #[derive(Clone)]
 pub struct MultiSimulator<B: BlockSimulator + Send + Sync> {
@@ -56,7 +52,6 @@ impl<B: BlockSimulator + Send + Sync> BlockSimulator for MultiSimulator<B> {
         request: BlockSimRequest,
         builder_info: &BuilderInfo,
         is_top_bid: bool,
-        sim_result_saver_sender: Sender<DbInfo>,
     ) -> Result<bool, BlockSimError> {
         let mut attempts = 0;
 
@@ -77,14 +72,7 @@ impl<B: BlockSimulator + Send + Sync> BlockSimulator for MultiSimulator<B> {
                 let simulator = &self.simulators[index];
 
                 // Process the request with the selected simulator
-                return simulator
-                    .process_request(
-                        request.clone(),
-                        builder_info,
-                        is_top_bid,
-                        sim_result_saver_sender,
-                    )
-                    .await
+                return simulator.process_request(request.clone(), builder_info, is_top_bid).await
             }
 
             // If reached max attempts, return an error

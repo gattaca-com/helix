@@ -254,13 +254,6 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref DB_QUEUE: Gauge = register_gauge_with_registry!(
-        "db_queue",
-        "Length of the DB queue",
-        &RELAY_METRICS_REGISTRY
-    )
-    .unwrap();
-
     pub static ref BUILDER_GOSSIP_QUEUE: Gauge = register_gauge_with_registry!(
         "builder_gossip_queue",
         "Length of the builder gossip queue",
