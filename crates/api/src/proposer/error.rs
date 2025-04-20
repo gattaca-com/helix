@@ -98,7 +98,7 @@ pub enum ProposerApiError {
     RegistrationTimestampTooOld,
 
     #[error("request for past slot. request slot: {request_slot}, head slot: {head_slot}")]
-    RequestForPastSlot { request_slot: u64, head_slot: u64 },
+    RequestForPastSlot { request_slot: Slot, head_slot: Slot },
 
     #[error("slot is too new")]
     SlotTooNew,
@@ -152,12 +152,12 @@ pub enum ProposerApiError {
     BlindedBlobsBundleLengthMismatch,
 
     #[error("internal slot: {internal_slot} does not match slot duty slot: {slot_duty_slot}")]
-    InternalSlotMismatchesWithSlotDuty { internal_slot: u64, slot_duty_slot: u64 },
+    InternalSlotMismatchesWithSlotDuty { internal_slot: Slot, slot_duty_slot: Slot },
 
     #[error(
         "internal slot: {internal_slot} does not match blinded block slot: {blinded_block_slot}"
     )]
-    InvalidBlindedBlockSlot { internal_slot: u64, blinded_block_slot: u64 },
+    InvalidBlindedBlockSlot { internal_slot: Slot, blinded_block_slot: Slot },
 
     #[error("expected parent hash: {expected_parent_hash:?} does not match blinded block parent hash: {blinded_block_parent_hash:?}")]
     InvalidBlindedBlockParentHash { expected_parent_hash: B256, blinded_block_parent_hash: B256 },

@@ -6,9 +6,8 @@ use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{chain_info::ChainInfo, signing::RelaySigningContext, RelayConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
-use helix_housekeeper::ChainUpdate;
+use helix_housekeeper::chain_event_updater::CurrentSlotInfo;
 use service::ApiService;
-use tokio::sync::broadcast;
 
 pub mod builder;
 pub mod gossiper;
@@ -30,16 +29,16 @@ pub fn start_api_service(
     config: RelayConfig,
     db: Arc<PostgresDatabaseService>,
     auctioneer: Arc<RedisCache>,
-    chain_update_rx: broadcast::Receiver<ChainUpdate>,
     chain_info: Arc<ChainInfo>,
     relay_signing_context: Arc<RelaySigningContext>,
     multi_beacon_client: Arc<MultiBeaconClient>,
+    current_slot_info: CurrentSlotInfo,
 ) {
     tokio::spawn(ApiService::run(
         config.clone(),
         db,
         auctioneer,
-        chain_update_rx,
+        current_slot_info,
         chain_info,
         relay_signing_context,
         multi_beacon_client,

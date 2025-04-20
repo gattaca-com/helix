@@ -9,12 +9,9 @@ use helix_common::{
 };
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
-use helix_housekeeper::ChainUpdate;
+use helix_housekeeper::chain_event_updater::CurrentSlotInfo;
 use moka::sync::Cache;
-use tokio::{
-    sync::{broadcast, mpsc},
-    time::timeout,
-};
+use tokio::{sync::mpsc, time::timeout};
 use tracing::{error, info};
 
 use crate::{
@@ -36,7 +33,7 @@ impl ApiService {
         mut config: RelayConfig,
         db: Arc<PostgresDatabaseService>,
         auctioneer: Arc<RedisCache>,
-        chain_update_rx: broadcast::Receiver<ChainUpdate>,
+        current_slot_info: CurrentSlotInfo,
         chain_info: Arc<ChainInfo>,
         relay_signing_context: Arc<RelaySigningContext>,
         multi_beacon_client: Arc<MultiBeaconClient>,
@@ -81,9 +78,9 @@ impl ApiService {
             gossiper.clone(),
             relay_signing_context.clone(),
             config.clone(),
-            chain_update_rx.resubscribe(),
             builder_gossip_receiver,
             validator_preferences.clone(),
+            current_slot_info.clone(),
         );
         let builder_api = Arc::new(builder_api);
 
@@ -107,11 +104,11 @@ impl ApiService {
             broadcasters,
             multi_beacon_client,
             chain_info.clone(),
-            chain_update_rx,
             validator_preferences.clone(),
             proposer_gossip_receiver,
             config.clone(),
             v3_payload_request_send,
+            current_slot_info,
         ));
 
         let data_api = Arc::new(DataApiProd::new(validator_preferences.clone(), db.clone()));

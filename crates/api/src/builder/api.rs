@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     io::Read,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -18,8 +17,7 @@ use flate2::read::GzDecoder;
 use futures::StreamExt;
 use helix_common::{
     api::{
-        builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
-        proposer_api::ValidatorRegistrationInfo,
+        builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
     },
     bid_submission::{
         v2::header_submission::SignedHeaderSubmission,
@@ -36,14 +34,12 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
-use helix_housekeeper::{ChainUpdate, PayloadAttributesUpdate, SlotUpdate};
-use helix_types::{
-    BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid, Slot,
-};
+use helix_housekeeper::{chain_event_updater::CurrentSlotInfo, PayloadAttributesUpdate};
+use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
 use hyper::HeaderMap;
 use ssz::Decode;
 use tokio::{
-    sync::{broadcast, mpsc::Receiver, RwLock},
+    sync::mpsc::Receiver,
     time::{self},
 };
 use tracing::{debug, error, info, warn, Instrument, Level};
@@ -74,13 +70,7 @@ where
     gossiper: Arc<G>,
     signing_context: Arc<RelaySigningContext>,
     relay_config: Arc<RelayConfig>,
-
-    /// Information about the current head slot and next proposer duty
-    curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
-
-    proposer_duties_response: Arc<RwLock<Option<Vec<u8>>>>,
-    payload_attributes: Arc<RwLock<HashMap<(B256, Slot), PayloadAttributesUpdate>>>,
-
+    curr_slot_info: CurrentSlotInfo,
     _validator_preferences: Arc<validator_preferences::ValidatorPreferences>,
 }
 
@@ -99,9 +89,9 @@ where
         gossiper: Arc<G>,
         signing_context: Arc<RelaySigningContext>,
         relay_config: RelayConfig,
-        chain_update_rx: tokio::sync::broadcast::Receiver<ChainUpdate>,
         gossip_receiver: Receiver<GossipedMessage>,
         validator_preferences: Arc<validator_preferences::ValidatorPreferences>,
+        curr_slot_info: CurrentSlotInfo,
     ) -> Self {
         let api = Self {
             auctioneer,
@@ -112,9 +102,7 @@ where
             signing_context,
             relay_config: Arc::new(relay_config),
 
-            curr_slot_info: Arc::new(RwLock::new((0, None))),
-            proposer_duties_response: Arc::new(RwLock::new(None)),
-            payload_attributes: Arc::new(RwLock::new(HashMap::new())),
+            curr_slot_info,
             _validator_preferences: validator_preferences,
         };
 
@@ -124,11 +112,6 @@ where
             api_clone.process_gossiped_info(gossip_receiver).await;
         });
 
-        // Spin up the housekeep task.
-        // This keeps the curr slot info variables up to date.
-        let api_clone = api.clone();
-        task::spawn(file!(), line!(), api_clone.housekeep(chain_update_rx));
-
         api
     }
 
@@ -136,7 +119,7 @@ where
     pub async fn get_validators(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
     ) -> impl IntoResponse {
-        let duty_bytes = api.proposer_duties_response.read().await.clone();
+        let duty_bytes = api.curr_slot_info.proposer_duties_response();
         match duty_bytes {
             Some(bytes) => Response::builder()
                 .status(StatusCode::OK)
@@ -165,9 +148,9 @@ where
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
-        let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
+        let (head_slot, next_duty) = api.curr_slot_info.slot_info();
 
-        debug!(head_slot, timestamp_request_start = trace.receive);
+        debug!(%head_slot, timestamp_request_start = trace.receive);
 
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) = decode_payload(req, &mut trace).await?;
@@ -187,7 +170,7 @@ where
 
             return Err(BuilderApiError::SubmissionForPastSlot {
                 current_slot: head_slot,
-                submission_slot: payload.slot().as_u64(),
+                submission_slot: payload.slot(),
             });
         }
 
@@ -459,7 +442,7 @@ where
         is_cancellations_enabled: bool,
         mut trace: HeaderSubmissionTrace,
     ) -> Result<StatusCode, BuilderApiError> {
-        let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
+        let (head_slot, next_duty) = api.curr_slot_info.slot_info();
 
         let block_hash = payload.block_hash();
 
@@ -471,7 +454,7 @@ where
             );
             return Err(BuilderApiError::SubmissionForPastSlot {
                 current_slot: head_slot,
-                submission_slot: payload.slot().as_u64(),
+                submission_slot: payload.slot(),
             });
         }
 
@@ -733,8 +716,8 @@ where
         payload: SignedBidSubmission,
         mut trace: SubmissionTrace,
     ) -> Result<StatusCode, BuilderApiError> {
-        let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
-        debug!(head_slot, timestamp_request_start = trace.receive);
+        let (head_slot, next_duty) = api.curr_slot_info.slot_info();
+        debug!(%head_slot, timestamp_request_start = trace.receive);
 
         let builder_pub_key = payload.builder_public_key().clone();
         let block_hash = payload.message().block_hash;
@@ -744,7 +727,7 @@ where
             debug!(?block_hash, "submission is for a past slot",);
             return Err(BuilderApiError::SubmissionForPastSlot {
                 current_slot: head_slot,
-                submission_slot: payload.slot().as_u64(),
+                submission_slot: payload.slot(),
             });
         }
 
@@ -947,8 +930,8 @@ where
         };
 
         // Verify that the gossiped header is not for a past slot
-        let (head_slot, _) = self.curr_slot_info.read().await.clone();
-        if req.slot <= head_slot {
+        let head_slot = self.curr_slot_info.head_slot();
+        if req.slot <= head_slot.as_u64() {
             debug!("received gossiped header for a past slot");
             return;
         }
@@ -1062,8 +1045,8 @@ where
         };
 
         // Verify that the gossiped payload is not for a past slot
-        let (head_slot, _) = self.curr_slot_info.read().await.clone();
-        if req.slot <= head_slot {
+        let head_slot = self.curr_slot_info.head_slot();
+        if req.slot <= head_slot.as_u64() {
             debug!("received gossiped payload for a past slot");
             return;
         }
@@ -1523,14 +1506,12 @@ where
         parent_hash: &B256,
         block_hash: &B256,
     ) -> Result<PayloadAttributesUpdate, BuilderApiError> {
-        let payload_attributes_key = &(*parent_hash, slot.into());
-        let payload_attributes =
-            self.payload_attributes.read().await.get(payload_attributes_key).cloned().ok_or_else(
-                || {
-                    warn!(?block_hash, "payload attributes not yet known");
-                    BuilderApiError::PayloadAttributesNotYetKnown
-                },
-            )?;
+        let Some(payload_attributes) =
+            self.curr_slot_info.payload_attributes(*parent_hash, slot.into())
+        else {
+            warn!(%block_hash, "payload attributes not yet known");
+            return Err(BuilderApiError::PayloadAttributesNotYetKnown)
+        };
 
         if payload_attributes.slot != slot {
             warn!(
@@ -1658,87 +1639,6 @@ where
         if let Err(err) = self.db.db_demote_builder(builder, block_hash, err.to_string()).await {
             error!(%err,  %builder, "Failed to demote builder in database");
         }
-    }
-}
-
-impl<A, DB, S, G> BuilderApi<A, DB, S, G>
-where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    S: BlockSimulator + 'static,
-    G: GossipClientTrait + 'static,
-{
-    /// Subscribes to slot head updater.
-    /// Updates the current slot, next proposer duty and prepares the get_validators() response.
-    pub async fn housekeep(self, mut rx: broadcast::Receiver<ChainUpdate>) {
-        while let Ok(slot_update) = rx.recv().await {
-            match slot_update {
-                ChainUpdate::SlotUpdate(slot_update) => {
-                    self.handle_new_slot(slot_update).await;
-                }
-                ChainUpdate::PayloadAttributesUpdate(payload_attributes) => {
-                    self.handle_new_payload_attributes(payload_attributes).await;
-                }
-            }
-        }
-
-        error!("builder API housekeep task disconnected!");
-    }
-
-    /// Handle a new slot update.
-    /// Updates the next proposer duty and prepares the get_validators() response.
-    async fn handle_new_slot(&self, slot_update: Box<SlotUpdate>) {
-        let epoch = slot_update.slot / self.chain_info.slots_per_epoch();
-        info!(
-            epoch,
-            slot_head = slot_update.slot,
-            slot_start_next_epoch = (epoch + 1) * self.chain_info.slots_per_epoch(),
-            next_proposer_duty = ?slot_update.next_duty,
-            "updated head slot",
-        );
-
-        *self.curr_slot_info.write().await = (slot_update.slot, slot_update.next_duty);
-
-        if let Some(new_duties) = slot_update.new_duties {
-            let response: Vec<BuilderGetValidatorsResponse> =
-                new_duties.into_iter().map(|duty| duty.into()).collect();
-            match serde_json::to_vec(&response) {
-                Ok(duty_bytes) => *self.proposer_duties_response.write().await = Some(duty_bytes),
-                Err(err) => {
-                    error!(%err, "failed to serialize proposer duties to JSON");
-                    *self.proposer_duties_response.write().await = None;
-                }
-            }
-        }
-    }
-
-    async fn handle_new_payload_attributes(&self, payload_attributes: PayloadAttributesUpdate) {
-        let (head_slot, _) = *self.curr_slot_info.read().await;
-
-        if payload_attributes.slot <= head_slot {
-            return;
-        }
-
-        info!(
-            slot = payload_attributes.slot,
-            randao = ?payload_attributes.payload_attributes.prev_randao,
-            timestamp = payload_attributes.payload_attributes.timestamp,
-            "updated payload attributes",
-        );
-
-        // Discard payload attributes if already known
-        let payload_attributes_key =
-            &(payload_attributes.parent_hash, payload_attributes.slot.into());
-        let mut all_payload_attributes = self.payload_attributes.write().await;
-        if all_payload_attributes.contains_key(&payload_attributes_key) {
-            return;
-        }
-
-        // Clean up old payload attributes
-        all_payload_attributes.retain(|_, value| value.slot >= head_slot);
-
-        // Save new one
-        all_payload_attributes.insert(*payload_attributes_key, payload_attributes);
     }
 }
 

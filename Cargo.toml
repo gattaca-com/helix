@@ -68,6 +68,7 @@ lh-types = { package = "types", git = "https://github.com/ltitanb/lighthouse", r
 mockito = "1.1.1"
 moka = "0.9"
 num-format = "0.4.4"
+parking_lot = "0.12"
 prometheus = "0.13.4"
 prost = "0.12"
 rand = "0.8"

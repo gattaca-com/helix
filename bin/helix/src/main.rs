@@ -60,7 +60,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     let db = start_db_service(&config).await?;
     let auctioneer = start_auctioneer(&config, &db).await?;
 
-    let chain_update_rx = start_housekeeper(
+    let current_slot_info = start_housekeeper(
         db.clone(),
         auctioneer.clone(),
         config.clone().into(),
@@ -73,10 +73,10 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         config.clone(),
         db.clone(),
         auctioneer,
-        chain_update_rx,
         chain_info,
         relay_signing_context,
         beacon_client,
+        current_slot_info,
     );
 
     if config.website.enabled {

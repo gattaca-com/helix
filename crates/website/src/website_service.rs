@@ -4,13 +4,13 @@ use axum::{routing::get, Router};
 use helix_beacon::{beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient};
 use helix_common::{chain_info::ChainInfo, NetworkConfig, RelayConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_datastore::MockAuctioneer; // Import MockAuctioneer from the appropriate module
-use helix_housekeeper::{ChainEventUpdater, ChainUpdate};
+use helix_datastore::MockAuctioneer;
+use helix_housekeeper::{chain_event_updater::CurrentSlotInfo, ChainEventUpdater};
 use tokio::{
     net::TcpListener,
     sync::{broadcast, RwLock},
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::{
     handlers,
@@ -61,6 +61,7 @@ impl WebsiteService {
         let multi_beacon_client = Arc::new(MultiBeaconClient::new(beacon_clients));
 
         // Website state
+        let current_slot_info = CurrentSlotInfo::new();
         let state = Arc::new(AppState {
             db_pool: db.clone(),
             chain_info: chain_info.clone(),
@@ -70,15 +71,14 @@ impl WebsiteService {
                 by_value_desc: IndexTemplate::default(),
                 by_value_asc: IndexTemplate::default(),
             })),
-            latest_slot: Arc::new(RwLock::new(0)),
+            current_slot_info: current_slot_info.clone(),
         });
 
-        let (chain_update_tx, chain_update_rx) = broadcast::channel(100);
         let chain_updater = ChainEventUpdater::new(
             db.clone(),
             Arc::new(MockAuctioneer::new()),
-            chain_update_tx,
-            chain_info.clone(),
+            chain_info,
+            current_slot_info,
         );
         info!("ChainEventUpdater initialized");
 
@@ -96,10 +96,13 @@ impl WebsiteService {
 
         // Start handling chain updates
         let update_state = state.clone();
-
         tokio::spawn(async move {
-            if let Err(e) = Self::handle_chain_updates(update_state, chain_update_rx).await {
-                error!("Error handling chain updates: {:?}", e);
+            loop {
+                // Update templates on new slot
+                if let Err(err) = Self::update_templates(&update_state).await {
+                    error!(%err, "error updating templates");
+                };
+                tokio::time::sleep(std::time::Duration::from_secs(12)).await;
             }
         });
 
@@ -113,40 +116,6 @@ impl WebsiteService {
         info!("Website listening on {}", addr);
 
         axum::serve(listener, app).await?;
-
-        Ok(())
-    }
-
-    async fn handle_chain_updates(
-        state: Arc<AppState>,
-        mut chain_update_rx: broadcast::Receiver<ChainUpdate>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        info!("Subscribed to chain updates");
-
-        while let Ok(update) = chain_update_rx.recv().await {
-            match update {
-                ChainUpdate::SlotUpdate(slot_update) => {
-                    info!("Received slot update: {}", slot_update.slot);
-
-                    // Update the latest slot using RwLock
-                    {
-                        let mut latest_slot = state.latest_slot.write().await;
-                        *latest_slot = slot_update.slot;
-                    }
-
-                    debug!("Updated latest slot to {}", slot_update.slot);
-
-                    // Update templates on new slot
-                    if let Err(e) = Self::update_templates(&state).await {
-                        error!("Error updating templates: {:?}", e);
-                    }
-                }
-                ChainUpdate::PayloadAttributesUpdate(_) => {
-                    // Not needed
-                }
-            }
-        }
-        warn!("Chain update handler exited");
 
         Ok(())
     }
@@ -245,10 +214,7 @@ impl WebsiteService {
         num_registered_validators: i64,
         num_delivered_payloads: i64,
     ) -> Result<IndexTemplate, Box<dyn std::error::Error>> {
-        let latest_slot = {
-            let latest_slot = state.latest_slot.read().await;
-            *latest_slot
-        };
+        let latest_slot = state.current_slot_info.head_slot();
 
         let (value_link, value_order_icon) = match order_by {
             "-value" => ("/?order_by=value", "▼"),
@@ -263,7 +229,7 @@ impl WebsiteService {
             show_config_details: state.website_config.show_config_details,
             network_validators: num_network_validators,
             registered_validators: num_registered_validators,
-            latest_slot: latest_slot as i32,
+            latest_slot: latest_slot.as_u64() as i32,
             recent_payloads: recent_payloads.to_vec(),
             num_delivered_payloads,
             value_link: value_link.to_string(),

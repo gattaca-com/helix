@@ -3,11 +3,14 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use alloy_primitives::B256;
 use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, utils::utcnow_sec,
+    api::builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
+    chain_info::ChainInfo,
+    utils::utcnow_sec,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::{Slot, SlotClockTrait, Withdrawals};
+use parking_lot::RwLock;
 use tokio::{
     sync::broadcast,
     time::{interval_at, sleep, Instant},
@@ -36,10 +39,106 @@ pub struct SlotUpdate {
     pub new_duties: Option<Vec<BuilderGetValidatorsResponseEntry>>,
 }
 
-#[derive(Clone, Debug)]
-pub enum ChainUpdate {
-    SlotUpdate(Box<SlotUpdate>),
-    PayloadAttributesUpdate(PayloadAttributesUpdate),
+/// All information that is refreshed every slot. This is thread safe and can be cloned/shared
+#[derive(Clone)]
+pub struct CurrentSlotInfo {
+    /// Information about the current head slot and next proposer duty
+    curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
+    proposer_duties_response: Arc<RwLock<Option<Vec<u8>>>>,
+    payload_attributes: Arc<RwLock<HashMap<(B256, Slot), PayloadAttributesUpdate>>>,
+}
+
+impl Default for CurrentSlotInfo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CurrentSlotInfo {
+    pub fn new() -> Self {
+        Self {
+            curr_slot_info: Arc::new(RwLock::new((0, None))),
+            proposer_duties_response: Arc::new(RwLock::new(None)),
+            payload_attributes: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    pub fn head_slot(&self) -> Slot {
+        self.curr_slot_info.read().0.into()
+    }
+
+    pub fn slot_info(&self) -> (Slot, Option<BuilderGetValidatorsResponseEntry>) {
+        let (slot, resp) = self.curr_slot_info.read().clone();
+        (slot.into(), resp)
+    }
+
+    pub fn proposer_duties_response(&self) -> Option<Vec<u8>> {
+        self.proposer_duties_response.read().clone()
+    }
+
+    pub fn payload_attributes(
+        &self,
+        parent_hash: B256,
+        slot: Slot,
+    ) -> Option<PayloadAttributesUpdate> {
+        self.payload_attributes.read().get(&(parent_hash, slot)).cloned()
+    }
+
+    /// Handle a new slot update.
+    /// Updates the next proposer duty and prepares the get_validators() response.
+    fn handle_new_slot(&self, slot_update: SlotUpdate, chain_info: &Arc<ChainInfo>) {
+        let epoch = slot_update.slot / chain_info.slots_per_epoch();
+        info!(
+            epoch,
+            slot_head = slot_update.slot,
+            slot_start_next_epoch = (epoch + 1) * chain_info.slots_per_epoch(),
+            next_proposer_duty = ?slot_update.next_duty,
+            "updated head slot",
+        );
+
+        *self.curr_slot_info.write() = (slot_update.slot, slot_update.next_duty);
+
+        if let Some(new_duties) = slot_update.new_duties {
+            let response: Vec<BuilderGetValidatorsResponse> =
+                new_duties.into_iter().map(|duty| duty.into()).collect();
+            match serde_json::to_vec(&response) {
+                Ok(duty_bytes) => *self.proposer_duties_response.write() = Some(duty_bytes),
+                Err(err) => {
+                    error!(%err, "failed to serialize proposer duties to JSON");
+                    *self.proposer_duties_response.write() = None;
+                }
+            }
+        }
+    }
+
+    fn handle_new_payload_attributes(&self, payload_attributes: PayloadAttributesUpdate) {
+        let head_slot = self.head_slot().as_u64();
+
+        if payload_attributes.slot <= head_slot {
+            return;
+        }
+
+        info!(
+            slot = payload_attributes.slot,
+            randao = ?payload_attributes.payload_attributes.prev_randao,
+            timestamp = payload_attributes.payload_attributes.timestamp,
+            "updated payload attributes",
+        );
+
+        // Discard payload attributes if already known
+        let payload_attributes_key =
+            &(payload_attributes.parent_hash, payload_attributes.slot.into());
+        let mut all_payload_attributes = self.payload_attributes.write();
+        if all_payload_attributes.contains_key(payload_attributes_key) {
+            return;
+        }
+
+        // Clean up old payload attributes
+        all_payload_attributes.retain(|_, value| value.slot >= head_slot);
+
+        // Save new one
+        all_payload_attributes.insert(*payload_attributes_key, payload_attributes);
+    }
 }
 
 /// Manages the update of head slots and the fetching of new proposer duties.
@@ -51,25 +150,25 @@ pub struct ChainEventUpdater<D: DatabaseService, A: Auctioneer> {
 
     database: Arc<D>,
     auctioneer: Arc<A>,
-    chain_update_tx: broadcast::Sender<ChainUpdate>,
     chain_info: Arc<ChainInfo>,
+    curr_slot_info: CurrentSlotInfo,
 }
 
 impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
     pub fn new(
         database: Arc<D>,
         auctioneer: Arc<A>,
-        chain_update_tx: broadcast::Sender<ChainUpdate>,
         chain_info: Arc<ChainInfo>,
+        curr_slot_info: CurrentSlotInfo,
     ) -> Self {
         Self {
             head_slot: 0,
             known_payload_attributes: Default::default(),
             database,
             auctioneer,
-            chain_update_tx,
             proposer_duties: Vec::new(),
             chain_info,
+            curr_slot_info,
         }
     }
 
@@ -204,8 +303,8 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         // Get the next proposer duty for the new slot.
         let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
 
-        let update = ChainUpdate::SlotUpdate(Box::new(SlotUpdate { slot, new_duties, next_duty }));
-        let _ = self.chain_update_tx.send(update);
+        let update = SlotUpdate { slot, new_duties, next_duty };
+        self.curr_slot_info.handle_new_slot(update, &self.chain_info);
     }
 
     // Handles a new payload attributes event
@@ -217,7 +316,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
 
         // Discard payload attributes if already known
         let payload_attributes_key = &(event.data.parent_block_hash, event.data.proposal_slot);
-        if self.known_payload_attributes.contains_key(&payload_attributes_key) {
+        if self.known_payload_attributes.contains_key(payload_attributes_key) {
             return;
         }
 
@@ -239,13 +338,13 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
             event.data.payload_attributes.withdrawals.clone().into();
         let withdrawals_root = withdrawals_list.tree_hash_root();
 
-        let update = ChainUpdate::PayloadAttributesUpdate(PayloadAttributesUpdate {
+        let update = PayloadAttributesUpdate {
             slot: event.data.proposal_slot.as_u64(),
             parent_hash: event.data.parent_block_hash,
             withdrawals_root,
             payload_attributes: event.data.payload_attributes,
-        });
+        };
 
-        let _ = self.chain_update_tx.send(update);
+        self.curr_slot_info.handle_new_payload_attributes(update);
     }
 }
