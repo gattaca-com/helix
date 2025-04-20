@@ -9,7 +9,7 @@ use axum::{
     body::{to_bytes, Body},
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::{Request, StatusCode},
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     Extension,
 };
 use bytes::Bytes;
@@ -119,14 +119,10 @@ where
     pub async fn get_validators(
         Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
     ) -> impl IntoResponse {
-        let duty_bytes = api.curr_slot_info.proposer_duties_response();
-        match duty_bytes {
-            Some(bytes) => Response::builder()
-                .status(StatusCode::OK)
-                .body(axum::body::Body::from(bytes.clone()))
-                .unwrap()
-                .into_response(),
-            None => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        if let Some(duty_bytes) = api.curr_slot_info.proposer_duties_response() {
+            (StatusCode::OK, duty_bytes.0).into_response()
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
 

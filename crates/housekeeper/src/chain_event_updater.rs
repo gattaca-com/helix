@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use alloy_primitives::B256;
+use alloy_primitives::{Bytes, B256};
 use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
@@ -44,7 +44,7 @@ pub struct SlotUpdate {
 pub struct CurrentSlotInfo {
     /// Information about the current head slot and next proposer duty
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
-    proposer_duties_response: Arc<RwLock<Option<Vec<u8>>>>,
+    proposer_duties_response: Arc<RwLock<Option<Bytes>>>,
     payload_attributes: Arc<RwLock<HashMap<(B256, Slot), PayloadAttributesUpdate>>>,
 }
 
@@ -72,7 +72,7 @@ impl CurrentSlotInfo {
         (slot.into(), resp)
     }
 
-    pub fn proposer_duties_response(&self) -> Option<Vec<u8>> {
+    pub fn proposer_duties_response(&self) -> Option<Bytes> {
         self.proposer_duties_response.read().clone()
     }
 
@@ -102,7 +102,9 @@ impl CurrentSlotInfo {
             let response: Vec<BuilderGetValidatorsResponse> =
                 new_duties.into_iter().map(|duty| duty.into()).collect();
             match serde_json::to_vec(&response) {
-                Ok(duty_bytes) => *self.proposer_duties_response.write() = Some(duty_bytes),
+                Ok(duty_bytes) => {
+                    *self.proposer_duties_response.write() = Some(Bytes::from(duty_bytes))
+                }
                 Err(err) => {
                     error!(%err, "failed to serialize proposer duties to JSON");
                     *self.proposer_duties_response.write() = None;
