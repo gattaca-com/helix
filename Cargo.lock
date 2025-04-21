@@ -4127,6 +4127,7 @@ dependencies = [
  "alloy-primitives 0.8.25",
  "ethers",
  "eyre",
+ "futures 0.3.31",
  "helix-beacon",
  "helix-common",
  "helix-database",

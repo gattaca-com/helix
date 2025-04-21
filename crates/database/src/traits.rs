@@ -51,7 +51,7 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn get_validator_registrations_for_pub_keys(
         &self,
-        pub_keys: Vec<BlsPublicKey>,
+        pub_keys: &[&BlsPublicKey],
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError>;
 
     async fn get_validator_registration_timestamp(

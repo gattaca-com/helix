@@ -1,8 +1,11 @@
+use std::time::Duration;
+
 use alloy_primitives::B256;
 use helix_types::{
-    custom_slot_clock, holesky_slot_clock, holesky_spec, mainnet_slot_clock, sepolia_slot_clock,
-    sepolia_spec, spec_from_file, ChainSpec, EthSpec, ForkName, MainnetEthSpec, SlotClock,
-    SlotClockTrait, HOLESKY_GENESIS_TIME, MAINNET_GENESIS_TIME, SEPOLIA_GENESIS_TIME,
+    custom_slot_clock, duration_into_slot, holesky_slot_clock, holesky_spec, mainnet_slot_clock,
+    sepolia_slot_clock, sepolia_spec, spec_from_file, ChainSpec, EthSpec, ForkName, MainnetEthSpec,
+    Slot, SlotClock, SlotClockTrait, HOLESKY_GENESIS_TIME, MAINNET_GENESIS_TIME,
+    SEPOLIA_GENESIS_TIME,
 };
 
 pub(crate) const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
@@ -108,5 +111,21 @@ impl ChainInfo {
 
     pub fn slots_per_epoch(&self) -> u64 {
         MainnetEthSpec::slots_per_epoch()
+    }
+
+    /// Returns the position of the slot in the epoch, 0-31.
+    pub fn slot_in_epoch(&self, slot: Slot) -> u64 {
+        slot.as_u64() % self.slots_per_epoch()
+    }
+
+    /// Duration since the start of the slot, None if we're before the start of the slot
+    pub fn duration_into_slot(&self, slot: Slot) -> Option<Duration> {
+        duration_into_slot(&self.clock, slot)
+    }
+
+    /// Current slot based on current clock time
+    pub fn current_slot(&self) -> Slot {
+        // safe since we're past genesis slot and UNIX_EPOCH
+        self.clock.now().unwrap()
     }
 }

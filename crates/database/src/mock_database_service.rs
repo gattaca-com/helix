@@ -91,11 +91,11 @@ impl DatabaseService for MockDatabaseService {
     }
     async fn get_validator_registrations_for_pub_keys(
         &self,
-        pubkeys: Vec<BlsPublicKey>,
+        pubkeys: &[&BlsPublicKey],
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError> {
         let mut entries = vec![];
-        for pubkey in pubkeys {
-            entries.push(self.get_validator_registration(pubkey).await?);
+        for &pubkey in pubkeys {
+            entries.push(self.get_validator_registration(pubkey.clone()).await?);
         }
         Ok(entries)
     }
