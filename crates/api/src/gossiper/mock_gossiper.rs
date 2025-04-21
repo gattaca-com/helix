@@ -3,7 +3,6 @@ use tonic::{Request, Response, Status};
 
 use crate::{
     gossiper::{
-        error::GossipError,
         traits::GossipClientTrait,
         types::{
             BroadcastGetPayloadParams, BroadcastHeaderParams, BroadcastPayloadParams,
@@ -14,7 +13,7 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct MockGossiper {}
+pub struct MockGossiper;
 
 impl MockGossiper {
     pub fn new() -> Result<Self, tonic::transport::Error> {
@@ -28,21 +27,10 @@ impl MockGossiper {
 
 #[async_trait]
 impl GossipClientTrait for MockGossiper {
-    async fn broadcast_header(&self, _request: BroadcastHeaderParams) -> Result<(), GossipError> {
-        Ok(())
-    }
-    async fn broadcast_payload(&self, _request: BroadcastPayloadParams) -> Result<(), GossipError> {
-        Ok(())
-    }
-    async fn broadcast_get_payload(
-        &self,
-        _request: BroadcastGetPayloadParams,
-    ) -> Result<(), GossipError> {
-        Ok(())
-    }
-    async fn request_payload(&self, _request: RequestPayloadParams) -> Result<(), GossipError> {
-        Ok(())
-    }
+    async fn broadcast_header(&self, _request: BroadcastHeaderParams) {}
+    async fn broadcast_payload(&self, _request: BroadcastPayloadParams) {}
+    async fn broadcast_get_payload(&self, _request: BroadcastGetPayloadParams) {}
+    async fn request_payload(&self, _request: RequestPayloadParams) {}
 }
 
 pub struct MockGossiperService;

@@ -7,7 +7,8 @@ mod data_api_tests {
             BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
             ReceivedBlocksResponse, ValidatorRegistrationParams,
         },
-        PATH_DATA_API,
+        PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API, PATH_PROPOSER_PAYLOAD_DELIVERED,
+        PATH_VALIDATOR_REGISTRATION,
     };
     use helix_database::mock_database_service::MockDatabaseService;
     use helix_types::{BlsPublicKey, SignedValidatorRegistration, TestRandomSeed};
@@ -15,20 +16,12 @@ mod data_api_tests {
     use serial_test::serial;
     use tokio::sync::oneshot;
 
-    use crate::{
-        relay_data::{
-            DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_PROPOSER_PAYLOAD_DELIVERED,
-            PATH_VALIDATOR_REGISTRATION,
-        },
-        test_utils::data_api_app,
-    };
+    use crate::{relay_data::DataApi, test_utils::data_api_app};
 
-    // +++ HELPER VARIABLES +++
     const ADDRESS: &str = "0.0.0.0";
     const PORT: u16 = 3000;
     const HEAD_SLOT: u64 = 32;
 
-    // +++ HELPER FUNCTIONS +++
     #[derive(Debug, Clone)]
     struct HttpServiceConfig {
         address: String,
@@ -192,7 +185,7 @@ mod data_api_tests {
 
         // Prepare the request
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_BUILDER_BIDS_RECEIVED,);
+            format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_BUILDER_BIDS_RECEIVED);
 
         let mut query_params = get_test_builder_blocks_received_params();
         query_params.slot = None;
@@ -289,7 +282,7 @@ mod data_api_tests {
 
         // Prepare the request
         let req_url =
-            format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_VALIDATOR_REGISTRATION,);
+            format!("{}{}{}", http_config.base_url(), PATH_DATA_API, PATH_VALIDATOR_REGISTRATION);
 
         let query_params = get_test_validator_registration_params();
 

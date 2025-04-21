@@ -92,10 +92,10 @@ impl MultiBeaconClient {
                             best_sync_status = Some(sync_status);
                         }
                     }
-                    Err(err) => tracing::error!("Failed to get sync status: {err:?}"),
+                    Err(err) => error!("Failed to get sync status: {err:?}"),
                 },
                 Err(join_err) => {
-                    tracing::error!("Tokio join error for best_sync_status: {join_err:?}")
+                    error!("Tokio join error for best_sync_status: {join_err:?}")
                 }
             }
         }
@@ -114,7 +114,7 @@ impl MultiBeaconClient {
             let chan = chan.clone();
             task::spawn(file!(), line!(), async move {
                 if let Err(err) = client.subscribe_to_head_events(chan).await {
-                    tracing::error!("Failed to subscribe to head events: {err:?}");
+                    error!("Failed to subscribe to head events: {err:?}");
                 }
             });
         }
@@ -135,7 +135,7 @@ impl MultiBeaconClient {
             let chan = chan.clone();
             task::spawn(file!(), line!(), async move {
                 if let Err(err) = client.subscribe_to_payload_attributes_events(chan).await {
-                    tracing::error!("Failed to subscribe to payload attributes events: {err:?}");
+                    error!("Failed to subscribe to payload attributes events: {err:?}");
                 }
             });
         }

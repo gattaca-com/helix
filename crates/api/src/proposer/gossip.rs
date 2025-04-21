@@ -89,7 +89,7 @@ where
 
                         match payload_result {
                             Ok(execution_payload) => {
-                                if let Err(err) = api_clone
+                                api_clone
                                     .gossiper
                                     .broadcast_payload(BroadcastPayloadParams {
                                         execution_payload,
@@ -97,9 +97,6 @@ where
                                         proposer_pub_key: payload.proposer_pub_key,
                                     })
                                     .await
-                                {
-                                    error!(request_id = %request_id, error = %err, "error broadcasting payload");
-                                }
                             }
                             Err(err) => {
                                 error!(request_id = %request_id, error = %err, "error fetching execution payload");

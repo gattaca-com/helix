@@ -177,7 +177,7 @@ where
                 if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
                     // Request payload in the background
                     task::spawn(file!(), line!(), async move {
-                        if let Err(err) = proposer_api
+                        proposer_api
                             .gossiper
                             .request_payload(RequestPayloadParams {
                                 slot,
@@ -185,15 +185,12 @@ where
                                 block_hash,
                             })
                             .await
-                        {
-                            error!(%err, "failed to request payload");
-                        }
                     });
                 }
 
-                info!(bid = %json!(bid), "delivering bid");
+                let bid = json!(bid);
+                info!(%bid, "delivering bid");
 
-                // Return header
                 Ok(axum::Json(bid))
             }
             Ok(None) => {
@@ -208,7 +205,6 @@ where
     }
 }
 
-// TODO(lor): remove static
 async fn save_get_header_call<DB: DatabaseService + 'static>(
     db: Arc<DB>,
     slot: u64,

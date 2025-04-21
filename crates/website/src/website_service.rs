@@ -27,9 +27,9 @@ impl WebsiteService {
         loop {
             match WebsiteService::run(config.clone(), db.clone()).await {
                 Ok(_) => {
-                    tracing::error!("Website service unexpectedly completed. Restarting...")
+                    error!("Website service unexpectedly completed. Restarting...")
                 }
-                Err(e) => tracing::error!("Website server error: {}. Restarting...", e),
+                Err(e) => error!("Website server error: {}. Restarting...", e),
             }
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }

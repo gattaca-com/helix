@@ -1,10 +1,6 @@
 #![allow(clippy::type_complexity)]
 
-use std::{
-    io::Read,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{io::Read, sync::Arc, time::Duration};
 
 use alloy_primitives::{B256, U256};
 use axum::{
@@ -303,7 +299,7 @@ where
                 }
 
                 // Log some final info
-                trace.request_finish = get_nanos_timestamp()?;
+                trace.request_finish = utcnow_ns();
                 debug!(
                     ?trace,
                     request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
@@ -404,8 +400,7 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace =
-            HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let mut trace = HeaderSubmissionTrace { receive: utcnow_ns(), ..Default::default() };
         trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         debug!(timestamp_request_start = trace.receive,);
@@ -422,8 +417,7 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace =
-            HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let mut trace = HeaderSubmissionTrace { receive: utcnow_ns(), ..Default::default() };
         trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         debug!(timestamp_request_start = trace.receive,);
@@ -1029,7 +1023,7 @@ where
             }
         }
 
-        trace.auctioneer_update = get_nanos_timestamp().unwrap_or_default();
+        trace.auctioneer_update = utcnow_ns();
 
         debug!("succesfully saved gossiped header");
 
@@ -1051,10 +1045,7 @@ where
 
         debug!(?block_hash, "received gossiped payload");
 
-        let mut trace = GossipedPayloadTrace {
-            receive: get_nanos_timestamp().unwrap_or_default(),
-            ..Default::default()
-        };
+        let mut trace = GossipedPayloadTrace { receive: utcnow_ns(), ..Default::default() };
 
         // Verify that the gossiped payload is not for a past slot
         let head_slot = self.curr_slot_info.head_slot();
@@ -1168,9 +1159,7 @@ where
             on_receive,
             payload_address,
         };
-        if let Err(err) = self.gossiper.broadcast_header(params).await {
-            error!(%err, "failed to broadcast header");
-        }
+        self.gossiper.broadcast_header(params).await
     }
 
     async fn gossip_payload(
@@ -1183,9 +1172,7 @@ where
             slot: payload.slot().as_u64(),
             proposer_pub_key: payload.proposer_public_key().clone(),
         };
-        if let Err(err) = self.gossiper.broadcast_payload(params).await {
-            error!(%err, "failed to broadcast payload");
-        }
+        self.gossiper.broadcast_payload(params).await
     }
 }
 
@@ -2047,19 +2034,6 @@ fn log_save_bid_info(
     if update_bid_result.was_bid_saved {
         debug!(eligible_at = bid_update_finish);
     }
-}
-
-fn get_nanos_timestamp() -> Result<u64, BuilderApiError> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .map_err(|_| BuilderApiError::InternalError)
-}
-
-pub(crate) fn get_nanos_from(now: SystemTime) -> Result<u64, BuilderApiError> {
-    now.duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .map_err(|_| BuilderApiError::InternalError)
 }
 
 #[cfg(test)]

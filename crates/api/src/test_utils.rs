@@ -12,8 +12,9 @@ use helix_beacon::{
 };
 use helix_common::{
     api::{
-        PATH_DATA_API, PATH_GET_HEADER, PATH_GET_PAYLOAD, PATH_PROPOSER_API,
-        PATH_REGISTER_VALIDATORS, PATH_STATUS,
+        PATH_BUILDER_BIDS_RECEIVED, PATH_DATA_API, PATH_GET_HEADER, PATH_GET_PAYLOAD,
+        PATH_PROPOSER_API, PATH_PROPOSER_PAYLOAD_DELIVERED, PATH_REGISTER_VALIDATORS, PATH_STATUS,
+        PATH_VALIDATOR_REGISTRATION,
     },
     chain_info::ChainInfo,
     metadata_provider::DefaultMetadataProvider,
@@ -34,7 +35,7 @@ use crate::{
     },
     constants::{MAX_BLINDED_BLOCK_LENGTH, _MAX_VAL_REGISTRATIONS_LENGTH},
     gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
-    proposer::{self, ProposerApi},
+    proposer::{self, status, ProposerApi},
     relay_data::{
         DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_PROPOSER_PAYLOAD_DELIVERED,
         PATH_VALIDATOR_REGISTRATION,
