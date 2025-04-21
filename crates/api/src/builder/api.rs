@@ -34,7 +34,9 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
-use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
+use helix_types::{
+    BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid, Slot,
+};
 use hyper::HeaderMap;
 use ssz::Decode;
 use tokio::{
@@ -183,9 +185,8 @@ where
         let next_duty = next_duty.unwrap();
 
         // Fetch the next payload attributes and validate basic information
-        let payload_attributes = api
-            .fetch_payload_attributes(payload.slot().as_u64(), payload.parent_hash(), &block_hash)
-            .await?;
+        let payload_attributes =
+            api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), &block_hash)?;
 
         // Handle duplicates.
         if let Err(err) = api
@@ -477,9 +478,8 @@ where
         let next_duty = next_duty.unwrap();
 
         // Fetch the next payload attributes and validate basic information
-        let payload_attributes = api
-            .fetch_payload_attributes(payload.slot().into(), payload.parent_hash(), block_hash)
-            .await?;
+        let payload_attributes =
+            api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), block_hash)?;
 
         // Fetch builder info
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
@@ -746,9 +746,8 @@ where
         let next_duty = next_duty.unwrap();
 
         // Fetch the next payload attributes and validate basic information
-        let payload_attributes = api
-            .fetch_payload_attributes(payload.slot().as_u64(), payload.parent_hash(), &block_hash)
-            .await?;
+        let payload_attributes =
+            api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), &block_hash)?;
 
         // Fetch builder info
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
@@ -1500,14 +1499,13 @@ where
         }
     }
 
-    async fn fetch_payload_attributes(
+    fn fetch_payload_attributes(
         &self,
-        slot: u64,
-        parent_hash: &B256,
+        slot: Slot,
+        parent_hash: B256,
         block_hash: &B256,
     ) -> Result<PayloadAttributesUpdate, BuilderApiError> {
-        let Some(payload_attributes) =
-            self.curr_slot_info.payload_attributes(*parent_hash, slot.into())
+        let Some(payload_attributes) = self.curr_slot_info.payload_attributes(parent_hash, slot)
         else {
             warn!(%block_hash, "payload attributes not yet known");
             return Err(BuilderApiError::PayloadAttributesNotYetKnown)
@@ -1515,8 +1513,8 @@ where
 
         if payload_attributes.slot != slot {
             warn!(
-                got = slot,
-                expected = payload_attributes.slot,
+                got =% slot,
+                expected =% payload_attributes.slot,
                 "payload attributes slot mismatch with payload attributes"
             );
             return Err(BuilderApiError::PayloadSlotMismatchWithPayloadAttributes {
