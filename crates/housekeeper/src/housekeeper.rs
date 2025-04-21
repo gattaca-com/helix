@@ -175,8 +175,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         }));
 
         // proposer duties
-        let last_updated = self.slots.proposer_duties();
-        if self.should_update_duties(head_slot, last_updated) {
+        if self.should_update_duties(head_slot) {
             let housekeeper = self.clone();
             tasks.push(task::spawn(file!(), line!(), async move {
                 match housekeeper.update_proposer_duties(epoch).await {
@@ -198,8 +197,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         };
 
         // known validators
-        let last_updated = self.slots.refreshed_validators();
-        if self.should_refresh_known_validators(head_slot.as_u64(), last_updated) {
+        if self.should_refresh_known_validators(head_slot.as_u64()) {
             let housekeeper = self.clone();
             tasks.push(task::spawn(file!(), line!(), async move {
                 if let Err(err) = housekeeper.refresh_known_validators().await {
@@ -219,8 +217,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         }));
 
         // trusted proposers
-        let last_updated = self.slots.trusted_proposers();
-        if self.should_update_trusted_proposers(head_slot.as_u64(), last_updated) {
+        if self.should_update_trusted_proposers(head_slot.as_u64()) {
             let housekeeper = self.clone();
             task::spawn(file!(), line!(), async move {
                 if let Err(err) = housekeeper.update_trusted_proposers().await {
@@ -231,6 +228,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             });
         }
 
+        // wait for all tasks, this should take less than one slot
         join_all(tasks).await;
     }
 
@@ -288,7 +286,8 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     }
 
     /// Determine if known validators should be refreshed for the given slot.
-    fn should_refresh_known_validators(&self, head_slot: u64, last_updated: u64) -> bool {
+    fn should_refresh_known_validators(&self, head_slot: u64) -> bool {
+        let last_updated = self.slots.refreshed_validators();
         if head_slot <= last_updated {
             return false;
         }
@@ -366,7 +365,8 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         Ok(())
     }
 
-    fn should_update_duties(&self, head_slot: Slot, last_updated: u64) -> bool {
+    fn should_update_duties(&self, head_slot: Slot) -> bool {
+        let last_updated = self.slots.proposer_duties();
         head_slot.as_u64().saturating_sub(last_updated) >= PROPOSER_DUTIES_UPDATE_FREQ
     }
 
@@ -400,7 +400,8 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         Ok(())
     }
 
-    fn should_update_trusted_proposers(&self, head_slot: u64, last_updated: u64) -> bool {
+    fn should_update_trusted_proposers(&self, head_slot: u64) -> bool {
+        let last_updated = self.slots.trusted_proposers();
         head_slot % TRUSTED_PROPOSERS_UPDATE_FREQ == 0 ||
             head_slot.saturating_sub(last_updated) >= TRUSTED_PROPOSERS_UPDATE_FREQ
     }
