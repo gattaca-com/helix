@@ -31,8 +31,9 @@ use crate::{
         api::{BuilderApi, MAX_PAYLOAD_LENGTH},
         mock_simulator::MockSimulator,
     },
+    constants::{MAX_BLINDED_BLOCK_LENGTH, _MAX_VAL_REGISTRATIONS_LENGTH},
     gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
-    proposer::api::{ProposerApi, MAX_BLINDED_BLOCK_LENGTH, _MAX_VAL_REGISTRATIONS_LENGTH},
+    proposer::{status, ProposerApi},
     relay_data::{
         DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_PROPOSER_PAYLOAD_DELIVERED,
         PATH_VALIDATOR_REGISTRATION,
@@ -68,11 +69,7 @@ pub fn app() -> Router {
     Router::new()
         .route(
             &format!("{PATH_PROPOSER_API}{PATH_STATUS}"),
-            get(ProposerApi::<
-                MockAuctioneer,
-                MockDatabaseService,
-                MockGossiper,
-            >::status),
+            get(status),
         )
         .route(
             &format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
