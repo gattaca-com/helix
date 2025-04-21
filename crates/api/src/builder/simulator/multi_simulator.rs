@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
@@ -8,24 +8,25 @@ use std::{
 
 use async_trait::async_trait;
 use helix_common::{simulator::BlockSimError, BuilderInfo};
-use tokio::{sync::RwLock, time::sleep};
+use tokio::time::sleep;
 
 use super::{traits::BlockSimulator, BlockSimRequest};
 
 #[derive(Clone)]
 pub struct MultiSimulator<B: BlockSimulator + Send + Sync> {
-    pub simulators: Vec<B>,
+    pub simulators: Arc<Vec<B>>,
     next_index: Arc<AtomicUsize>,
-    enabled: Arc<RwLock<Vec<bool>>>,
+    // never resized after init
+    enabled: Arc<Vec<AtomicBool>>,
 }
 
 impl<B: BlockSimulator + Send + Sync> MultiSimulator<B> {
     pub fn new(simulators: Vec<B>) -> Self {
-        let num_simulators = simulators.len();
+        let enabled = vec![true; simulators.len()].into_iter().map(AtomicBool::new).collect();
         Self {
-            simulators,
+            simulators: Arc::new(simulators),
             next_index: Arc::new(AtomicUsize::new(0)),
-            enabled: Arc::new(RwLock::new(vec![true; num_simulators])),
+            enabled: Arc::new(enabled),
         }
     }
 
@@ -33,8 +34,7 @@ impl<B: BlockSimulator + Send + Sync> MultiSimulator<B> {
         loop {
             for (i, simulator) in self.simulators.iter().enumerate() {
                 let is_synced = simulator.is_synced().await.unwrap_or(false);
-                let mut enabled = self.enabled.write().await;
-                enabled[i] = is_synced;
+                self.enabled[i].store(is_synced, Ordering::Relaxed);
             }
             sleep(Duration::from_secs(1)).await;
         }
@@ -65,10 +65,8 @@ impl<B: BlockSimulator + Send + Sync> BlockSimulator for MultiSimulator<B> {
                 .unwrap_or(0);
 
             // Check if the simulator is enabled
-            let enabled = self.enabled.read().await;
-            let simulator_enabled = enabled[index];
+            let simulator_enabled = self.enabled[index].load(Ordering::Relaxed);
             if simulator_enabled {
-                drop(enabled);
                 let simulator = &self.simulators[index];
 
                 // Process the request with the selected simulator
@@ -85,7 +83,7 @@ impl<B: BlockSimulator + Send + Sync> BlockSimulator for MultiSimulator<B> {
 
     async fn is_synced(&self) -> Result<bool, BlockSimError> {
         // If any simulator is synced, then the multi-simulator is synced
-        for simulator in &self.simulators {
+        for simulator in self.simulators.iter() {
             if simulator.is_synced().await? {
                 return Ok(true)
             }

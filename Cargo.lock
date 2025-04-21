@@ -4184,6 +4184,7 @@ dependencies = [
  "helix-housekeeper",
  "helix-types",
  "num-format",
+ "parking_lot",
  "serde",
  "tokio",
  "tracing",

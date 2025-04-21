@@ -6,10 +6,8 @@ use helix_common::{chain_info::ChainInfo, NetworkConfig, RelayConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::MockAuctioneer;
 use helix_housekeeper::{ChainEventUpdater, CurrentSlotInfo};
-use tokio::{
-    net::TcpListener,
-    sync::{broadcast, RwLock},
-};
+use parking_lot::RwLock;
+use tokio::{net::TcpListener, sync::broadcast};
 use tracing::{debug, error, info};
 
 use crate::{
@@ -197,7 +195,7 @@ impl WebsiteService {
         .await?;
 
         // Update all cached templates
-        let mut cached_templates = state.cached_templates.write().await;
+        let mut cached_templates = state.cached_templates.write();
         cached_templates.default = default_template;
         cached_templates.by_value_desc = by_value_desc_template;
         cached_templates.by_value_asc = by_value_asc_template;

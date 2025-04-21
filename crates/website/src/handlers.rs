@@ -17,7 +17,7 @@ pub async fn index(
     let order_by = params.get("order_by").map(|s| s.as_str());
 
     // Await the read lock on cached_templates
-    let cached_templates = state.cached_templates.read().await;
+    let cached_templates = state.cached_templates.read();
 
     let template = match order_by {
         Some("-value") => &cached_templates.by_value_desc,

@@ -5,6 +5,7 @@ use helix_common::{
     metrics::{GossipMetrics, BUILDER_GOSSIP_QUEUE, PROPOSER_GOSSIP_QUEUE},
     task,
 };
+use parking_lot::RwLock;
 use prost::Message;
 use tokio::{sync::mpsc::Sender, time::sleep};
 use tonic::{transport::Channel, Request, Response, Status};
@@ -34,12 +35,12 @@ const REQUEST_PAYLOAD_ID: &str = "request_payload";
 #[derive(Clone)]
 pub struct GrpcGossiperClient {
     endpoint: String,
-    client: Arc<tokio::sync::RwLock<Option<GossipServiceClient<Channel>>>>,
+    client: Arc<RwLock<Option<GossipServiceClient<Channel>>>>,
 }
 
 impl GrpcGossiperClient {
     pub fn new(endpoint: String) -> Self {
-        Self { endpoint, client: Arc::new(tokio::sync::RwLock::new(None)) }
+        Self { endpoint, client: Arc::new(RwLock::new(None)) }
     }
 
     pub async fn connect(&self) {
@@ -53,7 +54,7 @@ impl GrpcGossiperClient {
             loop {
                 match GossipServiceClient::connect(endpoint.clone()).await {
                     Ok(c) => {
-                        let mut client_with_lock = client.write().await;
+                        let mut client_with_lock = client.write();
                         *client_with_lock = Some(c);
                         break;
                     }
@@ -69,6 +70,11 @@ impl GrpcGossiperClient {
         });
     }
 
+    fn client(&self) -> Option<GossipServiceClient<Channel>> {
+        let client_guard = self.client.read();
+        client_guard.clone()
+    }
+
     pub async fn broadcast_header(
         &self,
         request: grpc::BroadcastHeaderParams,
@@ -78,12 +84,8 @@ impl GrpcGossiperClient {
         GossipMetrics::out_size(HEADER_ID, size);
 
         let request = Request::new(request);
-        let client = {
-            let client_guard = self.client.read().await;
-            client_guard.clone()
-        };
 
-        if let Some(mut client) = client {
+        if let Some(mut client) = self.client() {
             let result =
                 tokio::time::timeout(Duration::from_secs(5), client.broadcast_header(request))
                     .await;
@@ -118,12 +120,8 @@ impl GrpcGossiperClient {
         GossipMetrics::out_size(PAYLOAD_ID, size);
 
         let request = Request::new(request);
-        let client = {
-            let client_guard = self.client.read().await;
-            client_guard.clone()
-        };
 
-        if let Some(mut client) = client {
+        if let Some(mut client) = self.client() {
             let result =
                 tokio::time::timeout(Duration::from_secs(5), client.broadcast_payload(request))
                     .await;
@@ -158,12 +156,8 @@ impl GrpcGossiperClient {
         GossipMetrics::out_size(GET_PAYLOAD_ID, size);
 
         let request = Request::new(request);
-        let client = {
-            let client_guard = self.client.read().await;
-            client_guard.clone()
-        };
 
-        if let Some(mut client) = client {
+        if let Some(mut client) = self.client() {
             let result =
                 tokio::time::timeout(Duration::from_secs(5), client.broadcast_get_payload(request))
                     .await;
@@ -198,12 +192,8 @@ impl GrpcGossiperClient {
         GossipMetrics::out_size(REQUEST_PAYLOAD_ID, size);
 
         let request = Request::new(request);
-        let client = {
-            let client_guard = self.client.read().await;
-            client_guard.clone()
-        };
 
-        if let Some(mut client) = client {
+        if let Some(mut client) = self.client() {
             let result =
                 tokio::time::timeout(Duration::from_secs(5), client.request_payload(request)).await;
             match result {
