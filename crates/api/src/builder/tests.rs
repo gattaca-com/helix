@@ -19,6 +19,7 @@ use helix_common::{
         v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionDeneb},
         BidSubmission,
     },
+    metadata_provider::DefaultMetadataProvider,
     request_encoding::Encoding,
     HeaderSubmissionTrace, Route, SubmissionTrace, ValidatorPreferences,
 };
@@ -197,7 +198,15 @@ fn resign_bid_submission(bid: &mut SignedBidSubmission) {
 async fn start_api_server() -> (
     oneshot::Sender<()>,
     HttpServiceConfig,
-    Arc<BuilderApi<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>>,
+    Arc<
+        BuilderApi<
+            MockAuctioneer,
+            MockDatabaseService,
+            MockSimulator,
+            MockGossiper,
+            DefaultMetadataProvider,
+        >,
+    >,
     broadcast::Sender<ChainUpdate>,
 ) {
     let (tx, rx) = oneshot::channel();

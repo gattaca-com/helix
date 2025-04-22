@@ -3,6 +3,7 @@ use std::{sync::Arc, time::SystemTime};
 use alloy_primitives::B256;
 use helix_common::{
     bid_submission::v3::header_submission_v3::{GetPayloadV3, SignedGetPayloadV3},
+    metadata_provider::MetadataProvider,
     signing::RelaySigningContext,
     utils::utcnow_ms,
     SubmissionTrace,
@@ -25,8 +26,8 @@ use crate::{
 };
 
 /// A task that fetches builder blocks for optimistic v3 submissions.
-pub async fn fetch_builder_blocks<A, DB, S, G>(
-    api: Arc<BuilderApi<A, DB, S, G>>,
+pub async fn fetch_builder_blocks<A, DB, S, G, MP>(
+    api: Arc<BuilderApi<A, DB, S, G, MP>>,
     mut receiver: Receiver<(B256, BlsPublicKey, Vec<u8>)>,
     signing_ctx: Arc<RelaySigningContext>,
 ) where
@@ -34,6 +35,7 @@ pub async fn fetch_builder_blocks<A, DB, S, G>(
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
 {
     while let Some((block_hash, builder_pubkey, builder_address)) = receiver.recv().await {
         let receive = get_nanos_from(SystemTime::now()).unwrap_or_default();

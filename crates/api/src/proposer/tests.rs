@@ -43,6 +43,7 @@ mod proposer_api_tests {
             PATH_REGISTER_VALIDATORS,
         },
         chain_info::ChainInfo,
+        metadata_provider::DefaultMetadataProvider,
         utils::utcnow_ns,
         ValidatorPreferences,
     };
@@ -197,7 +198,9 @@ mod proposer_api_tests {
     async fn start_api_server() -> (
         oneshot::Sender<()>,
         HttpServiceConfig,
-        Arc<ProposerApi<MockAuctioneer, MockDatabaseService, MockGossiper>>,
+        Arc<
+            ProposerApi<MockAuctioneer, MockDatabaseService, MockGossiper, DefaultMetadataProvider>,
+        >,
         broadcast::Sender<ChainUpdate>,
         Arc<MockAuctioneer>,
     ) {
@@ -910,10 +913,16 @@ mod proposer_api_tests {
         let (v3_sender, _v3_receiver) = channel(32);
         let auctioneer = Arc::new(MockAuctioneer::default());
 
-        let prop_api = ProposerApi::<MockAuctioneer, MockDatabaseService, MockGossiper>::new(
+        let prop_api = ProposerApi::<
+            MockAuctioneer,
+            MockDatabaseService,
+            MockGossiper,
+            DefaultMetadataProvider,
+        >::new(
             auctioneer.clone(),
             Arc::new(MockDatabaseService::default()),
             Arc::new(MockGossiper::new().unwrap()),
+            Arc::new(DefaultMetadataProvider::new()),
             vec![],
             Arc::new(MultiBeaconClient::new(vec![])),
             Arc::new(ChainInfo::for_mainnet()),

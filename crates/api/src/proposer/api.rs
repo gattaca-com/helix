@@ -18,6 +18,7 @@ use helix_common::{
     beacon_api::PublishBlobsRequest,
     blob_sidecars::blob_sidecars_from_unblinded_payload,
     chain_info::{ChainInfo, Network},
+    metadata_provider::MetadataProvider,
     metrics::{GetHeaderMetric, PROPOSER_GOSSIP_QUEUE},
     task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns, utcnow_sec},
@@ -63,15 +64,17 @@ pub(crate) const MAX_BLINDED_BLOCK_LENGTH: usize = 1024 * 1024;
 pub(crate) const _MAX_VAL_REGISTRATIONS_LENGTH: usize = 425 * 10_000; // 425 bytes per registration (json) * 10,000 registrations
 
 #[derive(Clone)]
-pub struct ProposerApi<A, DB, G>
+pub struct ProposerApi<A, DB, G, MP>
 where
     A: Auctioneer,
     DB: DatabaseService,
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider,
 {
     auctioneer: Arc<A>,
     db: Arc<DB>,
     gossiper: Arc<G>,
+    metadata_provider: Arc<MP>,
     broadcasters: Vec<Arc<BlockBroadcaster>>,
     multi_beacon_client: Arc<MultiBeaconClient>,
 
@@ -87,16 +90,18 @@ where
     v3_payload_request: Sender<(B256, BlsPublicKey, Vec<u8>)>,
 }
 
-impl<A, DB, G> ProposerApi<A, DB, G>
+impl<A, DB, G, MP> ProposerApi<A, DB, G, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
 {
     pub fn new(
         auctioneer: Arc<A>,
         db: Arc<DB>,
         gossiper: Arc<G>,
+        metadata_provider: Arc<MP>,
         broadcasters: Vec<Arc<BlockBroadcaster>>,
         multi_beacon_client: Arc<MultiBeaconClient>,
         chain_info: Arc<ChainInfo>,
@@ -110,6 +115,7 @@ where
             auctioneer,
             db,
             gossiper,
+            metadata_provider,
             broadcasters,
             multi_beacon_client,
             curr_slot_info: Arc::new(RwLock::new((0, None))),
@@ -135,7 +141,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/status>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn status(
-        Extension(_proposer_api): Extension<Arc<ProposerApi<A, DB, G>>>,
+        Extension(_proposer_api): Extension<Arc<ProposerApi<A, DB, G, MP>>>,
         headers: HeaderMap,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         Ok(StatusCode::OK)
@@ -155,7 +161,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/registerValidator>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn register_validators(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G, MP>>>,
         headers: HeaderMap,
         Json(registrations): Json<Vec<SignedValidatorRegistration>>,
     ) -> Result<StatusCode, ProposerApiError> {
@@ -229,8 +235,7 @@ where
             }
         }
 
-        let user_agent =
-            headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|v| v.to_string());
+        let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
 
         let (head_slot, _) = *proposer_api.curr_slot_info.read().await;
         let num_registrations = registrations.len();
@@ -347,7 +352,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/getHeader>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn get_header(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G, MP>>>,
         headers: HeaderMap,
         Path(GetHeaderParams { slot, parent_hash, public_key }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
@@ -393,8 +398,7 @@ where
         };
         trace.validation_complete = utcnow_ns();
 
-        let user_agent =
-            headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|v| v.to_string());
+        let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
 
         let mut mev_boost = false;
 
@@ -526,7 +530,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlock>
     #[tracing::instrument(skip_all, fields(id))]
     pub async fn get_payload(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G, MP>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
@@ -535,8 +539,7 @@ where
 
         let mut trace = GetPayloadTrace { receive: utcnow_ns(), ..Default::default() };
 
-        let user_agent =
-            headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|v| v.to_string());
+        let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
 
         let signed_blinded_block: SignedBlindedBeaconBlock =
             match deserialize_get_payload_bytes(req).await {
@@ -846,12 +849,12 @@ where
     }
 }
 
-impl<A, DB, G> ProposerApi<A, DB, G>
+impl<A, DB, G, MP> ProposerApi<A, DB, G, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
 {
     /// Validate a single registration.
     pub fn validate_registration(
@@ -1393,11 +1396,12 @@ fn get_x_mev_boost_header_start_ms(header_map: &HeaderMap) -> Option<u64> {
 }
 
 // STATE SYNC
-impl<A, DB, G> ProposerApi<A, DB, G>
+impl<A, DB, G, MP> ProposerApi<A, DB, G, MP>
 where
     A: Auctioneer,
     DB: DatabaseService,
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
 {
     /// Subscribes to slot head updater.
     /// Updates the current slot and next proposer duty.
