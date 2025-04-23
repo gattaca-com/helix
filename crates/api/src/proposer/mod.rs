@@ -25,12 +25,7 @@ use hyper::StatusCode;
 use tokio::sync::mpsc::{Receiver, Sender};
 pub use types::*;
 
-use crate::{
-    gossiper::{traits::GossipClientTrait, types::GossipedMessage},
-    proposer::{
-        unblind_beacon_block, GetHeaderParams, PreferencesHeader, GET_HEADER_REQUEST_CUTOFF_MS,
-    },
-};
+use crate::gossiper::{traits::GossipClientTrait, types::GossipedMessage};
 
 #[derive(Clone)]
 pub struct ProposerApi<A, DB, G, MP>

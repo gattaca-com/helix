@@ -52,6 +52,7 @@ use crate::{
         traits::GossipClientTrait,
         types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
     },
+    proposer::{ShareHeader, HELIX_SHARE_HEADER},
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
@@ -406,10 +407,21 @@ where
 
         debug!(timestamp_request_start = trace.receive,);
 
+        let sharing = headers.get(HELIX_SHARE_HEADER).map(ShareHeader::from).unwrap_or_default();
+
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) = decode_header_submission(req, &mut trace).await?;
 
-        Self::handle_submit_header(&api, payload, None, None, is_cancellations_enabled, trace).await
+        Self::handle_submit_header(
+            &api,
+            payload,
+            None,
+            None,
+            is_cancellations_enabled,
+            matches!(sharing, ShareHeader::All),
+            trace,
+        )
+        .await
     }
 
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
@@ -427,12 +439,15 @@ where
         let (payload, is_cancellations_enabled) =
             decode_header_submission_v3(req, &mut trace).await?;
 
+        let sharing = headers.get(HELIX_SHARE_HEADER).map(ShareHeader::from).unwrap_or_default();
+
         Self::handle_submit_header(
             &api,
             payload.submission,
             Some(payload.url),
             Some(payload.tx_count),
             is_cancellations_enabled,
+            matches!(sharing, ShareHeader::All),
             trace,
         )
         .await
@@ -444,6 +459,7 @@ where
         payload_address: Option<Vec<u8>>,
         _block_tx_count: Option<u32>, // TODO
         is_cancellations_enabled: bool,
+        is_gossip_enabled: bool,
         mut trace: HeaderSubmissionTrace,
     ) -> Result<StatusCode, BuilderApiError> {
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
@@ -597,14 +613,16 @@ where
             .await?
         {
             Some(builder_bid) => {
-                api.gossip_header(
-                    builder_bid,
-                    payload.bid_trace(),
-                    is_cancellations_enabled,
-                    trace.receive,
-                    payload_address.clone(),
-                )
-                .await;
+                if is_gossip_enabled {
+                    api.gossip_header(
+                        builder_bid,
+                        payload.bid_trace(),
+                        is_cancellations_enabled,
+                        trace.receive,
+                        payload_address.clone(),
+                    )
+                    .await;
+                }
             }
             None => { /* Bid wasn't saved so no need to gossip as it will never be served */ }
         }

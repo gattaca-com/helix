@@ -14,7 +14,7 @@ use helix_types::{BlsPublicKey, SignedBidSubmission};
 use reqwest::Url;
 use ssz::{Decode, Encode};
 use tokio::sync::mpsc::Receiver;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use super::V3Error;
 use crate::{
@@ -38,6 +38,7 @@ pub async fn fetch_builder_blocks<A, DB, S, G, MP>(
         let receive = utcnow_ns();
         let trace = SubmissionTrace { receive, ..Default::default() };
 
+        info!(?block_hash, "fetch v3 builder payload");
         match fetch_block(block_hash, &builder_address, &signing_ctx).await {
             Ok(block) => match BuilderApi::handle_optimistic_payload(
                 api.clone(),
@@ -59,6 +60,8 @@ pub async fn fetch_builder_blocks<A, DB, S, G, MP>(
             }
         }
     }
+
+    warn!("v3 payload fetch task exiting");
 }
 
 async fn fetch_block(

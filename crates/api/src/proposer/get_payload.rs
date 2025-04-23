@@ -424,14 +424,17 @@ where
         {
             // Fetch v3 optimistic payload from builder. This will complete asynchronously.
             info!(
-                 ?builder_pubkey,
-                 payload_address = String::from_utf8_lossy(&payload_address).as_ref(),
-                 "Requesting v3 payload from builder"
-             );
-            let _ =
-                self.v3_payload_request.send((*block_hash, builder_pubkey, payload_address)).await;
+                ?builder_pubkey,
+                payload_address = String::from_utf8_lossy(&payload_address).as_ref(),
+                "Requesting v3 payload from builder"
+            );
+            if let Err(e) =
+                self.v3_payload_request.send((*block_hash, builder_pubkey, payload_address)).await
+            {
+                error!("Failed to send v3 payload request: {e:?}");
+            }
         }
-        
+
         let mut last_error: Option<ProposerApiError> = None;
         let mut first_try = true; // Try at least once to cover case where get_payload is called too late.
         while first_try || utcnow_ms() < slot_cutoff_millis {
