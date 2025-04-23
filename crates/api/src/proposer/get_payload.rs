@@ -420,7 +420,7 @@ where
         let slot_cutoff_millis = (slot_time * 1000) + GET_PAYLOAD_REQUEST_CUTOFF_MS as u64;
 
         if let Ok(Some((builder_pubkey, payload_address))) =
-            self.auctioneer.get_payload_url(&block_hash).await
+            self.auctioneer.get_payload_url(block_hash).await
         {
             // Fetch v3 optimistic payload from builder. This will complete asynchronously.
             info!(
