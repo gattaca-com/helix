@@ -2,10 +2,10 @@
 
 use std::collections::HashMap;
 
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{Bytes, B256, U256};
 use async_trait::async_trait;
 use deadpool_redis::{Config, CreatePoolError, Pool, Runtime};
-use futures_util::TryStreamExt;
+use futures_util::StreamExt;
 use helix_common::{
     api::builder_api::TopBidUpdate,
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
@@ -24,7 +24,6 @@ use redis::{AsyncCommands, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use ssz::Encode;
 use tokio::sync::broadcast;
-use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 use tracing::{error, info};
 
 use super::utils::{
@@ -72,7 +71,7 @@ return nil
 #[derive(Clone)]
 pub struct RedisCache {
     pool: Pool,
-    tx: broadcast::Sender<Vec<u8>>,
+    tx: broadcast::Sender<Bytes>,
 }
 
 #[allow(dead_code)]
@@ -133,7 +132,7 @@ impl RedisCache {
 
             let top_bid_update: TopBidUpdate = sig_bid.into();
             //ssz encode the top bid update
-            let serialized = top_bid_update.as_ssz_bytes();
+            let serialized = Bytes::from(top_bid_update.as_ssz_bytes());
 
             if let Err(err) = self.tx.send(serialized) {
                 error!(err=%err, "Failed to send top bid update");
@@ -597,12 +596,8 @@ impl Auctioneer for RedisCache {
         Ok(wrapped_bid.map(|wrapped_bid| wrapped_bid.bid))
     }
 
-    async fn get_best_bids(
-        &self,
-    ) -> Box<dyn Stream<Item = Result<Vec<u8>, AuctioneerError>> + Send + Unpin> {
-        let rx = self.tx.subscribe();
-        let stream = BroadcastStream::new(rx).map_err(AuctioneerError::from);
-        Box::new(stream)
+    fn get_best_bids(&self) -> broadcast::Receiver<Bytes> {
+        self.tx.subscribe()
     }
 
     async fn save_execution_payload(
