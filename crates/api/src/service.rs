@@ -5,7 +5,8 @@ use helix_beacon::{
     multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
 };
 use helix_common::{
-    chain_info::ChainInfo, signing::RelaySigningContext, BroadcasterConfig, RelayConfig,
+    chain_info::ChainInfo, metadata_provider::MetadataProvider, signing::RelaySigningContext,
+    BroadcasterConfig, RelayConfig,
 };
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
@@ -29,7 +30,7 @@ const INIT_BROADCASTER_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct ApiService;
 
 impl ApiService {
-    pub async fn run(
+    pub async fn run<MP: MetadataProvider>(
         mut config: RelayConfig,
         db: Arc<PostgresDatabaseService>,
         auctioneer: Arc<RedisCache>,
@@ -37,6 +38,7 @@ impl ApiService {
         chain_info: Arc<ChainInfo>,
         relay_signing_context: Arc<RelaySigningContext>,
         multi_beacon_client: Arc<MultiBeaconClient>,
+        metadata_provider: Arc<MP>,
     ) {
         let broadcasters = init_broadcasters(&config).await;
 
@@ -76,6 +78,7 @@ impl ApiService {
             chain_info.clone(),
             simulator,
             gossiper.clone(),
+            metadata_provider.clone(),
             relay_signing_context.clone(),
             config.clone(),
             builder_gossip_receiver,
@@ -101,6 +104,7 @@ impl ApiService {
             auctioneer.clone(),
             db.clone(),
             gossiper.clone(),
+            metadata_provider.clone(),
             broadcasters,
             multi_beacon_client,
             chain_info.clone(),

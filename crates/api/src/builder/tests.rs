@@ -19,12 +19,14 @@ use helix_common::{
         v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionDeneb},
         BidSubmission,
     },
+    chain_info::ChainInfo,
+    metadata_provider::DefaultMetadataProvider,
     request_encoding::Encoding,
     HeaderSubmissionTrace, Route, SubmissionTrace, ValidatorPreferences,
 };
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
-use helix_housekeeper::{PayloadAttributesUpdate, SlotUpdate};
+use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate, SlotUpdate};
 use helix_types::{
     get_fixed_pubkey, get_fixed_secret, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayloadRef,
     ForkName, SignedBidSubmission, SignedBidSubmissionElectra, SignedRoot,
@@ -33,7 +35,7 @@ use helix_types::{
 use reqwest::{Client, Response};
 use serial_test::serial;
 use ssz::{Decode, Encode};
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::oneshot;
 use tokio_tungstenite::{
     connect_async,
     tungstenite::{self, Message},
@@ -106,7 +108,7 @@ fn get_valid_payload_register_validator(
         }
 }
 
-fn get_dummy_slot_update(head_slot: Option<u64>, submission_slot: Option<u64>) -> Box<SlotUpdate> {
+fn get_dummy_slot_update(head_slot: Option<u64>, submission_slot: Option<u64>) -> SlotUpdate {
     SlotUpdate {
         slot: head_slot.unwrap_or(HEAD_SLOT),
         next_duty: Some(get_valid_payload_register_validator(submission_slot)),
@@ -135,24 +137,23 @@ fn get_dummy_payload_attributes_update(submission_slot: Option<u64>) -> PayloadA
 }
 
 async fn send_dummy_slot_update(
-    slot_update_sender: broadcast::Sender<ChainUpdate>,
+    curr_slot_info: CurrentSlotInfo,
     head_slot: Option<u64>,
     submission_slot: Option<u64>,
 ) {
-    let chain_update = ChainUpdate::SlotUpdate(get_dummy_slot_update(head_slot, submission_slot));
-    slot_update_sender.send(chain_update).unwrap();
+    let chain_update = get_dummy_slot_update(head_slot, submission_slot);
+    curr_slot_info.handle_new_slot(chain_update, &ChainInfo::for_mainnet());
 
     // sleep for a bit to allow the api to process the slot update
     tokio::time::sleep(Duration::from_millis(100)).await;
 }
 
 async fn send_dummy_payload_attributes_update(
-    slot_update_sender: broadcast::Sender<ChainUpdate>,
+    curr_slot_info: CurrentSlotInfo,
     submission_slot: Option<u64>,
 ) {
-    let chain_update =
-        ChainUpdate::PayloadAttributesUpdate(get_dummy_payload_attributes_update(submission_slot));
-    slot_update_sender.send(chain_update).unwrap();
+    let chain_update = get_dummy_payload_attributes_update(submission_slot);
+    curr_slot_info.handle_new_payload_attributes(chain_update);
 
     // sleep for a bit to allow the api to process the slot update
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -197,8 +198,16 @@ fn resign_bid_submission(bid: &mut SignedBidSubmission) {
 async fn start_api_server() -> (
     oneshot::Sender<()>,
     HttpServiceConfig,
-    Arc<BuilderApi<MockAuctioneer, MockDatabaseService, MockSimulator, MockGossiper>>,
-    broadcast::Sender<ChainUpdate>,
+    Arc<
+        BuilderApi<
+            MockAuctioneer,
+            MockDatabaseService,
+            MockSimulator,
+            MockGossiper,
+            DefaultMetadataProvider,
+        >,
+    >,
+    CurrentSlotInfo,
 ) {
     let (tx, rx) = oneshot::channel();
     let http_config = HttpServiceConfig::new(ADDRESS, PORT);

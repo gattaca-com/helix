@@ -59,7 +59,7 @@ impl CurrentSlotInfo {
 
     /// Handle a new slot update.
     /// Updates the next proposer duty and prepares the get_validators() response.
-    pub(crate) fn handle_new_slot(&self, slot_update: SlotUpdate, chain_info: &ChainInfo) {
+    pub fn handle_new_slot(&self, slot_update: SlotUpdate, chain_info: &ChainInfo) {
         let epoch = slot_update.slot / chain_info.slots_per_epoch();
         info!(
             epoch,
@@ -86,10 +86,7 @@ impl CurrentSlotInfo {
         }
     }
 
-    pub(crate) fn handle_new_payload_attributes(
-        &self,
-        payload_attributes: PayloadAttributesUpdate,
-    ) {
+    pub fn handle_new_payload_attributes(&self, payload_attributes: PayloadAttributesUpdate) {
         let head_slot = self.head_slot().as_u64();
 
         if payload_attributes.slot <= head_slot {
