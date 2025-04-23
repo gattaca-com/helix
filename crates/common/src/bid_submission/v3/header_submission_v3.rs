@@ -28,6 +28,7 @@ bitflags! {
         const JSON_ENCODED = 1 << 1;
         const CBOR_ENCODED = 1 << 2;
         const CANCELLATION_ENABLED = 1 << 3;
+        const NO_SHARE = 1 <<4;
     }
 }
 
