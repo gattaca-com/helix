@@ -131,7 +131,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
-            _ = timer.tick();
+            timer.tick().await;
 
             let head_slot = self.chain_info.current_slot();
             if let Some(duration) = self.chain_info.duration_into_slot(head_slot) {
