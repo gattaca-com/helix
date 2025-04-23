@@ -161,6 +161,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
     #[tracing::instrument(skip(self))]
     async fn process_new_slot(&self, head_slot: Slot, block_hash: Option<B256>) {
+        let start = Instant::now();
         if self.slots.head_already_seen(head_slot) {
             return;
         }
@@ -223,13 +224,13 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                             );
 
                             slots.update_proposer_duties(head_slot);
-                            info!(duration = ?start.elapsed(), "proposer duties task completed");
                         }
 
                         Err(err) => {
                             error!(%err, "failed to update proposer duties");
                         }
                     }
+                    info!(duration = ?start.elapsed(), "proposer duties task completed");
                 }
                 .in_current_span(),
             ));
@@ -290,6 +291,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         // wait for all tasks, this should take less than one slot
         join_all(tasks).await;
+        info!(duration = ?start.elapsed(), "processed new slot");
     }
 
     /// Refresh the list of known validators by querying the beacon client.
