@@ -13,7 +13,6 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::BlsPublicKey;
-use serde_json::json;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
 

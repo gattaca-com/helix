@@ -35,11 +35,8 @@ use crate::{
     },
     constants::{MAX_BLINDED_BLOCK_LENGTH, _MAX_VAL_REGISTRATIONS_LENGTH},
     gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
-    proposer::{self, status, ProposerApi},
-    relay_data::{
-        DataApi, PATH_BUILDER_BIDS_RECEIVED, PATH_PROPOSER_PAYLOAD_DELIVERED,
-        PATH_VALIDATOR_REGISTRATION,
-    },
+    proposer::{self, ProposerApi},
+    relay_data::DataApi,
 };
 
 pub fn app() -> Router {

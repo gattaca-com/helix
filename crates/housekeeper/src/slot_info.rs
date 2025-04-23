@@ -102,8 +102,7 @@ impl CurrentSlotInfo {
         );
 
         // Discard payload attributes if already known
-        let payload_attributes_key =
-            &(payload_attributes.parent_hash, payload_attributes.slot.into());
+        let payload_attributes_key = &(payload_attributes.parent_hash, payload_attributes.slot);
         let mut all_payload_attributes = self.payload_attributes.write();
         if all_payload_attributes.contains_key(payload_attributes_key) {
             return;
