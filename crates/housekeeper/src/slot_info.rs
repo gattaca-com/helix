@@ -95,7 +95,7 @@ impl CurrentSlotInfo {
         }
 
         info!(
-            slot =% payload_attributes.slot,
+            slot = %payload_attributes.slot,
             randao = ?payload_attributes.payload_attributes.prev_randao,
             timestamp = payload_attributes.payload_attributes.timestamp,
             "updated payload attributes",
