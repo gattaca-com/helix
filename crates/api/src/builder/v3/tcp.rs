@@ -81,7 +81,7 @@ async fn handle_builder_connection<A, DB, S, G, MP>(
                         Some(header.url),
                         Some(header.tx_count),
                         msg_header.message_flags.contains(MessageHeaderFlags::CANCELLATION_ENABLED),
-                        msg_header.message_flags.contains(MessageHeaderFlags::NO_SHARE),
+                        !msg_header.message_flags.contains(MessageHeaderFlags::NO_SHARE),
                         trace,
                     )
                     .await

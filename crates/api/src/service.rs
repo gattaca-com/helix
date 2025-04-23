@@ -91,14 +91,16 @@ impl ApiService {
 
         let (v3_payload_request_send, v3_payload_request_recv) = mpsc::channel(32);
         if let Some(v3_port) = config.v3_port {
-            // v3 optimistic configured
+            // v3 tcp optimistic configured
             tokio::spawn(builder::v3::tcp::run_api(v3_port, builder_api.clone()));
-            tokio::spawn(builder::v3::payload::fetch_builder_blocks(
-                builder_api.clone(),
-                v3_payload_request_recv,
-                relay_signing_context,
-            ));
         }
+
+        // Start builder block fetcher
+        tokio::spawn(builder::v3::payload::fetch_builder_blocks(
+            builder_api.clone(),
+            v3_payload_request_recv,
+            relay_signing_context,
+        ));
 
         let proposer_api = Arc::new(ProposerApiProd::new(
             auctioneer.clone(),
