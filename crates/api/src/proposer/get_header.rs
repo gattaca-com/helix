@@ -188,7 +188,7 @@ where
                     });
                 }
 
-                let bid = json!(bid);
+                let bid = serde_json::to_value(bid)?;
                 info!(%bid, "delivering bid");
 
                 Ok(axum::Json(bid))
