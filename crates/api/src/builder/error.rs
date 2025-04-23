@@ -58,7 +58,7 @@ pub enum BuilderApiError {
     PayloadAttributesNotYetKnown,
 
     #[error("payload slot mismatches with current payload attributes slot. got: {got}, expected: {expected}")]
-    PayloadSlotMismatchWithPayloadAttributes { got: u64, expected: u64 },
+    PayloadSlotMismatchWithPayloadAttributes { got: Slot, expected: Slot },
 
     #[error("{0}")]
     BidValidationError(#[from] BidValidationError),

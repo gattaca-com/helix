@@ -1,5 +1,5 @@
 use alloy_primitives::{hex, B256};
-use helix_types::{Slot, Withdrawal};
+use helix_types::{Slot, Withdrawals};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -115,6 +115,6 @@ pub struct PayloadAttributes {
     pub timestamp: u64,
     pub prev_randao: B256,
     pub suggested_fee_recipient: String,
-    pub withdrawals: Vec<Withdrawal>,
+    pub withdrawals: Withdrawals,
     pub parent_beacon_block_root: Option<B256>,
 }

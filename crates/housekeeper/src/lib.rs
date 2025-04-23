@@ -17,6 +17,7 @@ pub use housekeeper::Housekeeper;
 pub use primev_service::EthereumPrimevService;
 pub use slot_info::CurrentSlotInfo;
 use tokio::sync::broadcast;
+use tracing::error;
 
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PAYLOAD_ATTRIBUTE_CHANNEL_SIZE: usize = 300;
@@ -43,7 +44,7 @@ pub async fn start_housekeeper(
     tokio::spawn(async move {
         loop {
             if let Err(err) = housekeeper.start(&mut housekeeper_head_events).await {
-                tracing::error!("Housekeeper error: {}", err);
+                error!("Housekeeper error: {}", err);
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
         }

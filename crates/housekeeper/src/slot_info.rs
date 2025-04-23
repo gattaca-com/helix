@@ -60,16 +60,17 @@ impl CurrentSlotInfo {
     /// Handle a new slot update.
     /// Updates the next proposer duty and prepares the get_validators() response.
     pub fn handle_new_slot(&self, slot_update: SlotUpdate, chain_info: &ChainInfo) {
-        let epoch = slot_update.slot / chain_info.slots_per_epoch();
+        let epoch = slot_update.slot.epoch(chain_info.slots_per_epoch());
+
         info!(
-            epoch,
-            slot_head = slot_update.slot,
-            slot_start_next_epoch = (epoch + 1) * chain_info.slots_per_epoch(),
+            %epoch,
+            slot_head = %slot_update.slot,
+            slot_start_next_epoch = %(epoch + 1).start_slot(chain_info.slots_per_epoch()),
             next_proposer_duty = ?slot_update.next_duty,
             "updated head slot",
         );
 
-        *self.curr_slot_info.write() = (slot_update.slot, slot_update.next_duty);
+        *self.curr_slot_info.write() = (slot_update.slot.as_u64(), slot_update.next_duty);
 
         if let Some(new_duties) = slot_update.new_duties {
             let response: Vec<BuilderGetValidatorsResponse> =
@@ -94,15 +95,14 @@ impl CurrentSlotInfo {
         }
 
         info!(
-            slot = payload_attributes.slot,
+            slot = %payload_attributes.slot,
             randao = ?payload_attributes.payload_attributes.prev_randao,
             timestamp = payload_attributes.payload_attributes.timestamp,
             "updated payload attributes",
         );
 
         // Discard payload attributes if already known
-        let payload_attributes_key =
-            &(payload_attributes.parent_hash, payload_attributes.slot.into());
+        let payload_attributes_key = &(payload_attributes.parent_hash, payload_attributes.slot);
         let mut all_payload_attributes = self.payload_attributes.write();
         if all_payload_attributes.contains_key(payload_attributes_key) {
             return;

@@ -90,16 +90,13 @@ where
         let slot = signed_blinded_block.message().slot();
 
         // Broadcast get payload request
-        if let Err(err) = proposer_api
+        proposer_api
             .gossiper
             .broadcast_get_payload(BroadcastGetPayloadParams {
                 signed_blinded_beacon_block: signed_blinded_block.clone(),
                 request_id,
             })
-            .await
-        {
-            error!(%err, "failed to broadcast get payload");
-        };
+            .await;
 
         match proposer_api._get_payload(signed_blinded_block, &mut trace, user_agent).await {
             Ok(get_payload_response) => Ok(axum::Json(get_payload_response)),
@@ -460,7 +457,7 @@ where
                             file!(),
                             line!(),
                             async move {
-                                if let Err(err) = self_clone
+                                self_clone
                                     .gossiper
                                     .request_payload(RequestPayloadParams {
                                         slot,
@@ -468,9 +465,6 @@ where
                                         block_hash,
                                     })
                                     .await
-                                {
-                                    error!(%err, "failed to request payload");
-                                }
                             }
                             .in_current_span(),
                         );

@@ -7,7 +7,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::{Slot, SlotClockTrait, Withdrawals};
+use helix_types::{Slot, SlotClockTrait};
 use tokio::{
     sync::broadcast,
     time::{interval_at, sleep, Instant},
@@ -19,12 +19,12 @@ use crate::CurrentSlotInfo;
 
 // Do not accept slots more than 60 seconds in the future
 const MAX_DISTANCE_FOR_FUTURE_SLOT: u64 = 60;
-const CUTT_OFF_TIME: u64 = 4;
+const CUTOFF_TIME: u64 = 4;
 
 /// Payload for a new payload attribute event sent to subscribers.
 #[derive(Clone, Debug, Default)]
 pub struct PayloadAttributesUpdate {
-    pub slot: u64,
+    pub slot: Slot,
     pub parent_hash: B256,
     pub withdrawals_root: B256,
     pub payload_attributes: PayloadAttributes,
@@ -33,7 +33,7 @@ pub struct PayloadAttributesUpdate {
 /// Payload for head event updates sent to subscribers.
 #[derive(Clone, Debug, Default)]
 pub struct SlotUpdate {
-    pub slot: u64,
+    pub slot: Slot,
     pub next_duty: Option<BuilderGetValidatorsResponseEntry>,
     pub new_duties: Option<Vec<BuilderGetValidatorsResponseEntry>>,
 }
@@ -77,7 +77,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
     ) {
         let start_instant = Instant::now() +
             self.chain_info.clock.duration_to_next_slot().unwrap() +
-            Duration::from_secs(CUTT_OFF_TIME);
+            Duration::from_secs(CUTOFF_TIME);
         let mut timer =
             interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot()));
         loop {
@@ -200,7 +200,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         // Get the next proposer duty for the new slot.
         let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
 
-        let update = SlotUpdate { slot, new_duties, next_duty };
+        let update = SlotUpdate { slot: slot.into(), new_duties, next_duty };
         self.curr_slot_info.handle_new_slot(update, &self.chain_info);
     }
 
@@ -230,13 +230,10 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
             "Processing payload attribute event",
         );
 
-        // FIXME(alloy)
-        let withdrawals_list: Withdrawals =
-            event.data.payload_attributes.withdrawals.clone().into();
-        let withdrawals_root = withdrawals_list.tree_hash_root();
+        let withdrawals_root = event.data.payload_attributes.withdrawals.tree_hash_root();
 
         let update = PayloadAttributesUpdate {
-            slot: event.data.proposal_slot.as_u64(),
+            slot: event.data.proposal_slot,
             parent_hash: event.data.parent_block_hash,
             withdrawals_root,
             payload_attributes: event.data.payload_attributes,

@@ -13,7 +13,6 @@ mod simulator_tests {
     use reqwest::Client;
     use serde_json::json;
 
-    // ++++ IMPORTS ++++
     use crate::builder::{
         optimistic_simulator::OptimisticSimulator,
         rpc_simulator::{BlockSimRpcResponse, JsonRpcError},
@@ -21,7 +20,6 @@ mod simulator_tests {
         BlockSimRequest,
     };
 
-    // ++++ HELPERS ++++
     fn get_optimistic_simulator(
         endpoint: &str,
         builder_info: Option<BuilderInfo>,
@@ -63,7 +61,6 @@ mod simulator_tests {
         )
     }
 
-    // ++++ TESTS ++++
     #[tokio::test]
     async fn test_process_request_optimistically_ok() {
         let mut server = mockito::Server::new();

@@ -16,6 +16,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
+use tracing::{error, info};
 
 use super::V3Error;
 use crate::{
@@ -38,7 +39,7 @@ where
     while let Ok((socket, remote_addr)) = tcp_listener.accept().await {
         tokio::spawn(handle_builder_connection(socket, remote_addr, builder_api.clone()));
     }
-    tracing::error!("Builder API TCP listener has exited");
+    error!("Builder API TCP listener has exited");
     Err(Error::other("TCP API listener exited"))
 }
 
@@ -53,7 +54,7 @@ async fn handle_builder_connection<A, DB, S, G, MP>(
     G: GossipClientTrait + 'static,
     MP: MetadataProvider + 'static,
 {
-    tracing::info!(?remote_addr, "builder connection connected");
+    info!(?remote_addr, "builder connection connected");
 
     let mut header_buffer = [0u8; size_of::<MessageHeader>()];
     let mut payload_buffer = Vec::with_capacity(32 * 1024);
@@ -67,7 +68,7 @@ async fn handle_builder_connection<A, DB, S, G, MP>(
 
             payload_buffer.resize(msg_header.message_length as usize, 0);
             let Ok(_) = stream.read_exact(payload_buffer.as_mut_slice()).await else {
-                tracing::error!(?msg_header, "tcp stream read failed for header submission");
+                error!(?msg_header, "tcp stream read failed for header submission");
                 break;
             };
 
@@ -95,7 +96,7 @@ async fn handle_builder_connection<A, DB, S, G, MP>(
                             let _ = stream.write_all(ack.as_ref()).await;
                         }
                         Err(e) => {
-                            tracing::error!(error=?e, "v3 header submission failed");
+                            error!(error=?e, "v3 header submission failed");
                             let err_code = e.into_response().status().as_u16();
                             if let Ok(encoded) = encode_error(msg_header, err_code) {
                                 let err = MessageHeader {
@@ -114,13 +115,13 @@ async fn handle_builder_connection<A, DB, S, G, MP>(
                 }
                 Err(e) => {
                     trace.decode = utcnow_ns();
-                    tracing::error!(error=?e, ?msg_header, "Failed to decode payload for header submission");
+                    error!(error=?e, ?msg_header, "Failed to decode payload for header submission");
                     break;
                 }
             }
         }
     }
-    tracing::info!(?remote_addr, "builder connection disconnected");
+    info!(?remote_addr, "builder connection disconnected");
 }
 
 fn decode_message(header: &MessageHeader, payload: &[u8]) -> Result<HeaderSubmissionV3, V3Error> {

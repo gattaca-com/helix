@@ -269,7 +269,7 @@ impl GrpcGossiperClientManager {
 
 #[async_trait]
 impl GossipClientTrait for GrpcGossiperClientManager {
-    async fn broadcast_header(&self, request: BroadcastHeaderParams) -> Result<(), GossipError> {
+    async fn broadcast_header(&self, request: BroadcastHeaderParams) {
         let request = request.to_proto();
 
         for client in self.clients.iter() {
@@ -277,14 +277,13 @@ impl GossipClientTrait for GrpcGossiperClientManager {
             let request = request.clone();
             task::spawn(file!(), line!(), async move {
                 if let Err(err) = client.broadcast_header(request).await {
-                    error!(err = %err, "failed to broadcast header");
+                    error!(%err, "failed to broadcast header");
                 }
             });
         }
-        Ok(())
     }
 
-    async fn broadcast_payload(&self, request: BroadcastPayloadParams) -> Result<(), GossipError> {
+    async fn broadcast_payload(&self, request: BroadcastPayloadParams) {
         let request = request.to_proto();
 
         for client in self.clients.iter() {
@@ -292,17 +291,13 @@ impl GossipClientTrait for GrpcGossiperClientManager {
             let request = request.clone();
             task::spawn(file!(), line!(), async move {
                 if let Err(err) = client.broadcast_payload(request).await {
-                    error!(err = %err, "failed to broadcast payload");
+                    error!(%err, "failed to broadcast payload");
                 }
             });
         }
-        Ok(())
     }
 
-    async fn broadcast_get_payload(
-        &self,
-        request: BroadcastGetPayloadParams,
-    ) -> Result<(), GossipError> {
+    async fn broadcast_get_payload(&self, request: BroadcastGetPayloadParams) {
         let request = request.to_proto();
 
         for client in self.clients.iter() {
@@ -310,14 +305,13 @@ impl GossipClientTrait for GrpcGossiperClientManager {
             let request = request.clone();
             task::spawn(file!(), line!(), async move {
                 if let Err(err) = client.broadcast_get_payload(request).await {
-                    error!(err = %err, "failed to broadcast get payload");
+                    error!( %err, "failed to broadcast get payload");
                 }
             });
         }
-        Ok(())
     }
 
-    async fn request_payload(&self, request: RequestPayloadParams) -> Result<(), GossipError> {
+    async fn request_payload(&self, request: RequestPayloadParams) {
         let request = request.to_proto();
 
         for client in self.clients.iter() {
@@ -325,11 +319,10 @@ impl GossipClientTrait for GrpcGossiperClientManager {
             let request = request.clone();
             task::spawn(file!(), line!(), async move {
                 if let Err(err) = client.request_payload(request).await {
-                    error!(err = %err, "failed to request payload");
+                    error!(%err, "failed to request payload");
                 }
             });
         }
-        Ok(())
     }
 }
 

@@ -18,10 +18,6 @@ use tracing::warn;
 
 use crate::relay_data::error::DataApiError;
 
-pub const PATH_PROPOSER_PAYLOAD_DELIVERED: &str = "/bidtraces/proposer_payload_delivered";
-pub const PATH_BUILDER_BIDS_RECEIVED: &str = "/bidtraces/builder_blocks_received";
-pub const PATH_VALIDATOR_REGISTRATION: &str = "/validator_registration";
-
 pub(crate) type BidsCache = Cache<String, Vec<ReceivedBlocksResponse>>;
 pub(crate) type DeliveredPayloadsCache = Cache<String, Vec<DeliveredPayloadsResponse>>;
 

@@ -1,11 +1,11 @@
-use std::{sync::Arc, time::SystemTime};
+use std::sync::Arc;
 
 use alloy_primitives::B256;
 use helix_common::{
     bid_submission::v3::header_submission_v3::{GetPayloadV3, SignedGetPayloadV3},
     metadata_provider::MetadataProvider,
     signing::RelaySigningContext,
-    utils::utcnow_ms,
+    utils::{utcnow_ms, utcnow_ns},
     SubmissionTrace,
 };
 use helix_database::DatabaseService;
@@ -14,15 +14,11 @@ use helix_types::{BlsPublicKey, SignedBidSubmission};
 use reqwest::Url;
 use ssz::{Decode, Encode};
 use tokio::sync::mpsc::Receiver;
+use tracing::{error, info};
 
 use super::V3Error;
 use crate::{
-    builder::{
-        api::{get_nanos_from, BuilderApi},
-        error::BuilderApiError,
-        traits::BlockSimulator,
-        OptimisticVersion,
-    },
+    builder::{api::BuilderApi, error::BuilderApiError, traits::BlockSimulator, OptimisticVersion},
     gossiper::traits::GossipClientTrait,
 };
 
@@ -39,7 +35,7 @@ pub async fn fetch_builder_blocks<A, DB, S, G, MP>(
     MP: MetadataProvider + 'static,
 {
     while let Some((block_hash, builder_pubkey, builder_address)) = receiver.recv().await {
-        let receive = get_nanos_from(SystemTime::now()).unwrap_or_default();
+        let receive = utcnow_ns();
         let trace = SubmissionTrace { receive, ..Default::default() };
 
         match fetch_block(block_hash, &builder_address, &signing_ctx).await {
@@ -51,13 +47,13 @@ pub async fn fetch_builder_blocks<A, DB, S, G, MP>(
             )
             .await
             {
-                Ok(_) => tracing::info!(?block_hash, ?builder_address, "v3 block fetch successful"),
-                Err(e) => {
-                    tracing::error!(error=?e, ?block_hash, ?builder_address, "v3 block submission failed")
+                Ok(_) => info!(?block_hash, ?builder_address, "v3 block fetch successful"),
+                Err(err) => {
+                    error!(%err, ?block_hash, ?builder_address, "v3 block submission failed")
                 }
             },
             Err(e) => {
-                tracing::error!(error=?e, ?block_hash, ?builder_address, "v3 block fetch failed, demoting builder");
+                error!(error=?e, ?block_hash, ?builder_address, "v3 block fetch failed, demoting builder");
                 api.demote_builder(&builder_pubkey, &block_hash, &BuilderApiError::PayloadError(e))
                     .await;
             }

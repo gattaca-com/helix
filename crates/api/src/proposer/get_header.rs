@@ -13,7 +13,6 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::BlsPublicKey;
-use serde_json::json;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
 
@@ -177,7 +176,7 @@ where
                 if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
                     // Request payload in the background
                     task::spawn(file!(), line!(), async move {
-                        if let Err(err) = proposer_api
+                        proposer_api
                             .gossiper
                             .request_payload(RequestPayloadParams {
                                 slot,
@@ -185,15 +184,12 @@ where
                                 block_hash,
                             })
                             .await
-                        {
-                            error!(%err, "failed to request payload");
-                        }
                     });
                 }
 
-                info!(bid = %json!(bid), "delivering bid");
+                let bid = serde_json::to_value(bid)?;
+                info!(%bid, "delivering bid");
 
-                // Return header
                 Ok(axum::Json(bid))
             }
             Ok(None) => {
@@ -208,7 +204,6 @@ where
     }
 }
 
-// TODO(lor): remove static
 async fn save_get_header_call<DB: DatabaseService + 'static>(
     db: Arc<DB>,
     slot: u64,

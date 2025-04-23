@@ -10,6 +10,7 @@ use helix_common::RelayConfig;
 use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
 use redis::redis_cache::RedisCache;
 use tokio::time::sleep;
+use tracing::error;
 
 pub async fn start_auctioneer(
     config: &RelayConfig,
@@ -23,7 +24,7 @@ pub async fn start_auctioneer(
     tokio::spawn(async move {
         loop {
             if let Err(err) = auctioneer_clone.start_best_bid_listener().await {
-                tracing::error!("Bid listener error: {}", err);
+                error!("Bid listener error: {}", err);
                 sleep(Duration::from_secs(5)).await;
             }
         }

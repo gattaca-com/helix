@@ -1,10 +1,6 @@
 #![allow(clippy::type_complexity)]
 
-use std::{
-    io::Read,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{io::Read, sync::Arc, time::Duration};
 
 use alloy_primitives::{B256, U256};
 use axum::{
@@ -38,7 +34,9 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
-use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
+use helix_types::{
+    BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid, Slot,
+};
 use hyper::HeaderMap;
 use ssz::Decode;
 use tokio::{
@@ -187,9 +185,8 @@ where
         let next_duty = next_duty.unwrap();
 
         // Fetch the next payload attributes and validate basic information
-        let payload_attributes = api
-            .fetch_payload_attributes(payload.slot().as_u64(), payload.parent_hash(), &block_hash)
-            .await?;
+        let payload_attributes =
+            api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), &block_hash)?;
 
         // Handle duplicates.
         if let Err(err) = api
@@ -303,7 +300,7 @@ where
                 }
 
                 // Log some final info
-                trace.request_finish = get_nanos_timestamp()?;
+                trace.request_finish = utcnow_ns();
                 debug!(
                     ?trace,
                     request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
@@ -404,8 +401,7 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace =
-            HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let mut trace = HeaderSubmissionTrace { receive: utcnow_ns(), ..Default::default() };
         trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         debug!(timestamp_request_start = trace.receive,);
@@ -422,8 +418,7 @@ where
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace =
-            HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        let mut trace = HeaderSubmissionTrace { receive: utcnow_ns(), ..Default::default() };
         trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         debug!(timestamp_request_start = trace.receive,);
@@ -483,9 +478,8 @@ where
         let next_duty = next_duty.unwrap();
 
         // Fetch the next payload attributes and validate basic information
-        let payload_attributes = api
-            .fetch_payload_attributes(payload.slot().into(), payload.parent_hash(), block_hash)
-            .await?;
+        let payload_attributes =
+            api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), block_hash)?;
 
         // Fetch builder info
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
@@ -752,9 +746,8 @@ where
         let next_duty = next_duty.unwrap();
 
         // Fetch the next payload attributes and validate basic information
-        let payload_attributes = api
-            .fetch_payload_attributes(payload.slot().as_u64(), payload.parent_hash(), &block_hash)
-            .await?;
+        let payload_attributes =
+            api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), &block_hash)?;
 
         // Fetch builder info
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
@@ -1029,7 +1022,7 @@ where
             }
         }
 
-        trace.auctioneer_update = get_nanos_timestamp().unwrap_or_default();
+        trace.auctioneer_update = utcnow_ns();
 
         debug!("succesfully saved gossiped header");
 
@@ -1051,10 +1044,7 @@ where
 
         debug!(?block_hash, "received gossiped payload");
 
-        let mut trace = GossipedPayloadTrace {
-            receive: get_nanos_timestamp().unwrap_or_default(),
-            ..Default::default()
-        };
+        let mut trace = GossipedPayloadTrace { receive: utcnow_ns(), ..Default::default() };
 
         // Verify that the gossiped payload is not for a past slot
         let head_slot = self.curr_slot_info.head_slot();
@@ -1168,9 +1158,7 @@ where
             on_receive,
             payload_address,
         };
-        if let Err(err) = self.gossiper.broadcast_header(params).await {
-            error!(%err, "failed to broadcast header");
-        }
+        self.gossiper.broadcast_header(params).await
     }
 
     async fn gossip_payload(
@@ -1183,9 +1171,7 @@ where
             slot: payload.slot().as_u64(),
             proposer_pub_key: payload.proposer_public_key().clone(),
         };
-        if let Err(err) = self.gossiper.broadcast_payload(params).await {
-            error!(%err, "failed to broadcast payload");
-        }
+        self.gossiper.broadcast_payload(params).await
     }
 }
 
@@ -1513,14 +1499,13 @@ where
         }
     }
 
-    async fn fetch_payload_attributes(
+    fn fetch_payload_attributes(
         &self,
-        slot: u64,
-        parent_hash: &B256,
+        slot: Slot,
+        parent_hash: B256,
         block_hash: &B256,
     ) -> Result<PayloadAttributesUpdate, BuilderApiError> {
-        let Some(payload_attributes) =
-            self.curr_slot_info.payload_attributes(*parent_hash, slot.into())
+        let Some(payload_attributes) = self.curr_slot_info.payload_attributes(parent_hash, slot)
         else {
             warn!(%block_hash, "payload attributes not yet known");
             return Err(BuilderApiError::PayloadAttributesNotYetKnown)
@@ -1528,8 +1513,8 @@ where
 
         if payload_attributes.slot != slot {
             warn!(
-                got = slot,
-                expected = payload_attributes.slot,
+                got =% slot,
+                expected =% payload_attributes.slot,
                 "payload attributes slot mismatch with payload attributes"
             );
             return Err(BuilderApiError::PayloadSlotMismatchWithPayloadAttributes {
@@ -2047,19 +2032,6 @@ fn log_save_bid_info(
     if update_bid_result.was_bid_saved {
         debug!(eligible_at = bid_update_finish);
     }
-}
-
-fn get_nanos_timestamp() -> Result<u64, BuilderApiError> {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .map_err(|_| BuilderApiError::InternalError)
-}
-
-pub(crate) fn get_nanos_from(now: SystemTime) -> Result<u64, BuilderApiError> {
-    now.duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .map_err(|_| BuilderApiError::InternalError)
 }
 
 #[cfg(test)]
