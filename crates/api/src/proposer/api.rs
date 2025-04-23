@@ -139,12 +139,8 @@ where
     }
 
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/status>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
-    pub async fn status(
-        Extension(_proposer_api): Extension<Arc<ProposerApi<A, DB, G, MP>>>,
-        headers: HeaderMap,
-    ) -> Result<impl IntoResponse, ProposerApiError> {
-        Ok(StatusCode::OK)
+    pub async fn status() -> impl IntoResponse {
+        StatusCode::OK
     }
 
     /// Registers a batch of validators to the relay.

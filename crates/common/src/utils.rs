@@ -7,8 +7,6 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use alloy_primitives::B256;
-use helix_types::Slot;
 use http::HeaderMap;
 use reqwest::Url;
 use tracing::error;
@@ -17,10 +15,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 use uuid::Uuid;
 
 use crate::LoggingConfig;
-
-pub fn get_payload_attributes_key(parent_hash: &B256, slot: Slot) -> String {
-    format!("{parent_hash:?}:{slot}")
-}
 
 pub fn init_tracing_log(config: &LoggingConfig) -> WorkerGuard {
     let format =
