@@ -78,6 +78,7 @@ async fn handle_builder_connection<A, DB, S, G, MP>(
                         &builder_api,
                         header.submission,
                         Some(header.url),
+                        Some(header.tx_count),
                         msg_header.message_flags.contains(MessageHeaderFlags::CANCELLATION_ENABLED),
                         trace,
                     )

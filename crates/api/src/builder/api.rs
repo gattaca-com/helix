@@ -449,7 +449,7 @@ where
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) = decode_header_submission(req, &mut trace).await?;
 
-        Self::handle_submit_header(&api, payload, None, is_cancellations_enabled, trace).await
+        Self::handle_submit_header(&api, payload, None, None, is_cancellations_enabled, trace).await
     }
 
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
@@ -472,6 +472,7 @@ where
             &api,
             payload.submission,
             Some(payload.url),
+            Some(payload.tx_count),
             is_cancellations_enabled,
             trace,
         )
@@ -482,6 +483,7 @@ where
         api: &Arc<BuilderApi<A, DB, S, G, MP>>,
         payload: SignedHeaderSubmission,
         payload_address: Option<Vec<u8>>,
+        _block_tx_count: Option<u32>, // TODO
         is_cancellations_enabled: bool,
         mut trace: HeaderSubmissionTrace,
     ) -> Result<StatusCode, BuilderApiError> {
@@ -752,13 +754,14 @@ where
                 BuilderApiError::AuctioneerError(err)
             })?;
 
-        Self::handle_optimistic_payload(api, payload, trace).await
+        Self::handle_optimistic_payload(api, payload, trace, OptimisticVersion::V2).await
     }
 
     pub(crate) async fn handle_optimistic_payload(
         api: Arc<BuilderApi<A, DB, S, G, MP>>,
         payload: SignedBidSubmission,
         mut trace: SubmissionTrace,
+        optimistic_version: OptimisticVersion,
     ) -> Result<StatusCode, BuilderApiError> {
         let (head_slot, next_duty) = api.curr_slot_info.read().await.clone();
         debug!(head_slot, timestamp_request_start = trace.receive);
@@ -804,7 +807,7 @@ where
         if next_duty.entry.preferences.filtering.is_regional() &&
             !builder_info.can_process_regional_slot_optimistically()
         {
-            warn!("proposer has regional filtering enabled, discarding optimistic v2 submission");
+            warn!("proposer has regional filtering enabled, discarding {optimistic_version:?} submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
                 builder_pub_key: payload.builder_public_key().clone(),
             });
@@ -877,7 +880,7 @@ where
         {
             Ok(val) => val,
             Err(err) => {
-                // Any invalid submission for optimistic v2 results in a demotion.
+                // Any invalid submission for optimistic v2/v3 results in a demotion.
                 api.demote_builder(&builder_pub_key, &block_hash, &err).await;
                 return Err(err);
             }
@@ -919,7 +922,7 @@ where
             async move {
                 if let Err(err) = api
                     .db
-                    .store_block_submission(payload, Arc::new(trace), OptimisticVersion::V2 as i16)
+                    .store_block_submission(payload, Arc::new(trace), optimistic_version as i16)
                     .await
                 {
                     error!(%err, "failed to store block submission")
