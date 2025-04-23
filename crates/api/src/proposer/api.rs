@@ -647,6 +647,11 @@ where
             self.auctioneer.get_payload_url(&block_hash).await
         {
             // Fetch v3 optimistic payload from builder. This will complete asynchronously.
+            info!(
+                ?builder_pubkey,
+                payload_address = String::from_utf8_lossy(&payload_address).as_ref(),
+                "Requesting v3 payload from builder"
+            );
             let _ =
                 self.v3_payload_request.send((block_hash, builder_pubkey, payload_address)).await;
         }

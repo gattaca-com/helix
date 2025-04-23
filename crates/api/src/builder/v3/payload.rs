@@ -20,6 +20,7 @@ use crate::{
         api::{get_nanos_from, BuilderApi},
         error::BuilderApiError,
         traits::BlockSimulator,
+        OptimisticVersion,
     },
     gossiper::traits::GossipClientTrait,
 };
@@ -40,8 +41,13 @@ pub async fn fetch_builder_blocks<A, DB, S, G>(
         let trace = SubmissionTrace { receive, ..Default::default() };
 
         match fetch_block(block_hash, &builder_address, &signing_ctx).await {
-            Ok(block) => match BuilderApi::handle_optimistic_payload(api.clone(), block, trace)
-                .await
+            Ok(block) => match BuilderApi::handle_optimistic_payload(
+                api.clone(),
+                block,
+                trace,
+                OptimisticVersion::V3,
+            )
+            .await
             {
                 Ok(_) => tracing::info!(?block_hash, ?builder_address, "v3 block fetch successful"),
                 Err(e) => {
