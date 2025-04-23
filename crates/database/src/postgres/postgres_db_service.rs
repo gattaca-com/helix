@@ -1196,9 +1196,9 @@ impl DatabaseService for PostgresDatabaseService {
         transaction.execute(
             "
                 INSERT INTO
-                    submission_trace (block_hash, region_id, optimistic_version, receive, decode, pre_checks, signature, floor_bid_checks, simulation, auctioneer_update, request_finish)
+                    submission_trace (block_hash, region_id, optimistic_version, receive, decode, pre_checks, signature, floor_bid_checks, simulation, auctioneer_update, request_finish, metadata)
                 VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ",
             &[
                 &(submission.block_hash().as_slice()),
@@ -1212,6 +1212,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(trace.simulation as i64),
                 &(trace.auctioneer_update as i64),
                 &(trace.request_finish as i64),
+                &(trace.metadata),
             ],
         ).await?;
 
@@ -1791,9 +1792,9 @@ impl DatabaseService for PostgresDatabaseService {
         transaction.execute(
             "
                 INSERT INTO
-                    header_submission_trace (block_hash, region_id, receive, decode, pre_checks, signature, floor_bid_checks, auctioneer_update, request_finish)
+                    header_submission_trace (block_hash, region_id, receive, decode, pre_checks, signature, floor_bid_checks, auctioneer_update, request_finish, metadata)
                 VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ",
             &[
                 &(submission.block_hash().as_slice()),
@@ -1805,6 +1806,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(trace.floor_bid_checks as i64),
                 &(trace.auctioneer_update as i64),
                 &(trace.request_finish as i64),
+                &(trace.metadata),
             ],
         ).await?;
 

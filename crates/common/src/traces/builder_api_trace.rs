@@ -10,6 +10,7 @@ pub struct SubmissionTrace {
     pub simulation: u64,
     pub auctioneer_update: u64,
     pub request_finish: u64,
+    pub metadata: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -21,6 +22,7 @@ pub struct HeaderSubmissionTrace {
     pub floor_bid_checks: u64,
     pub auctioneer_update: u64,
     pub request_finish: u64,
+    pub metadata: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
