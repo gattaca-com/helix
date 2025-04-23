@@ -60,7 +60,7 @@ pub async fn fetch_builder_blocks<A, DB, S, G, MP>(
             }
         }
     }
-    
+
     warn!("v3 payload fetch task exiting");
 }
 

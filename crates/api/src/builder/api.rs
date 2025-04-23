@@ -52,6 +52,7 @@ use crate::{
         traits::GossipClientTrait,
         types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
     },
+    proposer::{ShareHeader, HELIX_SHARE_HEADER},
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
@@ -406,10 +407,7 @@ where
 
         debug!(timestamp_request_start = trace.receive,);
 
-        let is_gossip_enabled = headers
-            .get("share")
-            .and_then(|v| v.to_str().ok().map(|val| val.to_lowercase() != "none"))
-            .unwrap_or(true);
+        let sharing = headers.get(HELIX_SHARE_HEADER).map(ShareHeader::from).unwrap_or_default();
 
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) = decode_header_submission(req, &mut trace).await?;
@@ -420,7 +418,7 @@ where
             None,
             None,
             is_cancellations_enabled,
-            is_gossip_enabled,
+            matches!(sharing, ShareHeader::All),
             trace,
         )
         .await
@@ -441,10 +439,7 @@ where
         let (payload, is_cancellations_enabled) =
             decode_header_submission_v3(req, &mut trace).await?;
 
-        let is_gossip_enabled = headers
-            .get("share")
-            .and_then(|v| v.to_str().ok().map(|val| val.to_lowercase() != "none"))
-            .unwrap_or(true);
+        let sharing = headers.get(HELIX_SHARE_HEADER).map(ShareHeader::from).unwrap_or_default();
 
         Self::handle_submit_header(
             &api,
@@ -452,7 +447,7 @@ where
             Some(payload.url),
             Some(payload.tx_count),
             is_cancellations_enabled,
-            is_gossip_enabled,
+            matches!(sharing, ShareHeader::All),
             trace,
         )
         .await
