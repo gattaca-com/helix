@@ -11,7 +11,9 @@ use alloy_eips::merge::EPOCH_SLOTS;
 use alloy_primitives::{map::HashSet, U256};
 use futures::future::join_all;
 use helix_beacon::{
-    error::BeaconClientError, multi_beacon_client::MultiBeaconClient, types::StateId,
+    error::BeaconClientError,
+    multi_beacon_client::MultiBeaconClient,
+    types::{HeadEventData, StateId},
 };
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
@@ -20,8 +22,8 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::{BlsPublicKey, Epoch, Slot};
-use tokio::time::{interval, MissedTickBehavior};
+use helix_types::{BlsPublicKey, Epoch, Slot, SlotClockTrait};
+use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 
@@ -117,26 +119,37 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     }
 
     // if this fails, all beacon nodes are down
-    pub async fn start(self) -> Result<(), BeaconClientError> {
+    pub async fn start(
+        self,
+        head_event_rx: broadcast::Receiver<HeadEventData>,
+    ) -> Result<(), BeaconClientError> {
         let best_sync_status = self.beacon_client.best_sync_status().await?;
         self.process_new_slot(best_sync_status.head_slot).await;
 
-        tokio::spawn(self.run());
+        tokio::spawn(self.run(head_event_rx));
 
         Ok(())
     }
 
-    async fn run(self) {
-        let mut timer = interval(Duration::from_secs(2));
-        timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
+    async fn run(self, mut head_event_rx: broadcast::Receiver<HeadEventData>) {
         loop {
-            timer.tick().await;
+            let sleep_time = self.chain_info.clock.duration_to_next_slot().unwrap() + CUTOFF_TIME;
 
-            let head_slot = self.chain_info.current_slot();
-            if let Some(duration) = self.chain_info.duration_into_slot(head_slot) {
-                if duration > CUTOFF_TIME {
-                    self.process_new_slot(head_slot).await
+            tokio::select! {
+                head_event_result = head_event_rx.recv() => {
+                    match head_event_result {
+                        Ok(head_event) => {
+                            self.process_new_slot(head_event.slot).await;
+                        }
+                        Err(err) => {
+                            error!(%err, "failed to receive head event");
+                        }
+                    }
+                }
+
+                _ = tokio::time::sleep(sleep_time) => {
+                    let head_slot = self.chain_info.current_slot();
+                    self.process_new_slot(head_slot).await;
                 }
             }
         }
@@ -164,7 +177,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         let mut tasks = Vec::new();
 
-        // v2 demotions
+        // v2 demotions checks every slot
         let housekeeper = self.clone();
         tasks.push(task::spawn(
             file!(),
@@ -496,5 +509,20 @@ fn v2_submission_late(pending_block: &PendingBlock) -> bool {
             payload_receive_ms.saturating_sub(header_receive_ms) >
                 MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn test_dont_process_same_slot() {
+        let slots = HousekeeperSlots::default();
+        assert!(!slots.head_already_seen(10u64.into()));
+        assert!(slots.head_already_seen(9u64.into()));
+        assert!(slots.head_already_seen(10u64.into()));
+        assert!(!slots.head_already_seen(11u64.into()));
     }
 }

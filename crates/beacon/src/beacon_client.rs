@@ -290,6 +290,14 @@ pub mod mock_beacon_node {
             });
         }
 
+        pub fn with_state_validators(&self, state_validators: Vec<ValidatorSummary>) {
+            self.mock_api(
+                "eth/v1/beacon/states/head/validators?status=active,pending",
+                200,
+                state_validators,
+            );
+        }
+
         pub fn with_sync_status(&self, sync_status: &SyncStatus) {
             self.mock_api("/eth/v1/node/syncing", 200, sync_status.clone());
         }

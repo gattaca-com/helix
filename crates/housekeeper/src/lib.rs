@@ -1,8 +1,8 @@
 pub mod chain_event_updater;
 pub mod error;
 pub mod housekeeper;
-// #[cfg(test)]
-// pub mod housekeeper_tests;
+#[cfg(test)]
+pub mod housekeeper_tests;
 pub mod primev_service;
 mod slot_info;
 
@@ -38,7 +38,7 @@ pub async fn start_housekeeper(
 
     let housekeeper =
         Housekeeper::new(db.clone(), beacon_client, auctioneer.clone(), config, chain_info.clone());
-    housekeeper.start().await?;
+    housekeeper.start(head_event_receiver.resubscribe()).await?;
 
     let curr_slot_info = CurrentSlotInfo::new();
     let chain_updater = ChainEventUpdater::new(db, auctioneer, chain_info, curr_slot_info.clone());

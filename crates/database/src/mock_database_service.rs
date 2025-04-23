@@ -28,8 +28,8 @@ use crate::{
 
 #[derive(Default, Clone)]
 pub struct MockDatabaseService {
-    known_validators: Arc<Mutex<Vec<ValidatorSummary>>>,
-    proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>>,
+    pub known_validators: Arc<Mutex<Vec<ValidatorSummary>>>,
+    pub proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>>,
 }
 
 impl MockDatabaseService {
