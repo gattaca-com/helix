@@ -4,6 +4,7 @@ use helix_api::start_api_service;
 use helix_beacon::start_beacon_client;
 use helix_common::{
     load_config, load_keypair,
+    metadata_provider::DefaultMetadataProvider,
     metrics::start_metrics_server,
     signing::RelaySigningContext,
     utils::{init_panic_hook, init_tracing_log},
@@ -76,6 +77,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         chain_info,
         relay_signing_context,
         beacon_client,
+        Arc::new(DefaultMetadataProvider {}),
         current_slot_info,
     );
 

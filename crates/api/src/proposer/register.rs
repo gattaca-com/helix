@@ -8,6 +8,7 @@ use axum::{
 use helix_common::{
     api::proposer_api::ValidatorRegistrationInfo,
     chain_info::ChainInfo,
+    metadata_provider::MetadataProvider,
     task,
     utils::{extract_request_id, utcnow_ns, utcnow_sec},
     Filtering, RegisterValidatorsTrace, ValidatorPreferences,
@@ -24,11 +25,12 @@ use crate::{
     proposer::{error::ProposerApiError, PreferencesHeader},
 };
 
-impl<A, DB, G> ProposerApi<A, DB, G>
+impl<A, DB, G, MP> ProposerApi<A, DB, G, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
 {
     /// Registers a batch of validators to the relay.
     ///
@@ -44,7 +46,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/registerValidator>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn register_validators(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G, MP>>>,
         headers: HeaderMap,
         Json(registrations): Json<Vec<SignedValidatorRegistration>>,
     ) -> Result<StatusCode, ProposerApiError> {
@@ -118,8 +120,7 @@ where
             }
         }
 
-        let user_agent =
-            headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|v| v.to_string());
+        let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
 
         let head_slot = proposer_api.curr_slot_info.head_slot();
         let num_registrations = registrations.len();

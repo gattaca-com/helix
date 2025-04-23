@@ -4,6 +4,7 @@ use alloy_primitives::{B256, U256};
 use axum::{extract::Path, http::HeaderMap, response::IntoResponse, Extension};
 use helix_common::{
     chain_info::ChainInfo,
+    metadata_provider::MetadataProvider,
     metrics::GetHeaderMetric,
     task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
@@ -22,11 +23,12 @@ use crate::{
     proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
 };
 
-impl<A, DB, G> ProposerApi<A, DB, G>
+impl<A, DB, G, MP> ProposerApi<A, DB, G, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
 {
     /// Retrieves the best bid header for the specified slot, parent hash, and public key.
     ///
@@ -40,7 +42,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/getHeader>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn get_header(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G, MP>>>,
         headers: HeaderMap,
         Path(GetHeaderParams { slot, parent_hash, public_key }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
@@ -86,8 +88,7 @@ where
         };
         trace.validation_complete = utcnow_ns();
 
-        let user_agent =
-            headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|v| v.to_string());
+        let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
 
         let mut mev_boost = false;
 

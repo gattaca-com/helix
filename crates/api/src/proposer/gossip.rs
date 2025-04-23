@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use helix_common::{
     self, beacon_api::PublishBlobsRequest, blob_sidecars::blob_sidecars_from_unblinded_payload,
-    metrics::PROPOSER_GOSSIP_QUEUE, task, utils::utcnow_ns, GetPayloadTrace,
+    metadata_provider::MetadataProvider, metrics::PROPOSER_GOSSIP_QUEUE, task, utils::utcnow_ns,
+    GetPayloadTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
@@ -17,11 +18,12 @@ use crate::gossiper::{
     types::{BroadcastPayloadParams, GossipedMessage},
 };
 
-impl<A, DB, G> ProposerApi<A, DB, G>
+impl<A, DB, G, MP> ProposerApi<A, DB, G, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
 {
     /// If there are blobs in the unblinded payload, this function will send them directly to the
     /// beacon chain to be propagated async to the full block.

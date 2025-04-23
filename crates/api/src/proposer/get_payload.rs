@@ -11,6 +11,7 @@ use helix_beacon::types::BroadcastValidation;
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry,
     chain_info::{ChainInfo, Network},
+    metadata_provider::MetadataProvider,
     task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
     GetPayloadTrace,
@@ -35,11 +36,12 @@ use crate::{
     proposer::{error::ProposerApiError, unblind_beacon_block},
 };
 
-impl<A, DB, G> ProposerApi<A, DB, G>
+impl<A, DB, G, MP> ProposerApi<A, DB, G, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
 {
     /// Retrieves the execution payload for a given blinded beacon block.
     ///
@@ -54,7 +56,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlock>
     #[tracing::instrument(skip_all, fields(id))]
     pub async fn get_payload(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G, MP>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
@@ -63,8 +65,7 @@ where
 
         let mut trace = GetPayloadTrace { receive: utcnow_ns(), ..Default::default() };
 
-        let user_agent =
-            headers.get("user-agent").and_then(|v| v.to_str().ok()).map(|v| v.to_string());
+        let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
 
         let signed_blinded_block: SignedBlindedBeaconBlock =
             match deserialize_get_payload_bytes(req).await {
@@ -175,6 +176,11 @@ where
             self.auctioneer.get_payload_url(&block_hash).await
         {
             // Fetch v3 optimistic payload from builder. This will complete asynchronously.
+            info!(
+                ?builder_pubkey,
+                payload_address = String::from_utf8_lossy(&payload_address).as_ref(),
+                "Requesting v3 payload from builder"
+            );
             let _ =
                 self.v3_payload_request.send((block_hash, builder_pubkey, payload_address)).await;
         }

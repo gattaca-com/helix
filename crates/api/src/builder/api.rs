@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use std::{
     io::Read,
     sync::Arc,
@@ -24,6 +26,7 @@ use helix_common::{
         v3::header_submission_v3::HeaderSubmissionV3, BidSubmission,
     },
     chain_info::ChainInfo,
+    metadata_provider::MetadataProvider,
     metrics::BUILDER_GOSSIP_QUEUE,
     signing::RelaySigningContext,
     simulator::BlockSimError,
@@ -56,30 +59,33 @@ use crate::{
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
 
 #[derive(Clone)]
-pub struct BuilderApi<A, DB, S, G>
+pub struct BuilderApi<A, DB, S, G, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
 {
     auctioneer: Arc<A>,
     db: Arc<DB>,
     chain_info: Arc<ChainInfo>,
     simulator: S,
     gossiper: Arc<G>,
+    metadata_provider: Arc<MP>,
     signing_context: Arc<RelaySigningContext>,
     relay_config: Arc<RelayConfig>,
     curr_slot_info: CurrentSlotInfo,
     _validator_preferences: Arc<validator_preferences::ValidatorPreferences>,
 }
 
-impl<A, DB, S, G> BuilderApi<A, DB, S, G>
+impl<A, DB, S, G, MP> BuilderApi<A, DB, S, G, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
 {
     pub fn new(
         auctioneer: Arc<A>,
@@ -87,6 +93,7 @@ where
         chain_info: Arc<ChainInfo>,
         simulator: S,
         gossiper: Arc<G>,
+        metadata_provider: Arc<MP>,
         signing_context: Arc<RelaySigningContext>,
         relay_config: RelayConfig,
         gossip_receiver: Receiver<GossipedMessage>,
@@ -99,6 +106,7 @@ where
             chain_info,
             simulator,
             gossiper,
+            metadata_provider,
             signing_context,
             relay_config: Arc::new(relay_config),
 
@@ -117,7 +125,7 @@ where
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/getValidators>
     pub async fn get_validators(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
     ) -> impl IntoResponse {
         if let Some(duty_bytes) = api.curr_slot_info.proposer_duties_response() {
             (StatusCode::OK, duty_bytes.0).into_response()
@@ -139,12 +147,13 @@ where
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err, ret(level = Level::DEBUG))]
     pub async fn submit_block(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
+        trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         debug!(%head_slot, timestamp_request_start = trace.receive);
 
@@ -391,29 +400,31 @@ where
     /// verifications before saving the headre to the auctioneer.
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_header(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let mut trace =
             HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         debug!(timestamp_request_start = trace.receive,);
 
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) = decode_header_submission(req, &mut trace).await?;
 
-        Self::handle_submit_header(&api, payload, None, is_cancellations_enabled, trace).await
+        Self::handle_submit_header(&api, payload, None, None, is_cancellations_enabled, trace).await
     }
 
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_header_v3(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let mut trace =
             HeaderSubmissionTrace { receive: get_nanos_timestamp()?, ..Default::default() };
+        trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         debug!(timestamp_request_start = trace.receive,);
 
@@ -425,6 +436,7 @@ where
             &api,
             payload.submission,
             Some(payload.url),
+            Some(payload.tx_count),
             is_cancellations_enabled,
             trace,
         )
@@ -432,9 +444,10 @@ where
     }
 
     pub(crate) async fn handle_submit_header(
-        api: &Arc<BuilderApi<A, DB, S, G>>,
+        api: &Arc<BuilderApi<A, DB, S, G, MP>>,
         payload: SignedHeaderSubmission,
         payload_address: Option<Vec<u8>>,
+        _block_tx_count: Option<u32>, // TODO
         is_cancellations_enabled: bool,
         mut trace: HeaderSubmissionTrace,
     ) -> Result<StatusCode, BuilderApiError> {
@@ -673,11 +686,12 @@ where
     /// Implements this API: https://docs.titanrelay.xyz/builders/builder-integration#optimistic-v2
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_block_v2(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
+        trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         // Decode the incoming request body into a payload
         let (payload, _) = decode_payload(req, &mut trace).await?;
@@ -704,13 +718,14 @@ where
                 BuilderApiError::AuctioneerError(err)
             })?;
 
-        Self::handle_optimistic_payload(api, payload, trace).await
+        Self::handle_optimistic_payload(api, payload, trace, OptimisticVersion::V2).await
     }
 
     pub(crate) async fn handle_optimistic_payload(
-        api: Arc<BuilderApi<A, DB, S, G>>,
+        api: Arc<BuilderApi<A, DB, S, G, MP>>,
         payload: SignedBidSubmission,
         mut trace: SubmissionTrace,
+        optimistic_version: OptimisticVersion,
     ) -> Result<StatusCode, BuilderApiError> {
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
         debug!(%head_slot, timestamp_request_start = trace.receive);
@@ -756,7 +771,7 @@ where
         if next_duty.entry.preferences.filtering.is_regional() &&
             !builder_info.can_process_regional_slot_optimistically()
         {
-            warn!("proposer has regional filtering enabled, discarding optimistic v2 submission");
+            warn!("proposer has regional filtering enabled, discarding {optimistic_version:?} submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
                 builder_pub_key: payload.builder_public_key().clone(),
             });
@@ -829,7 +844,7 @@ where
         {
             Ok(val) => val,
             Err(err) => {
-                // Any invalid submission for optimistic v2 results in a demotion.
+                // Any invalid submission for optimistic v2/v3 results in a demotion.
                 api.demote_builder(&builder_pub_key, &block_hash, &err).await;
                 return Err(err);
             }
@@ -871,7 +886,7 @@ where
             async move {
                 if let Err(err) = api
                     .db
-                    .store_block_submission(payload, Arc::new(trace), OptimisticVersion::V2 as i16)
+                    .store_block_submission(payload, Arc::new(trace), optimistic_version as i16)
                     .await
                 {
                     error!(%err, "failed to store block submission")
@@ -885,7 +900,7 @@ where
 
     #[tracing::instrument(skip_all)]
     pub async fn get_top_bid(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G>>>,
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
         headers: HeaderMap,
         ws: WebSocketUpgrade,
     ) -> Result<impl IntoResponse, BuilderApiError> {
@@ -907,12 +922,13 @@ where
 }
 
 // Handle Gossiped Payloads
-impl<A, DB, S, G> BuilderApi<A, DB, S, G>
+impl<A, DB, S, G, MP> BuilderApi<A, DB, S, G, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
 {
     #[tracing::instrument(skip_all, fields(id = %Uuid::new_v4()))]
     pub async fn process_gossiped_header(&self, req: BroadcastHeaderParams) {
@@ -1174,12 +1190,13 @@ where
 }
 
 // Helpers
-impl<A, DB, S, G> BuilderApi<A, DB, S, G>
+impl<A, DB, S, G, MP> BuilderApi<A, DB, S, G, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
     G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
 {
     /// This function verifies:
     /// 1. Verifies the payload signature.
