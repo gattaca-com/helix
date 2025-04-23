@@ -29,7 +29,7 @@ use helix_common::{
     },
     chain_info::ChainInfo,
     metadata_provider::MetadataProvider,
-    metrics::{BUILDER_GOSSIP_QUEUE, DB_QUEUE},
+    metrics::BUILDER_GOSSIP_QUEUE,
     signing::RelaySigningContext,
     simulator::BlockSimError,
     task,
@@ -44,20 +44,14 @@ use helix_types::{BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, 
 use hyper::HeaderMap;
 use ssz::Decode;
 use tokio::{
-    sync::{
-        broadcast,
-        mpsc::{self, Receiver, Sender},
-        RwLock,
-    },
+    sync::{broadcast, mpsc::Receiver, RwLock},
     time::{self},
 };
 use tracing::{debug, error, info, warn, Instrument, Level};
 use uuid::Uuid;
 
 use crate::{
-    builder::{
-        error::BuilderApiError, traits::BlockSimulator, BlockSimRequest, DbInfo, OptimisticVersion,
-    },
+    builder::{error::BuilderApiError, traits::BlockSimulator, BlockSimRequest, OptimisticVersion},
     gossiper::{
         traits::GossipClientTrait,
         types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
@@ -83,7 +77,6 @@ where
     metadata_provider: Arc<MP>,
     signing_context: Arc<RelaySigningContext>,
     relay_config: Arc<RelayConfig>,
-    db_sender: Sender<DbInfo>,
 
     /// Information about the current head slot and next proposer duty
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
@@ -115,14 +108,6 @@ where
         gossip_receiver: Receiver<GossipedMessage>,
         validator_preferences: Arc<validator_preferences::ValidatorPreferences>,
     ) -> Self {
-        let (db_sender, db_receiver) = mpsc::channel::<DbInfo>(10_000);
-
-        // Spin up db processing task
-        let db_clone = db.clone();
-        task::spawn(file!(), line!(), async move {
-            process_db_additions(db_clone, db_receiver).await;
-        });
-
         let api = Self {
             auctioneer,
             db,
@@ -132,8 +117,6 @@ where
             metadata_provider,
             signing_context,
             relay_config: Arc::new(relay_config),
-
-            db_sender,
 
             curr_slot_info: Arc::new(RwLock::new((0, None))),
             proposer_duties_response: Arc::new(RwLock::new(None)),
@@ -1451,10 +1434,7 @@ where
             registration_info.preferences,
             payload_attributes.payload_attributes.parent_beacon_block_root,
         );
-        let result = self
-            .simulator
-            .process_request(sim_request, builder_info, is_top_bid, self.db_sender.clone())
-            .await;
+        let result = self.simulator.process_request(sim_request, builder_info, is_top_bid).await;
 
         match result {
             Ok(sim_optimistic) => {
@@ -2173,61 +2153,6 @@ fn log_save_bid_info(
 
     if update_bid_result.was_bid_saved {
         debug!(eligible_at = bid_update_finish);
-    }
-}
-
-/// Should be called as a new async task.
-/// Stores updates to the db out of the critical path.
-async fn process_db_additions<DB: DatabaseService + 'static>(
-    db: Arc<DB>,
-    mut db_receiver: mpsc::Receiver<DbInfo>,
-) {
-    while let Some(db_info) = db_receiver.recv().await {
-        DB_QUEUE.dec();
-        match db_info {
-            DbInfo::NewSubmission(submission, trace, version) => {
-                if let Err(err) =
-                    db.store_block_submission(submission, Arc::new(trace), version as i16).await
-                {
-                    error!(
-                        error = %err,
-                        "failed to store block submission",
-                    )
-                }
-            }
-            DbInfo::NewHeaderSubmission(header_submission, trace) => {
-                if let Err(err) = db.store_header_submission(header_submission, trace).await {
-                    error!(
-                        error = %err,
-                        "failed to store header submission",
-                    )
-                }
-            }
-            DbInfo::GossipedHeader { block_hash, trace } => {
-                if let Err(err) = db.save_gossiped_header_trace(block_hash, trace).await {
-                    error!(
-                        error = %err,
-                        "failed to store gossiped header trace",
-                    )
-                }
-            }
-            DbInfo::GossipedPayload { block_hash, trace } => {
-                if let Err(err) = db.save_gossiped_payload_trace(block_hash, trace).await {
-                    error!(
-                        error = %err,
-                        "failed to store gossiped payload trace",
-                    )
-                }
-            }
-            DbInfo::SimulationResult { block_hash, block_sim_result } => {
-                if let Err(err) = db.save_simulation_result(block_hash, block_sim_result).await {
-                    error!(
-                        error = %err,
-                        "failed to store simulation result",
-                    )
-                }
-            }
-        }
     }
 }
 

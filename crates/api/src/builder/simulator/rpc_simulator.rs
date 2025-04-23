@@ -1,16 +1,14 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
-use helix_common::{
-    metrics::{SimulatorMetrics, DB_QUEUE},
-    simulator::BlockSimError,
-    BuilderInfo,
-};
+use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, task, BuilderInfo};
+use helix_database::DatabaseService;
 use reqwest::{
     header::{HeaderMap, HeaderValue, CONTENT_TYPE},
     Client, Response, StatusCode,
 };
 use serde_json::{json, Value};
-use tokio::sync::mpsc::Sender;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, Instrument};
 
 use crate::builder::{traits::BlockSimulator, BlockSimRequest, DbInfo};
 
@@ -27,14 +25,15 @@ pub struct BlockSimRpcResponse {
 /// RpcSimulator is responsible for sending block requests to the RPC endpoint for validation.
 /// It uses the `flashbots_validateBuilderSubmissionV2` method for the actual validation.
 #[derive(Clone)]
-pub struct RpcSimulator {
+pub struct RpcSimulator<DB: DatabaseService + 'static> {
     http: Client,
     endpoint: String,
+    db: Arc<DB>,
 }
 
-impl RpcSimulator {
-    pub fn new(http: Client, endpoint: String) -> Self {
-        Self { http, endpoint }
+impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
+    pub fn new(http: Client, endpoint: String, db: Arc<DB>) -> Self {
+        Self { http, endpoint, db }
     }
 
     /// Sends an RPC request for block validation.
@@ -111,13 +110,12 @@ impl RpcSimulator {
 }
 
 #[async_trait]
-impl BlockSimulator for RpcSimulator {
+impl<DB: DatabaseService + 'static> BlockSimulator for RpcSimulator<DB> {
     async fn process_request(
         &self,
         request: BlockSimRequest,
         _builder_info: &BuilderInfo,
         is_top_bid: bool,
-        sim_result_saver_sender: Sender<DbInfo>,
     ) -> Result<bool, BlockSimError> {
         let timer = SimulatorMetrics::timer();
 
@@ -137,11 +135,13 @@ impl BlockSimulator for RpcSimulator {
                 // Send sim result to db processor task
                 let db_info =
                     DbInfo::SimulationResult { block_hash, block_sim_result: result.clone() };
-                sim_result_saver_sender
-                    .send(db_info)
-                    .await
-                    .map_err(|_| BlockSimError::SendError)?;
-                DB_QUEUE.inc();
+                let db_clone = self.db.clone();
+                task::spawn(file!(), line!(), {
+                    async move {
+                        process_db_additions(db_clone, db_info).await;
+                    }
+                    .in_current_span()
+                });
 
                 result.map(|_| false)
             }
@@ -200,6 +200,40 @@ impl BlockSimulator for RpcSimulator {
             _ => {
                 info!("Geth is not fully synced: {:?}", sync_result);
                 Ok(false)
+            }
+        }
+    }
+}
+
+/// Should be called as a new async task.
+/// Stores updates to the db out of the critical path.
+async fn process_db_additions<DB: DatabaseService + 'static>(db: Arc<DB>, db_info: DbInfo) {
+    match db_info {
+        DbInfo::NewSubmission(submission, trace, version) => {
+            if let Err(err) =
+                db.store_block_submission(submission, Arc::new(trace), version as i16).await
+            {
+                error!(%err, "failed to store block submission")
+            }
+        }
+        DbInfo::NewHeaderSubmission(header_submission, trace) => {
+            if let Err(err) = db.store_header_submission(header_submission, trace).await {
+                error!(%err, "failed to store header submission")
+            }
+        }
+        DbInfo::GossipedHeader { block_hash, trace } => {
+            if let Err(err) = db.save_gossiped_header_trace(block_hash, trace).await {
+                error!(%err, "failed to store gossiped header trace")
+            }
+        }
+        DbInfo::GossipedPayload { block_hash, trace } => {
+            if let Err(err) = db.save_gossiped_payload_trace(block_hash, trace).await {
+                error!(%err, "failed to store gossiped payload trace")
+            }
+        }
+        DbInfo::SimulationResult { block_hash, block_sim_result } => {
+            if let Err(err) = db.save_simulation_result(block_hash, block_sim_result).await {
+                error!(%err, "failed to store simulation result")
             }
         }
     }

@@ -13,21 +13,16 @@ use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::BlsPublicKey;
 use reqwest::Client;
-use tokio::{
-    sync::{mpsc::Sender, RwLock},
-    time::sleep,
-};
+use tokio::{sync::RwLock, time::sleep};
 use tracing::{debug, error, warn, Instrument};
 
-use crate::builder::{
-    rpc_simulator::RpcSimulator, traits::BlockSimulator, BlockSimRequest, DbInfo,
-};
+use crate::builder::{rpc_simulator::RpcSimulator, traits::BlockSimulator, BlockSimRequest};
 
 /// OptimisticSimulator is responsible for running simulations optimistically or synchronously based
 /// on the builder's status.
 #[derive(Clone)]
 pub struct OptimisticSimulator<A: Auctioneer + 'static, DB: DatabaseService + 'static> {
-    simulator: Arc<RpcSimulator>,
+    simulator: Arc<RpcSimulator<DB>>,
     auctioneer: Arc<A>,
     db: Arc<DB>,
     /// The `failsafe_triggered` flag serves as a circuit breaker for the optimistic simulation
@@ -42,7 +37,7 @@ pub struct OptimisticSimulator<A: Auctioneer + 'static, DB: DatabaseService + 's
 
 impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator<A, DB> {
     pub fn new(auctioneer: Arc<A>, db: Arc<DB>, http: Client, endpoint: String) -> Self {
-        let simulator = Arc::new(RpcSimulator::new(http, endpoint));
+        let simulator = Arc::new(RpcSimulator::new(http, endpoint, db.clone()));
         let failsafe_triggered = Arc::new(RwLock::new(false));
         let optimistic_state = Arc::new(PauseState::new(Duration::from_secs(60)));
         Self { simulator, auctioneer, db, failsafe_triggered, optimistic_state }
@@ -67,13 +62,10 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         &self,
         request: BlockSimRequest,
         is_top_bid: bool,
-        sim_result_saver_sender: Sender<DbInfo>,
         builder_info: BuilderInfo,
     ) -> Result<(), BlockSimError> {
-        if let Err(err) = self
-            .simulator
-            .process_request(request.clone(), &builder_info, is_top_bid, sim_result_saver_sender)
-            .await
+        if let Err(err) =
+            self.simulator.process_request(request.clone(), &builder_info, is_top_bid).await
         {
             if builder_info.is_optimistic {
                 if err.is_aleady_known() {
@@ -197,7 +189,6 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
         request: BlockSimRequest,
         builder_info: &BuilderInfo,
         is_top_bid: bool,
-        sim_result_saver_sender: Sender<DbInfo>,
     ) -> Result<bool, BlockSimError> {
         if self.should_process_optimistically(&request, builder_info).await {
             SimulatorMetrics::sim_count(true);
@@ -209,12 +200,11 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
 
             let cloned_self = self.clone_for_async();
             let builder_info = builder_info.clone();
-            let sender_clone = sim_result_saver_sender.clone();
+
             task::spawn(file!(), line!(), {
                 async move {
-                    if let Err(e) = cloned_self
-                        .handle_simulation(request, is_top_bid, sender_clone, builder_info)
-                        .await
+                    if let Err(e) =
+                        cloned_self.handle_simulation(request, is_top_bid, builder_info).await
                     {
                         error!("Simulation failed: {:?}", e);
                     }
@@ -234,14 +224,7 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
                 request=?request.message,
                 "processing simulation synchronously"
             );
-            self.handle_simulation(
-                request,
-                is_top_bid,
-                sim_result_saver_sender,
-                builder_info.clone(),
-            )
-            .await
-            .map(|_| false)
+            self.handle_simulation(request, is_top_bid, builder_info.clone()).await.map(|_| false)
         }
     }
 

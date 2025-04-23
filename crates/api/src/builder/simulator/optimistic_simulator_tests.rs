@@ -74,7 +74,6 @@ mod simulator_tests {
             .create();
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
-        let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
         let builder_info = BuilderInfo {
             collateral: U256::from(100),
             is_optimistic: true,
@@ -88,8 +87,7 @@ mod simulator_tests {
             builder_demoted.clone(),
         );
 
-        let result =
-            simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender).await;
+        let result = simulator.process_request(get_sim_req(), &builder_info, true).await;
 
         // give the simulator time to process the request
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -109,7 +107,6 @@ mod simulator_tests {
         let mock = server.mock("POST", "/").with_status(200).with_body(rpc_response_json).create();
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
-        let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
         let builder_info = BuilderInfo {
             collateral: U256::from(100),
             is_optimistic: true,
@@ -123,8 +120,7 @@ mod simulator_tests {
             builder_demoted.clone(),
         );
 
-        let result =
-            simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender).await;
+        let result = simulator.process_request(get_sim_req(), &builder_info, true).await;
 
         // give the simulator time to process the request
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -144,7 +140,6 @@ mod simulator_tests {
             .create();
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
-        let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
         let builder_info = BuilderInfo {
             collateral: U256::from(100),
             is_optimistic: false,
@@ -158,8 +153,7 @@ mod simulator_tests {
             builder_demoted.clone(),
         );
 
-        let result =
-            simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender).await;
+        let result = simulator.process_request(get_sim_req(), &builder_info, true).await;
 
         // give the simulator time to process the request
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -179,7 +173,6 @@ mod simulator_tests {
         let mock = server.mock("POST", "/").with_status(200).with_body(rpc_response_json).create();
 
         let builder_demoted = Arc::new(AtomicBool::new(false));
-        let (sim_res_sender, _sim_res_receiver) = tokio::sync::mpsc::channel(100);
         let builder_info = BuilderInfo {
             collateral: U256::from(100),
             is_optimistic: false,
@@ -193,8 +186,7 @@ mod simulator_tests {
             builder_demoted.clone(),
         );
 
-        let result =
-            simulator.process_request(get_sim_req(), &builder_info, true, sim_res_sender).await;
+        let result = simulator.process_request(get_sim_req(), &builder_info, true).await;
 
         // give the simulator time to process the request
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
