@@ -15,6 +15,8 @@ use tokio::{
 use tracing::{error, info, warn};
 use tree_hash::TreeHash;
 
+use crate::CurrentSlotInfo;
+
 // Do not accept slots more than 60 seconds in the future
 const MAX_DISTANCE_FOR_FUTURE_SLOT: u64 = 60;
 const CUTT_OFF_TIME: u64 = 4;
@@ -36,12 +38,6 @@ pub struct SlotUpdate {
     pub new_duties: Option<Vec<BuilderGetValidatorsResponseEntry>>,
 }
 
-#[derive(Clone, Debug)]
-pub enum ChainUpdate {
-    SlotUpdate(Box<SlotUpdate>),
-    PayloadAttributesUpdate(PayloadAttributesUpdate),
-}
-
 /// Manages the update of head slots and the fetching of new proposer duties.
 pub struct ChainEventUpdater<D: DatabaseService, A: Auctioneer> {
     head_slot: u64,
@@ -51,25 +47,25 @@ pub struct ChainEventUpdater<D: DatabaseService, A: Auctioneer> {
 
     database: Arc<D>,
     auctioneer: Arc<A>,
-    chain_update_tx: broadcast::Sender<ChainUpdate>,
     chain_info: Arc<ChainInfo>,
+    curr_slot_info: CurrentSlotInfo,
 }
 
 impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
     pub fn new(
         database: Arc<D>,
         auctioneer: Arc<A>,
-        chain_update_tx: broadcast::Sender<ChainUpdate>,
         chain_info: Arc<ChainInfo>,
+        curr_slot_info: CurrentSlotInfo,
     ) -> Self {
         Self {
             head_slot: 0,
             known_payload_attributes: Default::default(),
             database,
             auctioneer,
-            chain_update_tx,
             proposer_duties: Vec::new(),
             chain_info,
+            curr_slot_info,
         }
     }
 
@@ -204,8 +200,8 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         // Get the next proposer duty for the new slot.
         let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
 
-        let update = ChainUpdate::SlotUpdate(Box::new(SlotUpdate { slot, new_duties, next_duty }));
-        let _ = self.chain_update_tx.send(update);
+        let update = SlotUpdate { slot, new_duties, next_duty };
+        self.curr_slot_info.handle_new_slot(update, &self.chain_info);
     }
 
     // Handles a new payload attributes event
@@ -239,13 +235,13 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
             event.data.payload_attributes.withdrawals.clone().into();
         let withdrawals_root = withdrawals_list.tree_hash_root();
 
-        let update = ChainUpdate::PayloadAttributesUpdate(PayloadAttributesUpdate {
+        let update = PayloadAttributesUpdate {
             slot: event.data.proposal_slot.as_u64(),
             parent_hash: event.data.parent_block_hash,
             withdrawals_root,
             payload_attributes: event.data.payload_attributes,
-        });
+        };
 
-        let _ = self.chain_update_tx.send(update);
+        self.curr_slot_info.handle_new_payload_attributes(update);
     }
 }

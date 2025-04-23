@@ -4,23 +4,22 @@ pub mod housekeeper;
 #[cfg(test)]
 pub mod housekeeper_tests;
 pub mod primev_service;
+mod slot_info;
 
 use std::{sync::Arc, time::Duration};
 
-pub use chain_event_updater::{
-    ChainEventUpdater, ChainUpdate, PayloadAttributesUpdate, SlotUpdate,
-};
+pub use chain_event_updater::{ChainEventUpdater, PayloadAttributesUpdate, SlotUpdate};
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{chain_info::ChainInfo, RelayConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
 pub use housekeeper::Housekeeper;
 pub use primev_service::EthereumPrimevService;
+pub use slot_info::CurrentSlotInfo;
 use tokio::sync::broadcast;
 
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PAYLOAD_ATTRIBUTE_CHANNEL_SIZE: usize = 300;
-const CHAIN_UPDATE_CHANNEL_SIZE: usize = 200;
 
 /// Start housekeeper and chain updater
 pub async fn start_housekeeper(
@@ -29,7 +28,7 @@ pub async fn start_housekeeper(
     config: Arc<RelayConfig>,
     beacon_client: Arc<MultiBeaconClient>,
     chain_info: Arc<ChainInfo>,
-) -> eyre::Result<broadcast::Receiver<ChainUpdate>> {
+) -> eyre::Result<CurrentSlotInfo> {
     let (head_event_sender, head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
     beacon_client.subscribe_to_head_events(head_event_sender).await;
 
@@ -50,9 +49,9 @@ pub async fn start_housekeeper(
         }
     });
 
-    let (chain_update_tx, chain_update_rx) = broadcast::channel(CHAIN_UPDATE_CHANNEL_SIZE);
-    let chain_updater = ChainEventUpdater::new(db, auctioneer, chain_update_tx, chain_info);
+    let curr_slot_info = CurrentSlotInfo::new();
+    let chain_updater = ChainEventUpdater::new(db, auctioneer, chain_info, curr_slot_info.clone());
     tokio::spawn(chain_updater.start(head_event_receiver, payload_attribute_receiver));
 
-    Ok(chain_update_rx)
+    Ok(curr_slot_info)
 }

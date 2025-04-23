@@ -6,7 +6,7 @@ use axum::{
 use helix_common::{bid_submission::BidValidationError, simulator::BlockSimError};
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
-use helix_types::BlsPublicKey;
+use helix_types::{BlsPublicKey, Slot};
 
 use super::v3::V3Error;
 
@@ -40,7 +40,7 @@ pub enum BuilderApiError {
     PayloadTooLarge { max_size: usize, size: usize },
 
     #[error("submission for past slot. current slot: {current_slot}, submission slot: {submission_slot}")]
-    SubmissionForPastSlot { current_slot: u64, submission_slot: u64 },
+    SubmissionForPastSlot { current_slot: Slot, submission_slot: Slot },
 
     #[error("builder blacklisted. pubkey: {pubkey:?}")]
     BuilderBlacklisted { pubkey: BlsPublicKey },

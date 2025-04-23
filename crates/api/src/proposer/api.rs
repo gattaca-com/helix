@@ -27,7 +27,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
-use helix_housekeeper::{ChainUpdate, SlotUpdate};
+use helix_housekeeper::CurrentSlotInfo;
 use helix_types::{
     BlsPublicKey, ChainSpec, ExecPayload, ExecutionPayloadHeader, GetPayloadResponse,
     PayloadAndBlobs, SigError, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot,
@@ -36,9 +36,8 @@ use helix_types::{
 use serde_json::json;
 use tokio::{
     sync::{
-        broadcast,
         mpsc::{Receiver, Sender},
-        oneshot, RwLock,
+        oneshot,
     },
     time::{sleep, Instant},
 };
@@ -79,7 +78,7 @@ where
     multi_beacon_client: Arc<MultiBeaconClient>,
 
     /// Information about the current head slot and next proposer duty
-    curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
+    curr_slot_info: CurrentSlotInfo,
 
     chain_info: Arc<ChainInfo>,
     validator_preferences: Arc<ValidatorPreferences>,
@@ -105,11 +104,11 @@ where
         broadcasters: Vec<Arc<BlockBroadcaster>>,
         multi_beacon_client: Arc<MultiBeaconClient>,
         chain_info: Arc<ChainInfo>,
-        chain_update_rx: broadcast::Receiver<ChainUpdate>,
         validator_preferences: Arc<ValidatorPreferences>,
         gossip_receiver: Receiver<GossipedMessage>,
         relay_config: RelayConfig,
         v3_payload_request: Sender<(B256, BlsPublicKey, Vec<u8>)>,
+        curr_slot_info: CurrentSlotInfo,
     ) -> Self {
         let api = Self {
             auctioneer,
@@ -118,11 +117,11 @@ where
             metadata_provider,
             broadcasters,
             multi_beacon_client,
-            curr_slot_info: Arc::new(RwLock::new((0, None))),
             chain_info,
             validator_preferences,
             relay_config,
             v3_payload_request,
+            curr_slot_info,
         };
 
         // Spin up gossip processing task
@@ -130,10 +129,6 @@ where
         task::spawn(file!(), line!(), async move {
             api_clone.process_gossiped_info(gossip_receiver).await;
         });
-
-        // Spin up the housekeep task
-        let api_clone = api.clone();
-        task::spawn(file!(), line!(), api_clone.housekeep(chain_update_rx));
 
         api
     }
@@ -233,9 +228,9 @@ where
 
         let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
 
-        let (head_slot, _) = *proposer_api.curr_slot_info.read().await;
+        let head_slot = proposer_api.curr_slot_info.head_slot();
         let num_registrations = registrations.len();
-        trace!(head_slot = head_slot, num_registrations = num_registrations,);
+        trace!(%head_slot, num_registrations,);
 
         // Bulk check if the validators are known
         let registration_pub_keys =
@@ -358,13 +353,13 @@ where
 
         let mut trace = GetHeaderTrace { receive: utcnow_ns(), ..Default::default() };
 
-        let (head_slot, duty) = proposer_api.curr_slot_info.read().await.clone();
+        let (head_slot, duty) = proposer_api.curr_slot_info.slot_info();
         debug!(
-            head_slot = head_slot,
+            %head_slot,
             request_ts = trace.receive,
-            slot = slot,
-            parent_hash = ?parent_hash,
-            public_key = ?public_key,
+            %slot,
+            %parent_hash,
+            %public_key,
         );
 
         let bid_request = BidRequest { slot: slot.into(), parent_hash, public_key };
@@ -373,7 +368,7 @@ where
         if bid_request.slot < head_slot {
             debug!("request for past slot");
             return Err(ProposerApiError::RequestForPastSlot {
-                request_slot: bid_request.slot.into(),
+                request_slot: bid_request.slot,
                 head_slot,
             });
         }
@@ -602,15 +597,15 @@ where
             .block_hash()
             .0;
 
-        let (head_slot, slot_duty) = self.curr_slot_info.read().await.clone();
+        let (head_slot, slot_duty) = self.curr_slot_info.slot_info();
 
-        info!(head_slot, request_ts = trace.receive, ?block_hash,);
+        info!(%head_slot, request_ts = trace.receive, %block_hash);
 
         // Verify that the request is for the current slot
         if signed_blinded_block.message().slot() <= head_slot {
             warn!("request for past slot");
             return Err(ProposerApiError::RequestForPastSlot {
-                request_slot: signed_blinded_block.message().slot().into(),
+                request_slot: signed_blinded_block.message().slot(),
                 head_slot,
             });
         }
@@ -931,7 +926,7 @@ where
         &self,
         signed_blinded_block: &SignedBlindedBeaconBlock,
         slot_duty: &BuilderGetValidatorsResponseEntry,
-        head_slot: u64,
+        head_slot: Slot,
     ) -> Result<(), ProposerApiError> {
         let actual_index = signed_blinded_block.message().proposer_index();
         let expected_index = slot_duty.validator_index;
@@ -943,17 +938,17 @@ where
             });
         }
 
-        if head_slot + 1 != slot_duty.slot.as_u64() {
+        if head_slot + 1 != slot_duty.slot {
             return Err(ProposerApiError::InternalSlotMismatchesWithSlotDuty {
                 internal_slot: head_slot,
-                slot_duty_slot: slot_duty.slot.into(),
+                slot_duty_slot: slot_duty.slot,
             });
         }
 
         if slot_duty.slot != signed_blinded_block.message().slot() {
             return Err(ProposerApiError::InvalidBlindedBlockSlot {
-                internal_slot: slot_duty.slot.into(),
-                blinded_block_slot: signed_blinded_block.message().slot().into(),
+                internal_slot: slot_duty.slot,
+                blinded_block_slot: signed_blinded_block.message().slot(),
             });
         }
 
@@ -1394,45 +1389,6 @@ fn get_x_mev_boost_header_start_ms(header_map: &HeaderMap) -> Option<u64> {
     let start_time_str = header_map.get("X-MEVBoost-StartTimeUnixMS")?.to_str().ok()?;
     let start_time_ms: u64 = start_time_str.parse().ok()?;
     Some(start_time_ms)
-}
-
-// STATE SYNC
-impl<A, DB, G, MP> ProposerApi<A, DB, G, MP>
-where
-    A: Auctioneer,
-    DB: DatabaseService,
-    G: GossipClientTrait + 'static,
-    MP: MetadataProvider + 'static,
-{
-    /// Subscribes to slot head updater.
-    /// Updates the current slot and next proposer duty.
-    pub async fn housekeep(self, mut chain_update_rx: broadcast::Receiver<ChainUpdate>) {
-        while let Ok(slot_update) = chain_update_rx.recv().await {
-            match slot_update {
-                ChainUpdate::SlotUpdate(slot_update) => {
-                    self.handle_new_slot(slot_update).await;
-                }
-                ChainUpdate::PayloadAttributesUpdate(_) => {}
-            }
-        }
-
-        error!("proposer API housekeep task disconnected!");
-    }
-
-    /// Handle a new slot update.
-    /// Updates the next proposer duty for the new slot.
-    async fn handle_new_slot(&self, slot_update: Box<SlotUpdate>) {
-        let epoch = slot_update.slot / self.chain_info.seconds_per_slot();
-        info!(
-            epoch = epoch,
-            slot = slot_update.slot,
-            slot_start_next_epoch = (epoch + 1) * self.chain_info.slots_per_epoch(),
-            next_proposer_duty = ?slot_update.next_duty,
-            "Updated head slot",
-        );
-
-        *self.curr_slot_info.write().await = (slot_update.slot, slot_update.next_duty);
-    }
 }
 
 /// Calculates the time information for a given slot.

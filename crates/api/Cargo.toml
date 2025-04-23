@@ -26,6 +26,7 @@ helix-types.workspace = true
 hyper.workspace = true
 mockito.workspace = true
 moka.workspace = true
+parking_lot.workspace = true
 prost.workspace = true
 rand.workspace = true
 reqwest.workspace = true

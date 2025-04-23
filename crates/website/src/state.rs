@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use helix_common::{chain_info::ChainInfo, WebsiteConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
+use helix_housekeeper::CurrentSlotInfo;
 use tokio::sync::RwLock;
 
 use crate::templates::IndexTemplate;
@@ -12,7 +13,7 @@ pub struct AppState {
     pub chain_info: Arc<ChainInfo>,
     pub website_config: WebsiteConfig,
     pub cached_templates: Arc<RwLock<CachedTemplates>>,
-    pub latest_slot: Arc<RwLock<u64>>,
+    pub current_slot_info: CurrentSlotInfo,
 }
 
 pub struct CachedTemplates {
