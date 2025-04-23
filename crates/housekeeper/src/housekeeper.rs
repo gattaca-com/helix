@@ -16,9 +16,12 @@ use helix_beacon::{
     types::{HeadEventData, StateId},
 };
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
-    pending_block::PendingBlock, task, utils::utcnow_ms, BuilderInfo, ProposerDuty, RelayConfig,
-    SignedValidatorRegistrationEntry,
+    api::builder_api::BuilderGetValidatorsResponseEntry,
+    chain_info::ChainInfo,
+    pending_block::PendingBlock,
+    task,
+    utils::{utcnow_dur, utcnow_ms},
+    BuilderInfo, ProposerDuty, RelayConfig, SignedValidatorRegistrationEntry,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
@@ -56,6 +59,9 @@ struct HousekeeperSlots {
 }
 
 impl HousekeeperSlots {
+    fn head(&self) -> Slot {
+        self.head.load(Ordering::Relaxed).into()
+    }
     fn head_already_seen(&self, new_slot: Slot) -> bool {
         self.head.fetch_max(new_slot.as_u64(), Ordering::Relaxed) >= new_slot.as_u64()
     }
@@ -133,24 +139,22 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
     async fn run(self, mut head_event_rx: broadcast::Receiver<HeadEventData>) {
         loop {
-            let sleep_time = self.chain_info.clock.duration_to_next_slot().unwrap() + CUTOFF_TIME;
+            let head = self.slots.head();
+            let timeout = (self.chain_info.clock.start_of(head + 1).unwrap() + CUTOFF_TIME)
+                .saturating_sub(utcnow_dur());
 
-            tokio::select! {
-                head_event_result = head_event_rx.recv() => {
-                    match head_event_result {
-                        Ok(head_event) => {
-                            self.process_new_slot(head_event.slot).await;
-                        }
-                        Err(err) => {
-                            error!(%err, "failed to receive head event");
-                        }
+            if let Ok(head_event_result) = tokio::time::timeout(timeout, head_event_rx.recv()).await
+            {
+                match head_event_result {
+                    Ok(head_event) => {
+                        self.process_new_slot(head_event.slot).await;
+                    }
+                    Err(err) => {
+                        error!(%err, "failed to receive head event");
                     }
                 }
-
-                _ = tokio::time::sleep(sleep_time) => {
-                    let head_slot = self.chain_info.current_slot();
-                    self.process_new_slot(head_slot).await;
-                }
+            } else {
+                self.process_new_slot(self.chain_info.current_slot()).await;
             }
         }
     }
@@ -514,7 +518,6 @@ fn v2_submission_late(pending_block: &PendingBlock) -> bool {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[test]
