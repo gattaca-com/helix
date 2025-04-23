@@ -172,6 +172,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         let epoch = head_slot.epoch(self.chain_info.slots_per_epoch());
         info!(
+            into_slot =? self.chain_info.duration_into_slot(head_slot),
             slot_pos = self.chain_info.slot_in_epoch(head_slot),
             %epoch,
             epoch_start = %epoch.start_slot(self.chain_info.slots_per_epoch()),
