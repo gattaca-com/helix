@@ -1,0 +1,293 @@
+#![allow(clippy::type_complexity)]
+
+use std::sync::Arc;
+
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+    Extension,
+};
+use helix_common::{
+    bid_submission::BidSubmission,
+    metadata_provider::MetadataProvider,
+    task,
+    utils::{extract_request_id, utcnow_ns},
+    SubmissionTrace,
+};
+use helix_database::DatabaseService;
+use helix_datastore::Auctioneer;
+use helix_types::SignedBidSubmission;
+use hyper::HeaderMap;
+use tracing::{debug, error, info, warn, Instrument};
+
+use super::api::BuilderApi;
+use crate::{
+    builder::{
+        api::{decode_payload, sanity_check_block_submission},
+        error::BuilderApiError,
+        traits::BlockSimulator,
+        OptimisticVersion,
+    },
+    gossiper::traits::GossipClientTrait,
+};
+
+impl<A, DB, S, G, MP> BuilderApi<A, DB, S, G, MP>
+where
+    A: Auctioneer + 'static,
+    DB: DatabaseService + 'static,
+    S: BlockSimulator + 'static,
+    G: GossipClientTrait + 'static,
+    MP: MetadataProvider + 'static,
+{
+    /// Handles the submission of a new block by performing various checks and verifications
+    /// before saving the submission to the auctioneer. This is expected to pair with submit_header.
+    ///
+    /// 1. Receives the request and decodes the payload into a `SignedBidSubmission` object.
+    /// 2. Validates the builder and checks against the next proposer duty.
+    /// 3. Verifies the signature of the payload.
+    /// 4. Runs further validations against auctioneer.
+    /// 5. Simulates the block to validate the payment.
+    /// 6. Saves the bid to auctioneer and db.
+    ///
+    /// Implements this API: https://docs.titanrelay.xyz/builders/builder-integration#optimistic-v2
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
+    pub async fn submit_block_v2(
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
+        headers: HeaderMap,
+        req: Request<Body>,
+    ) -> Result<StatusCode, BuilderApiError> {
+        let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
+        trace.metadata = api.metadata_provider.get_metadata(&headers);
+
+        // Decode the incoming request body into a payload
+        let (payload, _) = decode_payload(req, &mut trace).await?;
+
+        info!(
+            slot = %payload.slot(),
+            builder_pub_key = ?payload.builder_public_key(),
+            block_value = %payload.value(),
+            block_hash = ?payload.block_hash(),
+            "payload decoded",
+        );
+
+        // Save pending block payload to auctioneer
+        api.auctioneer
+            .save_pending_block_payload(
+                payload.slot().as_u64(),
+                payload.builder_public_key(),
+                payload.block_hash(),
+                trace.receive / 1_000_000, // convert to ms
+            )
+            .await
+            .map_err(|err| {
+                error!(%err, "failed to save pending block header");
+                BuilderApiError::AuctioneerError(err)
+            })?;
+
+        Self::handle_optimistic_payload(api, payload, trace, OptimisticVersion::V2).await
+    }
+
+    pub(crate) async fn handle_optimistic_payload(
+        api: Arc<BuilderApi<A, DB, S, G, MP>>,
+        payload: SignedBidSubmission,
+        mut trace: SubmissionTrace,
+        optimistic_version: OptimisticVersion,
+    ) -> Result<StatusCode, BuilderApiError> {
+        let (head_slot, next_duty) = api.curr_slot_info.slot_info();
+        debug!(%head_slot, timestamp_request_start = trace.receive);
+
+        let builder_pub_key = payload.builder_public_key().clone();
+        let block_hash = payload.message().block_hash;
+
+        // Verify the payload is for the current slot
+        if payload.slot() <= head_slot {
+            debug!(?block_hash, "submission is for a past slot",);
+            return Err(BuilderApiError::SubmissionForPastSlot {
+                current_slot: head_slot,
+                submission_slot: payload.slot(),
+            });
+        }
+
+        // Verify that we have a validator connected for this slot
+        // Note: in `submit_block_v2` we have to do this check after decoding
+        // so we can send a `PayloadReceived` message.
+        if next_duty.is_none() {
+            warn!(?block_hash, "could not find slot duty");
+            return Err(BuilderApiError::ProposerDutyNotFound);
+        }
+        let next_duty = next_duty.unwrap();
+
+        // Fetch the next payload attributes and validate basic information
+        let payload_attributes =
+            api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), &block_hash)?;
+
+        // Fetch builder info
+        let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
+
+        // submit_block_v2 can only be processed optimistically.
+        // Make sure that the builder has enough collateral to cover the submission.
+        if let Err(err) = Self::check_builder_collateral(&payload, &builder_info) {
+            warn!(%err, "builder has insufficient collateral");
+            return Err(err);
+        }
+
+        // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
+        // and the builder is not optimistic for regional filtering.
+        if next_duty.entry.preferences.filtering.is_regional() &&
+            !builder_info.can_process_regional_slot_optimistically()
+        {
+            warn!("proposer has regional filtering enabled, discarding {optimistic_version:?} submission");
+            return Err(BuilderApiError::BuilderNotOptimistic {
+                builder_pub_key: payload.builder_public_key().clone(),
+            });
+        }
+
+        // Handle trusted builders check
+        if !Self::check_if_trusted_builder(&next_duty, &builder_info) {
+            let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
+            warn!(
+                builder_pub_key = ?payload.builder_public_key(),
+                proposer_trusted_builders = ?proposer_trusted_builders,
+                "builder not in proposer trusted builders list",
+            );
+            return Err(BuilderApiError::BuilderNotInProposersTrustedList {
+                proposer_trusted_builders,
+            });
+        }
+
+        // Verify payload has not already been delivered
+        match api.auctioneer.get_last_slot_delivered().await {
+            Ok(Some(slot)) => {
+                if payload.slot() <= slot {
+                    debug!("payload already delivered");
+                    return Err(BuilderApiError::PayloadAlreadyDelivered);
+                }
+            }
+            Ok(None) => {}
+            Err(err) => {
+                error!(%err, "failed to get last slot delivered");
+            }
+        }
+
+        // Check for tx root against header received
+        if let Err(err) = api.check_tx_root_against_header(&payload).await {
+            match err {
+                // Could have just received the payload before the header
+                BuilderApiError::MissingTransactionsRoot => {}
+                // Nothing the builder can do about this error
+                BuilderApiError::AuctioneerError(err) => {
+                    return Err(BuilderApiError::AuctioneerError(err))
+                }
+                _ => {
+                    api.demote_builder(&builder_pub_key, &block_hash, &err).await;
+                    return Err(err);
+                }
+            }
+        }
+
+        // Sanity check the payload
+        if let Err(err) = sanity_check_block_submission(
+            &payload,
+            &next_duty,
+            &payload_attributes,
+            &api.chain_info,
+        ) {
+            warn!(%err, "failed sanity check");
+            return Err(err);
+        }
+        trace.pre_checks = utcnow_ns();
+
+        let (payload, _) = match api
+            .verify_submitted_block(
+                payload,
+                next_duty,
+                &builder_info,
+                &mut trace,
+                &payload_attributes,
+            )
+            .await
+        {
+            Ok(val) => val,
+            Err(err) => {
+                // Any invalid submission for optimistic v2/v3 results in a demotion.
+                api.demote_builder(&builder_pub_key, &block_hash, &err).await;
+                return Err(err);
+            }
+        };
+
+        // Save bid to auctioneer
+        if let Err(err) = api
+            .auctioneer
+            .save_execution_payload(
+                payload.slot().as_u64(),
+                &payload.message().proposer_pubkey,
+                payload.block_hash(),
+                &payload.payload_and_blobs(),
+            )
+            .await
+        {
+            error!(%err, "failed to save execution payload");
+            return Err(BuilderApiError::AuctioneerError(err));
+        }
+        trace.auctioneer_update = utcnow_ns();
+
+        // Gossip to other relays
+        if api.relay_config.payload_gossip_enabled {
+            api.gossip_payload(&payload, payload.payload_and_blobs()).await;
+        }
+
+        // Log some final info
+        trace.request_finish = utcnow_ns();
+        debug!(
+            ?trace,
+            request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
+            "sumbit_block_v2 request finished"
+        );
+
+        // Save submission to db
+        task::spawn(
+            file!(),
+            line!(),
+            async move {
+                if let Err(err) = api
+                    .db
+                    .store_block_submission(payload, Arc::new(trace), optimistic_version as i16)
+                    .await
+                {
+                    error!(%err, "failed to store block submission")
+                }
+            }
+            .in_current_span(),
+        );
+
+        Ok(StatusCode::OK)
+    }
+
+    async fn check_tx_root_against_header(
+        &self,
+        payload: &SignedBidSubmission,
+    ) -> Result<(), BuilderApiError> {
+        match self.auctioneer.get_header_tx_root(payload.block_hash()).await {
+            Ok(Some(expected_tx_root)) => {
+                let tx_root = payload.transactions_root();
+
+                if expected_tx_root != tx_root {
+                    warn!("tx root mismatch");
+                    return Err(BuilderApiError::TransactionsRootMismatch {
+                        got: tx_root,
+                        expected: expected_tx_root,
+                    });
+                }
+            }
+            Ok(None) => {
+                warn!("no tx root found for block hash");
+                return Err(BuilderApiError::MissingTransactionsRoot);
+            }
+            Err(err) => {
+                error!(%err, "failed to get tx root");
+                return Err(BuilderApiError::AuctioneerError(err));
+            }
+        };
+        Ok(())
+    }
+}
