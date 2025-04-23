@@ -31,7 +31,7 @@ use crate::{
     },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     middleware::{inner_metrics_middleware, outer_metrics_middleware},
-    proposer::api::ProposerApi,
+    proposer::{self, ProposerApi},
     relay_data::{BidsCache, DataApi, DeliveredPayloadsCache},
     service::API_REQUEST_TIMEOUT,
 };
@@ -69,7 +69,7 @@ pub fn build_router<MP: MetadataProvider>(
             Route::SubmitBlockOptimistic => post(BuilderApiProd::<MP>::submit_block_v2),
             Route::SubmitHeader => post(BuilderApiProd::<MP>::submit_header),
             Route::GetTopBid => get(BuilderApiProd::<MP>::get_top_bid),
-            Route::Status => get(ProposerApiProd::<MP>::status),
+            Route::Status => get(proposer::status),
             Route::RegisterValidators => post(ProposerApiProd::<MP>::register_validators),
             Route::GetHeader => get(ProposerApiProd::<MP>::get_header),
             Route::GetPayload => post(ProposerApiProd::<MP>::get_payload),

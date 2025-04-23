@@ -13,6 +13,7 @@ use helix_housekeeper::CurrentSlotInfo;
 use service::ApiService;
 
 pub mod builder;
+pub mod constants;
 pub mod gossiper;
 pub mod integration_tests;
 pub mod middleware;
