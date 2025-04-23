@@ -217,7 +217,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
 
         // Discard payload attributes if already known
         let payload_attributes_key = &(event.data.parent_block_hash, event.data.proposal_slot);
-        if self.known_payload_attributes.contains_key(&payload_attributes_key) {
+        if self.known_payload_attributes.contains_key(payload_attributes_key) {
             return;
         }
 

@@ -1748,7 +1748,7 @@ where
         let payload_attributes_key =
             &(payload_attributes.parent_hash, payload_attributes.slot.into());
         let mut all_payload_attributes = self.payload_attributes.write().await;
-        if all_payload_attributes.contains_key(&payload_attributes_key) {
+        if all_payload_attributes.contains_key(payload_attributes_key) {
             return;
         }
 
