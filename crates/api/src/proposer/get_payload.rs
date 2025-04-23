@@ -169,19 +169,6 @@ where
         }
         trace.signature_validated = utcnow_ns();
 
-        if let Ok(Some((builder_pubkey, payload_address))) =
-            self.auctioneer.get_payload_url(&block_hash).await
-        {
-            // Fetch v3 optimistic payload from builder. This will complete asynchronously.
-            info!(
-                ?builder_pubkey,
-                payload_address = String::from_utf8_lossy(&payload_address).as_ref(),
-                "Requesting v3 payload from builder"
-            );
-            let _ =
-                self.v3_payload_request.send((block_hash, builder_pubkey, payload_address)).await;
-        }
-
         // Get execution payload from auctioneer
         let payload_result = self
             .get_execution_payload(
@@ -432,6 +419,19 @@ where
             self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot());
         let slot_cutoff_millis = (slot_time * 1000) + GET_PAYLOAD_REQUEST_CUTOFF_MS as u64;
 
+        if let Ok(Some((builder_pubkey, payload_address))) =
+            self.auctioneer.get_payload_url(block_hash).await
+        {
+            // Fetch v3 optimistic payload from builder. This will complete asynchronously.
+            info!(
+                 ?builder_pubkey,
+                 payload_address = String::from_utf8_lossy(&payload_address).as_ref(),
+                 "Requesting v3 payload from builder"
+             );
+            let _ =
+                self.v3_payload_request.send((*block_hash, builder_pubkey, payload_address)).await;
+        }
+        
         let mut last_error: Option<ProposerApiError> = None;
         let mut first_try = true; // Try at least once to cover case where get_payload is called too late.
         while first_try || utcnow_ms() < slot_cutoff_millis {
