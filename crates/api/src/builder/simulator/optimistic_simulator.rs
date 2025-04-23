@@ -13,7 +13,7 @@ use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::BlsPublicKey;
 use reqwest::Client;
-use tokio::{sync::RwLock, time::sleep};
+use tokio::time::sleep;
 use tracing::{debug, error, warn, Instrument};
 
 use crate::builder::{rpc_simulator::RpcSimulator, traits::BlockSimulator, BlockSimRequest};
@@ -31,14 +31,14 @@ pub struct OptimisticSimulator<A: Auctioneer + 'static, DB: DatabaseService + 's
     /// If a simulation error occurs and the auctioneer fails to update the builder status, this
     /// flag will be set to `true`. Once triggered, the system will halt all optimistic
     /// simulations.
-    failsafe_triggered: Arc<RwLock<bool>>,
+    failsafe_triggered: Arc<AtomicBool>,
     optimistic_state: Arc<PauseState>,
 }
 
 impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator<A, DB> {
     pub fn new(auctioneer: Arc<A>, db: Arc<DB>, http: Client, endpoint: String) -> Self {
         let simulator = Arc::new(RpcSimulator::new(http, endpoint, db.clone()));
-        let failsafe_triggered = Arc::new(RwLock::new(false));
+        let failsafe_triggered = Arc::new(AtomicBool::new(false));
         let optimistic_state = Arc::new(PauseState::new(Duration::from_secs(60)));
         Self { simulator, auctioneer, db, failsafe_triggered, optimistic_state }
     }
@@ -121,7 +121,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         SimulatorMetrics::demotion_count();
 
         if let Err(err) = self.auctioneer.demote_builder(builder_public_key).await {
-            *self.failsafe_triggered.write().await = true;
+            self.failsafe_triggered.store(true, Ordering::Relaxed);
             error!(
                 builder=%builder_public_key,
                 err=%err,
@@ -130,7 +130,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         }
 
         if let Err(err) = self.db.db_demote_builder(builder_public_key, block_hash, reason).await {
-            *self.failsafe_triggered.write().await = true;
+            self.failsafe_triggered.store(true, Ordering::Relaxed);
             error!(
                 builder=%builder_public_key,
                 err=%err,
@@ -157,7 +157,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
                 return false;
             }
 
-            if *self.failsafe_triggered.read().await {
+            if self.failsafe_triggered.load(Ordering::Relaxed) {
                 warn!(
                     builder=%request.message.builder_pubkey,
                     block_hash=%request.execution_payload.block_hash(),
