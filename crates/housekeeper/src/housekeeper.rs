@@ -8,7 +8,7 @@ use std::{
 };
 
 use alloy_eips::merge::EPOCH_SLOTS;
-use alloy_primitives::{map::HashSet, U256};
+use alloy_primitives::{map::HashSet, B256, U256};
 use futures::future::join_all;
 use helix_beacon::{
     error::BeaconClientError,
@@ -130,7 +130,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         head_event_rx: broadcast::Receiver<HeadEventData>,
     ) -> Result<(), BeaconClientError> {
         let best_sync_status = self.beacon_client.best_sync_status().await?;
-        self.process_new_slot(best_sync_status.head_slot).await;
+        self.process_new_slot(best_sync_status.head_slot, None).await;
 
         tokio::spawn(self.run(head_event_rx));
 
@@ -147,20 +147,20 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             {
                 match head_event_result {
                     Ok(head_event) => {
-                        self.process_new_slot(head_event.slot).await;
+                        self.process_new_slot(head_event.slot, Some(head_event.block)).await;
                     }
                     Err(err) => {
                         error!(%err, "failed to receive head event");
                     }
                 }
             } else {
-                self.process_new_slot(self.chain_info.current_slot()).await;
+                self.process_new_slot(self.chain_info.current_slot(), None).await;
             }
         }
     }
 
     #[tracing::instrument(skip(self))]
-    async fn process_new_slot(&self, head_slot: Slot) {
+    async fn process_new_slot(&self, head_slot: Slot, block_hash: Option<B256>) {
         if self.slots.head_already_seen(head_slot) {
             return;
         }
@@ -177,6 +177,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             %epoch,
             epoch_start = %epoch.start_slot(self.chain_info.slots_per_epoch()),
             epoch_end = %epoch.end_slot(self.chain_info.slots_per_epoch()),
+            ?block_hash,
             "processing new slot",
         );
 
