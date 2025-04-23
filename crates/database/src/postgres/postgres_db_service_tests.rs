@@ -206,8 +206,9 @@ mod tests {
             .get_validator_registrations_for_pub_keys(
                 registrations
                     .iter()
-                    .map(|r| r.registration.message.pubkey.clone())
-                    .collect::<Vec<_>>(),
+                    .map(|r| &r.registration.message.pubkey)
+                    .collect::<Vec<_>>()
+                    .as_slice(),
             )
             .await
             .unwrap();

@@ -1,25 +1,33 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
+};
 
 use alloy_eips::merge::EPOCH_SLOTS;
-use alloy_primitives::{map::HashSet, U256};
+use alloy_primitives::{map::HashSet, B256, U256};
+use futures::future::join_all;
 use helix_beacon::{
     error::BeaconClientError,
     multi_beacon_client::MultiBeaconClient,
     types::{HeadEventData, StateId},
 };
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
-    pending_block::PendingBlock, task, utils::utcnow_ms, BuilderInfo, ProposerDuty, RelayConfig,
-    SignedValidatorRegistrationEntry,
+    api::builder_api::BuilderGetValidatorsResponseEntry,
+    chain_info::ChainInfo,
+    pending_block::PendingBlock,
+    task,
+    utils::{utcnow_dur, utcnow_ms},
+    BuilderInfo, ProposerDuty, RelayConfig, SignedValidatorRegistrationEntry,
 };
-use helix_database::{error::DatabaseError, DatabaseService};
+use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::{BlsPublicKey, SlotClockTrait};
-use tokio::{
-    sync::{broadcast, Mutex},
-    time::{interval_at, sleep, Instant},
-};
-use tracing::{debug, error, info, warn};
+use helix_types::{BlsPublicKey, Epoch, Slot, SlotClockTrait};
+use tokio::sync::broadcast;
+use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 
 use crate::{error::HousekeeperError, EthereumPrimevService};
@@ -28,21 +36,54 @@ const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 1;
 
 const TRUSTED_PROPOSERS_UPDATE_FREQ: u64 = 5;
 
-const CUTT_OFF_TIME: u64 = 4;
+const CUTOFF_TIME: Duration = Duration::from_secs(4);
 
 // Constants for known validators refresh logic.
 const MIN_SLOTS_BETWEEN_UPDATES: u64 = 6;
 const MAX_SLOTS_BEFORE_FORCED_UPDATE: u64 = 32;
-pub(crate) const SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS: Duration = Duration::from_millis(200);
 
 // Max time between header and payload for OptimsiticV2 submissions
 const MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS: u64 = 2_000;
-
-// Max time to wait for payload after header is received for OptimsiticV2 submissions
+/// Max time to wait for payload after header is received for OptimsiticV2 submissions. We leave
+/// more time here to account for some overhead/processing time. Note This should be
+/// [`MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS`] + max overhead, but we leave some buffer. Note this also
+/// works because the keepalive of pending blocks in redis is longer than this
 const MAX_DELAY_WITH_NO_V2_PAYLOAD_MS: u64 = 20_000;
 
-/// Arc wrapped Housekeeper type for convenience
-type SharedHousekeeper<Database, Auctioneer> = Arc<Housekeeper<Database, Auctioneer>>;
+#[derive(Default, Clone)]
+struct HousekeeperSlots {
+    head: Arc<AtomicU64>,
+    proposer_duties: Arc<AtomicU64>,
+    refreshed_validators: Arc<AtomicU64>,
+    trusted_proposers: Arc<AtomicU64>,
+}
+
+impl HousekeeperSlots {
+    fn head(&self) -> Slot {
+        self.head.load(Ordering::Relaxed).into()
+    }
+    fn head_already_seen(&self, new_slot: Slot) -> bool {
+        self.head.fetch_max(new_slot.as_u64(), Ordering::Relaxed) >= new_slot.as_u64()
+    }
+    fn proposer_duties(&self) -> u64 {
+        self.proposer_duties.load(Ordering::Relaxed)
+    }
+    fn update_proposer_duties(&self, head_slot: Slot) {
+        self.proposer_duties.store(head_slot.as_u64(), Ordering::Relaxed);
+    }
+    fn refreshed_validators(&self) -> u64 {
+        self.refreshed_validators.load(Ordering::Relaxed)
+    }
+    fn update_refreshed_validators(&self, head_slot: Slot) {
+        self.refreshed_validators.store(head_slot.as_u64(), Ordering::Relaxed);
+    }
+    fn trusted_proposers(&self) -> u64 {
+        self.trusted_proposers.load(Ordering::Relaxed)
+    }
+    fn update_trusted_proposers(&self, head_slot: Slot) {
+        self.trusted_proposers.store(head_slot.as_u64(), Ordering::Relaxed);
+    }
+}
 
 /// Housekeeper Service.
 ///
@@ -50,309 +91,228 @@ type SharedHousekeeper<Database, Auctioneer> = Arc<Housekeeper<Database, Auction
 /// Also responsible for keeping the Auctioneer builder info up to date after manual changes.
 /// If running multiple API instances in a single region only one housekeeper is needed as services
 /// will sync through db.
+#[derive(Clone)]
 pub struct Housekeeper<DB: DatabaseService + 'static, A: Auctioneer + 'static> {
     db: Arc<DB>,
     beacon_client: Arc<MultiBeaconClient>,
-    auctioneer: A,
-    primev_service: Option<EthereumPrimevService>,
-
-    head_slot: Mutex<u64>,
-
-    proposer_duties_slot: Mutex<u64>,
-    proposer_duties_lock: Mutex<()>,
-
-    refreshed_validators_slot: Mutex<u64>,
-    refresh_validators_lock: Mutex<()>,
-
-    re_sync_builder_info_slot: Mutex<u64>,
-    re_sync_builder_info_lock: Mutex<()>,
-
-    refreshed_trusted_proposers_slot: Mutex<u64>,
-    refresh_trusted_proposers_lock: Mutex<()>,
-
-    refresh_primev_builders_lock: Mutex<()>,
-
-    leader_id: String,
-
-    config: Arc<RelayConfig>,
-
+    auctioneer: Arc<A>,
     chain_info: Arc<ChainInfo>,
+    leader_id: Arc<String>,
+    primev_service: Option<EthereumPrimevService>,
+    slots: HousekeeperSlots,
 }
 
 impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     pub fn new(
         db: Arc<DB>,
         beacon_client: Arc<MultiBeaconClient>,
-        auctioneer: A,
-        config: Arc<RelayConfig>,
+        auctioneer: Arc<A>,
+        config: &RelayConfig,
         chain_info: Arc<ChainInfo>,
-    ) -> Arc<Self> {
+    ) -> Self {
         let primev_service =
             config.primev_config.clone().map(|p| EthereumPrimevService::new(p).unwrap());
 
-        Arc::new(Self {
+        Self {
             db,
             beacon_client,
             auctioneer,
-            primev_service,
-            head_slot: Mutex::new(0),
-            proposer_duties_slot: Mutex::new(0),
-            proposer_duties_lock: Mutex::new(()),
-            refreshed_validators_slot: Mutex::new(0),
-            refresh_validators_lock: Mutex::new(()),
-            re_sync_builder_info_slot: Mutex::new(0),
-            re_sync_builder_info_lock: Mutex::new(()),
-            refreshed_trusted_proposers_slot: Mutex::new(0),
-            refresh_trusted_proposers_lock: Mutex::new(()),
-            refresh_primev_builders_lock: Mutex::new(()),
-            leader_id: Uuid::new_v4().to_string(),
-            config,
             chain_info,
-        })
+            leader_id: Uuid::new_v4().to_string().into(),
+            primev_service,
+            slots: HousekeeperSlots::default(),
+        }
     }
 
-    /// Start the Housekeeper service.
+    // if this fails, all beacon nodes are down
     pub async fn start(
-        self: &SharedHousekeeper<DB, A>,
-        head_event_receiver: &mut broadcast::Receiver<HeadEventData>,
+        self,
+        head_event_rx: broadcast::Receiver<HeadEventData>,
     ) -> Result<(), BeaconClientError> {
         let best_sync_status = self.beacon_client.best_sync_status().await?;
+        self.process_new_slot(best_sync_status.head_slot, None).await;
 
-        self.process_new_slot(best_sync_status.head_slot.as_u64()).await;
-        loop {
-            let start_instant = Instant::now() +
-                self.chain_info.clock.duration_to_next_slot().unwrap() +
-                Duration::from_secs(CUTT_OFF_TIME);
-            let mut timer =
-                interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot()));
-
-            tokio::select! {
-                head_event_result = head_event_receiver.recv() => {
-                    match head_event_result {
-                        Ok(head_event) => {
-                            self.process_new_slot(head_event.slot.as_u64()).await;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            warn!("head events lagged by {n} events");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            error!("head event channel closed");
-                            break;
-                        }
-                    }
-                }
-                _ = timer.tick() => {
-                    match self.chain_info.clock.now() {
-                        Some(slot) => self.process_new_slot(slot.as_u64()).await,
-                        None => {
-                            error!("could not get current slot");
-                        }
-                    }
-                }
-            }
-        }
+        tokio::spawn(self.run(head_event_rx));
 
         Ok(())
     }
 
-    /// Process updates for the given slot.
-    ///
-    /// Skips slots that are older than the currently processed slot.
-    async fn process_new_slot(self: &SharedHousekeeper<DB, A>, head_slot: u64) {
-        let (is_new_block, prev_head_slot) = self.update_head_slot(head_slot).await;
-        if !is_new_block {
+    async fn run(self, mut head_event_rx: broadcast::Receiver<HeadEventData>) {
+        loop {
+            let head = self.slots.head();
+            let timeout = (self.chain_info.clock.start_of(head + 1).unwrap() + CUTOFF_TIME)
+                .saturating_sub(utcnow_dur());
+
+            if let Ok(head_event_result) = tokio::time::timeout(timeout, head_event_rx.recv()).await
+            {
+                match head_event_result {
+                    Ok(head_event) => {
+                        self.process_new_slot(head_event.slot, Some(head_event.block)).await;
+                    }
+                    Err(err) => {
+                        error!(%err, "failed to receive head event");
+                    }
+                }
+            } else {
+                self.process_new_slot(self.chain_info.current_slot(), None).await;
+            }
+        }
+    }
+
+    #[tracing::instrument(skip(self))]
+    async fn process_new_slot(&self, head_slot: Slot, block_hash: Option<B256>) {
+        let start = Instant::now();
+        if self.slots.head_already_seen(head_slot) {
             return;
         }
 
-        // Only allow one housekeeper task to run at a time.
+        // only allow one housekeeper task to run at a time.
         if !self.auctioneer.try_acquire_or_renew_leadership(&self.leader_id).await {
             return;
         }
 
-        // Demote builders with expired pending blocks
-        let cloned_self = self.clone();
-        task::spawn(file!(), line!(), async move {
-            if let Err(err) = cloned_self.demote_builders_with_expired_pending_blocks().await {
-                error!(%err, "failed to demote builders with expired pending blocks");
-            }
-        });
+        let epoch = head_slot.epoch(self.chain_info.slots_per_epoch());
+        info!(
+            into_slot =? self.chain_info.duration_into_slot(head_slot),
+            slot_pos = self.chain_info.slot_in_epoch(head_slot),
+            %epoch,
+            epoch_start = %epoch.start_slot(self.chain_info.slots_per_epoch()),
+            epoch_end = %epoch.end_slot(self.chain_info.slots_per_epoch()),
+            ?block_hash,
+            "processing new slot",
+        );
 
-        // Spawn a task to asynchronously update proposer duties.
-        // After that completes, run primev_update if configured
-        if self.should_update_duties(head_slot).await {
-            let cloned_self = self.clone();
-            task::spawn(file!(), line!(), async move {
-                match cloned_self.update_proposer_duties(head_slot).await {
-                    Ok(proposer_duties) => {
-                        if cloned_self.config.primev_config.is_some() {
-                            // Run primev_update with the fetched duties
-                            let primev_self = cloned_self.clone();
-                            tokio::spawn(async move {
-                                match primev_self.refresh_primev_builders_lock.try_lock() {
-                                    Ok(_guard) => {
-                                        if let Err(err) = primev_self
-                                            .primev_update_with_duties(proposer_duties)
-                                            .await
-                                        {
-                                            error!(err = %err, "failed to update primev");
-                                        }
-                                    }
-                                    Err(_) => {
-                                        debug!("Primev update already in progress, skipping");
+        let mut tasks = Vec::new();
+
+        // v2 demotions checks every slot
+        let housekeeper = self.clone();
+        tasks.push(task::spawn(
+            file!(),
+            line!(),
+            async move {
+                let start = Instant::now();
+                if let Err(err) = housekeeper.demote_builders_with_expired_pending_blocks().await {
+                    error!(%err, "failed to demote builders");
+                }
+                info!(duration = ?start.elapsed(), "demote builders task completed");
+            }
+            .in_current_span(),
+        ));
+
+        // proposer duties
+        if self.should_update_duties(head_slot) {
+            let housekeeper = self.clone();
+            tasks.push(task::spawn(
+                file!(),
+                line!(),
+                async move {
+                    let start = Instant::now();
+                    match housekeeper.update_proposer_duties(epoch).await {
+                        Ok(proposer_duties) => {
+                            let slots = housekeeper.slots.clone();
+                            // don't wait for primev update to complete
+                            tokio::spawn(
+                                async move {
+                                    if let Err(err) = housekeeper
+                                        .maybe_primev_update_with_duties(proposer_duties)
+                                        .await
+                                    {
+                                        error!(%err, "failed to update primev duties");
                                     }
                                 }
-                            });
+                                .in_current_span(),
+                            );
+
+                            slots.update_proposer_duties(head_slot);
+                        }
+
+                        Err(err) => {
+                            error!(%err, "failed to update proposer duties");
                         }
                     }
-                    Err(err) => {
-                        error!(err = %err, "failed to update proposer duties");
-                    }
+                    info!(duration = ?start.elapsed(), "proposer duties task completed");
                 }
-            });
+                .in_current_span(),
+            ));
+        };
+
+        // known validators
+        if self.should_refresh_known_validators(head_slot.as_u64()) {
+            let housekeeper = self.clone();
+            tasks.push(task::spawn(
+                file!(),
+                line!(),
+                async move {
+                    let start = Instant::now();
+                    if let Err(err) = housekeeper.refresh_known_validators().await {
+                        error!(%err, "failed to refresh known validators");
+                    } else {
+                        housekeeper.slots.update_refreshed_validators(head_slot);
+                    }
+                    info!(duration = ?start.elapsed(), "refresh validators task completed");
+                }
+                .in_current_span(),
+            ));
         }
 
-        // Spawn a task to asynchronously update known validators.
-        if self.should_refresh_known_validators(head_slot).await {
-            let cloned_self = self.clone();
-            task::spawn(file!(), line!(), async move {
-                let _ = cloned_self.refresh_known_validators(head_slot).await;
-            });
-        }
-
-        // Spawn a task to asynchronously re sync builder info.
-        let cloned_self = self.clone();
-        task::spawn(file!(), line!(), async move {
-            let _ = cloned_self.sync_builder_info_changes(head_slot).await;
-        });
-
-        // Spawn a task to asynchronously update the trusted proposers.
-        if self.should_update_trusted_proposers(head_slot).await {
-            let cloned_self = self.clone();
-            task::spawn(file!(), line!(), async move {
-                let _ = cloned_self.update_trusted_proposers(head_slot).await;
-            });
-        }
-
-        info!(
-            head_slot = head_slot,
-            head_slot_pos = (head_slot % EPOCH_SLOTS) + 1,
-            prev_head_slot = prev_head_slot,
-            "Housekeeper::process_new_slot",
-        );
-
-        // Log any missed slots and all slots that have been updated.
-        if prev_head_slot > 0 {
-            for missed_slot in prev_head_slot + 1..head_slot {
-                warn!(missed_slot = missed_slot);
+        // builder info updated every slot
+        let housekeeper = self.clone();
+        tasks.push(task::spawn(
+            file!(),
+            line!(),
+            async move {
+                let start = Instant::now();
+                if let Err(err) = housekeeper.sync_builder_info_changes().await {
+                    error!(%err, "failed to sync builder info changes");
+                }
+                info!(duration = ?start.elapsed(), "sync builder info task completed");
             }
+            .in_current_span(),
+        ));
+
+        // trusted proposers
+        if self.should_update_trusted_proposers(head_slot.as_u64()) {
+            let housekeeper = self.clone();
+            task::spawn(
+                file!(),
+                line!(),
+                async move {
+                    let start = Instant::now();
+                    if let Err(err) = housekeeper.update_trusted_proposers().await {
+                        error!(%err, "failed to update trusted proposers");
+                    } else {
+                        housekeeper.slots.update_trusted_proposers(head_slot);
+                    }
+                    info!(duration = ?start.elapsed(), "update trusted proposers task completed");
+                }
+                .in_current_span(),
+            );
         }
 
-        let current_epoch = head_slot / EPOCH_SLOTS;
-        debug!(
-            epoch = current_epoch,
-            slot_start_next_epoch = (current_epoch + 1) * EPOCH_SLOTS,
-            head_slot = head_slot,
-            "updated head slot",
-        );
-    }
-
-    /// Update the head slot and return whether the given slot is a new block.
-    ///
-    /// - Acquires a lock on `head_slot`.
-    /// - Compares the given `head_slot` with the current value.
-    /// - Updates the value if the given `head_slot` is greater.
-    ///
-    /// Returns a tuple containing:
-    /// - A boolean that indicates whether the given slot is a new block (`true`) or not (`false`).
-    /// - The value of the previous head slot.
-    async fn update_head_slot(&self, head_slot: u64) -> (bool, u64) {
-        let mut guard = self.head_slot.lock().await;
-        let prev_head_slot = *guard;
-        if prev_head_slot < head_slot {
-            *guard = head_slot;
-            (true, prev_head_slot)
-        } else {
-            (false, prev_head_slot)
-        }
+        // wait for all tasks, this should take less than one slot
+        join_all(tasks).await;
+        info!(duration = ?start.elapsed(), "processed new slot");
     }
 
     /// Refresh the list of known validators by querying the beacon client.
     /// Refreshed validators are stored in the database.
-    ///
-    /// This will lock `known_validators_lock` to ensure that only one task is refreshing the known
-    /// validators at a time.
-    async fn refresh_known_validators(
-        self: &SharedHousekeeper<DB, A>,
-        head_slot: u64,
-    ) -> Result<(), HousekeeperError> {
-        let _guard = self.refresh_validators_lock.try_lock()?;
+    /// This is potentially very slow as it fetches all active validators (~1mm entries in mainnet).
+    async fn refresh_known_validators(&self) -> Result<(), HousekeeperError> {
+        let start = Instant::now();
+        let validators = self.beacon_client.get_state_validators(StateId::Head).await?;
+        debug!(validators = validators.len(), duration = ?start.elapsed(), "fetched validators");
 
-        // Wait for 6s into the slot
-        sleep(SLEEP_DURATION_BEFORE_REFRESHING_VALIDATORS).await;
-
-        debug!(
-            head_slot = head_slot,
-            head_slot_pos = (head_slot % EPOCH_SLOTS) + 1,
-            "Housekeeper::refresh_known_validators",
-        );
-
-        let start_fetching_ts = Instant::now();
-
-        let validators = match self.beacon_client.get_state_validators(StateId::Head).await {
-            Ok(validators) => validators,
-            Err(err) => {
-                error!(err = %err, "failed to fetch validators");
-                return Err(HousekeeperError::BeaconClientError(err));
-            }
-        };
-
-        info!(
-            head_slot = head_slot,
-            num_known_validators = validators.len(),
-            fetch_validators_latency_ms = start_fetching_ts.elapsed().as_millis(),
-        );
-
-        if let Err(err) = self.db.set_known_validators(validators).await {
-            error!(err = %err, "failed to set known validators");
-            return Err(HousekeeperError::DatabaseError(err));
-        }
-
-        *self.refreshed_validators_slot.lock().await = head_slot;
+        self.db.set_known_validators(validators).await?;
 
         Ok(())
     }
 
     /// Synchronizes builder information changes.
-    async fn sync_builder_info_changes(
-        self: &SharedHousekeeper<DB, A>,
-        head_slot: u64,
-    ) -> Result<(), HousekeeperError> {
-        let _guard = self.re_sync_builder_info_lock.try_lock()?;
+    async fn sync_builder_info_changes(&self) -> Result<(), HousekeeperError> {
+        let builder_infos = self.db.get_all_builder_infos().await?;
+        debug!(builder_infos = builder_infos.len(), "updating builder infos");
+        self.auctioneer.update_builder_infos(builder_infos).await?;
 
-        debug!(
-            head_slot = head_slot,
-            head_slot_pos = (head_slot % EPOCH_SLOTS) + 1,
-            "Housekeeper::sync_builder_info_changes",
-        );
-
-        let start_fetching_ts = Instant::now();
-
-        let builder_infos = match self.db.get_all_builder_infos().await {
-            Ok(builder_infos) => builder_infos,
-            Err(err) => {
-                error!(err = %err, "failed to fetch builder infos");
-                return Err(HousekeeperError::DatabaseError(err));
-            }
-        };
-
-        if let Err(err) = self.auctioneer.update_builder_infos(builder_infos).await {
-            error!(err = %err, "failed to update builder infos in auctioneer");
-            return Err(HousekeeperError::AuctioneerError(err));
-        }
-
-        *self.re_sync_builder_info_slot.lock().await = head_slot;
-
-        info!(head_slot = head_slot, update_latency_ms = start_fetching_ts.elapsed().as_millis());
         Ok(())
     }
 
@@ -363,28 +323,31 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     /// 2) The payload was received > 2 seconds after we received the header.
     ///
     /// DB entries are also removed if they have been waiting for over 45 seconds.
+    // TODO: here we're most likely processing the same pending blocks several times
     async fn demote_builders_with_expired_pending_blocks(&self) -> Result<(), HousekeeperError> {
-        let current_time = utcnow_ms();
-
         let mut demoted_builders = HashSet::new();
+        let pending_blocks = self.auctioneer.get_pending_blocks().await?;
 
-        for pending_block in self.auctioneer.get_pending_blocks().await? {
+        debug!(pending_blocks = pending_blocks.len(), "checking expired pending blocks");
+
+        for pending_block in pending_blocks {
             if demoted_builders.contains(&pending_block.builder_pubkey) {
                 continue;
             }
 
-            if v2_submission_late(&pending_block, current_time) {
+            if v2_submission_late(&pending_block) {
                 let reason =
                     format!("builder demoted due to missing payload submission. {pending_block:?}");
-                info!(builder_pub_key = ?pending_block.builder_pubkey, reason);
+                info!(builder_pubkey = ?pending_block.builder_pubkey, reason);
                 self.auctioneer.demote_builder(&pending_block.builder_pubkey).await?;
                 self.db
                     .db_demote_builder(
                         &pending_block.builder_pubkey,
                         &pending_block.block_hash,
-                        reason.to_string(),
+                        reason,
                     )
                     .await?;
+
                 demoted_builders.insert(pending_block.builder_pubkey);
             }
         }
@@ -393,17 +356,13 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     }
 
     /// Determine if known validators should be refreshed for the given slot.
-    async fn should_refresh_known_validators(
-        self: &SharedHousekeeper<DB, A>,
-        head_slot: u64,
-    ) -> bool {
-        let last_refreshed_slot = *self.refreshed_validators_slot.lock().await;
-
-        if head_slot <= last_refreshed_slot {
+    fn should_refresh_known_validators(&self, head_slot: u64) -> bool {
+        let last_updated = self.slots.refreshed_validators();
+        if head_slot <= last_updated {
             return false;
         }
 
-        let slots_since_last_update = head_slot - last_refreshed_slot;
+        let slots_since_last_update = head_slot - last_updated;
         if slots_since_last_update < MIN_SLOTS_BETWEEN_UPDATES {
             return false;
         }
@@ -420,124 +379,64 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     /// Update proposer duties for `head_slot` and `head_slot` + 1.
     /// Returns the fetched proposer duties on success.
     async fn update_proposer_duties(
-        self: &SharedHousekeeper<DB, A>,
-        head_slot: u64,
+        &self,
+        epoch: Epoch,
     ) -> Result<Vec<ProposerDuty>, HousekeeperError> {
-        // Only allow one update_proposer_duties task at a time.
-        let _guard = self.proposer_duties_lock.try_lock()?;
+        debug!(%epoch, "updating proposer duties");
 
-        let epoch = head_slot / EPOCH_SLOTS;
-
-        info!(epoch_from = epoch, epoch_to = epoch + 1, "Housekeeper::update_proposer_duties",);
-
-        let proposer_duties = match self.fetch_duties(epoch).await {
-            Ok(proposer_duties) => proposer_duties,
-            Err(err) => {
-                error!(err = %err, "failed to fetch proposer duties");
-                return Err(HousekeeperError::BeaconClientError(err));
-            }
-        };
+        let proposer_duties = self.fetch_duties(epoch.as_u64()).await?;
 
         // Check if signed validator registrations exist for each proposer duty
-        let pub_keys: Vec<BlsPublicKey> =
-            proposer_duties.iter().map(|duty| duty.public_key.clone()).collect();
+        let pubkeys: Vec<&BlsPublicKey> =
+            proposer_duties.iter().map(|duty| &duty.public_key).collect();
         let signed_validator_registrations =
-            match self.fetch_signed_validator_registrations(pub_keys).await {
-                Ok(signed_validator_registrations) => signed_validator_registrations,
-                Err(err) => {
-                    error!(err = %err, "failed to fetch signed validator registrations");
-                    return Err(HousekeeperError::DatabaseError(err));
-                }
-            };
+            self.fetch_signed_validator_registrations(pubkeys.as_slice()).await?;
 
         // Format duties and save to the database
         if signed_validator_registrations.is_empty() {
-            warn!("No signed validator registrations found for proposer duties");
+            warn!(%epoch, "no registrationts found");
         } else {
-            match self
-                .format_and_store_duties(proposer_duties.clone(), signed_validator_registrations)
-                .await
-            {
-                Ok(num_duties) => {
-                    info!(epoch_from = epoch, num_duties = num_duties, "updated proposer duties")
-                }
-                Err(err) => error!(err = %err, "failed to update proposer duties"),
-            }
-        }
+            let mut formatted_proposer_duties = Vec::with_capacity(proposer_duties.len());
 
-        *self.proposer_duties_slot.lock().await = head_slot;
+            for duty in proposer_duties.iter() {
+                if let Some(reg) = signed_validator_registrations.get(&duty.public_key) {
+                    formatted_proposer_duties.push(BuilderGetValidatorsResponseEntry {
+                        slot: duty.slot.into(),
+                        validator_index: duty.validator_index,
+                        entry: reg.registration_info.clone(),
+                    });
+                }
+            }
+
+            info!(
+                duties = formatted_proposer_duties.capacity(),
+                registered = formatted_proposer_duties.len(),
+                "storing proposer duties"
+            );
+
+            self.db.set_proposer_duties(formatted_proposer_duties).await?;
+        }
 
         Ok(proposer_duties)
     }
 
-    /// Format and store proposer duties
-    ///
-    /// Returns the number of proposer duties registered to the relay for the next 2 epochs.
-    pub async fn format_and_store_duties(
-        &self,
-        proposer_duties: Vec<ProposerDuty>,
-        signed_validator_registrations: HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>,
-    ) -> Result<usize, DatabaseError> {
-        let mut formatted_proposer_duties: Vec<BuilderGetValidatorsResponseEntry> =
-            Vec::with_capacity(proposer_duties.len());
-
-        let len = proposer_duties.len();
-
-        for duty in proposer_duties {
-            if let Some(reg) = signed_validator_registrations.get(&duty.public_key) {
-                if duty.public_key != reg.registration_info.registration.message.pubkey {
-                    error!(?duty, ?reg, "mismatch in duty vs registration")
-                }
-
-                formatted_proposer_duties.push(BuilderGetValidatorsResponseEntry {
-                    slot: duty.slot.into(),
-                    validator_index: duty.validator_index,
-                    entry: reg.registration_info.clone(),
-                });
-            } else {
-                warn!(
-                    public_key = %duty.public_key,
-                    slot = duty.slot,
-                    proposer_duties_len = len,
-                    "No signed validator registration found for proposer duty"
-                );
-            }
-        }
-
-        let num_duties = formatted_proposer_duties.len();
-
-        self.db.set_proposer_duties(formatted_proposer_duties).await?;
-
-        Ok(num_duties)
-    }
-
-    /// Determine if proposer duties should be updated for the given slot.
-    ///
-    /// This function checks:
-    /// If the distance between the current `head_slot` and the last slot for which proposer
-    /// duties were fetched (`proposer_duties_slot`) is greater than or equal to
-    /// PROPOSER_DUTIES_UPDATE_FREQ, it will also return `true`.
-    async fn should_update_duties(self: &SharedHousekeeper<DB, A>, head_slot: u64) -> bool {
-        let proposer_duties_slot = *self.proposer_duties_slot.lock().await;
-        let last_proposer_duty_distance = head_slot.saturating_sub(proposer_duties_slot);
-        last_proposer_duty_distance >= PROPOSER_DUTIES_UPDATE_FREQ
+    fn should_update_duties(&self, head_slot: Slot) -> bool {
+        let last_updated = self.slots.proposer_duties();
+        head_slot.as_u64().saturating_sub(last_updated) >= PROPOSER_DUTIES_UPDATE_FREQ
     }
 
     /// Updates primev builders and validators using pre-fetched proposer duties
-    async fn primev_update_with_duties(
-        self: &SharedHousekeeper<DB, A>,
+    async fn maybe_primev_update_with_duties(
+        &self,
         proposer_duties: Vec<ProposerDuty>,
     ) -> Result<(), HousekeeperError> {
-        // Check if primev service exists, if not exit early
-        let primev_service = match &self.primev_service {
-            Some(service) => service,
-            None => return Ok(()),
+        let Some(primev_service) = self.primev_service.as_ref() else {
+            return Ok(());
         };
 
         let primev_builders = primev_service.get_registered_primev_builders().await;
 
         for builder_pubkey in primev_builders {
-            info!(builder_pubkey = %builder_pubkey, "PrimevBuilder");
             self.db
                 .store_builder_info(&builder_pubkey, &BuilderInfo {
                     collateral: U256::ZERO,
@@ -556,73 +455,31 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         Ok(())
     }
 
-    /// Determine if the trusted proposers should be refreshed for the given slot.
-    ///     
-    /// This function checks two conditions:
-    /// 1. If the `head_slot` is exactly divisible by `TRUSTED_PROPOSERS_UPDATE_FREQ`, it will
-    ///    return `true` to trigger a trusted proposer update.
-    /// 2. If the distance between the current `head_slot` and the last slot for which the trusted
-    ///    proposers was refreshed (`refreshed_trusted_proposers_slot`) is greater than or equal to
-    ///    `TRUSTED_PROPOSERS_UPDATE_FREQ`, it will also return `true`.
-    async fn should_update_trusted_proposers(
-        self: &SharedHousekeeper<DB, A>,
-        head_slot: u64,
-    ) -> bool {
-        let trusted_proposers_slot = *self.refreshed_trusted_proposers_slot.lock().await;
-        let last_trusted_proposers_distance = head_slot.saturating_sub(trusted_proposers_slot);
+    fn should_update_trusted_proposers(&self, head_slot: u64) -> bool {
+        let last_updated = self.slots.trusted_proposers();
         head_slot % TRUSTED_PROPOSERS_UPDATE_FREQ == 0 ||
-            last_trusted_proposers_distance >= TRUSTED_PROPOSERS_UPDATE_FREQ
+            head_slot.saturating_sub(last_updated) >= TRUSTED_PROPOSERS_UPDATE_FREQ
     }
 
     /// Update the proposer whitelist.
     ///
     /// This function will fetch the proposer whitelist from the database and update the auctioneer.
     /// It will also update the `refreshed_trusted_proposers_slot` to the current `head_slot`.
-    ///
-    /// This function will error if it cannot fetch the proposer whitelist from the database.
-    /// It will continue if it cannot update the auctioneer.
-    ///
-    /// This function will also error if it cannot update the `refreshed_trusted_proposers_slot`.
-    ///
-    /// This function will return `Ok(())` if it completes successfully.
-    async fn update_trusted_proposers(
-        self: &SharedHousekeeper<DB, A>,
-        head_slot: u64,
-    ) -> Result<(), HousekeeperError> {
-        let _guard = self.refresh_trusted_proposers_lock.try_lock()?;
-
-        debug!(head_slot = head_slot, "Housekeeper::update_trusted_proposers",);
-
+    async fn update_trusted_proposers(&self) -> Result<(), HousekeeperError> {
+        let start = Instant::now();
         let proposer_whitelist = self.db.get_trusted_proposers().await?;
-        let num_trusted_proposers = proposer_whitelist.len();
-
+        debug!(proposer_whitelist = proposer_whitelist.len(), duration = ?start.elapsed(), "fetched trusted proposers");
         self.auctioneer.update_trusted_proposers(proposer_whitelist).await?;
-        *self.refreshed_trusted_proposers_slot.lock().await = head_slot;
-
-        debug!(
-            head_slot = head_slot,
-            num_trusted_proposers = num_trusted_proposers,
-            "updated trusted proposers"
-        );
 
         Ok(())
     }
 
-    /// Fetch proposer duties for the given epoch and epoch + 1.
-    ///
-    /// This function will error if it cannot fetch the duties for the current epoch
-    /// but will continue if it fails to fetch epoch + 1.
-    async fn fetch_duties(
-        self: &SharedHousekeeper<DB, A>,
-        epoch: u64,
-    ) -> Result<Vec<ProposerDuty>, BeaconClientError> {
-        // Fetch duties for current epoch
+    async fn fetch_duties(&self, epoch: u64) -> Result<Vec<ProposerDuty>, BeaconClientError> {
         let (_, mut proposer_duties) = self.beacon_client.get_proposer_duties(epoch).await?;
 
-        // Fetch duties for next epoch
         match self.beacon_client.get_proposer_duties(epoch + 1).await {
             Ok((_, mut next_duties)) => proposer_duties.append(&mut next_duties),
-            Err(err) => error!(err = %err, "Error fetching next proposer duties"),
+            Err(err) => error!(epoch = epoch + 1, %err, "failed fetching next proposer duties"),
         }
 
         Ok(proposer_duties)
@@ -630,13 +487,16 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
     /// Fetch validator registrations for `pub_keys` from database.
     async fn fetch_signed_validator_registrations(
-        self: &SharedHousekeeper<DB, A>,
-        pubkeys: Vec<BlsPublicKey>,
-    ) -> Result<HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>, DatabaseError> {
+        &self,
+        pubkeys: &[&BlsPublicKey],
+    ) -> Result<HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>, HousekeeperError> {
         let registrations: Vec<SignedValidatorRegistrationEntry> =
             self.db.get_validator_registrations_for_pub_keys(pubkeys).await?;
 
-        Ok(registrations.into_iter().map(|entry| (entry.public_key().clone(), entry)).collect())
+        let registrations =
+            registrations.into_iter().map(|entry| (entry.public_key().clone(), entry)).collect();
+
+        Ok(registrations)
     }
 }
 
@@ -644,16 +504,32 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 ///
 /// Returns true if the payload was received over 2 seconds after the header or if the payload was
 /// never received. Otherwise, returns false.
-fn v2_submission_late(pending_block: &PendingBlock, current_time: u64) -> bool {
+fn v2_submission_late(pending_block: &PendingBlock) -> bool {
     match (pending_block.header_receive_ms, pending_block.payload_receive_ms) {
-        (None, None) => false,
-        (None, Some(_)) => false,
+        // no header
+        (None, _) => false,
+        // no payload yet
         (Some(header_receive_ms), None) => {
-            (current_time.saturating_sub(header_receive_ms)) > MAX_DELAY_WITH_NO_V2_PAYLOAD_MS
+            (utcnow_ms().saturating_sub(header_receive_ms)) > MAX_DELAY_WITH_NO_V2_PAYLOAD_MS
         }
+        // payload received
         (Some(header_receive_ms), Some(payload_receive_ms)) => {
             payload_receive_ms.saturating_sub(header_receive_ms) >
                 MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_dont_process_same_slot() {
+        let slots = HousekeeperSlots::default();
+        assert!(!slots.head_already_seen(10u64.into()));
+        assert!(slots.head_already_seen(9u64.into()));
+        assert!(slots.head_already_seen(10u64.into()));
+        assert!(!slots.head_already_seen(11u64.into()));
     }
 }

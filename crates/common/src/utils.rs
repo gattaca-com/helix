@@ -4,7 +4,7 @@ use std::{
     io::Write,
     panic,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use http::HeaderMap;
@@ -136,19 +136,25 @@ pub fn extract_request_id(headers: &HeaderMap) -> Uuid {
 
 ////// TIME //////
 
+/// Duration since UNIX_EPOCH
+pub fn utcnow_dur() -> Duration {
+    // safe since we're past UNIX_EPOCH
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap()
+}
+
 /// Seconds
 pub fn utcnow_sec() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+    utcnow_dur().as_secs()
 }
 /// Millis
 pub fn utcnow_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
+    utcnow_dur().as_millis() as u64
 }
 /// Micros
 pub fn utcnow_us() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_micros() as u64
+    utcnow_dur().as_micros() as u64
 }
 /// Nanos
 pub fn utcnow_ns() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64
+    utcnow_dur().as_nanos() as u64
 }

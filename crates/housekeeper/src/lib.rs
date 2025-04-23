@@ -6,7 +6,7 @@ pub mod housekeeper_tests;
 pub mod primev_service;
 mod slot_info;
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 pub use chain_event_updater::{ChainEventUpdater, PayloadAttributesUpdate, SlotUpdate};
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
@@ -17,7 +17,6 @@ pub use housekeeper::Housekeeper;
 pub use primev_service::EthereumPrimevService;
 pub use slot_info::CurrentSlotInfo;
 use tokio::sync::broadcast;
-use tracing::error;
 
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PAYLOAD_ATTRIBUTE_CHANNEL_SIZE: usize = 300;
@@ -26,7 +25,7 @@ const PAYLOAD_ATTRIBUTE_CHANNEL_SIZE: usize = 300;
 pub async fn start_housekeeper(
     db: Arc<PostgresDatabaseService>,
     auctioneer: Arc<RedisCache>,
-    config: Arc<RelayConfig>,
+    config: &RelayConfig,
     beacon_client: Arc<MultiBeaconClient>,
     chain_info: Arc<ChainInfo>,
 ) -> eyre::Result<CurrentSlotInfo> {
@@ -39,16 +38,7 @@ pub async fn start_housekeeper(
 
     let housekeeper =
         Housekeeper::new(db.clone(), beacon_client, auctioneer.clone(), config, chain_info.clone());
-
-    let mut housekeeper_head_events = head_event_receiver.resubscribe();
-    tokio::spawn(async move {
-        loop {
-            if let Err(err) = housekeeper.start(&mut housekeeper_head_events).await {
-                error!("Housekeeper error: {}", err);
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
-        }
-    });
+    housekeeper.start(head_event_receiver.resubscribe()).await?;
 
     let curr_slot_info = CurrentSlotInfo::new();
     let chain_updater = ChainEventUpdater::new(db, auctioneer, chain_info, curr_slot_info.clone());

@@ -18,6 +18,7 @@ pub struct CurrentSlotInfo {
     // TODO: split this into a AtomicU64?
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
     proposer_duties_response: Arc<RwLock<Option<Bytes>>>,
+    /// Parent hash / slot -> payload attributes
     payload_attributes: Arc<RwLock<HashMap<(B256, Slot), PayloadAttributesUpdate>>>,
 }
 

@@ -87,7 +87,7 @@ pub struct SyncStatus {
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct HeadEventData {
     pub slot: Slot,
-    pub block: String,
+    pub block: B256,
     pub state: String,
 }
 

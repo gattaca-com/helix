@@ -60,6 +60,7 @@ fn process_bls_key_data(data: &[u8]) -> Option<BlsPublicKey> {
 }
 
 /// Default implementation for Primev service that connects to Ethereum contracts
+#[derive(Clone)]
 pub struct EthereumPrimevService {
     builder_contract: Contract<Provider<Http>>,
     validator_contract: Contract<Provider<Http>>,

@@ -669,7 +669,7 @@ impl DatabaseService for PostgresDatabaseService {
 
     async fn get_validator_registrations_for_pub_keys(
         &self,
-        pub_keys: Vec<BlsPublicKey>,
+        pub_keys: &[&BlsPublicKey],
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_validator_registrations_for_pub_keys");
 

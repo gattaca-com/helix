@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use eyre::eyre;
 use helix_api::start_api_service;
 use helix_beacon::start_beacon_client;
 use helix_common::{
@@ -64,11 +65,12 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     let current_slot_info = start_housekeeper(
         db.clone(),
         auctioneer.clone(),
-        config.clone().into(),
+        &config,
         beacon_client.clone(),
         chain_info.clone(),
     )
-    .await?;
+    .await
+    .map_err(|e| eyre!("housekeeper init: {e}"))?;
 
     start_api_service(
         config.clone(),
