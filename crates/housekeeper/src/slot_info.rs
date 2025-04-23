@@ -64,7 +64,7 @@ impl CurrentSlotInfo {
 
         info!(
             %epoch,
-            slot_head =% slot_update.slot,
+            slot_head = %slot_update.slot,
             slot_start_next_epoch = %(epoch + 1).start_slot(chain_info.slots_per_epoch()),
             next_proposer_duty = ?slot_update.next_duty,
             "updated head slot",
