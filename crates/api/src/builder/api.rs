@@ -1,58 +1,37 @@
-#![allow(clippy::type_complexity)]
-
-use std::{io::Read, sync::Arc, time::Duration};
+use std::{io::Read, sync::Arc};
 
 use alloy_primitives::{B256, U256};
 use axum::{
     body::{to_bytes, Body},
-    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::{Request, StatusCode},
     response::IntoResponse,
     Extension,
 };
-use bytes::Bytes;
 use flate2::read::GzDecoder;
-use futures::StreamExt;
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
     },
-    bid_submission::{
-        v2::header_submission::SignedHeaderSubmission,
-        v3::header_submission_v3::HeaderSubmissionV3, BidSubmission,
-    },
+    bid_submission::BidSubmission,
     chain_info::ChainInfo,
     metadata_provider::MetadataProvider,
-    metrics::BUILDER_GOSSIP_QUEUE,
     signing::RelaySigningContext,
     simulator::BlockSimError,
     task,
-    utils::{extract_request_id, utcnow_ns},
-    validator_preferences, BuilderInfo, GossipedHeaderTrace, GossipedPayloadTrace,
-    HeaderSubmissionTrace, RelayConfig, SubmissionTrace,
+    utils::utcnow_ns,
+    BuilderInfo, RelayConfig, SubmissionTrace, ValidatorPreferences,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
-use helix_types::{
-    BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid, Slot,
-};
-use hyper::HeaderMap;
+use helix_types::{BlsPublicKey, SignedBidSubmission, Slot};
 use ssz::Decode;
-use tokio::{
-    sync::mpsc::Receiver,
-    time::{self},
-};
-use tracing::{debug, error, info, warn, Instrument, Level};
-use uuid::Uuid;
+use tokio::sync::mpsc::{self};
+use tracing::{debug, error, info, warn};
 
 use crate::{
-    builder::{error::BuilderApiError, traits::BlockSimulator, BlockSimRequest, OptimisticVersion},
-    gossiper::{
-        traits::GossipClientTrait,
-        types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
-    },
-    proposer::{ShareHeader, HELIX_SHARE_HEADER},
+    builder::{error::BuilderApiError, traits::BlockSimulator, BlockSimRequest},
+    gossiper::{traits::GossipClientTrait, types::GossipedMessage},
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
@@ -66,16 +45,16 @@ where
     G: GossipClientTrait + 'static,
     MP: MetadataProvider + 'static,
 {
-    auctioneer: Arc<A>,
-    db: Arc<DB>,
-    chain_info: Arc<ChainInfo>,
-    simulator: S,
-    gossiper: Arc<G>,
-    metadata_provider: Arc<MP>,
-    signing_context: Arc<RelaySigningContext>,
-    relay_config: Arc<RelayConfig>,
-    curr_slot_info: CurrentSlotInfo,
-    _validator_preferences: Arc<validator_preferences::ValidatorPreferences>,
+    pub auctioneer: Arc<A>,
+    pub db: Arc<DB>,
+    pub chain_info: Arc<ChainInfo>,
+    pub simulator: S,
+    pub gossiper: Arc<G>,
+    pub metadata_provider: Arc<MP>,
+    pub signing_context: Arc<RelaySigningContext>,
+    pub relay_config: Arc<RelayConfig>,
+    pub curr_slot_info: CurrentSlotInfo,
+    pub _validator_preferences: Arc<ValidatorPreferences>,
 }
 
 impl<A, DB, S, G, MP> BuilderApi<A, DB, S, G, MP>
@@ -95,8 +74,8 @@ where
         metadata_provider: Arc<MP>,
         signing_context: Arc<RelaySigningContext>,
         relay_config: RelayConfig,
-        gossip_receiver: Receiver<GossipedMessage>,
-        validator_preferences: Arc<validator_preferences::ValidatorPreferences>,
+        gossip_receiver: mpsc::Receiver<GossipedMessage>,
+        validator_preferences: Arc<ValidatorPreferences>,
         curr_slot_info: CurrentSlotInfo,
     ) -> Self {
         let api = Self {
@@ -133,1081 +112,67 @@ where
         }
     }
 
-    /// Handles the submission of a new block by performing various checks and verifications
-    /// before saving the submission to the auctioneer.
-    ///
-    /// 1. Receives the request and decodes the payload into a `SignedBidSubmission` object.
-    /// 2. Validates the builder and checks against the next proposer duty.
-    /// 3. Verifies the signature of the payload.
-    /// 4. Runs further validations against auctioneer.
-    /// 5. Simulates the block to validate the payment.
-    /// 6. Saves the bid to auctioneer and db.
-    ///
-    /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err, ret(level = Level::DEBUG))]
-    pub async fn submit_block(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
-        headers: HeaderMap,
-        req: Request<Body>,
-    ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
-        let (head_slot, next_duty) = api.curr_slot_info.slot_info();
-        trace.metadata = api.metadata_provider.get_metadata(&headers);
-
-        debug!(%head_slot, timestamp_request_start = trace.receive);
-
-        // Decode the incoming request body into a payload
-        let (payload, is_cancellations_enabled) = decode_payload(req, &mut trace).await?;
-        let block_hash = payload.message().block_hash;
-
-        info!(
-            slot = %payload.slot(),
-            builder_pub_key = ?payload.builder_public_key(),
-            block_value = %payload.value(),
-            ?block_hash,
-            "payload decoded",
-        );
-
-        // Verify the payload is for the current slot
-        if payload.slot() <= head_slot {
-            debug!(?block_hash, "submission is for a past slot");
-
-            return Err(BuilderApiError::SubmissionForPastSlot {
-                current_slot: head_slot,
-                submission_slot: payload.slot(),
-            });
-        }
-
-        // Verify that we have a validator connected for this slot
-        if next_duty.is_none() {
-            warn!(?block_hash, "could not find slot duty");
-            return Err(BuilderApiError::ProposerDutyNotFound);
-        }
-        let next_duty = next_duty.unwrap();
-
-        // Fetch the next payload attributes and validate basic information
-        let payload_attributes =
-            api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), &block_hash)?;
-
-        // Handle duplicates.
-        if let Err(err) = api
-            .check_for_duplicate_block_hash(
-                &block_hash,
-                payload.slot().as_u64(),
-                payload.parent_hash(),
-                payload.proposer_public_key(),
-            )
-            .await
-        {
-            match err {
-                BuilderApiError::DuplicateBlockHash { block_hash } => {
-                    // We dont return the error here as we want to continue processing the request.
-                    // This mitigates the risk of someone sending an invalid payload
-                    // with a valid header, which would block subsequent submissions with the same
-                    // header and valid payload.
-                    debug!(
-                        ?block_hash,
-                        builder_pub_key = ?payload.builder_public_key(),
-                        "block hash already seen"
-                    );
-                }
-                _ => return Err(err),
-            }
-        }
-
-        // Verify the payload value is above the floor bid
-        let floor_bid_value = api
-            .check_if_bid_is_below_floor(
-                payload.slot().into(),
-                payload.parent_hash(),
-                payload.proposer_public_key(),
-                payload.builder_public_key(),
-                payload.value(),
-                is_cancellations_enabled,
-            )
-            .await?;
-        trace.floor_bid_checks = utcnow_ns();
-
-        // Fetch builder info
-        let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
-
-        // Handle trusted builders check
-        if !Self::check_if_trusted_builder(&next_duty, &builder_info) {
-            let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
-            debug!(
-                builder_pub_key = ?payload.builder_public_key(),
-                ?proposer_trusted_builders,
-                "builder not in proposer trusted builders list",
-            );
-            return Err(BuilderApiError::BuilderNotInProposersTrustedList {
-                proposer_trusted_builders,
-            });
-        }
-
-        // Verify payload has not already been delivered
-        match api.auctioneer.get_last_slot_delivered().await {
-            Ok(Some(slot)) => {
-                if payload.slot() <= slot {
-                    debug!("payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                error!(%err, "failed to get last slot delivered");
-            }
-        }
-
-        // Sanity check the payload
-        if let Err(err) = sanity_check_block_submission(
-            &payload,
-            &next_duty,
-            &payload_attributes,
-            &api.chain_info,
-        ) {
-            warn!(%err, "failed sanity check");
-            return Err(err);
-        }
-        trace.pre_checks = utcnow_ns();
-
-        let (payload, was_simulated_optimistically) = api
-            .verify_submitted_block(
-                payload,
-                next_duty,
-                &builder_info,
-                &mut trace,
-                &payload_attributes,
-            )
-            .await?;
-
-        // If cancellations are enabled, then abort now if there is a later submission
-        if is_cancellations_enabled {
-            if let Err(err) = api.check_for_later_submissions(&payload, trace.receive).await {
-                warn!(%err, "already processing later submission");
-
-                // Save bid to auctioneer
-                if let Err(err) = api
-                    .auctioneer
-                    .save_execution_payload(
-                        payload.slot().into(),
-                        &payload.message().proposer_pubkey,
-                        payload.block_hash(),
-                        &payload.payload_and_blobs(),
-                    )
-                    .await
-                {
-                    error!(%err, "failed to save execution payload");
-                    return Err(BuilderApiError::AuctioneerError(err));
-                }
-
-                // Log some final info
-                trace.request_finish = utcnow_ns();
-                debug!(
-                    ?trace,
-                    request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
-                    "submit_block request finished"
-                );
-
-                let optimistic_version = if was_simulated_optimistically {
-                    OptimisticVersion::V1
-                } else {
-                    OptimisticVersion::NotOptimistic
-                };
-
-                // Save submission to db.
-                task::spawn(
-                    file!(),
-                    line!(),
-                    async move {
-                        if let Err(err) = api
-                            .db
-                            .store_block_submission(
-                                payload,
-                                Arc::new(trace),
-                                optimistic_version as i16,
-                            )
-                            .await
-                        {
-                            error!(%err, "failed to store block submission")
-                        }
-                    }
-                    .in_current_span(),
-                );
-
-                return Err(err);
-            }
-        }
-
-        // Save bid to auctioneer
-        match api
-            .save_bid_to_auctioneer(&payload, &mut trace, is_cancellations_enabled, floor_bid_value)
-            .await?
-        {
-            // If the bid was succesfully saved then we gossip the header and payload to all other
-            // relays.
-            Some((builder_bid, execution_payload)) => {
-                api.gossip_header(
-                    builder_bid,
-                    payload.bid_trace(),
-                    is_cancellations_enabled,
-                    trace.receive,
-                    None,
-                )
-                .await;
-                if api.relay_config.payload_gossip_enabled {
-                    api.gossip_payload(&payload, execution_payload).await;
-                }
-            }
-            None => { /* Bid wasn't saved so no need to gossip as it will never be served */ }
-        }
-
-        // Log some final info
-        trace.request_finish = utcnow_ns();
-        debug!(
-            ?trace,
-            request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
-            "submit_block request finished"
-        );
-
-        let optimistic_version = if was_simulated_optimistically {
-            OptimisticVersion::V1
-        } else {
-            OptimisticVersion::NotOptimistic
+    pub(crate) fn fetch_payload_attributes(
+        &self,
+        slot: Slot,
+        parent_hash: B256,
+        block_hash: &B256,
+    ) -> Result<PayloadAttributesUpdate, BuilderApiError> {
+        let Some(payload_attributes) = self.curr_slot_info.payload_attributes(parent_hash, slot)
+        else {
+            warn!(%block_hash, "payload attributes not yet known");
+            return Err(BuilderApiError::PayloadAttributesNotYetKnown)
         };
 
-        // Save submission to db.
-        task::spawn(
-            file!(),
-            line!(),
-            async move {
-                if let Err(err) = api
-                    .db
-                    .store_block_submission(payload, Arc::new(trace), optimistic_version as i16)
-                    .await
-                {
-                    error!(%err, "failed to store block submission")
-                }
-            }
-            .in_current_span(),
-        );
-
-        Ok(StatusCode::OK)
-    }
-
-    /// Handles the submission of a new payload header by performing various checks and
-    /// verifications before saving the headre to the auctioneer.
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
-    pub async fn submit_header(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
-        headers: HeaderMap,
-        req: Request<Body>,
-    ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = HeaderSubmissionTrace { receive: utcnow_ns(), ..Default::default() };
-        trace.metadata = api.metadata_provider.get_metadata(&headers);
-
-        debug!(timestamp_request_start = trace.receive,);
-
-        let sharing = headers.get(HELIX_SHARE_HEADER).map(ShareHeader::from).unwrap_or_default();
-
-        // Decode the incoming request body into a payload
-        let (payload, is_cancellations_enabled) = decode_header_submission(req, &mut trace).await?;
-
-        Self::handle_submit_header(
-            &api,
-            payload,
-            None,
-            None,
-            is_cancellations_enabled,
-            matches!(sharing, ShareHeader::All),
-            trace,
-        )
-        .await
-    }
-
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
-    pub async fn submit_header_v3(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
-        headers: HeaderMap,
-        req: Request<Body>,
-    ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = HeaderSubmissionTrace { receive: utcnow_ns(), ..Default::default() };
-        trace.metadata = api.metadata_provider.get_metadata(&headers);
-
-        debug!(timestamp_request_start = trace.receive,);
-
-        // Decode the incoming request body into a payload
-        let (payload, is_cancellations_enabled) =
-            decode_header_submission_v3(req, &mut trace).await?;
-
-        let sharing = headers.get(HELIX_SHARE_HEADER).map(ShareHeader::from).unwrap_or_default();
-
-        Self::handle_submit_header(
-            &api,
-            payload.submission,
-            Some(payload.url),
-            Some(payload.tx_count),
-            is_cancellations_enabled,
-            matches!(sharing, ShareHeader::All),
-            trace,
-        )
-        .await
-    }
-
-    pub(crate) async fn handle_submit_header(
-        api: &Arc<BuilderApi<A, DB, S, G, MP>>,
-        payload: SignedHeaderSubmission,
-        payload_address: Option<Vec<u8>>,
-        _block_tx_count: Option<u32>, // TODO
-        is_cancellations_enabled: bool,
-        is_gossip_enabled: bool,
-        mut trace: HeaderSubmissionTrace,
-    ) -> Result<StatusCode, BuilderApiError> {
-        let (head_slot, next_duty) = api.curr_slot_info.slot_info();
-
-        let block_hash = payload.block_hash();
-
-        // Verify the payload is for the current slot
-        if payload.slot() <= head_slot {
-            debug!(
-                block_hash = ?block_hash,
-                "submission is for a past slot",
-            );
-            return Err(BuilderApiError::SubmissionForPastSlot {
-                current_slot: head_slot,
-                submission_slot: payload.slot(),
-            });
-        }
-
-        info!(
-            slot = %payload.slot(),
-            builder_pub_key = ?payload.builder_public_key(),
-            block_value = %payload.value(),
-            ?block_hash,
-            "header submission decoded",
-        );
-
-        // Verify that we have a validator connected for this slot
-        if next_duty.is_none() {
-            warn!(?block_hash, "could not find slot duty");
-            return Err(BuilderApiError::ProposerDutyNotFound);
-        }
-        let next_duty = next_duty.unwrap();
-
-        // Fetch the next payload attributes and validate basic information
-        let payload_attributes =
-            api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), block_hash)?;
-
-        // Fetch builder info
-        let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
-
-        // Submit header can only be processed optimistically.
-        // Make sure that the builder has enough collateral to cover the submission.
-        if let Err(err) = Self::check_builder_collateral(&payload, &builder_info) {
-            warn!(%err, "builder has insufficient collateral");
-            return Err(err);
-        }
-
-        // Handle duplicates.
-        if let Err(err) = api
-            .check_for_duplicate_block_hash(
-                block_hash,
-                payload.slot().as_u64(),
-                payload.parent_hash(),
-                payload.proposer_public_key(),
-            )
-            .await
-        {
-            match err {
-                BuilderApiError::DuplicateBlockHash { block_hash } => {
-                    // We dont return the error here as we want to continue processing the request.
-                    // This mitigates the risk of someone sending an invalid payload
-                    // with a valid header, which would block subsequent submissions with the same
-                    // header and valid payload.
-                    debug!(?block_hash, builder_pub_key = ?payload.builder_public_key(), "block hash already seen");
-                }
-                _ => return Err(err),
-            }
-        }
-
-        // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
-        // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional() &&
-            !builder_info.can_process_regional_slot_optimistically()
-        {
-            warn!("proposer has regional filtering and builder is not optimistic for regional filtering, discarding optimistic v2 submission");
-            return Err(BuilderApiError::BuilderNotOptimistic {
-                builder_pub_key: payload.builder_public_key().clone(),
-            });
-        }
-
-        // Validate basic information about the payload
-        if let Err(err) = sanity_check_block_submission(
-            &payload,
-            &next_duty,
-            &payload_attributes,
-            &api.chain_info,
-        ) {
-            warn!(%err, "failed sanity check");
-            return Err(err);
-        }
-
-        // Handle trusted builders check
-        if !Self::check_if_trusted_builder(&next_duty, &builder_info) {
-            let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
-            debug!(
-                builder_pub_key = ?payload.builder_public_key(),
-                proposer_trusted_builders = ?proposer_trusted_builders,
-                "builder not in proposer trusted builders list",
-            );
-            return Err(BuilderApiError::BuilderNotInProposersTrustedList {
-                proposer_trusted_builders,
-            });
-        }
-
-        trace.pre_checks = utcnow_ns();
-
-        // Verify the payload signature
-        if let Err(err) = payload.verify_signature(&api.chain_info.context) {
-            warn!(%err, "failed to verify signature");
-            return Err(BuilderApiError::SignatureVerificationFailed);
-        }
-        trace.signature = utcnow_ns();
-
-        // Verify payload has not already been delivered
-        match api.auctioneer.get_last_slot_delivered().await {
-            Ok(Some(slot)) => {
-                if payload.slot() <= slot {
-                    debug!("payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                error!(%err, "failed to get last slot delivered");
-            }
-        }
-
-        let payload = Arc::new(payload);
-
-        // Verify the payload value is above the floor bid
-        let floor_bid_value = api
-            .check_if_bid_is_below_floor(
-                payload.slot().as_u64(),
-                payload.parent_hash(),
-                payload.proposer_public_key(),
-                payload.builder_public_key(),
-                payload.value(),
-                is_cancellations_enabled,
-            )
-            .await?;
-        trace.floor_bid_checks = utcnow_ns();
-
-        // Save bid to auctioneer
-        match api
-            .save_header_bid_to_auctioneer(
-                payload.clone(),
-                &mut trace,
-                is_cancellations_enabled,
-                floor_bid_value,
-            )
-            .await?
-        {
-            Some(builder_bid) => {
-                if is_gossip_enabled {
-                    api.gossip_header(
-                        builder_bid,
-                        payload.bid_trace(),
-                        is_cancellations_enabled,
-                        trace.receive,
-                        payload_address.clone(),
-                    )
-                    .await;
-                }
-            }
-            None => { /* Bid wasn't saved so no need to gossip as it will never be served */ }
-        }
-
-        // Log some final info
-        trace.request_finish = utcnow_ns();
-        info!(
-            ?trace,
-            request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
-            "submit_header request finished"
-        );
-
-        match payload_address {
-            None => {
-                // Save pending block header to auctioneer
-                api.auctioneer
-                    .save_pending_block_header(
-                        payload.slot().as_u64(),
-                        payload.builder_public_key(),
-                        payload.block_hash(),
-                        trace.receive / 1_000_000, // convert to ms
-                    )
-                    .await
-                    .map_err(|err| {
-                        error!(%err, "failed to save pending block header");
-                        BuilderApiError::AuctioneerError(err)
-                    })?;
-            }
-            Some(payload_addr) => {
-                api.auctioneer
-                    .save_payload_address(
-                        payload.block_hash(),
-                        payload.builder_public_key(),
-                        payload_addr,
-                    )
-                    .await
-                    .map_err(|err| {
-                        error!(%err, "failed to save payload address");
-                        BuilderApiError::AuctioneerError(err)
-                    })?;
-            }
-        }
-
-        // Save submission to db
-        let db = api.db.clone();
-        task::spawn(
-            file!(),
-            line!(),
-            async move {
-                if let Err(err) = db.store_header_submission(payload, trace).await {
-                    error!(
-                        %err,
-                        "failed to store header submission",
-                    )
-                }
-            }
-            .in_current_span(),
-        );
-
-        Ok(StatusCode::OK)
-    }
-
-    /// Handles the submission of a new block by performing various checks and verifications
-    /// before saving the submission to the auctioneer. This is expected to pair with submit_header.
-    ///
-    /// 1. Receives the request and decodes the payload into a `SignedBidSubmission` object.
-    /// 2. Validates the builder and checks against the next proposer duty.
-    /// 3. Verifies the signature of the payload.
-    /// 4. Runs further validations against auctioneer.
-    /// 5. Simulates the block to validate the payment.
-    /// 6. Saves the bid to auctioneer and db.
-    ///
-    /// Implements this API: https://docs.titanrelay.xyz/builders/builder-integration#optimistic-v2
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
-    pub async fn submit_block_v2(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
-        headers: HeaderMap,
-        req: Request<Body>,
-    ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
-        trace.metadata = api.metadata_provider.get_metadata(&headers);
-
-        // Decode the incoming request body into a payload
-        let (payload, _) = decode_payload(req, &mut trace).await?;
-
-        info!(
-            slot = %payload.slot(),
-            builder_pub_key = ?payload.builder_public_key(),
-            block_value = %payload.value(),
-            block_hash = ?payload.block_hash(),
-            "payload decoded",
-        );
-
-        // Save pending block payload to auctioneer
-        api.auctioneer
-            .save_pending_block_payload(
-                payload.slot().as_u64(),
-                payload.builder_public_key(),
-                payload.block_hash(),
-                trace.receive / 1_000_000, // convert to ms
-            )
-            .await
-            .map_err(|err| {
-                error!(%err, "failed to save pending block header");
-                BuilderApiError::AuctioneerError(err)
-            })?;
-
-        Self::handle_optimistic_payload(api, payload, trace, OptimisticVersion::V2).await
-    }
-
-    pub(crate) async fn handle_optimistic_payload(
-        api: Arc<BuilderApi<A, DB, S, G, MP>>,
-        payload: SignedBidSubmission,
-        mut trace: SubmissionTrace,
-        optimistic_version: OptimisticVersion,
-    ) -> Result<StatusCode, BuilderApiError> {
-        let (head_slot, next_duty) = api.curr_slot_info.slot_info();
-        debug!(%head_slot, timestamp_request_start = trace.receive);
-
-        let builder_pub_key = payload.builder_public_key().clone();
-        let block_hash = payload.message().block_hash;
-
-        // Verify the payload is for the current slot
-        if payload.slot() <= head_slot {
-            debug!(?block_hash, "submission is for a past slot",);
-            return Err(BuilderApiError::SubmissionForPastSlot {
-                current_slot: head_slot,
-                submission_slot: payload.slot(),
-            });
-        }
-
-        // Verify that we have a validator connected for this slot
-        // Note: in `submit_block_v2` we have to do this check after decoding
-        // so we can send a `PayloadReceived` message.
-        if next_duty.is_none() {
-            warn!(?block_hash, "could not find slot duty");
-            return Err(BuilderApiError::ProposerDutyNotFound);
-        }
-        let next_duty = next_duty.unwrap();
-
-        // Fetch the next payload attributes and validate basic information
-        let payload_attributes =
-            api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), &block_hash)?;
-
-        // Fetch builder info
-        let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
-
-        // submit_block_v2 can only be processed optimistically.
-        // Make sure that the builder has enough collateral to cover the submission.
-        if let Err(err) = Self::check_builder_collateral(&payload, &builder_info) {
-            warn!(%err, "builder has insufficient collateral");
-            return Err(err);
-        }
-
-        // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
-        // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional() &&
-            !builder_info.can_process_regional_slot_optimistically()
-        {
-            warn!("proposer has regional filtering enabled, discarding {optimistic_version:?} submission");
-            return Err(BuilderApiError::BuilderNotOptimistic {
-                builder_pub_key: payload.builder_public_key().clone(),
-            });
-        }
-
-        // Handle trusted builders check
-        if !Self::check_if_trusted_builder(&next_duty, &builder_info) {
-            let proposer_trusted_builders = next_duty.entry.preferences.trusted_builders.unwrap();
+        if payload_attributes.slot != slot {
             warn!(
-                builder_pub_key = ?payload.builder_public_key(),
-                proposer_trusted_builders = ?proposer_trusted_builders,
-                "builder not in proposer trusted builders list",
+                got =% slot,
+                expected =% payload_attributes.slot,
+                "payload attributes slot mismatch with payload attributes"
             );
-            return Err(BuilderApiError::BuilderNotInProposersTrustedList {
-                proposer_trusted_builders,
+            return Err(BuilderApiError::PayloadSlotMismatchWithPayloadAttributes {
+                got: slot,
+                expected: payload_attributes.slot,
             });
         }
 
-        // Verify payload has not already been delivered
-        match api.auctioneer.get_last_slot_delivered().await {
-            Ok(Some(slot)) => {
-                if payload.slot() <= slot {
-                    debug!("payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                error!(%err, "failed to get last slot delivered");
-            }
-        }
-
-        // Check for tx root against header received
-        if let Err(err) = api.check_tx_root_against_header(&payload).await {
-            match err {
-                // Could have just received the payload before the header
-                BuilderApiError::MissingTransactionsRoot => {}
-                // Nothing the builder can do about this error
-                BuilderApiError::AuctioneerError(err) => {
-                    return Err(BuilderApiError::AuctioneerError(err))
-                }
-                _ => {
-                    api.demote_builder(&builder_pub_key, &block_hash, &err).await;
-                    return Err(err);
-                }
-            }
-        }
-
-        // Sanity check the payload
-        if let Err(err) = sanity_check_block_submission(
-            &payload,
-            &next_duty,
-            &payload_attributes,
-            &api.chain_info,
-        ) {
-            warn!(%err, "failed sanity check");
-            return Err(err);
-        }
-        trace.pre_checks = utcnow_ns();
-
-        let (payload, _) = match api
-            .verify_submitted_block(
-                payload,
-                next_duty,
-                &builder_info,
-                &mut trace,
-                &payload_attributes,
-            )
-            .await
-        {
-            Ok(val) => val,
-            Err(err) => {
-                // Any invalid submission for optimistic v2/v3 results in a demotion.
-                api.demote_builder(&builder_pub_key, &block_hash, &err).await;
-                return Err(err);
-            }
-        };
-
-        // Save bid to auctioneer
-        if let Err(err) = api
-            .auctioneer
-            .save_execution_payload(
-                payload.slot().as_u64(),
-                &payload.message().proposer_pubkey,
-                payload.block_hash(),
-                &payload.payload_and_blobs(),
-            )
-            .await
-        {
-            error!(%err, "failed to save execution payload");
-            return Err(BuilderApiError::AuctioneerError(err));
-        }
-        trace.auctioneer_update = utcnow_ns();
-
-        // Gossip to other relays
-        if api.relay_config.payload_gossip_enabled {
-            api.gossip_payload(&payload, payload.payload_and_blobs()).await;
-        }
-
-        // Log some final info
-        trace.request_finish = utcnow_ns();
-        debug!(
-            ?trace,
-            request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
-            "sumbit_block_v2 request finished"
-        );
-
-        // Save submission to db
-        task::spawn(
-            file!(),
-            line!(),
-            async move {
-                if let Err(err) = api
-                    .db
-                    .store_block_submission(payload, Arc::new(trace), optimistic_version as i16)
-                    .await
-                {
-                    error!(%err, "failed to store block submission")
-                }
-            }
-            .in_current_span(),
-        );
-
-        Ok(StatusCode::OK)
+        Ok(payload_attributes)
     }
 
-    #[tracing::instrument(skip_all)]
-    pub async fn get_top_bid(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
-        headers: HeaderMap,
-        ws: WebSocketUpgrade,
-    ) -> Result<impl IntoResponse, BuilderApiError> {
-        let api_key = headers.get("x-api-key").and_then(|key| key.to_str().ok());
-        match api_key {
-            Some(key) => match api.db.check_builder_api_key(key).await {
-                Ok(true) => {}
-                Ok(false) => return Err(BuilderApiError::InvalidApiKey),
-                Err(err) => {
-                    error!(%err, "failed to check api key");
-                    return Err(BuilderApiError::InternalError);
-                }
-            },
-            None => return Err(BuilderApiError::InvalidApiKey),
-        }
-
-        Ok(ws.on_upgrade(move |socket| push_top_bids(socket, api.auctioneer.clone())))
-    }
-}
-
-// Handle Gossiped Payloads
-impl<A, DB, S, G, MP> BuilderApi<A, DB, S, G, MP>
-where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    S: BlockSimulator + 'static,
-    G: GossipClientTrait + 'static,
-    MP: MetadataProvider + 'static,
-{
-    #[tracing::instrument(skip_all, fields(id = %Uuid::new_v4()))]
-    pub async fn process_gossiped_header(&self, req: BroadcastHeaderParams) {
-        let block_hash = req.signed_builder_bid.data.message.header().block_hash().0;
-        debug!(?block_hash, "received gossiped header");
-
-        let mut trace = GossipedHeaderTrace {
-            on_receive: req.on_receive,
-            on_gossip_receive: utcnow_ns(),
-            ..Default::default()
-        };
-
-        // Verify that the gossiped header is not for a past slot
-        let head_slot = self.curr_slot_info.head_slot();
-        if req.slot <= head_slot.as_u64() {
-            debug!("received gossiped header for a past slot");
-            return;
-        }
-
-        // Handle duplicates.
-        if self
-            .check_for_duplicate_block_hash(
-                &block_hash,
-                req.slot,
-                &req.parent_hash,
-                &req.proposer_pub_key,
-            )
-            .await
-            .is_err()
-        {
-            return;
-        }
-
-        // Verify payload has not already been delivered
-        match self.auctioneer.get_last_slot_delivered().await {
-            Ok(Some(slot)) => {
-                if req.slot <= slot {
-                    debug!("payload already delivered");
-                    return;
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                error!(%err, "failed to get last slot delivered");
-            }
-        }
-
-        // Verify the bid value is above the floor bid
-        let floor_bid_value = match self
-            .check_if_bid_is_below_floor(
-                req.slot,
-                &req.parent_hash,
-                &req.proposer_pub_key,
-                &req.builder_pub_key,
-                *req.signed_builder_bid.data.message.value(),
-                req.is_cancellations_enabled,
-            )
-            .await
-        {
-            Ok(floor_bid_value) => floor_bid_value,
-            Err(err) => {
-                warn!(%err, "bid is below floor");
-                return;
-            }
-        };
-
-        trace.pre_checks = utcnow_ns();
-
-        // Save header to auctioneer
-        let mut update_bid_result = SaveBidAndUpdateTopBidResponse::default();
-        if let Err(err) = self
-            .auctioneer
-            .save_signed_builder_bid_and_update_top_bid(
-                &req.signed_builder_bid,
-                &req.bid_trace,
-                req.on_receive.into(),
-                req.is_cancellations_enabled,
-                floor_bid_value,
-                &mut update_bid_result,
-            )
-            .await
-        {
-            warn!(%err, "failed to save header bid");
-            return;
-        }
-
-        if let Some(payload_address) = req.payload_address {
-            if let Err(e) = self
-                .auctioneer
-                .save_payload_address(
-                    &req.bid_trace.block_hash,
-                    &req.builder_pub_key,
-                    payload_address,
-                )
-                .await
-            {
-                warn!(%e, "failed to save payload address");
-            }
-        }
-
-        trace.auctioneer_update = utcnow_ns();
-
-        debug!("succesfully saved gossiped header");
-
-        // Save latency trace to db
-        // let db = self.db.clone();
-        // task::spawn(file!(), line!(), async move {
-        //     if let Err(err) = db
-        //         .save_gossiped_header_trace(req.bid_trace.block_hash.clone(), Arc::new(trace))
-        //         .await
-        //     {
-        //         error!(%err, "failed to store gossiped header trace")
-        //     }
-        // });
-    }
-
-    #[tracing::instrument(skip_all, fields(id = %Uuid::new_v4()))]
-    pub async fn process_gossiped_payload(&self, req: BroadcastPayloadParams) {
-        let block_hash = req.execution_payload.execution_payload.block_hash().0;
-
-        debug!(?block_hash, "received gossiped payload");
-
-        let mut trace = GossipedPayloadTrace { receive: utcnow_ns(), ..Default::default() };
-
-        // Verify that the gossiped payload is not for a past slot
-        let head_slot = self.curr_slot_info.head_slot();
-        if req.slot <= head_slot.as_u64() {
-            debug!("received gossiped payload for a past slot");
-            return;
-        }
-
-        // Verify payload has not already been delivered
-        match self.auctioneer.get_last_slot_delivered().await {
-            Ok(Some(slot)) => {
-                if req.slot <= slot {
-                    debug!("payload already delivered");
-                    return;
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                error!(%err, "failed to get last slot delivered");
-            }
-        }
-
-        trace.pre_checks = utcnow_ns();
-
-        // Save payload to auctioneer
-        if let Err(err) = self
-            .auctioneer
-            .save_execution_payload(
-                req.slot,
-                &req.proposer_pub_key,
-                &req.execution_payload.execution_payload.block_hash().0,
-                &req.execution_payload,
-            )
-            .await
-        {
-            error!(%err, "failed to save execution payload");
-            return;
-        }
-
-        trace.auctioneer_update = utcnow_ns();
-
-        debug!("succesfully saved gossiped payload");
-
-        // Save gossiped payload trace to db
-        let db = self.db.clone();
-        task::spawn(file!(), line!(), async move {
-            if let Err(err) = db.save_gossiped_payload_trace(block_hash, trace).await {
-                error!(%err, "failed to store gossiped payload trace")
-            }
-        });
-    }
-
-    /// This function should be run as a seperate async task.
-    /// Will process new gossiped messages from
-    async fn process_gossiped_info(&self, mut recveiver: Receiver<GossipedMessage>) {
-        while let Some(msg) = recveiver.recv().await {
-            BUILDER_GOSSIP_QUEUE.dec();
-            match msg {
-                GossipedMessage::Header(header) => {
-                    let api_clone = self.clone();
-                    task::spawn(file!(), line!(), async move {
-                        api_clone.process_gossiped_header(*header).await;
-                    });
-                }
-                GossipedMessage::Payload(payload) => {
-                    let api_clone = self.clone();
-                    task::spawn(file!(), line!(), async move {
-                        api_clone.process_gossiped_payload(*payload).await;
-                    });
-                }
-                _ => {}
-            }
-        }
-    }
-
-    async fn _gossip_new_submission(
+    /// Check for block hashes that have already been processed.
+    /// If this is the first time the hash has been seen it will insert the hash into the set.
+    ///
+    /// This function should not be called by functions that only process the payload.
+    pub(crate) async fn check_for_duplicate_block_hash(
         &self,
-        payload: &SignedBidSubmission,
-        execution_payload: PayloadAndBlobs,
-        builder_bid: SignedBuilderBid,
-        is_cancellations_enabled: bool,
-        on_receive: u64,
-    ) {
-        self.gossip_header(
-            builder_bid,
-            payload.bid_trace(),
-            is_cancellations_enabled,
-            on_receive,
-            None,
-        )
-        .await;
-        self.gossip_payload(payload, execution_payload).await;
+        block_hash: &B256,
+        slot: u64,
+        parent_hash: &B256,
+        proposer_public_key: &BlsPublicKey,
+    ) -> Result<(), BuilderApiError> {
+        match self
+            .auctioneer
+            .seen_or_insert_block_hash(block_hash, slot, parent_hash, proposer_public_key)
+            .await
+        {
+            Ok(false) => Ok(()),
+            Ok(true) => {
+                debug!(?block_hash, "duplicate block hash");
+                Err(BuilderApiError::DuplicateBlockHash { block_hash: *block_hash })
+            }
+            Err(err) => {
+                error!(%err, "failed to call seen_or_insert_block_hash");
+                Err(BuilderApiError::InternalError)
+            }
+        }
     }
 
-    async fn gossip_header(
-        &self,
-        builder_bid: SignedBuilderBid,
-        bid_trace: &BidTrace,
-        is_cancellations_enabled: bool,
-        on_receive: u64,
-        payload_address: Option<Vec<u8>>,
-    ) {
-        let params = BroadcastHeaderParams {
-            signed_builder_bid: builder_bid,
-            bid_trace: bid_trace.clone(),
-            slot: bid_trace.slot,
-            parent_hash: bid_trace.parent_hash,
-            proposer_pub_key: bid_trace.proposer_pubkey.clone(),
-            builder_pub_key: bid_trace.builder_pubkey.clone(),
-            is_cancellations_enabled,
-            on_receive,
-            payload_address,
-        };
-        self.gossiper.broadcast_header(params).await
-    }
-
-    async fn gossip_payload(
-        &self,
-        payload: &SignedBidSubmission,
-        execution_payload: PayloadAndBlobs,
-    ) {
-        let params = BroadcastPayloadParams {
-            execution_payload,
-            slot: payload.slot().as_u64(),
-            proposer_pub_key: payload.proposer_public_key().clone(),
-        };
-        self.gossiper.broadcast_payload(params).await
-    }
-}
-
-// Helpers
-impl<A, DB, S, G, MP> BuilderApi<A, DB, S, G, MP>
-where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    S: BlockSimulator + 'static,
-    G: GossipClientTrait + 'static,
-    MP: MetadataProvider + 'static,
-{
     /// This function verifies:
     /// 1. Verifies the payload signature.
     /// 2. Simulates the submission
     ///
     /// Returns: the bid submission in an Arc.
-    async fn verify_submitted_block(
+    pub(crate) async fn verify_submitted_block(
         &self,
         payload: SignedBidSubmission,
         next_duty: BuilderGetValidatorsResponseEntry,
@@ -1237,62 +202,6 @@ where
         Ok((payload, was_simulated_optimistically))
     }
 
-    /// Check for block hashes that have already been processed.
-    /// If this is the first time the hash has been seen it will insert the hash into the set.
-    ///
-    /// This function should not be called by functions that only process the payload.
-    async fn check_for_duplicate_block_hash(
-        &self,
-        block_hash: &B256,
-        slot: u64,
-        parent_hash: &B256,
-        proposer_public_key: &BlsPublicKey,
-    ) -> Result<(), BuilderApiError> {
-        match self
-            .auctioneer
-            .seen_or_insert_block_hash(block_hash, slot, parent_hash, proposer_public_key)
-            .await
-        {
-            Ok(false) => Ok(()),
-            Ok(true) => {
-                debug!(?block_hash, "duplicate block hash");
-                Err(BuilderApiError::DuplicateBlockHash { block_hash: *block_hash })
-            }
-            Err(err) => {
-                error!(%err, "failed to call seen_or_insert_block_hash");
-                Err(BuilderApiError::InternalError)
-            }
-        }
-    }
-
-    async fn check_tx_root_against_header(
-        &self,
-        payload: &SignedBidSubmission,
-    ) -> Result<(), BuilderApiError> {
-        match self.auctioneer.get_header_tx_root(payload.block_hash()).await {
-            Ok(Some(expected_tx_root)) => {
-                let tx_root = payload.transactions_root();
-
-                if expected_tx_root != tx_root {
-                    warn!("tx root mismatch");
-                    return Err(BuilderApiError::TransactionsRootMismatch {
-                        got: tx_root,
-                        expected: expected_tx_root,
-                    });
-                }
-            }
-            Ok(None) => {
-                warn!("no tx root found for block hash");
-                return Err(BuilderApiError::MissingTransactionsRoot);
-            }
-            Err(err) => {
-                error!(%err, "failed to get tx root");
-                return Err(BuilderApiError::AuctioneerError(err));
-            }
-        };
-        Ok(())
-    }
-
     /// Checks if the bid in the payload is below the floor value.
     ///
     /// - If cancellations are enabled and the bid is below the floor, it deletes the previous bid.
@@ -1300,7 +209,7 @@ where
     ///   submission.
     ///
     /// Returns the floor bid value.
-    async fn check_if_bid_is_below_floor(
+    pub(crate) async fn check_if_bid_is_below_floor(
         &self,
         slot: u64,
         parent_hash: &B256,
@@ -1356,7 +265,7 @@ where
     /// This function retrieves the ID associated with the builder's public key from the auctioneer.
     /// It then checks if this ID is included in the list of trusted builders specified by the
     /// proposer.
-    fn check_if_trusted_builder(
+    pub(crate) fn check_if_trusted_builder(
         next_duty: &BuilderGetValidatorsResponseEntry,
         builder_info: &BuilderInfo,
     ) -> bool {
@@ -1442,147 +351,12 @@ where
         }
     }
 
-    async fn save_bid_to_auctioneer(
-        &self,
-        payload: &SignedBidSubmission,
-        trace: &mut SubmissionTrace,
-        is_cancellations_enabled: bool,
-        floor_bid_value: U256,
-    ) -> Result<Option<(SignedBuilderBid, PayloadAndBlobs)>, BuilderApiError> {
-        let mut update_bid_result = SaveBidAndUpdateTopBidResponse::default();
-
-        match self
-            .auctioneer
-            .save_bid_and_update_top_bid(
-                payload,
-                trace.receive.into(),
-                is_cancellations_enabled,
-                floor_bid_value,
-                &mut update_bid_result,
-                &self.signing_context,
-            )
-            .await
-        {
-            Ok(Some((builder_bid, execution_payload))) => {
-                // Log the results of the bid submission
-                trace.auctioneer_update = utcnow_ns();
-                log_save_bid_info(&update_bid_result, trace.simulation, trace.auctioneer_update);
-
-                Ok(Some((builder_bid, execution_payload)))
-            }
-            Ok(None) => Ok(None),
-            Err(err) => {
-                error!(%err, "could not save bid and update top bids");
-                Err(BuilderApiError::AuctioneerError(err))
-            }
-        }
-    }
-
-    async fn save_header_bid_to_auctioneer(
-        &self,
-        payload: Arc<SignedHeaderSubmission>,
-        trace: &mut HeaderSubmissionTrace,
-        is_cancellations_enabled: bool,
-        floor_bid_value: U256,
-    ) -> Result<Option<SignedBuilderBid>, BuilderApiError> {
-        let mut update_bid_result = SaveBidAndUpdateTopBidResponse::default();
-        match self
-            .auctioneer
-            .save_header_submission_and_update_top_bid(
-                &payload,
-                trace.receive.into(),
-                is_cancellations_enabled,
-                floor_bid_value,
-                &mut update_bid_result,
-                &self.signing_context,
-            )
-            .await
-        {
-            Ok(Some(builder_bid)) => {
-                // Log the results of the bid submission
-                trace.auctioneer_update = utcnow_ns();
-                log_save_bid_info(
-                    &update_bid_result,
-                    trace.floor_bid_checks,
-                    trace.auctioneer_update,
-                );
-
-                Ok(Some(builder_bid))
-            }
-            Ok(None) => Ok(None),
-            Err(err) => {
-                error!(%err, "could not save header submission and update top bid");
-                Err(BuilderApiError::AuctioneerError(err))
-            }
-        }
-    }
-
-    fn fetch_payload_attributes(
-        &self,
-        slot: Slot,
-        parent_hash: B256,
-        block_hash: &B256,
-    ) -> Result<PayloadAttributesUpdate, BuilderApiError> {
-        let Some(payload_attributes) = self.curr_slot_info.payload_attributes(parent_hash, slot)
-        else {
-            warn!(%block_hash, "payload attributes not yet known");
-            return Err(BuilderApiError::PayloadAttributesNotYetKnown)
-        };
-
-        if payload_attributes.slot != slot {
-            warn!(
-                got =% slot,
-                expected =% payload_attributes.slot,
-                "payload attributes slot mismatch with payload attributes"
-            );
-            return Err(BuilderApiError::PayloadSlotMismatchWithPayloadAttributes {
-                got: slot,
-                expected: payload_attributes.slot,
-            });
-        }
-
-        Ok(payload_attributes)
-    }
-
-    /// Checks for later bid submissions from the same builder.
-    ///
-    /// This function should be called only if cancellations are enabled.
-    /// It checks if there is a later submission.
-    /// If a later submission exists, it returns an error.
-    async fn check_for_later_submissions(
-        &self,
-        payload: &impl BidSubmission,
-        on_receive: u64,
-    ) -> Result<(), BuilderApiError> {
-        match self
-            .auctioneer
-            .get_builder_latest_payload_received_at(
-                payload.slot().as_u64(),
-                payload.builder_public_key(),
-                payload.parent_hash(),
-                payload.proposer_public_key(),
-            )
-            .await
-        {
-            Ok(Some(latest_payload_received_at)) => {
-                if on_receive < latest_payload_received_at {
-                    return Err(BuilderApiError::AlreadyProcessingNewerPayload);
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                error!(%err, "failed to get last slot delivered");
-            }
-        }
-        Ok(())
-    }
-
     /// Checks if the builder has enough collateral to submit an optimistic bid.
     /// Or if the builder is not optimistic.
     ///
     /// This function compares the builder's collateral with the block value for a bid submission.
     /// If the builder's collateral is less than the required value, it returns an error.
-    fn check_builder_collateral(
+    pub(crate) fn check_builder_collateral(
         payload: &impl BidSubmission,
         builder_info: &BuilderInfo,
     ) -> Result<(), BuilderApiError> {
@@ -1614,7 +388,7 @@ where
     }
 
     /// Fetch the builder's information. Default info is returned if fetching fails.
-    async fn fetch_builder_info(&self, builder_pub_key: &BlsPublicKey) -> BuilderInfo {
+    pub(crate) async fn fetch_builder_info(&self, builder_pub_key: &BlsPublicKey) -> BuilderInfo {
         match self.auctioneer.get_builder_info(builder_pub_key).await {
             Ok(info) => info,
             Err(err) => {
@@ -1759,215 +533,12 @@ pub async fn decode_payload(
     Ok((payload, is_cancellations_enabled))
 }
 
-/// `push_top_bids` manages a WebSocket connection to continuously send the top auction bids to a
-/// client.
-///
-/// - Periodically fetches the latest auction bids via a stream and sends them to the client in ssz
-///   format.
-/// - Sends a ping message every 10 seconds to maintain the connection's liveliness.
-/// - Terminates the connection on sending failures or if a bid stream error occurs, ensuring clean
-///   disconnection.
-///
-/// This function operates in an asynchronous loop until the WebSocket connection is closed either
-/// due to an error or when the auction ends. It returns after the socket has been closed, logging
-/// the closure status.
-async fn push_top_bids<A: Auctioneer + 'static>(mut socket: WebSocket, auctioneer: Arc<A>) {
-    let mut bid_stream = auctioneer.get_best_bids().await;
-    let mut interval = time::interval(Duration::from_secs(10));
-
-    loop {
-        tokio::select! {
-            Some(result) = bid_stream.next() => {
-                match result {
-                    Ok(bid) => {
-                        if socket.send(Message::Binary(bid.into())).await.is_err() {
-                            error!("Failed to send bid. Disconnecting.");
-                            break;
-                        }
-                    },
-                    Err(e) => {
-                        error!("Error while receiving bid: {}", e);
-                        break;
-                    }
-                }
-            },
-            _ = interval.tick() => {
-                if socket.send(Message::Ping(Bytes::new())).await.is_err() {
-                    error!("Failed to send ping.");
-                    break;
-                }
-            },
-
-            msg = socket.next() => {
-                match msg {
-                    Some(Ok(Message::Ping(data))) => {
-                        if socket.send(Message::Pong(data)).await.is_err() {
-                            error!("Failed to respond to ping.");
-                            break;
-                        }
-                    },
-                    Some(Ok(Message::Pong(_))) => {
-                        debug!("Received pong response.");
-                    },
-                    Some(Ok(Message::Close(_))) => {
-                        debug!("Received close frame.");
-                        break;
-                    },
-                    Some(Ok(Message::Binary(_))) => {
-                        debug!("Received Binary frame.");
-                    },
-                    Some(Ok(Message::Text(_))) => {
-                        debug!("Received Text frame.");
-                    },
-                    Some(Err(e)) => {
-                        error!("Error in WebSocket connection: {}", e);
-                        break;
-                    },
-                    None => {
-                        error!("WebSocket connection closed by the other side.");
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    debug!("Socket connection closed gracefully.");
-}
-
-/// `decode_payload` decodes the payload from `SubmitBlockParams` into a `SignedHeaderSubmission`
-/// object.
-///
-/// - Supports both SSZ and JSON encodings for deserialization.
-/// - Automatically falls back to JSON if SSZ deserialization fails.
-/// - Does *not* handle GZIP-compressed headers.
-///
-/// It returns a tuple of the decoded header and if cancellations are enabled.
-pub async fn decode_header_submission(
-    req: Request<Body>,
-    trace: &mut HeaderSubmissionTrace,
-) -> Result<(SignedHeaderSubmission, bool), BuilderApiError> {
-    // Extract the query parameters
-    let is_cancellations_enabled = req
-        .uri()
-        .query()
-        .unwrap_or("")
-        .split('&')
-        .find_map(|part| {
-            let mut split = part.splitn(2, '=');
-            if split.next()? == "cancellations" {
-                Some(split.next()? == "1")
-            } else {
-                None
-            }
-        })
-        .unwrap_or(false);
-
-    let is_ssz = req
-        .headers()
-        .get("Content-Type")
-        .and_then(|val| val.to_str().ok())
-        .map_or(false, |v| v == "application/octet-stream");
-
-    // Read the body
-    let body = req.into_body();
-    let body_bytes = to_bytes(body, MAX_PAYLOAD_LENGTH).await?;
-    if body_bytes.len() > MAX_PAYLOAD_LENGTH {
-        return Err(BuilderApiError::PayloadTooLarge {
-            max_size: MAX_PAYLOAD_LENGTH,
-            size: body_bytes.len(),
-        });
-    }
-
-    // Decode header
-    let header: SignedHeaderSubmission = if is_ssz {
-        match SignedHeaderSubmission::from_ssz_bytes(&body_bytes) {
-            Ok(header) => header,
-            Err(err) => {
-                // Fallback to JSON
-                warn!(?err, "Failed to decode header using SSZ; falling back to JSON");
-                serde_json::from_slice(&body_bytes)?
-            }
-        }
-    } else {
-        serde_json::from_slice(&body_bytes)?
-    };
-
-    trace.decode = utcnow_ns();
-    debug!(
-        timestamp_after_decoding = trace.decode,
-        decode_latency_ns = trace.decode.saturating_sub(trace.receive),
-        builder_pub_key = ?header.builder_public_key(),
-        block_hash = ?header.block_hash(),
-        proposer_pubkey = ?header.proposer_public_key(),
-        parent_hash = ?header.parent_hash(),
-        value = ?header.value(),
-    );
-
-    Ok((header, is_cancellations_enabled))
-}
-
-pub async fn decode_header_submission_v3(
-    req: Request<Body>,
-    trace: &mut HeaderSubmissionTrace,
-) -> Result<(HeaderSubmissionV3, bool), BuilderApiError> {
-    // Extract the query parameters
-    let is_cancellations_enabled = req
-        .uri()
-        .query()
-        .unwrap_or("")
-        .split('&')
-        .find_map(|part| {
-            let mut split = part.splitn(2, '=');
-            if split.next()? == "cancellations" {
-                Some(split.next()? == "1")
-            } else {
-                None
-            }
-        })
-        .unwrap_or(false);
-
-    // Get content-type header
-    let content_type = req.headers().get("Content-Type").cloned();
-
-    // Read the body
-    let body = req.into_body();
-    let body_bytes = to_bytes(body, MAX_PAYLOAD_LENGTH).await?;
-    if body_bytes.len() > MAX_PAYLOAD_LENGTH {
-        return Err(BuilderApiError::PayloadTooLarge {
-            max_size: MAX_PAYLOAD_LENGTH,
-            size: body_bytes.len(),
-        });
-    }
-
-    let submission_v3 = match content_type.as_ref().and_then(|val| val.to_str().ok()) {
-        Some("application/octet-stream") => HeaderSubmissionV3::from_ssz_bytes(&body_bytes)
-            .map_err(|_| BuilderApiError::DeserializeError)?,
-        Some("application/cbor") => cbor4ii::serde::from_slice(&body_bytes)
-            .map_err(|_| BuilderApiError::DeserializeError)?,
-        _ => serde_json::from_slice(&body_bytes)?,
-    };
-
-    trace.decode = utcnow_ns();
-    debug!(
-        timestamp_after_decoding = trace.decode,
-        decode_latency_ns = trace.decode.saturating_sub(trace.receive),
-        builder_pub_key = ?submission_v3.submission.builder_public_key(),
-        block_hash = ?submission_v3.submission.block_hash(),
-        proposer_pubkey = ?submission_v3.submission.proposer_public_key(),
-        parent_hash = ?submission_v3.submission.parent_hash(),
-        value = ?submission_v3.submission.value(),
-    );
-
-    Ok((submission_v3, is_cancellations_enabled))
-}
-
 /// - Validates the expected block.timestamp.
 /// - Ensures that the fee recipients in the payload and proposer duty match.
 /// - Ensures that the slot in the payload and payload attributes match.
 /// - Validates that the block hash in the payload and message are the same.
 /// - Validates that the parent hash in the payload and message are the same.
-fn sanity_check_block_submission(
+pub(crate) fn sanity_check_block_submission(
     payload: &impl BidSubmission,
     next_duty: &BuilderGetValidatorsResponseEntry,
     payload_attributes: &PayloadAttributesUpdate,
@@ -2031,7 +602,7 @@ fn sanity_check_block_submission(
     Ok(())
 }
 
-fn log_save_bid_info(
+pub(crate) fn log_save_bid_info(
     update_bid_result: &SaveBidAndUpdateTopBidResponse,
     bid_update_start: u64,
     bid_update_finish: u64,
