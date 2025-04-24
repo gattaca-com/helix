@@ -937,24 +937,22 @@ impl Auctioneer for RedisCache {
         for builder_info in builder_infos {
             let builder_pub_key_str = format!("{:?}", builder_info.pub_key);
             if let Some(redis_builder_info) = redis_builder_infos.get(&builder_pub_key_str) {
-                info!(
-                    "Redis builder info: {:?}, Builder info: {:?}",
-                    redis_builder_info, builder_info
-                );
                 if builder_info.builder_info != *redis_builder_info {
                     self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info)
                         .await?;
                     info!(
-                        "Updated builder info for {:?} is opt is now {:?}",
-                        builder_info.pub_key, builder_info.builder_info.is_optimistic
+                        pubkey = %builder_info.pub_key,
+                        is_optimistic = builder_info.builder_info.is_optimistic,
+                        "updated builder info",
                     );
                 }
             } else {
                 self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info)
                     .await?;
                 info!(
-                    "Updated builder info for {:?} is opt is now {:?}",
-                    builder_info.pub_key, builder_info.builder_info.is_optimistic
+                    pubkey = %builder_info.pub_key,
+                    is_optimistic = builder_info.builder_info.is_optimistic,
+                    "updated builder info",
                 );
             }
         }

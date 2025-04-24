@@ -140,8 +140,9 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     async fn run(self, mut head_event_rx: broadcast::Receiver<HeadEventData>) {
         loop {
             let head = self.slots.head();
-            let timeout = (self.chain_info.clock.start_of(head + 1).unwrap() + CUTOFF_TIME)
-                .saturating_sub(utcnow_dur());
+            let timeout = (self.chain_info.clock.start_of(head + 1).unwrap())
+                .saturating_sub(utcnow_dur()) +
+                CUTOFF_TIME;
 
             if let Ok(head_event_result) = tokio::time::timeout(timeout, head_event_rx.recv()).await
             {
@@ -159,7 +160,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         }
     }
 
-    #[tracing::instrument(skip(self))]
+    #[tracing::instrument(skip_all, fields(slot = %head_slot))]
     async fn process_new_slot(&self, head_slot: Slot, block_hash: Option<B256>) {
         let start = Instant::now();
         if self.slots.head_already_seen(head_slot) {
@@ -170,15 +171,16 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         if !self.auctioneer.try_acquire_or_renew_leadership(&self.leader_id).await {
             return;
         }
+        let checks_start = start.elapsed();
 
         let epoch = head_slot.epoch(self.chain_info.slots_per_epoch());
         info!(
-            into_slot =? self.chain_info.duration_into_slot(head_slot),
+            from_timeout = block_hash.is_none(),
+            into_slot =? self.chain_info.duration_into_slot(head_slot).unwrap_or_default(),
             slot_pos = self.chain_info.slot_in_epoch(head_slot),
             %epoch,
             epoch_start = %epoch.start_slot(self.chain_info.slots_per_epoch()),
             epoch_end = %epoch.end_slot(self.chain_info.slots_per_epoch()),
-            ?block_hash,
             "processing new slot",
         );
 
@@ -291,7 +293,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         // wait for all tasks, this should take less than one slot
         join_all(tasks).await;
-        info!(duration = ?start.elapsed(), "processed new slot");
+        info!(duration = ?start.elapsed(), checks = ?checks_start, "processed new slot");
     }
 
     /// Refresh the list of known validators by querying the beacon client.
