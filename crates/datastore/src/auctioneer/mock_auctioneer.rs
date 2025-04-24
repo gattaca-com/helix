@@ -1,6 +1,6 @@
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
-use alloy_primitives::{Bytes, B256, U256};
+use alloy_primitives::{bytes::Bytes, B256, U256};
 use async_trait::async_trait;
 use helix_common::{
     api::builder_api::TopBidUpdate, bid_submission::v2::header_submission::SignedHeaderSubmission,

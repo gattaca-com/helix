@@ -1,4 +1,4 @@
-use alloy_primitives::{Bytes, B256, U256};
+use alloy_primitives::{bytes::Bytes, B256, U256};
 use async_trait::async_trait;
 use helix_common::{
     bid_submission::v2::header_submission::SignedHeaderSubmission, builder_info::BuilderInfo,

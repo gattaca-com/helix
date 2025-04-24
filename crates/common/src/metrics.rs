@@ -18,6 +18,8 @@ use prometheus::{
 use tokio::net::TcpListener;
 use tracing::{error, info};
 
+use crate::utils::utcnow_ms;
+
 pub fn start_metrics_server() {
     let port =
         std::env::var("METRICS_PORT").map(|s| s.parse().expect("invalid port")).unwrap_or(9500);
@@ -268,6 +270,28 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref TOP_BID_CONNECTIONS: Gauge = register_gauge_with_registry!(
+        "top_bid_connections",
+        "Count of top bid connections",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref TOP_BID_UPDATE_COUNT: IntCounter = register_int_counter_with_registry!(
+        "top_bid_update_count",
+        "Count of top bid updates",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref TOP_BID_UPDATE_LATENCY: Histogram = register_histogram_with_registry!(
+        "top_bid_update_latency_secs",
+        "Latency of top bid updates",
+        vec![0.0001, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 5.0, 10.0],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
 
     //////////////// TIMING GAMES ////////////////
 
@@ -391,6 +415,30 @@ impl RedisMetrics {
 
     pub fn latency(endpoint: &str) -> HistogramTimer {
         REDIS_LATENCY.with_label_values(&[endpoint]).start_timer()
+    }
+}
+
+pub struct TopBidMetrics;
+
+impl TopBidMetrics {
+    pub fn connection() -> Self {
+        TOP_BID_CONNECTIONS.inc();
+        Self {}
+    }
+
+    pub fn top_bid_update_count() {
+        TOP_BID_UPDATE_COUNT.inc();
+    }
+
+    pub fn received_at(timestamp_ms: u64) {
+        let latency = utcnow_ms().saturating_sub(timestamp_ms) as f64 / 1000.0;
+        TOP_BID_UPDATE_LATENCY.observe(latency);
+    }
+}
+
+impl Drop for TopBidMetrics {
+    fn drop(&mut self) {
+        TOP_BID_CONNECTIONS.dec();
     }
 }
 

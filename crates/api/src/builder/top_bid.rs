@@ -7,7 +7,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::StreamExt;
-use helix_common::{self, metadata_provider::MetadataProvider};
+use helix_common::{self, metadata_provider::MetadataProvider, metrics::TopBidMetrics};
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use hyper::HeaderMap;
@@ -64,13 +64,14 @@ where
 /// due to an error or when the auction ends. It returns after the socket has been closed, logging
 /// the closure status.
 async fn push_top_bids<A: Auctioneer + 'static>(mut socket: WebSocket, auctioneer: Arc<A>) {
+    let _conn = TopBidMetrics::connection();
     let mut bid_stream = auctioneer.get_best_bids();
     let mut interval = time::interval(Duration::from_secs(10));
 
     loop {
         tokio::select! {
             Ok(bid) = bid_stream.recv() => {
-                if socket.send(Message::Binary(bid.0)).await.is_err() {
+                if socket.send(Message::Binary(bid)).await.is_err() {
                     error!("Failed to send bid. Disconnecting.");
                     break;
                 }
