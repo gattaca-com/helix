@@ -10,8 +10,8 @@ use helix_common::{
     chain_info::ChainInfo,
     metadata_provider::MetadataProvider,
     task,
-    utils::{extract_request_id, utcnow_ns, utcnow_sec},
-    Filtering, RegisterValidatorsTrace, ValidatorPreferences,
+    utils::{extract_request_id, utcnow_sec},
+    Filtering, ValidatorPreferences,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
@@ -54,7 +54,7 @@ where
             return Err(ProposerApiError::EmptyRequest);
         }
 
-        let mut trace = RegisterValidatorsTrace { receive: utcnow_ns(), ..Default::default() };
+        let start = Instant::now();
 
         // Get optional api key from headers
         let api_key = headers.get("x-api-key").and_then(|key| key.to_str().ok());
@@ -80,11 +80,6 @@ where
         };
 
         let preferences_header = headers.get("x-preferences");
-
-        debug!(
-            pool_name = ?pool_name,
-            preferences_header = ?preferences_header,
-        );
 
         let preferences = match preferences_header {
             Some(preferences_header) => {
@@ -136,32 +131,22 @@ where
 
         let mut handles = Vec::with_capacity(registrations.len());
 
+        let mut unknown_registrations = 0;
+        let mut update_not_required = 0;
+
         for registration in registrations {
             let proposer_api_clone = proposer_api.clone();
             let start_time = Instant::now();
 
             let pub_key = registration.message.pubkey.clone();
 
-            trace!(
-                pub_key = ?pub_key,
-                fee_recipient = %registration.message.fee_recipient,
-                gas_limit = registration.message.gas_limit,
-                timestamp = registration.message.timestamp,
-            );
-
             if !known_pub_keys.contains(&pub_key) {
-                warn!(
-                    pub_key = ?pub_key,
-                    "Registration for unknown validator",
-                );
+                unknown_registrations += 1;
                 continue;
             }
 
             if !proposer_api_clone.db.is_registration_update_required(&registration).await? {
-                trace!(
-                    pub_key = ?pub_key,
-                    "Registration update not required",
-                );
+                update_not_required += 1;
                 valid_registrations.push(registration);
                 continue;
             }
@@ -215,10 +200,10 @@ where
             }
         });
 
-        trace.registrations_complete = utcnow_ns();
-
         debug!(
-            trace = ?trace,
+            duration = ?start.elapsed(),
+            unknown_registrations = unknown_registrations,
+            update_not_required = update_not_required,
             successful_registrations = successful_registrations,
             failed_registrations = num_registrations - successful_registrations,
         );

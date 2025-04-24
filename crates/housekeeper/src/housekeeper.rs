@@ -160,7 +160,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         }
     }
 
-    #[tracing::instrument(skip_all, fields(slot = %head_slot))]
+    #[tracing::instrument(skip_all, name = "new_slot", fields(slot = %head_slot))]
     async fn process_new_slot(&self, head_slot: Slot, block_hash: Option<B256>) {
         let start = Instant::now();
         if self.slots.head_already_seen(head_slot) {
