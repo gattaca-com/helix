@@ -9,7 +9,6 @@ use std::{
 
 use alloy_eips::merge::EPOCH_SLOTS;
 use alloy_primitives::{map::HashSet, B256, U256};
-use futures::future::join_all;
 use helix_beacon::{
     error::BeaconClientError,
     multi_beacon_client::MultiBeaconClient,
@@ -26,7 +25,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::{BlsPublicKey, Epoch, Slot, SlotClockTrait};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 
@@ -56,6 +55,12 @@ struct HousekeeperSlots {
     proposer_duties: Arc<AtomicU64>,
     refreshed_validators: Arc<AtomicU64>,
     trusted_proposers: Arc<AtomicU64>,
+    // updating can take >> slot time, so we avoid concurrent updates by locking the mutex
+    updating_demotions: Arc<Mutex<()>>,
+    updating_builder_infos: Arc<Mutex<()>>,
+    updating_proposer_duties: Arc<Mutex<()>>,
+    updating_refreshed_validators: Arc<Mutex<()>>,
+    updating_trusted_proposers: Arc<Mutex<()>>,
 }
 
 impl HousekeeperSlots {
@@ -162,7 +167,6 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
     #[tracing::instrument(skip_all, name = "new_slot", fields(slot = %head_slot))]
     async fn process_new_slot(&self, head_slot: Slot, block_hash: Option<B256>) {
-        let start = Instant::now();
         if self.slots.head_already_seen(head_slot) {
             return;
         }
@@ -171,7 +175,6 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         if !self.auctioneer.try_acquire_or_renew_leadership(&self.leader_id).await {
             return;
         }
-        let checks_start = start.elapsed();
 
         let epoch = head_slot.epoch(self.chain_info.slots_per_epoch());
         info!(
@@ -192,6 +195,10 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             file!(),
             line!(),
             async move {
+                let Ok(_guard) = housekeeper.slots.updating_demotions.try_lock() else {
+                    debug!("demotions update already in progress");
+                    return;
+                };
                 let start = Instant::now();
                 if let Err(err) = housekeeper.demote_builders_with_expired_pending_blocks().await {
                     error!(%err, "failed to demote builders");
@@ -208,24 +215,37 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                 file!(),
                 line!(),
                 async move {
+                    let Ok(_guard) = housekeeper.slots.updating_proposer_duties.try_lock() else {
+                        debug!("proposer duties update already in progress");
+                        return;
+                    };
                     let start = Instant::now();
                     match housekeeper.update_proposer_duties(epoch).await {
                         Ok(proposer_duties) => {
-                            let slots = housekeeper.slots.clone();
-                            // don't wait for primev update to complete
-                            tokio::spawn(
-                                async move {
-                                    if let Err(err) = housekeeper
-                                        .maybe_primev_update_with_duties(proposer_duties)
+                            if let Some(primev_service) = housekeeper.primev_service.clone() {
+                                let db = housekeeper.db.clone();
+                                let auctioneer = housekeeper.auctioneer.clone();
+                                // don't wait for primev update to complete
+                                task::spawn(
+                                    file!(),
+                                    line!(),
+                                    async move {
+                                        if let Err(err) = Self::primev_update_with_duties(
+                                            primev_service,
+                                            auctioneer,
+                                            db,
+                                            proposer_duties,
+                                        )
                                         .await
-                                    {
-                                        error!(%err, "failed to update primev duties");
+                                        {
+                                            error!(%err, "failed to update primev duties");
+                                        }
                                     }
-                                }
-                                .in_current_span(),
-                            );
+                                    .in_current_span(),
+                                );
+                            }
 
-                            slots.update_proposer_duties(head_slot);
+                            housekeeper.slots.update_proposer_duties(head_slot);
                         }
 
                         Err(err) => {
@@ -245,6 +265,11 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                 file!(),
                 line!(),
                 async move {
+                    let Ok(_guard) = housekeeper.slots.updating_refreshed_validators.try_lock()
+                    else {
+                        debug!("refreshed validators update already in progress");
+                        return;
+                    };
                     let start = Instant::now();
                     if let Err(err) = housekeeper.refresh_known_validators().await {
                         error!(%err, "failed to refresh known validators");
@@ -263,6 +288,10 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             file!(),
             line!(),
             async move {
+                let Ok(_guard) = housekeeper.slots.updating_builder_infos.try_lock() else {
+                    debug!("builder info update already in progress");
+                    return;
+                };
                 let start = Instant::now();
                 if let Err(err) = housekeeper.sync_builder_info_changes().await {
                     error!(%err, "failed to sync builder info changes");
@@ -279,6 +308,10 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                 file!(),
                 line!(),
                 async move {
+                    let Ok(_guard) = housekeeper.slots.updating_trusted_proposers.try_lock() else {
+                        debug!("trusted proposer update already in progress");
+                        return;
+                    };
                     let start = Instant::now();
                     if let Err(err) = housekeeper.update_trusted_proposers().await {
                         error!(%err, "failed to update trusted proposers");
@@ -290,10 +323,6 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                 .in_current_span(),
             );
         }
-
-        // wait for all tasks, this should take less than one slot
-        join_all(tasks).await;
-        info!(duration = ?start.elapsed(), checks = ?checks_start, "processed new slot");
     }
 
     /// Refresh the list of known validators by querying the beacon client.
@@ -428,31 +457,28 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     }
 
     /// Updates primev builders and validators using pre-fetched proposer duties
-    async fn maybe_primev_update_with_duties(
-        &self,
+    async fn primev_update_with_duties(
+        primev_service: EthereumPrimevService,
+        auctioneer: Arc<A>,
+        db: Arc<DB>,
         proposer_duties: Vec<ProposerDuty>,
     ) -> Result<(), HousekeeperError> {
-        let Some(primev_service) = self.primev_service.as_ref() else {
-            return Ok(());
-        };
-
         let primev_builders = primev_service.get_registered_primev_builders().await;
 
         for builder_pubkey in primev_builders {
-            self.db
-                .store_builder_info(&builder_pubkey, &BuilderInfo {
-                    collateral: U256::ZERO,
-                    is_optimistic: false,
-                    is_optimistic_for_regional_filtering: false,
-                    builder_id: Some("PrimevBuilder".to_string()),
-                    builder_ids: Some(vec!["PrimevBuilder".to_string()]),
-                })
-                .await?;
+            db.store_builder_info(&builder_pubkey, &BuilderInfo {
+                collateral: U256::ZERO,
+                is_optimistic: false,
+                is_optimistic_for_regional_filtering: false,
+                builder_id: Some("PrimevBuilder".to_string()),
+                builder_ids: Some(vec!["PrimevBuilder".to_string()]),
+            })
+            .await?;
         }
 
         let primev_validators =
             primev_service.get_registered_primev_validators(proposer_duties).await;
-        self.auctioneer.update_primev_proposers(&primev_validators).await?;
+        auctioneer.update_primev_proposers(&primev_validators).await?;
 
         Ok(())
     }
