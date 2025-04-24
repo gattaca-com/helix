@@ -86,7 +86,6 @@ thiserror = "1.0.49"
 tikv-jemallocator = { version = "0.5", features = ["profiling"] }
 tokio = { version = "1.43", features = ["full"] }
 tokio-postgres = "0.7.10"
-tokio-stream = { version = "0.1.15", features = ["sync"] }
 tokio-tungstenite = "0.16"
 tonic = "0.10"
 tonic-build = "0.10"

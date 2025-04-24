@@ -1,4 +1,4 @@
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{bytes::Bytes, B256, U256};
 use async_trait::async_trait;
 use helix_common::{
     bid_submission::v2::header_submission::SignedHeaderSubmission, builder_info::BuilderInfo,
@@ -8,7 +8,7 @@ use helix_database::BuilderInfoDocument;
 use helix_types::{
     BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid,
 };
-use tokio_stream::Stream;
+use tokio::sync::broadcast;
 
 use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse};
 
@@ -29,9 +29,7 @@ pub trait Auctioneer: Send + Sync + Clone {
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<Option<SignedBuilderBid>, AuctioneerError>;
 
-    async fn get_best_bids(
-        &self,
-    ) -> Box<dyn Stream<Item = Result<Vec<u8>, AuctioneerError>> + Send + Unpin>;
+    fn get_best_bids(&self) -> broadcast::Receiver<Bytes>;
 
     async fn save_execution_payload(
         &self,

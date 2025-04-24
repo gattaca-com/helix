@@ -3,7 +3,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use helix_types::{BlsPublicKey, CryptoError};
-use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
 use crate::redis::error::RedisCacheError;
 
@@ -11,9 +10,6 @@ use crate::redis::error::RedisCacheError;
 pub enum AuctioneerError {
     #[error("unexpected value type")]
     UnexpectedValueType,
-
-    #[error("broadcast stream recv error {0}")]
-    BroadcastStreamRecvError(#[from] BroadcastStreamRecvError),
 
     #[error("crypto error: {0:?}")]
     CryptoError(CryptoError),
@@ -64,9 +60,7 @@ impl IntoResponse for AuctioneerError {
             AuctioneerError::ExecutionPayloadNotFound |
             AuctioneerError::BuilderNotFound { .. } => StatusCode::BAD_REQUEST,
 
-            AuctioneerError::BroadcastStreamRecvError(_) | AuctioneerError::RedisError(_) => {
-                StatusCode::INTERNAL_SERVER_ERROR
-            }
+            AuctioneerError::RedisError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
         (code, self.to_string()).into_response()

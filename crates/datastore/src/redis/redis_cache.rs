@@ -2,15 +2,15 @@
 
 use std::collections::HashMap;
 
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{bytes::Bytes, B256, U256};
 use async_trait::async_trait;
 use deadpool_redis::{Config, CreatePoolError, Pool, Runtime};
-use futures_util::TryStreamExt;
+use futures_util::StreamExt;
 use helix_common::{
     api::builder_api::TopBidUpdate,
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
     bid_submission_to_builder_bid, header_submission_to_builder_bid,
-    metrics::RedisMetricRecord,
+    metrics::{RedisMetricRecord, TopBidMetrics},
     pending_block::PendingBlock,
     signing::RelaySigningContext,
     BuilderInfo, ProposerInfo,
@@ -24,7 +24,6 @@ use redis::{AsyncCommands, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use ssz::Encode;
 use tokio::sync::broadcast;
-use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 use tracing::{error, info};
 
 use super::utils::{
@@ -72,7 +71,7 @@ return nil
 #[derive(Clone)]
 pub struct RedisCache {
     pool: Pool,
-    tx: broadcast::Sender<Vec<u8>>,
+    tx: broadcast::Sender<Bytes>,
 }
 
 #[allow(dead_code)]
@@ -111,7 +110,7 @@ impl RedisCache {
             let payload: String = match message.get_payload() {
                 Ok(payload) => payload,
                 Err(err) => {
-                    error!(err=%err, "Failed to get payload from message");
+                    error!(%err, "Failed to get payload from message");
                     continue;
                 }
             };
@@ -119,24 +118,28 @@ impl RedisCache {
             let data: String = match conn.get(payload).await {
                 Ok(data) => data,
                 Err(err) => {
-                    error!(err=%err, "Failed to get data from redis");
+                    error!(%err, "Failed to get data from redis");
                     continue;
                 }
             };
             let sig_bid: SignedBuilderBidWrapper = match serde_json::from_str(&data) {
                 Ok(sig_bid) => sig_bid,
                 Err(err) => {
-                    error!(err=%err, "Failed to deserialize data");
+                    error!(%err, "Failed to deserialize data");
                     continue;
                 }
             };
 
+            let received_at = sig_bid.received_at_ms;
+
             let top_bid_update: TopBidUpdate = sig_bid.into();
             //ssz encode the top bid update
-            let serialized = top_bid_update.as_ssz_bytes();
+            let serialized = Bytes::from(top_bid_update.as_ssz_bytes());
 
+            TopBidMetrics::top_bid_update_count();
+            TopBidMetrics::received_at(received_at);
             if let Err(err) = self.tx.send(serialized) {
-                error!(err=%err, "Failed to send top bid update");
+                error!(%err, "Failed to send top bid update");
                 continue;
             }
         }
@@ -597,12 +600,8 @@ impl Auctioneer for RedisCache {
         Ok(wrapped_bid.map(|wrapped_bid| wrapped_bid.bid))
     }
 
-    async fn get_best_bids(
-        &self,
-    ) -> Box<dyn Stream<Item = Result<Vec<u8>, AuctioneerError>> + Send + Unpin> {
-        let rx = self.tx.subscribe();
-        let stream = BroadcastStream::new(rx).map_err(AuctioneerError::from);
-        Box::new(stream)
+    fn get_best_bids(&self) -> broadcast::Receiver<Bytes> {
+        self.tx.subscribe()
     }
 
     async fn save_execution_payload(

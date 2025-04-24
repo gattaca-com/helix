@@ -36,7 +36,6 @@ serde_json.workspace = true
 serial_test.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tokio-stream.workspace = true
 tokio-tungstenite.workspace = true
 tonic.workspace = true
 tower.workspace = true

@@ -3996,7 +3996,6 @@ dependencies = [
  "serial_test",
  "thiserror 1.0.69",
  "tokio",
- "tokio-stream",
  "tokio-tungstenite 0.16.1",
  "tonic",
  "tonic-build",
@@ -4115,7 +4114,6 @@ dependencies = [
  "serial_test",
  "thiserror 1.0.69",
  "tokio",
- "tokio-stream",
  "tracing",
 ]
 
