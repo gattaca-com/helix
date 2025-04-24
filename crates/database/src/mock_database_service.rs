@@ -165,7 +165,7 @@ impl DatabaseService for MockDatabaseService {
     async fn store_block_submission(
         &self,
         _submission: Arc<SignedBidSubmission>,
-        _trace: Arc<SubmissionTrace>,
+        _trace: SubmissionTrace,
         _optimistic_version: i16,
     ) -> Result<(), DatabaseError> {
         Ok(())

@@ -28,8 +28,7 @@ const NBASE: u64 = 10000;
 /// E.g. some tests have shown that 1000_000_000_000_000_000_000_000_000 is stored as
 /// [0, 1, 0, 6, 0, 0, 0, 0, 3, 232]
 /// sign and dscale are still not used
-
-impl<'a> FromSql<'a> for PostgresNumeric {
+impl FromSql<'_> for PostgresNumeric {
     fn from_sql(
         _: &tokio_postgres::types::Type,
         raw: &[u8],

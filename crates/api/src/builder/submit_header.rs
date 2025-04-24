@@ -136,11 +136,10 @@ where
         );
 
         // Verify that we have a validator connected for this slot
-        if next_duty.is_none() {
+        let Some(next_duty) = next_duty else {
             warn!(?block_hash, "could not find slot duty");
             return Err(BuilderApiError::ProposerDutyNotFound);
-        }
-        let next_duty = next_duty.unwrap();
+        };
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes =
@@ -402,11 +401,8 @@ pub async fn decode_header_submission(
         })
         .unwrap_or(false);
 
-    let is_ssz = req
-        .headers()
-        .get("Content-Type")
-        .and_then(|val| val.to_str().ok())
-        .map_or(false, |v| v == "application/octet-stream");
+    let is_ssz = req.headers().get("Content-Type").and_then(|val| val.to_str().ok()) ==
+        Some("application/octet-stream");
 
     // Read the body
     let body = req.into_body();

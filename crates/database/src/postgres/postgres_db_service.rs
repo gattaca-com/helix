@@ -1157,7 +1157,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn store_block_submission(
         &self,
         submission: Arc<SignedBidSubmission>,
-        trace: Arc<SubmissionTrace>,
+        trace: SubmissionTrace,
         optimistic_version: i16,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_block_submission");

@@ -456,11 +456,7 @@ mod tests {
         let submission_trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
 
         db_service
-            .store_block_submission(
-                Arc::new(signed_bid_submission.into()),
-                Arc::new(submission_trace),
-                0,
-            )
+            .store_block_submission(Arc::new(signed_bid_submission.into()), submission_trace, 0)
             .await?;
         Ok(())
     }
