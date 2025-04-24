@@ -210,9 +210,7 @@ impl<DB: DatabaseService + 'static> BlockSimulator for RpcSimulator<DB> {
 async fn process_db_additions<DB: DatabaseService + 'static>(db: Arc<DB>, db_info: DbInfo) {
     match db_info {
         DbInfo::NewSubmission(submission, trace, version) => {
-            if let Err(err) =
-                db.store_block_submission(submission, Arc::new(trace), version as i16).await
-            {
+            if let Err(err) = db.store_block_submission(submission, trace, version as i16).await {
                 error!(%err, "failed to store block submission")
             }
         }

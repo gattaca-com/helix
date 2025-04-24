@@ -249,10 +249,8 @@ where
             file!(),
             line!(),
             async move {
-                if let Err(err) = api
-                    .db
-                    .store_block_submission(payload, Arc::new(trace), optimistic_version as i16)
-                    .await
+                if let Err(err) =
+                    api.db.store_block_submission(payload, trace, optimistic_version as i16).await
                 {
                     error!(%err, "failed to store block submission")
                 }

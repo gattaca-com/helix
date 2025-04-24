@@ -86,7 +86,7 @@ impl MultiBeaconClient {
             match join_result {
                 Ok(sync_status_result) => match sync_status_result {
                     Ok(sync_status) => {
-                        if best_sync_status.as_ref().map_or(true, |current_best| {
+                        if best_sync_status.as_ref().is_none_or(|current_best| {
                             current_best.head_slot < sync_status.head_slot
                         }) {
                             best_sync_status = Some(sync_status);

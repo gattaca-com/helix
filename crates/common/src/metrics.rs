@@ -398,7 +398,7 @@ impl<'a> DbMetricRecord<'a> {
     }
 }
 
-impl<'a> Drop for DbMetricRecord<'a> {
+impl Drop for DbMetricRecord<'_> {
     fn drop(&mut self) {
         if !self.has_recorded {
             self.record_failure();
@@ -465,7 +465,7 @@ impl<'a> RedisMetricRecord<'a> {
     }
 }
 
-impl<'a> Drop for RedisMetricRecord<'a> {
+impl Drop for RedisMetricRecord<'_> {
     fn drop(&mut self) {
         if !self.has_recorded {
             self.record_failure();
