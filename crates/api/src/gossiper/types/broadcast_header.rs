@@ -2,7 +2,7 @@ use alloy_primitives::B256;
 use helix_types::{BidTrace, BlsPublicKey, SignedBuilderBid, Slot};
 use ssz::{Decode, Encode};
 
-use crate::grpc;
+use crate::{gossiper::error::GossipError, grpc};
 
 #[derive(Clone, Debug)]
 pub struct BroadcastHeaderParams {
@@ -30,14 +30,15 @@ impl BroadcastHeaderParams {
 
 impl BroadcastHeaderParams {
     // TODO: impl SSZ serialisation for SignedBuilderBid instead of JSON
-    pub fn from_proto(proto_params: grpc::BroadcastHeaderParams) -> Self {
-        Self {
-            signed_builder_bid: serde_json::from_slice(&proto_params.signed_builder_bid).unwrap(),
-            bid_trace: BidTrace::from_ssz_bytes(&proto_params.bid_trace).unwrap(),
+    pub fn from_proto(proto_params: grpc::BroadcastHeaderParams) -> Result<Self, GossipError> {
+        Ok(Self {
+            signed_builder_bid: serde_json::from_slice(&proto_params.signed_builder_bid)?,
+            bid_trace: BidTrace::from_ssz_bytes(&proto_params.bid_trace)
+                .map_err(GossipError::SszDecodeError)?,
             is_cancellations_enabled: proto_params.is_cancellations_enabled,
             on_receive: proto_params.on_receive,
             payload_address: proto_params.payload_address,
-        }
+        })
     }
 
     // TODO: impl SSZ serialisation for SignedBuilderBid instead of JSON

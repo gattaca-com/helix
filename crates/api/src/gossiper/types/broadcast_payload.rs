@@ -1,7 +1,7 @@
 use helix_types::{BlsPublicKey, ForkName, ForkVersionDecode, PayloadAndBlobs};
 use ssz::Encode;
 
-use crate::grpc;
+use crate::{gossiper::error::GossipError, grpc};
 
 #[derive(Clone, Debug)]
 pub struct BroadcastPayloadParams {
@@ -11,19 +11,20 @@ pub struct BroadcastPayloadParams {
 }
 
 impl BroadcastPayloadParams {
-    pub fn from_proto(proto_params: grpc::BroadcastPayloadParams) -> Self {
+    pub fn from_proto(proto_params: grpc::BroadcastPayloadParams) -> Result<Self, GossipError> {
         let fork_name = proto_params.fork_name.and_then(|s| s.parse::<ForkName>().ok());
-        Self {
+        Ok(Self {
             execution_payload: decode_ssz_payload_and_blobs(
                 &proto_params.execution_payload,
                 fork_name,
             )
-            .unwrap(),
+            .map_err(GossipError::SszDecodeError)?,
             slot: proto_params.slot,
             proposer_pub_key: BlsPublicKey::deserialize(proto_params.proposer_pub_key.as_slice())
-                .unwrap(),
-        }
+                .map_err(GossipError::BlsDecodeError)?,
+        })
     }
+
     pub fn to_proto(&self) -> grpc::BroadcastPayloadParams {
         grpc::BroadcastPayloadParams {
             execution_payload: self.execution_payload.as_ssz_bytes(),

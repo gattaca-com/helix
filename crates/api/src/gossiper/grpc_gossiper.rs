@@ -342,7 +342,13 @@ impl GossipService for GrpcGossiperService {
         let size = inner.encoded_len();
         GossipMetrics::in_size(HEADER_ID, size);
 
-        let request = BroadcastHeaderParams::from_proto(inner);
+        let request = match BroadcastHeaderParams::from_proto(inner) {
+            Ok(request) => request,
+            Err(err) => {
+                error!(%err, "failed to decode header");
+                return Ok(Response::new(()));
+            }
+        };
         if let Err(err) = self.gossip_sender.send(GossipedMessage::Header(Box::new(request))).await
         {
             error!(%err, "failed to send header to builder");
@@ -361,7 +367,13 @@ impl GossipService for GrpcGossiperService {
         let size = inner.encoded_len();
         GossipMetrics::in_size(PAYLOAD_ID, size);
 
-        let request = BroadcastPayloadParams::from_proto(inner);
+        let request = match BroadcastPayloadParams::from_proto(inner) {
+            Ok(request) => request,
+            Err(err) => {
+                error!(%err, "failed to decode payload");
+                return Ok(Response::new(()));
+            }
+        };
         if let Err(err) = self.gossip_sender.send(GossipedMessage::Payload(Box::new(request))).await
         {
             error!(%err, "failed to send payload to builder");
@@ -380,7 +392,13 @@ impl GossipService for GrpcGossiperService {
         let size = inner.encoded_len();
         GossipMetrics::in_size(GET_PAYLOAD_ID, size);
 
-        let request = BroadcastGetPayloadParams::from_proto(inner);
+        let request = match BroadcastGetPayloadParams::from_proto(inner) {
+            Ok(request) => request,
+            Err(err) => {
+                error!(%err, "failed to decode get payload");
+                return Ok(Response::new(()));
+            }
+        };
         if let Err(err) =
             self.gossip_sender.send(GossipedMessage::GetPayload(Box::new(request))).await
         {
@@ -400,7 +418,13 @@ impl GossipService for GrpcGossiperService {
         let size = inner.encoded_len();
         GossipMetrics::in_size(REQUEST_PAYLOAD_ID, size);
 
-        let request = RequestPayloadParams::from_proto(inner);
+        let request = match RequestPayloadParams::from_proto(inner) {
+            Ok(request) => request,
+            Err(err) => {
+                error!(%err, "failed to decode request payload");
+                return Ok(Response::new(()));
+            }
+        };
         if let Err(err) =
             self.gossip_sender.send(GossipedMessage::RequestPayload(Box::new(request))).await
         {

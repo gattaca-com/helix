@@ -1,7 +1,7 @@
 use alloy_primitives::B256;
 use helix_types::BlsPublicKey;
 
-use crate::grpc;
+use crate::{gossiper::error::GossipError, grpc};
 
 #[derive(Clone, Debug)]
 pub struct RequestPayloadParams {
@@ -11,13 +11,13 @@ pub struct RequestPayloadParams {
 }
 
 impl RequestPayloadParams {
-    pub fn from_proto(proto_params: grpc::RequestPayloadParams) -> Self {
-        Self {
+    pub fn from_proto(proto_params: grpc::RequestPayloadParams) -> Result<Self, GossipError> {
+        Ok(Self {
             slot: proto_params.slot,
             proposer_pub_key: BlsPublicKey::deserialize(proto_params.proposer_pub_key.as_slice())
-                .unwrap(),
-            block_hash: B256::try_from(proto_params.block_hash.as_slice()).unwrap(),
-        }
+                .map_err(GossipError::BlsDecodeError)?,
+            block_hash: B256::try_from(proto_params.block_hash.as_slice())?,
+        })
     }
 
     pub fn to_proto(&self) -> grpc::RequestPayloadParams {
