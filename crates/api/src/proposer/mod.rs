@@ -25,19 +25,18 @@ use hyper::StatusCode;
 use tokio::sync::mpsc::{Receiver, Sender};
 pub use types::*;
 
-use crate::gossiper::{traits::GossipClientTrait, types::GossipedMessage};
+use crate::gossiper::{grpc_gossiper::GrpcGossiperClientManager, types::GossipedMessage};
 
 #[derive(Clone)]
-pub struct ProposerApi<A, DB, G, MP>
+pub struct ProposerApi<A, DB, MP>
 where
     A: Auctioneer,
     DB: DatabaseService,
-    G: GossipClientTrait + 'static,
     MP: MetadataProvider,
 {
     pub auctioneer: Arc<A>,
     pub db: Arc<DB>,
-    pub gossiper: Arc<G>,
+    pub gossiper: Arc<GrpcGossiperClientManager>,
     pub broadcasters: Vec<Arc<BlockBroadcaster>>,
     pub multi_beacon_client: Arc<MultiBeaconClient>,
     pub metadata_provider: Arc<MP>,
@@ -51,17 +50,16 @@ where
     pub v3_payload_request: Sender<(B256, BlsPublicKey, Vec<u8>)>,
 }
 
-impl<A, DB, G, MP> ProposerApi<A, DB, G, MP>
+impl<A, DB, MP> ProposerApi<A, DB, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    G: GossipClientTrait + 'static,
     MP: MetadataProvider + 'static,
 {
     pub fn new(
         auctioneer: Arc<A>,
         db: Arc<DB>,
-        gossiper: Arc<G>,
+        gossiper: Arc<GrpcGossiperClientManager>,
         metadata_provider: Arc<MP>,
         broadcasters: Vec<Arc<BlockBroadcaster>>,
         multi_beacon_client: Arc<MultiBeaconClient>,

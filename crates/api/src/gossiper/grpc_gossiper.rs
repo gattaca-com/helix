@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use async_trait::async_trait;
 use helix_common::{
     metrics::{GossipMetrics, BUILDER_GOSSIP_QUEUE, PROPOSER_GOSSIP_QUEUE},
     task,
@@ -14,7 +13,6 @@ use tracing::error;
 use crate::{
     gossiper::{
         error::GossipError,
-        traits::GossipClientTrait,
         types::{
             BroadcastGetPayloadParams, BroadcastHeaderParams, BroadcastPayloadParams,
             GossipedMessage, RequestPayloadParams,
@@ -255,11 +253,17 @@ impl GrpcGossiperClientManager {
                 .expect("failed to start gossiper service");
         });
     }
+
+    #[cfg(test)]
+    pub fn mock() -> Self {
+        Self { clients: vec![] }
+    }
 }
 
-#[async_trait]
-impl GossipClientTrait for GrpcGossiperClientManager {
-    async fn broadcast_header(&self, request: BroadcastHeaderParams) {
+impl GrpcGossiperClientManager {
+    /// Broadcast a header. The header will be saved if it is the best header for the receiving
+    /// relay. Only validated Headers are gossiped.
+    pub async fn broadcast_header(&self, request: BroadcastHeaderParams) {
         let request = request.to_proto();
 
         for client in self.clients.iter() {
@@ -273,7 +277,10 @@ impl GossipClientTrait for GrpcGossiperClientManager {
         }
     }
 
-    async fn broadcast_payload(&self, request: BroadcastPayloadParams) {
+    /// Broadcast a payload. This payload will always be saved to the receiving relay's Autcioneer.
+    /// This is because, the local relay has saved the payload's header and may have served it for
+    /// get_header. Only validated Payloads are gossiped.
+    pub async fn broadcast_payload(&self, request: BroadcastPayloadParams) {
         let request = request.to_proto();
 
         for client in self.clients.iter() {
@@ -287,7 +294,10 @@ impl GossipClientTrait for GrpcGossiperClientManager {
         }
     }
 
-    async fn broadcast_get_payload(&self, request: BroadcastGetPayloadParams) {
+    /// Broadcast a request for a payload. If the receiving relay has the payload, it will be able
+    /// to broadcast the block to the network. This is fallback mechanism for when the relay that
+    /// get_header was called on does not have the payload yet.
+    pub async fn broadcast_get_payload(&self, request: BroadcastGetPayloadParams) {
         let request = request.to_proto();
 
         for client in self.clients.iter() {
@@ -301,7 +311,7 @@ impl GossipClientTrait for GrpcGossiperClientManager {
         }
     }
 
-    async fn request_payload(&self, request: RequestPayloadParams) {
+    pub async fn request_payload(&self, request: RequestPayloadParams) {
         let request = request.to_proto();
 
         for client in self.clients.iter() {

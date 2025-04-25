@@ -34,7 +34,7 @@ use crate::{
         mock_simulator::MockSimulator,
     },
     constants::{MAX_BLINDED_BLOCK_LENGTH, _MAX_VAL_REGISTRATIONS_LENGTH},
-    gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
+    gossiper::{grpc_gossiper::GrpcGossiperClientManager, types::GossipedMessage},
     proposer::{self, ProposerApi},
     relay_data::DataApi,
 };
@@ -45,25 +45,21 @@ pub fn app() -> Router {
     let node = MockBeaconNode::new();
     let client = node.beacon_client();
 
-    let api_service = Arc::new(ProposerApi::<
-        MockAuctioneer,
-        MockDatabaseService,
-        MockGossiper,
-        DefaultMetadataProvider,
-    >::new(
-        Arc::new(MockAuctioneer::default()),
-        Arc::new(MockDatabaseService::default()),
-        Arc::new(MockGossiper::new().unwrap()),
-        Arc::new(DefaultMetadataProvider::default()),
-        vec![Arc::new(BlockBroadcaster::BeaconClient(client))],
-        Arc::new(MultiBeaconClient::new(vec![])),
-        Arc::new(ChainInfo::for_mainnet()),
-        Arc::new(ValidatorPreferences::default()),
-        gossip_receiver,
-        Default::default(),
-        v3_sender,
-        Default::default(),
-    ));
+    let api_service =
+        Arc::new(ProposerApi::<MockAuctioneer, MockDatabaseService, DefaultMetadataProvider>::new(
+            Arc::new(MockAuctioneer::default()),
+            Arc::new(MockDatabaseService::default()),
+            GrpcGossiperClientManager::mock().into(),
+            Arc::new(DefaultMetadataProvider::default()),
+            vec![Arc::new(BlockBroadcaster::BeaconClient(client))],
+            Arc::new(MultiBeaconClient::new(vec![])),
+            Arc::new(ChainInfo::for_mainnet()),
+            Arc::new(ValidatorPreferences::default()),
+            gossip_receiver,
+            Default::default(),
+            v3_sender,
+            Default::default(),
+        ));
 
     let data_api = Arc::new(DataApi::<MockDatabaseService>::new(
         Arc::new(ValidatorPreferences::default()),
@@ -78,7 +74,6 @@ pub fn app() -> Router {
                 ProposerApi::<
                     MockAuctioneer,
                     MockDatabaseService,
-                    MockGossiper,
                     DefaultMetadataProvider,
                 >::register_validators,
             ),
@@ -88,7 +83,6 @@ pub fn app() -> Router {
             get(ProposerApi::<
                 MockAuctioneer,
                 MockDatabaseService,
-                MockGossiper,
                 DefaultMetadataProvider,
             >::get_header),
         )
@@ -98,7 +92,6 @@ pub fn app() -> Router {
                 ProposerApi::<
                     MockAuctioneer,
                     MockDatabaseService,
-                    MockGossiper,
                     DefaultMetadataProvider,
                 >::get_payload,
             ),
@@ -122,15 +115,7 @@ pub fn app() -> Router {
 #[allow(clippy::type_complexity)]
 pub fn builder_api_app() -> (
     Router,
-    Arc<
-        BuilderApi<
-            MockAuctioneer,
-            MockDatabaseService,
-            MockSimulator,
-            MockGossiper,
-            DefaultMetadataProvider,
-        >,
-    >,
+    Arc<BuilderApi<MockAuctioneer, MockDatabaseService, MockSimulator, DefaultMetadataProvider>>,
     CurrentSlotInfo,
 ) {
     let (_gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10);
@@ -140,14 +125,13 @@ pub fn builder_api_app() -> (
         MockAuctioneer,
         MockDatabaseService,
         MockSimulator,
-        MockGossiper,
         DefaultMetadataProvider,
     >::new(
         Arc::new(MockAuctioneer::default()),
         Arc::new(MockDatabaseService::default()),
         Arc::new(ChainInfo::for_mainnet()),
         MockSimulator::default(),
-        Arc::new(MockGossiper::new().unwrap()),
+        GrpcGossiperClientManager::mock().into(),
         Arc::new(DefaultMetadataProvider::default()),
         Arc::new(RelaySigningContext::default()),
         RelayConfig::default(),
@@ -164,7 +148,6 @@ pub fn builder_api_app() -> (
                 MockAuctioneer,
                 MockDatabaseService,
                 MockSimulator,
-                MockGossiper,
                 DefaultMetadataProvider,
             >::get_validators),
         )
@@ -175,7 +158,6 @@ pub fn builder_api_app() -> (
                     MockAuctioneer,
                     MockDatabaseService,
                     MockSimulator,
-                    MockGossiper,
                     DefaultMetadataProvider,
                 >::submit_block,
             ),
@@ -186,7 +168,6 @@ pub fn builder_api_app() -> (
                 MockAuctioneer,
                 MockDatabaseService,
                 MockSimulator,
-                MockGossiper,
                 DefaultMetadataProvider,
             >::get_top_bid),
         )
@@ -213,7 +194,7 @@ pub fn builder_api_app() -> (
 #[allow(clippy::type_complexity)]
 pub fn proposer_api_app() -> (
     Router,
-    Arc<ProposerApi<MockAuctioneer, MockDatabaseService, MockGossiper, DefaultMetadataProvider>>,
+    Arc<ProposerApi<MockAuctioneer, MockDatabaseService, DefaultMetadataProvider>>,
     CurrentSlotInfo,
     Arc<MockAuctioneer>,
 ) {
@@ -224,25 +205,21 @@ pub fn proposer_api_app() -> (
     let client = node.beacon_client();
 
     let current_slot_info = CurrentSlotInfo::new();
-    let proposer_api_service = Arc::new(ProposerApi::<
-        MockAuctioneer,
-        MockDatabaseService,
-        MockGossiper,
-        DefaultMetadataProvider,
-    >::new(
-        auctioneer.clone(),
-        Arc::new(MockDatabaseService::default()),
-        Arc::new(MockGossiper::new().unwrap()),
-        Arc::new(DefaultMetadataProvider::default()),
-        vec![Arc::new(BlockBroadcaster::BeaconClient(client))],
-        Arc::new(MultiBeaconClient::new(vec![])),
-        Arc::new(ChainInfo::for_mainnet()),
-        Arc::new(ValidatorPreferences::default()),
-        gossip_receiver,
-        Default::default(),
-        v3_sender,
-        current_slot_info.clone(),
-    ));
+    let proposer_api_service =
+        Arc::new(ProposerApi::<MockAuctioneer, MockDatabaseService, DefaultMetadataProvider>::new(
+            auctioneer.clone(),
+            Arc::new(MockDatabaseService::default()),
+            GrpcGossiperClientManager::mock().into(),
+            Arc::new(DefaultMetadataProvider::default()),
+            vec![Arc::new(BlockBroadcaster::BeaconClient(client))],
+            Arc::new(MultiBeaconClient::new(vec![])),
+            Arc::new(ChainInfo::for_mainnet()),
+            Arc::new(ValidatorPreferences::default()),
+            gossip_receiver,
+            Default::default(),
+            v3_sender,
+            current_slot_info.clone(),
+        ));
 
     let router = Router::new()
         .route(
@@ -250,7 +227,6 @@ pub fn proposer_api_app() -> (
             get(ProposerApi::<
                 MockAuctioneer,
                 MockDatabaseService,
-                MockGossiper,
                 DefaultMetadataProvider,
             >::get_header),
         )
@@ -260,7 +236,6 @@ pub fn proposer_api_app() -> (
                 ProposerApi::<
                     MockAuctioneer,
                     MockDatabaseService,
-                    MockGossiper,
                     DefaultMetadataProvider,
                 >::get_payload,
             ),
@@ -272,7 +247,6 @@ pub fn proposer_api_app() -> (
                 ProposerApi::<
                     MockAuctioneer,
                     MockDatabaseService,
-                    MockGossiper,
                     DefaultMetadataProvider,
                 >::register_validators,
             ),

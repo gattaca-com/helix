@@ -17,21 +17,19 @@ use tokio::sync::mpsc::Receiver;
 use tracing::{error, info, warn};
 
 use super::V3Error;
-use crate::{
-    builder::{api::BuilderApi, error::BuilderApiError, traits::BlockSimulator, OptimisticVersion},
-    gossiper::traits::GossipClientTrait,
+use crate::builder::{
+    api::BuilderApi, error::BuilderApiError, traits::BlockSimulator, OptimisticVersion,
 };
 
 /// A task that fetches builder blocks for optimistic v3 submissions.
-pub async fn fetch_builder_blocks<A, DB, S, G, MP>(
-    api: Arc<BuilderApi<A, DB, S, G, MP>>,
+pub async fn fetch_builder_blocks<A, DB, S, MP>(
+    api: Arc<BuilderApi<A, DB, S, MP>>,
     mut receiver: Receiver<(B256, BlsPublicKey, Vec<u8>)>,
     signing_ctx: Arc<RelaySigningContext>,
 ) where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
-    G: GossipClientTrait + 'static,
     MP: MetadataProvider + 'static,
 {
     while let Some((block_hash, builder_pubkey, builder_address)) = receiver.recv().await {

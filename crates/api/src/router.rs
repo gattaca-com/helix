@@ -29,7 +29,6 @@ use crate::{
         multi_simulator::MultiSimulator,
         optimistic_simulator::OptimisticSimulator,
     },
-    gossiper::grpc_gossiper::GrpcGossiperClientManager,
     middleware::{inner_metrics_middleware, outer_metrics_middleware},
     proposer::{self, ProposerApi},
     relay_data::{BidsCache, DataApi, DeliveredPayloadsCache},
@@ -40,12 +39,10 @@ pub type BuilderApiProd<MP> = BuilderApi<
     RedisCache,
     PostgresDatabaseService,
     MultiSimulator<OptimisticSimulator<RedisCache, PostgresDatabaseService>>,
-    GrpcGossiperClientManager,
     MP,
 >;
 
-pub type ProposerApiProd<MP> =
-    ProposerApi<RedisCache, PostgresDatabaseService, GrpcGossiperClientManager, MP>;
+pub type ProposerApiProd<MP> = ProposerApi<RedisCache, PostgresDatabaseService, MP>;
 
 pub type DataApiProd = DataApi<PostgresDatabaseService>;
 
