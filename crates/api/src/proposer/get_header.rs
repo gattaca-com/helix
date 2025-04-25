@@ -269,7 +269,12 @@ pub fn is_mev_boost_client(client_name: &str) -> bool {
 
 /// Fetches the timestamp set by the mev-boost client when initialising the `get_header` request.
 fn get_x_mev_boost_header_start_ms(header_map: &HeaderMap) -> Option<u64> {
-    let start_time_str = header_map.get("X-MEVBoost-StartTimeUnixMS")?.to_str().ok()?;
+    const MEV_BOOST_START_TIME_HEADER: &str = "X-MEVBoost-StartTimeUnixMS";
+    const DATE_MS_HEADER: &str = "Date-Milliseconds";
+
+    let header =
+        header_map.get(DATE_MS_HEADER).or_else(|| header_map.get(MEV_BOOST_START_TIME_HEADER))?;
+    let start_time_str = header.to_str().ok()?;
     let start_time_ms: u64 = start_time_str.parse().ok()?;
     Some(start_time_ms)
 }
