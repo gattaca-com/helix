@@ -24,23 +24,14 @@ use tower_http::{
 use tracing::{info, warn};
 
 use crate::{
-    builder::{
-        api::{BuilderApi, MAX_PAYLOAD_LENGTH},
-        multi_simulator::MultiSimulator,
-        optimistic_simulator::OptimisticSimulator,
-    },
+    builder::api::{BuilderApi, MAX_PAYLOAD_LENGTH},
     middleware::{inner_metrics_middleware, outer_metrics_middleware},
     proposer::{self, ProposerApi},
     relay_data::{BidsCache, DataApi, DeliveredPayloadsCache},
     service::API_REQUEST_TIMEOUT,
 };
 
-pub type BuilderApiProd<MP> = BuilderApi<
-    RedisCache,
-    PostgresDatabaseService,
-    MultiSimulator<OptimisticSimulator<RedisCache, PostgresDatabaseService>>,
-    MP,
->;
+pub type BuilderApiProd<MP> = BuilderApi<RedisCache, PostgresDatabaseService, MP>;
 
 pub type ProposerApiProd<MP> = ProposerApi<RedisCache, PostgresDatabaseService, MP>;
 

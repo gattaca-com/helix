@@ -19,16 +19,15 @@ use tokio::{
 use tracing::{error, info};
 
 use super::V3Error;
-use crate::builder::{api::BuilderApi, traits::BlockSimulator};
+use crate::builder::api::BuilderApi;
 
-pub async fn run_api<A, DB, S, MP>(
+pub async fn run_api<A, DB, MP>(
     listening_port: u16,
-    builder_api: Arc<BuilderApi<A, DB, S, MP>>,
+    builder_api: Arc<BuilderApi<A, DB, MP>>,
 ) -> Result<(), Error>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    S: BlockSimulator + 'static,
     MP: MetadataProvider + 'static,
 {
     let tcp_listener = TcpListener::bind(format!("0.0.0.0:{listening_port}")).await?;
@@ -39,14 +38,13 @@ where
     Err(Error::other("TCP API listener exited"))
 }
 
-async fn handle_builder_connection<A, DB, S, MP>(
+async fn handle_builder_connection<A, DB, MP>(
     mut stream: TcpStream,
     remote_addr: SocketAddr,
-    builder_api: Arc<BuilderApi<A, DB, S, MP>>,
+    builder_api: Arc<BuilderApi<A, DB, MP>>,
 ) where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    S: BlockSimulator + 'static,
     MP: MetadataProvider + 'static,
 {
     info!(?remote_addr, "builder connection connected");

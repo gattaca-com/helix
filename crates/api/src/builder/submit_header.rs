@@ -29,23 +29,21 @@ use crate::{
     builder::{
         api::{sanity_check_block_submission, MAX_PAYLOAD_LENGTH},
         error::BuilderApiError,
-        traits::BlockSimulator,
     },
     proposer::{ShareHeader, HELIX_SHARE_HEADER},
 };
 
-impl<A, DB, S, MP> BuilderApi<A, DB, S, MP>
+impl<A, DB, MP> BuilderApi<A, DB, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    S: BlockSimulator + 'static,
     MP: MetadataProvider + 'static,
 {
     /// Handles the submission of a new payload header by performing various checks and
     /// verifications before saving the header to the auctioneer.
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_header(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, MP>>>,
+        Extension(api): Extension<Arc<BuilderApi<A, DB, MP>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
@@ -73,7 +71,7 @@ where
 
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_header_v3(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, MP>>>,
+        Extension(api): Extension<Arc<BuilderApi<A, DB, MP>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
@@ -101,7 +99,7 @@ where
     }
 
     pub(crate) async fn handle_submit_header(
-        api: &Arc<BuilderApi<A, DB, S, MP>>,
+        api: &Arc<BuilderApi<A, DB, MP>>,
         payload: SignedHeaderSubmission,
         payload_address: Option<Vec<u8>>,
         _block_tx_count: Option<u32>, // TODO

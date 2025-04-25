@@ -7,7 +7,6 @@ use std::{
 };
 
 use alloy_primitives::B256;
-use async_trait::async_trait;
 use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, task, BuilderInfo};
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
@@ -16,7 +15,7 @@ use reqwest::Client;
 use tokio::time::sleep;
 use tracing::{debug, error, warn, Instrument};
 
-use crate::builder::{rpc_simulator::RpcSimulator, traits::BlockSimulator, BlockSimRequest};
+use crate::builder::{rpc_simulator::RpcSimulator, BlockSimRequest};
 
 /// OptimisticSimulator is responsible for running simulations optimistically or synchronously based
 /// on the builder's status.
@@ -180,11 +179,8 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
 
         false
     }
-}
 
-#[async_trait]
-impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<A, DB> {
-    async fn process_request(
+    pub async fn process_request(
         &self,
         request: BlockSimRequest,
         builder_info: &BuilderInfo,
@@ -228,7 +224,7 @@ impl<A: Auctioneer, DB: DatabaseService> BlockSimulator for OptimisticSimulator<
         }
     }
 
-    async fn is_synced(&self) -> Result<bool, BlockSimError> {
+    pub async fn is_synced(&self) -> Result<bool, BlockSimError> {
         self.simulator.is_synced().await
     }
 }

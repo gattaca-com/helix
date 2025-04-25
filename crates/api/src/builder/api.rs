@@ -29,25 +29,25 @@ use ssz::Decode;
 use tokio::sync::mpsc::{self};
 use tracing::{debug, error, info, warn};
 
+use super::multi_simulator::MultiSimulator;
 use crate::{
-    builder::{error::BuilderApiError, traits::BlockSimulator, BlockSimRequest},
+    builder::{error::BuilderApiError, BlockSimRequest},
     gossiper::{grpc_gossiper::GrpcGossiperClientManager, types::GossipedMessage},
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
 
 #[derive(Clone)]
-pub struct BuilderApi<A, DB, S, MP>
+pub struct BuilderApi<A, DB, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    S: BlockSimulator + 'static,
     MP: MetadataProvider + 'static,
 {
     pub auctioneer: Arc<A>,
     pub db: Arc<DB>,
     pub chain_info: Arc<ChainInfo>,
-    pub simulator: S,
+    pub simulator: MultiSimulator<A, DB>,
     pub gossiper: Arc<GrpcGossiperClientManager>,
     pub metadata_provider: Arc<MP>,
     pub signing_context: Arc<RelaySigningContext>,
@@ -56,18 +56,17 @@ where
     pub _validator_preferences: Arc<ValidatorPreferences>,
 }
 
-impl<A, DB, S, MP> BuilderApi<A, DB, S, MP>
+impl<A, DB, MP> BuilderApi<A, DB, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    S: BlockSimulator + 'static,
     MP: MetadataProvider + 'static,
 {
     pub fn new(
         auctioneer: Arc<A>,
         db: Arc<DB>,
         chain_info: Arc<ChainInfo>,
-        simulator: S,
+        simulator: MultiSimulator<A, DB>,
         gossiper: Arc<GrpcGossiperClientManager>,
         metadata_provider: Arc<MP>,
         signing_context: Arc<RelaySigningContext>,
@@ -101,7 +100,7 @@ where
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/getValidators>
     pub async fn get_validators(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, MP>>>,
+        Extension(api): Extension<Arc<BuilderApi<A, DB, MP>>>,
     ) -> impl IntoResponse {
         if let Some(duty_bytes) = api.curr_slot_info.proposer_duties_response() {
             (StatusCode::OK, duty_bytes.0).into_response()

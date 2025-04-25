@@ -12,7 +12,6 @@ use serde_json::json;
 
 use crate::builder::{
     rpc_simulator::{BlockSimRpcResponse, JsonRpcError, RpcSimulator},
-    traits::BlockSimulator,
     BlockSimRequest,
 };
 
