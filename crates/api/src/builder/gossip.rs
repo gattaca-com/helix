@@ -29,7 +29,7 @@ impl<A: Api> BuilderApi<A> {
 
         // Verify that the gossiped header is not for a past slot
         let head_slot = self.curr_slot_info.head_slot();
-        if req.slot <= head_slot.as_u64() {
+        if req.slot() <= head_slot {
             debug!("received gossiped header for a past slot");
             return;
         }
@@ -38,9 +38,9 @@ impl<A: Api> BuilderApi<A> {
         if self
             .check_for_duplicate_block_hash(
                 &block_hash,
-                req.slot,
-                &req.parent_hash,
-                &req.proposer_pub_key,
+                req.slot().as_u64(),
+                req.parent_hash(),
+                req.proposer_pubkey(),
             )
             .await
             .is_err()
@@ -51,7 +51,7 @@ impl<A: Api> BuilderApi<A> {
         // Verify payload has not already been delivered
         match self.auctioneer.get_last_slot_delivered().await {
             Ok(Some(slot)) => {
-                if req.slot <= slot {
+                if req.slot().as_u64() <= slot {
                     debug!("payload already delivered");
                     return;
                 }
@@ -65,10 +65,10 @@ impl<A: Api> BuilderApi<A> {
         // Verify the bid value is above the floor bid
         let floor_bid_value = match self
             .check_if_bid_is_below_floor(
-                req.slot,
-                &req.parent_hash,
-                &req.proposer_pub_key,
-                &req.builder_pub_key,
+                req.slot().as_u64(),
+                req.parent_hash(),
+                req.proposer_pubkey(),
+                req.builder_pubkey(),
                 *req.signed_builder_bid.data.message.value(),
                 req.is_cancellations_enabled,
             )
@@ -106,7 +106,7 @@ impl<A: Api> BuilderApi<A> {
                 .auctioneer
                 .save_payload_address(
                     &req.bid_trace.block_hash,
-                    &req.builder_pub_key,
+                    &req.bid_trace.builder_pubkey,
                     payload_address,
                 )
                 .await
@@ -200,7 +200,7 @@ impl<A: Api> BuilderApi<A> {
     ) {
         self.gossip_header(
             builder_bid,
-            payload.bid_trace(),
+            payload.bid_trace().clone(),
             is_cancellations_enabled,
             on_receive,
             None,
@@ -212,18 +212,14 @@ impl<A: Api> BuilderApi<A> {
     pub(crate) async fn gossip_header(
         &self,
         builder_bid: SignedBuilderBid,
-        bid_trace: &BidTrace,
+        bid_trace: BidTrace,
         is_cancellations_enabled: bool,
         on_receive: u64,
         payload_address: Option<Vec<u8>>,
     ) {
         let params = BroadcastHeaderParams {
             signed_builder_bid: builder_bid,
-            bid_trace: bid_trace.clone(),
-            slot: bid_trace.slot,
-            parent_hash: bid_trace.parent_hash,
-            proposer_pub_key: bid_trace.proposer_pubkey.clone(),
-            builder_pub_key: bid_trace.builder_pubkey.clone(),
+            bid_trace,
             is_cancellations_enabled,
             on_receive,
             payload_address,

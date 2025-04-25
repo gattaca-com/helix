@@ -170,7 +170,7 @@ impl EthereumPrimevService {
         }
 
         let validator_pubkeys: Vec<Bytes> =
-            proposer_duties.iter().map(|duty| Bytes::from(duty.public_key.serialize())).collect();
+            proposer_duties.iter().map(|duty| Bytes::from(duty.pubkey.serialize())).collect();
 
         let func = match self.validator_contract.abi().function("areValidatorsOptedIn") {
             Ok(f) => f,
@@ -248,7 +248,7 @@ impl EthereumPrimevService {
         for (index, status) in opted_in_statuses.iter().enumerate() {
             if status.0 || status.1 || status.2 {
                 if let Some(duty) = proposer_duties.get(index) {
-                    opted_in_validators.push(duty.public_key.clone());
+                    opted_in_validators.push(duty.pubkey.clone());
                 }
             }
         }

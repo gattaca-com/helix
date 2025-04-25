@@ -418,8 +418,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         let proposer_duties = self.fetch_duties(epoch.as_u64()).await?;
 
         // Check if signed validator registrations exist for each proposer duty
-        let pubkeys: Vec<&BlsPublicKey> =
-            proposer_duties.iter().map(|duty| &duty.public_key).collect();
+        let pubkeys: Vec<&BlsPublicKey> = proposer_duties.iter().map(|duty| &duty.pubkey).collect();
         let signed_validator_registrations =
             self.fetch_signed_validator_registrations(pubkeys.as_slice()).await?;
 
@@ -430,7 +429,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             let mut formatted_proposer_duties = Vec::with_capacity(proposer_duties.len());
 
             for duty in proposer_duties.iter() {
-                if let Some(reg) = signed_validator_registrations.get(&duty.public_key) {
+                if let Some(reg) = signed_validator_registrations.get(&duty.pubkey) {
                     formatted_proposer_duties.push(BuilderGetValidatorsResponseEntry {
                         slot: duty.slot.into(),
                         validator_index: duty.validator_index,

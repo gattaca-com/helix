@@ -150,12 +150,12 @@ impl<A: Api> BuilderApi<A> {
     /// Returns: the bid submission in an Arc.
     pub(crate) async fn verify_submitted_block(
         &self,
-        payload: SignedBidSubmission,
+        payload: Arc<SignedBidSubmission>,
         next_duty: BuilderGetValidatorsResponseEntry,
         builder_info: &BuilderInfo,
         trace: &mut SubmissionTrace,
         payload_attributes: &PayloadAttributesUpdate,
-    ) -> Result<(Arc<SignedBidSubmission>, bool), BuilderApiError> {
+    ) -> Result<bool, BuilderApiError> {
         // Verify the payload signature
         if let Err(err) = payload.verify_signature(&self.chain_info.context) {
             warn!(%err, "failed to verify signature");
@@ -164,18 +164,11 @@ impl<A: Api> BuilderApi<A> {
         trace.signature = utcnow_ns();
 
         // Simulate the submission
-        let payload = Arc::new(payload);
         let was_simulated_optimistically = self
-            .simulate_submission(
-                payload.clone(),
-                builder_info,
-                trace,
-                next_duty.entry,
-                payload_attributes,
-            )
+            .simulate_submission(payload, builder_info, trace, next_duty.entry, payload_attributes)
             .await?;
 
-        Ok((payload, was_simulated_optimistically))
+        Ok(was_simulated_optimistically)
     }
 
     /// Checks if the bid in the payload is below the floor value.
@@ -299,7 +292,7 @@ impl<A: Api> BuilderApi<A> {
 
         let sim_request = BlockSimRequest::new(
             registration_info.registration.message.gas_limit,
-            payload.clone(),
+            payload,
             registration_info.preferences,
             payload_attributes.payload_attributes.parent_beacon_block_root,
         );
@@ -418,7 +411,7 @@ impl<A: Api> BuilderApi<A> {
 pub async fn decode_payload(
     req: Request<Body>,
     trace: &mut SubmissionTrace,
-) -> Result<(SignedBidSubmission, bool), BuilderApiError> {
+) -> Result<(Arc<SignedBidSubmission>, bool), BuilderApiError> {
     // Extract the query parameters
     let is_cancellations_enabled = req
         .uri()
@@ -500,7 +493,7 @@ pub async fn decode_payload(
         num_tx = payload.execution_payload().transactions().len(),
     );
 
-    Ok((payload, is_cancellations_enabled))
+    Ok((Arc::new(payload), is_cancellations_enabled))
 }
 
 /// - Validates the expected block.timestamp.

@@ -782,8 +782,7 @@ impl Auctioneer for RedisCache {
         state.set_latency_save_payload();
 
         // Sign builder bid with relay pubkey.
-        let cloned_submission = (*submission).clone();
-        let builder_bid = bid_submission_to_builder_bid(&cloned_submission, signing_context);
+        let builder_bid = bid_submission_to_builder_bid(submission, signing_context);
 
         // Save builder bid and update top bid/ floor keys if possible.
         self.save_signed_builder_bid_and_update_top_bid(
@@ -797,7 +796,7 @@ impl Auctioneer for RedisCache {
         .await?;
 
         record.record_success();
-        Ok(Some((builder_bid, cloned_submission.payload_and_blobs())))
+        Ok(Some((builder_bid, submission.payload_and_blobs())))
     }
 
     async fn get_top_bid_value(
@@ -1127,11 +1126,11 @@ impl Auctioneer for RedisCache {
 
         // get keys
         let proposer_keys: Vec<String> =
-            proposer_whitelist.iter().map(|proposer| format!("{:?}", proposer.pub_key)).collect();
+            proposer_whitelist.iter().map(|proposer| format!("{:?}", proposer.pubkey)).collect();
 
         // add or update proposers
         for proposer in proposer_whitelist {
-            let key_str = format!("{:?}", proposer.pub_key);
+            let key_str = format!("{:?}", proposer.pubkey);
             self.hset(PROPOSER_WHITELIST_KEY, &key_str, &proposer).await?;
         }
 
@@ -2053,8 +2052,8 @@ mod tests {
 
         cache
             .update_trusted_proposers(vec![
-                ProposerInfo { name: "test".to_string(), pub_key: get_fixed_pubkey(0) },
-                ProposerInfo { name: "test2".to_string(), pub_key: get_fixed_pubkey(1) },
+                ProposerInfo { name: "test".to_string(), pubkey: get_fixed_pubkey(0) },
+                ProposerInfo { name: "test2".to_string(), pubkey: get_fixed_pubkey(1) },
             ])
             .await
             .unwrap();
@@ -2071,7 +2070,7 @@ mod tests {
         cache
             .update_trusted_proposers(vec![ProposerInfo {
                 name: "test2".to_string(),
-                pub_key: get_fixed_pubkey(3),
+                pubkey: get_fixed_pubkey(3),
             }])
             .await
             .unwrap();

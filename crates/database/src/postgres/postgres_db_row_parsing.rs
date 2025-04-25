@@ -253,7 +253,7 @@ impl FromRow for ProposerInfo {
     {
         Ok(ProposerInfo {
             name: row.get::<&str, &str>("name").to_string(),
-            pub_key: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("pub_key"))?,
+            pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("pub_key"))?,
         })
     }
 }

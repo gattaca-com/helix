@@ -170,9 +170,9 @@ impl<A: Api> BuilderApi<A> {
         }
         trace.pre_checks = utcnow_ns();
 
-        let (payload, was_simulated_optimistically) = api
+        let was_simulated_optimistically = api
             .verify_submitted_block(
-                payload,
+                payload.clone(),
                 next_duty,
                 &builder_info,
                 &mut trace,
@@ -244,7 +244,7 @@ impl<A: Api> BuilderApi<A> {
             Some((builder_bid, execution_payload)) => {
                 api.gossip_header(
                     builder_bid,
-                    payload.bid_trace(),
+                    payload.bid_trace().clone(),
                     is_cancellations_enabled,
                     trace.receive,
                     None,
