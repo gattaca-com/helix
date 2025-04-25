@@ -34,7 +34,7 @@ use crate::{
         multi_simulator::MultiSimulator,
     },
     constants::{MAX_BLINDED_BLOCK_LENGTH, _MAX_VAL_REGISTRATIONS_LENGTH},
-    gossiper::{grpc_gossiper::GrpcGossiperClientManager, types::GossipedMessage},
+    gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::{self, ProposerApi},
     relay_data::DataApi,
     Api,
@@ -50,7 +50,6 @@ impl Api for MockApi {
 }
 
 pub fn app() -> Router {
-    let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
     let (v3_sender, _v3_receiver) = channel(32);
     let node = MockBeaconNode::new();
     let client = node.beacon_client();
@@ -64,7 +63,6 @@ pub fn app() -> Router {
         Arc::new(MultiBeaconClient::new(vec![])),
         Arc::new(ChainInfo::for_mainnet()),
         Arc::new(ValidatorPreferences::default()),
-        gossip_receiver,
         Default::default(),
         v3_sender,
         Default::default(),
@@ -107,7 +105,6 @@ pub fn app() -> Router {
 
 #[allow(clippy::type_complexity)]
 pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) {
-    let (_gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10);
     let current_slot_info = CurrentSlotInfo::new();
 
     let builder_api_service = BuilderApi::<MockApi>::new(
@@ -119,7 +116,6 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
         Arc::new(DefaultMetadataProvider::default()),
         Arc::new(RelaySigningContext::default()),
         RelayConfig::default(),
-        gossip_receiver,
         Arc::new(ValidatorPreferences::default()),
         current_slot_info.clone(),
     );
@@ -152,7 +148,6 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
 #[allow(clippy::type_complexity)]
 pub fn proposer_api_app(
 ) -> (Router, Arc<ProposerApi<MockApi>>, CurrentSlotInfo, Arc<MockAuctioneer>) {
-    let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
     let (v3_sender, _v3_receiver) = channel(32);
     let auctioneer = Arc::new(MockAuctioneer::default());
     let node = MockBeaconNode::new();
@@ -168,7 +163,6 @@ pub fn proposer_api_app(
         Arc::new(MultiBeaconClient::new(vec![])),
         Arc::new(ChainInfo::for_mainnet()),
         Arc::new(ValidatorPreferences::default()),
-        gossip_receiver,
         Default::default(),
         v3_sender,
         current_slot_info.clone(),

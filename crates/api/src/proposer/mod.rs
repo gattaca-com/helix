@@ -13,17 +13,14 @@ use std::sync::Arc;
 use alloy_primitives::B256;
 use axum::response::IntoResponse;
 use helix_beacon::{multi_beacon_client::MultiBeaconClient, BlockBroadcaster};
-use helix_common::{chain_info::ChainInfo, task, RelayConfig, ValidatorPreferences};
+use helix_common::{chain_info::ChainInfo, RelayConfig, ValidatorPreferences};
 use helix_housekeeper::CurrentSlotInfo;
 use helix_types::BlsPublicKey;
 use hyper::StatusCode;
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::Sender;
 pub use types::*;
 
-use crate::{
-    gossiper::{grpc_gossiper::GrpcGossiperClientManager, types::GossipedMessage},
-    Api,
-};
+use crate::{gossiper::grpc_gossiper::GrpcGossiperClientManager, Api};
 
 #[derive(Clone)]
 pub struct ProposerApi<A: Api> {
@@ -53,12 +50,11 @@ impl<A: Api> ProposerApi<A> {
         multi_beacon_client: Arc<MultiBeaconClient>,
         chain_info: Arc<ChainInfo>,
         validator_preferences: Arc<ValidatorPreferences>,
-        gossip_receiver: Receiver<GossipedMessage>,
         relay_config: RelayConfig,
         v3_payload_request: Sender<(B256, BlsPublicKey, Vec<u8>)>,
         curr_slot_info: CurrentSlotInfo,
     ) -> Self {
-        let api = Self {
+        Self {
             auctioneer,
             db,
             gossiper,
@@ -70,15 +66,7 @@ impl<A: Api> ProposerApi<A> {
             relay_config,
             v3_payload_request,
             curr_slot_info,
-        };
-
-        // Spin up gossip processing task
-        let api_clone = api.clone();
-        task::spawn(file!(), line!(), async move {
-            api_clone.process_gossiped_info(gossip_receiver).await;
-        });
-
-        api
+        }
     }
 }
 

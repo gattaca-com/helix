@@ -1,17 +1,16 @@
 use helix_common::{
-    bid_submission::BidSubmission, metrics::BUILDER_GOSSIP_QUEUE, task, utils::utcnow_ns,
-    GossipedHeaderTrace, GossipedPayloadTrace,
+    bid_submission::BidSubmission, task, utils::utcnow_ns, GossipedHeaderTrace,
+    GossipedPayloadTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_types::{BidTrace, PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
-use tokio::sync::mpsc::Receiver;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use super::api::BuilderApi;
 use crate::{
-    gossiper::types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
+    gossiper::types::{BroadcastHeaderParams, BroadcastPayloadParams},
     Api,
 };
 
@@ -189,29 +188,6 @@ impl<A: Api> BuilderApi<A> {
                 error!(%err, "failed to store gossiped payload trace")
             }
         });
-    }
-
-    /// This function should be run as a seperate async task.
-    /// Will process new gossiped messages from
-    pub(crate) async fn process_gossiped_info(&self, mut recveiver: Receiver<GossipedMessage>) {
-        while let Some(msg) = recveiver.recv().await {
-            BUILDER_GOSSIP_QUEUE.dec();
-            match msg {
-                GossipedMessage::Header(header) => {
-                    let api_clone = self.clone();
-                    task::spawn(file!(), line!(), async move {
-                        api_clone.process_gossiped_header(*header).await;
-                    });
-                }
-                GossipedMessage::Payload(payload) => {
-                    let api_clone = self.clone();
-                    task::spawn(file!(), line!(), async move {
-                        api_clone.process_gossiped_payload(*payload).await;
-                    });
-                }
-                _ => {}
-            }
-        }
     }
 
     async fn _gossip_new_submission(
