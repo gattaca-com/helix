@@ -26,15 +26,13 @@ use super::api::{log_save_bid_info, BuilderApi};
 use crate::builder::{
     api::{decode_payload, sanity_check_block_submission},
     error::BuilderApiError,
-    traits::BlockSimulator,
     OptimisticVersion,
 };
 
-impl<A, DB, S, MP> BuilderApi<A, DB, S, MP>
+impl<A, DB, MP> BuilderApi<A, DB, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    S: BlockSimulator + 'static,
     MP: MetadataProvider + 'static,
 {
     /// Handles the submission of a new block by performing various checks and verifications
@@ -50,7 +48,7 @@ where
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err, ret(level = Level::DEBUG))]
     pub async fn submit_block(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, MP>>>,
+        Extension(api): Extension<Arc<BuilderApi<A, DB, MP>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {

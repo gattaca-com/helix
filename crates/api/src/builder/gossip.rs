@@ -11,26 +11,21 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use super::api::BuilderApi;
-use crate::{
-    builder::traits::BlockSimulator,
-    gossiper::types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
-};
+use crate::gossiper::types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage};
 
-impl<A, DB, S, MP> BuilderApi<A, DB, S, MP>
+impl<A, DB, MP> BuilderApi<A, DB, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    S: BlockSimulator + 'static,
     MP: MetadataProvider + 'static,
 {
 }
 
 // Handle Gossiped Payloads
-impl<A, DB, S, MP> BuilderApi<A, DB, S, MP>
+impl<A, DB, MP> BuilderApi<A, DB, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    S: BlockSimulator + 'static,
     MP: MetadataProvider + 'static,
 {
     #[tracing::instrument(skip_all, fields(id = %Uuid::new_v4()))]

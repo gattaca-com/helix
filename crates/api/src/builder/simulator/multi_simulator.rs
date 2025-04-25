@@ -6,22 +6,23 @@ use std::{
     time::Duration,
 };
 
-use async_trait::async_trait;
 use helix_common::{simulator::BlockSimError, BuilderInfo};
+use helix_database::DatabaseService;
+use helix_datastore::Auctioneer;
 use tokio::time::sleep;
 
-use super::{traits::BlockSimulator, BlockSimRequest};
+use super::{optimistic_simulator::OptimisticSimulator, BlockSimRequest};
 
 #[derive(Clone)]
-pub struct MultiSimulator<B: BlockSimulator + Send + Sync> {
-    pub simulators: Arc<Vec<B>>,
+pub struct MultiSimulator<A: Auctioneer + 'static, DB: DatabaseService + 'static> {
+    pub simulators: Arc<Vec<OptimisticSimulator<A, DB>>>,
     next_index: Arc<AtomicUsize>,
     // never resized after init
     enabled: Arc<Vec<AtomicBool>>,
 }
 
-impl<B: BlockSimulator + Send + Sync> MultiSimulator<B> {
-    pub fn new(simulators: Vec<B>) -> Self {
+impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> MultiSimulator<A, DB> {
+    pub fn new(simulators: Vec<OptimisticSimulator<A, DB>>) -> Self {
         let enabled = vec![true; simulators.len()].into_iter().map(AtomicBool::new).collect();
         Self {
             simulators: Arc::new(simulators),
@@ -43,11 +44,8 @@ impl<B: BlockSimulator + Send + Sync> MultiSimulator<B> {
     pub fn clone_for_async(&self) -> Self {
         self.clone()
     }
-}
 
-#[async_trait]
-impl<B: BlockSimulator + Send + Sync> BlockSimulator for MultiSimulator<B> {
-    async fn process_request(
+    pub async fn process_request(
         &self,
         request: BlockSimRequest,
         builder_info: &BuilderInfo,
@@ -81,7 +79,7 @@ impl<B: BlockSimulator + Send + Sync> BlockSimulator for MultiSimulator<B> {
         }
     }
 
-    async fn is_synced(&self) -> Result<bool, BlockSimError> {
+    pub async fn is_synced(&self) -> Result<bool, BlockSimError> {
         // If any simulator is synced, then the multi-simulator is synced
         for simulator in self.simulators.iter() {
             if simulator.is_synced().await? {

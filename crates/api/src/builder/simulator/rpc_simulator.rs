@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, task, BuilderInfo};
 use helix_database::DatabaseService;
 use reqwest::{
@@ -10,7 +9,7 @@ use reqwest::{
 use serde_json::{json, Value};
 use tracing::{debug, error, info, Instrument};
 
-use crate::builder::{traits::BlockSimulator, BlockSimRequest, DbInfo};
+use crate::builder::{BlockSimRequest, DbInfo};
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct JsonRpcError {
@@ -107,11 +106,8 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
             Err(err) => Err(BlockSimError::RpcError(err.to_string())),
         }
     }
-}
 
-#[async_trait]
-impl<DB: DatabaseService + 'static> BlockSimulator for RpcSimulator<DB> {
-    async fn process_request(
+    pub async fn process_request(
         &self,
         request: BlockSimRequest,
         _builder_info: &BuilderInfo,
@@ -154,7 +150,7 @@ impl<DB: DatabaseService + 'static> BlockSimulator for RpcSimulator<DB> {
         }
     }
 
-    async fn is_synced(&self) -> Result<bool, BlockSimError> {
+    pub async fn is_synced(&self) -> Result<bool, BlockSimError> {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 

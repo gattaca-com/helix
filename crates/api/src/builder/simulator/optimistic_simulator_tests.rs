@@ -16,7 +16,6 @@ mod simulator_tests {
     use crate::builder::{
         optimistic_simulator::OptimisticSimulator,
         rpc_simulator::{BlockSimRpcResponse, JsonRpcError},
-        traits::BlockSimulator,
         BlockSimRequest,
     };
 

@@ -31,7 +31,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use crate::{
     builder::{
         api::{BuilderApi, MAX_PAYLOAD_LENGTH},
-        mock_simulator::MockSimulator,
+        multi_simulator::MultiSimulator,
     },
     constants::{MAX_BLINDED_BLOCK_LENGTH, _MAX_VAL_REGISTRATIONS_LENGTH},
     gossiper::{grpc_gossiper::GrpcGossiperClientManager, types::GossipedMessage},
@@ -115,30 +115,26 @@ pub fn app() -> Router {
 #[allow(clippy::type_complexity)]
 pub fn builder_api_app() -> (
     Router,
-    Arc<BuilderApi<MockAuctioneer, MockDatabaseService, MockSimulator, DefaultMetadataProvider>>,
+    Arc<BuilderApi<MockAuctioneer, MockDatabaseService, DefaultMetadataProvider>>,
     CurrentSlotInfo,
 ) {
     let (_gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10);
     let current_slot_info = CurrentSlotInfo::new();
 
-    let builder_api_service = BuilderApi::<
-        MockAuctioneer,
-        MockDatabaseService,
-        MockSimulator,
-        DefaultMetadataProvider,
-    >::new(
-        Arc::new(MockAuctioneer::default()),
-        Arc::new(MockDatabaseService::default()),
-        Arc::new(ChainInfo::for_mainnet()),
-        MockSimulator::default(),
-        GrpcGossiperClientManager::mock().into(),
-        Arc::new(DefaultMetadataProvider::default()),
-        Arc::new(RelaySigningContext::default()),
-        RelayConfig::default(),
-        gossip_receiver,
-        Arc::new(ValidatorPreferences::default()),
-        current_slot_info.clone(),
-    );
+    let builder_api_service =
+        BuilderApi::<MockAuctioneer, MockDatabaseService, DefaultMetadataProvider>::new(
+            Arc::new(MockAuctioneer::default()),
+            Arc::new(MockDatabaseService::default()),
+            Arc::new(ChainInfo::for_mainnet()),
+            MultiSimulator::new(vec![]),
+            GrpcGossiperClientManager::mock().into(),
+            Arc::new(DefaultMetadataProvider::default()),
+            Arc::new(RelaySigningContext::default()),
+            RelayConfig::default(),
+            gossip_receiver,
+            Arc::new(ValidatorPreferences::default()),
+            current_slot_info.clone(),
+        );
     let builder_api_service = Arc::new(builder_api_service);
 
     let mut router = Router::new()
@@ -147,7 +143,6 @@ pub fn builder_api_app() -> (
             get(BuilderApi::<
                 MockAuctioneer,
                 MockDatabaseService,
-                MockSimulator,
                 DefaultMetadataProvider,
             >::get_validators),
         )
@@ -157,7 +152,6 @@ pub fn builder_api_app() -> (
                 BuilderApi::<
                     MockAuctioneer,
                     MockDatabaseService,
-                    MockSimulator,
                     DefaultMetadataProvider,
                 >::submit_block,
             ),
@@ -167,7 +161,6 @@ pub fn builder_api_app() -> (
             get(BuilderApi::<
                 MockAuctioneer,
                 MockDatabaseService,
-                MockSimulator,
                 DefaultMetadataProvider,
             >::get_top_bid),
         )
