@@ -1282,19 +1282,19 @@ impl Auctioneer for RedisCache {
         let redis_builder_infos: Option<HashMap<String, BuilderInfo>> =
             self.hgetall(BUILDER_INFO_KEY).await?;
 
-        if redis_builder_infos.is_none() {
+        let Some(redis_builder_infos) = redis_builder_infos else {
             record.record_success();
             return Ok(pending_blocks);
-        }
+        };
 
-        for (bulder_pub_key_str, builder_info) in redis_builder_infos.unwrap() {
-            let builder_pubkey = get_pubkey_from_hex(&bulder_pub_key_str)?;
-            let builder_key_prefix =
-                format!("{}_*", get_pending_block_builder_key(&builder_pubkey));
-
+        for (bulder_pub_key_str, builder_info) in redis_builder_infos {
             if builder_info.is_optimistic {
+                let builder_pubkey = get_pubkey_from_hex(&bulder_pub_key_str)?;
+                let builder_key_prefix =
+                    format!("{}_*", get_pending_block_builder_key(&builder_pubkey));
+
                 let keys: Vec<String> = self.scan_keys(builder_key_prefix.as_str()).await?;
-                let builder_pubkey_clone = builder_pubkey.clone();
+
                 for key in keys {
                     let pending_block = self.hgetall_raw(key.as_str()).await?;
 
@@ -1323,7 +1323,7 @@ impl Auctioneer for RedisCache {
                     let pending_block = PendingBlock {
                         slot,
                         block_hash,
-                        builder_pubkey: builder_pubkey_clone.clone(),
+                        builder_pubkey: builder_pubkey.clone(),
                         header_receive_ms: header_received,
                         payload_receive_ms: payload_received,
                     };
@@ -2516,6 +2516,7 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
+        let builder_pub_key = BlsPublicKey::test_random();
         let builder_infos = vec![BuilderInfoDocument {
             builder_info: BuilderInfo {
                 collateral: U256::from(100),
@@ -2524,14 +2525,14 @@ mod tests {
                 builder_id: None,
                 builder_ids: None,
             },
-            pub_key: BlsPublicKey::test_random(),
+            pub_key: builder_pub_key.clone(),
         }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
 
         let slot = 42;
         let block_hash = B256::try_from([5u8; 32].as_ref()).unwrap();
-        let builder_pub_key = BlsPublicKey::test_random();
+
         let time = 1616237123000u64;
 
         cache.save_pending_block_header(slot, &builder_pub_key, &block_hash, time).await.unwrap();
@@ -2539,6 +2540,7 @@ mod tests {
         cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash, time).await.unwrap();
 
         let pending_blocks = cache.get_pending_blocks().await.unwrap();
+        assert_eq!(pending_blocks.len(), 1);
 
         for i in pending_blocks {
             assert_eq!(i.slot, slot);
@@ -2555,6 +2557,7 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
+        let builder_pub_key = BlsPublicKey::test_random();
         let builder_infos = vec![BuilderInfoDocument {
             builder_info: BuilderInfo {
                 collateral: U256::from(100),
@@ -2563,7 +2566,7 @@ mod tests {
                 builder_id: None,
                 builder_ids: None,
             },
-            pub_key: BlsPublicKey::test_random(),
+            pub_key: builder_pub_key.clone(),
         }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
@@ -2573,7 +2576,7 @@ mod tests {
         for i in 0..10 {
             let slot = i as u64;
             let block_hash = B256::try_from([i; 32].as_ref()).unwrap();
-            let builder_pub_key = BlsPublicKey::test_random();
+
             let time = utcnow_ns();
 
             cache
@@ -2589,13 +2592,14 @@ mod tests {
             expected_pending_blocks.push(PendingBlock {
                 slot,
                 block_hash,
-                builder_pubkey: builder_pub_key,
+                builder_pubkey: builder_pub_key.clone(),
                 header_receive_ms: Some(time),
                 payload_receive_ms: Some(time),
             });
         }
 
         let mut pending_blocks = cache.get_pending_blocks().await.unwrap();
+        assert_eq!(pending_blocks.len(), 10);
         pending_blocks.sort_by_key(|block| block.slot);
 
         for (actual, expected) in pending_blocks.iter().zip(expected_pending_blocks.iter()) {
@@ -2621,6 +2625,7 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
+        let builder_pub_key = BlsPublicKey::test_random();
         let builder_infos = vec![BuilderInfoDocument {
             builder_info: BuilderInfo {
                 collateral: U256::from(100),
@@ -2629,19 +2634,19 @@ mod tests {
                 builder_id: None,
                 builder_ids: None,
             },
-            pub_key: BlsPublicKey::test_random(),
+            pub_key: builder_pub_key.clone(),
         }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
 
         let slot = 42;
         let block_hash = B256::try_from([5u8; 32].as_ref()).unwrap();
-        let builder_pub_key = BlsPublicKey::test_random();
         let time = 1616237123000u64;
 
         cache.save_pending_block_payload(slot, &builder_pub_key, &block_hash, time).await.unwrap();
 
         let pending_blocks = cache.get_pending_blocks().await.unwrap();
+        assert_eq!(pending_blocks.len(), 1);
 
         for i in pending_blocks {
             assert_eq!(i.slot, slot);
@@ -2658,6 +2663,7 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
+        let builder_pub_key = BlsPublicKey::test_random();
         let builder_infos = vec![BuilderInfoDocument {
             builder_info: BuilderInfo {
                 collateral: U256::from(100),
@@ -2666,20 +2672,20 @@ mod tests {
                 builder_id: None,
                 builder_ids: None,
             },
-            pub_key: BlsPublicKey::test_random(),
+            pub_key: builder_pub_key.clone(),
         }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
 
         let slot = 42;
         let block_hash = B256::try_from([5u8; 32].as_ref()).unwrap();
-        let builder_pub_key = BlsPublicKey::test_random();
+
         let time = 1616237123000u64;
 
         cache.save_pending_block_header(slot, &builder_pub_key, &block_hash, time).await.unwrap();
 
         let pending_blocks = cache.get_pending_blocks().await.unwrap();
-
+        assert_eq!(pending_blocks.len(), 1);
         for i in pending_blocks {
             assert_eq!(i.slot, slot);
             assert_eq!(i.block_hash, block_hash);
@@ -2695,6 +2701,8 @@ mod tests {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
         cache.clear_cache().await.unwrap();
 
+        let builder_pub_key = BlsPublicKey::test_random();
+
         let builder_infos = vec![BuilderInfoDocument {
             builder_info: BuilderInfo {
                 collateral: U256::from(100),
@@ -2703,14 +2711,13 @@ mod tests {
                 builder_id: None,
                 builder_ids: None,
             },
-            pub_key: BlsPublicKey::test_random(),
+            pub_key: builder_pub_key.clone(),
         }];
 
         cache.update_builder_infos(builder_infos).await.unwrap();
 
         let slot = 42;
-        let block_hash = B256::try_from([5u8; 32].as_ref()).unwrap();
-        let builder_pub_key = BlsPublicKey::test_random();
+        let block_hash = B256::random();
         let time = 1616237123000u64;
 
         cache.save_pending_block_header(slot, &builder_pub_key, &block_hash, time).await.unwrap();
@@ -2723,6 +2730,7 @@ mod tests {
             .unwrap();
 
         let pending_blocks = cache.get_pending_blocks().await.unwrap();
+        assert_eq!(pending_blocks.len(), 1);
 
         for i in pending_blocks {
             assert_eq!(i.slot, slot);
