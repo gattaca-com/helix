@@ -14,7 +14,6 @@ use helix_common::{
     },
     bid_submission::BidSubmission,
     chain_info::ChainInfo,
-    metadata_provider::MetadataProvider,
     signing::RelaySigningContext,
     simulator::BlockSimError,
     task,
@@ -33,42 +32,33 @@ use super::multi_simulator::MultiSimulator;
 use crate::{
     builder::{error::BuilderApiError, BlockSimRequest},
     gossiper::{grpc_gossiper::GrpcGossiperClientManager, types::GossipedMessage},
+    Api,
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
 
 #[derive(Clone)]
-pub struct BuilderApi<A, DB, MP>
-where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    MP: MetadataProvider + 'static,
-{
-    pub auctioneer: Arc<A>,
-    pub db: Arc<DB>,
+pub struct BuilderApi<A: Api> {
+    pub auctioneer: Arc<A::Auctioneer>,
+    pub db: Arc<A::DatabaseService>,
     pub chain_info: Arc<ChainInfo>,
-    pub simulator: MultiSimulator<A, DB>,
+    pub simulator: MultiSimulator<A::Auctioneer, A::DatabaseService>,
     pub gossiper: Arc<GrpcGossiperClientManager>,
-    pub metadata_provider: Arc<MP>,
+    pub metadata_provider: Arc<A::MetadataProvider>,
     pub signing_context: Arc<RelaySigningContext>,
     pub relay_config: Arc<RelayConfig>,
     pub curr_slot_info: CurrentSlotInfo,
     pub _validator_preferences: Arc<ValidatorPreferences>,
 }
 
-impl<A, DB, MP> BuilderApi<A, DB, MP>
-where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    MP: MetadataProvider + 'static,
-{
+impl<A: Api> BuilderApi<A> {
     pub fn new(
-        auctioneer: Arc<A>,
-        db: Arc<DB>,
+        auctioneer: Arc<A::Auctioneer>,
+        db: Arc<A::DatabaseService>,
         chain_info: Arc<ChainInfo>,
-        simulator: MultiSimulator<A, DB>,
+        simulator: MultiSimulator<A::Auctioneer, A::DatabaseService>,
         gossiper: Arc<GrpcGossiperClientManager>,
-        metadata_provider: Arc<MP>,
+        metadata_provider: Arc<A::MetadataProvider>,
         signing_context: Arc<RelaySigningContext>,
         relay_config: RelayConfig,
         gossip_receiver: mpsc::Receiver<GossipedMessage>,
@@ -100,7 +90,7 @@ where
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/getValidators>
     pub async fn get_validators(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, MP>>>,
+        Extension(api): Extension<Arc<BuilderApi<A>>>,
     ) -> impl IntoResponse {
         if let Some(duty_bytes) = api.curr_slot_info.proposer_duties_response() {
             (StatusCode::OK, duty_bytes.0).into_response()

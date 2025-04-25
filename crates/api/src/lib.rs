@@ -7,8 +7,8 @@ use helix_common::{
     chain_info::ChainInfo, metadata_provider::MetadataProvider, signing::RelaySigningContext,
     RelayConfig,
 };
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_datastore::redis::redis_cache::RedisCache;
+use helix_database::DatabaseService;
+use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
 use service::ApiService;
 
@@ -29,17 +29,17 @@ mod grpc {
     include!(concat!(env!("OUT_DIR"), "/gossip.rs"));
 }
 
-pub fn start_api_service<MP: MetadataProvider>(
+pub fn start_api_service<A: Api>(
     config: RelayConfig,
-    db: Arc<PostgresDatabaseService>,
-    auctioneer: Arc<RedisCache>,
+    db: Arc<A::DatabaseService>,
+    auctioneer: Arc<A::Auctioneer>,
     chain_info: Arc<ChainInfo>,
     relay_signing_context: Arc<RelaySigningContext>,
     multi_beacon_client: Arc<MultiBeaconClient>,
-    metadata_provider: Arc<MP>,
+    metadata_provider: Arc<A::MetadataProvider>,
     current_slot_info: CurrentSlotInfo,
 ) {
-    tokio::spawn(ApiService::run(
+    tokio::spawn(ApiService::run::<A>(
         config.clone(),
         db,
         auctioneer,
@@ -49,4 +49,10 @@ pub fn start_api_service<MP: MetadataProvider>(
         multi_beacon_client,
         metadata_provider,
     ));
+}
+
+pub trait Api: Clone + Send + Sync + 'static {
+    type Auctioneer: Auctioneer;
+    type DatabaseService: DatabaseService;
+    type MetadataProvider: MetadataProvider;
 }

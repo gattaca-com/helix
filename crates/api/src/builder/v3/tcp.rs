@@ -5,12 +5,9 @@ use helix_common::{
     bid_submission::v3::header_submission_v3::{
         HeaderSubmissionV3, MessageHeader, MessageHeaderFlags, MessageType, SubmissionV3Error,
     },
-    metadata_provider::MetadataProvider,
     utils::utcnow_ns,
     HeaderSubmissionTrace,
 };
-use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use ssz::{Decode, Encode};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -19,17 +16,12 @@ use tokio::{
 use tracing::{error, info};
 
 use super::V3Error;
-use crate::builder::api::BuilderApi;
+use crate::{builder::api::BuilderApi, Api};
 
-pub async fn run_api<A, DB, MP>(
+pub async fn run_api<A: Api>(
     listening_port: u16,
-    builder_api: Arc<BuilderApi<A, DB, MP>>,
-) -> Result<(), Error>
-where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    MP: MetadataProvider + 'static,
-{
+    builder_api: Arc<BuilderApi<A>>,
+) -> Result<(), Error> {
     let tcp_listener = TcpListener::bind(format!("0.0.0.0:{listening_port}")).await?;
     while let Ok((socket, remote_addr)) = tcp_listener.accept().await {
         tokio::spawn(handle_builder_connection(socket, remote_addr, builder_api.clone()));
@@ -38,15 +30,11 @@ where
     Err(Error::other("TCP API listener exited"))
 }
 
-async fn handle_builder_connection<A, DB, MP>(
+async fn handle_builder_connection<A: Api>(
     mut stream: TcpStream,
     remote_addr: SocketAddr,
-    builder_api: Arc<BuilderApi<A, DB, MP>>,
-) where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    MP: MetadataProvider + 'static,
-{
+    builder_api: Arc<BuilderApi<A>>,
+) {
     info!(?remote_addr, "builder connection connected");
 
     let mut header_buffer = [0u8; size_of::<MessageHeader>()];

@@ -13,33 +13,26 @@ use std::sync::Arc;
 use alloy_primitives::B256;
 use axum::response::IntoResponse;
 use helix_beacon::{multi_beacon_client::MultiBeaconClient, BlockBroadcaster};
-use helix_common::{
-    chain_info::ChainInfo, metadata_provider::MetadataProvider, task, RelayConfig,
-    ValidatorPreferences,
-};
-use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
+use helix_common::{chain_info::ChainInfo, task, RelayConfig, ValidatorPreferences};
 use helix_housekeeper::CurrentSlotInfo;
 use helix_types::BlsPublicKey;
 use hyper::StatusCode;
 use tokio::sync::mpsc::{Receiver, Sender};
 pub use types::*;
 
-use crate::gossiper::{grpc_gossiper::GrpcGossiperClientManager, types::GossipedMessage};
+use crate::{
+    gossiper::{grpc_gossiper::GrpcGossiperClientManager, types::GossipedMessage},
+    Api,
+};
 
 #[derive(Clone)]
-pub struct ProposerApi<A, DB, MP>
-where
-    A: Auctioneer,
-    DB: DatabaseService,
-    MP: MetadataProvider,
-{
-    pub auctioneer: Arc<A>,
-    pub db: Arc<DB>,
+pub struct ProposerApi<A: Api> {
+    pub auctioneer: Arc<A::Auctioneer>,
+    pub db: Arc<A::DatabaseService>,
     pub gossiper: Arc<GrpcGossiperClientManager>,
     pub broadcasters: Vec<Arc<BlockBroadcaster>>,
     pub multi_beacon_client: Arc<MultiBeaconClient>,
-    pub metadata_provider: Arc<MP>,
+    pub metadata_provider: Arc<A::MetadataProvider>,
 
     /// Information about the current head slot and next proposer duty
     pub curr_slot_info: CurrentSlotInfo,
@@ -50,17 +43,12 @@ where
     pub v3_payload_request: Sender<(B256, BlsPublicKey, Vec<u8>)>,
 }
 
-impl<A, DB, MP> ProposerApi<A, DB, MP>
-where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    MP: MetadataProvider + 'static,
-{
+impl<A: Api> ProposerApi<A> {
     pub fn new(
-        auctioneer: Arc<A>,
-        db: Arc<DB>,
+        auctioneer: Arc<A::Auctioneer>,
+        db: Arc<A::DatabaseService>,
         gossiper: Arc<GrpcGossiperClientManager>,
-        metadata_provider: Arc<MP>,
+        metadata_provider: Arc<A::MetadataProvider>,
         broadcasters: Vec<Arc<BlockBroadcaster>>,
         multi_beacon_client: Arc<MultiBeaconClient>,
         chain_info: Arc<ChainInfo>,

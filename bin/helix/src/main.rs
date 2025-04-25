@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use eyre::eyre;
-use helix_api::start_api_service;
+use helix_api::{start_api_service, Api};
 use helix_beacon::start_beacon_client;
 use helix_common::{
     load_config, load_keypair,
@@ -11,8 +11,8 @@ use helix_common::{
     utils::{init_panic_hook, init_tracing_log},
     RelayConfig,
 };
-use helix_database::start_db_service;
-use helix_datastore::start_auctioneer;
+use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, start_db_service};
+use helix_datastore::{redis::redis_cache::RedisCache, start_auctioneer};
 use helix_housekeeper::start_housekeeper;
 use helix_types::BlsKeypair;
 use helix_website::website_service::WebsiteService;
@@ -22,6 +22,15 @@ use tracing::{error, info};
 
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
+
+#[derive(Clone)]
+struct ApiProd;
+
+impl Api for ApiProd {
+    type Auctioneer = RedisCache;
+    type DatabaseService = PostgresDatabaseService;
+    type MetadataProvider = DefaultMetadataProvider;
+}
 
 #[tokio::main]
 async fn main() {
@@ -72,7 +81,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     .await
     .map_err(|e| eyre!("housekeeper init: {e}"))?;
 
-    start_api_service(
+    start_api_service::<ApiProd>(
         config.clone(),
         db.clone(),
         auctioneer,

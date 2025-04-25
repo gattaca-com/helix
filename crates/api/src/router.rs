@@ -7,11 +7,7 @@ use axum::{
     routing::{get, post},
     Extension, Router,
 };
-use helix_common::{
-    metadata_provider::MetadataProvider, utils::extract_request_id, Route, RouterConfig,
-};
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_datastore::redis::redis_cache::RedisCache;
+use helix_common::{utils::extract_request_id, Route, RouterConfig};
 use hyper::{HeaderMap, Uri};
 use tower::{timeout::TimeoutLayer, BoxError, ServiceBuilder};
 use tower_governor::{
@@ -29,19 +25,14 @@ use crate::{
     proposer::{self, ProposerApi},
     relay_data::{BidsCache, DataApi, DeliveredPayloadsCache},
     service::API_REQUEST_TIMEOUT,
+    Api,
 };
 
-pub type BuilderApiProd<MP> = BuilderApi<RedisCache, PostgresDatabaseService, MP>;
-
-pub type ProposerApiProd<MP> = ProposerApi<RedisCache, PostgresDatabaseService, MP>;
-
-pub type DataApiProd = DataApi<PostgresDatabaseService>;
-
-pub fn build_router<MP: MetadataProvider>(
+pub fn build_router<A: Api>(
     router_config: &mut RouterConfig,
-    builder_api: Arc<BuilderApiProd<MP>>,
-    proposer_api: Arc<ProposerApiProd<MP>>,
-    data_api: Arc<DataApiProd>,
+    builder_api: Arc<BuilderApi<A>>,
+    proposer_api: Arc<ProposerApi<A>>,
+    data_api: Arc<DataApi<A>>,
     bids_cache: Arc<BidsCache>,
     delivered_payloads_cache: Arc<DeliveredPayloadsCache>,
 ) -> Router {
@@ -52,19 +43,19 @@ pub fn build_router<MP: MetadataProvider>(
 
     for route_info in router_config.enabled_routes.iter() {
         let method = match route_info.route {
-            Route::GetValidators => get(BuilderApiProd::<MP>::get_validators),
-            Route::SubmitBlock => post(BuilderApiProd::<MP>::submit_block),
-            Route::SubmitBlockOptimistic => post(BuilderApiProd::<MP>::submit_block_v2),
-            Route::SubmitHeader => post(BuilderApiProd::<MP>::submit_header),
-            Route::GetTopBid => get(BuilderApiProd::<MP>::get_top_bid),
+            Route::GetValidators => get(BuilderApi::<A>::get_validators),
+            Route::SubmitBlock => post(BuilderApi::<A>::submit_block),
+            Route::SubmitBlockOptimistic => post(BuilderApi::<A>::submit_block_v2),
+            Route::SubmitHeader => post(BuilderApi::<A>::submit_header),
+            Route::GetTopBid => get(BuilderApi::<A>::get_top_bid),
             Route::Status => get(proposer::status),
-            Route::RegisterValidators => post(ProposerApiProd::<MP>::register_validators),
-            Route::GetHeader => get(ProposerApiProd::<MP>::get_header),
-            Route::GetPayload => post(ProposerApiProd::<MP>::get_payload),
-            Route::ProposerPayloadDelivered => get(DataApiProd::proposer_payload_delivered),
-            Route::BuilderBidsReceived => get(DataApiProd::builder_bids_received),
-            Route::ValidatorRegistration => get(DataApiProd::validator_registration),
-            Route::SubmitHeaderV3 => post(BuilderApiProd::<MP>::submit_header_v3),
+            Route::RegisterValidators => post(ProposerApi::<A>::register_validators),
+            Route::GetHeader => get(ProposerApi::<A>::get_header),
+            Route::GetPayload => post(ProposerApi::<A>::get_payload),
+            Route::ProposerPayloadDelivered => get(DataApi::<A>::proposer_payload_delivered),
+            Route::BuilderBidsReceived => get(DataApi::<A>::builder_bids_received),
+            Route::ValidatorRegistration => get(DataApi::<A>::validator_registration),
+            Route::SubmitHeaderV3 => post(BuilderApi::<A>::submit_header_v3),
             _ => {
                 panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route_info.route);
             }
