@@ -14,20 +14,17 @@ use helix_common::{
     Filtering, ValidatorPreferences,
 };
 use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use helix_types::SignedValidatorRegistration;
 use tokio::time::Instant;
 use tracing::{debug, error, trace, warn};
 
 use super::ProposerApi;
-use crate::proposer::{error::ProposerApiError, PreferencesHeader};
+use crate::{
+    proposer::{error::ProposerApiError, PreferencesHeader},
+    Api,
+};
 
-impl<A, DB, MP> ProposerApi<A, DB, MP>
-where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    MP: MetadataProvider + 'static,
-{
+impl<A: Api> ProposerApi<A> {
     /// Registers a batch of validators to the relay.
     ///
     /// This function accepts a list of `SignedValidatorRegistration` objects and performs the
@@ -42,7 +39,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/registerValidator>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn register_validators(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, MP>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
         headers: HeaderMap,
         Json(registrations): Json<Vec<SignedValidatorRegistration>>,
     ) -> Result<StatusCode, ProposerApiError> {

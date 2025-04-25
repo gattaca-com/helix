@@ -3,13 +3,10 @@ use std::sync::Arc;
 use alloy_primitives::B256;
 use helix_common::{
     bid_submission::v3::header_submission_v3::{GetPayloadV3, SignedGetPayloadV3},
-    metadata_provider::MetadataProvider,
     signing::RelaySigningContext,
     utils::{utcnow_ms, utcnow_ns},
     SubmissionTrace,
 };
-use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use helix_types::{BlsPublicKey, SignedBidSubmission};
 use reqwest::Url;
 use ssz::{Decode, Encode};
@@ -17,18 +14,17 @@ use tokio::sync::mpsc::Receiver;
 use tracing::{error, info, warn};
 
 use super::V3Error;
-use crate::builder::{api::BuilderApi, error::BuilderApiError, OptimisticVersion};
+use crate::{
+    builder::{api::BuilderApi, error::BuilderApiError, OptimisticVersion},
+    Api,
+};
 
 /// A task that fetches builder blocks for optimistic v3 submissions.
-pub async fn fetch_builder_blocks<A, DB, MP>(
-    api: Arc<BuilderApi<A, DB, MP>>,
+pub async fn fetch_builder_blocks<A: Api>(
+    api: Arc<BuilderApi<A>>,
     mut receiver: Receiver<(B256, BlsPublicKey, Vec<u8>)>,
     signing_ctx: Arc<RelaySigningContext>,
-) where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    MP: MetadataProvider + 'static,
-{
+) {
     while let Some((block_hash, builder_pubkey, builder_address)) = receiver.recv().await {
         let receive = utcnow_ns();
         let trace = SubmissionTrace { receive, ..Default::default() };

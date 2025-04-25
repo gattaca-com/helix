@@ -31,14 +31,10 @@ use crate::{
     constants::{GET_PAYLOAD_REQUEST_CUTOFF_MS, MAX_BLINDED_BLOCK_LENGTH},
     gossiper::types::{BroadcastGetPayloadParams, RequestPayloadParams},
     proposer::{error::ProposerApiError, unblind_beacon_block},
+    Api,
 };
 
-impl<A, DB, MP> ProposerApi<A, DB, MP>
-where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    MP: MetadataProvider + 'static,
-{
+impl<A: Api> ProposerApi<A> {
     /// Retrieves the execution payload for a given blinded beacon block.
     ///
     /// This function accepts a `SignedBlindedBeaconBlock` as input and performs several steps:
@@ -52,7 +48,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlock>
     #[tracing::instrument(skip_all, fields(id))]
     pub async fn get_payload(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, MP>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<impl IntoResponse, ProposerApiError> {

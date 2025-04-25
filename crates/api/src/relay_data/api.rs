@@ -16,25 +16,28 @@ use helix_database::{error::DatabaseError, DatabaseService};
 use moka::sync::Cache;
 use tracing::warn;
 
-use crate::relay_data::error::DataApiError;
+use crate::{relay_data::error::DataApiError, Api};
 
 pub(crate) type BidsCache = Cache<String, Vec<ReceivedBlocksResponse>>;
 pub(crate) type DeliveredPayloadsCache = Cache<String, Vec<DeliveredPayloadsResponse>>;
 
 #[derive(Clone)]
-pub struct DataApi<DB: DatabaseService> {
+pub struct DataApi<A: Api> {
     validator_preferences: Arc<ValidatorPreferences>,
-    db: Arc<DB>,
+    db: Arc<A::DatabaseService>,
 }
 
-impl<DB: DatabaseService + 'static> DataApi<DB> {
-    pub fn new(validator_preferences: Arc<ValidatorPreferences>, db: Arc<DB>) -> Self {
+impl<A: Api> DataApi<A> {
+    pub fn new(
+        validator_preferences: Arc<ValidatorPreferences>,
+        db: Arc<A::DatabaseService>,
+    ) -> Self {
         Self { validator_preferences, db }
     }
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getDeliveredPayloads>
     pub async fn proposer_payload_delivered(
-        Extension(data_api): Extension<Arc<DataApi<DB>>>,
+        Extension(data_api): Extension<Arc<DataApi<A>>>,
         Extension(cache): Extension<Arc<DeliveredPayloadsCache>>,
         Query(mut params): Query<ProposerPayloadDeliveredParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
@@ -96,7 +99,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getReceivedBids>
     pub async fn builder_bids_received(
-        Extension(data_api): Extension<Arc<DataApi<DB>>>,
+        Extension(data_api): Extension<Arc<DataApi<A>>>,
         Extension(cache): Extension<Arc<BidsCache>>,
         Query(mut params): Query<BuilderBlocksReceivedParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
@@ -140,7 +143,7 @@ impl<DB: DatabaseService + 'static> DataApi<DB> {
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getValidatorRegistration>
     pub async fn validator_registration(
-        Extension(data_api): Extension<Arc<DataApi<DB>>>,
+        Extension(data_api): Extension<Arc<DataApi<A>>>,
         Query(params): Query<ValidatorRegistrationParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         match data_api.db.get_validator_registration(params.pubkey.clone()).await {

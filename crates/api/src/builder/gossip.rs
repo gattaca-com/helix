@@ -1,7 +1,6 @@
 use helix_common::{
-    bid_submission::BidSubmission, metadata_provider::MetadataProvider,
-    metrics::BUILDER_GOSSIP_QUEUE, task, utils::utcnow_ns, GossipedHeaderTrace,
-    GossipedPayloadTrace,
+    bid_submission::BidSubmission, metrics::BUILDER_GOSSIP_QUEUE, task, utils::utcnow_ns,
+    GossipedHeaderTrace, GossipedPayloadTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
@@ -11,23 +10,13 @@ use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use super::api::BuilderApi;
-use crate::gossiper::types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage};
-
-impl<A, DB, MP> BuilderApi<A, DB, MP>
-where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    MP: MetadataProvider + 'static,
-{
-}
+use crate::{
+    gossiper::types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
+    Api,
+};
 
 // Handle Gossiped Payloads
-impl<A, DB, MP> BuilderApi<A, DB, MP>
-where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    MP: MetadataProvider + 'static,
-{
+impl<A: Api> BuilderApi<A> {
     #[tracing::instrument(skip_all, fields(id = %Uuid::new_v4()))]
     pub async fn process_gossiped_header(&self, req: BroadcastHeaderParams) {
         let block_hash = req.signed_builder_bid.data.message.header().block_hash().0;

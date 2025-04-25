@@ -21,18 +21,16 @@ use hyper::HeaderMap;
 use tracing::{debug, error, info, warn, Instrument};
 
 use super::api::BuilderApi;
-use crate::builder::{
-    api::{decode_payload, sanity_check_block_submission},
-    error::BuilderApiError,
-    OptimisticVersion,
+use crate::{
+    builder::{
+        api::{decode_payload, sanity_check_block_submission},
+        error::BuilderApiError,
+        OptimisticVersion,
+    },
+    Api,
 };
 
-impl<A, DB, MP> BuilderApi<A, DB, MP>
-where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    MP: MetadataProvider + 'static,
-{
+impl<A: Api> BuilderApi<A> {
     /// Handles the submission of a new block by performing various checks and verifications
     /// before saving the submission to the auctioneer. This is expected to pair with submit_header.
     ///
@@ -46,7 +44,7 @@ where
     /// Implements this API: https://docs.titanrelay.xyz/builders/builder-integration#optimistic-v2
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_block_v2(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, MP>>>,
+        Extension(api): Extension<Arc<BuilderApi<A>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
@@ -82,7 +80,7 @@ where
     }
 
     pub(crate) async fn handle_optimistic_payload(
-        api: Arc<BuilderApi<A, DB, MP>>,
+        api: Arc<BuilderApi<A>>,
         payload: SignedBidSubmission,
         mut trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,

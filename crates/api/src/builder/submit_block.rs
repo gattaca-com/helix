@@ -23,18 +23,16 @@ use hyper::HeaderMap;
 use tracing::{debug, error, info, warn, Instrument, Level};
 
 use super::api::{log_save_bid_info, BuilderApi};
-use crate::builder::{
-    api::{decode_payload, sanity_check_block_submission},
-    error::BuilderApiError,
-    OptimisticVersion,
+use crate::{
+    builder::{
+        api::{decode_payload, sanity_check_block_submission},
+        error::BuilderApiError,
+        OptimisticVersion,
+    },
+    Api,
 };
 
-impl<A, DB, MP> BuilderApi<A, DB, MP>
-where
-    A: Auctioneer + 'static,
-    DB: DatabaseService + 'static,
-    MP: MetadataProvider + 'static,
-{
+impl<A: Api> BuilderApi<A> {
     /// Handles the submission of a new block by performing various checks and verifications
     /// before saving the submission to the auctioneer.
     ///
@@ -48,7 +46,7 @@ where
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err, ret(level = Level::DEBUG))]
     pub async fn submit_block(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, MP>>>,
+        Extension(api): Extension<Arc<BuilderApi<A>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {

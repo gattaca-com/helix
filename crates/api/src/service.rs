@@ -5,22 +5,23 @@ use helix_beacon::{
     multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
 };
 use helix_common::{
-    chain_info::ChainInfo, metadata_provider::MetadataProvider, signing::RelaySigningContext,
-    BroadcasterConfig, RelayConfig,
+    chain_info::ChainInfo, signing::RelaySigningContext, BroadcasterConfig, RelayConfig,
 };
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_datastore::redis::redis_cache::RedisCache;
 use helix_housekeeper::CurrentSlotInfo;
 use moka::sync::Cache;
 use tokio::{sync::mpsc, time::timeout};
 use tracing::{error, info};
 
 use crate::{
-    builder,
-    builder::{multi_simulator::MultiSimulator, optimistic_simulator::OptimisticSimulator},
+    builder::{
+        self, api::BuilderApi, multi_simulator::MultiSimulator,
+        optimistic_simulator::OptimisticSimulator,
+    },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
-    relay_data::{BidsCache, DeliveredPayloadsCache},
-    router::{build_router, BuilderApiProd, DataApiProd, ProposerApiProd},
+    proposer::ProposerApi,
+    relay_data::{BidsCache, DataApi, DeliveredPayloadsCache},
+    router::build_router,
+    Api,
 };
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -30,15 +31,15 @@ const INIT_BROADCASTER_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct ApiService;
 
 impl ApiService {
-    pub async fn run<MP: MetadataProvider>(
+    pub async fn run<A: Api>(
         mut config: RelayConfig,
-        db: Arc<PostgresDatabaseService>,
-        auctioneer: Arc<RedisCache>,
+        db: Arc<A::DatabaseService>,
+        auctioneer: Arc<A::Auctioneer>,
         current_slot_info: CurrentSlotInfo,
         chain_info: Arc<ChainInfo>,
         relay_signing_context: Arc<RelaySigningContext>,
         multi_beacon_client: Arc<MultiBeaconClient>,
-        metadata_provider: Arc<MP>,
+        metadata_provider: Arc<A::MetadataProvider>,
     ) {
         let broadcasters = init_broadcasters(&config).await;
 
@@ -48,7 +49,7 @@ impl ApiService {
         let mut simulators = vec![];
 
         for cfg in &config.simulators {
-            let simulator = OptimisticSimulator::<RedisCache, PostgresDatabaseService>::new(
+            let simulator = OptimisticSimulator::<A::Auctioneer, A::DatabaseService>::new(
                 auctioneer.clone(),
                 db.clone(),
                 client.clone(),
@@ -72,7 +73,7 @@ impl ApiService {
         let (builder_gossip_sender, builder_gossip_receiver) = tokio::sync::mpsc::channel(10_000);
         let (proposer_gossip_sender, proposer_gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
-        let builder_api = BuilderApiProd::new(
+        let builder_api = BuilderApi::<A>::new(
             auctioneer.clone(),
             db.clone(),
             chain_info.clone(),
@@ -102,7 +103,7 @@ impl ApiService {
             relay_signing_context,
         ));
 
-        let proposer_api = Arc::new(ProposerApiProd::new(
+        let proposer_api = Arc::new(ProposerApi::<A>::new(
             auctioneer.clone(),
             db.clone(),
             gossiper.clone(),
@@ -117,7 +118,7 @@ impl ApiService {
             current_slot_info,
         ));
 
-        let data_api = Arc::new(DataApiProd::new(validator_preferences.clone(), db.clone()));
+        let data_api = Arc::new(DataApi::<A>::new(validator_preferences.clone(), db.clone()));
 
         let bids_cache: Arc<BidsCache> = Arc::new(
             Cache::builder()

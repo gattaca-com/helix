@@ -16,7 +16,10 @@ mod data_api_tests {
     use serial_test::serial;
     use tokio::sync::oneshot;
 
-    use crate::{relay_data::DataApi, test_utils::data_api_app};
+    use crate::{
+        relay_data::DataApi,
+        test_utils::{data_api_app, MockApi},
+    };
 
     const ADDRESS: &str = "0.0.0.0";
     const PORT: u16 = 3000;
@@ -42,12 +45,9 @@ mod data_api_tests {
         }
     }
 
-    async fn start_api_server() -> (
-        oneshot::Sender<()>,
-        HttpServiceConfig,
-        Arc<DataApi<MockDatabaseService>>,
-        Arc<MockDatabaseService>,
-    ) {
+    async fn start_api_server(
+    ) -> (oneshot::Sender<()>, HttpServiceConfig, Arc<DataApi<MockApi>>, Arc<MockDatabaseService>)
+    {
         let (tx, rx) = oneshot::channel();
         let http_config = HttpServiceConfig::new(ADDRESS, PORT);
         let bind_address = http_config.bind_address();
