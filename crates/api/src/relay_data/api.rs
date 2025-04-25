@@ -146,7 +146,7 @@ impl<A: Api> DataApi<A> {
         Extension(data_api): Extension<Arc<DataApi<A>>>,
         Query(params): Query<ValidatorRegistrationParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
-        match data_api.db.get_validator_registration(params.pubkey.clone()).await {
+        match data_api.db.get_validator_registration(&params.pubkey).await {
             Ok(result) => Ok(Json(result.registration_info.registration)),
             Err(err) => match err {
                 DatabaseError::ValidatorRegistrationNotFound => {
