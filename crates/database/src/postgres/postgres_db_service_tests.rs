@@ -127,31 +127,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_save_and_get_validator_registration() {
-        run_setup().await;
-
-        let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
-        db_service.start_registration_processor().await;
-
-        let registration = get_randomized_signed_validator_registration();
-
-        db_service
-            .save_validator_registration(registration.clone(), Some("test".to_string()), None)
-            .await
-            .unwrap();
-        sleep(Duration::from_secs(5)).await;
-
-        let result = db_service
-            .get_validator_registration(registration.registration.message.pubkey)
-            .await
-            .unwrap();
-        assert_eq!(
-            result.registration_info.registration.signature,
-            registration.registration.signature
-        );
-    }
-
-    #[tokio::test]
     async fn test_save_and_get_validator_registrations() {
         run_setup().await;
 
@@ -172,7 +147,7 @@ mod tests {
 
         for registration in registrations {
             let result = db_service
-                .get_validator_registration(registration.registration.message.pubkey)
+                .get_validator_registration(&registration.registration.message.pubkey)
                 .await
                 .unwrap();
             assert_eq!(
@@ -229,27 +204,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_save_and_get_validator_registration_timestamp() {
-        run_setup().await;
-
-        let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
-        db_service.start_registration_processor().await;
-
-        let registration = get_randomized_signed_validator_registration();
-        db_service
-            .save_validator_registration(registration.clone(), Some("test".to_string()), None)
-            .await
-            .unwrap();
-
-        sleep(Duration::from_secs(5)).await;
-
-        let result = db_service
-            .get_validator_registration_timestamp(registration.registration.message.pubkey)
-            .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
     async fn test_save_and_get_proposer_duties() {
         run_setup().await;
 
@@ -258,7 +212,11 @@ mod tests {
         for i in 0..10 {
             let registration = get_randomized_signed_validator_registration();
             db_service
-                .save_validator_registration(registration.clone(), Some("test".to_string()), None)
+                .save_validator_registrations(
+                    vec![registration.clone()],
+                    Some("test".to_string()),
+                    None,
+                )
                 .await
                 .unwrap();
 
@@ -392,11 +350,9 @@ mod tests {
         let result = db_service.store_builder_info(&public_key, &builder_info).await;
         assert!(result.is_ok());
 
-        let result = db_service.db_get_builder_info(&public_key).await;
-        assert!(result.is_ok());
-
-        let result = db_service.get_all_builder_infos().await;
-        assert!(result.is_ok());
+        let result = db_service.get_all_builder_infos().await.unwrap();
+        assert!(result.len() == 1);
+        assert!(result[0].pub_key == public_key);
     }
 
     #[tokio::test]

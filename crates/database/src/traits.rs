@@ -25,13 +25,6 @@ use crate::{
 
 #[async_trait]
 pub trait DatabaseService: Send + Sync + Clone {
-    async fn save_validator_registration(
-        &self,
-        entry: ValidatorRegistrationInfo,
-        pool_name: Option<String>,
-        user_agent: Option<String>,
-    ) -> Result<(), DatabaseError>;
-
     async fn save_validator_registrations(
         &self,
         entries: Vec<ValidatorRegistrationInfo>,
@@ -46,18 +39,13 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn get_validator_registration(
         &self,
-        pub_key: BlsPublicKey,
+        pub_key: &BlsPublicKey,
     ) -> Result<SignedValidatorRegistrationEntry, DatabaseError>;
 
     async fn get_validator_registrations_for_pub_keys(
         &self,
         pub_keys: &[&BlsPublicKey],
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError>;
-
-    async fn get_validator_registration_timestamp(
-        &self,
-        pub_key: BlsPublicKey,
-    ) -> Result<u64, DatabaseError>;
 
     async fn set_proposer_duties(
         &self,
@@ -114,11 +102,6 @@ pub trait DatabaseService: Send + Sync + Clone {
         &self,
         builders: &[BuilderInfoDocument],
     ) -> Result<(), DatabaseError>;
-
-    async fn db_get_builder_info(
-        &self,
-        builder_pub_key: &BlsPublicKey,
-    ) -> Result<BuilderInfo, DatabaseError>;
 
     async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError>;
 
@@ -192,12 +175,6 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn get_validator_pool_name(&self, api_key: &str)
         -> Result<Option<String>, DatabaseError>;
-
-    async fn update_trusted_builders(
-        &self,
-        validator_keys: &[BlsPublicKey],
-        trusted_builders: &[String],
-    ) -> Result<(), DatabaseError>;
 
     async fn get_validator_registrations(
         &self,

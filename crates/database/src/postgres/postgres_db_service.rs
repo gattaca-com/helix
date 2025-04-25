@@ -1,9 +1,4 @@
-use std::{
-    collections::HashSet,
-    ops::DerefMut,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::HashSet, ops::DerefMut, sync::Arc, time::SystemTime};
 
 use alloy_primitives::B256;
 use async_trait::async_trait;
@@ -438,92 +433,6 @@ impl Default for PostgresDatabaseService {
 
 #[async_trait]
 impl DatabaseService for PostgresDatabaseService {
-    async fn save_validator_registration(
-        &self,
-        registration_info: ValidatorRegistrationInfo,
-        pool_name: Option<String>,
-        user_agent: Option<String>,
-    ) -> Result<(), DatabaseError> {
-        let mut record = DbMetricRecord::new("save_validator_registration");
-
-        let registration = registration_info.registration.message.clone();
-
-        if let Some(entry) = self.validator_registration_cache.get(&registration.pubkey) {
-            if entry.registration_info.registration.message.timestamp >= registration.timestamp {
-                return Ok(());
-            }
-        }
-
-        let fee_recipient = &registration.fee_recipient;
-        let public_key = &registration.pubkey;
-        let signature = &registration_info.registration.signature;
-
-        let mut client = self.pool.get().await?;
-        let transaction = client.transaction().await?;
-
-        let inserted_at = SystemTime::now();
-
-        transaction
-            .execute(
-                "INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay, gossip_blobs)
-            VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (public_key)
-            DO UPDATE SET
-                filtering = excluded.filtering, trusted_builders = excluded.trusted_builders, header_delay = excluded.header_delay, gossip_blobs = excluded.gossip_blobs
-            ",
-                &[
-                    &public_key.serialize().as_slice(),
-                    &(registration_info.preferences.filtering as i16),
-                    &registration_info.preferences.trusted_builders,
-                    &registration_info.preferences.header_delay,
-                    &registration_info.preferences.gossip_blobs,
-                ],
-            )
-            .await?;
-
-        match transaction.execute(
-            "
-                INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at, user_agent)
-                VALUES ($1, $2, $3, $4, $5,$6,$7)
-                ON CONFLICT (public_key)
-                DO UPDATE SET
-                    fee_recipient = excluded.fee_recipient,
-                    gas_limit = excluded.gas_limit,
-                    timestamp = excluded.timestamp,
-                    signature = excluded.signature,
-                    inserted_at = excluded.inserted_at,
-                    user_agent = excluded.user_agent,
-                    active = true
-            ",
-            &[
-                &(fee_recipient.as_slice()),
-                &(registration.gas_limit as i32),
-                &(registration.timestamp as i64),
-                &(public_key.serialize().as_slice()),
-                &(signature.serialize().as_slice()),
-                &(inserted_at),
-                &(user_agent),
-            ],
-        ).await {
-            Ok(_) => {
-                self.validator_registration_cache.insert(public_key.clone(), SignedValidatorRegistrationEntry {
-                    registration_info,
-                    inserted_at: inserted_at.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64,
-                    pool_name,
-                    user_agent,
-                });
-            }
-            Err(e) => {
-                return Err(DatabaseError::from(e))
-            },
-        };
-
-        transaction.commit().await?;
-
-        record.record_success();
-        Ok(())
-    }
-
     async fn save_validator_registrations(
         &self,
         mut entries: Vec<ValidatorRegistrationInfo>,
@@ -561,31 +470,6 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(())
     }
 
-    async fn update_trusted_builders(
-        &self,
-        validator_keys: &[BlsPublicKey],
-        trusted_builders: &[String],
-    ) -> Result<(), DatabaseError> {
-        let mut record = DbMetricRecord::new("update_trusted_builders");
-
-        let client = self.pool.get().await?;
-
-        let validator_keys: Vec<_> = validator_keys.iter().map(|k| k.serialize()).collect();
-
-        client
-            .execute(
-                "UPDATE validator_preferences SET trusted_builders = $1 WHERE public_key = ANY($2)",
-                &[
-                    &trusted_builders,
-                    &validator_keys.iter().map(|key| key.as_slice()).collect::<Vec<&[u8]>>(),
-                ],
-            )
-            .await?;
-
-        record.record_success();
-        Ok(())
-    }
-
     async fn is_registration_update_required(
         &self,
         registration: &SignedValidatorRegistration,
@@ -604,7 +488,7 @@ impl DatabaseService for PostgresDatabaseService {
 
     async fn get_validator_registration(
         &self,
-        pub_key: BlsPublicKey,
+        pub_key: &BlsPublicKey,
     ) -> Result<SignedValidatorRegistrationEntry, DatabaseError> {
         let mut record = DbMetricRecord::new("get_validator_registration");
 
@@ -701,13 +585,6 @@ impl DatabaseService for PostgresDatabaseService {
 
         record.record_success();
         parse_rows(rows)
-    }
-
-    async fn get_validator_registration_timestamp(
-        &self,
-        pub_key: BlsPublicKey,
-    ) -> Result<u64, DatabaseError> {
-        self.get_validator_registration(pub_key).await.map(|entry| entry.inserted_at)
     }
 
     async fn set_proposer_duties(
@@ -1285,35 +1162,6 @@ impl DatabaseService for PostgresDatabaseService {
 
         record.record_success();
         Ok(())
-    }
-
-    async fn db_get_builder_info(
-        &self,
-        builder_pub_key: &BlsPublicKey,
-    ) -> Result<BuilderInfo, DatabaseError> {
-        let mut record = DbMetricRecord::new("get_builder_info");
-
-        match self
-            .pool
-            .get()
-            .await?
-            .query(
-                "
-                    SELECT * FROM builder_info 
-                    WHERE public_key = $1
-                ",
-                &[&(builder_pub_key.serialize().as_slice())],
-            )
-            .await?
-        {
-            rows if rows.is_empty() => {
-                Err(DatabaseError::BuilderInfoNotFound { public_key: builder_pub_key.clone() })
-            }
-            rows => {
-                record.record_success();
-                parse_row(rows.first().unwrap())
-            }
-        }
     }
 
     async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError> {

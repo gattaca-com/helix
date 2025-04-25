@@ -43,14 +43,6 @@ impl MockDatabaseService {
 
 #[async_trait]
 impl DatabaseService for MockDatabaseService {
-    async fn save_validator_registration(
-        &self,
-        _entry: ValidatorRegistrationInfo,
-        _pool_name: Option<String>,
-        _user_agent: Option<String>,
-    ) -> Result<(), DatabaseError> {
-        Ok(())
-    }
     async fn save_validator_registrations(
         &self,
         _entries: Vec<ValidatorRegistrationInfo>,
@@ -67,14 +59,14 @@ impl DatabaseService for MockDatabaseService {
     }
     async fn get_validator_registration(
         &self,
-        pubkey: BlsPublicKey,
+        pubkey: &BlsPublicKey,
     ) -> Result<SignedValidatorRegistrationEntry, DatabaseError> {
         let registration = SignedValidatorRegistration {
             message: ValidatorRegistrationData {
                 fee_recipient: Address::test_random(),
                 gas_limit: 1000000,
                 timestamp: 1000000,
-                pubkey,
+                pubkey: pubkey.clone(),
             },
             signature: BlsSignature::test_random(),
         };
@@ -95,16 +87,9 @@ impl DatabaseService for MockDatabaseService {
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError> {
         let mut entries = vec![];
         for &pubkey in pubkeys {
-            entries.push(self.get_validator_registration(pubkey.clone()).await?);
+            entries.push(self.get_validator_registration(pubkey).await?);
         }
         Ok(entries)
-    }
-
-    async fn get_validator_registration_timestamp(
-        &self,
-        _pub_key: BlsPublicKey,
-    ) -> Result<u64, DatabaseError> {
-        Ok(0)
     }
 
     async fn set_proposer_duties(
@@ -184,13 +169,6 @@ impl DatabaseService for MockDatabaseService {
         _builders: &[BuilderInfoDocument],
     ) -> Result<(), DatabaseError> {
         Ok(())
-    }
-
-    async fn db_get_builder_info(
-        &self,
-        _builder_pub_key: &BlsPublicKey,
-    ) -> Result<BuilderInfo, DatabaseError> {
-        Ok(BuilderInfo::default())
     }
 
     async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError> {
@@ -307,15 +285,6 @@ impl DatabaseService for MockDatabaseService {
         } else {
             Ok(None)
         }
-    }
-
-    async fn update_trusted_builders(
-        &self,
-        validator_keys: &[BlsPublicKey],
-        _trusted_builders: &[String],
-    ) -> Result<(), DatabaseError> {
-        println!("updating trusted builders: {:?}", validator_keys);
-        Ok(())
     }
 
     async fn get_validator_registrations(
