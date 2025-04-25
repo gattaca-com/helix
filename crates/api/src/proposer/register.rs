@@ -20,16 +20,12 @@ use tokio::time::Instant;
 use tracing::{debug, error, trace, warn};
 
 use super::ProposerApi;
-use crate::{
-    gossiper::traits::GossipClientTrait,
-    proposer::{error::ProposerApiError, PreferencesHeader},
-};
+use crate::proposer::{error::ProposerApiError, PreferencesHeader};
 
-impl<A, DB, G, MP> ProposerApi<A, DB, G, MP>
+impl<A, DB, MP> ProposerApi<A, DB, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    G: GossipClientTrait + 'static,
     MP: MetadataProvider + 'static,
 {
     /// Registers a batch of validators to the relay.
@@ -46,7 +42,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/registerValidator>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn register_validators(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G, MP>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, MP>>>,
         headers: HeaderMap,
         Json(registrations): Json<Vec<SignedValidatorRegistration>>,
     ) -> Result<StatusCode, ProposerApiError> {

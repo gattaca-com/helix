@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use async_trait::async_trait;
 use helix_common::{
     metrics::{GossipMetrics, BUILDER_GOSSIP_QUEUE, PROPOSER_GOSSIP_QUEUE},
     task,
@@ -14,7 +13,6 @@ use tracing::error;
 use crate::{
     gossiper::{
         error::GossipError,
-        traits::GossipClientTrait,
         types::{
             BroadcastGetPayloadParams, BroadcastHeaderParams, BroadcastPayloadParams,
             GossipedMessage, RequestPayloadParams,
@@ -255,11 +253,15 @@ impl GrpcGossiperClientManager {
                 .expect("failed to start gossiper service");
         });
     }
+
+    #[cfg(test)]
+    pub fn mock() -> Self {
+        Self { clients: vec![] }
+    }
 }
 
-#[async_trait]
-impl GossipClientTrait for GrpcGossiperClientManager {
-    async fn broadcast_header(&self, request: BroadcastHeaderParams) {
+impl GrpcGossiperClientManager {
+    pub async fn broadcast_header(&self, request: BroadcastHeaderParams) {
         let request = request.to_proto();
 
         for client in self.clients.iter() {
@@ -273,7 +275,7 @@ impl GossipClientTrait for GrpcGossiperClientManager {
         }
     }
 
-    async fn broadcast_payload(&self, request: BroadcastPayloadParams) {
+    pub async fn broadcast_payload(&self, request: BroadcastPayloadParams) {
         let request = request.to_proto();
 
         for client in self.clients.iter() {
@@ -287,7 +289,7 @@ impl GossipClientTrait for GrpcGossiperClientManager {
         }
     }
 
-    async fn broadcast_get_payload(&self, request: BroadcastGetPayloadParams) {
+    pub async fn broadcast_get_payload(&self, request: BroadcastGetPayloadParams) {
         let request = request.to_proto();
 
         for client in self.clients.iter() {
@@ -301,7 +303,7 @@ impl GossipClientTrait for GrpcGossiperClientManager {
         }
     }
 
-    async fn request_payload(&self, request: RequestPayloadParams) {
+    pub async fn request_payload(&self, request: RequestPayloadParams) {
         let request = request.to_proto();
 
         for client in self.clients.iter() {

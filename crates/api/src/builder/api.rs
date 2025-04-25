@@ -31,25 +31,24 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     builder::{error::BuilderApiError, traits::BlockSimulator, BlockSimRequest},
-    gossiper::{traits::GossipClientTrait, types::GossipedMessage},
+    gossiper::{grpc_gossiper::GrpcGossiperClientManager, types::GossipedMessage},
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
 
 #[derive(Clone)]
-pub struct BuilderApi<A, DB, S, G, MP>
+pub struct BuilderApi<A, DB, S, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
-    G: GossipClientTrait + 'static,
     MP: MetadataProvider + 'static,
 {
     pub auctioneer: Arc<A>,
     pub db: Arc<DB>,
     pub chain_info: Arc<ChainInfo>,
     pub simulator: S,
-    pub gossiper: Arc<G>,
+    pub gossiper: Arc<GrpcGossiperClientManager>,
     pub metadata_provider: Arc<MP>,
     pub signing_context: Arc<RelaySigningContext>,
     pub relay_config: Arc<RelayConfig>,
@@ -57,12 +56,11 @@ where
     pub _validator_preferences: Arc<ValidatorPreferences>,
 }
 
-impl<A, DB, S, G, MP> BuilderApi<A, DB, S, G, MP>
+impl<A, DB, S, MP> BuilderApi<A, DB, S, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
-    G: GossipClientTrait + 'static,
     MP: MetadataProvider + 'static,
 {
     pub fn new(
@@ -70,7 +68,7 @@ where
         db: Arc<DB>,
         chain_info: Arc<ChainInfo>,
         simulator: S,
-        gossiper: Arc<G>,
+        gossiper: Arc<GrpcGossiperClientManager>,
         metadata_provider: Arc<MP>,
         signing_context: Arc<RelaySigningContext>,
         relay_config: RelayConfig,
@@ -103,7 +101,7 @@ where
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/getValidators>
     pub async fn get_validators(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, MP>>>,
     ) -> impl IntoResponse {
         if let Some(duty_bytes) = api.curr_slot_info.proposer_duties_response() {
             (StatusCode::OK, duty_bytes.0).into_response()

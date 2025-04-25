@@ -18,15 +18,14 @@ use tracing::{debug, error, info, warn, Instrument};
 
 use super::ProposerApi;
 use crate::{
-    gossiper::{traits::GossipClientTrait, types::RequestPayloadParams},
+    gossiper::types::RequestPayloadParams,
     proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
 };
 
-impl<A, DB, G, MP> ProposerApi<A, DB, G, MP>
+impl<A, DB, MP> ProposerApi<A, DB, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    G: GossipClientTrait + 'static,
     MP: MetadataProvider + 'static,
 {
     /// Retrieves the best bid header for the specified slot, parent hash, and public key.
@@ -41,7 +40,7 @@ where
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/getHeader>
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn get_header(
-        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, G, MP>>>,
+        Extension(proposer_api): Extension<Arc<ProposerApi<A, DB, MP>>>,
         headers: HeaderMap,
         Path(GetHeaderParams { slot, parent_hash, public_key }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {

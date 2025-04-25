@@ -21,22 +21,18 @@ use hyper::HeaderMap;
 use tracing::{debug, error, info, warn, Instrument};
 
 use super::api::BuilderApi;
-use crate::{
-    builder::{
-        api::{decode_payload, sanity_check_block_submission},
-        error::BuilderApiError,
-        traits::BlockSimulator,
-        OptimisticVersion,
-    },
-    gossiper::traits::GossipClientTrait,
+use crate::builder::{
+    api::{decode_payload, sanity_check_block_submission},
+    error::BuilderApiError,
+    traits::BlockSimulator,
+    OptimisticVersion,
 };
 
-impl<A, DB, S, G, MP> BuilderApi<A, DB, S, G, MP>
+impl<A, DB, S, MP> BuilderApi<A, DB, S, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
-    G: GossipClientTrait + 'static,
     MP: MetadataProvider + 'static,
 {
     /// Handles the submission of a new block by performing various checks and verifications
@@ -52,7 +48,7 @@ where
     /// Implements this API: https://docs.titanrelay.xyz/builders/builder-integration#optimistic-v2
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_block_v2(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, MP>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
@@ -88,7 +84,7 @@ where
     }
 
     pub(crate) async fn handle_optimistic_payload(
-        api: Arc<BuilderApi<A, DB, S, G, MP>>,
+        api: Arc<BuilderApi<A, DB, S, MP>>,
         payload: SignedBidSubmission,
         mut trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,

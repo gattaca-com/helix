@@ -15,22 +15,18 @@ use tokio::time::{self};
 use tracing::{debug, error};
 
 use super::api::BuilderApi;
-use crate::{
-    builder::{error::BuilderApiError, traits::BlockSimulator},
-    gossiper::traits::GossipClientTrait,
-};
+use crate::builder::{error::BuilderApiError, traits::BlockSimulator};
 
-impl<A, DB, S, G, MP> BuilderApi<A, DB, S, G, MP>
+impl<A, DB, S, MP> BuilderApi<A, DB, S, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
-    G: GossipClientTrait + 'static,
     MP: MetadataProvider + 'static,
 {
     #[tracing::instrument(skip_all)]
     pub async fn get_top_bid(
-        Extension(api): Extension<Arc<BuilderApi<A, DB, S, G, MP>>>,
+        Extension(api): Extension<Arc<BuilderApi<A, DB, S, MP>>>,
         headers: HeaderMap,
         ws: WebSocketUpgrade,
     ) -> Result<impl IntoResponse, BuilderApiError> {

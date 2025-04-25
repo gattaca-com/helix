@@ -13,29 +13,24 @@ use uuid::Uuid;
 use super::api::BuilderApi;
 use crate::{
     builder::traits::BlockSimulator,
-    gossiper::{
-        traits::GossipClientTrait,
-        types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
-    },
+    gossiper::types::{BroadcastHeaderParams, BroadcastPayloadParams, GossipedMessage},
 };
 
-impl<A, DB, S, G, MP> BuilderApi<A, DB, S, G, MP>
+impl<A, DB, S, MP> BuilderApi<A, DB, S, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
-    G: GossipClientTrait + 'static,
     MP: MetadataProvider + 'static,
 {
 }
 
 // Handle Gossiped Payloads
-impl<A, DB, S, G, MP> BuilderApi<A, DB, S, G, MP>
+impl<A, DB, S, MP> BuilderApi<A, DB, S, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
     S: BlockSimulator + 'static,
-    G: GossipClientTrait + 'static,
     MP: MetadataProvider + 'static,
 {
     #[tracing::instrument(skip_all, fields(id = %Uuid::new_v4()))]

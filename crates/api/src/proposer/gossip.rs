@@ -13,16 +13,12 @@ use tracing::{debug, error, info};
 use uuid::Uuid;
 
 use super::ProposerApi;
-use crate::gossiper::{
-    traits::GossipClientTrait,
-    types::{BroadcastPayloadParams, GossipedMessage},
-};
+use crate::gossiper::types::{BroadcastPayloadParams, GossipedMessage};
 
-impl<A, DB, G, MP> ProposerApi<A, DB, G, MP>
+impl<A, DB, MP> ProposerApi<A, DB, MP>
 where
     A: Auctioneer + 'static,
     DB: DatabaseService + 'static,
-    G: GossipClientTrait + 'static,
     MP: MetadataProvider + 'static,
 {
     /// If there are blobs in the unblinded payload, this function will send them directly to the
