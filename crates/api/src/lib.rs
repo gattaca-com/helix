@@ -14,6 +14,7 @@ use service::ApiService;
 
 pub mod builder;
 pub mod constants;
+pub mod gossip;
 pub mod gossiper;
 pub mod integration_tests;
 pub mod middleware;

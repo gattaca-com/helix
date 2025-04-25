@@ -1,12 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
 use helix_common::{
-    metrics::{GossipMetrics, BUILDER_GOSSIP_QUEUE, PROPOSER_GOSSIP_QUEUE},
+    metrics::{GossipMetrics, GOSSIP_QUEUE},
     task,
 };
 use parking_lot::RwLock;
 use prost::Message;
-use tokio::{sync::mpsc::Sender, time::sleep};
+use tokio::{
+    sync::mpsc::{self},
+    time::sleep,
+};
 use tonic::{transport::Channel, Request, Response, Status};
 use tracing::error;
 
@@ -57,7 +60,7 @@ impl GrpcGossiperClient {
                         break;
                     }
                     Err(err) => {
-                        error!(err = %err, "failed to connect to {}", endpoint);
+                        error!(%err, "failed to connect to {}", endpoint);
                         let delay = std::cmp::min(base_delay * 2_u32.pow(attempt - 1), max_delay);
                         sleep(delay).await;
 
@@ -93,7 +96,7 @@ impl GrpcGossiperClient {
                     Ok(())
                 }
                 Ok(Err(err)) => {
-                    error!(err = %err, "Client call failed.");
+                    error!(%err, "Client call failed.");
                     GossipMetrics::out_count(HEADER_ID, false);
                     Err(GossipError::BroadcastError(err))
                 }
@@ -129,7 +132,7 @@ impl GrpcGossiperClient {
                     Ok(())
                 }
                 Ok(Err(err)) => {
-                    error!(err = %err, "Client call failed.");
+                    error!(%err, "Client call failed.");
                     GossipMetrics::out_count(PAYLOAD_ID, false);
                     Err(GossipError::BroadcastError(err))
                 }
@@ -165,7 +168,7 @@ impl GrpcGossiperClient {
                     Ok(())
                 }
                 Ok(Err(err)) => {
-                    error!(err = %err, "Client call failed.");
+                    error!(%err, "Client call failed.");
                     GossipMetrics::out_count(GET_PAYLOAD_ID, false);
                     Err(GossipError::BroadcastError(err))
                 }
@@ -200,7 +203,7 @@ impl GrpcGossiperClient {
                     Ok(())
                 }
                 Ok(Err(err)) => {
-                    error!(err = %err, "Client call failed.");
+                    error!(%err, "Client call failed.");
                     GossipMetrics::out_count(REQUEST_PAYLOAD_ID, false);
                     Err(GossipError::BroadcastError(err))
                 }
@@ -237,12 +240,8 @@ impl GrpcGossiperClientManager {
 
     /// Starts the gRPC server to listen for gossip requests on the 50051 port.
     /// Will panic if the server can't be started.
-    pub async fn start_server(
-        &self,
-        builder_api_sender: Sender<GossipedMessage>,
-        proposer_api_sender: Sender<GossipedMessage>,
-    ) {
-        let service = GrpcGossiperService { builder_api_sender, proposer_api_sender };
+    pub async fn start_server(&self, gossip_sender: mpsc::Sender<GossipedMessage>) {
+        let service = GrpcGossiperService { gossip_sender };
 
         let addr = "0.0.0.0:50051".parse().unwrap();
         task::spawn(file!(), line!(), async move {
@@ -329,8 +328,7 @@ impl GrpcGossiperClientManager {
 /// `GrpcGossiperService` listens to incoming requests from the other geo-distributed instances
 /// and processes them.
 pub struct GrpcGossiperService {
-    builder_api_sender: Sender<GossipedMessage>,
-    proposer_api_sender: Sender<GossipedMessage>,
+    gossip_sender: mpsc::Sender<GossipedMessage>,
 }
 
 #[tonic::async_trait]
@@ -345,12 +343,11 @@ impl GossipService for GrpcGossiperService {
         GossipMetrics::in_size(HEADER_ID, size);
 
         let request = BroadcastHeaderParams::from_proto(inner);
-        if let Err(err) =
-            self.builder_api_sender.send(GossipedMessage::Header(Box::new(request))).await
+        if let Err(err) = self.gossip_sender.send(GossipedMessage::Header(Box::new(request))).await
         {
-            error!(err = %err, "failed to send header to builder");
+            error!(%err, "failed to send header to builder");
         } else {
-            BUILDER_GOSSIP_QUEUE.inc();
+            GOSSIP_QUEUE.inc();
         }
         Ok(Response::new(()))
     }
@@ -365,12 +362,11 @@ impl GossipService for GrpcGossiperService {
         GossipMetrics::in_size(PAYLOAD_ID, size);
 
         let request = BroadcastPayloadParams::from_proto(inner);
-        if let Err(err) =
-            self.builder_api_sender.send(GossipedMessage::Payload(Box::new(request))).await
+        if let Err(err) = self.gossip_sender.send(GossipedMessage::Payload(Box::new(request))).await
         {
-            error!(err = %err, "failed to send payload to builder");
+            error!(%err, "failed to send payload to builder");
         } else {
-            BUILDER_GOSSIP_QUEUE.inc();
+            GOSSIP_QUEUE.inc();
         }
         Ok(Response::new(()))
     }
@@ -386,11 +382,11 @@ impl GossipService for GrpcGossiperService {
 
         let request = BroadcastGetPayloadParams::from_proto(inner);
         if let Err(err) =
-            self.proposer_api_sender.send(GossipedMessage::GetPayload(Box::new(request))).await
+            self.gossip_sender.send(GossipedMessage::GetPayload(Box::new(request))).await
         {
-            error!(err = %err, "failed to send get payload to builder");
+            error!(%err, "failed to send get payload to builder");
         } else {
-            PROPOSER_GOSSIP_QUEUE.inc();
+            GOSSIP_QUEUE.inc();
         }
         Ok(Response::new(()))
     }
@@ -406,11 +402,11 @@ impl GossipService for GrpcGossiperService {
 
         let request = RequestPayloadParams::from_proto(inner);
         if let Err(err) =
-            self.proposer_api_sender.send(GossipedMessage::RequestPayload(Box::new(request))).await
+            self.gossip_sender.send(GossipedMessage::RequestPayload(Box::new(request))).await
         {
-            error!(err = %err, "failed to send payload to builder");
+            error!(%err, "failed to send payload to builder");
         } else {
-            PROPOSER_GOSSIP_QUEUE.inc();
+            GOSSIP_QUEUE.inc();
         }
         Ok(Response::new(()))
     }

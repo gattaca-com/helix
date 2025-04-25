@@ -17,6 +17,7 @@ use crate::{
         self, api::BuilderApi, multi_simulator::MultiSimulator,
         optimistic_simulator::OptimisticSimulator,
     },
+    gossip::{self},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::ProposerApi,
     relay_data::{BidsCache, DataApi, DeliveredPayloadsCache},
@@ -70,8 +71,7 @@ impl ApiService {
 
         let validator_preferences = Arc::new(config.validator_preferences.clone());
 
-        let (builder_gossip_sender, builder_gossip_receiver) = tokio::sync::mpsc::channel(10_000);
-        let (proposer_gossip_sender, proposer_gossip_receiver) = tokio::sync::mpsc::channel(10_000);
+        let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
         let builder_api = BuilderApi::<A>::new(
             auctioneer.clone(),
@@ -82,13 +82,12 @@ impl ApiService {
             metadata_provider.clone(),
             relay_signing_context.clone(),
             config.clone(),
-            builder_gossip_receiver,
             validator_preferences.clone(),
             current_slot_info.clone(),
         );
         let builder_api = Arc::new(builder_api);
 
-        gossiper.start_server(builder_gossip_sender, proposer_gossip_sender).await;
+        gossiper.start_server(gossip_sender).await;
 
         let (v3_payload_request_send, v3_payload_request_recv) = mpsc::channel(32);
         if let Some(v3_port) = config.v3_port {
@@ -112,10 +111,15 @@ impl ApiService {
             multi_beacon_client,
             chain_info.clone(),
             validator_preferences.clone(),
-            proposer_gossip_receiver,
             config.clone(),
             v3_payload_request_send,
             current_slot_info,
+        ));
+
+        tokio::spawn(gossip::process_gossip_messages(
+            builder_api.clone(),
+            proposer_api.clone(),
+            gossip_receiver,
         ));
 
         let data_api = Arc::new(DataApi::<A>::new(validator_preferences.clone(), db.clone()));

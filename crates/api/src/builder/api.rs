@@ -16,7 +16,6 @@ use helix_common::{
     chain_info::ChainInfo,
     signing::RelaySigningContext,
     simulator::BlockSimError,
-    task,
     utils::utcnow_ns,
     BuilderInfo, RelayConfig, SubmissionTrace, ValidatorPreferences,
 };
@@ -25,13 +24,12 @@ use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{BlsPublicKey, SignedBidSubmission, Slot};
 use ssz::Decode;
-use tokio::sync::mpsc::{self};
 use tracing::{debug, error, info, warn};
 
 use super::multi_simulator::MultiSimulator;
 use crate::{
     builder::{error::BuilderApiError, BlockSimRequest},
-    gossiper::{grpc_gossiper::GrpcGossiperClientManager, types::GossipedMessage},
+    gossiper::grpc_gossiper::GrpcGossiperClientManager,
     Api,
 };
 
@@ -61,11 +59,10 @@ impl<A: Api> BuilderApi<A> {
         metadata_provider: Arc<A::MetadataProvider>,
         signing_context: Arc<RelaySigningContext>,
         relay_config: RelayConfig,
-        gossip_receiver: mpsc::Receiver<GossipedMessage>,
         validator_preferences: Arc<ValidatorPreferences>,
         curr_slot_info: CurrentSlotInfo,
     ) -> Self {
-        let api = Self {
+        Self {
             auctioneer,
             db,
             chain_info,
@@ -77,15 +74,7 @@ impl<A: Api> BuilderApi<A> {
 
             curr_slot_info,
             _validator_preferences: validator_preferences,
-        };
-
-        // Spin up gossip processing task
-        let api_clone = api.clone();
-        task::spawn(file!(), line!(), async move {
-            api_clone.process_gossiped_info(gossip_receiver).await;
-        });
-
-        api
+        }
     }
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/getValidators>

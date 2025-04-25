@@ -398,7 +398,7 @@ impl<A: Api> ProposerApi<A> {
     /// Fetches the execution payload associated with a given slot, public key, and block hash.
     ///
     /// The function will retry until the slot cutoff is reached.
-    pub(super) async fn get_execution_payload(
+    pub(crate) async fn get_execution_payload(
         &self,
         slot: u64,
         pub_key: &BlsPublicKey,
