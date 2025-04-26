@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use helix_common::{request_encoding::Encoding, utils::utcnow_ns};
+use helix_common::utils::utcnow_ns;
 use helix_types::VersionedSignedProposal;
 use ssz::Encode;
 use tracing::debug;
@@ -8,21 +8,16 @@ use tracing::debug;
 use crate::{error::BeaconClientError, types::BroadcastValidation};
 
 pub struct FiberBroadcaster {
-    _encoding: Encoding,
     client: fiber::Client,
 }
 
 impl FiberBroadcaster {
-    pub async fn new(
-        url: String,
-        api_key: String,
-        encoding: Encoding,
-    ) -> Result<Self, BeaconClientError> {
+    pub async fn new(url: String, api_key: String) -> Result<Self, BeaconClientError> {
         tokio::time::sleep(tokio::time::Duration::from_secs(12)).await;
         let client = fiber::Client::connect(url, api_key)
             .await
             .map_err(|err| BeaconClientError::BroadcasterInitError(format!("Fiber Err: {err}")))?;
-        Ok(Self { _encoding: encoding, client })
+        Ok(Self { client })
     }
 
     pub async fn broadcast_block(

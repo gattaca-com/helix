@@ -140,7 +140,6 @@ pub trait DatabaseService: Send + Sync + Clone {
         public_key: BlsPublicKey,
         best_block_hash: B256,
         trace: GetHeaderTrace,
-
         mev_boost: bool,
         user_agent: Option<String>,
     ) -> Result<(), DatabaseError>;

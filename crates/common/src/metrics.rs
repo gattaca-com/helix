@@ -256,13 +256,6 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref GOSSIP_QUEUE: Gauge = register_gauge_with_registry!(
-        "gossip_queue",
-        "Length of the gossip queue",
-        &RELAY_METRICS_REGISTRY
-    )
-    .unwrap();
-
     pub static ref TOP_BID_CONNECTIONS: Gauge = register_gauge_with_registry!(
         "top_bid_connections",
         "Count of top bid connections",

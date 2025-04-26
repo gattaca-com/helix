@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use helix_common::{metrics::GOSSIP_QUEUE, task, utils::utcnow_ns, GetPayloadTrace};
+use helix_common::{task, utils::utcnow_ns, GetPayloadTrace};
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 use uuid::Uuid;
@@ -18,7 +18,6 @@ pub async fn process_gossip_messages<A: Api>(
     mut rx: mpsc::Receiver<GossipedMessage>,
 ) {
     while let Some(msg) = rx.recv().await {
-        GOSSIP_QUEUE.dec();
         match msg {
             GossipedMessage::GetPayload(payload) => {
                 let proposer = proposer_api.clone();

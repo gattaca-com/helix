@@ -1,9 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use helix_common::{
-    metrics::{GossipMetrics, GOSSIP_QUEUE},
-    task,
-};
+use helix_common::{metrics::GossipMetrics, task};
 use parking_lot::RwLock;
 use prost::Message;
 use tokio::{
@@ -352,8 +349,6 @@ impl GossipService for GrpcGossiperService {
         if let Err(err) = self.gossip_sender.send(GossipedMessage::Header(Box::new(request))).await
         {
             error!(%err, "failed to send header to builder");
-        } else {
-            GOSSIP_QUEUE.inc();
         }
         Ok(Response::new(()))
     }
@@ -377,9 +372,8 @@ impl GossipService for GrpcGossiperService {
         if let Err(err) = self.gossip_sender.send(GossipedMessage::Payload(Box::new(request))).await
         {
             error!(%err, "failed to send payload to builder");
-        } else {
-            GOSSIP_QUEUE.inc();
         }
+
         Ok(Response::new(()))
     }
 
@@ -403,8 +397,6 @@ impl GossipService for GrpcGossiperService {
             self.gossip_sender.send(GossipedMessage::GetPayload(Box::new(request))).await
         {
             error!(%err, "failed to send get payload to builder");
-        } else {
-            GOSSIP_QUEUE.inc();
         }
         Ok(Response::new(()))
     }
@@ -429,8 +421,6 @@ impl GossipService for GrpcGossiperService {
             self.gossip_sender.send(GossipedMessage::RequestPayload(Box::new(request))).await
         {
             error!(%err, "failed to send payload to builder");
-        } else {
-            GOSSIP_QUEUE.inc();
         }
         Ok(Response::new(()))
     }

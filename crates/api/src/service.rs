@@ -29,131 +29,122 @@ pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const INIT_BROADCASTER_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub struct ApiService;
+pub async fn run_api_service<A: Api>(
+    mut config: RelayConfig,
+    db: Arc<A::DatabaseService>,
+    auctioneer: Arc<A::Auctioneer>,
+    current_slot_info: CurrentSlotInfo,
+    chain_info: Arc<ChainInfo>,
+    relay_signing_context: Arc<RelaySigningContext>,
+    multi_beacon_client: Arc<MultiBeaconClient>,
+    metadata_provider: Arc<A::MetadataProvider>,
+) {
+    let broadcasters = init_broadcasters(&config).await;
 
-impl ApiService {
-    pub async fn run<A: Api>(
-        mut config: RelayConfig,
-        db: Arc<A::DatabaseService>,
-        auctioneer: Arc<A::Auctioneer>,
-        current_slot_info: CurrentSlotInfo,
-        chain_info: Arc<ChainInfo>,
-        relay_signing_context: Arc<RelaySigningContext>,
-        multi_beacon_client: Arc<MultiBeaconClient>,
-        metadata_provider: Arc<A::MetadataProvider>,
-    ) {
-        let broadcasters = init_broadcasters(&config).await;
+    let client = reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
 
-        let client =
-            reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
+    let mut simulators = vec![];
 
-        let mut simulators = vec![];
+    for cfg in &config.simulators {
+        let simulator = OptimisticSimulator::<A::Auctioneer, A::DatabaseService>::new(
+            auctioneer.clone(),
+            db.clone(),
+            client.clone(),
+            cfg.url.clone(),
+        );
+        simulators.push(simulator);
+    }
 
-        for cfg in &config.simulators {
-            let simulator = OptimisticSimulator::<A::Auctioneer, A::DatabaseService>::new(
-                auctioneer.clone(),
-                db.clone(),
-                client.clone(),
-                cfg.url.clone(),
-            );
-            simulators.push(simulator);
-        }
+    let simulator = MultiSimulator::new(simulators);
 
-        let simulator = MultiSimulator::new(simulators);
-
-        let gossiper = Arc::new(
-            GrpcGossiperClientManager::new(
-                config.relays.iter().map(|cfg| cfg.url.clone()).collect(),
-            )
+    let gossiper = Arc::new(
+        GrpcGossiperClientManager::new(config.relays.iter().map(|cfg| cfg.url.clone()).collect())
             .await
             .expect("failed to initialise gRPC gossiper"),
-        );
+    );
 
-        let validator_preferences = Arc::new(config.validator_preferences.clone());
+    let validator_preferences = Arc::new(config.validator_preferences.clone());
 
-        let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
+    let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
-        let builder_api = BuilderApi::<A>::new(
-            auctioneer.clone(),
-            db.clone(),
-            chain_info.clone(),
-            simulator,
-            gossiper.clone(),
-            metadata_provider.clone(),
-            relay_signing_context.clone(),
-            config.clone(),
-            validator_preferences.clone(),
-            current_slot_info.clone(),
-        );
-        let builder_api = Arc::new(builder_api);
+    let builder_api = BuilderApi::<A>::new(
+        auctioneer.clone(),
+        db.clone(),
+        chain_info.clone(),
+        simulator,
+        gossiper.clone(),
+        metadata_provider.clone(),
+        relay_signing_context.clone(),
+        config.clone(),
+        validator_preferences.clone(),
+        current_slot_info.clone(),
+    );
+    let builder_api = Arc::new(builder_api);
 
-        gossiper.start_server(gossip_sender).await;
+    gossiper.start_server(gossip_sender).await;
 
-        let (v3_payload_request_send, v3_payload_request_recv) = mpsc::channel(32);
-        if let Some(v3_port) = config.v3_port {
-            // v3 tcp optimistic configured
-            tokio::spawn(builder::v3::tcp::run_api(v3_port, builder_api.clone()));
-        }
+    let (v3_payload_request_send, v3_payload_request_recv) = mpsc::channel(32);
+    if let Some(v3_port) = config.v3_port {
+        // v3 tcp optimistic configured
+        tokio::spawn(builder::v3::tcp::run_api(v3_port, builder_api.clone()));
+    }
 
-        // Start builder block fetcher
-        tokio::spawn(builder::v3::payload::fetch_builder_blocks(
-            builder_api.clone(),
-            v3_payload_request_recv,
-            relay_signing_context,
-        ));
+    // Start builder block fetcher
+    tokio::spawn(builder::v3::payload::fetch_builder_blocks(
+        builder_api.clone(),
+        v3_payload_request_recv,
+        relay_signing_context,
+    ));
 
-        let proposer_api = Arc::new(ProposerApi::<A>::new(
-            auctioneer.clone(),
-            db.clone(),
-            gossiper.clone(),
-            metadata_provider.clone(),
-            broadcasters,
-            multi_beacon_client,
-            chain_info.clone(),
-            validator_preferences.clone(),
-            config.clone(),
-            v3_payload_request_send,
-            current_slot_info,
-        ));
+    let proposer_api = Arc::new(ProposerApi::<A>::new(
+        auctioneer.clone(),
+        db.clone(),
+        gossiper.clone(),
+        metadata_provider.clone(),
+        broadcasters,
+        multi_beacon_client,
+        chain_info.clone(),
+        validator_preferences.clone(),
+        config.clone(),
+        v3_payload_request_send,
+        current_slot_info,
+    ));
 
-        tokio::spawn(gossip::process_gossip_messages(
-            builder_api.clone(),
-            proposer_api.clone(),
-            gossip_receiver,
-        ));
+    tokio::spawn(gossip::process_gossip_messages(
+        builder_api.clone(),
+        proposer_api.clone(),
+        gossip_receiver,
+    ));
 
-        let data_api = Arc::new(DataApi::<A>::new(validator_preferences.clone(), db.clone()));
+    let data_api = Arc::new(DataApi::<A>::new(validator_preferences.clone(), db.clone()));
 
-        let bids_cache: Arc<BidsCache> = Arc::new(
-            Cache::builder()
-                .time_to_live(Duration::from_secs(10))
-                .time_to_idle(Duration::from_secs(5))
-                .build(),
-        );
+    let bids_cache: Arc<BidsCache> = Arc::new(
+        Cache::builder()
+            .time_to_live(Duration::from_secs(10))
+            .time_to_idle(Duration::from_secs(5))
+            .build(),
+    );
 
-        let delivered_payloads_cache: Arc<DeliveredPayloadsCache> = Arc::new(
-            Cache::builder()
-                .time_to_live(Duration::from_secs(10))
-                .time_to_idle(Duration::from_secs(5))
-                .build(),
-        );
+    let delivered_payloads_cache: Arc<DeliveredPayloadsCache> = Arc::new(
+        Cache::builder()
+            .time_to_live(Duration::from_secs(10))
+            .time_to_idle(Duration::from_secs(5))
+            .build(),
+    );
 
-        let router = build_router(
-            &mut config.router_config,
-            builder_api,
-            proposer_api,
-            data_api,
-            bids_cache,
-            delivered_payloads_cache,
-        );
+    let router = build_router(
+        &mut config.router_config,
+        builder_api,
+        proposer_api,
+        data_api,
+        bids_cache,
+        delivered_payloads_cache,
+    );
 
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:4040").await.unwrap();
-        match axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>())
-            .await
-        {
-            Ok(_) => info!("Server exited successfully"),
-            Err(e) => error!("Server exited with error: {e}"),
-        }
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:4040").await.unwrap();
+    match axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await {
+        Ok(_) => info!("Server exited successfully"),
+        Err(e) => error!("Server exited with error: {e}"),
     }
 }
 
@@ -164,7 +155,7 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
             BroadcasterConfig::Fiber(cfg) => {
                 let result = timeout(
                     INIT_BROADCASTER_TIMEOUT,
-                    FiberBroadcaster::new(cfg.url.clone(), cfg.api_key.clone(), cfg.encoding),
+                    FiberBroadcaster::new(cfg.url.clone(), cfg.api_key.clone()),
                 )
                 .await;
                 match result {
@@ -189,7 +180,6 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
     broadcasters
 }
 
-// add test module
 #[cfg(test)]
 mod test {
     use alloy_primitives::hex;

@@ -6,8 +6,7 @@ pub struct ProposerDuty {
     pub pubkey: BlsPublicKey,
     #[serde(with = "serde_utils::quoted_u64")]
     pub validator_index: u64,
-    #[serde(with = "serde_utils::quoted_u64")]
-    pub slot: u64,
+    pub slot: Slot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

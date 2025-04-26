@@ -431,7 +431,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             for duty in proposer_duties.iter() {
                 if let Some(reg) = signed_validator_registrations.get(&duty.pubkey) {
                     formatted_proposer_duties.push(BuilderGetValidatorsResponseEntry {
-                        slot: duty.slot.into(),
+                        slot: duty.slot,
                         validator_index: duty.validator_index,
                         entry: reg.registration_info.clone(),
                     });

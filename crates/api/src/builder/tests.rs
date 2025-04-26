@@ -931,7 +931,6 @@ async fn test_submit_block_timeout_triggered() {
         if cancellations_enabled { "?cancellations=1" } else { "" }
     );
 
-    #[allow(clippy::type_complexity)]
     let mut body: FuturesOrdered<
         Pin<Box<dyn Future<Output = Result<Vec<u8>, Infallible>> + Send>>,
     > = FuturesOrdered::new();
