@@ -42,6 +42,10 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         Self { simulator, auctioneer, db, failsafe_triggered, optimistic_state }
     }
 
+    pub fn endpoint(&self) -> &str {
+        &self.simulator.endpoint
+    }
+
     /// This is a lightweight operation as all params are references.
     pub fn clone_for_async(&self) -> Self {
         Self {

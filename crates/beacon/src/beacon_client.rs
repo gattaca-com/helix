@@ -43,6 +43,10 @@ impl BeaconClient {
         Self::new(client, config)
     }
 
+    pub fn endpoint(&self) -> &str {
+        &self.config.url.as_str()
+    }
+
     pub async fn get<T: serde::Serialize + serde::de::DeserializeOwned>(
         &self,
         path: &str,

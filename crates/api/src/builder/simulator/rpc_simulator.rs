@@ -26,7 +26,7 @@ pub struct BlockSimRpcResponse {
 #[derive(Clone)]
 pub struct RpcSimulator<DB: DatabaseService + 'static> {
     http: Client,
-    endpoint: String,
+    pub endpoint: String,
     db: Arc<DB>,
 }
 
@@ -113,7 +113,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
         _builder_info: &BuilderInfo,
         is_top_bid: bool,
     ) -> Result<bool, BlockSimError> {
-        let timer = SimulatorMetrics::timer();
+        let timer = SimulatorMetrics::timer(&self.endpoint);
 
         let block_hash = request.execution_payload.block_hash().0;
         debug!(

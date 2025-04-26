@@ -9,21 +9,33 @@ use axum::{
 use eyre::bail;
 use lazy_static::lazy_static;
 use prometheus::{
-    register_gauge_vec_with_registry, register_gauge_with_registry,
+    exponential_buckets, register_gauge_vec_with_registry, register_gauge_with_registry,
     register_histogram_vec_with_registry, register_histogram_with_registry,
     register_int_counter_vec_with_registry, register_int_counter_with_registry, Encoder, Gauge,
-    GaugeVec, Histogram, HistogramTimer, HistogramVec, IntCounter, IntCounterVec, Registry,
-    TextEncoder,
+    GaugeVec, Histogram, HistogramTimer, HistogramVec, IntCounter, IntCounterVec, IntGauge, Opts,
+    Registry, TextEncoder,
 };
 use tokio::net::TcpListener;
 use tracing::{error, info};
 
-use crate::utils::utcnow_ms;
+use crate::{utils::utcnow_ms, RelayConfig};
 
-pub fn start_metrics_server() {
+pub fn start_metrics_server(config: &RelayConfig) {
     let port =
         std::env::var("METRICS_PORT").map(|s| s.parse().expect("invalid port")).unwrap_or(9500);
     tokio::spawn(MetricsProvider::new(port).run());
+
+    let opts = Opts::new("info", "Relay info")
+        .const_label("version", env!("CARGO_PKG_VERSION"))
+        .const_label("commit", env!("GIT_HASH"))
+        .const_label("branch", env!("GIT_BRANCH"))
+        .const_label("built_at", env!("BUILT_AT"))
+        .const_label("region", config.postgres.region_name.to_string());
+
+    let info = IntGauge::with_opts(opts).unwrap();
+    info.set(1);
+
+    RELAY_METRICS_REGISTRY.register(Box::new(info)).unwrap();
 }
 
 pub struct MetricsProvider {
@@ -36,7 +48,7 @@ impl MetricsProvider {
     }
 
     pub async fn run(self) -> eyre::Result<()> {
-        info!("Starting metrics server on port {}", self.port);
+        info!("starting metrics server on port {}", self.port);
 
         let router = axum::Router::new()
             .route("/metrics", get(handle_metrics))
@@ -46,7 +58,7 @@ impl MetricsProvider {
 
         axum::serve(listener, router).await?;
 
-        bail!("Metrics server stopped")
+        bail!("metrics server stopped")
     }
 }
 
@@ -109,9 +121,10 @@ lazy_static! {
 
     /// Duration of request in seconds
     static ref REQUEST_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
-        "request_latency_sec",
+        "request_latency_secs",
         "Latency of requests",
         &["endpoint"],
+        vec![0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 50.0],
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
@@ -127,9 +140,10 @@ lazy_static! {
 
     /// Request size in bytes
     static ref REQUEST_SIZE: HistogramVec = register_histogram_vec_with_registry!(
-        "request_size_dist_bytes",
-        "Size of requests",
+        "request_size_bytes",
+        "Size of requests in bytes",
         &["endpoint"],
+        exponential_buckets(1000.0, 4.0, 12).unwrap(),
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
@@ -151,9 +165,11 @@ lazy_static! {
     )
     .unwrap();
 
-    static ref SIMULATOR_LATENCY: Histogram = register_histogram_with_registry!(
-        "sim_latency_sec",
+    static ref SIMULATOR_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
+        "sim_latency_secs",
         "Latency of simulations",
+        &["simulator"],
+        vec![0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 50.0],
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
@@ -161,6 +177,25 @@ lazy_static! {
     static ref BUILDER_DEMOTION_COUNT: IntCounter = register_int_counter_with_registry!(
         "builder_demotion_count_total",
         "Count of builder demotions",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+
+    static ref SIMULATOR_SYNC: GaugeVec = register_gauge_vec_with_registry!(
+        "simulator_synced",
+        "Sync status of simulators",
+        &["simulator"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    ////////////////// BEACON //////////////////
+
+    static ref BEACON_SYNC: GaugeVec = register_gauge_vec_with_registry!(
+        "beacon_synced",
+        "Sync status of beacon nodes",
+        &["beacon"],
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
@@ -197,18 +232,20 @@ lazy_static! {
 
     /// Sent gossip latency
     static ref OUT_GOSSIP_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
-        "out_gossip_latency_sec",
+        "out_gossip_latency_secs",
         "Latency of sent gossip messages",
         &["endpoint"],
+        vec![0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 50.0],
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
 
     /// Sent gossip size in bytes
-    static ref OUT_GOSSIP_SIZE: IntCounterVec = register_int_counter_vec_with_registry!(
-        "out_gossip_size_bytes",
-        "Size of sent gossip messages",
+    static ref OUT_GOSSIP_SIZE: HistogramVec = register_histogram_vec_with_registry!(
+        "out_gossip_size",
+        "Size of sent gossip messages in bytes",
         &["endpoint"],
+        exponential_buckets(1000.0, 4.0, 12).unwrap(),
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
@@ -223,9 +260,10 @@ lazy_static! {
     .unwrap();
 
     static ref DB_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
-        "db_latency_sec",
+        "db_latency_secs",
         "Latency of db operations",
         &["endpoint"],
+        vec![0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 50.0],
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
@@ -241,9 +279,10 @@ lazy_static! {
     .unwrap();
 
     static ref REDIS_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
-        "redis_latency_sec",
+        "redis_latency_secs",
         "Latency of redis operations",
         &["endpoint"],
+        vec![0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 50.0],
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
@@ -345,7 +384,7 @@ impl GossipMetrics {
     }
 
     pub fn out_size(endpoint: &str, size: usize) {
-        OUT_GOSSIP_SIZE.with_label_values(&[endpoint]).inc_by(size as u64);
+        OUT_GOSSIP_SIZE.with_label_values(&[endpoint]).observe(size as f64);
     }
 }
 
@@ -470,12 +509,24 @@ impl SimulatorMetrics {
         SIMULATOR_STATUS.with_label_values(&[is_success.to_string().as_str()]).inc();
     }
 
-    pub fn timer() -> HistogramTimer {
-        SIMULATOR_LATENCY.start_timer()
+    pub fn timer(simulator: &str) -> HistogramTimer {
+        SIMULATOR_LATENCY.with_label_values(&[simulator]).start_timer()
     }
 
     pub fn demotion_count() {
         BUILDER_DEMOTION_COUNT.inc();
+    }
+
+    pub fn simulator_sync(simulator: &str, is_synced: bool) {
+        SIMULATOR_SYNC.with_label_values(&[simulator]).set(is_synced as i64 as f64);
+    }
+}
+
+pub struct BeaconMetrics;
+
+impl BeaconMetrics {
+    pub fn beacon_sync(beacon: &str, is_synced: bool) {
+        BEACON_SYNC.with_label_values(&[beacon]).set(is_synced as i64 as f64);
     }
 }
 
