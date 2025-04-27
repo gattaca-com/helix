@@ -187,11 +187,9 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             "processing new slot",
         );
 
-        let mut tasks = Vec::new();
-
         // v2 demotions checks every slot
         let housekeeper = self.clone();
-        tasks.push(task::spawn(
+        task::spawn(
             file!(),
             line!(),
             async move {
@@ -206,12 +204,12 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                 info!(duration = ?start.elapsed(), "demote builders task completed");
             }
             .in_current_span(),
-        ));
+        );
 
         // proposer duties
         if self.should_update_duties(head_slot) {
             let housekeeper = self.clone();
-            tasks.push(task::spawn(
+            task::spawn(
                 file!(),
                 line!(),
                 async move {
@@ -255,13 +253,13 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                     info!(duration = ?start.elapsed(), "proposer duties task completed");
                 }
                 .in_current_span(),
-            ));
+            );
         };
 
         // known validators
         if self.should_refresh_known_validators(head_slot.as_u64()) {
             let housekeeper = self.clone();
-            tasks.push(task::spawn(
+            task::spawn(
                 file!(),
                 line!(),
                 async move {
@@ -279,12 +277,12 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                     info!(duration = ?start.elapsed(), "refresh validators task completed");
                 }
                 .in_current_span(),
-            ));
+            );
         }
 
         // builder info updated every slot
         let housekeeper = self.clone();
-        tasks.push(task::spawn(
+        task::spawn(
             file!(),
             line!(),
             async move {
@@ -299,7 +297,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                 info!(duration = ?start.elapsed(), "sync builder info task completed");
             }
             .in_current_span(),
-        ));
+        );
 
         // trusted proposers
         if self.should_update_trusted_proposers(head_slot.as_u64()) {
