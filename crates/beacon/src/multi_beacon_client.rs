@@ -74,7 +74,7 @@ impl MultiBeaconClient {
             .map(|(_, client)| {
                 task::spawn(file!(), line!(), async move {
                     let sync_status = client.sync_status().await;
-                    let is_synced = sync_status.as_ref().map(|s| !s.is_syncing).unwrap_or(false);
+                    let is_synced = sync_status.as_ref().is_ok_and(|s| !s.is_syncing);
                     BeaconMetrics::beacon_sync(client.endpoint(), is_synced);
 
                     sync_status
