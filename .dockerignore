@@ -1,5 +1,4 @@
 .env*
-.git/
 .github/
 audits/
 images/
