@@ -5,7 +5,9 @@ use std::sync::{
 
 use alloy_primitives::B256;
 use futures::future::join_all;
-use helix_common::{beacon_api::PublishBlobsRequest, task, ProposerDuty, ValidatorSummary};
+use helix_common::{
+    beacon_api::PublishBlobsRequest, metrics::BeaconMetrics, task, ProposerDuty, ValidatorSummary,
+};
 use helix_types::{ForkName, VersionedSignedProposal};
 use tokio::{sync::broadcast::Sender, task::JoinError};
 use tracing::{error, warn};
@@ -57,10 +59,6 @@ impl MultiBeaconClient {
     ) -> Result<(), BeaconClientError> {
         self.publish_block(block, broadcast_validation, consensus_version).await
     }
-
-    pub fn identifier(&self) -> String {
-        "MULTI-BEACON-CLIENT".to_string()
-    }
 }
 
 impl MultiBeaconClient {
@@ -74,7 +72,13 @@ impl MultiBeaconClient {
         let handles = clients
             .into_iter()
             .map(|(_, client)| {
-                task::spawn(file!(), line!(), async move { client.sync_status().await })
+                task::spawn(file!(), line!(), async move {
+                    let sync_status = client.sync_status().await;
+                    let is_synced = sync_status.as_ref().is_ok_and(|s| !s.is_syncing);
+                    BeaconMetrics::beacon_sync(client.endpoint(), is_synced);
+
+                    sync_status
+                })
             })
             .collect::<Vec<_>>();
 

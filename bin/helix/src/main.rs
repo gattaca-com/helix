@@ -44,7 +44,7 @@ async fn main() {
         config.discord_webhook_url.clone(),
         config.logging.dir_path(),
     );
-    start_metrics_server();
+    start_metrics_server(&config);
 
     info!(
         region = config.postgres.region_name,

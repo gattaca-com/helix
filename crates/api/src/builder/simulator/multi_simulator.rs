@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use helix_common::{simulator::BlockSimError, BuilderInfo};
+use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, BuilderInfo};
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use tokio::time::sleep;
@@ -36,6 +36,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> MultiSimulator<A, D
             for (i, simulator) in self.simulators.iter().enumerate() {
                 let is_synced = simulator.is_synced().await.unwrap_or(false);
                 self.enabled[i].store(is_synced, Ordering::Relaxed);
+                SimulatorMetrics::simulator_sync(simulator.endpoint(), is_synced);
             }
             sleep(Duration::from_secs(1)).await;
         }
