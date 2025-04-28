@@ -1,6 +1,9 @@
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
 };
 
 use alloy_primitives::B256;
@@ -9,7 +12,7 @@ use helix_common::{
     beacon_api::PublishBlobsRequest, metrics::BeaconMetrics, task, ProposerDuty, ValidatorSummary,
 };
 use helix_types::{ForkName, VersionedSignedProposal};
-use tokio::{sync::broadcast::Sender, task::JoinError};
+use tokio::{sync::broadcast::Sender, time::sleep};
 use tracing::{error, warn};
 
 use crate::{
@@ -20,35 +23,29 @@ use crate::{
 
 #[derive(Clone)]
 pub struct MultiBeaconClient {
-    /// Vec of all beacon clients with a fixed usize ID used when
-    /// fetching: `beacon_clients_by_last_response`
-    pub beacon_clients: Vec<(usize, Arc<BeaconClient>)>,
-    /// The ID of the beacon client with the most recent successful response.
-    pub best_beacon_instance: Arc<AtomicUsize>,
+    // never changed after init
+    pub beacon_clients: Arc<Vec<Arc<BeaconClient>>>,
+    pub best_index: Arc<AtomicUsize>,
 }
 
 impl MultiBeaconClient {
     pub fn new(beacon_clients: Vec<Arc<BeaconClient>>) -> Self {
-        let beacon_clients_with_index = beacon_clients.into_iter().enumerate().collect();
-
-        Self {
-            beacon_clients: beacon_clients_with_index,
-            best_beacon_instance: Arc::new(AtomicUsize::new(0)),
-        }
+        Self { beacon_clients: Arc::new(beacon_clients), best_index: Arc::new(AtomicUsize::new(0)) }
     }
 
     /// Returns a list of beacon clients, prioritized by the last successful response.
     ///
     /// The beacon client with the most recent successful response is placed at the
     /// beginning of the returned vector. All other clients maintain their original order.
-    pub fn beacon_clients_by_last_response(&self) -> Vec<(usize, Arc<BeaconClient>)> {
-        let mut instances = self.beacon_clients.clone();
-        let index = self.best_beacon_instance.load(Ordering::Relaxed);
-        if index != 0 {
-            let pos = instances.iter().position(|(i, _)| *i == index).unwrap();
-            instances.swap(0, pos);
-        }
-        instances
+    pub fn beacon_clients_by_last_response(
+        &self,
+    ) -> impl Iterator<Item = Arc<BeaconClient>> + use<'_> {
+        let start = self.best_index.load(Ordering::Relaxed);
+
+        self.beacon_clients[start..]
+            .iter()
+            .chain(&self.beacon_clients[..start])
+            .map(|client| client.clone())
     }
 
     pub async fn broadcast_block(
@@ -62,16 +59,25 @@ impl MultiBeaconClient {
 }
 
 impl MultiBeaconClient {
+    pub async fn start_sync_monitor(self) {
+        loop {
+            if let Err(err) = self.best_sync_status().await {
+                error!(%err, "failed to get sync from any beacon");
+            }
+            sleep(Duration::from_secs(1)).await;
+        }
+    }
+
     /// Retrieves the sync status from multiple beacon clients and selects the best one.
     ///
     /// The function spawns async tasks to fetch the sync status from each beacon client.
     /// It then selects the sync status with the highest `head_slot`.
     pub async fn best_sync_status(&self) -> Result<SyncStatus, BeaconClientError> {
-        let clients = self.beacon_clients_by_last_response();
-
-        let handles = clients
-            .into_iter()
-            .map(|(_, client)| {
+        let handles = self
+            .beacon_clients
+            .iter()
+            .map(|client| {
+                let client = client.clone();
                 task::spawn(file!(), line!(), async move {
                     let sync_status = client.sync_status().await;
                     let is_synced = sync_status.as_ref().is_ok_and(|s| !s.is_syncing);
@@ -82,29 +88,30 @@ impl MultiBeaconClient {
             })
             .collect::<Vec<_>>();
 
-        let results: Vec<Result<Result<SyncStatus, BeaconClientError>, JoinError>> =
-            join_all(handles).await;
+        let mut best_sync_status: Option<(usize, SyncStatus)> = None;
 
-        let mut best_sync_status: Option<SyncStatus> = None;
-        for join_result in results {
-            match join_result {
-                Ok(sync_status_result) => match sync_status_result {
+        for (i, join_result) in join_all(handles).await.into_iter().enumerate() {
+            if let Ok(sync_status_result) = join_result {
+                match sync_status_result {
                     Ok(sync_status) => {
-                        if best_sync_status.as_ref().is_none_or(|current_best| {
+                        if best_sync_status.as_ref().is_none_or(|(_, current_best)| {
                             current_best.head_slot < sync_status.head_slot
                         }) {
-                            best_sync_status = Some(sync_status);
+                            best_sync_status = Some((i, sync_status));
                         }
                     }
-                    Err(err) => error!("Failed to get sync status: {err:?}"),
-                },
-                Err(join_err) => {
-                    error!("Tokio join error for best_sync_status: {join_err:?}")
+
+                    Err(err) => error!(%err, "failed to get sync status"),
                 }
             }
         }
 
-        best_sync_status.ok_or(BeaconClientError::BeaconNodeUnavailable)
+        if let Some((i, sync_status)) = best_sync_status {
+            self.best_index.store(i, Ordering::Relaxed);
+            Ok(sync_status)
+        } else {
+            Err(BeaconClientError::BeaconNodeUnavailable)
+        }
     }
 
     /// `subscribe_to_head_events` subscribes to head events from all beacon nodes.
@@ -112,9 +119,7 @@ impl MultiBeaconClient {
     /// This function swaps async tasks for all beacon clients. Therefore,
     /// a single head event will be received multiple times, likely once for every beacon node.
     pub async fn subscribe_to_head_events(&self, chan: Sender<HeadEventData>) {
-        let clients = self.beacon_clients_by_last_response();
-
-        for (_, client) in clients {
+        for client in self.beacon_clients_by_last_response() {
             let chan = chan.clone();
             task::spawn(file!(), line!(), async move {
                 if let Err(err) = client.subscribe_to_head_events(chan).await {
@@ -133,9 +138,7 @@ impl MultiBeaconClient {
         &self,
         chan: Sender<PayloadAttributesEvent>,
     ) {
-        let clients = self.beacon_clients_by_last_response();
-
-        for (_, client) in clients {
+        for client in self.beacon_clients_by_last_response() {
             let chan = chan.clone();
             task::spawn(file!(), line!(), async move {
                 if let Err(err) = client.subscribe_to_payload_attributes_events(chan).await {
@@ -149,15 +152,14 @@ impl MultiBeaconClient {
         &self,
         state_id: StateId,
     ) -> Result<Vec<ValidatorSummary>, BeaconClientError> {
-        let clients = self.beacon_clients_by_last_response();
         let mut last_error = None;
 
-        for (i, client) in clients.into_iter() {
+        for client in self.beacon_clients_by_last_response() {
             match client.get_state_validators(state_id.clone()).await {
                 Ok(state_validators) => {
-                    self.best_beacon_instance.store(i, Ordering::Relaxed);
                     return Ok(state_validators);
                 }
+
                 Err(err) => {
                     last_error = Some(err);
                 }
@@ -171,13 +173,11 @@ impl MultiBeaconClient {
         &self,
         epoch: u64,
     ) -> Result<(B256, Vec<ProposerDuty>), BeaconClientError> {
-        let clients = self.beacon_clients_by_last_response();
         let mut last_error = None;
 
-        for (i, client) in clients.into_iter() {
+        for client in self.beacon_clients_by_last_response() {
             match client.get_proposer_duties(epoch).await {
                 Ok(proposer_duties) => {
-                    self.best_beacon_instance.store(i, Ordering::Relaxed);
                     return Ok(proposer_duties);
                 }
                 Err(err) => {
@@ -201,29 +201,21 @@ impl MultiBeaconClient {
         broadcast_validation: Option<BroadcastValidation>,
         fork: ForkName,
     ) -> Result<(), BeaconClientError> {
-        let clients = self.beacon_clients_by_last_response();
-        let num_clients = clients.len();
-        let (sender, mut receiver) = tokio::sync::mpsc::channel(num_clients);
+        let handles = self
+            .beacon_clients_by_last_response()
+            .map(|client| {
+                let block = block.clone();
+                let broadcast_validation = broadcast_validation.clone();
 
-        clients.into_iter().for_each(|(i, client)| {
-            let block = block.clone();
-            let broadcast_validation = broadcast_validation.clone();
-            let sender = sender.clone();
-
-            task::spawn(file!(), line!(), async move {
-                let res = client.publish_block(block, broadcast_validation, fork).await;
-                if let Err(err) = sender.send((i, res)).await {
-                    // TODO: we might be able to completely remove this as this should only error if
-                    // the receiver is dropped this happens if we've received an
-                    // ok response
-                    warn!("failed to send publish_block response: {err:?}");
-                }
-            });
-        });
+                task::spawn(file!(), line!(), async move {
+                    client.publish_block(block, broadcast_validation, fork).await
+                })
+            })
+            .collect::<Vec<_>>();
 
         let mut last_error: Option<BeaconClientError> = None;
-        for _ in 0..num_clients {
-            if let Some((i, res)) = receiver.recv().await {
+        for res in join_all(handles).await {
+            if let Ok(res) = res {
                 match res {
                     // Should the block fail full validation, a separate success response code (202)
                     // is used to indicate that the block was successfully broadcast but failed
@@ -231,16 +223,15 @@ impl MultiBeaconClient {
                     Ok(202) => {
                         last_error = Some(BeaconClientError::BlockIntegrationFailed);
                     }
+
                     Ok(_) => {
-                        self.best_beacon_instance.store(i, Ordering::Relaxed);
                         return Ok(());
                     }
+
                     Err(err) => {
                         last_error = Some(err);
                     }
                 }
-            } else {
-                error!("Tokio channel closed for publish_block");
             }
         }
 
@@ -251,8 +242,7 @@ impl MultiBeaconClient {
         &self,
         blob_sidecars: PublishBlobsRequest,
     ) -> Result<u16, BeaconClientError> {
-        let clients = self.beacon_clients_by_last_response();
-        clients.into_iter().for_each(|(_i, client)| {
+        for client in self.beacon_clients_by_last_response() {
             let sidecars = blob_sidecars.clone();
 
             task::spawn(file!(), line!(), async move {
@@ -264,7 +254,7 @@ impl MultiBeaconClient {
                     }
                 }
             });
-        });
+        }
 
         Ok(200)
     }
@@ -272,36 +262,36 @@ impl MultiBeaconClient {
 
 #[cfg(test)]
 mod multi_beacon_client_tests {
-    use helix_common::BeaconClientConfig;
-
     use super::*;
     use crate::beacon_client::mock_beacon_node::MockBeaconNode;
 
-    fn mock_beacon_client() -> Arc<BeaconClient> {
-        let config = BeaconClientConfig {
-            url: "http://do-not-call.xyz".parse().unwrap(),
-            gossip_blobs_enabled: false,
-        };
+    fn mock_beacon_client(head_slot: u64) -> Arc<BeaconClient> {
+        let sync_status =
+            SyncStatus { head_slot: head_slot.into(), sync_distance: 0, is_syncing: false };
 
-        Arc::new(BeaconClient::from_config(config))
+        let mock_node = MockBeaconNode::new();
+        mock_node.with_sync_status(&sync_status);
+
+        Arc::new(mock_node.beacon_client())
     }
 
-    #[tokio::test]
-    async fn test_beacon_clients_by_last_response() {
+    #[test]
+    fn test_beacon_clients_by_last_response() {
         let multi_client = MultiBeaconClient::new(vec![
-            mock_beacon_client(),
-            mock_beacon_client(),
-            mock_beacon_client(),
-            mock_beacon_client(),
+            mock_beacon_client(1),
+            mock_beacon_client(2),
+            mock_beacon_client(100),
+            mock_beacon_client(4),
         ]);
 
-        multi_client.best_beacon_instance.store(2, Ordering::Relaxed);
-        let clients = multi_client.beacon_clients_by_last_response();
+        multi_client.best_index.store(2, Ordering::Relaxed);
 
-        assert_eq!(clients[0].0, multi_client.beacon_clients[2].0);
-        assert_eq!(clients[1].0, multi_client.beacon_clients[1].0);
-        assert_eq!(clients[2].0, multi_client.beacon_clients[0].0);
-        assert_eq!(clients[3].0, multi_client.beacon_clients[3].0);
+        let clients = multi_client.beacon_clients_by_last_response().collect::<Vec<_>>();
+
+        assert_eq!(clients[0].endpoint(), multi_client.beacon_clients[2].endpoint());
+        assert_eq!(clients[1].endpoint(), multi_client.beacon_clients[3].endpoint());
+        assert_eq!(clients[2].endpoint(), multi_client.beacon_clients[0].endpoint());
+        assert_eq!(clients[3].endpoint(), multi_client.beacon_clients[1].endpoint());
     }
 
     #[tokio::test]
@@ -326,6 +316,7 @@ mod multi_beacon_client_tests {
         let best_status = multi_client.best_sync_status().await.unwrap();
 
         assert_eq!(best_status.head_slot, 20);
+        assert_eq!(multi_client.best_index.load(Ordering::Relaxed), 1);
     }
 
     // #[tokio::test]

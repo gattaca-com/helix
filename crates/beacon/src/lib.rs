@@ -16,5 +16,9 @@ pub fn start_beacon_client(config: &RelayConfig) -> Arc<MultiBeaconClient> {
     for cfg in &config.beacon_clients {
         beacon_clients.push(Arc::new(BeaconClient::from_config(cfg.clone())));
     }
-    MultiBeaconClient::new(beacon_clients).into()
+
+    let beacon_client = MultiBeaconClient::new(beacon_clients);
+    tokio::spawn(beacon_client.clone().start_sync_monitor());
+
+    Arc::new(beacon_client)
 }
