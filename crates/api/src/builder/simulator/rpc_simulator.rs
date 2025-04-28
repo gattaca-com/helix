@@ -162,13 +162,13 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
             "params": []
         });
 
-        info!("Sending eth_syncing request to check Geth sync status...");
+        debug!(endpoint = %self.endpoint, "sending eth_syncing");
 
         let response =
             match self.http.post(&self.endpoint).headers(headers).json(&payload).send().await {
                 Ok(response) => response,
                 Err(err) => {
-                    error!("Error sending eth_syncing request: {:?}", err);
+                    error!(%err, "error sending eth_syncing request");
                     return Err(BlockSimError::RpcError(err.to_string()));
                 }
             };
@@ -176,27 +176,18 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
         let json_response: Value = match response.json().await {
             Ok(json_response) => json_response,
             Err(err) => {
-                error!("Error parsing eth_syncing response: {:?}", err);
+                error!(%err, "error parsing eth_syncing response");
                 return Err(BlockSimError::RpcError(err.to_string()));
             }
         };
 
-        info!("Received response: {:?}", json_response);
-
-        // According to the Ethereum JSON-RPC spec, if Geth is fully synced,
-        // `eth_syncing` will return "result": false
+        // parse {"jsonrpc":"2.0","id":0,"result":false}
         let sync_result = &json_response["result"];
         match sync_result {
             // Fully synced
-            Value::Bool(false) => {
-                info!("Geth is fully synced.");
-                Ok(true)
-            }
+            Value::Bool(false) => Ok(true),
             // Still syncing, or unexpected format
-            _ => {
-                info!("Geth is not fully synced: {:?}", sync_result);
-                Ok(false)
-            }
+            _ => Ok(false),
         }
     }
 }

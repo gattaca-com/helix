@@ -31,7 +31,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> MultiSimulator<A, D
         }
     }
 
-    pub async fn start_sync_monitor(&self) {
+    pub async fn start_sync_monitor(self) {
         loop {
             for (i, simulator) in self.simulators.iter().enumerate() {
                 let is_synced = simulator.is_synced().await.unwrap_or(false);
