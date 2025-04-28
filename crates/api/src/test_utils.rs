@@ -103,7 +103,6 @@ pub fn app() -> Router {
         .layer(Extension(data_api))
 }
 
-#[allow(clippy::type_complexity)]
 pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) {
     let current_slot_info = CurrentSlotInfo::new();
 
@@ -145,7 +144,6 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
     (router, builder_api_service, current_slot_info)
 }
 
-#[allow(clippy::type_complexity)]
 pub fn proposer_api_app(
 ) -> (Router, Arc<ProposerApi<MockApi>>, CurrentSlotInfo, Arc<MockAuctioneer>) {
     let (v3_sender, _v3_receiver) = channel(32);

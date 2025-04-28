@@ -1,7 +1,7 @@
 use std::{error::Error, fmt};
 
 use axum::{
-    http::{status::InvalidStatusCode, StatusCode},
+    http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
@@ -53,7 +53,7 @@ impl IntoResponse for BeaconClientError {
     fn into_response(self) -> Response {
         let message = self.to_string();
         let code = StatusCode::BAD_REQUEST;
-        (code, Json(ApiError::ErrorMessage { code, message })).into_response()
+        (code, Json(ApiError::ErrorMessage { code: code.as_u16(), message })).into_response()
     }
 }
 
@@ -62,17 +62,8 @@ impl IntoResponse for BeaconClientError {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum ApiError {
-    IndexedError {
-        #[serde(with = "helix_common::serde_utils::axum_as_u16")]
-        code: StatusCode,
-        message: String,
-        failures: Vec<IndexedError>,
-    },
-    ErrorMessage {
-        #[serde(with = "helix_common::serde_utils::axum_as_u16")]
-        code: StatusCode,
-        message: String,
-    },
+    IndexedError { code: u16, message: String, failures: Vec<IndexedError> },
+    ErrorMessage { code: u16, message: String },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -99,12 +90,3 @@ impl fmt::Display for ApiError {
 }
 
 impl Error for ApiError {}
-
-impl<'a> TryFrom<(u16, &'a str)> for ApiError {
-    type Error = InvalidStatusCode;
-
-    fn try_from((code, message): (u16, &'a str)) -> Result<Self, Self::Error> {
-        let code = StatusCode::from_u16(code)?;
-        Ok(Self::ErrorMessage { code, message: message.to_string() })
-    }
-}

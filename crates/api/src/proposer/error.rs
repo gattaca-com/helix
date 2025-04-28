@@ -1,17 +1,16 @@
 use alloy_primitives::{Address, B256};
 use axum::{
-    http::{self, StatusCode},
+    self,
     response::{IntoResponse, Response},
 };
 use helix_beacon::error::BeaconClientError;
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
 use helix_types::{BlsPublicKey, Slot};
-use serde::{Deserialize, Serialize};
+use hyper::StatusCode;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-#[allow(clippy::result_large_err)]
 pub enum ProposerApiError {
     #[error("hyper error: {0}")]
     HyperError(#[from] hyper::Error),
@@ -239,59 +238,5 @@ impl IntoResponse for ProposerApiError {
         };
 
         (code, self.to_string()).into_response()
-    }
-}
-
-// NOTE: `IndexedError` must come before `ErrorMessage` so
-// the `serde(untagged)` machinery does not greedily match it first.
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(untagged)]
-pub enum ApiError {
-    IndexedError {
-        #[serde(with = "as_u16")]
-        code: StatusCode,
-        message: String,
-        failures: Vec<IndexedError>,
-    },
-    ErrorMessage {
-        #[serde(with = "as_u16")]
-        code: StatusCode,
-        message: String,
-    },
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct IndexedError {
-    index: usize,
-    message: String,
-}
-
-impl<'a> TryFrom<(u16, &'a str)> for ApiError {
-    type Error = http::status::InvalidStatusCode;
-
-    fn try_from((code, message): (u16, &'a str)) -> Result<Self, Self::Error> {
-        let code = StatusCode::from_u16(code)?;
-        Ok(Self::ErrorMessage { code, message: message.to_string() })
-    }
-}
-
-pub(crate) mod as_u16 {
-    use axum::http;
-    use http::StatusCode;
-    use serde::{de::Deserializer, Deserialize, Serializer};
-
-    pub fn serialize<S>(x: &StatusCode, s: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        s.serialize_u16(x.as_u16())
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<StatusCode, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value: u16 = Deserialize::deserialize(deserializer)?;
-        StatusCode::from_u16(value).map_err(serde::de::Error::custom)
     }
 }

@@ -223,7 +223,6 @@ async fn test_primev_real_contract_integration() {
     };
     // Test is ignored by default since it requires external network connectivity
     // Run with: cargo test test_primev_real_contract_integration -- --ignored
-    #[allow(unreachable_code)]
     if std::env::var("RUN_EXTERNAL_TESTS").is_err() {
         println!("Skipping external contract test. Set RUN_EXTERNAL_TESTS=1 to run.");
         return;

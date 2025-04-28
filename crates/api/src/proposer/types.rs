@@ -16,8 +16,7 @@ pub const GET_HEADER_REQUEST_CUTOFF_MS: i64 = 3000;
 pub struct GetHeaderParams {
     pub slot: u64,
     pub parent_hash: B256,
-    #[serde(rename = "pubkey")]
-    pub public_key: BlsPublicKey,
+    pub pubkey: BlsPublicKey,
 }
 
 pub fn unblind_beacon_block(

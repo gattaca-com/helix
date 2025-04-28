@@ -38,7 +38,7 @@ impl<A: Api> ProposerApi<A> {
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
         headers: HeaderMap,
-        Path(GetHeaderParams { slot, parent_hash, public_key }): Path<GetHeaderParams>,
+        Path(GetHeaderParams { slot, parent_hash, pubkey }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         if proposer_api.auctioneer.kill_switch_enabled().await? {
             return Err(ProposerApiError::ServiceUnavailableError);
@@ -52,10 +52,10 @@ impl<A: Api> ProposerApi<A> {
             request_ts = trace.receive,
             %slot,
             %parent_hash,
-            %public_key,
+            %pubkey,
         );
 
-        let bid_request = BidRequest { slot: slot.into(), parent_hash, public_key };
+        let bid_request = BidRequest { slot: slot.into(), parent_hash, pubkey };
 
         // Dont allow requests for past slots
         if bid_request.slot < head_slot {
@@ -67,11 +67,10 @@ impl<A: Api> ProposerApi<A> {
         }
 
         // Only return a bid if there is a proposer connected this slot.
-        if duty.is_none() {
+        let Some(duty) = duty else {
             debug!("proposer duty not found");
             return Err(ProposerApiError::ProposerNotRegistered);
-        }
-        let duty = duty.unwrap();
+        };
 
         let ms_into_slot = match validate_bid_request_time(&proposer_api.chain_info, &bid_request) {
             Ok(ms_into_slot) => ms_into_slot,
@@ -118,7 +117,7 @@ impl<A: Api> ProposerApi<A> {
                 max_header_delay_ms,
                 latest_header_delay_ms_in_slot,
                 slot,
-                pubkey = ?bid_request.public_key,
+                pubkey = ?bid_request.pubkey,
                 "timing game sleep");
 
             if sleep_time > Duration::ZERO {
@@ -131,11 +130,7 @@ impl<A: Api> ProposerApi<A> {
         // Get best bid from auctioneer
         let get_best_bid_res = proposer_api
             .auctioneer
-            .get_best_bid(
-                bid_request.slot.into(),
-                &bid_request.parent_hash,
-                &bid_request.public_key,
-            )
+            .get_best_bid(bid_request.slot.into(), &bid_request.parent_hash, &bid_request.pubkey)
             .await;
         trace.best_bid_fetched = utcnow_ns();
         debug!(trace = ?trace, "best bid fetched");
@@ -158,7 +153,7 @@ impl<A: Api> ProposerApi<A> {
                     proposer_api.db.clone(),
                     slot,
                     bid_request.parent_hash,
-                    bid_request.public_key.clone(),
+                    bid_request.pubkey.clone(),
                     bid.data.message.header().block_hash().0,
                     trace,
                     mev_boost,
@@ -166,7 +161,7 @@ impl<A: Api> ProposerApi<A> {
                 )
                 .await;
 
-                let proposer_pubkey_clone = bid_request.public_key;
+                let proposer_pubkey_clone = bid_request.pubkey;
                 let block_hash = bid.data.message.header().block_hash().0;
                 if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
                     // Request payload in the background

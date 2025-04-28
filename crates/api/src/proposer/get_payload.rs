@@ -135,11 +135,10 @@ impl<A: Api> ProposerApi<A> {
         }
 
         // Verify that we have a proposer connected for the current proposal
-        if slot_duty.is_none() {
+        let Some(slot_duty) = slot_duty else {
             warn!("no slot proposer duty");
             return Err(ProposerApiError::ProposerNotRegistered);
-        }
-        let slot_duty = slot_duty.unwrap();
+        };
 
         if let Err(err) = validate_proposal_coordinate(&signed_blinded_block, &slot_duty, head_slot)
         {

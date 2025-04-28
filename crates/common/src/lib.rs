@@ -9,8 +9,6 @@ pub mod metadata_provider;
 pub mod metrics;
 pub mod pending_block;
 pub mod proposer;
-pub mod request_encoding;
-pub mod serde_utils;
 pub mod signing;
 pub mod simulator;
 pub mod task;

@@ -146,7 +146,7 @@ As stated in the "Optimised Block Propagation" section, we plan to develop a mod
 In line with the design principles of Protocol Enforced Proposer Commitments (PEPC) [PEPC](https://ethresear.ch/t/unbundling-pbs-towards-protocol-enforced-proposer-commitments-pepc/13879), we aim to offer more granularity in allowing proposers to communicate their preferences regarding the types of blocks they wish to commit to. Currently, this is achieved through the `preferences` field, which enables proposers to indicate whether they prefer to commit to a regional or global filtering policy. In the future, we plan to support additional preferences, such as commitment to blocks adhering to relay-established inclusion lists, blocks produced by trusted builders, and others.
 
 
-## Compatability
+## Compatibility
 - For proposers, Helix is fully compatible with the current MEV-Boost relay spec.
 - For builders, there's a requirement to adapt to these changes as the [proposers](https://flashbots.github.io/relay-specs/#/Builder/getproposers) API response will now contain an extra `preferences` field. Minor changes are also required to the internal logic, as filtering moves from a per-relay basis to a per-validator basis.
 

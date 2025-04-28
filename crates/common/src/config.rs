@@ -6,10 +6,7 @@ use helix_types::{BlsKeypair, BlsPublicKey, BlsSecretKey};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    api::*, chain_info::ChainInfo, request_encoding::Encoding, serde_utils::default_bool,
-    BuilderInfo, ValidatorPreferences,
-};
+use crate::{api::*, chain_info::ChainInfo, BuilderInfo, ValidatorPreferences};
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RelayConfig {
@@ -153,6 +150,10 @@ fn default_port() -> u16 {
     5432
 }
 
+pub const fn default_bool<const B: bool>() -> bool {
+    B
+}
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RedisConfig {
     pub url: String,
@@ -168,7 +169,6 @@ pub enum BroadcasterConfig {
 pub struct FiberConfig {
     pub url: String,
     pub api_key: String,
-    pub encoding: Encoding,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]

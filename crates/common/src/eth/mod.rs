@@ -18,16 +18,7 @@ pub const BLOB_KZG_COMMITMENTS_INDEX: usize = 11;
 pub struct BidRequest {
     pub slot: Slot,
     pub parent_hash: B256,
-    pub public_key: BlsPublicKey,
-}
-
-impl std::fmt::Display for BidRequest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let slot = self.slot;
-        let parent_hash = &self.parent_hash;
-        let public_key = &self.public_key;
-        write!(f, "slot {slot}, parent hash {parent_hash} and proposer {public_key}")
-    }
+    pub pubkey: BlsPublicKey,
 }
 
 /// Creates a new [`SignedBuilderBid`] (get_header_reponse) from a [`SignedBidSubmission`]. The

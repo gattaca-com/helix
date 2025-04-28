@@ -1,5 +1,3 @@
-#![allow(clippy::type_complexity)]
-
 pub mod api;
 pub mod error;
 pub mod simulator;

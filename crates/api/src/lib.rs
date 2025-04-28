@@ -10,7 +10,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
-use service::ApiService;
+use service::run_api_service;
 
 pub mod builder;
 pub mod constants;
@@ -40,7 +40,7 @@ pub fn start_api_service<A: Api>(
     metadata_provider: Arc<A::MetadataProvider>,
     current_slot_info: CurrentSlotInfo,
 ) {
-    tokio::spawn(ApiService::run::<A>(
+    tokio::spawn(run_api_service::<A>(
         config.clone(),
         db,
         auctioneer,

@@ -1,5 +1,3 @@
-#![allow(clippy::type_complexity)]
-
 use std::sync::Arc;
 
 use axum::{
@@ -81,7 +79,7 @@ impl<A: Api> BuilderApi<A> {
 
     pub(crate) async fn handle_optimistic_payload(
         api: Arc<BuilderApi<A>>,
-        payload: SignedBidSubmission,
+        payload: Arc<SignedBidSubmission>,
         mut trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,
     ) -> Result<StatusCode, BuilderApiError> {
@@ -103,11 +101,10 @@ impl<A: Api> BuilderApi<A> {
         // Verify that we have a validator connected for this slot
         // Note: in `submit_block_v2` we have to do this check after decoding
         // so we can send a `PayloadReceived` message.
-        if next_duty.is_none() {
+        let Some(next_duty) = next_duty else {
             warn!(?block_hash, "could not find slot duty");
             return Err(BuilderApiError::ProposerDutyNotFound);
-        }
-        let next_duty = next_duty.unwrap();
+        };
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes =
@@ -189,9 +186,9 @@ impl<A: Api> BuilderApi<A> {
         }
         trace.pre_checks = utcnow_ns();
 
-        let (payload, _) = match api
+        match api
             .verify_submitted_block(
-                payload,
+                payload.clone(),
                 next_duty,
                 &builder_info,
                 &mut trace,

@@ -256,7 +256,7 @@ impl<A: Api> BuilderApi<A> {
                 if is_gossip_enabled {
                     api.gossip_header(
                         builder_bid,
-                        payload.bid_trace(),
+                        payload.bid_trace().clone(),
                         is_cancellations_enabled,
                         trace.receive,
                         payload_address.clone(),

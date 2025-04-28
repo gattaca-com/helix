@@ -2,7 +2,7 @@ use helix_types::{ForkName, ForkVersionDecode, SignedBlindedBeaconBlock};
 use ssz::Encode;
 use uuid::Uuid;
 
-use crate::grpc;
+use crate::{gossiper::error::GossipError, grpc};
 
 #[derive(Clone, Debug)]
 pub struct BroadcastGetPayloadParams {
@@ -11,16 +11,17 @@ pub struct BroadcastGetPayloadParams {
 }
 
 impl BroadcastGetPayloadParams {
-    pub fn from_proto(proto_params: grpc::BroadcastGetPayloadParams) -> Self {
+    pub fn from_proto(proto_params: grpc::BroadcastGetPayloadParams) -> Result<Self, GossipError> {
         let fork_name = proto_params.fork_name.and_then(|s| s.parse::<ForkName>().ok());
-        Self {
-            signed_blinded_beacon_block: decode_ssz_signed_blinded_beacon_block(
-                &proto_params.signed_blinded_beacon_block,
-                fork_name,
-            )
-            .unwrap(),
-            request_id: Uuid::from_slice(&proto_params.request_id).unwrap(),
-        }
+        let request_id = Uuid::from_slice(&proto_params.request_id)?;
+
+        let signed_blinded_beacon_block = decode_ssz_signed_blinded_beacon_block(
+            &proto_params.signed_blinded_beacon_block,
+            fork_name,
+        )
+        .map_err(GossipError::SszDecodeError)?;
+
+        Ok(Self { signed_blinded_beacon_block, request_id })
     }
     pub fn to_proto(&self) -> grpc::BroadcastGetPayloadParams {
         grpc::BroadcastGetPayloadParams {
