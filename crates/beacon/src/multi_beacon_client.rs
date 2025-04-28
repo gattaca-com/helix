@@ -42,10 +42,7 @@ impl MultiBeaconClient {
     ) -> impl Iterator<Item = Arc<BeaconClient>> + use<'_> {
         let start = self.best_index.load(Ordering::Relaxed);
 
-        self.beacon_clients[start..]
-            .iter()
-            .chain(&self.beacon_clients[..start])
-            .map(|client| client.clone())
+        self.beacon_clients[start..].iter().chain(&self.beacon_clients[..start]).cloned()
     }
 
     pub async fn broadcast_block(
@@ -214,23 +211,21 @@ impl MultiBeaconClient {
             .collect::<Vec<_>>();
 
         let mut last_error: Option<BeaconClientError> = None;
-        for res in join_all(handles).await {
-            if let Ok(res) = res {
-                match res {
-                    // Should the block fail full validation, a separate success response code (202)
-                    // is used to indicate that the block was successfully broadcast but failed
-                    // integration.
-                    Ok(202) => {
-                        last_error = Some(BeaconClientError::BlockIntegrationFailed);
-                    }
+        for res in (join_all(handles).await).into_iter().flatten() {
+            match res {
+                // Should the block fail full validation, a separate success response code (202)
+                // is used to indicate that the block was successfully broadcast but failed
+                // integration.
+                Ok(202) => {
+                    last_error = Some(BeaconClientError::BlockIntegrationFailed);
+                }
 
-                    Ok(_) => {
-                        return Ok(());
-                    }
+                Ok(_) => {
+                    return Ok(());
+                }
 
-                    Err(err) => {
-                        last_error = Some(err);
-                    }
+                Err(err) => {
+                    last_error = Some(err);
                 }
             }
         }
