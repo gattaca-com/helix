@@ -18,6 +18,6 @@ impl BuilderInfo {
     }
 
     pub fn builder_id(&self) -> &str {
-        self.builder_id.as_ref().map(|s| s.as_str()).unwrap_or("")
+        self.builder_id.as_deref().unwrap_or("")
     }
 }
