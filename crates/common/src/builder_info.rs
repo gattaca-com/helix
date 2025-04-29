@@ -16,4 +16,8 @@ impl BuilderInfo {
     pub fn can_process_regional_slot_optimistically(&self) -> bool {
         self.is_optimistic && self.is_optimistic_for_regional_filtering
     }
+
+    pub fn builder_id(&self) -> &str {
+        self.builder_id.as_ref().map(|s| s.as_str()).unwrap_or("")
+    }
 }
