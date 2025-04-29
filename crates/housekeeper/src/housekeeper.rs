@@ -371,6 +371,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                 self.auctioneer.demote_builder(&pending_block.builder_pubkey).await?;
                 self.db
                     .db_demote_builder(
+                        pending_block.slot,
                         &pending_block.builder_pubkey,
                         &pending_block.block_hash,
                         reason,

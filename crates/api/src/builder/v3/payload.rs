@@ -22,10 +22,10 @@ use crate::{
 /// A task that fetches builder blocks for optimistic v3 submissions.
 pub async fn fetch_builder_blocks<A: Api>(
     api: Arc<BuilderApi<A>>,
-    mut receiver: Receiver<(B256, BlsPublicKey, Vec<u8>)>,
+    mut receiver: Receiver<(u64, B256, BlsPublicKey, Vec<u8>)>,
     signing_ctx: Arc<RelaySigningContext>,
 ) {
-    while let Some((block_hash, builder_pubkey, builder_address)) = receiver.recv().await {
+    while let Some((slot, block_hash, builder_pubkey, builder_address)) = receiver.recv().await {
         let receive = utcnow_ns();
         let trace = SubmissionTrace { receive, ..Default::default() };
 
@@ -46,8 +46,13 @@ pub async fn fetch_builder_blocks<A: Api>(
             },
             Err(e) => {
                 error!(error=?e, ?block_hash, ?builder_address, "v3 block fetch failed, demoting builder");
-                api.demote_builder(&builder_pubkey, &block_hash, &BuilderApiError::PayloadError(e))
-                    .await;
+                api.demote_builder(
+                    slot,
+                    &builder_pubkey,
+                    &block_hash,
+                    &BuilderApiError::PayloadError(e),
+                )
+                .await;
             }
         }
     }

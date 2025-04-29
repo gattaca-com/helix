@@ -379,6 +379,7 @@ impl<A: Api> BuilderApi<A> {
 
     pub(crate) async fn demote_builder(
         &self,
+        slot: u64,
         builder: &BlsPublicKey,
         block_hash: &B256,
         err: &BuilderApiError,
@@ -395,7 +396,9 @@ impl<A: Api> BuilderApi<A> {
             error!(%err, %builder, "failed to demote builder in auctioneer");
         }
 
-        if let Err(err) = self.db.db_demote_builder(builder, block_hash, err.to_string()).await {
+        if let Err(err) =
+            self.db.db_demote_builder(slot, builder, block_hash, err.to_string()).await
+        {
             error!(%err,  %builder, "Failed to demote builder in database");
         }
     }

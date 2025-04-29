@@ -1186,6 +1186,7 @@ impl DatabaseService for PostgresDatabaseService {
 
     async fn db_demote_builder(
         &self,
+        slot: u64,
         builder_pub_key: &BlsPublicKey,
         block_hash: &B256,
         reason: String,
@@ -1211,14 +1212,15 @@ impl DatabaseService for PostgresDatabaseService {
         transaction
             .execute(
                 "
-                    INSERT INTO demotions (public_key, block_hash, demotion_time, reason)
-                    VALUES ($1, $2, $3, $4)
+                    INSERT INTO demotions (public_key, block_hash, demotion_time, reason, slot_number)
+                    VALUES ($1, $2, $3, $4, $5)
                 ",
                 &[
                     &(builder_pub_key_bytes.as_slice()),
                     &(block_hash.as_slice()),
                     &(timestamp as i64),
                     &(reason),
+                    &(slot  as i32),
                 ],
             )
             .await?;

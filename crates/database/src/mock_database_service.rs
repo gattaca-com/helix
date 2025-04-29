@@ -185,6 +185,7 @@ impl DatabaseService for MockDatabaseService {
 
     async fn db_demote_builder(
         &self,
+        _slot: u64,
         _builder_pub_key: &BlsPublicKey,
         _block_hash: &B256,
         _reason: String,

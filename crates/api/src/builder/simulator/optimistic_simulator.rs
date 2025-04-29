@@ -100,6 +100,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
                     "Block simulation resulted in an error. Demoting builder...",
                 );
                 self.demote_builder_due_to_error(
+                    request.message.slot,
                     &request.message.builder_pubkey,
                     &request.execution_payload.block_hash().0,
                     err.to_string(),
@@ -117,6 +118,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
     /// If demotion fails, the failsafe is triggered to halt all optimistic simulations.
     async fn demote_builder_due_to_error(
         &self,
+        slot: u64,
         builder_public_key: &BlsPublicKey,
         block_hash: &B256,
         reason: String,
@@ -132,7 +134,9 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             );
         }
 
-        if let Err(err) = self.db.db_demote_builder(builder_public_key, block_hash, reason).await {
+        if let Err(err) =
+            self.db.db_demote_builder(slot, builder_public_key, block_hash, reason).await
+        {
             self.failsafe_triggered.store(true, Ordering::Relaxed);
             error!(
                 builder=%builder_public_key,
