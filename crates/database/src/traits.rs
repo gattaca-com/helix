@@ -109,6 +109,7 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn db_demote_builder(
         &self,
+        slot: u64,
         builder_pub_key: &BlsPublicKey,
         block_hash: &B256,
         reason: String,

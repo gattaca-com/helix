@@ -168,7 +168,13 @@ impl<A: Api> BuilderApi<A> {
                     return Err(BuilderApiError::AuctioneerError(err))
                 }
                 _ => {
-                    api.demote_builder(&builder_pub_key, &block_hash, &err).await;
+                    api.demote_builder(
+                        payload.slot().as_u64(),
+                        &builder_pub_key,
+                        &block_hash,
+                        &err,
+                    )
+                    .await;
                     return Err(err);
                 }
             }
@@ -199,7 +205,8 @@ impl<A: Api> BuilderApi<A> {
             Ok(val) => val,
             Err(err) => {
                 // Any invalid submission for optimistic v2/v3 results in a demotion.
-                api.demote_builder(&builder_pub_key, &block_hash, &err).await;
+                api.demote_builder(payload.slot().as_u64(), &builder_pub_key, &block_hash, &err)
+                    .await;
                 return Err(err);
             }
         };

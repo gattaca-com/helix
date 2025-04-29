@@ -419,8 +419,10 @@ impl<A: Api> ProposerApi<A> {
                 payload_address = String::from_utf8_lossy(&payload_address).as_ref(),
                 "Requesting v3 payload from builder"
             );
-            if let Err(e) =
-                self.v3_payload_request.send((*block_hash, builder_pubkey, payload_address)).await
+            if let Err(e) = self
+                .v3_payload_request
+                .send((slot, *block_hash, builder_pubkey, payload_address))
+                .await
             {
                 error!("Failed to send v3 payload request: {e:?}");
             }
