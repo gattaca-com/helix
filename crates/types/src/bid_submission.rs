@@ -47,7 +47,7 @@ impl BidTrace {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash, TestRandom)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
 #[serde(deny_unknown_fields)]
 pub struct SignedBidSubmissionDeneb {
     pub message: BidTrace,
@@ -56,7 +56,7 @@ pub struct SignedBidSubmissionDeneb {
     pub signature: BlsSignature,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash, TestRandom)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
 #[serde(deny_unknown_fields)]
 pub struct SignedBidSubmissionElectra {
     pub message: BidTrace,
@@ -67,9 +67,8 @@ pub struct SignedBidSubmissionElectra {
 }
 
 /// Request object of POST `/relay/v1/builder/blocks`
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 #[ssz(enum_behaviour = "transparent")]
-#[tree_hash(enum_behaviour = "transparent")]
 #[serde(untagged)]
 pub enum SignedBidSubmission {
     Deneb(SignedBidSubmissionDeneb),
