@@ -39,8 +39,8 @@ pub enum BuilderApiError {
     #[error("payload too large. max size: {max_size}, size: {size}")]
     PayloadTooLarge { max_size: usize, size: usize },
 
-    #[error("submission for past slot. current slot: {current_slot}, submission slot: {submission_slot}")]
-    SubmissionForPastSlot { current_slot: Slot, submission_slot: Slot },
+    #[error("submission for wrong slot. expected: {expected}, got: {got}")]
+    SubmissionForWrongSlot { expected: Slot, got: Slot },
 
     #[error("builder blacklisted. pubkey: {pubkey:?}")]
     BuilderBlacklisted { pubkey: BlsPublicKey },
@@ -166,7 +166,7 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::HyperError(_) |
             BuilderApiError::AxumError(_) |
             BuilderApiError::PayloadTooLarge { .. } |
-            BuilderApiError::SubmissionForPastSlot { .. } |
+            BuilderApiError::SubmissionForWrongSlot { .. } |
             BuilderApiError::BuilderBlacklisted { .. } |
             BuilderApiError::IncorrectTimestamp { .. } |
             BuilderApiError::ProposerDutyNotFound |

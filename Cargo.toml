@@ -68,6 +68,9 @@ lh-types = { package = "types", git = "https://github.com/ltitanb/lighthouse", r
 mockito = "1.1.1"
 moka = "0.9"
 num-format = "0.4.4"
+opentelemetry = { version = "0.29", features = ["trace"] }
+opentelemetry-otlp = { version = "0.29", features = ["grpc-tonic", "trace"] }
+opentelemetry_sdk = { version = "0.29", features = ["rt-tokio", "trace"] }
 parking_lot = "0.12"
 prometheus = "0.13.4"
 prost = "0.12"
@@ -94,6 +97,7 @@ tower-http = { version = "0.5.1", features = ["full"] }
 tower_governor = { version = "0.6.0", features = ["axum"] }
 tracing = "0.1.37"
 tracing-appender = "0.2.2"
+tracing-opentelemetry = "0.30"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 tree_hash = "0.9"
 tree_hash_derive = "0.9"

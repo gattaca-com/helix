@@ -18,7 +18,7 @@ use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
 use helix_types::{PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
 use hyper::HeaderMap;
-use tracing::{debug, error, info, warn, Instrument, Level};
+use tracing::{debug, error, info, trace, warn, Instrument, Level};
 
 use super::api::{log_save_bid_info, BuilderApi};
 use crate::{
@@ -42,14 +42,30 @@ impl<A: Api> BuilderApi<A> {
     /// 6. Saves the bid to auctioneer and db.
     ///
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err, ret(level = Level::DEBUG))]
+    #[tracing::instrument(skip_all, fields(
+        id =% extract_request_id(&headers),
+        slot = tracing::field::Empty, // submission slot
+        builder_pubkey = tracing::field::Empty,
+        builder_id = tracing::field::Empty,
+        block_hash = tracing::field::Empty,
+    ), err, ret(level = Level::DEBUG))]
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
+        trace!("new block submission");
+
         let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
+        tracing::Span::current().record("slot", head_slot.as_u64() + 1);
+
+        // Verify that we have a validator connected for this slot
+        let Some(next_duty) = next_duty else {
+            warn!("could not find slot duty");
+            return Err(BuilderApiError::ProposerDutyNotFound);
+        };
+
         trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         debug!(%head_slot, timestamp_request_start = trace.receive);
@@ -58,34 +74,30 @@ impl<A: Api> BuilderApi<A> {
         let (payload, is_cancellations_enabled) = decode_payload(req, &mut trace).await?;
         let block_hash = payload.message().block_hash;
 
+        tracing::Span::current()
+            .record("builder_pubkey", tracing::field::display(payload.builder_public_key()));
+        tracing::Span::current()
+            .record("block_hash", tracing::field::display(payload.message().block_hash));
+
         info!(
             slot = %payload.slot(),
-            builder_pub_key = ?payload.builder_public_key(),
             block_value = %payload.value(),
-            ?block_hash,
             "payload decoded",
         );
 
         // Verify the payload is for the current slot
-        if payload.slot() <= head_slot {
-            debug!(?block_hash, "submission is for a past slot");
-
-            return Err(BuilderApiError::SubmissionForPastSlot {
-                current_slot: head_slot,
-                submission_slot: payload.slot(),
+        if payload.slot() != head_slot + 1 {
+            debug!(?block_hash, "submission is for wrong slot");
+            return Err(BuilderApiError::SubmissionForWrongSlot {
+                expected: head_slot + 1,
+                got: payload.slot(),
             });
         }
-
-        // Verify that we have a validator connected for this slot
-        if next_duty.is_none() {
-            warn!(?block_hash, "could not find slot duty");
-            return Err(BuilderApiError::ProposerDutyNotFound);
-        }
-        let next_duty = next_duty.unwrap();
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes =
             api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), &block_hash)?;
+        trace!("fetched payload attributes");
 
         // Handle duplicates.
         if let Err(err) = api
@@ -112,6 +124,7 @@ impl<A: Api> BuilderApi<A> {
                 _ => return Err(err),
             }
         }
+        trace!("checked for duplicates");
 
         // Verify the payload value is above the floor bid
         let floor_bid_value = api
@@ -124,10 +137,14 @@ impl<A: Api> BuilderApi<A> {
                 is_cancellations_enabled,
             )
             .await?;
+        trace!(%floor_bid_value, "floor bid checked");
         trace.floor_bid_checks = utcnow_ns();
 
         // Fetch builder info
         let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
+        trace!(?builder_info, "fetched builder info");
+        tracing::Span::current()
+            .record("builder_id", tracing::field::display(builder_info.builder_id()));
 
         // Handle trusted builders check
         if !Self::check_if_trusted_builder(&next_duty, &builder_info) {
@@ -141,6 +158,7 @@ impl<A: Api> BuilderApi<A> {
                 proposer_trusted_builders,
             });
         }
+        trace!("checked trusted builders");
 
         // Verify payload has not already been delivered
         match api.auctioneer.get_last_slot_delivered().await {
@@ -155,6 +173,7 @@ impl<A: Api> BuilderApi<A> {
                 error!(%err, "failed to get last slot delivered");
             }
         }
+        trace!("checked payload not already delivered");
 
         // Sanity check the payload
         if let Err(err) = sanity_check_block_submission(
@@ -166,6 +185,7 @@ impl<A: Api> BuilderApi<A> {
             warn!(%err, "failed sanity check");
             return Err(err);
         }
+        trace!("sanity check passed");
         trace.pre_checks = utcnow_ns();
 
         let was_simulated_optimistically = api
@@ -177,6 +197,7 @@ impl<A: Api> BuilderApi<A> {
                 &payload_attributes,
             )
             .await?;
+        trace!(is_optimistic = was_simulated_optimistically, "verified submitted block");
 
         // If cancellations are enabled, then abort now if there is a later submission
         if is_cancellations_enabled {
@@ -231,6 +252,7 @@ impl<A: Api> BuilderApi<A> {
                 return Err(err);
             }
         }
+        trace!(is_cancellations_enabled, "checked for later submissions");
 
         // Save bid to auctioneer
         match api
@@ -255,6 +277,7 @@ impl<A: Api> BuilderApi<A> {
             Some(_) => { /* Gossiping is not enabled */ }
             None => { /* Bid wasn't saved so no need to gossip as it will never be served */ }
         }
+        trace!("saved bid to auctioneer");
 
         // Log some final info
         trace.request_finish = utcnow_ns();

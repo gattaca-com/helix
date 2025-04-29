@@ -108,14 +108,14 @@ impl<A: Api> BuilderApi<A> {
         let block_hash = payload.block_hash();
 
         // Verify the payload is for the current slot
-        if payload.slot() <= head_slot {
+        if payload.slot() != head_slot + 1 {
             debug!(
                 block_hash = ?block_hash,
                 "submission is for a past slot",
             );
-            return Err(BuilderApiError::SubmissionForPastSlot {
-                current_slot: head_slot,
-                submission_slot: payload.slot(),
+            return Err(BuilderApiError::SubmissionForWrongSlot {
+                expected: head_slot + 1,
+                got: payload.slot(),
             });
         }
 

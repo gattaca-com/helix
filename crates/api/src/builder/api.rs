@@ -27,7 +27,7 @@ use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{BlsPublicKey, SignedBidSubmission, Slot};
 use parking_lot::RwLock;
 use ssz::Decode;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use super::multi_simulator::MultiSimulator;
 use crate::{
@@ -166,6 +166,7 @@ impl<A: Api> BuilderApi<A> {
             warn!(%err, "failed to verify signature");
             return Err(BuilderApiError::SignatureVerificationFailed);
         }
+        trace!("verified signature");
         trace.signature = utcnow_ns();
 
         // Simulate the submission
@@ -298,7 +299,7 @@ impl<A: Api> BuilderApi<A> {
             }
         }
 
-        debug!(timestamp_before_validation = utcnow_ns());
+        debug!("validating block");
 
         let current_slot_coord = get_slot_coordinate(
             payload.slot().as_u64(),
@@ -325,10 +326,11 @@ impl<A: Api> BuilderApi<A> {
 
         match result {
             Ok(sim_optimistic) => {
-                debug!("block simulation successful");
-
                 trace.simulation = utcnow_ns();
-                debug!(sim_latency = trace.simulation.saturating_sub(trace.signature));
+                debug!(
+                    sim_latency = trace.simulation.saturating_sub(trace.signature),
+                    "block simulation successful"
+                );
 
                 Ok(sim_optimistic)
             }
@@ -436,6 +438,7 @@ impl<A: Api> BuilderApi<A> {
 /// - Handles GZIP-compressed payloads.
 ///
 /// It returns a tuple of the decoded payload and if cancellations are enabled.
+#[tracing::instrument(skip_all)]
 pub async fn decode_payload(
     req: Request<Body>,
     trace: &mut SubmissionTrace,
@@ -456,8 +459,6 @@ pub async fn decode_payload(
         })
         .unwrap_or(false);
 
-    let headers = req.headers().clone();
-
     // Get content encoding and content type
     let is_gzip =
         req.headers().get("Content-Encoding").and_then(|val| val.to_str().ok()) == Some("gzip");
@@ -467,6 +468,7 @@ pub async fn decode_payload(
 
     // Read the body
     let body = req.into_body();
+    trace!("reading body");
     let mut body_bytes = to_bytes(body, MAX_PAYLOAD_LENGTH).await?;
     if body_bytes.len() > MAX_PAYLOAD_LENGTH {
         return Err(BuilderApiError::PayloadTooLarge {
@@ -487,13 +489,7 @@ pub async fn decode_payload(
         body_bytes = buf.into();
     }
 
-    info!(
-        payload_size = body_bytes.len(),
-        is_gzip,
-        is_ssz,
-        headers = ?headers,
-        "received payload",
-    );
+    info!(payload_size = body_bytes.len(), is_gzip, is_ssz, "decoded payload");
 
     // Decode payload
     let payload: SignedBidSubmission = if is_ssz {
