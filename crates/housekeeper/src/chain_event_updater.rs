@@ -183,7 +183,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
                                 }
                                 None => {
                                     duty.entry.preferences.trusted_builders =
-                                        Some(vec!["".to_string()]);
+                                        Some(vec!["PrimevBuilder".to_string()]);
                                 }
                             }
                         }
