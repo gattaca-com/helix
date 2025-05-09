@@ -1,4 +1,4 @@
-use helix_common::api::data_api::BidFilters;
+use helix_common::api::data_api::{BidFilters, BidsOrderBy};
 
 #[derive(Clone, Debug)]
 pub struct PgBidFilters(BidFilters);
@@ -40,8 +40,8 @@ impl PgBidFilters {
         self.0.block_hash.as_ref().map(|block_hash| block_hash.as_ref())
     }
 
-    pub fn order(&self) -> Option<i32> {
-        self.0.order_by.map(|order_by| order_by as i32)
+    pub fn order(&self) -> Option<&BidsOrderBy> {
+        self.0.order_by.as_ref()
     }
 
     pub fn limit(&self) -> Option<i64> {
