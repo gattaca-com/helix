@@ -148,6 +148,9 @@ pub enum BuilderApiError {
 
     #[error("builder not in proposer's trusted list: {proposer_trusted_builders:?}")]
     BuilderNotInProposersTrustedList { proposer_trusted_builders: Vec<String> },
+
+    #[error("not {fork_name:?} payload")]
+    InvalidPayloadType { fork_name: String },
 }
 
 impl IntoResponse for BuilderApiError {
@@ -204,6 +207,7 @@ impl IntoResponse for BuilderApiError {
 
                 _ => StatusCode::BAD_REQUEST,
             },
+            BuilderApiError::InvalidPayloadType { .. } => StatusCode::BAD_REQUEST,
         };
 
         (code, self.to_string()).into_response()

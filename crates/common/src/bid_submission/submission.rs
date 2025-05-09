@@ -248,4 +248,11 @@ impl BidSubmission for SignedBidSubmission {
 
         Ok(())
     }
+
+    fn fork_name(&self) -> helix_types::ForkName {
+        match self {
+            SignedBidSubmission::Deneb(_) => helix_types::ForkName::Deneb,
+            SignedBidSubmission::Electra(_) => helix_types::ForkName::Electra,
+        }
+    }
 }

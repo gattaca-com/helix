@@ -510,6 +510,13 @@ pub(crate) fn sanity_check_block_submission(
     payload_attributes: &PayloadAttributesUpdate,
     chain_info: &ChainInfo,
 ) -> Result<(), BuilderApiError> {
+    // Check block is for current fork
+    if chain_info.current_fork_name() != payload.fork_name() {
+        return Err(BuilderApiError::InvalidPayloadType {
+            fork_name: chain_info.current_fork_name().to_string(),
+        });
+    }
+
     // checks internal consistency of the payload
     payload.validate()?;
 
