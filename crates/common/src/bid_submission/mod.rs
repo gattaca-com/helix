@@ -3,7 +3,7 @@ pub mod v2;
 pub mod v3;
 
 use alloy_primitives::{Address, B256, U256};
-use helix_types::{BidTrace, Bloom, BlsPublicKey, BlsSignature, ExtraData, Slot};
+use helix_types::{BidTrace, Bloom, BlsPublicKey, BlsSignature, ExtraData, ForkName, Slot};
 
 #[auto_impl::auto_impl(Arc)]
 pub trait BidSubmission {
@@ -56,6 +56,8 @@ pub trait BidSubmission {
 
     /// Validates that the bid trace and execution payload are consistent
     fn validate(&self) -> Result<(), BidValidationError>;
+
+    fn fork_name(&self) -> ForkName;
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
