@@ -6,13 +6,10 @@ use helix_types::{
     TestRandom,
 };
 use ssz_derive::{Decode, Encode};
-use tree_hash_derive::TreeHash;
 
 use crate::bid_submission::{BidSubmission, BidTrace, BidValidationError};
 
-#[derive(
-    Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode, TreeHash, TestRandom,
-)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode, TestRandom)]
 pub struct HeaderSubmissionDeneb {
     pub bid_trace: BidTrace,
     pub execution_payload_header: ExecutionPayloadHeaderDeneb,
@@ -21,9 +18,7 @@ pub struct HeaderSubmissionDeneb {
 
 pub type SignedHeaderSubmissionDeneb = SignedMessage<HeaderSubmissionDeneb>;
 
-#[derive(
-    Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode, TreeHash, TestRandom,
-)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode, TestRandom)]
 pub struct HeaderSubmissionElectra {
     pub bid_trace: BidTrace,
     pub execution_payload_header: ExecutionPayloadHeaderElectra,

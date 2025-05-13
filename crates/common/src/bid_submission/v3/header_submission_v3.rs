@@ -123,6 +123,8 @@ pub struct GetPayloadV3 {
     pub relay_pubkey: BlsPublicKey,
 }
 
+impl helix_types::SignedRoot for GetPayloadV3 {}
+
 /// Builder block payload response.
 #[derive(Debug, serde::Deserialize, serde::Serialize, Encode, Decode)]
 pub struct SignedGetPayloadV3 {

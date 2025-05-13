@@ -24,6 +24,8 @@ pub struct ValidatorRegistrationData {
     pub pubkey: PublicKey,
 }
 
+impl SignedRoot for ValidatorRegistrationData {}
+
 impl SignedValidatorRegistrationData {
     pub fn verify_signature(&self, spec: &ChainSpec) -> bool {
         let domain = spec.get_builder_domain();
@@ -36,9 +38,7 @@ impl SignedValidatorRegistrationData {
 /// Information about a `BeaconChain` validator.
 ///
 /// Spec v0.12.1
-#[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash, TestRandom,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TestRandom)]
 pub struct Validator {
     pub pubkey: PublicKey,
     pub withdrawal_credentials: B256,

@@ -41,6 +41,8 @@ pub struct BidTrace {
     pub value: U256,
 }
 
+impl SignedRoot for BidTrace {}
+
 impl BidTrace {
     pub fn slot(&self) -> Slot {
         Slot::from(self.slot)
