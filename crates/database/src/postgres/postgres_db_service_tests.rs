@@ -376,7 +376,7 @@ mod tests {
         assert!(result.is_ok());
 
         let result =
-            db_service.db_demote_builder(&public_key, &Default::default(), "".to_string()).await;
+            db_service.db_demote_builder(0, &public_key, &Default::default(), "".to_string()).await;
         assert!(result.is_ok());
     }
 
