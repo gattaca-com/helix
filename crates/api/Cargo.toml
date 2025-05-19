@@ -13,6 +13,7 @@ auto_impl.workspace = true
 axum.workspace = true
 bytes.workspace = true
 cbor4ii.workspace = true
+dashmap.workspace = true
 ethereum_serde_utils.workspace = true
 ethereum_ssz.workspace = true
 flate2.workspace = true
