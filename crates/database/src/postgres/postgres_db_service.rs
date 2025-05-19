@@ -1279,7 +1279,7 @@ impl DatabaseService for PostgresDatabaseService {
                 block_submission.gas_limit gas_limit,
                 block_submission.gas_used gas_used,
                 block_submission.value submission_value,
-                block_submission.num_txs num_txs,
+                COALESCE(block_submission.num_txs, header_submission.tx_count) num_txs,
                 LEAST(block_submission.first_seen, header_submission.first_seen) submission_timestamp
             FROM 
                 block_submission
@@ -1376,13 +1376,13 @@ impl DatabaseService for PostgresDatabaseService {
                 block_submission.gas_limit              gas_limit,
                 block_submission.gas_used               gas_used,
                 block_submission.block_number           block_number,
-                block_submission.num_txs                num_txs
+                COALESCE(block_submission.num_txs, header_submission.tx_count) num_txs
             FROM
                 block_submission
             INNER JOIN
-                delivered_payload
-            ON
-                block_submission.block_number = delivered_payload.block_number and block_submission.block_hash = delivered_payload.block_hash
+                delivered_payload ON block_submission.block_number = delivered_payload.block_number and block_submission.block_hash = delivered_payload.block_hash
+            LEFT JOIN
+                header_submission ON block_submission.block_hash = header_submission.block_hash
         ",
         );
 
@@ -1603,6 +1603,7 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         submission: Arc<SignedHeaderSubmission>,
         trace: HeaderSubmissionTrace,
+        tx_count: Option<u32>,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_header_submission");
 
@@ -1616,9 +1617,9 @@ impl DatabaseService for PostgresDatabaseService {
         transaction.execute(
             "
                 INSERT INTO
-                    header_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, timestamp, first_seen)
+                    header_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, timestamp, first_seen, tx_count)
                 VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                 ON CONFLICT (block_hash)
                 DO UPDATE SET
                     first_seen = LEAST(header_submission.first_seen, excluded.first_seen)
@@ -1636,6 +1637,7 @@ impl DatabaseService for PostgresDatabaseService {
                 &(PostgresNumeric::from(submission.value())),
                 &(submission.timestamp() as i64),
                 &(trace.receive as i64),
+                &(tx_count.map(|c| c as i32)),
             ],
         ).await?;
 

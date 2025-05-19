@@ -98,7 +98,7 @@ impl<A: Api> BuilderApi<A> {
         api: &Arc<BuilderApi<A>>,
         payload: SignedHeaderSubmission,
         payload_address: Option<Vec<u8>>,
-        _block_tx_count: Option<u32>, // TODO
+        block_tx_count: Option<u32>, 
         is_cancellations_enabled: bool,
         is_gossip_enabled: bool,
         mut trace: HeaderSubmissionTrace,
@@ -252,7 +252,8 @@ impl<A: Api> BuilderApi<A> {
             )
             .await?
         {
-            Some(builder_bid) => {
+            // v3 header submissions (`block_tx_count` is set) are not gossiped
+            Some(builder_bid) if block_tx_count.is_none() => {
                 if is_gossip_enabled {
                     api.gossip_header(
                         builder_bid,
@@ -264,7 +265,7 @@ impl<A: Api> BuilderApi<A> {
                     .await;
                 }
             }
-            None => { /* Bid wasn't saved so no need to gossip as it will never be served */ }
+            _ => { /* Bid wasn't saved so no need to gossip as it will never be served */ }
         }
 
         // Log some final info
@@ -312,7 +313,7 @@ impl<A: Api> BuilderApi<A> {
             file!(),
             line!(),
             async move {
-                if let Err(err) = db.store_header_submission(payload, trace).await {
+                if let Err(err) = db.store_header_submission(payload, trace, block_tx_count).await {
                     error!(
                         %err,
                         "failed to store header submission",

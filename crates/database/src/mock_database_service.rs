@@ -253,6 +253,7 @@ impl DatabaseService for MockDatabaseService {
         &self,
         _submission: Arc<SignedHeaderSubmission>,
         _trace: HeaderSubmissionTrace,
+        _tx_count: Option<u32>,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }
