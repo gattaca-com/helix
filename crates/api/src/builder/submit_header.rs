@@ -98,7 +98,7 @@ impl<A: Api> BuilderApi<A> {
         api: &Arc<BuilderApi<A>>,
         payload: SignedHeaderSubmission,
         payload_address: Option<Vec<u8>>,
-        block_tx_count: Option<u32>, 
+        block_tx_count: Option<u32>,
         is_cancellations_enabled: bool,
         is_gossip_enabled: bool,
         mut trace: HeaderSubmissionTrace,

@@ -202,7 +202,7 @@ async fn process_db_additions<DB: DatabaseService + 'static>(db: Arc<DB>, db_inf
             }
         }
         DbInfo::NewHeaderSubmission(header_submission, trace) => {
-            if let Err(err) = db.store_header_submission(header_submission, trace).await {
+            if let Err(err) = db.store_header_submission(header_submission, trace, None).await {
                 error!(%err, "failed to store header submission")
             }
         }

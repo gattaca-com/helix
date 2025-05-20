@@ -1267,7 +1267,7 @@ impl DatabaseService for PostgresDatabaseService {
 
         let filters = PgBidFilters::from(filters);
 
-        // Build 2 queries - one for bids that have entries in the `block_submission` table 
+        // Build 2 queries - one for bids that have entries in the `block_submission` table
         // and possibly also in the `header_submission` table (v1 and v2 submissions) and a second
         // for bids that are only present in the `header_submission` table (v3 submissions).
         let mut block_query = String::from("
@@ -1290,7 +1290,8 @@ impl DatabaseService for PostgresDatabaseService {
                 header_submission ON block_submission.block_hash = header_submission.block_hash
         ");
 
-        let mut header_query = String::from("
+        let mut header_query = String::from(
+            "
             SELECT
                 header_submission.block_number block_number,
                 header_submission.slot_number slot_number,
@@ -1306,7 +1307,8 @@ impl DatabaseService for PostgresDatabaseService {
                 header_submission.first_seen submission_timestamp
             FROM 
                 header_submission
-        ");
+        ",
+        );
 
         let filtering = match validator_preferences.filtering {
             Filtering::Regional => Some(1_i16),
@@ -1340,28 +1342,34 @@ impl DatabaseService for PostgresDatabaseService {
 
         if let Some(slot) = filters.slot() {
             block_query.push_str(&format!(" AND block_submission.slot_number = ${}", param_index));
-            header_query.push_str(&format!(" AND header_submission.slot_number = ${}", param_index));
+            header_query
+                .push_str(&format!(" AND header_submission.slot_number = ${}", param_index));
             params.push(Box::new(slot));
             param_index += 1;
         }
 
         if let Some(block_number) = filters.block_number() {
             block_query.push_str(&format!(" AND block_submission.block_number = ${}", param_index));
-            header_query.push_str(&format!(" AND header_submission.block_number = ${}", param_index));
+            header_query
+                .push_str(&format!(" AND header_submission.block_number = ${}", param_index));
             params.push(Box::new(block_number));
             param_index += 1;
         }
 
         if let Some(proposer_pubkey) = filters.proposer_pubkey() {
-            block_query.push_str(&format!(" AND block_submission.proposer_pubkey = ${}", param_index));
-            header_query.push_str(&format!(" AND header_submission.proposer_pubkey = ${}", param_index));
+            block_query
+                .push_str(&format!(" AND block_submission.proposer_pubkey = ${}", param_index));
+            header_query
+                .push_str(&format!(" AND header_submission.proposer_pubkey = ${}", param_index));
             params.push(Box::new(proposer_pubkey.to_vec()));
             param_index += 1;
         }
 
         if let Some(builder_pubkey) = filters.builder_pubkey() {
-            block_query.push_str(&format!(" AND block_submission.builder_pubkey = ${}", param_index));
-            header_query.push_str(&format!(" AND header_submission.builder_pubkey = ${}", param_index));
+            block_query
+                .push_str(&format!(" AND block_submission.builder_pubkey = ${}", param_index));
+            header_query
+                .push_str(&format!(" AND header_submission.builder_pubkey = ${}", param_index));
             params.push(Box::new(builder_pubkey.to_vec()));
             param_index += 1;
         }
@@ -1387,7 +1395,7 @@ impl DatabaseService for PostgresDatabaseService {
 
         let params_refs: Vec<&(dyn ToSql + Sync)> =
             params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect();
-        
+
         let query = format!("{block_query} UNION {header_query}");
 
         let rows = self.pool.get().await?.query(&query, &params_refs[..]).await?;
