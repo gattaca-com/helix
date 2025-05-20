@@ -1267,7 +1267,10 @@ impl DatabaseService for PostgresDatabaseService {
 
         let filters = PgBidFilters::from(filters);
 
-        let mut query = String::from("
+        // Build 2 queries - one for bids that have entries in the `block_submission` table 
+        // and possibly also in the `header_submission` table (v1 and v2 submissions) and a second
+        // for bids that are only present in the `header_submission` table (v3 submissions).
+        let mut block_query = String::from("
             SELECT
                 block_submission.block_number block_number,
                 block_submission.slot_number slot_number,
@@ -1279,12 +1282,30 @@ impl DatabaseService for PostgresDatabaseService {
                 block_submission.gas_limit gas_limit,
                 block_submission.gas_used gas_used,
                 block_submission.value submission_value,
-                COALESCE(block_submission.num_txs, header_submission.tx_count) num_txs,
+                block_submission.num_txs num_txs,
                 LEAST(block_submission.first_seen, header_submission.first_seen) submission_timestamp
             FROM 
                 block_submission
             LEFT JOIN
                 header_submission ON block_submission.block_hash = header_submission.block_hash
+        ");
+
+        let mut header_query = String::from("
+            SELECT
+                header_submission.block_number block_number,
+                header_submission.slot_number slot_number,
+                header_submission.parent_hash,
+                header_submission.block_hash,
+                header_submission.builder_pubkey builder_public_key,
+                header_submission.proposer_pubkey proposer_public_key,
+                header_submission.proposer_fee_recipient proposer_fee_recipient,
+                header_submission.gas_limit gas_limit,
+                header_submission.gas_used gas_used,
+                header_submission.value submission_value,
+                header_submission.tx_count num_txs,
+                header_submission.first_seen submission_timestamp
+            FROM 
+                header_submission
         ");
 
         let filtering = match validator_preferences.filtering {
@@ -1293,7 +1314,7 @@ impl DatabaseService for PostgresDatabaseService {
         };
 
         if filtering.is_some() {
-            query.push_str(
+            block_query.push_str(
                 "
                 LEFT JOIN
                     slot_preferences
@@ -1301,45 +1322,63 @@ impl DatabaseService for PostgresDatabaseService {
                     block_submission.slot_number = slot_preferences.slot_number
             ",
             );
+            header_query.push_str(
+                "
+                LEFT JOIN
+                    slot_preferences
+                ON
+                    header_submission.slot_number = slot_preferences.slot_number
+            ",
+            );
         }
 
-        query.push_str(" WHERE 1 = 1");
+        block_query.push_str(" WHERE 1 = 1");
+        header_query.push_str(" WHERE header_submission.tx_count IS NOT NULL");
 
         let mut param_index = 1;
         let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
 
         if let Some(slot) = filters.slot() {
-            query.push_str(&format!(" AND block_submission.slot_number = ${}", param_index));
+            block_query.push_str(&format!(" AND block_submission.slot_number = ${}", param_index));
+            header_query.push_str(&format!(" AND header_submission.slot_number = ${}", param_index));
             params.push(Box::new(slot));
             param_index += 1;
         }
 
         if let Some(block_number) = filters.block_number() {
-            query.push_str(&format!(" AND block_submission.block_number = ${}", param_index));
+            block_query.push_str(&format!(" AND block_submission.block_number = ${}", param_index));
+            header_query.push_str(&format!(" AND header_submission.block_number = ${}", param_index));
             params.push(Box::new(block_number));
             param_index += 1;
         }
 
         if let Some(proposer_pubkey) = filters.proposer_pubkey() {
-            query.push_str(&format!(" AND block_submission.proposer_pubkey = ${}", param_index));
+            block_query.push_str(&format!(" AND block_submission.proposer_pubkey = ${}", param_index));
+            header_query.push_str(&format!(" AND header_submission.proposer_pubkey = ${}", param_index));
             params.push(Box::new(proposer_pubkey.to_vec()));
             param_index += 1;
         }
 
         if let Some(builder_pubkey) = filters.builder_pubkey() {
-            query.push_str(&format!(" AND block_submission.builder_pubkey = ${}", param_index));
+            block_query.push_str(&format!(" AND block_submission.builder_pubkey = ${}", param_index));
+            header_query.push_str(&format!(" AND header_submission.builder_pubkey = ${}", param_index));
             params.push(Box::new(builder_pubkey.to_vec()));
             param_index += 1;
         }
 
         if let Some(block_hash) = filters.block_hash() {
-            query.push_str(&format!(" AND block_submission.block_hash = ${}", param_index));
+            block_query.push_str(&format!(" AND block_submission.block_hash = ${}", param_index));
+            header_query.push_str(&format!(" AND header_submission.block_hash = ${}", param_index));
             params.push(Box::new(block_hash));
             param_index += 1;
         }
 
         if let Some(filtering) = filtering {
-            query.push_str(&format!(
+            block_query.push_str(&format!(
+                " AND (slot_preferences.filtering = ${} OR slot_preferences.filtering IS NULL)",
+                param_index
+            ));
+            header_query.push_str(&format!(
                 " AND (slot_preferences.filtering = ${} OR slot_preferences.filtering IS NULL)",
                 param_index
             ));
@@ -1348,6 +1387,8 @@ impl DatabaseService for PostgresDatabaseService {
 
         let params_refs: Vec<&(dyn ToSql + Sync)> =
             params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect();
+        
+        let query = format!("{block_query} UNION {header_query}");
 
         let rows = self.pool.get().await?.query(&query, &params_refs[..]).await?;
 
