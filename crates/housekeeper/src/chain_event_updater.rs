@@ -4,6 +4,7 @@ use alloy_primitives::B256;
 use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, utils::utcnow_sec,
+    RelayConfig,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
@@ -15,11 +16,12 @@ use tokio::{
 use tracing::{error, info, warn};
 use tree_hash::TreeHash;
 
-use crate::CurrentSlotInfo;
+use crate::{inclusion_list_fetcher::InclusionListFetcher, CurrentSlotInfo};
 
 // Do not accept slots more than 60 seconds in the future
 const MAX_DISTANCE_FOR_FUTURE_SLOT: u64 = 60;
 const CUTOFF_TIME: u64 = 4;
+const MISSING_INCLUSION_LIST_CUTOFF: Duration = Duration::from_secs(6);
 
 /// Payload for a new payload attribute event sent to subscribers.
 #[derive(Clone, Debug, Default)]
@@ -49,6 +51,7 @@ pub struct ChainEventUpdater<D: DatabaseService, A: Auctioneer> {
     auctioneer: Arc<A>,
     chain_info: Arc<ChainInfo>,
     curr_slot_info: CurrentSlotInfo,
+    inclusion_list_fetcher: InclusionListFetcher,
 }
 
 impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
@@ -57,6 +60,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         auctioneer: Arc<A>,
         chain_info: Arc<ChainInfo>,
         curr_slot_info: CurrentSlotInfo,
+        config: RelayConfig,
     ) -> Self {
         Self {
             head_slot: 0,
@@ -66,6 +70,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
             proposer_duties: Vec::new(),
             chain_info,
             curr_slot_info,
+            inclusion_list_fetcher: InclusionListFetcher::new(config.inclusion_list),
         }
     }
 
@@ -197,6 +202,22 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
             self.proposer_duties.clone_from(new_duties);
         }
 
+        // Fetch inclusion list for this slot
+        self.curr_slot_info.remove_inclusion_list();
+        tokio::select! {
+            inclusion_list = self.inclusion_list_fetcher.fetch_inclusion_list_with_retry(self.head_slot) => {
+                self.curr_slot_info.replace_inclusion_list(inclusion_list);
+                info!(head_slot = self.head_slot, "Fetched new inclusion list for this slot");
+            }
+            _ = tokio::time::sleep(self.time_to_missing_inclusion_list_cutoff()) => {
+                warn!(
+                    head_slot = self.head_slot,
+                    "No inclusion list for this slot. We have reached the {}s cutoff and have not been able to source one.",
+                    MISSING_INCLUSION_LIST_CUTOFF.as_secs()
+                );
+            }
+        }
+
         // Get the next proposer duty for the new slot.
         let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
 
@@ -240,5 +261,12 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         };
 
         self.curr_slot_info.handle_new_payload_attributes(update);
+    }
+
+    fn time_to_missing_inclusion_list_cutoff(&self) -> Duration {
+        self.chain_info
+            .duration_into_slot(self.head_slot.into())
+            .and_then(|time_into_slot| MISSING_INCLUSION_LIST_CUTOFF.checked_sub(time_into_slot))
+            .unwrap_or(Duration::ZERO)
     }
 }

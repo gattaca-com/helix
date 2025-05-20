@@ -48,6 +48,8 @@ pub struct RelayConfig {
     pub payload_gossip_enabled: bool,
     #[serde(default)]
     pub v3_port: Option<u16>,
+    #[serde(default)]
+    pub inclusion_list: InclusionListConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -295,6 +297,7 @@ impl RouterConfig {
             Route::SubmitBlockOptimistic,
             Route::SubmitHeader,
             Route::GetTopBid,
+            Route::GetInclusionList,
         ]);
 
         self.replace_condensed_with_real(Route::ProposerApi, &[
@@ -369,6 +372,7 @@ pub enum Route {
     BuilderBidsReceived,
     ValidatorRegistration,
     SubmitHeaderV3,
+    GetInclusionList,
 }
 
 impl Route {
@@ -381,6 +385,7 @@ impl Route {
             }
             Route::SubmitHeader => format!("{PATH_BUILDER_API}{PATH_SUBMIT_HEADER}"),
             Route::GetTopBid => format!("{PATH_BUILDER_API}{PATH_GET_TOP_BID}"),
+            Route::GetInclusionList => format!("{PATH_BUILDER_API}{PATH_GET_INCLUSION_LIST}"),
             Route::Status => format!("{PATH_PROPOSER_API}{PATH_STATUS}"),
             Route::RegisterValidators => format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
             Route::GetHeader => format!("{PATH_PROPOSER_API}{PATH_GET_HEADER}"),
@@ -451,4 +456,16 @@ fn test_config() {
         .to_vec(),
     };
     println!("{}", serde_yaml::to_string(&config).unwrap());
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct InclusionListConfig {
+    pub nodes: Vec<Url>,
+    pub max_size_bytes: usize,
+}
+
+impl Default for InclusionListConfig {
+    fn default() -> Self {
+        Self { nodes: vec![], max_size_bytes: 8192 }
+    }
 }

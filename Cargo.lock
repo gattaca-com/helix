@@ -4131,6 +4131,7 @@ dependencies = [
  "helix-types",
  "httpmock",
  "parking_lot",
+ "reqwest 0.11.27",
  "serde_json",
  "thiserror 1.0.69",
  "tokio",

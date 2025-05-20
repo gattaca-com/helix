@@ -97,7 +97,7 @@ impl<A: Api> BuilderApi<A> {
         let Some(payload_attributes) = self.curr_slot_info.payload_attributes(parent_hash, slot)
         else {
             warn!(%block_hash, "payload attributes not yet known");
-            return Err(BuilderApiError::PayloadAttributesNotYetKnown)
+            return Err(BuilderApiError::PayloadAttributesNotYetKnown);
         };
 
         if payload_attributes.slot != slot {

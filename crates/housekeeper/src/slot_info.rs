@@ -2,7 +2,9 @@ use std::{collections::HashMap, sync::Arc};
 
 use alloy_primitives::{Bytes, B256};
 use helix_common::{
-    api::builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
+    api::builder_api::{
+        BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry, InclusionList,
+    },
     chain_info::ChainInfo,
 };
 use helix_types::Slot;
@@ -17,6 +19,7 @@ pub struct CurrentSlotInfo {
     /// Information about the current head slot and next proposer duty
     // TODO: split this into a AtomicU64?
     curr_slot_info: Arc<RwLock<(u64, Option<BuilderGetValidatorsResponseEntry>)>>,
+    inclusion_list: Arc<RwLock<Option<InclusionList>>>,
     proposer_duties_response: Arc<RwLock<Option<Bytes>>>,
     /// Parent hash / slot -> payload attributes
     payload_attributes: Arc<RwLock<HashMap<(B256, Slot), PayloadAttributesUpdate>>>,
@@ -32,6 +35,7 @@ impl CurrentSlotInfo {
     pub fn new() -> Self {
         Self {
             curr_slot_info: Arc::new(RwLock::new((0, None))),
+            inclusion_list: Arc::new(RwLock::new(None)),
             proposer_duties_response: Arc::new(RwLock::new(None)),
             payload_attributes: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -114,5 +118,17 @@ impl CurrentSlotInfo {
 
         // Save new one
         all_payload_attributes.insert(*payload_attributes_key, payload_attributes);
+    }
+
+    pub fn inclusion_list(&self) -> Option<alloy_primitives::bytes::Bytes> {
+        self.inclusion_list.read().as_ref().map(|il| il.bytes.0.clone())
+    }
+
+    pub fn replace_inclusion_list(&self, inclusion_list: InclusionList) {
+        self.inclusion_list.write().replace(inclusion_list);
+    }
+
+    pub fn remove_inclusion_list(&self) {
+        self.inclusion_list.write().take();
     }
 }

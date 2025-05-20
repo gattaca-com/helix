@@ -77,6 +77,7 @@ impl WebsiteService {
             Arc::new(MockAuctioneer::new()),
             chain_info,
             current_slot_info,
+            config.clone(),
         );
         info!("ChainEventUpdater initialized");
 

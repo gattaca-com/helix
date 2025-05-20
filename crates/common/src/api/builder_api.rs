@@ -1,5 +1,6 @@
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, Bytes, B256, U256};
 use helix_types::{BlsPublicKey, SignedValidatorRegistration, Slot, TestRandom};
+use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 
 use crate::{api::proposer_api::ValidatorRegistrationInfo, BuilderValidatorPreferences};
@@ -42,4 +43,10 @@ pub struct TopBidUpdate {
     pub builder_pubkey: BlsPublicKey,
     pub fee_recipient: Address,
     pub value: U256,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct InclusionList {
+    #[serde(flatten)]
+    pub bytes: Bytes,
 }
