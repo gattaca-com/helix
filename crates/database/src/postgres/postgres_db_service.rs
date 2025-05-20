@@ -1417,13 +1417,11 @@ impl DatabaseService for PostgresDatabaseService {
                 block_submission.gas_limit              gas_limit,
                 block_submission.gas_used               gas_used,
                 block_submission.block_number           block_number,
-                COALESCE(block_submission.num_txs, header_submission.tx_count) num_txs
+                block_submission.num_txs                num_txs
             FROM
                 block_submission
             INNER JOIN
                 delivered_payload ON block_submission.block_number = delivered_payload.block_number and block_submission.block_hash = delivered_payload.block_hash
-            LEFT JOIN
-                header_submission ON block_submission.block_hash = header_submission.block_hash
         ",
         );
 
