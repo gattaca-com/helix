@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use helix_common::{api::builder_api::InclusionList, InclusionListConfig};
-use reqwest::{Client, ClientBuilder, Url};
+use reqwest::{Client, ClientBuilder};
 use thiserror::Error;
 use tracing::info;
 
@@ -30,19 +30,17 @@ impl InclusionListFetcher {
         loop {
             retry_interval.tick().await;
 
-            for node_url in &self.config.nodes {
-                if let Ok(inclusion_list) = self.fetch_inclusion_list(node_url).await {
-                    return inclusion_list;
-                }
+            if let Ok(inclusion_list) = self.fetch_inclusion_list(&self.config.node).await {
+                return inclusion_list;
             }
         }
     }
 
     async fn fetch_inclusion_list(
         &self,
-        node_url: &Url,
+        node_url: &str,
     ) -> Result<InclusionList, InclusionListError> {
-        let bytes = self.http.get(node_url.as_str()).send().await?.bytes().await?;
+        let bytes = self.http.get(node_url).send().await?.bytes().await?;
 
         // Quick validity check that the IL is < 8KiB & not empty
         if bytes.is_empty() || bytes.len() > self.config.max_size_bytes {

@@ -11,7 +11,7 @@ pub struct ValidatorPreferences {
 
     /// Allows validators to express a preference for whether a delay should be applied to get
     /// headers or not.
-    #[serde(default = "default_header_delay")]
+    #[serde(default = "default_bool::<true>")]
     pub header_delay: bool,
 
     #[serde(default)]
@@ -19,13 +19,17 @@ pub struct ValidatorPreferences {
 
     #[serde(default)]
     pub gossip_blobs: bool,
+
+    #[serde(default = "default_bool::<true>")]
+    pub allow_inclusion_lists: bool,
 }
 
-fn default_filtering() -> Filtering {
+const fn default_filtering() -> Filtering {
     Filtering::Global
 }
-fn default_header_delay() -> bool {
-    true
+
+const fn default_bool<const B: bool>() -> bool {
+    B
 }
 
 #[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
@@ -81,6 +85,7 @@ fn test_validator_preferences_serde() {
         header_delay: false,
         delay_ms: Some(1000),
         gossip_blobs: true,
+        allow_inclusion_lists: true,
     };
 
     let json = serde_json::to_string(&preferences).unwrap();

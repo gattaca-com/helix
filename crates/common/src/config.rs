@@ -437,6 +437,7 @@ fn test_config() {
         header_delay: true,
         delay_ms: Some(1000),
         gossip_blobs: false,
+        allow_inclusion_lists: false,
     };
     config.router_config = RouterConfig {
         enabled_routes: vec![
@@ -460,12 +461,12 @@ fn test_config() {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct InclusionListConfig {
-    pub nodes: Vec<Url>,
+    pub node: String,
     pub max_size_bytes: usize,
 }
 
 impl Default for InclusionListConfig {
     fn default() -> Self {
-        Self { nodes: vec![], max_size_bytes: 8192 }
+        Self { node: String::new(), max_size_bytes: 8192 }
     }
 }

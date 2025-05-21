@@ -122,6 +122,7 @@ mod tests {
                 header_delay: true,
                 delay_ms: Some(1000),
                 gossip_blobs: true,
+                allow_inclusion_lists: true,
             },
         }
     }
@@ -192,8 +193,8 @@ mod tests {
             let result = result
                 .iter()
                 .find(|r| {
-                    r.registration_info.registration.message.pubkey ==
-                        registration.registration.message.pubkey
+                    r.registration_info.registration.message.pubkey
+                        == registration.registration.message.pubkey
                 })
                 .unwrap();
             assert_eq!(

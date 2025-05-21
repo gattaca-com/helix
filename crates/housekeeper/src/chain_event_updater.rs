@@ -202,24 +202,16 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
             self.proposer_duties.clone_from(new_duties);
         }
 
-        // Fetch inclusion list for this slot
-        self.curr_slot_info.remove_inclusion_list();
-        tokio::select! {
-            inclusion_list = self.inclusion_list_fetcher.fetch_inclusion_list_with_retry(self.head_slot) => {
-                self.curr_slot_info.replace_inclusion_list(inclusion_list);
-                info!(head_slot = self.head_slot, "Fetched new inclusion list for this slot");
-            }
-            _ = tokio::time::sleep(self.time_to_missing_inclusion_list_cutoff()) => {
-                warn!(
-                    head_slot = self.head_slot,
-                    "No inclusion list for this slot. We have reached the {}s cutoff and have not been able to source one.",
-                    MISSING_INCLUSION_LIST_CUTOFF.as_secs()
-                );
-            }
-        }
-
         // Get the next proposer duty for the new slot.
         let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
+
+        // Fetch inclusion list for this slot
+        self.curr_slot_info.remove_inclusion_list();
+        if next_duty.is_none() ||
+            next_duty.as_ref().is_some_and(|duty| duty.entry.preferences.allow_inclusion_lists)
+        {
+            self.fetch_inclusion_list_or_timeout().await;
+        }
 
         let update = SlotUpdate { slot: slot.into(), new_duties, next_duty };
         self.curr_slot_info.handle_new_slot(update, &self.chain_info);
@@ -261,6 +253,23 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         };
 
         self.curr_slot_info.handle_new_payload_attributes(update);
+    }
+
+    /// Attempts to fetch an inclusion list with a timeout
+    async fn fetch_inclusion_list_or_timeout(&mut self) {
+        tokio::select! {
+            inclusion_list = self.inclusion_list_fetcher.fetch_inclusion_list_with_retry(self.head_slot) => {
+                self.curr_slot_info.replace_inclusion_list(inclusion_list);
+                info!(head_slot = self.head_slot, "Fetched new inclusion list for this slot");
+            }
+            _ = tokio::time::sleep(self.time_to_missing_inclusion_list_cutoff()) => {
+                warn!(
+                    head_slot = self.head_slot,
+                    "No inclusion list for this slot. We have reached the {}s cutoff and have not been able to source one.",
+                    MISSING_INCLUSION_LIST_CUTOFF.as_secs()
+                );
+            }
+        }
     }
 
     fn time_to_missing_inclusion_list_cutoff(&self) -> Duration {
