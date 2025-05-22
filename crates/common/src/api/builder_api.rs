@@ -1,4 +1,4 @@
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{bytes::Bytes, Address, FixedBytes, B256, U256};
 use helix_types::{BlsPublicKey, SignedValidatorRegistration, Slot, TestRandom};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
@@ -47,6 +47,22 @@ pub struct TopBidUpdate {
 
 #[derive(Deserialize, Serialize)]
 pub struct InclusionList {
-    #[serde(flatten)]
+    pub txs: Vec<InclusionListTx>,
+}
+
+impl InclusionList {
+    pub const fn empty() -> Self {
+        Self { txs: vec![] }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct InclusionListTx {
+    pub hash: B256,
+    pub nonce: u64,
+    pub sender: Address,
+    pub included: bool,
+    pub gas_priority_fee: u64,
     pub bytes: Bytes,
+    pub wait_time: u32,
 }

@@ -7,7 +7,8 @@ use alloy_primitives::{Address, B256, U256};
 use async_trait::async_trait;
 use helix_common::{
     api::{
-        builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
+        builder_api::{BuilderGetValidatorsResponseEntry, InclusionList},
+        data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
     bid_submission::v2::header_submission::SignedHeaderSubmission,
@@ -293,5 +294,14 @@ impl DatabaseService for MockDatabaseService {
         &self,
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError> {
         Ok(vec![])
+    }
+
+    async fn save_inclusion_list(
+        &self,
+        inclusion_list: &InclusionList,
+        slot_number: i32,
+        included: bool,
+    ) -> Result<(), DatabaseError> {
+        Ok(())
     }
 }

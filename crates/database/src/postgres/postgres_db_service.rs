@@ -6,7 +6,8 @@ use dashmap::{DashMap, DashSet};
 use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
 use helix_common::{
     api::{
-        builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
+        builder_api::{BuilderGetValidatorsResponseEntry, InclusionList},
+        data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
@@ -21,7 +22,7 @@ use helix_types::{
     BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
 };
 use tokio_postgres::{types::ToSql, NoTls};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     error::DatabaseError,
@@ -445,8 +446,8 @@ impl DatabaseService for PostgresDatabaseService {
             if let Some(existing_entry) =
                 self.validator_registration_cache.get(&entry.registration.message.pubkey)
             {
-                if existing_entry.registration_info.registration.message.timestamp >=
-                    entry.registration.message.timestamp
+                if existing_entry.registration_info.registration.message.timestamp
+                    >= entry.registration.message.timestamp
                 {
                     return false;
                 }
@@ -477,8 +478,8 @@ impl DatabaseService for PostgresDatabaseService {
         if let Some(existing_entry) =
             self.validator_registration_cache.get(&registration.message.pubkey)
         {
-            if existing_entry.registration_info.registration.message.timestamp >=
-                registration.message.timestamp
+            if existing_entry.registration_info.registration.message.timestamp
+                >= registration.message.timestamp
             {
                 return Ok(false);
             }
@@ -768,9 +769,10 @@ impl DatabaseService for PostgresDatabaseService {
                 pub_keys.insert(public_key.clone());
             } else {
                 let rows = client
-                    .query("SELECT * FROM known_validators WHERE public_key = $1", &[&(public_key
-                        .serialize()
-                        .to_vec())])
+                    .query(
+                        "SELECT * FROM known_validators WHERE public_key = $1",
+                        &[&(public_key.serialize().to_vec())],
+                    )
                     .await?;
                 for row in rows {
                     let public_key: BlsPublicKey =
@@ -975,8 +977,8 @@ impl DatabaseService for PostgresDatabaseService {
             transaction.execute(&sql, &params[..]).await?;
         }
 
-        if payload.execution_payload.withdrawals().is_ok() &&
-            !payload.execution_payload.withdrawals().unwrap().is_empty()
+        if payload.execution_payload.withdrawals().is_ok()
+            && !payload.execution_payload.withdrawals().unwrap().is_empty()
         {
             // Save the withdrawals
             let mut structured_params: Vec<(i32, Vec<u8>, i32, &[u8], i64)> = Vec::new();
@@ -1790,5 +1792,76 @@ impl DatabaseService for PostgresDatabaseService {
 
         record.record_success();
         parse_rows(rows)
+    }
+
+    async fn save_inclusion_list(
+        &self,
+        inclusion_list: &InclusionList,
+        slot_number: i32,
+        included: bool,
+    ) -> Result<(), DatabaseError> {
+        let mut record = DbMetricRecord::new("save_inclusion_list");
+
+        let client = self.pool.get().await?;
+
+        let mut failed_at_least_once = false;
+
+        for tx in &inclusion_list.txs {
+            info!("saving tx {}", tx.hash);
+            let result = client.execute(
+                "
+                    INSERT INTO
+                        inclusion_list_txs (tx_hash, bytes, nonce, gas_priority_fee, sender, wait_time, slot_included)
+                    VALUES
+                        ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (tx_hash)
+                    DO UPDATE SET
+                        wait_time = EXCLUDED.wait_time,
+                        slot_included = EXCLUDED.slot_included
+                ",
+                &[
+                    &(tx.hash.as_slice()),
+                    &(tx.bytes.iter().as_slice()),
+                    &(tx.nonce as i32),
+                    &(tx.gas_priority_fee as i32),
+                    &(tx.sender.as_slice()),
+                    &(tx.wait_time as i64),
+                    &(slot_number),
+                ],
+            ).await;
+
+            if let Err(err) = result {
+                warn!("Error saving tx from inclusion list in the 'inclusion_list_txs' table in postgres: {:?}", err);
+                record.record_failure();
+                failed_at_least_once = true;
+                continue;
+            };
+
+            // let result = client
+            //     .execute(
+            //         "
+            //         INSERT INTO
+            //             inclusion_lists (slot_n, tx_hash)
+            //         VALUES
+            //             ($1, $2)
+            //         ON CONFLICT DO NOTHING
+            //     ",
+            //         &[&(slot_number), &(tx.hash.as_slice())],
+            //     )
+            //     .await;
+
+            // if let Err(err) = result {
+            //     warn!("Error saving tx from inclusion list in the 'inclusion_lists' table in postgres: {:?}", err);
+            //     record.record_failure();
+            //     failed_at_least_once = true;
+            // };
+        }
+
+        if !failed_at_least_once {
+            record.record_success();
+            Ok(())
+        } else {
+            Err(DatabaseError::GeneralError)
+        }
     }
 }

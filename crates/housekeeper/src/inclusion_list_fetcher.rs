@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use helix_common::{api::builder_api::InclusionList, InclusionListConfig};
-use reqwest::{Client, ClientBuilder};
+use reqwest::{Client, ClientBuilder, Url};
 use thiserror::Error;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Use a short timeout here because we only have 6 seconds to declare an inclusion list.
 const IL_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
@@ -30,15 +30,19 @@ impl InclusionListFetcher {
         loop {
             retry_interval.tick().await;
 
-            if let Ok(inclusion_list) = self.fetch_inclusion_list(&self.config.node).await {
-                return inclusion_list;
+            match self.fetch_inclusion_list(self.config.node.clone()).await {
+                Ok(inclusion_list) => return inclusion_list,
+                Err(err) => warn!(
+                    head_slot = head_slot,
+                    "Failed to fetch inclusion list for this slot {}", err
+                ),
             }
         }
     }
 
     async fn fetch_inclusion_list(
         &self,
-        node_url: &str,
+        node_url: Url,
     ) -> Result<InclusionList, InclusionListError> {
         let bytes = self.http.get(node_url).send().await?.bytes().await?;
 
@@ -47,7 +51,7 @@ impl InclusionListFetcher {
             return Err(InclusionListError::InvalidSize(bytes.len()));
         }
 
-        let inclusion_list = InclusionList { bytes: bytes.into() };
+        let inclusion_list: InclusionList = serde_json::from_slice(&bytes)?;
 
         Ok(inclusion_list)
     }
@@ -60,4 +64,7 @@ enum InclusionListError {
 
     #[error("Invalid inclusion list size: {0} bytes")]
     InvalidSize(usize),
+
+    #[error("Invalid inclusion list {0}")]
+    DeserializeError(#[from] serde_json::Error),
 }
