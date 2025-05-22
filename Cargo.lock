@@ -3971,6 +3971,7 @@ dependencies = [
  "axum 0.8.3",
  "bytes",
  "cbor4ii",
+ "dashmap 5.5.3",
  "ethereum_serde_utils",
  "ethereum_ssz",
  "flate2",
