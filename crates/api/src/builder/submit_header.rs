@@ -394,6 +394,11 @@ pub async fn decode_header_submission(
         })
         .unwrap_or(false);
 
+    info!(
+        headers = ?req.headers(),
+        "received header",
+    );
+
     let is_ssz = req.headers().get("Content-Type").and_then(|val| val.to_str().ok()) ==
         Some("application/octet-stream");
 
@@ -454,6 +459,11 @@ pub async fn decode_header_submission_v3(
             }
         })
         .unwrap_or(false);
+
+    info!(
+        headers = ?req.headers(),
+        "received header",
+    );
 
     // Get content-type header
     let content_type = req.headers().get("Content-Type").cloned();
