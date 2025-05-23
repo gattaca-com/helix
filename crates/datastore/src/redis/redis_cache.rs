@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use deadpool_redis::{Config, CreatePoolError, Pool, Runtime};
 use futures_util::StreamExt;
 use helix_common::{
-    api::builder_api::TopBidUpdate,
+    api::builder_api::{InclusionList, TopBidUpdate},
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
     bid_submission_to_builder_bid, header_submission_to_builder_bid,
     metrics::{RedisMetricRecord, TopBidMetrics},
@@ -21,14 +21,14 @@ use helix_types::{
     SignedBidSubmission, SignedBuilderBid,
 };
 use redis::{AsyncCommands, RedisResult, Script, Value};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use ssz::Encode;
 use tokio::sync::broadcast;
 use tracing::{error, info};
 
 use super::utils::{
-    get_hash_from_hex, get_header_tx_root_key, get_pending_block_builder_block_hash_key,
-    get_pending_block_builder_key, get_pubkey_from_hex,
+    get_hash_from_hex, get_header_tx_root_key, get_inclusion_list_key,
+    get_pending_block_builder_block_hash_key, get_pending_block_builder_key, get_pubkey_from_hex,
 };
 use crate::{
     error::AuctioneerError,
@@ -1382,6 +1382,56 @@ impl Auctioneer for RedisCache {
         self.set(KILL_SWITCH, &false, None).await?;
         Ok(())
     }
+
+    async fn get_current_inclusion_list(
+        &self,
+        slot: i32,
+
+        parent_hash: &B256,
+    ) -> Result<Option<InclusionListWithKey>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_current_inclusion_list");
+
+        let key = get_inclusion_list_key(slot, /* proposer_pub_key, */ parent_hash);
+
+        error!("key {}", key);
+
+        let inclusion_list: Option<InclusionListWithKey> = self.get(&key).await?;
+
+        if inclusion_list.as_ref().is_some_and(|list| list.inclusion_list.txs.is_empty()) {
+            Ok(None)
+        } else {
+            record.record_success();
+            Ok(inclusion_list)
+        }
+    }
+
+    async fn save_current_inclusion_list(
+        &self,
+        inclusion_list: InclusionList,
+        slot: i32,
+        // proposer_pub_key: &BlsPublicKey,
+        parent_hash: &B256,
+    ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("set_current_inclusion_list");
+
+        let slot_coordinate = format!("{slot}");
+
+        let payload = InclusionListWithKey { slot_coordinate, inclusion_list };
+
+        let key = get_inclusion_list_key(slot, /* proposer_pub_key, */ parent_hash);
+
+        self.set(&key, &payload, None).await?;
+
+        record.record_success();
+
+        Ok(())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InclusionListWithKey {
+    pub slot_coordinate: String,
+    pub inclusion_list: InclusionList,
 }
 
 fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {

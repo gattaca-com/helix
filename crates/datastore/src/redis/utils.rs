@@ -5,9 +5,9 @@ use crate::{
     error::AuctioneerError,
     types::keys::{
         BID_FLOOR_KEY, BID_FLOOR_VALUE_KEY, BID_TRACE_KEY, BLOCK_BUILDER_LATEST_BID_KEY,
-        BLOCK_BUILDER_LATEST_BID_TIME_KEY, BLOCK_BUILDER_LATEST_BID_VALUE_KEY, EXEC_PAYLOAD_KEY,
-        GET_HEADER_RESPONSE_KEY, HEADER_TX_ROOT, PENDING_BLOCK_KEY, SEEN_BLOCK_HASHES_KEY,
-        TOP_BID_VALUE_KEY,
+        BLOCK_BUILDER_LATEST_BID_TIME_KEY, BLOCK_BUILDER_LATEST_BID_VALUE_KEY,
+        CURRENT_INCLUSION_LIST_KEY, EXEC_PAYLOAD_KEY, GET_HEADER_RESPONSE_KEY, HEADER_TX_ROOT,
+        PENDING_BLOCK_KEY, SEEN_BLOCK_HASHES_KEY, TOP_BID_VALUE_KEY,
     },
 };
 
@@ -126,4 +126,13 @@ pub fn get_hash_from_hex(hash: &str) -> Result<B256, AuctioneerError> {
 
 pub fn get_header_tx_root_key(hash: &B256) -> String {
     format!("{HEADER_TX_ROOT}:{hash:?}")
+}
+
+pub fn get_inclusion_list_key(
+    slot: i32,
+    // proposer_pub_key: &BlsPublicKey,
+    parent_hash: &B256,
+) -> String {
+    // format!("{CURRENT_INCLUSION_LIST_KEY}:{slot}_ _")
+    "inclusion-list-key".into()
 }

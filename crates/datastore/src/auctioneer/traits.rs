@@ -1,8 +1,9 @@
 use alloy_primitives::{bytes::Bytes, B256, U256};
 use async_trait::async_trait;
 use helix_common::{
-    bid_submission::v2::header_submission::SignedHeaderSubmission, builder_info::BuilderInfo,
-    pending_block::PendingBlock, signing::RelaySigningContext, ProposerInfo,
+    api::builder_api::InclusionList, bid_submission::v2::header_submission::SignedHeaderSubmission,
+    builder_info::BuilderInfo, pending_block::PendingBlock, signing::RelaySigningContext,
+    ProposerInfo,
 };
 use helix_database::BuilderInfoDocument;
 use helix_types::{
@@ -10,7 +11,10 @@ use helix_types::{
 };
 use tokio::sync::broadcast;
 
-use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse};
+use crate::{
+    error::AuctioneerError, redis::redis_cache::InclusionListWithKey,
+    types::SaveBidAndUpdateTopBidResponse,
+};
 
 #[async_trait]
 #[auto_impl::auto_impl(Arc)]
@@ -210,4 +214,19 @@ pub trait Auctioneer: Send + Sync + Clone {
     async fn enable_kill_switch(&self) -> Result<(), AuctioneerError>;
 
     async fn disable_kill_switch(&self) -> Result<(), AuctioneerError>;
+
+    async fn get_current_inclusion_list(
+        &self,
+        slot: i32,
+        // proposer_pub_key: &BlsPublicKey,
+        parent_hash: &B256,
+    ) -> Result<Option<InclusionListWithKey>, AuctioneerError>;
+
+    async fn save_current_inclusion_list(
+        &self,
+        inclusion_list: InclusionList,
+        slot: i32,
+        // proposer_pub_key: &BlsPublicKey,
+        parent_hash: &B256,
+    ) -> Result<(), AuctioneerError>;
 }

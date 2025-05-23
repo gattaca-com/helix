@@ -291,31 +291,27 @@ impl RouterConfig {
         }
 
         // Replace BuilderApi, ProposerApi, DataApi with their real routes
-        self.replace_condensed_with_real(
-            Route::BuilderApi,
-            &[
-                Route::GetValidators,
-                Route::SubmitBlock,
-                Route::SubmitBlockOptimistic,
-                Route::SubmitHeader,
-                Route::GetTopBid,
-                Route::GetInclusionList,
-            ],
-        );
+        self.replace_condensed_with_real(Route::BuilderApi, &[
+            Route::GetValidators,
+            Route::SubmitBlock,
+            Route::SubmitBlockOptimistic,
+            Route::SubmitHeader,
+            Route::GetTopBid,
+            Route::GetInclusionList,
+        ]);
 
-        self.replace_condensed_with_real(
-            Route::ProposerApi,
-            &[Route::Status, Route::RegisterValidators, Route::GetHeader, Route::GetPayload],
-        );
+        self.replace_condensed_with_real(Route::ProposerApi, &[
+            Route::Status,
+            Route::RegisterValidators,
+            Route::GetHeader,
+            Route::GetPayload,
+        ]);
 
-        self.replace_condensed_with_real(
-            Route::DataApi,
-            &[
-                Route::ProposerPayloadDelivered,
-                Route::BuilderBidsReceived,
-                Route::ValidatorRegistration,
-            ],
-        );
+        self.replace_condensed_with_real(Route::DataApi, &[
+            Route::ProposerPayloadDelivered,
+            Route::BuilderBidsReceived,
+            Route::ValidatorRegistration,
+        ]);
     }
 
     fn contains(&self, route: Route) -> bool {

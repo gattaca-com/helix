@@ -45,7 +45,7 @@ pub struct TopBidUpdate {
     pub value: U256,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct InclusionList {
     pub txs: Vec<InclusionListTx>,
 }
@@ -56,7 +56,7 @@ impl InclusionList {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct InclusionListTx {
     pub hash: B256,
     pub nonce: u64,
