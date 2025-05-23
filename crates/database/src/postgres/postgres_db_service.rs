@@ -1797,7 +1797,6 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         inclusion_list: &InclusionList,
         slot_number: i32,
-        included: bool,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("save_inclusion_list");
 
@@ -1829,7 +1828,7 @@ impl DatabaseService for PostgresDatabaseService {
             ).await;
 
             if let Err(err) = result {
-                warn!("Error saving tx from inclusion list in the 'inclusion_list_txs' table in postgres: {:?}", err);
+                warn!(head_slot = &slot_number, "Error saving tx from inclusion list in the 'inclusion_list_txs' table in postgres: {:?}", err);
                 record.record_failure();
                 failed_at_least_once = true;
                 continue;

@@ -217,16 +217,11 @@ pub trait Auctioneer: Send + Sync + Clone {
 
     async fn get_current_inclusion_list(
         &self,
-        slot: i32,
-        // proposer_pub_key: &BlsPublicKey,
-        parent_hash: &B256,
     ) -> Result<Option<InclusionListWithKey>, AuctioneerError>;
 
     async fn save_current_inclusion_list(
         &self,
         inclusion_list: InclusionList,
-        slot: i32,
-        // proposer_pub_key: &BlsPublicKey,
-        parent_hash: &B256,
+        slot_coordinate: String,
     ) -> Result<(), AuctioneerError>;
 }

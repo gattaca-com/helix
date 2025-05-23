@@ -325,9 +325,6 @@ impl Auctioneer for MockAuctioneer {
 
     async fn get_current_inclusion_list(
         &self,
-        _: i32,
-
-        _: &B256,
     ) -> Result<Option<InclusionListWithKey>, AuctioneerError> {
         Ok(None)
     }
@@ -335,9 +332,7 @@ impl Auctioneer for MockAuctioneer {
     async fn save_current_inclusion_list(
         &self,
         _: InclusionList,
-        _: i32,
-        // _: &BlsPublicKey,
-        _: &B256,
+        _: String,
     ) -> Result<(), AuctioneerError> {
         Ok(())
     }
