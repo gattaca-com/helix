@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fs::File, path::PathBuf};
+use std::{collections::HashSet, fs::File, path::PathBuf, str::FromStr};
 
 use alloy_primitives::B256;
 use clap::Parser;
@@ -291,27 +291,31 @@ impl RouterConfig {
         }
 
         // Replace BuilderApi, ProposerApi, DataApi with their real routes
-        self.replace_condensed_with_real(Route::BuilderApi, &[
-            Route::GetValidators,
-            Route::SubmitBlock,
-            Route::SubmitBlockOptimistic,
-            Route::SubmitHeader,
-            Route::GetTopBid,
-            Route::GetInclusionList,
-        ]);
+        self.replace_condensed_with_real(
+            Route::BuilderApi,
+            &[
+                Route::GetValidators,
+                Route::SubmitBlock,
+                Route::SubmitBlockOptimistic,
+                Route::SubmitHeader,
+                Route::GetTopBid,
+                Route::GetInclusionList,
+            ],
+        );
 
-        self.replace_condensed_with_real(Route::ProposerApi, &[
-            Route::Status,
-            Route::RegisterValidators,
-            Route::GetHeader,
-            Route::GetPayload,
-        ]);
+        self.replace_condensed_with_real(
+            Route::ProposerApi,
+            &[Route::Status, Route::RegisterValidators, Route::GetHeader, Route::GetPayload],
+        );
 
-        self.replace_condensed_with_real(Route::DataApi, &[
-            Route::ProposerPayloadDelivered,
-            Route::BuilderBidsReceived,
-            Route::ValidatorRegistration,
-        ]);
+        self.replace_condensed_with_real(
+            Route::DataApi,
+            &[
+                Route::ProposerPayloadDelivered,
+                Route::BuilderBidsReceived,
+                Route::ValidatorRegistration,
+            ],
+        );
     }
 
     fn contains(&self, route: Route) -> bool {
@@ -437,7 +441,7 @@ fn test_config() {
         header_delay: true,
         delay_ms: Some(1000),
         gossip_blobs: false,
-        allow_inclusion_lists: false,
+        disable_inclusion_lists: false,
     };
     config.router_config = RouterConfig {
         enabled_routes: vec![
@@ -461,12 +465,19 @@ fn test_config() {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct InclusionListConfig {
-    pub node: String,
+    pub node: Url,
     pub max_size_bytes: usize,
+    pub wait_time_tx_score_weight: u32,
+    pub priority_fee_tx_score_weight: u32,
 }
 
 impl Default for InclusionListConfig {
     fn default() -> Self {
-        Self { node: String::new(), max_size_bytes: 8192 }
+        Self {
+            node: Url::from_str("http://please-set-node-url-in-confg.invalid").unwrap(),
+            max_size_bytes: 8192,
+            wait_time_tx_score_weight: 1,
+            priority_fee_tx_score_weight: 1,
+        }
     }
 }

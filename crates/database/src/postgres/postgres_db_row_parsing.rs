@@ -159,7 +159,7 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                     header_delay: row.get::<&str, bool>("header_delay"),
                     delay_ms: parse_i64_to_u64(row.get::<&str, i64>("delay_ms")).ok(),
                     gossip_blobs: row.get::<&str, bool>("gossip_blobs"),
-                    allow_inclusion_lists: row.get::<&str, bool>("allow_inclusion_lists"),
+                    disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
                 },
             },
         })
@@ -236,7 +236,7 @@ impl FromRow for SignedValidatorRegistrationEntry {
                     header_delay: row.get::<&str, bool>("header_delay"),
                     delay_ms: parse_i64_to_u64(row.get::<&str, i64>("delay_ms")).ok(),
                     gossip_blobs: row.get::<&str, bool>("gossip_blobs"),
-                    allow_inclusion_lists: row.get::<&str, bool>("allow_inclusion_lists"),
+                    disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
                 },
             },
             inserted_at: parse_timestamptz_to_u64(

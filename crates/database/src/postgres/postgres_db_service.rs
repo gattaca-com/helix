@@ -1807,7 +1807,6 @@ impl DatabaseService for PostgresDatabaseService {
         let mut failed_at_least_once = false;
 
         for tx in &inclusion_list.txs {
-            info!("saving tx {}", tx.hash);
             let result = client.execute(
                 "
                     INSERT INTO
@@ -1836,25 +1835,6 @@ impl DatabaseService for PostgresDatabaseService {
                 failed_at_least_once = true;
                 continue;
             };
-
-            // let result = client
-            //     .execute(
-            //         "
-            //         INSERT INTO
-            //             inclusion_lists (slot_n, tx_hash)
-            //         VALUES
-            //             ($1, $2)
-            //         ON CONFLICT DO NOTHING
-            //     ",
-            //         &[&(slot_number), &(tx.hash.as_slice())],
-            //     )
-            //     .await;
-
-            // if let Err(err) = result {
-            //     warn!("Error saving tx from inclusion list in the 'inclusion_lists' table in postgres: {:?}", err);
-            //     record.record_failure();
-            //     failed_at_least_once = true;
-            // };
         }
 
         if !failed_at_least_once {

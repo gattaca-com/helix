@@ -1,4 +1,4 @@
-use alloy_primitives::{bytes::Bytes, Address, FixedBytes, B256, U256};
+use alloy_primitives::{bytes::Bytes, Address, B256, U256};
 use helix_types::{BlsPublicKey, SignedValidatorRegistration, Slot, TestRandom};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};

@@ -20,8 +20,8 @@ pub struct ValidatorPreferences {
     #[serde(default)]
     pub gossip_blobs: bool,
 
-    #[serde(default = "default_bool::<true>")]
-    pub allow_inclusion_lists: bool,
+    #[serde(default)]
+    pub disable_inclusion_lists: bool,
 }
 
 const fn default_filtering() -> Filtering {
@@ -85,7 +85,7 @@ fn test_validator_preferences_serde() {
         header_delay: false,
         delay_ms: Some(1000),
         gossip_blobs: true,
-        allow_inclusion_lists: true,
+        disable_inclusion_lists: true,
     };
 
     let json = serde_json::to_string(&preferences).unwrap();
