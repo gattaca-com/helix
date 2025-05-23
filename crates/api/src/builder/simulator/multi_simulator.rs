@@ -69,13 +69,13 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> MultiSimulator<A, D
                 let simulator = &self.simulators[index];
 
                 // Process the request with the selected simulator
-                return simulator.process_request(request.clone(), builder_info, is_top_bid).await
+                return simulator.process_request(request.clone(), builder_info, is_top_bid).await;
             }
 
             // If reached max attempts, return an error
             attempts += 1;
             if attempts >= self.simulators.len() {
-                return Err(BlockSimError::NoSimulatorAvailable)
+                return Err(BlockSimError::NoSimulatorAvailable);
             }
         }
     }
@@ -84,7 +84,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> MultiSimulator<A, D
         // If any simulator is synced, then the multi-simulator is synced
         for simulator in self.simulators.iter() {
             if simulator.is_synced().await? {
-                return Ok(true)
+                return Ok(true);
             }
         }
 

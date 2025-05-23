@@ -6,7 +6,8 @@ use dashmap::{DashMap, DashSet};
 use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
 use helix_common::{
     api::{
-        builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
+        builder_api::{BuilderGetValidatorsResponseEntry, InclusionList},
+        data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
@@ -21,7 +22,7 @@ use helix_types::{
     BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
 };
 use tokio_postgres::{types::ToSql, NoTls};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     error::DatabaseError,
@@ -1790,5 +1791,55 @@ impl DatabaseService for PostgresDatabaseService {
 
         record.record_success();
         parse_rows(rows)
+    }
+
+    async fn save_inclusion_list(
+        &self,
+        inclusion_list: &InclusionList,
+        slot_number: i32,
+    ) -> Result<(), DatabaseError> {
+        let mut record = DbMetricRecord::new("save_inclusion_list");
+
+        let client = self.pool.get().await?;
+
+        let mut failed_at_least_once = false;
+
+        for tx in &inclusion_list.txs {
+            let result = client.execute(
+                "
+                    INSERT INTO
+                        inclusion_list_txs (tx_hash, bytes, nonce, gas_priority_fee, sender, wait_time, slot_included)
+                    VALUES
+                        ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (tx_hash)
+                    DO UPDATE SET
+                        wait_time = EXCLUDED.wait_time,
+                        slot_included = EXCLUDED.slot_included
+                ",
+                &[
+                    &(tx.hash.as_slice()),
+                    &(tx.bytes.iter().as_slice()),
+                    &(tx.nonce as i32),
+                    &(tx.gas_priority_fee as i32),
+                    &(tx.sender.as_slice()),
+                    &(tx.wait_time as i64),
+                    &(slot_number),
+                ],
+            ).await;
+
+            if let Err(err) = result {
+                warn!(head_slot = &slot_number, "Error saving tx from inclusion list in the 'inclusion_list_txs' table in postgres: {:?}", err);
+                record.record_failure();
+                failed_at_least_once = true;
+                continue;
+            };
+        }
+
+        if !failed_at_least_once {
+            record.record_success();
+            Ok(())
+        } else {
+            Err(DatabaseError::GeneralError)
+        }
     }
 }

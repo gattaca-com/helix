@@ -7,6 +7,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use alloy_primitives::B256;
+use helix_types::BlsPublicKey;
 use http::HeaderMap;
 use reqwest::Url;
 use tracing::error;
@@ -157,4 +159,12 @@ pub fn utcnow_us() -> u64 {
 /// Nanos
 pub fn utcnow_ns() -> u64 {
     utcnow_dur().as_nanos() as u64
+}
+
+pub fn get_slot_coordinate(
+    slot: i32,
+    proposer_pub_key: &BlsPublicKey,
+    parent_hash: &B256,
+) -> String {
+    format!("{slot}_{proposer_pub_key}_{parent_hash}")
 }

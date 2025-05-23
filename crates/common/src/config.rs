@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fs::File, path::PathBuf};
+use std::{collections::HashSet, fs::File, path::PathBuf, str::FromStr};
 
 use alloy_primitives::B256;
 use clap::Parser;
@@ -48,6 +48,8 @@ pub struct RelayConfig {
     pub payload_gossip_enabled: bool,
     #[serde(default)]
     pub v3_port: Option<u16>,
+    #[serde(default)]
+    pub inclusion_list: InclusionListConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -295,6 +297,7 @@ impl RouterConfig {
             Route::SubmitBlockOptimistic,
             Route::SubmitHeader,
             Route::GetTopBid,
+            Route::GetInclusionList,
         ]);
 
         self.replace_condensed_with_real(Route::ProposerApi, &[
@@ -369,6 +372,7 @@ pub enum Route {
     BuilderBidsReceived,
     ValidatorRegistration,
     SubmitHeaderV3,
+    GetInclusionList,
 }
 
 impl Route {
@@ -381,6 +385,7 @@ impl Route {
             }
             Route::SubmitHeader => format!("{PATH_BUILDER_API}{PATH_SUBMIT_HEADER}"),
             Route::GetTopBid => format!("{PATH_BUILDER_API}{PATH_GET_TOP_BID}"),
+            Route::GetInclusionList => format!("{PATH_BUILDER_API}{PATH_GET_INCLUSION_LIST}"),
             Route::Status => format!("{PATH_PROPOSER_API}{PATH_STATUS}"),
             Route::RegisterValidators => format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
             Route::GetHeader => format!("{PATH_PROPOSER_API}{PATH_GET_HEADER}"),
@@ -432,6 +437,7 @@ fn test_config() {
         header_delay: true,
         delay_ms: Some(1000),
         gossip_blobs: false,
+        disable_inclusion_lists: false,
     };
     config.router_config = RouterConfig {
         enabled_routes: vec![
@@ -451,4 +457,23 @@ fn test_config() {
         .to_vec(),
     };
     println!("{}", serde_yaml::to_string(&config).unwrap());
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+pub struct InclusionListConfig {
+    pub node: Url,
+    pub max_size_bytes: usize,
+    pub wait_time_tx_score_weight: u32,
+    pub priority_fee_tx_score_weight: u32,
+}
+
+impl Default for InclusionListConfig {
+    fn default() -> Self {
+        Self {
+            node: Url::from_str("http://please-set-node-url-in-confg.invalid").unwrap(),
+            max_size_bytes: 8192,
+            wait_time_tx_score_weight: 1,
+            priority_fee_tx_score_weight: 1,
+        }
+    }
 }

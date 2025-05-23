@@ -56,7 +56,8 @@ pub fn build_router<A: Api>(
             Route::BuilderBidsReceived => get(DataApi::<A>::builder_bids_received),
             Route::ValidatorRegistration => get(DataApi::<A>::validator_registration),
             Route::SubmitHeaderV3 => post(BuilderApi::<A>::submit_header_v3),
-            _ => {
+            Route::GetInclusionList => get(BuilderApi::<A>::get_inclusion_list),
+            Route::All | Route::BuilderApi | Route::ProposerApi | Route::DataApi => {
                 panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route_info.route);
             }
         };

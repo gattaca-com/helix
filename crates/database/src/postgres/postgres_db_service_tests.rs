@@ -122,6 +122,7 @@ mod tests {
                 header_delay: true,
                 delay_ms: Some(1000),
                 gossip_blobs: true,
+                disable_inclusion_lists: true,
             },
         }
     }

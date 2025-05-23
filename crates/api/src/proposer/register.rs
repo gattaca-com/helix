@@ -70,6 +70,7 @@ impl<A: Api> ProposerApi<A> {
             header_delay: proposer_api.validator_preferences.header_delay,
             delay_ms: proposer_api.validator_preferences.delay_ms,
             gossip_blobs: proposer_api.validator_preferences.gossip_blobs,
+            disable_inclusion_lists: proposer_api.validator_preferences.disable_inclusion_lists,
         };
 
         let preferences_header = headers.get("x-preferences");
