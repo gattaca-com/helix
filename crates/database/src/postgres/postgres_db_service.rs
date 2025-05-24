@@ -6,7 +6,8 @@ use dashmap::{DashMap, DashSet};
 use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
 use helix_common::{
     api::{
-        builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
+        builder_api::BuilderGetValidatorsResponseEntry,
+        data_api::{BidFilters, BidsOrderBy},
         proposer_api::ValidatorRegistrationInfo,
     },
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
@@ -1510,7 +1511,9 @@ impl DatabaseService for PostgresDatabaseService {
 
         if let Some(order) = filters.order() {
             query.push_str(" ORDER BY block_submission.value ");
-            query.push_str(if order >= 0 { "ASC" } else { "DESC" });
+            if order == &BidsOrderBy::HighToLow {
+                query.push_str("DESC");
+            }
         } else {
             query.push_str(" ORDER BY block_submission.slot_number DESC");
         }
