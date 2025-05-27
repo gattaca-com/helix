@@ -161,6 +161,7 @@ pub fn utcnow_ns() -> u64 {
     utcnow_dur().as_nanos() as u64
 }
 
+#[inline(always)]
 pub fn get_slot_coordinate(
     slot: i32,
     proposer_pub_key: &BlsPublicKey,

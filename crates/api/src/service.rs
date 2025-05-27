@@ -7,6 +7,7 @@ use helix_beacon::{
 use helix_common::{
     chain_info::ChainInfo, signing::RelaySigningContext, BroadcasterConfig, RelayConfig,
 };
+use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
 use moka::sync::Cache;
 use tokio::{sync::mpsc, time::timeout};
@@ -98,6 +99,8 @@ pub async fn run_api_service<A: Api>(
         relay_signing_context,
     ));
 
+    tokio::spawn(listen_for_inclusion_lists_background_task(builder_api.clone()));
+
     let proposer_api = Arc::new(ProposerApi::<A>::new(
         auctioneer.clone(),
         db.clone(),
@@ -180,6 +183,15 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
         }
     }
     broadcasters
+}
+
+async fn listen_for_inclusion_lists_background_task(api: Arc<BuilderApi<impl Api>>) -> ! {
+    let mut inclusion_list_recv = api.auctioneer.get_inclusion_list();
+    loop {
+        if let Ok(new_list) = inclusion_list_recv.recv().await {
+            api.current_inclusion_list.write().replace(new_list);
+        }
+    }
 }
 
 #[cfg(test)]

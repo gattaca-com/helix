@@ -16,13 +16,16 @@ use helix_common::{
     chain_info::ChainInfo,
     signing::RelaySigningContext,
     simulator::BlockSimError,
-    utils::utcnow_ns,
+    utils::{get_slot_coordinate, utcnow_ns},
     BuilderInfo, RelayConfig, SubmissionTrace, ValidatorPreferences,
 };
 use helix_database::DatabaseService;
-use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
+use helix_datastore::{
+    redis::redis_cache::InclusionListWithKey, types::SaveBidAndUpdateTopBidResponse, Auctioneer,
+};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{BlsPublicKey, SignedBidSubmission, Slot};
+use parking_lot::RwLock;
 use ssz::Decode;
 use tracing::{debug, error, info, warn};
 
@@ -47,6 +50,7 @@ pub struct BuilderApi<A: Api> {
     pub relay_config: Arc<RelayConfig>,
     pub curr_slot_info: CurrentSlotInfo,
     pub _validator_preferences: Arc<ValidatorPreferences>,
+    pub current_inclusion_list: Arc<RwLock<Option<InclusionListWithKey>>>,
 }
 
 impl<A: Api> BuilderApi<A> {
@@ -74,6 +78,7 @@ impl<A: Api> BuilderApi<A> {
 
             curr_slot_info,
             _validator_preferences: validator_preferences,
+            current_inclusion_list: Default::default(),
         }
     }
 
@@ -290,12 +295,27 @@ impl<A: Api> BuilderApi<A> {
 
         debug!(timestamp_before_validation = utcnow_ns());
 
+        let current_slot_coord = get_slot_coordinate(
+            payload.slot().as_u64() as i32,
+            payload.proposer_public_key(),
+            payload.parent_hash(),
+        );
+
+        let inclusion_list = self
+            .current_inclusion_list
+            .read()
+            .as_ref()
+            .filter(|il| il.slot_coordinate == current_slot_coord)
+            .map(|il| il.inclusion_list.clone());
+
         let sim_request = BlockSimRequest::new(
             registration_info.registration.message.gas_limit,
             payload,
             registration_info.preferences,
             payload_attributes.payload_attributes.parent_beacon_block_root,
+            inclusion_list,
         );
+
         let result = self.simulator.process_request(sim_request, builder_info, is_top_bid).await;
 
         match result {

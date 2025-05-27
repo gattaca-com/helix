@@ -210,7 +210,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         // Fetch inclusion list for this slot
         if let (Some(duty), Some(parent_hash)) = (next_duty.as_ref(), parent_block_hash.as_ref()) {
             if !duty.entry.preferences.disable_inclusion_lists {
-                self.fetch_inclusion_list_or_timeout(
+                self.fetch_and_persist_current_inclusion_list(
                     &duty.entry.registration.message.pubkey,
                     parent_hash,
                 )
@@ -260,7 +260,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         self.curr_slot_info.handle_new_payload_attributes(update);
     }
 
-    async fn fetch_inclusion_list_or_timeout(
+    async fn fetch_and_persist_current_inclusion_list(
         &mut self,
         pub_key: &BlsPublicKey,
         parent_hash: &B256,

@@ -44,7 +44,7 @@ use crate::{
     },
     types::{
         keys::{
-            BUILDER_INFO_KEY, CURRENT_INCLUSION_LIST_KEY, HOUSEKEEPER_LOCK_KEY, KILL_SWITCH,
+            BUILDER_INFO_KEY, CURRENT_INCLUSION_LIST_CHANNEL, HOUSEKEEPER_LOCK_KEY, KILL_SWITCH,
             LAST_HASH_DELIVERED_KEY, LAST_SLOT_DELIVERED_KEY, PAYLOAD_ADDRESS_KEY,
             PRIMEV_PROPOSERS_KEY, PROPOSER_WHITELIST_KEY,
         },
@@ -72,6 +72,7 @@ return nil
 pub struct RedisCache {
     pool: Pool,
     tx: broadcast::Sender<Bytes>,
+    inclusion_list: broadcast::Sender<InclusionListWithKey>,
 }
 
 #[allow(dead_code)]
@@ -82,12 +83,14 @@ impl RedisCache {
     ) -> Result<Self, CreatePoolError> {
         let cfg = Config::from_url(conn_str);
         let pool = cfg.create_pool(Some(Runtime::Tokio1))?;
-        let (tx, mut rx) = broadcast::channel(1000);
+        let (tx, mut tx_recv) = broadcast::channel(1000);
+        let (inclusion_list, mut il_recv) = broadcast::channel(1);
 
         // ensure at least one subscriber is running
-        tokio::spawn(async move { while let Ok(_message) = rx.recv().await {} });
+        tokio::spawn(async move { while let Ok(_message) = tx_recv.recv().await {} });
+        tokio::spawn(async move { while let Ok(_message) = il_recv.recv().await {} });
 
-        let cache = Self { pool, tx };
+        let cache = Self { pool, tx, inclusion_list };
 
         // Load in builder info
         if let Err(err) = cache.update_builder_infos(builder_infos).await {
@@ -516,6 +519,50 @@ impl RedisCache {
 
         let key_floor_bid_value = get_floor_bid_value_key(slot, parent_hash, proposer_pub_key);
         self.set(&key_floor_bid_value, &new_floor_value, Some(BID_CACHE_EXPIRY_S)).await
+    }
+
+    pub async fn start_inclusion_list_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(CURRENT_INCLUSION_LIST_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        let mut conn = self.pool.get().await?;
+
+        while let Some(message) = message_stream.next().await {
+            let payload: String = match message.get_payload() {
+                Ok(payload) => payload,
+                Err(err) => {
+                    error!(%err, "Failed to get payload from message");
+                    continue;
+                }
+            };
+
+            let data: String = match conn.get(payload).await {
+                Ok(data) => data,
+                Err(err) => {
+                    error!(%err, "Failed to get data from redis");
+                    continue;
+                }
+            };
+
+            let inclusion_list: InclusionListWithKey = match serde_json::from_str(&data) {
+                Ok(sig_bid) => sig_bid,
+                Err(err) => {
+                    error!(%err, "Failed to deserialize data");
+                    continue;
+                }
+            };
+
+            if let Err(err) = self.inclusion_list.send(inclusion_list) {
+                error!(%err, "Failed to send top bid update");
+                continue;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1389,7 +1436,7 @@ impl Auctioneer for RedisCache {
         let mut record = RedisMetricRecord::new("get_current_inclusion_list");
 
         let inclusion_list: Option<InclusionListWithKey> =
-            self.get(CURRENT_INCLUSION_LIST_KEY).await?;
+            self.get(CURRENT_INCLUSION_LIST_CHANNEL).await?;
 
         if inclusion_list.as_ref().is_some_and(|list| list.inclusion_list.txs.is_empty()) {
             Ok(None)
@@ -1408,15 +1455,19 @@ impl Auctioneer for RedisCache {
 
         let value = InclusionListWithKey { slot_coordinate, inclusion_list };
 
-        self.set(CURRENT_INCLUSION_LIST_KEY, &value, None).await?;
+        self.set(CURRENT_INCLUSION_LIST_CHANNEL, &value, None).await?;
 
         record.record_success();
 
         Ok(())
     }
+
+    fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey> {
+        self.inclusion_list.subscribe()
+    }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InclusionListWithKey {
     pub slot_coordinate: String,
     pub inclusion_list: InclusionList,

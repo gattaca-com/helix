@@ -224,4 +224,6 @@ pub trait Auctioneer: Send + Sync + Clone {
         inclusion_list: InclusionList,
         slot_coordinate: String,
     ) -> Result<(), AuctioneerError>;
+
+    fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey>;
 }

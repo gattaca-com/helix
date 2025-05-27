@@ -60,6 +60,7 @@ async fn get_block(slot_number: u64) -> BlockSimRequest {
         Arc::new(signed_bid_submission.into()),
         ValidatorPreferences::default(),
         Some(block_response.data.message().parent_root()),
+        None,
     )
 }
 
@@ -86,6 +87,7 @@ fn get_sim_req() -> BlockSimRequest {
         0,
         Arc::new(signed_bid_submission.into()),
         ValidatorPreferences::default(),
+        None,
         None,
     )
 }
