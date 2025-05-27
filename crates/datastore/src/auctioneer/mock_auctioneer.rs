@@ -323,12 +323,6 @@ impl Auctioneer for MockAuctioneer {
         Ok(None)
     }
 
-    async fn get_current_inclusion_list(
-        &self,
-    ) -> Result<Option<InclusionListWithKey>, AuctioneerError> {
-        Ok(None)
-    }
-
     async fn save_current_inclusion_list(
         &self,
         _: InclusionList,

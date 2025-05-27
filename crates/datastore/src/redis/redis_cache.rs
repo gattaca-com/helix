@@ -1430,22 +1430,6 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
-    async fn get_current_inclusion_list(
-        &self,
-    ) -> Result<Option<InclusionListWithKey>, AuctioneerError> {
-        let mut record = RedisMetricRecord::new("get_current_inclusion_list");
-
-        let inclusion_list: Option<InclusionListWithKey> =
-            self.get(CURRENT_INCLUSION_LIST_CHANNEL).await?;
-
-        if inclusion_list.as_ref().is_some_and(|list| list.inclusion_list.txs.is_empty()) {
-            Ok(None)
-        } else {
-            record.record_success();
-            Ok(inclusion_list)
-        }
-    }
-
     async fn save_current_inclusion_list(
         &self,
         inclusion_list: InclusionList,
