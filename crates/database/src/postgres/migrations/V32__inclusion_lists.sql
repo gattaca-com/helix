@@ -13,9 +13,3 @@ CREATE TABLE "inclusion_list_txs" (
     "wait_time" BIGINT NOT NULL,
     "slot_included" integer NOT NULL
 );
-
--- CREATE TABLE "inclusion_lists" (
---   "slot_n" integer NOT NULL PRIMARY KEY,
---   "tx_hash" bytea NOT NULL,
---   FOREIGN KEY (tx_hash) REFERENCES inclusion_list_txs(tx_hash)
--- );

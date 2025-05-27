@@ -27,8 +27,8 @@ use tokio::sync::broadcast;
 use tracing::{error, info};
 
 use super::utils::{
-    get_hash_from_hex, get_header_tx_root_key, get_inclusion_list_key,
-    get_pending_block_builder_block_hash_key, get_pending_block_builder_key, get_pubkey_from_hex,
+    get_hash_from_hex, get_header_tx_root_key, get_pending_block_builder_block_hash_key,
+    get_pending_block_builder_key, get_pubkey_from_hex,
 };
 use crate::{
     error::AuctioneerError,
@@ -44,9 +44,9 @@ use crate::{
     },
     types::{
         keys::{
-            BUILDER_INFO_KEY, HOUSEKEEPER_LOCK_KEY, KILL_SWITCH, LAST_HASH_DELIVERED_KEY,
-            LAST_SLOT_DELIVERED_KEY, PAYLOAD_ADDRESS_KEY, PRIMEV_PROPOSERS_KEY,
-            PROPOSER_WHITELIST_KEY,
+            BUILDER_INFO_KEY, CURRENT_INCLUSION_LIST_KEY, HOUSEKEEPER_LOCK_KEY, KILL_SWITCH,
+            LAST_HASH_DELIVERED_KEY, LAST_SLOT_DELIVERED_KEY, PAYLOAD_ADDRESS_KEY,
+            PRIMEV_PROPOSERS_KEY, PROPOSER_WHITELIST_KEY,
         },
         signed_builder_bid_wrapper::SignedBuilderBidWrapper,
         SaveBidAndUpdateTopBidResponse,
@@ -1385,17 +1385,11 @@ impl Auctioneer for RedisCache {
 
     async fn get_current_inclusion_list(
         &self,
-        slot: i32,
-
-        parent_hash: &B256,
     ) -> Result<Option<InclusionListWithKey>, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_current_inclusion_list");
 
-        let key = get_inclusion_list_key(slot, /* proposer_pub_key, */ parent_hash);
-
-        error!("key {}", key);
-
-        let inclusion_list: Option<InclusionListWithKey> = self.get(&key).await?;
+        let inclusion_list: Option<InclusionListWithKey> =
+            self.get(CURRENT_INCLUSION_LIST_KEY).await?;
 
         if inclusion_list.as_ref().is_some_and(|list| list.inclusion_list.txs.is_empty()) {
             Ok(None)
@@ -1408,19 +1402,13 @@ impl Auctioneer for RedisCache {
     async fn save_current_inclusion_list(
         &self,
         inclusion_list: InclusionList,
-        slot: i32,
-        // proposer_pub_key: &BlsPublicKey,
-        parent_hash: &B256,
+        slot_coordinate: String,
     ) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("set_current_inclusion_list");
 
-        let slot_coordinate = format!("{slot}");
+        let value = InclusionListWithKey { slot_coordinate, inclusion_list };
 
-        let payload = InclusionListWithKey { slot_coordinate, inclusion_list };
-
-        let key = get_inclusion_list_key(slot, /* proposer_pub_key, */ parent_hash);
-
-        self.set(&key, &payload, None).await?;
+        self.set(CURRENT_INCLUSION_LIST_KEY, &value, None).await?;
 
         record.record_success();
 

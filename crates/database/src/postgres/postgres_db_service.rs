@@ -1797,13 +1797,12 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         inclusion_list: &InclusionList,
         slot_number: i32,
-        included: bool,
-    ) -> Result<(), DatabaseError> {
+    ) -> Result<(), Vec<DatabaseError>> {
         let mut record = DbMetricRecord::new("save_inclusion_list");
 
-        let client = self.pool.get().await?;
+        let client = self.pool.get().await.map_err(|err| vec![err.into()])?;
 
-        let mut failed_at_least_once = false;
+        let mut errors = vec![];
 
         for tx in &inclusion_list.txs {
             let result = client.execute(
@@ -1829,18 +1828,22 @@ impl DatabaseService for PostgresDatabaseService {
             ).await;
 
             if let Err(err) = result {
-                warn!("Error saving tx from inclusion list in the 'inclusion_list_txs' table in postgres: {:?}", err);
+                warn!(
+                    head_slot = &slot_number,
+                    "Error saving inclusion list in the 'inclusion_list_txs' table in postgres: {:?}",
+                    err
+                );
+                errors.push(err.into());
                 record.record_failure();
-                failed_at_least_once = true;
                 continue;
             };
         }
 
-        if !failed_at_least_once {
+        if errors.is_empty() {
             record.record_success();
             Ok(())
         } else {
-            Err(DatabaseError::GeneralError)
+            Err(errors)
         }
     }
 }

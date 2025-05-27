@@ -3,13 +3,13 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use alloy_primitives::B256;
 use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
-    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionList},
+    api::builder_api::BuilderGetValidatorsResponseEntry,
     chain_info::ChainInfo,
-    utils::utcnow_sec,
+    utils::{get_slot_coordinate, utcnow_sec},
     RelayConfig,
 };
-use helix_database::{error::DatabaseError, DatabaseService};
-use helix_datastore::{error::AuctioneerError, Auctioneer};
+use helix_database::DatabaseService;
+use helix_datastore::Auctioneer;
 use helix_types::{BlsPublicKey, Slot, SlotClockTrait};
 use tokio::{
     sync::broadcast,
@@ -93,7 +93,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
                     match head_event_result {
                         Ok(head_event) => {
                             info!(head_slot =% head_event.slot, "Received head event");
-                            self.process_slot(head_event.slot.into()).await
+                            self.process_slot(head_event.slot.into(), Some(head_event.block)).await
                         },
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("head events lagged by {n} events");
@@ -120,7 +120,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
                 _ = timer.tick() => {
                     info!("4 seconds into slot. Attempting to slot update...");
                     match self.chain_info.clock.now() {
-                        Some(slot) => self.process_slot(slot.as_u64()).await,
+                        Some(slot) => self.process_slot(slot.as_u64(), None).await,
                         None => {
                             error!("could not get current slot");
                         }
@@ -131,7 +131,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
     }
 
     /// Handles a new slot.
-    async fn process_slot(&mut self, slot: u64) {
+    async fn process_slot(&mut self, slot: u64, parent_block_hash: Option<B256>) {
         if self.head_slot >= slot {
             return;
         }
@@ -208,18 +208,15 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
 
         // Fetch inclusion list for this slot
-        // let _ = self.auctioneer.save_current_inclusion_list(&InclusionList::empty()).await;
-        // info!("next_duty {:?}", next_duty);
-        // if let Some(duty) = next_duty.as_ref() {
-        // info!("disable inclusion lists {}", duty.entry.preferences.disable_inclusion_lists);
-        // if !duty.entry.preferences.disable_inclusion_lists {
-        self.fetch_inclusion_list_or_timeout(
-            //&BlsPublicKey::deserialize(b"943148d4795fc16fc0bab1fb44132d86f5a40bf916bdbf61").unwrap(), //&duty.entry.registration.message.pubkey,
-            &B256::ZERO, //TODO: do it for real
-        )
-        .await;
-        // }
-        // }
+        if let (Some(duty), Some(parent_hash)) = (next_duty.as_ref(), parent_block_hash.as_ref()) {
+            if !duty.entry.preferences.disable_inclusion_lists {
+                self.fetch_inclusion_list_or_timeout(
+                    &duty.entry.registration.message.pubkey,
+                    parent_hash,
+                )
+                .await;
+            }
+        }
 
         let update = SlotUpdate { slot: slot.into(), new_duties, next_duty };
         self.curr_slot_info.handle_new_slot(update, &self.chain_info);
@@ -265,7 +262,7 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
 
     async fn fetch_inclusion_list_or_timeout(
         &mut self,
-        // pub_key: &BlsPublicKey,
+        pub_key: &BlsPublicKey,
         parent_hash: &B256,
     ) {
         let inclusion_list_opt = tokio::select! {
@@ -286,14 +283,14 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
         };
 
         let slot: i32 = self.head_slot.try_into().unwrap();
+        let slot_coordinate = get_slot_coordinate(slot, pub_key, parent_hash);
         let (postgres_result, redis_result) = tokio::join!(
-            self.database.save_inclusion_list(&inclusion_list, slot, true),
-            self.auctioneer.save_current_inclusion_list(inclusion_list.clone(), slot, parent_hash)
+            self.database.save_inclusion_list(&inclusion_list, slot),
+            self.auctioneer.save_current_inclusion_list(inclusion_list.clone(), slot_coordinate)
         );
 
-        match postgres_result {
-            Ok(_) => info!(head_slot = self.head_slot, "Saved inclusion list to postgres"),
-            Err(_) => {}
+        if postgres_result.is_ok() {
+            info!(head_slot = self.head_slot, "Saved inclusion list to postgres");
         }
 
         match redis_result {

@@ -186,6 +186,5 @@ pub trait DatabaseService: Send + Sync + Clone {
         &self,
         inclusion_list: &InclusionList,
         slot_number: i32,
-        included: bool,
-    ) -> Result<(), DatabaseError>;
+    ) -> Result<(), Vec<DatabaseError>>;
 }

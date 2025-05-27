@@ -61,7 +61,6 @@ pub struct InclusionListTx {
     pub hash: B256,
     pub nonce: u64,
     pub sender: Address,
-    pub included: bool,
     pub gas_priority_fee: u64,
     pub bytes: Bytes,
     pub wait_time: u32,

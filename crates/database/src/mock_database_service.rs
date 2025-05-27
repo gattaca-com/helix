@@ -298,10 +298,9 @@ impl DatabaseService for MockDatabaseService {
 
     async fn save_inclusion_list(
         &self,
-        inclusion_list: &InclusionList,
-        slot_number: i32,
-        included: bool,
-    ) -> Result<(), DatabaseError> {
+        _: &InclusionList,
+        _: i32,
+    ) -> Result<(), Vec<DatabaseError>> {
         Ok(())
     }
 }
