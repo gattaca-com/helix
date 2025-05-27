@@ -3,8 +3,11 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use alloy_primitives::{bytes::Bytes, B256, U256};
 use async_trait::async_trait;
 use helix_common::{
-    api::builder_api::TopBidUpdate, bid_submission::v2::header_submission::SignedHeaderSubmission,
-    pending_block::PendingBlock, signing::RelaySigningContext, BuilderInfo, ProposerInfo,
+    api::builder_api::{InclusionList, TopBidUpdate},
+    bid_submission::v2::header_submission::SignedHeaderSubmission,
+    pending_block::PendingBlock,
+    signing::RelaySigningContext,
+    BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
 use helix_types::{
@@ -14,7 +17,10 @@ use helix_types::{
 use ssz::Encode;
 use tokio::sync::broadcast;
 
-use crate::{error::AuctioneerError, types::SaveBidAndUpdateTopBidResponse, Auctioneer};
+use crate::{
+    error::AuctioneerError, redis::redis_cache::InclusionListWithKey,
+    types::SaveBidAndUpdateTopBidResponse, Auctioneer,
+};
 
 #[derive(Default, Clone)]
 pub struct MockAuctioneer {
@@ -315,5 +321,23 @@ impl Auctioneer for MockAuctioneer {
         _block_hash: &B256,
     ) -> Result<Option<(BlsPublicKey, Vec<u8>)>, AuctioneerError> {
         Ok(None)
+    }
+
+    async fn save_current_inclusion_list(
+        &self,
+        _: InclusionList,
+        _: String,
+    ) -> Result<(), AuctioneerError> {
+        Ok(())
+    }
+
+    fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey> {
+        let (tx, rx) = broadcast::channel(1);
+        tx.send(InclusionListWithKey {
+            slot_coordinate: "".into(),
+            inclusion_list: InclusionList::empty(),
+        })
+        .unwrap();
+        rx
     }
 }

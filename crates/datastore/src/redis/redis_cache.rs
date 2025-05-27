@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use deadpool_redis::{Config, CreatePoolError, Pool, Runtime};
 use futures_util::StreamExt;
 use helix_common::{
-    api::builder_api::TopBidUpdate,
+    api::builder_api::{InclusionList, TopBidUpdate},
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
     bid_submission_to_builder_bid, header_submission_to_builder_bid,
     metrics::{RedisMetricRecord, TopBidMetrics},
@@ -21,7 +21,7 @@ use helix_types::{
     SignedBidSubmission, SignedBuilderBid,
 };
 use redis::{AsyncCommands, RedisResult, Script, Value};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use ssz::Encode;
 use tokio::sync::broadcast;
 use tracing::{error, info};
@@ -44,9 +44,9 @@ use crate::{
     },
     types::{
         keys::{
-            BUILDER_INFO_KEY, HOUSEKEEPER_LOCK_KEY, KILL_SWITCH, LAST_HASH_DELIVERED_KEY,
-            LAST_SLOT_DELIVERED_KEY, PAYLOAD_ADDRESS_KEY, PRIMEV_PROPOSERS_KEY,
-            PROPOSER_WHITELIST_KEY,
+            BUILDER_INFO_KEY, CURRENT_INCLUSION_LIST_CHANNEL, HOUSEKEEPER_LOCK_KEY, KILL_SWITCH,
+            LAST_HASH_DELIVERED_KEY, LAST_SLOT_DELIVERED_KEY, PAYLOAD_ADDRESS_KEY,
+            PRIMEV_PROPOSERS_KEY, PROPOSER_WHITELIST_KEY,
         },
         signed_builder_bid_wrapper::SignedBuilderBidWrapper,
         SaveBidAndUpdateTopBidResponse,
@@ -72,6 +72,7 @@ return nil
 pub struct RedisCache {
     pool: Pool,
     tx: broadcast::Sender<Bytes>,
+    inclusion_list: broadcast::Sender<InclusionListWithKey>,
 }
 
 #[allow(dead_code)]
@@ -82,12 +83,14 @@ impl RedisCache {
     ) -> Result<Self, CreatePoolError> {
         let cfg = Config::from_url(conn_str);
         let pool = cfg.create_pool(Some(Runtime::Tokio1))?;
-        let (tx, mut rx) = broadcast::channel(1000);
+        let (tx, mut tx_recv) = broadcast::channel(1000);
+        let (inclusion_list, mut il_recv) = broadcast::channel(1);
 
         // ensure at least one subscriber is running
-        tokio::spawn(async move { while let Ok(_message) = rx.recv().await {} });
+        tokio::spawn(async move { while let Ok(_message) = tx_recv.recv().await {} });
+        tokio::spawn(async move { while let Ok(_message) = il_recv.recv().await {} });
 
-        let cache = Self { pool, tx };
+        let cache = Self { pool, tx, inclusion_list };
 
         // Load in builder info
         if let Err(err) = cache.update_builder_infos(builder_infos).await {
@@ -516,6 +519,50 @@ impl RedisCache {
 
         let key_floor_bid_value = get_floor_bid_value_key(slot, parent_hash, proposer_pub_key);
         self.set(&key_floor_bid_value, &new_floor_value, Some(BID_CACHE_EXPIRY_S)).await
+    }
+
+    pub async fn start_inclusion_list_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(CURRENT_INCLUSION_LIST_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        let mut conn = self.pool.get().await?;
+
+        while let Some(message) = message_stream.next().await {
+            let payload: String = match message.get_payload() {
+                Ok(payload) => payload,
+                Err(err) => {
+                    error!(%err, "Failed to get payload from message");
+                    continue;
+                }
+            };
+
+            let data: String = match conn.get(payload).await {
+                Ok(data) => data,
+                Err(err) => {
+                    error!(%err, "Failed to get data from redis");
+                    continue;
+                }
+            };
+
+            let inclusion_list: InclusionListWithKey = match serde_json::from_str(&data) {
+                Ok(sig_bid) => sig_bid,
+                Err(err) => {
+                    error!(%err, "Failed to deserialize data");
+                    continue;
+                }
+            };
+
+            if let Err(err) = self.inclusion_list.send(inclusion_list) {
+                error!(%err, "Failed to send top bid update");
+                continue;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1382,6 +1429,32 @@ impl Auctioneer for RedisCache {
         self.set(KILL_SWITCH, &false, None).await?;
         Ok(())
     }
+
+    async fn save_current_inclusion_list(
+        &self,
+        inclusion_list: InclusionList,
+        slot_coordinate: String,
+    ) -> Result<(), AuctioneerError> {
+        let mut record = RedisMetricRecord::new("set_current_inclusion_list");
+
+        let value = InclusionListWithKey { slot_coordinate, inclusion_list };
+
+        self.set(CURRENT_INCLUSION_LIST_CHANNEL, &value, None).await?;
+
+        record.record_success();
+
+        Ok(())
+    }
+
+    fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey> {
+        self.inclusion_list.subscribe()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InclusionListWithKey {
+    pub slot_coordinate: String,
+    pub inclusion_list: InclusionList,
 }
 
 fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {

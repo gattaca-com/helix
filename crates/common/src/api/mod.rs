@@ -10,6 +10,7 @@ pub const PATH_SUBMIT_BLOCK_OPTIMISTIC_V2: &str = "/blocks_optimistic_v2";
 pub const PATH_CANCEL_BID: &str = "/cancel_bid";
 pub const PATH_SUBMIT_HEADER: &str = "/headers";
 pub const PATH_GET_TOP_BID: &str = "/top_bid";
+pub const PATH_GET_INCLUSION_LIST: &str = "/inclusion_list/{slot}/{parent_hash}/{pub_key}";
 
 pub const PATH_PROPOSER_API: &str = "/eth/v1/builder";
 

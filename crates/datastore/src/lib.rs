@@ -30,5 +30,14 @@ pub async fn start_auctioneer(
         }
     });
 
+    let auctioneer_clone = auctioneer.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = auctioneer_clone.start_inclusion_list_listener().await {
+                error!("Inclusion list listener error: {}", err);
+            }
+        }
+    });
+
     Ok(auctioneer)
 }

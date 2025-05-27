@@ -3,6 +3,7 @@ pub mod error;
 pub mod housekeeper;
 #[cfg(test)]
 pub mod housekeeper_tests;
+mod inclusion_list_fetcher;
 pub mod primev_service;
 mod slot_info;
 
@@ -41,7 +42,8 @@ pub async fn start_housekeeper(
     housekeeper.start(head_event_receiver.resubscribe()).await?;
 
     let curr_slot_info = CurrentSlotInfo::new();
-    let chain_updater = ChainEventUpdater::new(db, auctioneer, chain_info, curr_slot_info.clone());
+    let chain_updater =
+        ChainEventUpdater::new(db, auctioneer, chain_info, curr_slot_info.clone(), config.clone());
     tokio::spawn(chain_updater.start(head_event_receiver, payload_attribute_receiver));
 
     Ok(curr_slot_info)

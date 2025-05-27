@@ -5,7 +5,8 @@ use helix_common::{
     bid_submission::v2::header_submission::SignedHeaderSubmission, simulator::BlockSimError,
     GossipedHeaderTrace, GossipedPayloadTrace, HeaderSubmissionTrace, SubmissionTrace,
 };
-use helix_types::SignedBidSubmission;
+use helix_types::{BlsPublicKey, SignedBidSubmission};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub enum DbInfo {
@@ -16,7 +17,7 @@ pub enum DbInfo {
     SimulationResult { block_hash: B256, block_sim_result: Result<(), BlockSimError> },
 }
 
-#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
 #[repr(i16)]
 pub enum OptimisticVersion {
     #[default]
@@ -24,4 +25,11 @@ pub enum OptimisticVersion {
     V1 = 1,
     V2 = 2,
     V3 = 3,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InclusionListPathParams {
+    pub slot: u64,
+    pub parent_hash: B256,
+    pub pub_key: BlsPublicKey,
 }

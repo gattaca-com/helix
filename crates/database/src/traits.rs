@@ -4,7 +4,8 @@ use alloy_primitives::B256;
 use async_trait::async_trait;
 use helix_common::{
     api::{
-        builder_api::BuilderGetValidatorsResponseEntry, data_api::BidFilters,
+        builder_api::{BuilderGetValidatorsResponseEntry, InclusionList},
+        data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
     bid_submission::v2::header_submission::SignedHeaderSubmission,
@@ -180,4 +181,10 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn get_validator_registrations(
         &self,
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError>;
+
+    async fn save_inclusion_list(
+        &self,
+        inclusion_list: &InclusionList,
+        slot_number: i32,
+    ) -> Result<(), Vec<DatabaseError>>;
 }

@@ -57,6 +57,7 @@ mod simulator_tests {
             Arc::new(signed_bid_submission.into()),
             ValidatorPreferences::default(),
             None,
+            None,
         )
     }
 
