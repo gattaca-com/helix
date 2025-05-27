@@ -43,7 +43,7 @@ pub struct SlotUpdate {
 }
 
 /// Manages the update of head slots and the fetching of new proposer duties.
-pub struct ChainEventUpdater<D: DatabaseService, A: Auctioneer> {
+pub struct ChainEventUpdater<D: DatabaseService + 'static, A: Auctioneer + 'static> {
     head_slot: u64,
     known_payload_attributes: HashMap<(B256, Slot), PayloadAttributesEvent>,
 
@@ -56,7 +56,7 @@ pub struct ChainEventUpdater<D: DatabaseService, A: Auctioneer> {
     inclusion_list_fetcher: InclusionListFetcher,
 }
 
-impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
+impl<D: DatabaseService + 'static, A: Auctioneer + 'static> ChainEventUpdater<D, A> {
     pub fn new(
         database: Arc<D>,
         auctioneer: Arc<A>,
@@ -284,22 +284,28 @@ impl<D: DatabaseService, A: Auctioneer> ChainEventUpdater<D, A> {
 
         let slot: i32 = self.head_slot.try_into().unwrap();
         let slot_coordinate = get_slot_coordinate(slot, pub_key, parent_hash);
-        let (postgres_result, redis_result) = tokio::join!(
-            self.database.save_inclusion_list(&inclusion_list, slot),
-            self.auctioneer.save_current_inclusion_list(inclusion_list.clone(), slot_coordinate)
-        );
 
-        if postgres_result.is_ok() {
-            info!(head_slot = self.head_slot, "Saved inclusion list to postgres");
-        }
+        let db = self.database.clone();
+        let auctioneer = self.auctioneer.clone();
+        tokio::spawn(async move {
+            let (postgres_result, redis_result) = tokio::join!(
+                db.save_inclusion_list(&inclusion_list, slot),
+                auctioneer.save_current_inclusion_list(inclusion_list.clone(), slot_coordinate)
+            );
 
-        match redis_result {
-            Ok(_) => info!(head_slot = self.head_slot, "Saved inclusion list to redis"),
-            Err(err) => warn!(
-                head_slot = self.head_slot,
-                "Could not include list for this slot in redis {}", err
-            ),
-        }
+            if postgres_result.is_ok() {
+                info!(head_slot = slot, "Saved inclusion list to postgres");
+            }
+
+            match redis_result {
+                Ok(_) => {
+                    info!(head_slot = slot, "Saved inclusion list to redis")
+                }
+                Err(err) => {
+                    warn!(head_slot = slot, "Could not include list for this slot in redis {}", err)
+                }
+            };
+        });
     }
 
     fn time_to_missing_inclusion_list_cutoff(&self) -> Duration {
