@@ -12,6 +12,7 @@ use helix_housekeeper::CurrentSlotInfo;
 use moka::sync::Cache;
 use tokio::{sync::mpsc, time::timeout};
 use tracing::{error, info};
+use dashmap::DashMap;
 
 use crate::{
     builder::{
@@ -118,6 +119,7 @@ pub async fn run_api_service<A: Api>(
     tokio::spawn(gossip::process_gossip_messages(
         builder_api.clone(),
         proposer_api.clone(),
+        Arc::new(DashMap::new()),
         gossip_receiver,
     ));
 
