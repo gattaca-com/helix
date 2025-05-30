@@ -215,7 +215,7 @@ pub trait Auctioneer: Send + Sync + Clone {
 
     async fn disable_kill_switch(&self) -> Result<(), AuctioneerError>;
 
-    async fn save_current_inclusion_list(
+    async fn update_current_inclusion_list(
         &self,
         inclusion_list: InclusionList,
         slot_coordinate: String,

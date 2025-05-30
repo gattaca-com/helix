@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{extract::Path, response::IntoResponse, Extension};
 use helix_common::utils::get_slot_coordinate;
 use hyper::StatusCode;
-use tracing::warn;
+use tracing::debug;
 
 use super::{api::BuilderApi, error::BuilderApiError, InclusionListPathParams};
 use crate::Api;
@@ -14,11 +14,16 @@ impl<A: Api> BuilderApi<A> {
         Extension(api): Extension<Arc<BuilderApi<A>>>,
         Path(InclusionListPathParams { slot, parent_hash, pub_key }): Path<InclusionListPathParams>,
     ) -> Result<impl IntoResponse, BuilderApiError> {
-        tracing::debug!(slot = %slot, pub_key = %pub_key, parent_hash = %parent_hash, "Request for inclusion list.");
+        debug!(requested_slot = %slot, pub_key = %pub_key, parent_hash = %parent_hash,
+            "Request for inclusion list."
+        );
 
         let current_list = api.current_inclusion_list.read();
 
         let Some(current_list) = current_list.as_ref() else {
+            debug!(requested_slot = %slot, pub_key = %pub_key, parent_hash = %parent_hash,
+                "Builder has requested an inclusion list but none has been found in redis."
+            );
             return Ok(StatusCode::NOT_FOUND.into_response());
         };
 
@@ -27,7 +32,10 @@ impl<A: Api> BuilderApi<A> {
         if current_list.slot_coordinate == current_slot_coordinate {
             Ok((StatusCode::OK, axum::Json(current_list.inclusion_list.clone())).into_response())
         } else {
-            warn!("Requesting inclusion list for a slot in the past. Requested slot: {} current slot: {}", slot, api.curr_slot_info.head_slot());
+            debug!(requested_slot = %slot, pub_key = %pub_key, parent_hash = %parent_hash,
+                "Requested inclusion list for a slot in the past. Current slot: {}",
+                api.curr_slot_info.head_slot()
+            );
             Ok(StatusCode::NOT_FOUND.into_response())
         }
     }

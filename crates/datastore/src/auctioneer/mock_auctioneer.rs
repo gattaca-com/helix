@@ -323,7 +323,7 @@ impl Auctioneer for MockAuctioneer {
         Ok(None)
     }
 
-    async fn save_current_inclusion_list(
+    async fn update_current_inclusion_list(
         &self,
         _: InclusionList,
         _: String,

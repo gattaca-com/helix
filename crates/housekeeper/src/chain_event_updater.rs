@@ -290,7 +290,7 @@ impl<D: DatabaseService + 'static, A: Auctioneer + 'static> ChainEventUpdater<D,
         tokio::spawn(async move {
             let (postgres_result, redis_result) = tokio::join!(
                 db.save_inclusion_list(&inclusion_list, slot),
-                auctioneer.save_current_inclusion_list(inclusion_list.clone(), slot_coordinate)
+                auctioneer.update_current_inclusion_list(inclusion_list.clone(), slot_coordinate)
             );
 
             if postgres_result.is_ok() {

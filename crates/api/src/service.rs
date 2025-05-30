@@ -186,6 +186,8 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
 }
 
 async fn listen_for_inclusion_lists_background_task(api: Arc<BuilderApi<impl Api>>) -> ! {
+    info!("Starting to listen for inclusion list updates");
+
     let mut inclusion_list_recv = api.auctioneer.get_inclusion_list();
     loop {
         if let Ok(new_list) = inclusion_list_recv.recv().await {
