@@ -19,4 +19,4 @@ pub(crate) const PRIMEV_PROPOSERS_KEY: &str = "primev-proposers";
 pub(crate) const HEADER_TX_ROOT: &str = "header-tx-root";
 pub(crate) const KILL_SWITCH: &str = "kill-switch";
 pub(crate) const PAYLOAD_ADDRESS_KEY: &str = "payload-addr";
-pub(crate) const CURRENT_INCLUSION_LIST_CHANNEL: &str = "current-inclusion-list";
+pub(crate) const CURRENT_INCLUSION_LIST_KEY: &str = "current-inclusion-list";
