@@ -21,7 +21,7 @@ use helix_types::{
     SignedBidSubmission, SignedBuilderBid,
 };
 use redis::{AsyncCommands, Msg, RedisResult, Script, Value};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use ssz::Encode;
 use tokio::sync::broadcast;
 use tracing::{error, info};
@@ -56,6 +56,7 @@ use crate::{
 
 const BID_CACHE_EXPIRY_S: usize = 45;
 const PENDING_BLOCK_EXPIRY_S: usize = 45;
+const INCLUSION_LIST_EXPIRY_S: usize = 45;
 const PAYLOAD_ADDRESS_EXPIRY_S: usize = 24;
 const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 45_000;
 
@@ -110,12 +111,9 @@ impl RedisCache {
 
         let mut conn = self.pool.get().await?;
 
-        // The key for the new best bid _is_ the value published on this pubsub channel
-        let redis_key = |pubsub_msg| pubsub_msg;
-
         while let Some(message) = message_stream.next().await {
-            let Ok(sig_bid): Result<SignedBuilderBidWrapper, _> =
-                Self::process_pubsub_update(message, &mut conn, redis_key).await
+            let Ok((_, sig_bid)) =
+                Self::process_pubsub_update::<SignedBuilderBidWrapper>(message, &mut conn).await
             else {
                 continue;
             };
@@ -516,15 +514,13 @@ impl RedisCache {
         let mut message_stream = pubsub.on_message();
         let mut conn = self.pool.get().await?;
 
-        // The key for the current inclusion list is always constant, unlike for best bid updates
-        let redis_key = |_| CURRENT_INCLUSION_LIST_KEY.into();
-
         while let Some(msg) = message_stream.next().await {
-            let Ok(new_list) = Self::process_pubsub_update(msg, &mut conn, redis_key).await else {
+            let Ok((key, list)) = Self::process_pubsub_update(msg, &mut conn).await else {
                 continue;
             };
 
-            if let Err(err) = self.inclusion_list.send(new_list) {
+            let list_with_key = InclusionListWithKey { key, inclusion_list: list };
+            if let Err(err) = self.inclusion_list.send(list_with_key) {
                 error!(%err, "Failed to send inclusion list update");
             }
         }
@@ -533,19 +529,16 @@ impl RedisCache {
     }
 
     /// Process a redis pubsub update.
-    /// Used when a channel just passes a key or flag rather than a whole value
+    /// Used when a channel just passes the key of an updated value rather than the whole value.
     async fn process_pubsub_update<T: DeserializeOwned>(
         update: Msg,
         conn: &mut Connection,
-        get_key_from_update: impl FnOnce(String) -> String,
-    ) -> Result<T, RedisCacheError> {
-        let payload: String = update.get_payload().inspect_err(|err| {
+    ) -> Result<(String, T), RedisCacheError> {
+        let key: String = update.get_payload().inspect_err(|err| {
             error!(%err, "Failed to get payload from message");
         })?;
 
-        let key = get_key_from_update(payload);
-
-        let data: String = conn.get(key).await.inspect_err(|err| {
+        let data: String = conn.get(&key).await.inspect_err(|err| {
             error!(%err, "Failed to get data from redis");
         })?;
 
@@ -553,7 +546,7 @@ impl RedisCache {
             error!(%err, "Failed to deserialize data");
         })?;
 
-        Ok(value)
+        Ok((key, value))
     }
 }
 
@@ -1428,11 +1421,11 @@ impl Auctioneer for RedisCache {
     ) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("update_current_inclusion_list");
 
-        let value = InclusionListWithKey { slot_coordinate, inclusion_list };
+        let new_inclusion_list_key = format!("{CURRENT_INCLUSION_LIST_KEY}_{slot_coordinate}");
 
-        self.set(CURRENT_INCLUSION_LIST_KEY, &value, None).await?;
+        self.set(&new_inclusion_list_key, &inclusion_list, Some(INCLUSION_LIST_EXPIRY_S)).await?;
 
-        self.publish(CURRENT_INCLUSION_LIST_CHANNEL, &value.slot_coordinate).await?;
+        self.publish(CURRENT_INCLUSION_LIST_CHANNEL, &new_inclusion_list_key).await?;
 
         record.record_success();
 
@@ -1444,9 +1437,9 @@ impl Auctioneer for RedisCache {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct InclusionListWithKey {
-    pub slot_coordinate: String,
+    pub key: String,
     pub inclusion_list: InclusionList,
 }
 
