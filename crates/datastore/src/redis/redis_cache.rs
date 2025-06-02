@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use alloy_primitives::{bytes::Bytes, B256, U256};
 use async_trait::async_trait;
-use deadpool_redis::{Config, CreatePoolError, Pool, Runtime};
+use deadpool_redis::{Config, Connection, CreatePoolError, Pool, Runtime};
 use futures_util::StreamExt;
 use helix_common::{
     api::builder_api::{InclusionList, TopBidUpdate},
@@ -20,7 +20,7 @@ use helix_types::{
     maybe_upgrade_execution_payload, BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs,
     SignedBidSubmission, SignedBuilderBid,
 };
-use redis::{AsyncCommands, RedisResult, Script, Value};
+use redis::{AsyncCommands, Msg, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use ssz::Encode;
 use tokio::sync::broadcast;
@@ -44,7 +44,7 @@ use crate::{
     },
     types::{
         keys::{
-            BUILDER_INFO_KEY, CURRENT_INCLUSION_LIST_CHANNEL, HOUSEKEEPER_LOCK_KEY, KILL_SWITCH,
+            BUILDER_INFO_KEY, CURRENT_INCLUSION_LIST_KEY, HOUSEKEEPER_LOCK_KEY, KILL_SWITCH,
             LAST_HASH_DELIVERED_KEY, LAST_SLOT_DELIVERED_KEY, PAYLOAD_ADDRESS_KEY,
             PRIMEV_PROPOSERS_KEY, PROPOSER_WHITELIST_KEY,
         },
@@ -60,6 +60,7 @@ const PAYLOAD_ADDRESS_EXPIRY_S: usize = 24;
 const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 45_000;
 
 const BEST_BIDS_CHANNEL: &str = "best_bids";
+const CURRENT_INCLUSION_LIST_CHANNEL: &str = "inclusion_list_updates";
 
 const RENEW_SCRIPT: &str = r#"
 if redis.call('get', KEYS[1]) == ARGV[1] then
@@ -110,27 +111,10 @@ impl RedisCache {
         let mut conn = self.pool.get().await?;
 
         while let Some(message) = message_stream.next().await {
-            let payload: String = match message.get_payload() {
-                Ok(payload) => payload,
-                Err(err) => {
-                    error!(%err, "Failed to get payload from message");
-                    continue;
-                }
-            };
-
-            let data: String = match conn.get(payload).await {
-                Ok(data) => data,
-                Err(err) => {
-                    error!(%err, "Failed to get data from redis");
-                    continue;
-                }
-            };
-            let sig_bid: SignedBuilderBidWrapper = match serde_json::from_str(&data) {
-                Ok(sig_bid) => sig_bid,
-                Err(err) => {
-                    error!(%err, "Failed to deserialize data");
-                    continue;
-                }
+            let Ok(sig_bid): Result<SignedBuilderBidWrapper, _> =
+                Self::get_value_from_pubsub_update(message, &mut conn).await
+            else {
+                continue;
             };
 
             let received_at = sig_bid.received_at_ms;
@@ -523,46 +507,42 @@ impl RedisCache {
 
     pub async fn start_inclusion_list_listener(&self) -> Result<(), RedisCacheError> {
         let conn = self.pool.get().await?;
-
         let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
         pubsub.subscribe(CURRENT_INCLUSION_LIST_CHANNEL).await?;
 
         let mut message_stream = pubsub.on_message();
-
         let mut conn = self.pool.get().await?;
 
         while let Some(message) = message_stream.next().await {
-            let payload: String = match message.get_payload() {
-                Ok(payload) => payload,
-                Err(err) => {
-                    error!(%err, "Failed to get payload from message");
-                    continue;
-                }
-            };
-
-            let data: String = match conn.get(payload).await {
-                Ok(data) => data,
-                Err(err) => {
-                    error!(%err, "Failed to get data from redis");
-                    continue;
-                }
-            };
-
-            let inclusion_list: InclusionListWithKey = match serde_json::from_str(&data) {
-                Ok(sig_bid) => sig_bid,
-                Err(err) => {
-                    error!(%err, "Failed to deserialize data");
-                    continue;
-                }
-            };
-
-            if let Err(err) = self.inclusion_list.send(inclusion_list) {
-                error!(%err, "Failed to send top bid update");
+            let Ok(new_list) = Self::get_value_from_pubsub_update(message, &mut conn).await else {
                 continue;
+            };
+
+            if let Err(err) = self.inclusion_list.send(new_list) {
+                error!(%err, "Failed to send inclusion list update");
             }
         }
 
         Ok(())
+    }
+
+    async fn get_value_from_pubsub_update<T: DeserializeOwned>(
+        message: Msg,
+        conn: &mut Connection,
+    ) -> Result<T, RedisCacheError> {
+        let payload: String = message.get_payload().inspect_err(|err| {
+            error!(%err, "Failed to get payload from message");
+        })?;
+
+        let data: String = conn.get(payload).await.inspect_err(|err| {
+            error!(%err, "Failed to get data from redis");
+        })?;
+
+        let value = serde_json::from_str(&data).inspect_err(|err| {
+            error!(%err, "Failed to deserialize data");
+        })?;
+
+        Ok(value)
     }
 }
 
@@ -1430,16 +1410,18 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
-    async fn save_current_inclusion_list(
+    async fn update_current_inclusion_list(
         &self,
         inclusion_list: InclusionList,
         slot_coordinate: String,
     ) -> Result<(), AuctioneerError> {
-        let mut record = RedisMetricRecord::new("set_current_inclusion_list");
+        let mut record = RedisMetricRecord::new("update_current_inclusion_list");
 
         let value = InclusionListWithKey { slot_coordinate, inclusion_list };
 
-        self.set(CURRENT_INCLUSION_LIST_CHANNEL, &value, None).await?;
+        self.set(CURRENT_INCLUSION_LIST_KEY, &value, None).await?;
+
+        self.publish(CURRENT_INCLUSION_LIST_CHANNEL, &value.slot_coordinate).await?;
 
         record.record_success();
 
