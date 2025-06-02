@@ -20,3 +20,7 @@ pub(crate) const HEADER_TX_ROOT: &str = "header-tx-root";
 pub(crate) const KILL_SWITCH: &str = "kill-switch";
 pub(crate) const PAYLOAD_ADDRESS_KEY: &str = "payload-addr";
 pub(crate) const CURRENT_INCLUSION_LIST_KEY: &str = "current-inclusion-list";
+
+pub fn inclusion_list_key(slot_coordinate: &str) -> String {
+    format!("{CURRENT_INCLUSION_LIST_KEY}_{slot_coordinate}")
+}

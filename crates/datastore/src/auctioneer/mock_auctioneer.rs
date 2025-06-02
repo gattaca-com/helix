@@ -333,11 +333,8 @@ impl Auctioneer for MockAuctioneer {
 
     fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey> {
         let (tx, rx) = broadcast::channel(1);
-        tx.send(InclusionListWithKey {
-            slot_coordinate: "".into(),
-            inclusion_list: InclusionList::empty(),
-        })
-        .unwrap();
+        tx.send(InclusionListWithKey { key: "".into(), inclusion_list: InclusionList::empty() })
+            .unwrap();
         rx
     }
 }

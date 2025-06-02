@@ -305,7 +305,7 @@ impl<A: Api> BuilderApi<A> {
             .current_inclusion_list
             .read()
             .as_ref()
-            .filter(|il| il.slot_coordinate == current_slot_coord)
+            .filter(|il| il.key == current_slot_coord)
             .map(|il| il.inclusion_list.clone());
 
         let sim_request = BlockSimRequest::new(
