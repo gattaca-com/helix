@@ -110,9 +110,12 @@ impl RedisCache {
 
         let mut conn = self.pool.get().await?;
 
+        // The key for the new best bid _is_ the value published on this pubsub channel
+        let redis_key = |pubsub_msg| pubsub_msg;
+
         while let Some(message) = message_stream.next().await {
             let Ok(sig_bid): Result<SignedBuilderBidWrapper, _> =
-                Self::get_value_from_pubsub_update(message, &mut conn).await
+                Self::process_pubsub_update(message, &mut conn, redis_key).await
             else {
                 continue;
             };
@@ -513,8 +516,11 @@ impl RedisCache {
         let mut message_stream = pubsub.on_message();
         let mut conn = self.pool.get().await?;
 
-        while let Some(message) = message_stream.next().await {
-            let Ok(new_list) = Self::get_value_from_pubsub_update(message, &mut conn).await else {
+        // The key for the current inclusion list is always constant, unlike for best bid updates
+        let redis_key = |_| CURRENT_INCLUSION_LIST_KEY.into();
+
+        while let Some(msg) = message_stream.next().await {
+            let Ok(new_list) = Self::process_pubsub_update(msg, &mut conn, redis_key).await else {
                 continue;
             };
 
@@ -526,15 +532,20 @@ impl RedisCache {
         Ok(())
     }
 
-    async fn get_value_from_pubsub_update<T: DeserializeOwned>(
-        message: Msg,
+    /// Process a redis pubsub update.
+    /// Used when a channel just passes a key or flag rather than a whole value
+    async fn process_pubsub_update<T: DeserializeOwned>(
+        update: Msg,
         conn: &mut Connection,
+        get_key_from_update: impl FnOnce(String) -> String,
     ) -> Result<T, RedisCacheError> {
-        let payload: String = message.get_payload().inspect_err(|err| {
+        let payload: String = update.get_payload().inspect_err(|err| {
             error!(%err, "Failed to get payload from message");
         })?;
 
-        let data: String = conn.get(payload).await.inspect_err(|err| {
+        let key = get_key_from_update(payload);
+
+        let data: String = conn.get(key).await.inspect_err(|err| {
             error!(%err, "Failed to get data from redis");
         })?;
 
