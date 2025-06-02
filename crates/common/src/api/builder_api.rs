@@ -50,12 +50,6 @@ pub struct InclusionList {
     pub txs: Vec<InclusionListTx>,
 }
 
-impl InclusionList {
-    pub const fn empty() -> Self {
-        Self { txs: vec![] }
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct InclusionListTx {
     pub hash: B256,
