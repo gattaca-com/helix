@@ -332,8 +332,6 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             );
         }
 
-        debug!(%epoch, "updating proposer duties");
-
         if validator_registrations.is_empty() {
             warn!(%epoch, "no validator registrationts found");
         } else if let Err(err) =
@@ -458,8 +456,9 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         proposer_duties: &[ProposerDuty],
         signed_validator_registrations: &HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>,
     ) -> Result<(), HousekeeperError> {
-        let mut formatted_proposer_duties = Vec::with_capacity(proposer_duties.len());
+        debug!("updating proposer duties");
 
+        let mut formatted_proposer_duties = Vec::with_capacity(proposer_duties.len());
         for duty in proposer_duties.iter() {
             if let Some(reg) = signed_validator_registrations.get(&duty.pubkey) {
                 formatted_proposer_duties.push(BuilderGetValidatorsResponseEntry {
@@ -586,27 +585,23 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         let slot_coordinate = get_slot_coordinate(slot, pub_key, parent_hash);
 
-        let db = self.db.clone();
-        let auctioneer = self.auctioneer.clone();
-        tokio::spawn(async move {
-            let (postgres_result, redis_result) = tokio::join!(
-                db.save_inclusion_list(&inclusion_list, slot),
-                auctioneer.update_current_inclusion_list(inclusion_list.clone(), slot_coordinate)
-            );
+        let (postgres_result, redis_result) = tokio::join!(
+            self.db.save_inclusion_list(&inclusion_list, slot),
+            self.auctioneer.update_current_inclusion_list(inclusion_list.clone(), slot_coordinate)
+        );
 
-            if postgres_result.is_ok() {
-                info!(head_slot = slot, "Saved inclusion list to postgres");
+        if postgres_result.is_ok() {
+            info!(head_slot = slot, "Saved inclusion list to postgres");
+        }
+
+        match redis_result {
+            Ok(_) => {
+                info!(head_slot = slot, "Saved inclusion list to redis")
             }
-
-            match redis_result {
-                Ok(_) => {
-                    info!(head_slot = slot, "Saved inclusion list to redis")
-                }
-                Err(err) => {
-                    warn!(head_slot = slot, "Could not include list for this slot in redis {}", err)
-                }
-            };
-        });
+            Err(err) => {
+                warn!(head_slot = slot, "Could not include list for this slot in redis {}", err)
+            }
+        };
     }
 
     fn time_to_missing_inclusion_list_cutoff(&self, slot: Slot) -> Duration {
