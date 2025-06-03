@@ -28,7 +28,7 @@ impl<A: Api> BuilderApi<A> {
             return Ok(StatusCode::NOT_FOUND.into_response());
         };
 
-        let requested_slot_coordinate = get_slot_coordinate(slot as i32, &pub_key, &parent_hash);
+        let requested_slot_coordinate = get_slot_coordinate(slot, &pub_key, &parent_hash);
         let requested_key = inclusion_list_key(&requested_slot_coordinate);
 
         if current_list.key == requested_key {

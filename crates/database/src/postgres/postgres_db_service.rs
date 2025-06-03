@@ -1796,7 +1796,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn save_inclusion_list(
         &self,
         inclusion_list: &InclusionListWithMetadata,
-        slot_number: i32,
+        slot_number: u64,
     ) -> Result<(), Vec<DatabaseError>> {
         let mut record = DbMetricRecord::new("save_inclusion_list");
         let client = self.pool.get().await.map_err(|err| vec![err.into()])?;
@@ -1816,10 +1816,10 @@ impl DatabaseService for PostgresDatabaseService {
                 &[
                     &(tx.hash.as_slice()),
                     &(tx.bytes.iter().as_slice()),
-                    &(tx.nonce as i32),
-                    &(tx.gas_priority_fee as i32),
+                    &(tx.nonce as i64),
+                    &(tx.gas_priority_fee as i64),
                     &(tx.sender.as_slice()),
-                    &(slot_number),
+                    &(slot_number as i64),
                 ],
             ).await;
 

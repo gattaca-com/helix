@@ -289,7 +289,7 @@ impl<D: DatabaseService + 'static, A: Auctioneer + 'static> ChainEventUpdater<D,
             }
         };
 
-        let slot: i32 = self.head_slot.try_into().unwrap();
+        let slot = self.head_slot;
         let slot_coordinate = get_slot_coordinate(slot, pub_key, parent_hash);
 
         let db = self.database.clone();

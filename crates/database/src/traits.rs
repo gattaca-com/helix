@@ -185,6 +185,6 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn save_inclusion_list(
         &self,
         inclusion_list: &InclusionListWithMetadata,
-        slot_number: i32,
+        slot_number: u64,
     ) -> Result<(), Vec<DatabaseError>>;
 }

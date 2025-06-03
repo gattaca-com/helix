@@ -299,7 +299,7 @@ impl DatabaseService for MockDatabaseService {
     async fn save_inclusion_list(
         &self,
         _: &InclusionListWithMetadata,
-        _: i32,
+        _: u64,
     ) -> Result<(), Vec<DatabaseError>> {
         Ok(())
     }

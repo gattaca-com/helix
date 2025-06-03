@@ -296,7 +296,7 @@ impl<A: Api> BuilderApi<A> {
         debug!(timestamp_before_validation = utcnow_ns());
 
         let current_slot_coord = get_slot_coordinate(
-            payload.slot().as_u64() as i32,
+            payload.slot().as_u64(),
             payload.proposer_public_key(),
             payload.parent_hash(),
         );
