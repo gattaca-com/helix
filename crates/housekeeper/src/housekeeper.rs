@@ -214,84 +214,14 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         // proposer duties
         if self.should_update_duties(head_slot) {
-            let mut housekeeper = self.clone();
+            let housekeeper = self.clone();
             task::spawn(
                 file!(),
                 line!(),
-                async move {
-                    let Ok(_guard) = housekeeper.slots.updating_proposer_duties.try_lock() else {
-                        debug!("proposer duties update already in progress");
-                        return;
-                    };
-                    let start = Instant::now();
-                    match housekeeper.update_proposer_duties(epoch).await {
-                        Ok(proposer_duties) => {
-                            if let Some(primev_service) = housekeeper.primev_service.clone() {
-                                let db = housekeeper.db.clone();
-                                let auctioneer = housekeeper.auctioneer.clone();
-                                let proposer_duties = proposer_duties.clone();
-                                // don't wait for primev update to complete
-                                task::spawn(
-                                    file!(),
-                                    line!(),
-                                    async move {
-                                        if let Err(err) = Self::primev_update_with_duties(
-                                            primev_service,
-                                            auctioneer,
-                                            db,
-                                            proposer_duties,
-                                        )
-                                        .await
-                                        {
-                                            error!(%err, "failed to update primev duties");
-                                        }
-                                    }
-                                    .in_current_span(),
-                                );
-                            }
-
-                            housekeeper.slots.update_proposer_duties(head_slot);
-
-                            drop(_guard);
-
-                            let pubkeys: Vec<&BlsPublicKey> =
-                                proposer_duties.iter().map(|duty| &duty.pubkey).collect();
-
-                            if let Ok(signed_validator_registrations) =
-                                housekeeper.fetch_signed_validator_registrations(&pubkeys).await
-                            {
-                                let next_duty = proposer_duties
-                                    .iter()
-                                    .find(|duty| duty.slot == head_slot + 1)
-                                    .and_then(|duty| {
-                                        signed_validator_registrations.get(&duty.pubkey)
-                                    });
-
-                                if let (Some(duty), Some(parent_hash)) =
-                                    (next_duty.as_ref(), block_hash.as_ref())
-                                {
-                                    if !duty.registration_info.preferences.disable_inclusion_lists {
-                                        housekeeper
-                                            .fetch_and_persist_current_inclusion_list(
-                                                &duty.registration_info.registration.message.pubkey,
-                                                parent_hash,
-                                                head_slot.as_u64(),
-                                            )
-                                            .await;
-                                    }
-                                }
-                            }
-                        }
-
-                        Err(err) => {
-                            error!(%err, "failed to update proposer duties");
-                        }
-                    }
-                    info!(duration = ?start.elapsed(), "proposer duties task completed");
-                }
-                .in_current_span(),
+                async move { housekeeper.update_proposer_duties(head_slot, epoch, block_hash).await }
+                    .in_current_span(),
             );
-        };
+        }
 
         // known validators
         if self.should_refresh_known_validators(head_slot.as_u64()) {
@@ -358,6 +288,84 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                 .in_current_span(),
             );
         }
+    }
+
+    async fn update_proposer_duties(
+        &self,
+        head_slot: Slot,
+        epoch: Epoch,
+        block_hash: Option<B256>,
+    ) {
+        let Ok(_guard) = self.slots.updating_proposer_duties.try_lock() else {
+            debug!("proposer duties update already in progress");
+            return;
+        };
+
+        let start = Instant::now();
+
+        let (proposer_duties, validator_registrations) =
+            match self.fetch_proposer_duties_and_registrations(epoch).await {
+                Ok(result) => result,
+                Err(err) => {
+                    error!(%err, "failed to fetch proposer duties and registrations");
+                    return;
+                }
+            };
+
+        // Update primev if service exists
+        if let Some(primev_s) = self.primev_service.clone() {
+            let db = self.db.clone();
+            let auctioneer = self.auctioneer.clone();
+            let duties = proposer_duties.clone();
+            // don't wait for primev update to complete
+            task::spawn(
+                file!(),
+                line!(),
+                async move {
+                    if let Err(err) =
+                        Self::primev_update_with_duties(primev_s, auctioneer, db, duties).await
+                    {
+                        error!(%err, "failed to update primev duties");
+                    }
+                }
+                .in_current_span(),
+            );
+        }
+
+        debug!(%epoch, "updating proposer duties");
+
+        if validator_registrations.is_empty() {
+            warn!(%epoch, "no validator registrationts found");
+        } else if let Err(err) =
+            self.update_proposer_duties_in_db(&proposer_duties, &validator_registrations).await
+        {
+            error!(%err, "failed to update proposer duties");
+        }
+
+        self.slots.update_proposer_duties(head_slot);
+
+        let next_duty = next_duty(&proposer_duties, &validator_registrations, head_slot);
+        if let (Some(parent_hash), Some(duty)) = (block_hash, next_duty) {
+            if !duty.registration_info.preferences.disable_inclusion_lists {
+                let housekeeper = self.clone();
+                task::spawn(
+                    file!(),
+                    line!(),
+                    async move {
+                        housekeeper
+                            .fetch_and_persist_current_inclusion_list(
+                                &duty.registration_info.registration.message.pubkey,
+                                &parent_hash,
+                                head_slot.as_u64(),
+                            )
+                            .await
+                    }
+                    .in_current_span(),
+                );
+            }
+        }
+
+        info!(duration = ?start.elapsed(), "proposer duties task completed");
     }
 
     /// Refresh the list of known validators by querying the beacon client.
@@ -445,45 +453,32 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
     /// Update proposer duties for `head_slot` and `head_slot` + 1.
     /// Returns the fetched proposer duties on success.
-    async fn update_proposer_duties(
+    async fn update_proposer_duties_in_db(
         &self,
-        epoch: Epoch,
-    ) -> Result<Vec<ProposerDuty>, HousekeeperError> {
-        debug!(%epoch, "updating proposer duties");
+        proposer_duties: &[ProposerDuty],
+        signed_validator_registrations: &HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>,
+    ) -> Result<(), HousekeeperError> {
+        let mut formatted_proposer_duties = Vec::with_capacity(proposer_duties.len());
 
-        let proposer_duties = self.fetch_duties(epoch.as_u64()).await?;
-
-        // Check if signed validator registrations exist for each proposer duty
-        let pubkeys: Vec<&BlsPublicKey> = proposer_duties.iter().map(|duty| &duty.pubkey).collect();
-        let signed_validator_registrations =
-            self.fetch_signed_validator_registrations(pubkeys.as_slice()).await?;
-
-        // Format duties and save to the database
-        if signed_validator_registrations.is_empty() {
-            warn!(%epoch, "no registrationts found");
-        } else {
-            let mut formatted_proposer_duties = Vec::with_capacity(proposer_duties.len());
-
-            for duty in proposer_duties.iter() {
-                if let Some(reg) = signed_validator_registrations.get(&duty.pubkey) {
-                    formatted_proposer_duties.push(BuilderGetValidatorsResponseEntry {
-                        slot: duty.slot,
-                        validator_index: duty.validator_index,
-                        entry: reg.registration_info.clone(),
-                    });
-                }
+        for duty in proposer_duties.iter() {
+            if let Some(reg) = signed_validator_registrations.get(&duty.pubkey) {
+                formatted_proposer_duties.push(BuilderGetValidatorsResponseEntry {
+                    slot: duty.slot,
+                    validator_index: duty.validator_index,
+                    entry: reg.registration_info.clone(),
+                });
             }
-
-            info!(
-                duties = formatted_proposer_duties.capacity(),
-                registered = formatted_proposer_duties.len(),
-                "storing proposer duties"
-            );
-
-            self.db.set_proposer_duties(formatted_proposer_duties).await?;
         }
 
-        Ok(proposer_duties)
+        info!(
+            duties = formatted_proposer_duties.capacity(),
+            registered = formatted_proposer_duties.len(),
+            "storing proposer duties"
+        );
+
+        self.db.set_proposer_duties(formatted_proposer_duties).await?;
+
+        Ok(())
     }
 
     fn should_update_duties(&self, head_slot: Slot) -> bool {
@@ -563,7 +558,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     }
 
     async fn fetch_and_persist_current_inclusion_list(
-        &mut self,
+        &self,
         pub_key: &BlsPublicKey,
         parent_hash: &B256,
         slot: u64,
@@ -620,6 +615,22 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             .and_then(|time_into_slot| MISSING_INCLUSION_LIST_CUTOFF.checked_sub(time_into_slot))
             .unwrap_or(Duration::ZERO)
     }
+
+    /// Fetches proposer duties and validator registrations for the given epoch
+    async fn fetch_proposer_duties_and_registrations(
+        &self,
+        epoch: Epoch,
+    ) -> Result<
+        (Vec<ProposerDuty>, HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>),
+        HousekeeperError,
+    > {
+        let proposer_duties = self.fetch_duties(epoch.as_u64()).await?;
+        let pubkeys: Vec<&BlsPublicKey> = proposer_duties.iter().map(|duty| &duty.pubkey).collect();
+        let signed_validator_registrations =
+            self.fetch_signed_validator_registrations(&pubkeys).await?;
+
+        Ok((proposer_duties, signed_validator_registrations))
+    }
 }
 
 /// Calculates the delay in submission of the payload after a header.
@@ -640,6 +651,17 @@ fn v2_submission_late(pending_block: &PendingBlock) -> bool {
                 MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
         }
     }
+}
+
+fn next_duty(
+    proposer_duties: &[ProposerDuty],
+    signed_validator_registrations: &HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>,
+    head_slot: Slot,
+) -> Option<SignedValidatorRegistrationEntry> {
+    proposer_duties
+        .iter()
+        .find(|duty| duty.slot == head_slot + 1)
+        .and_then(|duty| signed_validator_registrations.get(&duty.pubkey).cloned())
 }
 
 #[cfg(test)]
