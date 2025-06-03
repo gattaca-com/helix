@@ -70,7 +70,7 @@ impl TryFrom<InclusionList> for InclusionListWithMetadata {
         for encoded_tx in inclusion_list.txs {
             let decoded_tx = TxEnvelope::decode(&mut encoded_tx.iter().as_slice())?;
             let tx_with_md = InclusionListTxWithMetadata {
-                hash: decoded_tx.hash().clone(),
+                hash: *decoded_tx.hash(),
                 nonce: decoded_tx.nonce(),
                 sender: decoded_tx.recover_signer()?,
                 gas_priority_fee: decoded_tx

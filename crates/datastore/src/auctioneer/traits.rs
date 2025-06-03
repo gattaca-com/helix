@@ -1,9 +1,9 @@
 use alloy_primitives::{bytes::Bytes, B256, U256};
 use async_trait::async_trait;
 use helix_common::{
-    api::builder_api::InclusionListWithMetadata, bid_submission::v2::header_submission::SignedHeaderSubmission,
-    builder_info::BuilderInfo, pending_block::PendingBlock, signing::RelaySigningContext,
-    ProposerInfo,
+    api::builder_api::InclusionListWithMetadata,
+    bid_submission::v2::header_submission::SignedHeaderSubmission, builder_info::BuilderInfo,
+    pending_block::PendingBlock, signing::RelaySigningContext, ProposerInfo,
 };
 use helix_database::BuilderInfoDocument;
 use helix_types::{
