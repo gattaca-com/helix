@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use alloy_primitives::Bytes;
 use helix_common::{api::builder_api::InclusionList, InclusionListConfig};
-use reqwest::{Client, ClientBuilder, StatusCode, Url};
+use reqwest::{Client, ClientBuilder, StatusCode};
 use serde::Deserialize;
 use serde_json::json;
 use thiserror::Error;
@@ -34,7 +34,7 @@ impl InclusionListFetcher {
         loop {
             retry_interval.tick().await;
 
-            match self.fetch_inclusion_list(self.config.node.clone()).await {
+            match self.fetch_inclusion_list(self.config.node_url.as_str()).await {
                 Ok(inclusion_list) => return inclusion_list,
                 Err(err) => warn!(
                     head_slot = head_slot,
@@ -46,7 +46,7 @@ impl InclusionListFetcher {
 
     async fn fetch_inclusion_list(
         &self,
-        inclusion_list_node_url: Url,
+        inclusion_list_node_url: &str,
     ) -> Result<InclusionList, InclusionListError> {
         let request_payload = json!({
             "jsonrpc": "2.0",
@@ -97,12 +97,13 @@ impl From<InclusionListResponse> for InclusionList {
 #[cfg(test)]
 mod tests {
     use httpmock::{Method::POST, MockServer};
+    use reqwest::Url;
     use serde_json::json;
 
     use super::*;
 
     fn create_test_config(url: Url) -> InclusionListConfig {
-        InclusionListConfig { node: url, ..Default::default() }
+        InclusionListConfig { node_url: url, ..Default::default() }
     }
 
     #[tokio::test]
@@ -132,7 +133,7 @@ mod tests {
             }));
         });
 
-        let result = fetcher.fetch_inclusion_list(url).await.unwrap();
+        let result = fetcher.fetch_inclusion_list(url.as_str()).await.unwrap();
         assert_eq!(result.txs.len(), expected_inclusion_list.txs.len());
         mock.assert();
     }

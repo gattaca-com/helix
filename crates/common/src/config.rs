@@ -461,19 +461,11 @@ fn test_config() {
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct InclusionListConfig {
-    pub node: Url,
-    pub max_size_bytes: usize,
-    pub wait_time_tx_score_weight: u32,
-    pub priority_fee_tx_score_weight: u32,
+    pub node_url: Url,
 }
 
 impl Default for InclusionListConfig {
     fn default() -> Self {
-        Self {
-            node: Url::from_str("http://please-set-node-url-in-confg.invalid").unwrap(),
-            max_size_bytes: 8192,
-            wait_time_tx_score_weight: 1,
-            priority_fee_tx_score_weight: 1,
-        }
+        Self { node_url: Url::from_str("http://please-set-node-url-in-confg.invalid").unwrap() }
     }
 }
