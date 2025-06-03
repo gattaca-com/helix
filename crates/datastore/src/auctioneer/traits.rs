@@ -1,7 +1,7 @@
 use alloy_primitives::{bytes::Bytes, B256, U256};
 use async_trait::async_trait;
 use helix_common::{
-    api::builder_api::InclusionList, bid_submission::v2::header_submission::SignedHeaderSubmission,
+    api::builder_api::InclusionListWithMetadata, bid_submission::v2::header_submission::SignedHeaderSubmission,
     builder_info::BuilderInfo, pending_block::PendingBlock, signing::RelaySigningContext,
     ProposerInfo,
 };
@@ -217,7 +217,7 @@ pub trait Auctioneer: Send + Sync + Clone {
 
     async fn update_current_inclusion_list(
         &self,
-        inclusion_list: InclusionList,
+        inclusion_list: InclusionListWithMetadata,
         slot_coordinate: String,
     ) -> Result<(), AuctioneerError>;
 

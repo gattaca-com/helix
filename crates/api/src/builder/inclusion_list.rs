@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{extract::Path, response::IntoResponse, Extension};
-use helix_common::utils::get_slot_coordinate;
+use helix_common::{api::builder_api::InclusionList, utils::get_slot_coordinate};
 use helix_datastore::types::keys::inclusion_list_key;
 use hyper::StatusCode;
 use tracing::debug;
@@ -32,7 +32,8 @@ impl<A: Api> BuilderApi<A> {
         let requested_key = inclusion_list_key(&requested_slot_coordinate);
 
         if current_list.key == requested_key {
-            Ok((StatusCode::OK, axum::Json(current_list.inclusion_list.clone())).into_response())
+            let response_payload = InclusionList::from(&current_list.inclusion_list);
+            Ok((StatusCode::OK, axum::Json(response_payload)).into_response())
         } else {
             debug!(requested_slot = %slot, pub_key = %pub_key, parent_hash = %parent_hash,
                 "Requested inclusion list for a slot in the past. Current slot: {}",

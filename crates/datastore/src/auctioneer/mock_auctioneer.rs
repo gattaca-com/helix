@@ -3,7 +3,7 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use alloy_primitives::{bytes::Bytes, B256, U256};
 use async_trait::async_trait;
 use helix_common::{
-    api::builder_api::{InclusionList, TopBidUpdate},
+    api::builder_api::{InclusionListWithMetadata, TopBidUpdate},
     bid_submission::v2::header_submission::SignedHeaderSubmission,
     pending_block::PendingBlock,
     signing::RelaySigningContext,
@@ -325,7 +325,7 @@ impl Auctioneer for MockAuctioneer {
 
     async fn update_current_inclusion_list(
         &self,
-        _: InclusionList,
+        _: InclusionListWithMetadata,
         _: String,
     ) -> Result<(), AuctioneerError> {
         Ok(())
@@ -335,7 +335,7 @@ impl Auctioneer for MockAuctioneer {
         let (tx, rx) = broadcast::channel(1);
         tx.send(InclusionListWithKey {
             key: "".into(),
-            inclusion_list: InclusionList { txs: vec![] },
+            inclusion_list: InclusionListWithMetadata { txs: vec![] },
         })
         .unwrap();
         rx

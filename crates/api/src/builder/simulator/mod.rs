@@ -13,7 +13,8 @@ use std::sync::Arc;
 
 use alloy_primitives::B256;
 use helix_common::{
-    api::builder_api::InclusionList, bid_submission::BidSubmission, ValidatorPreferences,
+    api::builder_api::InclusionListWithMetadata, bid_submission::BidSubmission,
+    ValidatorPreferences,
 };
 use helix_types::{
     BidTrace, BlobsBundle, BlsSignature, ExecutionPayload, ExecutionRequests, SignedBidSubmission,
@@ -30,7 +31,7 @@ pub struct BlockSimRequest {
     pub blobs_bundle: Option<BlobsBundle>,
     pub execution_requests: Option<ExecutionRequests>,
     pub parent_beacon_block_root: Option<B256>,
-    pub inclusion_list: Option<InclusionList>,
+    pub inclusion_list: Option<InclusionListWithMetadata>,
 }
 
 impl BlockSimRequest {
@@ -39,7 +40,7 @@ impl BlockSimRequest {
         block: Arc<SignedBidSubmission>,
         proposer_preferences: ValidatorPreferences,
         parent_beacon_block_root: Option<B256>,
-        inclusion_list: Option<InclusionList>,
+        inclusion_list: Option<InclusionListWithMetadata>,
     ) -> Self {
         Self {
             registered_gas_limit,

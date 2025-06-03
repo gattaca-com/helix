@@ -10,6 +10,5 @@ CREATE TABLE "inclusion_list_txs" (
     "nonce" integer NOT NULL,
     "gas_priority_fee" integer NOT NULL,
     "sender" bytea NOT NULL,
-    "wait_time" BIGINT NOT NULL,
     "slot_included" integer NOT NULL
 );

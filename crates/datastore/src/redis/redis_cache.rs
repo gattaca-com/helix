@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use deadpool_redis::{Config, Connection, CreatePoolError, Pool, Runtime};
 use futures_util::StreamExt;
 use helix_common::{
-    api::builder_api::{InclusionList, TopBidUpdate},
+    api::builder_api::{InclusionListWithMetadata, TopBidUpdate},
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
     bid_submission_to_builder_bid, header_submission_to_builder_bid,
     metrics::{RedisMetricRecord, TopBidMetrics},
@@ -1416,7 +1416,7 @@ impl Auctioneer for RedisCache {
 
     async fn update_current_inclusion_list(
         &self,
-        inclusion_list: InclusionList,
+        inclusion_list: InclusionListWithMetadata,
         slot_coordinate: String,
     ) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("update_current_inclusion_list");
@@ -1440,7 +1440,7 @@ impl Auctioneer for RedisCache {
 #[derive(Clone, Debug)]
 pub struct InclusionListWithKey {
     pub key: String,
-    pub inclusion_list: InclusionList,
+    pub inclusion_list: InclusionListWithMetadata,
 }
 
 fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {
