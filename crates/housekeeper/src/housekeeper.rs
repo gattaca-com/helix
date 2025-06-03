@@ -15,11 +15,11 @@ use helix_beacon::{
     types::{HeadEventData, StateId},
 };
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry,
+    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
     pending_block::PendingBlock,
     task,
-    utils::{utcnow_dur, utcnow_ms},
+    utils::{get_slot_coordinate, utcnow_dur, utcnow_ms},
     BuilderInfo, ProposerDuty, RelayConfig, SignedValidatorRegistrationEntry,
 };
 use helix_database::DatabaseService;
@@ -29,13 +29,17 @@ use tokio::sync::{broadcast, Mutex};
 use tracing::{debug, error, info, warn, Instrument};
 use uuid::Uuid;
 
-use crate::{error::HousekeeperError, EthereumPrimevService};
+use crate::{
+    error::HousekeeperError, inclusion_list_fetcher::InclusionListFetcher, EthereumPrimevService,
+};
 
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 1;
 
 const TRUSTED_PROPOSERS_UPDATE_FREQ: u64 = 5;
 
 const CUTOFF_TIME: Duration = Duration::from_secs(4);
+
+const MISSING_INCLUSION_LIST_CUTOFF: Duration = Duration::from_secs(6);
 
 // Constants for known validators refresh logic.
 const MIN_SLOTS_BETWEEN_UPDATES: u64 = 6;
@@ -105,6 +109,7 @@ pub struct Housekeeper<DB: DatabaseService + 'static, A: Auctioneer + 'static> {
     leader_id: Arc<String>,
     primev_service: Option<EthereumPrimevService>,
     slots: HousekeeperSlots,
+    inclusion_list_fetcher: InclusionListFetcher,
 }
 
 impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
@@ -126,6 +131,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             leader_id: Uuid::new_v4().to_string().into(),
             primev_service,
             slots: HousekeeperSlots::default(),
+            inclusion_list_fetcher: InclusionListFetcher::new(config.inclusion_list.clone()),
         }
     }
 
@@ -208,7 +214,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         // proposer duties
         if self.should_update_duties(head_slot) {
-            let housekeeper = self.clone();
+            let mut housekeeper = self.clone();
             task::spawn(
                 file!(),
                 line!(),
@@ -223,6 +229,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                             if let Some(primev_service) = housekeeper.primev_service.clone() {
                                 let db = housekeeper.db.clone();
                                 let auctioneer = housekeeper.auctioneer.clone();
+                                let proposer_duties = proposer_duties.clone();
                                 // don't wait for primev update to complete
                                 task::spawn(
                                     file!(),
@@ -244,6 +251,36 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                             }
 
                             housekeeper.slots.update_proposer_duties(head_slot);
+
+                            drop(_guard);
+
+                            let pubkeys: Vec<&BlsPublicKey> =
+                                proposer_duties.iter().map(|duty| &duty.pubkey).collect();
+
+                            if let Ok(signed_validator_registrations) =
+                                housekeeper.fetch_signed_validator_registrations(&pubkeys).await
+                            {
+                                let next_duty = proposer_duties
+                                    .iter()
+                                    .find(|duty| duty.slot == head_slot + 1)
+                                    .and_then(|duty| {
+                                        signed_validator_registrations.get(&duty.pubkey)
+                                    });
+
+                                if let (Some(duty), Some(parent_hash)) =
+                                    (next_duty.as_ref(), block_hash.as_ref())
+                                {
+                                    if !duty.registration_info.preferences.disable_inclusion_lists {
+                                        housekeeper
+                                            .fetch_and_persist_current_inclusion_list(
+                                                &duty.registration_info.registration.message.pubkey,
+                                                parent_hash,
+                                                head_slot.as_u64(),
+                                            )
+                                            .await;
+                                    }
+                                }
+                            }
                         }
 
                         Err(err) => {
@@ -523,6 +560,65 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             registrations.into_iter().map(|entry| (entry.public_key().clone(), entry)).collect();
 
         Ok(registrations)
+    }
+
+    async fn fetch_and_persist_current_inclusion_list(
+        &mut self,
+        pub_key: &BlsPublicKey,
+        parent_hash: &B256,
+        slot: u64,
+    ) {
+        let inclusion_list = tokio::select! {
+            inclusion_list = self.inclusion_list_fetcher.fetch_inclusion_list_with_retry(slot) => {
+                inclusion_list
+            }
+            _ = tokio::time::sleep(self.time_to_missing_inclusion_list_cutoff(slot.into())) => {
+                warn!(head_slot = slot,
+                    "No inclusion list for this slot. We have reached the {}s cutoff and have not been able to source one.",
+                    MISSING_INCLUSION_LIST_CUTOFF.as_secs()
+                );
+                return;
+            }
+        };
+
+        let inclusion_list = match InclusionListWithMetadata::try_from(inclusion_list) {
+            Ok(list) => list,
+            Err(err) => {
+                warn!(head_slot = slot, "Could not decode inclusion list RLP bytes. Error:{}", err);
+                return;
+            }
+        };
+
+        let slot_coordinate = get_slot_coordinate(slot, pub_key, parent_hash);
+
+        let db = self.db.clone();
+        let auctioneer = self.auctioneer.clone();
+        tokio::spawn(async move {
+            let (postgres_result, redis_result) = tokio::join!(
+                db.save_inclusion_list(&inclusion_list, slot),
+                auctioneer.update_current_inclusion_list(inclusion_list.clone(), slot_coordinate)
+            );
+
+            if postgres_result.is_ok() {
+                info!(head_slot = slot, "Saved inclusion list to postgres");
+            }
+
+            match redis_result {
+                Ok(_) => {
+                    info!(head_slot = slot, "Saved inclusion list to redis")
+                }
+                Err(err) => {
+                    warn!(head_slot = slot, "Could not include list for this slot in redis {}", err)
+                }
+            };
+        });
+    }
+
+    fn time_to_missing_inclusion_list_cutoff(&self, slot: Slot) -> Duration {
+        self.chain_info
+            .duration_into_slot(slot)
+            .and_then(|time_into_slot| MISSING_INCLUSION_LIST_CUTOFF.checked_sub(time_into_slot))
+            .unwrap_or(Duration::ZERO)
     }
 }
 
