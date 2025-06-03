@@ -7,9 +7,8 @@ ADD COLUMN "disable_inclusion_lists" boolean NOT NULL DEFAULT false;
 CREATE TABLE "inclusion_list_txs" (
     "tx_hash" bytea NOT NULL PRIMARY KEY,
     "bytes" bytea NOT NULL,
-    "nonce" integer NOT NULL,
-    "gas_priority_fee" integer NOT NULL,
+    "nonce" bigint NOT NULL,
+    "gas_priority_fee" bigint NOT NULL,
     "sender" bytea NOT NULL,
-    "wait_time" BIGINT NOT NULL,
-    "slot_included" integer NOT NULL
+    "slot_included" bigint NOT NULL
 );

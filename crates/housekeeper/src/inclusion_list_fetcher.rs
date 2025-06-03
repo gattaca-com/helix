@@ -1,7 +1,10 @@
 use std::time::Duration;
 
+use alloy_primitives::Bytes;
 use helix_common::{api::builder_api::InclusionList, InclusionListConfig};
-use reqwest::{Client, ClientBuilder, StatusCode, Url};
+use reqwest::{Client, ClientBuilder, StatusCode};
+use serde::Deserialize;
+use serde_json::json;
 use thiserror::Error;
 use tracing::{info, warn};
 
@@ -31,7 +34,7 @@ impl InclusionListFetcher {
         loop {
             retry_interval.tick().await;
 
-            match self.fetch_inclusion_list(self.config.node.clone()).await {
+            match self.fetch_inclusion_list(self.config.node_url.as_str()).await {
                 Ok(inclusion_list) => return inclusion_list,
                 Err(err) => warn!(
                     head_slot = head_slot,
@@ -43,12 +46,20 @@ impl InclusionListFetcher {
 
     async fn fetch_inclusion_list(
         &self,
-        node_url: Url,
+        inclusion_list_node_url: &str,
     ) -> Result<InclusionList, InclusionListError> {
-        let response = self.http.get(node_url).send().await?;
+        let request_payload = json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "relay_inclusionList",
+            "params": []
+        });
+
+        let response =
+            self.http.post(inclusion_list_node_url).json(&request_payload).send().await?;
 
         let inclusion_list = match response.status() {
-            StatusCode::OK => response.json().await?,
+            StatusCode::OK => response.json::<InclusionListResponse>().await?.into(),
             status => Err(InclusionListError::Http(format!(
                 "Invalid status in response from inclusion list node. Expected 200 but got {}. Headers: {:?}. Response: {:?}",
                 status, response.headers(), response
@@ -71,17 +82,28 @@ enum InclusionListError {
     Deserialization(#[from] serde_json::Error),
 }
 
+/// Response from node generating the inclusion list, excluding all unused jsonrpc params
+#[derive(Deserialize)]
+struct InclusionListResponse {
+    result: Vec<Bytes>,
+}
+
+impl From<InclusionListResponse> for InclusionList {
+    fn from(value: InclusionListResponse) -> Self {
+        Self { txs: value.result }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{bytes::Bytes, Address, B256};
-    use helix_common::api::builder_api::InclusionListTx;
-    use httpmock::prelude::*;
+    use httpmock::{Method::POST, MockServer};
+    use reqwest::Url;
     use serde_json::json;
 
     use super::*;
 
     fn create_test_config(url: Url) -> InclusionListConfig {
-        InclusionListConfig { node: url, ..Default::default() }
+        InclusionListConfig { node_url: url, ..Default::default() }
     }
 
     #[tokio::test]
@@ -91,35 +113,28 @@ mod tests {
         let config = create_test_config(url.clone());
         let fetcher = InclusionListFetcher::new(config);
 
-        let expected_inclusion_list = InclusionList {
-            txs: vec![InclusionListTx {
-                hash: B256::default(),
-                nonce: 1,
-                sender: Address::default(),
-                gas_priority_fee: 100,
-                bytes: Bytes::default(),
-                wait_time: 0,
-            }],
-        };
+        let expected_inclusion_list =
+            InclusionList { txs: vec![
+                "0x02f87582426801850221646a70850221646a7082520894acabf6c2d38973a5f2ebab6b5e85623db1005a4e880ddf2f839aa3d97080c080a0088ae2635655e314949dae343ac296c3fb6ac56802e1024639f9603c61e253669f2bf33fe18ce70520abc6a662794c1ef5bb310248b7b7c4acc6be93e7885d62".into(),
+                "0x02f8b5824268820130850239465d16850239465d1682728a9494373a4919b3240d86ea41593d5eba789fef384880b844095ea7b30000000000000000000000005fbe74a283f7954f10aa04c2edf55578811aeb03000000000000000000000000000000000000000000000000000009184e72a000c080a0a6d0c20df1f0582c0dbf62a125fc1874868106d845c3916d666441973fb29ff0a04f4ce8879bd85510c82246de9a58a5a705dc672b6d89cc8183544f2db8649ea9".into(),
+                "0x02f8b48242688193850232306c41850232306c4182739294685ce6742351ae9b618f383883d6d1e0c5a31b4b80b844095ea7b30000000000000000000000005fbe74a283f7954f10aa04c2edf55578811aeb030000000000000000000000000000000000000000000000000de0b6b3a7640000c001a0bda9b5171b2e0d3ceceebfa4de504485bd6a8fd5041251fcd2d4aed24a65ab4ca0369e2d4bcc7ef790e64195578005c8a6c3313dd0b0bc105856d0202a4e230de9".into(),
+            ] };
 
         let mock = server.mock(|when, then| {
-            when.method(GET).path("/");
+            when.method(POST).path("/");
             then.status(200).json_body(json!({
-                "txs": [{
-                    "hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
-                    "nonce": 1,
-                    "sender": "0x0000000000000000000000000000000000000000",
-                    "gas_priority_fee": 100,
-                    "bytes": "0x",
-                    "wait_time": 0
-                }]
+                "jsonrpc":"2.0",
+                "id":1,
+                "result":[
+                    "0x02f87582426801850221646a70850221646a7082520894acabf6c2d38973a5f2ebab6b5e85623db1005a4e880ddf2f839aa3d97080c080a0088ae2635655e314949dae343ac296c3fb6ac56802e1024639f9603c61e253669f2bf33fe18ce70520abc6a662794c1ef5bb310248b7b7c4acc6be93e7885d62",
+                    "0x02f8b5824268820130850239465d16850239465d1682728a9494373a4919b3240d86ea41593d5eba789fef384880b844095ea7b30000000000000000000000005fbe74a283f7954f10aa04c2edf55578811aeb03000000000000000000000000000000000000000000000000000009184e72a000c080a0a6d0c20df1f0582c0dbf62a125fc1874868106d845c3916d666441973fb29ff0a04f4ce8879bd85510c82246de9a58a5a705dc672b6d89cc8183544f2db8649ea9",
+                    "0x02f8b48242688193850232306c41850232306c4182739294685ce6742351ae9b618f383883d6d1e0c5a31b4b80b844095ea7b30000000000000000000000005fbe74a283f7954f10aa04c2edf55578811aeb030000000000000000000000000000000000000000000000000de0b6b3a7640000c001a0bda9b5171b2e0d3ceceebfa4de504485bd6a8fd5041251fcd2d4aed24a65ab4ca0369e2d4bcc7ef790e64195578005c8a6c3313dd0b0bc105856d0202a4e230de9",
+                ]
             }));
         });
 
-        let result = fetcher.fetch_inclusion_list(url).await.unwrap();
+        let result = fetcher.fetch_inclusion_list(url.as_str()).await.unwrap();
         assert_eq!(result.txs.len(), expected_inclusion_list.txs.len());
-        assert_eq!(result.txs[0].nonce, expected_inclusion_list.txs[0].nonce);
-        assert_eq!(result.txs[0].gas_priority_fee, expected_inclusion_list.txs[0].gas_priority_fee);
         mock.assert();
     }
 }

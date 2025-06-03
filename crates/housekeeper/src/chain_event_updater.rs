@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use alloy_primitives::B256;
 use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry,
+    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
     utils::{get_slot_coordinate, utcnow_sec},
     RelayConfig,
@@ -265,24 +265,31 @@ impl<D: DatabaseService + 'static, A: Auctioneer + 'static> ChainEventUpdater<D,
         pub_key: &BlsPublicKey,
         parent_hash: &B256,
     ) {
-        let inclusion_list_opt = tokio::select! {
+        let inclusion_list = tokio::select! {
             inclusion_list = self.inclusion_list_fetcher.fetch_inclusion_list_with_retry(self.head_slot) => {
-                Some(inclusion_list)
+                inclusion_list
             }
             _ = tokio::time::sleep(self.time_to_missing_inclusion_list_cutoff()) => {
                 warn!(head_slot = self.head_slot,
                     "No inclusion list for this slot. We have reached the {}s cutoff and have not been able to source one.",
                     MISSING_INCLUSION_LIST_CUTOFF.as_secs()
                 );
-                None
+                return;
             }
         };
 
-        let Some(inclusion_list) = inclusion_list_opt else {
-            return;
+        let inclusion_list = match InclusionListWithMetadata::try_from(inclusion_list) {
+            Ok(list) => list,
+            Err(err) => {
+                warn!(
+                    head_slot = self.head_slot,
+                    "Could not decode inclusion list RLP bytes. Error:{}", err
+                );
+                return;
+            }
         };
 
-        let slot: i32 = self.head_slot.try_into().unwrap();
+        let slot = self.head_slot;
         let slot_coordinate = get_slot_coordinate(slot, pub_key, parent_hash);
 
         let db = self.database.clone();

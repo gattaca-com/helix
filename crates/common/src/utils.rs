@@ -163,7 +163,7 @@ pub fn utcnow_ns() -> u64 {
 
 #[inline(always)]
 pub fn get_slot_coordinate(
-    slot: i32,
+    slot: u64,
     proposer_pub_key: &BlsPublicKey,
     parent_hash: &B256,
 ) -> String {

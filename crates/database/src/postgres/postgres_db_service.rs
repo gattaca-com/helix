@@ -6,7 +6,7 @@ use dashmap::{DashMap, DashSet};
 use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
 use helix_common::{
     api::{
-        builder_api::{BuilderGetValidatorsResponseEntry, InclusionList},
+        builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
@@ -1795,35 +1795,31 @@ impl DatabaseService for PostgresDatabaseService {
 
     async fn save_inclusion_list(
         &self,
-        inclusion_list: &InclusionList,
-        slot_number: i32,
+        inclusion_list: &InclusionListWithMetadata,
+        slot_number: u64,
     ) -> Result<(), Vec<DatabaseError>> {
         let mut record = DbMetricRecord::new("save_inclusion_list");
-
         let client = self.pool.get().await.map_err(|err| vec![err.into()])?;
-
         let mut errors = vec![];
 
         for tx in &inclusion_list.txs {
             let result = client.execute(
                 "
                     INSERT INTO
-                        inclusion_list_txs (tx_hash, bytes, nonce, gas_priority_fee, sender, wait_time, slot_included)
+                        inclusion_list_txs (tx_hash, bytes, nonce, gas_priority_fee, sender, slot_included)
                     VALUES
-                        ($1, $2, $3, $4, $5, $6, $7)
+                        ($1, $2, $3, $4, $5, $6)
                     ON CONFLICT (tx_hash)
                     DO UPDATE SET
-                        wait_time = EXCLUDED.wait_time,
                         slot_included = EXCLUDED.slot_included
                 ",
                 &[
                     &(tx.hash.as_slice()),
                     &(tx.bytes.iter().as_slice()),
-                    &(tx.nonce as i32),
-                    &(tx.gas_priority_fee as i32),
+                    &(tx.nonce as i64),
+                    &(tx.gas_priority_fee as i64),
                     &(tx.sender.as_slice()),
-                    &(tx.wait_time as i64),
-                    &(slot_number),
+                    &(slot_number as i64),
                 ],
             ).await;
 
