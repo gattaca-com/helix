@@ -68,7 +68,7 @@ impl TryFrom<InclusionList> for InclusionListWithMetadata {
         let mut txs = Vec::with_capacity(inclusion_list.txs.len());
 
         for encoded_tx in inclusion_list.txs {
-            let decoded_tx = TxEnvelope::decode(&mut encoded_tx.iter().as_slice())?;
+            let decoded_tx = TxEnvelope::decode(&mut &encoded_tx[..])?;
             let tx_with_md = InclusionListTxWithMetadata {
                 hash: *decoded_tx.hash(),
                 nonce: decoded_tx.nonce(),
