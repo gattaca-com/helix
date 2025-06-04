@@ -12,6 +12,7 @@ use tracing::{info, warn};
 const GET_IL_TIMEOUT: Duration = Duration::from_secs(6);
 const GET_IL_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
+#[derive(Clone)]
 pub struct InclusionListFetcher {
     http: Client,
     config: InclusionListConfig,
