@@ -600,7 +600,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         let slot_coordinate = get_slot_coordinate(slot, pub_key, parent_hash);
 
         let (postgres_result, redis_result) = tokio::join!(
-            self.db.save_inclusion_list(&inclusion_list, slot),
+            self.db.save_inclusion_list(&inclusion_list, slot, parent_hash, pub_key),
             self.auctioneer.update_current_inclusion_list(inclusion_list.clone(), slot_coordinate)
         );
 

@@ -1796,7 +1796,9 @@ impl DatabaseService for PostgresDatabaseService {
     async fn save_inclusion_list(
         &self,
         inclusion_list: &InclusionListWithMetadata,
-        slot_number: u64,
+        slot: u64,
+        block_parent_hash: &B256,
+        proposer_pubkey: &BlsPublicKey,
     ) -> Result<(), Vec<DatabaseError>> {
         let mut record = DbMetricRecord::new("save_inclusion_list");
         let client = self.pool.get().await.map_err(|err| vec![err.into()])?;
@@ -1806,26 +1808,27 @@ impl DatabaseService for PostgresDatabaseService {
             let result = client.execute(
                 "
                     INSERT INTO
-                        inclusion_list_txs (tx_hash, bytes, nonce, gas_priority_fee, sender, slot_included)
+                        inclusion_list_txs (tx_hash, bytes, slot, block_parent_hash, proposer_pubkey)
                     VALUES
-                        ($1, $2, $3, $4, $5, $6)
+                        ($1, $2, $3, $4, $5)
                     ON CONFLICT (tx_hash)
                     DO UPDATE SET
-                        slot_included = EXCLUDED.slot_included
+                        slot = EXCLUDED.slot,
+                        block_parent_hash = EXCLUDED.block_parent_hash, 
+                        proposer_pubkey = EXCLUDED.proposer_pubkey
                 ",
                 &[
                     &(tx.hash.as_slice()),
-                    &(tx.bytes.iter().as_slice()),
-                    &(tx.nonce as i64),
-                    &(tx.gas_priority_fee as i64),
-                    &(tx.sender.as_slice()),
-                    &(slot_number as i64),
+                    &(tx.bytes.as_ref()),
+                    &(slot as i64),
+                    &(block_parent_hash.as_slice()),
+                    &(proposer_pubkey.as_hex_string().as_bytes()),
                 ],
             ).await;
 
             if let Err(err) = result {
                 warn!(
-                    head_slot = &slot_number,
+                    head_slot = &slot,
                     "Error saving inclusion list in the 'inclusion_list_txs' table in postgres: {:?}",
                     err
                 );

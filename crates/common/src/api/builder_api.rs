@@ -1,5 +1,5 @@
-use alloy_consensus::{Transaction, TxEnvelope};
-use alloy_primitives::{Address, Bytes, SignatureError, B256, U256};
+use alloy_consensus::TxEnvelope;
+use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_rlp::Decodable;
 use helix_types::{BlsPublicKey, SignedValidatorRegistration, Slot, TestRandom};
 use serde::{Deserialize, Serialize};
@@ -50,9 +50,6 @@ pub struct TopBidUpdate {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct InclusionListTxWithMetadata {
     pub hash: B256,
-    pub nonce: u64,
-    pub sender: Address,
-    pub gas_priority_fee: u128,
     pub bytes: Bytes,
 }
 
@@ -62,38 +59,22 @@ pub struct InclusionListWithMetadata {
 }
 
 impl TryFrom<InclusionList> for InclusionListWithMetadata {
-    type Error = InclusionListError;
+    type Error = String;
 
     fn try_from(inclusion_list: InclusionList) -> Result<Self, Self::Error> {
         let mut txs = Vec::with_capacity(inclusion_list.txs.len());
 
         for encoded_tx in inclusion_list.txs {
-            let decoded_tx = TxEnvelope::decode(&mut encoded_tx.as_ref())?;
-            let tx_with_md = InclusionListTxWithMetadata {
-                hash: *decoded_tx.hash(),
-                nonce: decoded_tx.nonce(),
-                sender: decoded_tx.recover_signer()?,
-                gas_priority_fee: decoded_tx
-                    .max_priority_fee_per_gas()
-                    .ok_or(InclusionListError::MissingPriorityFee)?,
-                bytes: encoded_tx,
-            };
+            let decoded_tx = TxEnvelope::decode(&mut encoded_tx.as_ref())
+                .map_err(|err| format!("Failed to decode transaction: {}", err))?;
+            let tx_with_md =
+                InclusionListTxWithMetadata { hash: *decoded_tx.hash(), bytes: encoded_tx };
 
             txs.push(tx_with_md);
         }
 
         Ok(Self { txs })
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum InclusionListError {
-    #[error("Failed to decode transaction: {0}")]
-    TransactionDecode(#[from] alloy_rlp::Error),
-    #[error("Failed to recover signer: {0}")]
-    TransactionError(#[from] SignatureError),
-    #[error("Transaction missing max priority fee")]
-    MissingPriorityFee,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -109,7 +90,7 @@ impl From<&InclusionListWithMetadata> for InclusionList {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{Address, Bytes, B256};
+    use alloy_primitives::{Bytes, B256};
 
     use super::{InclusionList, InclusionListWithMetadata};
     use crate::api::builder_api::InclusionListTxWithMetadata;
@@ -129,9 +110,6 @@ mod tests {
             hash: "0x80e000dd49cd0c518e8e426cf00daeebbae81ee79e0bb669601a329d1cafa6c2"
                 .parse::<B256>()
                 .unwrap(),
-            nonce: 1,
-            sender: "0x384b9b5024f0f40b9f595284b14746e1b271e181".parse::<Address>().unwrap(),
-            gas_priority_fee: 9150163568,
             bytes: "0x02f87582426801850221646a70850221646a7082520894acabf6c2d38973a5f2ebab6b5e85623db1005a4e880ddf2f839aa3d97080c080a0088ae2635655e314949dae343ac296c3fb6ac56802e1024639f9603c61e253669f2bf33fe18ce70520abc6a662794c1ef5bb310248b7b7c4acc6be93e7885d62".parse::<Bytes>().unwrap()
         });
     }

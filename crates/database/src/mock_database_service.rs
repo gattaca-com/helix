@@ -300,6 +300,8 @@ impl DatabaseService for MockDatabaseService {
         &self,
         _: &InclusionListWithMetadata,
         _: u64,
+        _: &B256,
+        _: &BlsPublicKey,
     ) -> Result<(), Vec<DatabaseError>> {
         Ok(())
     }
