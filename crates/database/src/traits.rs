@@ -185,6 +185,8 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn save_inclusion_list(
         &self,
         inclusion_list: &InclusionListWithMetadata,
-        slot_number: u64,
+        slot: u64,
+        block_parent_hash: &B256,
+        proposer_pubkey: &BlsPublicKey,
     ) -> Result<(), Vec<DatabaseError>>;
 }
