@@ -218,8 +218,18 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             task::spawn(
                 file!(),
                 line!(),
-                async move { housekeeper.update_proposer_duties(head_slot, epoch, block_hash).await }
-                    .in_current_span(),
+                async move {
+                    let Ok(_guard) = housekeeper.slots.updating_proposer_duties.try_lock() else {
+                        debug!("proposer duties update already in progress");
+                        return;
+                    };
+                    let start = Instant::now();
+
+                    housekeeper.update_proposer_duties(head_slot, epoch, block_hash).await;
+
+                    info!(duration = ?start.elapsed(), "proposer duties task completed");
+                }
+                .in_current_span(),
             );
         }
 
@@ -290,19 +300,13 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         }
     }
 
+    #[tracing::instrument(skip_all, name = "update_proposer_duties", fields(epoch = %epoch))]
     async fn update_proposer_duties(
         &self,
         head_slot: Slot,
         epoch: Epoch,
         block_hash: Option<B256>,
     ) {
-        let Ok(_guard) = self.slots.updating_proposer_duties.try_lock() else {
-            debug!("proposer duties update already in progress");
-            return;
-        };
-
-        let start = Instant::now();
-
         let (proposer_duties, validator_registrations) =
             match self.fetch_proposer_duties_and_registrations(epoch).await {
                 Ok(result) => result,
@@ -334,7 +338,10 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         if validator_registrations.is_empty() {
             warn!(%epoch, "no validator registrationts found");
-        } else if let Err(err) =
+            return;
+        }
+
+        if let Err(err) =
             self.update_proposer_duties_in_db(&proposer_duties, &validator_registrations).await
         {
             error!(%err, "failed to update proposer duties");
@@ -343,8 +350,17 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         self.slots.update_proposer_duties(head_slot);
 
         let next_duty = next_duty(&proposer_duties, &validator_registrations, head_slot);
-        if let (Some(parent_hash), Some(duty)) = (block_hash, next_duty) {
-            if !duty.registration_info.preferences.disable_inclusion_lists {
+        match (block_hash, next_duty) {
+            (_, None) => {
+                info!("No inclusion list for this slot because we have no registration for the current validator");
+            }
+            (None, _) => {
+                info!("No inclusion list for this slot because we missed the new slot head event and have no block hash");
+            }
+            (_, Some(duty)) if duty.registration_info.preferences.disable_inclusion_lists => {
+                info!("No inclusion list for this slot because the validator has opted out");
+            }
+            (Some(parent_hash), Some(duty)) => {
                 let housekeeper = self.clone();
                 task::spawn(
                     file!(),
@@ -362,8 +378,6 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                 );
             }
         }
-
-        info!(duration = ?start.elapsed(), "proposer duties task completed");
     }
 
     /// Refresh the list of known validators by querying the beacon client.
