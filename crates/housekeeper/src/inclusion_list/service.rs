@@ -2,10 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
 use helix_common::{
-    api::{
-        builder_api::{InclusionList, InclusionListWithMetadata},
-        proposer_api::ValidatorRegistrationInfo,
-    },
+    api::builder_api::{InclusionList, InclusionListWithMetadata},
     chain_info::ChainInfo,
     utils::get_slot_coordinate,
     InclusionListConfig,
@@ -43,10 +40,11 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
     pub async fn handle_inclusion_list_for_slot(
         &self,
         parent_hash: Option<B256>,
-        next_duty: Option<ValidatorRegistrationInfo>,
+        pub_key: BlsPublicKey,
         slot: u64,
     ) {
-        let Some((parent_hash, pub_key)) = self.check_eligibility(parent_hash, next_duty) else {
+        let Some(parent_hash) = parent_hash else {
+            info!("No inclusion list for this slot because we missed the new slot head event and have no block hash");
             return;
         };
 
@@ -81,30 +79,6 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
                 warn!(head_slot = slot, "Could not include list for this slot in redis {}", err)
             }
         };
-    }
-
-    pub fn check_eligibility(
-        &self,
-        block_hash: Option<B256>,
-        next_duty: Option<ValidatorRegistrationInfo>,
-    ) -> Option<(B256, BlsPublicKey)> {
-        match (block_hash, next_duty) {
-            (_, None) => {
-                info!("No inclusion list for this slot because we have no registration for the current validator");
-                None
-            }
-            (None, _) => {
-                info!("No inclusion list for this slot because we missed the new slot head event and have no block hash");
-                None
-            }
-            (_, Some(duty)) if duty.preferences.disable_inclusion_lists => {
-                info!("No inclusion list for this slot because the validator has opted out");
-                None
-            }
-            (Some(parent_hash), Some(duty)) => {
-                Some((parent_hash, duty.registration.message.pubkey))
-            }
-        }
     }
 
     async fn fetch_inclusion_list_or_timeout(&self, slot: u64) -> Option<InclusionList> {

@@ -15,9 +15,7 @@ use helix_beacon::{
     types::{HeadEventData, StateId},
 };
 use helix_common::{
-    api::{
-        builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
-    },
+    api::builder_api::BuilderGetValidatorsResponseEntry,
     chain_info::ChainInfo,
     pending_block::PendingBlock,
     task,
@@ -355,18 +353,20 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         self.slots.update_proposer_duties(head_slot);
 
-        let next_duty = next_duty(&proposer_duties, &validator_registrations, head_slot);
-        let inclusion_list_service = Arc::clone(&self.inclusion_list_service);
-        task::spawn(
-            file!(),
-            line!(),
-            async move {
-                inclusion_list_service
-                    .handle_inclusion_list_for_slot(block_hash, next_duty, head_slot.as_u64())
-                    .await
-            }
-            .in_current_span(),
-        );
+        if let Some(next_duty) = proposer_duties.iter().find(|duty| duty.slot == head_slot) {
+            let pub_key = next_duty.pubkey.clone();
+            let inclusion_list_service = Arc::clone(&self.inclusion_list_service);
+            task::spawn(
+                file!(),
+                line!(),
+                async move {
+                    inclusion_list_service
+                        .handle_inclusion_list_for_slot(block_hash, pub_key, head_slot.as_u64())
+                        .await
+                }
+                .in_current_span(),
+            );
+        }
     }
 
     /// Refresh the list of known validators by querying the beacon client.
@@ -594,18 +594,6 @@ fn v2_submission_late(pending_block: &PendingBlock) -> bool {
                 MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
         }
     }
-}
-
-fn next_duty(
-    proposer_duties: &[ProposerDuty],
-    signed_validator_registrations: &HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>,
-    head_slot: Slot,
-) -> Option<ValidatorRegistrationInfo> {
-    proposer_duties
-        .iter()
-        .find(|duty| duty.slot == head_slot + 1)
-        .and_then(|duty| signed_validator_registrations.get(&duty.pubkey))
-        .map(|signed_registration| signed_registration.registration_info.clone())
 }
 
 #[cfg(test)]
