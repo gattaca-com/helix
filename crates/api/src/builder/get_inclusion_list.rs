@@ -10,6 +10,14 @@ use super::{api::BuilderApi, error::BuilderApiError, InclusionListPathParams};
 use crate::Api;
 
 impl<A: Api> BuilderApi<A> {
+    /// Retrieves the inclusion list for the current slot.
+    ///
+    /// This function accepts a slot number, parent hash and public_key.
+    /// 1. Validates that the request's slot is not older than the head slot.
+    /// 2. Fetches the current inclusion list from the auctioneer.
+    ///
+    /// Returns a JSON response containing the inclusion list if found.
+    /// Otherwise it returns 404 with an empty body.
     #[tracing::instrument(skip_all)]
     pub async fn get_inclusion_list(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
@@ -19,20 +27,21 @@ impl<A: Api> BuilderApi<A> {
             "New request for inclusion list."
         );
 
-        let current_list = api.current_inclusion_list.read();
+        let list_with_key = api.current_inclusion_list.read();
 
-        let Some(current_list) = current_list.as_ref() else {
+        let Some(list_with_key) = list_with_key.as_ref() else {
             debug!(requested_slot = %slot, pub_key = %pub_key, parent_hash = %parent_hash,
                 "Builder has requested an inclusion list but none has been found in redis."
             );
             return Ok(StatusCode::NOT_FOUND.into_response());
         };
 
-        let requested_slot_coordinate = get_slot_coordinate(slot, &pub_key, &parent_hash);
-        let requested_key = inclusion_list_key(&requested_slot_coordinate);
+        let (current_list, key) = list_with_key.into();
 
-        if current_list.key == requested_key {
-            let response_payload = InclusionList::from(&current_list.inclusion_list);
+        let requested_slot_coordinate = get_slot_coordinate(slot, &pub_key, &parent_hash);
+
+        if key == inclusion_list_key(&requested_slot_coordinate) {
+            let response_payload = InclusionList::from(current_list);
             Ok((StatusCode::OK, axum::Json(response_payload)).into_response())
         } else {
             debug!(requested_slot = %slot, pub_key = %pub_key, parent_hash = %parent_hash,

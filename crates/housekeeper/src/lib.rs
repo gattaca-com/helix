@@ -3,8 +3,9 @@ pub mod error;
 pub mod housekeeper;
 #[cfg(test)]
 pub mod housekeeper_tests;
-mod inclusion_list_fetcher;
 pub mod primev_service;
+
+mod inclusion_list;
 mod slot_info;
 
 use std::sync::Arc;
