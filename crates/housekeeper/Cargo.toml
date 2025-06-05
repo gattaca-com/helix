@@ -9,7 +9,6 @@ version.workspace = true
 [dependencies]
 alloy-eips.workspace = true
 alloy-primitives.workspace = true
-async-trait.workspace = true
 ethers.workspace = true
 eyre.workspace = true
 futures.workspace = true

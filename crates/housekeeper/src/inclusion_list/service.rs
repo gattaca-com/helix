@@ -15,19 +15,19 @@ use helix_datastore::Auctioneer;
 use helix_types::{BlsPublicKey, Slot};
 use tracing::{info, warn};
 
-use crate::inclusion_list::{fetcher::ListFetcher, http_fetcher::HttpListFetcher};
+use crate::inclusion_list::http_fetcher::HttpListFetcher;
 
 const MISSING_INCLUSION_LIST_CUTOFF: Duration = Duration::from_secs(6);
 
 #[derive(Clone)]
-pub struct InclusionListManager<DB: DatabaseService, A: Auctioneer> {
+pub struct InclusionListService<DB: DatabaseService, A: Auctioneer> {
     db: Arc<DB>,
     auctioneer: Arc<A>,
     http_fetcher: HttpListFetcher,
     chain_info: Arc<ChainInfo>,
 }
 
-impl<DB: DatabaseService, A: Auctioneer> InclusionListManager<DB, A> {
+impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
     pub fn new(
         db: Arc<DB>,
         auctioneer: Arc<A>,
@@ -42,10 +42,14 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListManager<DB, A> {
     /// Fetch and persist inclusion list for this slot.
     pub async fn handle_inclusion_list_for_slot(
         &self,
-        pub_key: &BlsPublicKey,
-        parent_hash: &B256,
+        parent_hash: Option<B256>,
+        next_duty: Option<ValidatorRegistrationInfo>,
         slot: u64,
     ) {
+        let Some((parent_hash, pub_key)) = self.check_eligibility(parent_hash, next_duty) else {
+            return;
+        };
+
         let Some(inclusion_list) = self.fetch_inclusion_list_or_timeout(slot).await else {
             return;
         };
@@ -58,10 +62,10 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListManager<DB, A> {
             }
         };
 
-        let slot_coordinate = get_slot_coordinate(slot, pub_key, parent_hash);
+        let slot_coordinate = get_slot_coordinate(slot, &pub_key, &parent_hash);
 
         let (postgres_result, redis_result) = tokio::join!(
-            self.db.save_inclusion_list(&inclusion_list, slot, parent_hash, pub_key),
+            self.db.save_inclusion_list(&inclusion_list, slot, &parent_hash, &pub_key),
             self.auctioneer.update_current_inclusion_list(inclusion_list.clone(), slot_coordinate)
         );
 
@@ -83,7 +87,7 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListManager<DB, A> {
         &self,
         block_hash: Option<B256>,
         next_duty: Option<ValidatorRegistrationInfo>,
-    ) -> Option<(BlsPublicKey, B256)> {
+    ) -> Option<(B256, BlsPublicKey)> {
         match (block_hash, next_duty) {
             (_, None) => {
                 info!("No inclusion list for this slot because we have no registration for the current validator");
@@ -98,14 +102,14 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListManager<DB, A> {
                 None
             }
             (Some(parent_hash), Some(duty)) => {
-                Some((duty.registration.message.pubkey, parent_hash))
+                Some((parent_hash, duty.registration.message.pubkey))
             }
         }
     }
 
     async fn fetch_inclusion_list_or_timeout(&self, slot: u64) -> Option<InclusionList> {
         tokio::select! {
-            inclusion_list = ListFetcher::fetch_inclusion_list(&self.http_fetcher, slot) => {
+            inclusion_list = self.http_fetcher.fetch_inclusion_list_with_retry(slot) => {
                 Some(inclusion_list)
             }
             _ = tokio::time::sleep(self.time_to_missing_inclusion_list_cutoff(slot.into())) => {

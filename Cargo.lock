@@ -4121,7 +4121,6 @@ version = "0.0.1"
 dependencies = [
  "alloy-eips 0.12.6",
  "alloy-primitives 0.8.25",
- "async-trait",
  "ethers",
  "eyre",
  "futures 0.3.31",

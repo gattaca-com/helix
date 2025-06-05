@@ -1,6 +1,5 @@
-pub(crate) mod fetcher;
-pub(crate) mod manager;
+pub(crate) mod service;
 
-pub(crate) use manager::InclusionListManager;
+pub(crate) use service::InclusionListService;
 
 mod http_fetcher;
