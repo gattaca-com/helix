@@ -13,12 +13,12 @@ const GET_IL_TIMEOUT: Duration = Duration::from_secs(6);
 const GET_IL_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone)]
-pub struct InclusionListFetcher {
+pub struct HttpListFetcher {
     http: Client,
     config: InclusionListConfig,
 }
 
-impl InclusionListFetcher {
+impl HttpListFetcher {
     pub fn new(config: InclusionListConfig) -> Self {
         let http = ClientBuilder::new()
             .timeout(GET_IL_TIMEOUT)
@@ -28,27 +28,23 @@ impl InclusionListFetcher {
         Self { http, config }
     }
 
-    pub async fn fetch_inclusion_list_with_retry(&self, head_slot: u64) -> InclusionList {
+    pub async fn fetch_inclusion_list_with_retry(&self, slot: u64) -> InclusionList {
         let mut retry_interval = tokio::time::interval(GET_IL_RETRY_INTERVAL);
 
-        info!(head_slot = head_slot, "Starting to fetch inclusion list for this slot");
+        info!(head_slot = slot, "Starting to fetch inclusion list for this slot");
         loop {
             retry_interval.tick().await;
 
-            match self.fetch_inclusion_list(self.config.node_url.as_str()).await {
+            match self.fetch_inclusion_list().await {
                 Ok(inclusion_list) => return inclusion_list,
-                Err(err) => warn!(
-                    head_slot = head_slot,
-                    "Failed to fetch inclusion list for this slot {}", err
-                ),
+                Err(err) => {
+                    warn!(head_slot = slot, "Failed to fetch inclusion list for this slot {}", err)
+                }
             }
         }
     }
 
-    async fn fetch_inclusion_list(
-        &self,
-        inclusion_list_node_url: &str,
-    ) -> Result<InclusionList, InclusionListError> {
+    async fn fetch_inclusion_list(&self) -> Result<InclusionList, InclusionListError> {
         let request_payload = json!({
             "jsonrpc": "2.0",
             "id": "1",
@@ -57,11 +53,11 @@ impl InclusionListFetcher {
         });
 
         let response =
-            self.http.post(inclusion_list_node_url).json(&request_payload).send().await?;
+            self.http.post(self.config.node_url.as_str()).json(&request_payload).send().await?;
 
         let inclusion_list = match response.status() {
             StatusCode::OK => response.json::<InclusionListResponse>().await?.into(),
-            status => Err(InclusionListError::Http(format!(
+            status => Err(InclusionListError::HttpResponse(format!(
                 "Invalid status in response from inclusion list node. Expected 200 but got {}. Headers: {:?}. Response: {:?}",
                 status, response.headers(), response
             )))?,
@@ -71,19 +67,7 @@ impl InclusionListFetcher {
     }
 }
 
-#[derive(Debug, Error)]
-enum InclusionListError {
-    #[error("HTTP reqwest error. {0}")]
-    Reqwest(#[from] reqwest::Error),
-
-    #[error("HTTP error (not from reqwest). {0}")]
-    Http(String),
-
-    #[error("Invalid inclusion list {0}")]
-    Deserialization(#[from] serde_json::Error),
-}
-
-/// Response from node generating the inclusion list, excluding all unused jsonrpc params
+/// Response from inclusion list generation node, excluding all unused jsonrpc params
 #[derive(Deserialize)]
 struct InclusionListResponse {
     result: Vec<Bytes>,
@@ -93,6 +77,16 @@ impl From<InclusionListResponse> for InclusionList {
     fn from(value: InclusionListResponse) -> Self {
         Self { txs: value.result }
     }
+}
+
+#[derive(Debug, Error)]
+enum InclusionListError {
+    #[error("HTTP reqwest error. {0}")]
+    Reqwest(#[from] reqwest::Error),
+    #[error("HTTP response error. {0}")]
+    HttpResponse(String),
+    #[error("Invalid inclusion list {0}")]
+    Deserialization(#[from] serde_json::Error),
 }
 
 #[cfg(test)]
@@ -112,7 +106,7 @@ mod tests {
         let server = MockServer::start();
         let url = Url::parse(&server.url("/")).unwrap();
         let config = create_test_config(url.clone());
-        let fetcher = InclusionListFetcher::new(config);
+        let fetcher = HttpListFetcher::new(config);
 
         let expected_inclusion_list =
             InclusionList { txs: vec![
@@ -134,7 +128,7 @@ mod tests {
             }));
         });
 
-        let result = fetcher.fetch_inclusion_list(url.as_str()).await.unwrap();
+        let result = fetcher.fetch_inclusion_list().await.unwrap();
         assert_eq!(result.txs.len(), expected_inclusion_list.txs.len());
         mock.assert();
     }

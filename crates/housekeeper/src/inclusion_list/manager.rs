@@ -1,0 +1,127 @@
+use std::{sync::Arc, time::Duration};
+
+use alloy_primitives::B256;
+use helix_common::{
+    api::{
+        builder_api::{InclusionList, InclusionListWithMetadata},
+        proposer_api::ValidatorRegistrationInfo,
+    },
+    chain_info::ChainInfo,
+    utils::get_slot_coordinate,
+    InclusionListConfig,
+};
+use helix_database::DatabaseService;
+use helix_datastore::Auctioneer;
+use helix_types::{BlsPublicKey, Slot};
+use tracing::{info, warn};
+
+use crate::inclusion_list::{fetcher::ListFetcher, http_fetcher::HttpListFetcher};
+
+const MISSING_INCLUSION_LIST_CUTOFF: Duration = Duration::from_secs(6);
+
+#[derive(Clone)]
+pub struct InclusionListManager<DB: DatabaseService, A: Auctioneer> {
+    db: Arc<DB>,
+    auctioneer: Arc<A>,
+    http_fetcher: HttpListFetcher,
+    chain_info: Arc<ChainInfo>,
+}
+
+impl<DB: DatabaseService, A: Auctioneer> InclusionListManager<DB, A> {
+    pub fn new(
+        db: Arc<DB>,
+        auctioneer: Arc<A>,
+        config: InclusionListConfig,
+        chain_info: Arc<ChainInfo>,
+    ) -> Self {
+        let http_fetcher = HttpListFetcher::new(config);
+
+        Self { db, auctioneer, http_fetcher, chain_info }
+    }
+
+    /// Fetch and persist inclusion list for this slot.
+    pub async fn handle_inclusion_list_for_slot(
+        &self,
+        pub_key: &BlsPublicKey,
+        parent_hash: &B256,
+        slot: u64,
+    ) {
+        let Some(inclusion_list) = self.fetch_inclusion_list_or_timeout(slot).await else {
+            return;
+        };
+
+        let inclusion_list = match InclusionListWithMetadata::try_from(inclusion_list) {
+            Ok(list) => list,
+            Err(err) => {
+                warn!(head_slot = slot, "Could not decode inclusion list RLP bytes. Error:{}", err);
+                return;
+            }
+        };
+
+        let slot_coordinate = get_slot_coordinate(slot, pub_key, parent_hash);
+
+        let (postgres_result, redis_result) = tokio::join!(
+            self.db.save_inclusion_list(&inclusion_list, slot, parent_hash, pub_key),
+            self.auctioneer.update_current_inclusion_list(inclusion_list.clone(), slot_coordinate)
+        );
+
+        if postgres_result.is_ok() {
+            info!(head_slot = slot, "Saved inclusion list to postgres");
+        }
+
+        match redis_result {
+            Ok(_) => {
+                info!(head_slot = slot, "Saved inclusion list to redis")
+            }
+            Err(err) => {
+                warn!(head_slot = slot, "Could not include list for this slot in redis {}", err)
+            }
+        };
+    }
+
+    pub fn check_eligibility(
+        &self,
+        block_hash: Option<B256>,
+        next_duty: Option<ValidatorRegistrationInfo>,
+    ) -> Option<(BlsPublicKey, B256)> {
+        match (block_hash, next_duty) {
+            (_, None) => {
+                info!("No inclusion list for this slot because we have no registration for the current validator");
+                None
+            }
+            (None, _) => {
+                info!("No inclusion list for this slot because we missed the new slot head event and have no block hash");
+                None
+            }
+            (_, Some(duty)) if duty.preferences.disable_inclusion_lists => {
+                info!("No inclusion list for this slot because the validator has opted out");
+                None
+            }
+            (Some(parent_hash), Some(duty)) => {
+                Some((duty.registration.message.pubkey, parent_hash))
+            }
+        }
+    }
+
+    async fn fetch_inclusion_list_or_timeout(&self, slot: u64) -> Option<InclusionList> {
+        tokio::select! {
+            inclusion_list = ListFetcher::fetch_inclusion_list(&self.http_fetcher, slot) => {
+                Some(inclusion_list)
+            }
+            _ = tokio::time::sleep(self.time_to_missing_inclusion_list_cutoff(slot.into())) => {
+                warn!(head_slot = slot,
+                    "No inclusion list for this slot. We have reached the {}s cutoff and have not been able to source one.",
+                    MISSING_INCLUSION_LIST_CUTOFF.as_secs()
+                );
+                None
+            }
+        }
+    }
+
+    fn time_to_missing_inclusion_list_cutoff(&self, slot: Slot) -> Duration {
+        self.chain_info
+            .duration_into_slot(slot)
+            .and_then(|time_into_slot| MISSING_INCLUSION_LIST_CUTOFF.checked_sub(time_into_slot))
+            .unwrap_or(Duration::ZERO)
+    }
+}
