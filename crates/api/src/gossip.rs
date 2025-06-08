@@ -1,6 +1,5 @@
 use std::{hash::Hash, sync::Arc};
-
-use dashmap::DashMap;
+use std::collections::HashMap;
 use helix_common::{task, utils::utcnow_ns, GetPayloadTrace};
 use helix_types::BlsPublicKey;
 use tokio::sync::{mpsc, Semaphore};
@@ -22,7 +21,7 @@ pub async fn process_gossip_messages<A: Api>(
     proposer_api: Arc<ProposerApi<A>>,
     mut rx: mpsc::Receiver<GossipedMessage>,
 ) {
-    let builder_semaphores = HashMap::new();
+    let mut builder_semaphores = HashMap::new();
     while let Some(msg) = rx.recv().await {
         match msg {
             GossipedMessage::GetPayload(payload) => {
@@ -76,7 +75,6 @@ pub async fn process_gossip_messages<A: Api>(
             }
             GossipedMessage::Header(header) => {
                 let builder = builder_api.clone();
-                let semaphores = builder_semaphores.clone();
                 
                 let head_slot = builder.get_current_head_slot();
                 if header.slot() <= head_slot {
@@ -84,7 +82,7 @@ pub async fn process_gossip_messages<A: Api>(
                     return;
                 }
 
-                let semaphore = semaphores
+                let semaphore = builder_semaphores
                     .entry(header.builder_pubkey().clone())
                     .or_insert_with(|| Arc::new(Semaphore::new(MAX_TASKS_PER_BUILDER)))
                     .clone();

@@ -11,7 +11,6 @@ use helix_housekeeper::CurrentSlotInfo;
 use moka::sync::Cache;
 use tokio::{sync::mpsc, time::timeout};
 use tracing::{error, info};
-use dashmap::DashMap;
 
 use crate::{
     builder::{

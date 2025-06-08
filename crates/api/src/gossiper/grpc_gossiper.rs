@@ -7,7 +7,7 @@ use tokio::{
     sync::mpsc::{self},
     time::sleep,
 };
-use tonic::{transport::Channel, Request, Response, Status};
+use tonic::{codec::CompressionEncoding, transport::Channel, Request, Response, Status};
 use tracing::error;
 
 use crate::{
@@ -53,7 +53,8 @@ impl GrpcGossiperClient {
                 match GossipServiceClient::connect(endpoint.clone()).await {
                     Ok(c) => {
                         let mut client_with_lock = client.write();
-                        *client_with_lock = Some(c);
+                        *client_with_lock = Some(c.accept_compressed(CompressionEncoding::Gzip)
+                            .send_compressed(CompressionEncoding::Gzip));
                         break;
                     }
                     Err(err) => {
@@ -242,8 +243,11 @@ impl GrpcGossiperClientManager {
 
         let addr = "0.0.0.0:50051".parse().unwrap();
         task::spawn(file!(), line!(), async move {
+            let srv = GossipServiceServer::new(service)
+                .accept_compressed(CompressionEncoding::Gzip)
+                .send_compressed(CompressionEncoding::Gzip);
             tonic::transport::Server::builder()
-                .add_service(GossipServiceServer::new(service))
+                .add_service(srv)
                 .serve(addr)
                 .await
                 .expect("failed to start gossiper service");
