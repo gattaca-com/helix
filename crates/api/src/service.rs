@@ -116,7 +116,6 @@ pub async fn run_api_service<A: Api>(
     tokio::spawn(gossip::process_gossip_messages(
         builder_api.clone(),
         proposer_api.clone(),
-        Arc::new(DashMap::new()),
         gossip_receiver,
     ));
 

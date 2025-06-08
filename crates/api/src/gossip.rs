@@ -1,9 +1,10 @@
-use std::sync::Arc;
+use std::{hash::Hash, sync::Arc};
 
 use dashmap::DashMap;
 use helix_common::{task, utils::utcnow_ns, GetPayloadTrace};
 use helix_types::BlsPublicKey;
 use tokio::sync::{mpsc, Semaphore};
+use tower::builder;
 use tracing::{debug, error};
 use uuid::Uuid;
 
@@ -19,9 +20,9 @@ const MAX_TASKS_PER_BUILDER: usize = 100;
 pub async fn process_gossip_messages<A: Api>(
     builder_api: Arc<BuilderApi<A>>,
     proposer_api: Arc<ProposerApi<A>>,
-    builder_semaphores: Arc<DashMap<BlsPublicKey, Arc<Semaphore>>>,
     mut rx: mpsc::Receiver<GossipedMessage>,
 ) {
+    let builder_semaphores = HashMap::new();
     while let Some(msg) = rx.recv().await {
         match msg {
             GossipedMessage::GetPayload(payload) => {
