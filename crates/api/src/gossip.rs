@@ -1,5 +1,5 @@
-use std::{hash::Hash, sync::Arc};
-use std::collections::HashMap;
+use std::{collections::HashMap, hash::Hash, sync::Arc};
+
 use helix_common::{task, utils::utcnow_ns, GetPayloadTrace};
 use helix_types::BlsPublicKey;
 use tokio::sync::{mpsc, Semaphore};
@@ -75,7 +75,7 @@ pub async fn process_gossip_messages<A: Api>(
             }
             GossipedMessage::Header(header) => {
                 let builder = builder_api.clone();
-                
+
                 let head_slot = builder.get_current_head_slot();
                 if header.slot() <= head_slot {
                     debug!("received gossiped header for a past slot");

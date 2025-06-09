@@ -53,8 +53,10 @@ impl GrpcGossiperClient {
                 match GossipServiceClient::connect(endpoint.clone()).await {
                     Ok(c) => {
                         let mut client_with_lock = client.write();
-                        *client_with_lock = Some(c.accept_compressed(CompressionEncoding::Gzip)
-                            .send_compressed(CompressionEncoding::Gzip));
+                        *client_with_lock = Some(
+                            c.accept_compressed(CompressionEncoding::Gzip)
+                                .send_compressed(CompressionEncoding::Gzip),
+                        );
                         break;
                     }
                     Err(err) => {
