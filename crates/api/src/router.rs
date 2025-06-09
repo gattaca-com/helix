@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{atomic::AtomicBool, Arc},
+    time::Duration,
+};
 
 use axum::{
     error_handling::HandleErrorLayer,
@@ -35,6 +38,7 @@ pub fn build_router<A: Api>(
     data_api: Arc<DataApi<A>>,
     bids_cache: Arc<BidsCache>,
     delivered_payloads_cache: Arc<DeliveredPayloadsCache>,
+    terminating: Arc<AtomicBool>,
 ) -> Router {
     router_config.resolve_condensed_routes();
 
@@ -123,7 +127,8 @@ pub fn build_router<A: Api>(
         .layer(Extension(proposer_api))
         .layer(Extension(data_api))
         .layer(Extension(bids_cache))
-        .layer(Extension(delivered_payloads_cache));
+        .layer(Extension(delivered_payloads_cache))
+        .layer(Extension(terminating));
 
     router
 }

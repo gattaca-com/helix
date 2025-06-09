@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::{atomic::AtomicBool, Arc},
+    time::Duration,
+};
 
 use helix_beacon::{
     beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
@@ -39,6 +43,7 @@ pub async fn run_api_service<A: Api>(
     relay_signing_context: Arc<RelaySigningContext>,
     multi_beacon_client: Arc<MultiBeaconClient>,
     metadata_provider: Arc<A::MetadataProvider>,
+    terminating: Arc<AtomicBool>,
 ) {
     let broadcasters = init_broadcasters(&config).await;
 
@@ -146,6 +151,7 @@ pub async fn run_api_service<A: Api>(
         data_api,
         bids_cache,
         delivered_payloads_cache,
+        terminating,
     );
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:4040").await.unwrap();

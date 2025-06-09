@@ -275,6 +275,10 @@ pub struct StartConfig {
 pub struct RouterConfig {
     #[serde(default)]
     pub enabled_routes: Vec<RouteInfo>,
+    /// On receipt of a shutdown signal, milliseconds to wait after shutting down health endpoint
+    /// and before terminating.
+    #[serde(default)]
+    pub shutdown_delay_ms: u64,
 }
 
 impl RouterConfig {
