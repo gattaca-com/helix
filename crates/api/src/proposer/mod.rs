@@ -8,10 +8,13 @@ mod gossip;
 mod register;
 mod types;
 
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use alloy_primitives::B256;
-use axum::response::IntoResponse;
+use axum::{response::IntoResponse, Extension};
 use helix_beacon::{multi_beacon_client::MultiBeaconClient, BlockBroadcaster};
 use helix_common::{chain_info::ChainInfo, RelayConfig, ValidatorPreferences};
 use helix_housekeeper::CurrentSlotInfo;
@@ -71,6 +74,10 @@ impl<A: Api> ProposerApi<A> {
 }
 
 /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/status>
-pub async fn status() -> impl IntoResponse {
-    StatusCode::OK
+pub async fn status(Extension(terminating): Extension<Arc<AtomicBool>>) -> impl IntoResponse {
+    if terminating.load(Ordering::Relaxed) {
+        StatusCode::SERVICE_UNAVAILABLE
+    } else {
+        StatusCode::OK
+    }
 }

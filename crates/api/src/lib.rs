@@ -1,6 +1,6 @@
 #![allow(clippy::too_many_arguments)]
 
-use std::sync::Arc;
+use std::sync::{atomic::AtomicBool, Arc};
 
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
@@ -39,6 +39,7 @@ pub fn start_api_service<A: Api>(
     multi_beacon_client: Arc<MultiBeaconClient>,
     metadata_provider: Arc<A::MetadataProvider>,
     current_slot_info: CurrentSlotInfo,
+    terminating: Arc<AtomicBool>,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),
@@ -49,6 +50,7 @@ pub fn start_api_service<A: Api>(
         relay_signing_context,
         multi_beacon_client,
         metadata_provider,
+        terminating,
     ));
 }
 

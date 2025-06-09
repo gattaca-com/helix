@@ -1,4 +1,10 @@
-use std::sync::Arc;
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use eyre::eyre;
 use helix_api::{start_api_service, Api};
@@ -81,6 +87,8 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     .await
     .map_err(|e| eyre!("housekeeper init: {e}"))?;
 
+    let terminating = Arc::new(AtomicBool::default());
+
     start_api_service::<ApiProd>(
         config.clone(),
         db.clone(),
@@ -90,7 +98,10 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         beacon_client,
         Arc::new(DefaultMetadataProvider {}),
         current_slot_info,
+        terminating.clone(),
     );
+
+    let termination_grace_period = config.router_config.shutdown_delay_ms;
 
     if config.website.enabled {
         tokio::spawn(WebsiteService::run_loop(config, db));
@@ -100,10 +111,17 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     let mut sigint = tokio::signal::unix::signal(SignalKind::interrupt())?;
     let mut sigterm = tokio::signal::unix::signal(SignalKind::terminate())?;
 
-    // TODO: here we should stop serving headers and sleep until slot is finished
     tokio::select! {
         _ = sigint.recv() => {}
         _ = sigterm.recv() => {}
+    }
+
+    // Set terminating flag.
+    terminating.store(true, Ordering::Relaxed);
+    if termination_grace_period != 0 {
+        // Wait for the grace period to expire before exiting.
+        tracing::info!("Pausing for {termination_grace_period}ms before exit");
+        tokio::time::sleep(Duration::from_millis(termination_grace_period)).await;
     }
 
     Ok(())
