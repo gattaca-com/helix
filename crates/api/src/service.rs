@@ -99,7 +99,9 @@ pub async fn run_api_service<A: Api>(
         relay_signing_context,
     ));
 
-    tokio::spawn(listen_for_inclusion_lists_background_task(builder_api.clone()));
+    if config.inclusion_list.is_some() {
+        tokio::spawn(listen_for_inclusion_lists_background_task(builder_api.clone()));
+    }
 
     let proposer_api = Arc::new(ProposerApi::<A>::new(
         auctioneer.clone(),

@@ -1,6 +1,6 @@
 pub mod api;
 pub mod error;
-pub mod inclusion_list;
+pub mod get_inclusion_list;
 pub mod simulator;
 pub mod types;
 pub mod v3;

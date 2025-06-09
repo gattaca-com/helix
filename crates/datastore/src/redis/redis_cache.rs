@@ -1443,6 +1443,12 @@ pub struct InclusionListWithKey {
     pub inclusion_list: InclusionListWithMetadata,
 }
 
+impl<'a> From<&'a InclusionListWithKey> for (&'a InclusionListWithMetadata, &'a str) {
+    fn from(value: &'a InclusionListWithKey) -> Self {
+        (&value.inclusion_list, &value.key)
+    }
+}
+
 fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {
     bid_values.iter().max_by_key(|&(_, value)| value).map(|(key, value)| (key.clone(), *value))
 }
