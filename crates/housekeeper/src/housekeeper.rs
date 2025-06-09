@@ -105,7 +105,7 @@ pub struct Housekeeper<DB: DatabaseService + 'static, A: Auctioneer + 'static> {
     leader_id: Arc<String>,
     primev_service: Option<EthereumPrimevService>,
     slots: HousekeeperSlots,
-    inclusion_list_service: Arc<InclusionListService<DB, A>>,
+    inclusion_list_service: Option<InclusionListService<DB, A>>,
 }
 
 impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
@@ -119,13 +119,9 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         let primev_service =
             config.primev_config.clone().map(|p| EthereumPrimevService::new(p).unwrap());
 
-        let inclusion_list_service = InclusionListService::new(
-            db.clone(),
-            auctioneer.clone(),
-            config.inclusion_list.clone(),
-            chain_info.clone(),
-        )
-        .into();
+        let inclusion_list_service = config.inclusion_list.clone().map(|config| {
+            InclusionListService::new(db.clone(), auctioneer.clone(), config, chain_info.clone())
+        });
 
         Self {
             db,
@@ -353,19 +349,21 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         self.slots.update_proposer_duties(head_slot);
 
-        if let Some(next_duty) = proposer_duties.iter().find(|duty| duty.slot == head_slot) {
-            let pub_key = next_duty.pubkey.clone();
-            let inclusion_list_service = Arc::clone(&self.inclusion_list_service);
-            task::spawn(
-                file!(),
-                line!(),
-                async move {
-                    inclusion_list_service
-                        .handle_inclusion_list_for_slot(block_hash, pub_key, head_slot.as_u64())
-                        .await
-                }
-                .in_current_span(),
-            );
+        if let Some(inclusion_list_service) = self.inclusion_list_service.as_ref() {
+            if let Some(next_duty) = proposer_duties.iter().find(|duty| duty.slot == head_slot) {
+                let pub_key = next_duty.pubkey.clone();
+                let inclusion_list_service = inclusion_list_service.clone();
+                task::spawn(
+                    file!(),
+                    line!(),
+                    async move {
+                        inclusion_list_service
+                            .handle_inclusion_list_for_slot(block_hash, pub_key, head_slot.as_u64())
+                            .await
+                    }
+                    .in_current_span(),
+                );
+            }
         }
     }
 

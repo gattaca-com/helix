@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fs::File, path::PathBuf, str::FromStr};
+use std::{collections::HashSet, fs::File, path::PathBuf};
 
 use alloy_primitives::B256;
 use clap::Parser;
@@ -48,8 +48,7 @@ pub struct RelayConfig {
     pub payload_gossip_enabled: bool,
     #[serde(default)]
     pub v3_port: Option<u16>,
-    #[serde(default)]
-    pub inclusion_list: InclusionListConfig,
+    pub inclusion_list: Option<InclusionListConfig>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -408,6 +407,11 @@ fn default_duration() -> u64 {
     1000
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+pub struct InclusionListConfig {
+    pub node_url: Url,
+}
+
 #[cfg(test)]
 #[test]
 fn test_config() {
@@ -457,15 +461,4 @@ fn test_config() {
         .to_vec(),
     };
     println!("{}", serde_yaml::to_string(&config).unwrap());
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-pub struct InclusionListConfig {
-    pub node_url: Url,
-}
-
-impl Default for InclusionListConfig {
-    fn default() -> Self {
-        Self { node_url: Url::from_str("http://please-set-node-url-in-confg.invalid").unwrap() }
-    }
 }
