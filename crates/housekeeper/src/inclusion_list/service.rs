@@ -12,7 +12,7 @@ use helix_datastore::Auctioneer;
 use helix_types::{BlsPublicKey, Slot};
 use tracing::{info, warn};
 
-use crate::inclusion_list::http_fetcher::HttpListFetcher;
+use crate::inclusion_list::http_fetcher::HttpInclusionListFetcher;
 
 const MISSING_INCLUSION_LIST_CUTOFF: Duration = Duration::from_secs(6);
 
@@ -20,7 +20,7 @@ const MISSING_INCLUSION_LIST_CUTOFF: Duration = Duration::from_secs(6);
 pub struct InclusionListService<DB: DatabaseService, A: Auctioneer> {
     db: Arc<DB>,
     auctioneer: Arc<A>,
-    http_fetcher: HttpListFetcher,
+    http_il_fetcher: HttpInclusionListFetcher,
     chain_info: Arc<ChainInfo>,
 }
 
@@ -31,9 +31,9 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
         config: InclusionListConfig,
         chain_info: Arc<ChainInfo>,
     ) -> Self {
-        let http_fetcher = HttpListFetcher::new(config);
+        let http_il_fetcher = HttpInclusionListFetcher::new(config);
 
-        Self { db, auctioneer, http_fetcher, chain_info }
+        Self { db, auctioneer, http_il_fetcher, chain_info }
     }
 
     /// Fetch and persist inclusion list for this slot.
@@ -83,7 +83,7 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
 
     async fn fetch_inclusion_list_or_timeout(&self, slot: u64) -> Option<InclusionList> {
         tokio::select! {
-            inclusion_list = self.http_fetcher.fetch_inclusion_list_with_retry(slot) => {
+            inclusion_list = self.http_il_fetcher.fetch_inclusion_list_with_retry(slot) => {
                 Some(inclusion_list)
             }
             _ = tokio::time::sleep(self.time_to_missing_inclusion_list_cutoff(slot.into())) => {

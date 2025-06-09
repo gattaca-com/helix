@@ -13,12 +13,12 @@ const GET_IL_TIMEOUT: Duration = Duration::from_secs(6);
 const GET_IL_RETRY_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone)]
-pub struct HttpListFetcher {
+pub struct HttpInclusionListFetcher {
     http: Client,
     config: InclusionListConfig,
 }
 
-impl HttpListFetcher {
+impl HttpInclusionListFetcher {
     pub fn new(config: InclusionListConfig) -> Self {
         let http = ClientBuilder::new()
             .timeout(GET_IL_TIMEOUT)
@@ -98,7 +98,7 @@ mod tests {
     use super::*;
 
     fn create_test_config(url: Url) -> InclusionListConfig {
-        InclusionListConfig { node_url: url, ..Default::default() }
+        InclusionListConfig { node_url: url }
     }
 
     #[tokio::test]
@@ -106,7 +106,7 @@ mod tests {
         let server = MockServer::start();
         let url = Url::parse(&server.url("/")).unwrap();
         let config = create_test_config(url.clone());
-        let fetcher = HttpListFetcher::new(config);
+        let fetcher = HttpInclusionListFetcher::new(config);
 
         let expected_inclusion_list =
             InclusionList { txs: vec![
