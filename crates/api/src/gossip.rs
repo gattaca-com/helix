@@ -1,9 +1,7 @@
-use std::{collections::HashMap, hash::Hash, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use helix_common::{task, utils::utcnow_ns, GetPayloadTrace};
-use helix_types::BlsPublicKey;
 use tokio::sync::{mpsc, Semaphore};
-use tower::builder;
 use tracing::{debug, error};
 use uuid::Uuid;
 
