@@ -277,7 +277,7 @@ pub struct RouterConfig {
     pub enabled_routes: Vec<RouteInfo>,
     /// On receipt of a shutdown signal, milliseconds to wait after shutting down health endpoint
     /// and before terminating.
-    #[serde(default)]
+    #[serde(default = "default_u64::<12_000>")]
     pub shutdown_delay_ms: u64,
 }
 
@@ -409,6 +409,10 @@ impl Route {
 
 fn default_duration() -> u64 {
     1000
+}
+
+fn default_u64<const D: u64>() -> u64 {
+    D
 }
 
 #[derive(Clone, Deserialize, Serialize)]
