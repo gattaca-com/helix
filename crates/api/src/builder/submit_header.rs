@@ -59,7 +59,7 @@ impl<A: Api> BuilderApi<A> {
             None,
             None,
             is_cancellations_enabled,
-            matches!(sharing, ShareHeader::All),
+            api.relay_config.header_gossip_enabled && matches!(sharing, ShareHeader::All),
             trace,
         )
         .await
