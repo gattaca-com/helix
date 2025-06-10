@@ -327,6 +327,22 @@ lazy_static! {
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
+
+    //////////////// CACHE ////////////////
+
+    static ref DELIEVERED_PAYLOADS_CACHE_HIT: IntCounter = register_int_counter_with_registry!(
+        "delivered_payloads_cache_hit",
+        "Count of delivered payloads cache hits",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref BIDS_CACHE_HIT: IntCounter = register_int_counter_with_registry!(
+        "bids_cache_hit",
+        "Count of bids cache hits",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 }
 
 pub struct ApiMetrics {
@@ -553,4 +569,12 @@ impl Drop for GetHeaderMetric {
             .with_label_values(&[is_timeout.to_string().as_str()])
             .observe(self.sleep_time);
     }
+}
+
+pub fn delivered_payloads_cache_hit() {
+    DELIEVERED_PAYLOADS_CACHE_HIT.inc();
+}
+
+pub fn bids_cache_hit() {
+    BIDS_CACHE_HIT.inc();
 }

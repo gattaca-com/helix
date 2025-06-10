@@ -446,8 +446,11 @@ fn test_config() {
         genesis_validator_root: Default::default(),
         genesis_time: 1,
     };
-    config.logging =
-        LoggingConfig::File { dir_path: "hello".parse().unwrap(), file_name: "test".to_string() };
+    config.logging = LoggingConfig::File {
+        dir_path: "hello".parse().unwrap(),
+        file_name: "test".to_string(),
+        otlp_server: None,
+    };
     config.validator_preferences = ValidatorPreferences {
         filtering: Filtering::Regional,
         trusted_builders: None,
@@ -472,6 +475,7 @@ fn test_config() {
             RouteInfo { route: Route::Status, rate_limit: None },
         ]
         .to_vec(),
+        shutdown_delay_ms: 12_000,
     };
     println!("{}", serde_yaml::to_string(&config).unwrap());
 }
