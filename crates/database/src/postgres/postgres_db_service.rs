@@ -288,7 +288,10 @@ impl PostgresDatabaseService {
                     trusted_builders: entry.registration_info.preferences.trusted_builders.clone(),
                     header_delay: entry.registration_info.preferences.header_delay,
                     gossip_blobs: entry.registration_info.preferences.gossip_blobs,
-                    disable_inclusion_lists: entry.registration_info.preferences.disable_inclusion_lists,
+                    disable_inclusion_lists: entry
+                        .registration_info
+                        .preferences
+                        .disable_inclusion_lists,
                 });
 
                 if name.is_some() {
