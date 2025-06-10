@@ -11,6 +11,7 @@ use alloy_primitives::B256;
 use helix_types::BlsPublicKey;
 use http::HeaderMap;
 use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_otlp::WithExportConfig;
 use reqwest::Url;
 use tracing::error;
 use tracing_appender::{non_blocking::WorkerGuard, rolling::Rotation};
@@ -40,7 +41,7 @@ pub fn init_tracing_log(config: &LoggingConfig) -> WorkerGuard {
             guard
         }
 
-        LoggingConfig::File { dir_path, file_name } => {
+        LoggingConfig::File { dir_path, file_name, otlp_server } => {
             let file_appender = tracing_appender::rolling::Builder::new()
                 .filename_prefix(file_name)
                 .max_log_files(14)
@@ -54,24 +55,29 @@ pub fn init_tracing_log(config: &LoggingConfig) -> WorkerGuard {
                 .with_writer(writer)
                 .with_filter(get_crate_filter(log_level));
 
-            if std::env::var("OTEL_TRACES_EXPORTER") == Ok("true".into()) {
-                println!("starting OTEL exporter");
-                let exporter =
-                    opentelemetry_otlp::SpanExporter::builder().with_tonic().build().unwrap();
+            match otlp_server {
+                Some(exporter_url) => {
+                    let exporter = opentelemetry_otlp::SpanExporter::builder()
+                        .with_tonic()
+                        .with_endpoint(exporter_url)
+                        .build()
+                        .unwrap();
 
-                let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder()
-                    .with_batch_exporter(exporter)
-                    .build()
-                    .tracer("helix_relay");
+                    let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+                        .with_batch_exporter(exporter)
+                        .build()
+                        .tracer("helix_relay");
 
-                let otel_layer = OpenTelemetryLayer::new(tracer)
-                    .with_tracked_inactivity(false)
-                    .with_threads(false)
-                    .with_filter(get_crate_filter(tracing::Level::TRACE));
+                    let otel_layer = OpenTelemetryLayer::new(tracer)
+                        .with_tracked_inactivity(false)
+                        .with_threads(false)
+                        .with_filter(get_crate_filter(tracing::Level::TRACE));
 
-                tracing_subscriber::registry().with(file_layer).with(otel_layer).init();
-            } else {
-                tracing_subscriber::registry().with(file_layer).init();
+                    tracing_subscriber::registry().with(file_layer).with(otel_layer).init();
+                }
+                None => {
+                    tracing_subscriber::registry().with(file_layer).init();
+                }
             }
 
             guard
