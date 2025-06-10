@@ -23,7 +23,7 @@ use helix_types::{
     PayloadAndBlobs, SigError, SignedBlindedBeaconBlock, Slot, SlotClockTrait,
     VersionedSignedProposal,
 };
-use tokio::{sync::oneshot, time::sleep};
+use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
 
 use super::ProposerApi;
@@ -278,14 +278,14 @@ impl<A: Api> ProposerApi<A> {
         // Publish and validate payload with multi-beacon-client
         let fork = unblinded_payload.signed_block.fork_name_unchecked();
 
-        let (tx, rx) = oneshot::channel();
-
         let self_clone = self.clone();
         let unblinded_payload_clone = unblinded_payload.clone();
         let mut trace_clone = *trace;
         let payload_clone = payload.clone();
 
-        task::spawn(file!(), line!(), async move {
+        let handle = task::spawn(file!(), line!(), async move {
+            let mut failed_publishing = false;
+
             if let Err(err) = self_clone
                 .multi_beacon_client
                 .publish_block(
@@ -296,6 +296,7 @@ impl<A: Api> ProposerApi<A> {
                 .await
             {
                 error!(%err, "error publishing block");
+                failed_publishing = true;
             };
 
             trace_clone.beacon_client_broadcast = utcnow_ns();
@@ -319,18 +320,21 @@ impl<A: Api> ProposerApi<A> {
                 )
                 .await;
 
-            if !is_trusted_proposer && tx.send(()).is_err() {
-                error!("Error sending beacon client response, receiver dropped");
-            }
+            (trace_clone, failed_publishing)
         });
 
         if !is_trusted_proposer {
-            if (rx.await).is_ok() {
-                info!(?trace, "Payload published and saved!")
-            } else {
-                error!("Error in beacon client publishing");
+            let Ok((new_trace, failed_publishing)) = handle.await else {
+                return Err(ProposerApiError::InternalServerError);
+            };
+            *trace = new_trace;
+
+            if failed_publishing {
+                error!("failed to publish payload to beacon client");
                 return Err(ProposerApiError::InternalServerError);
             }
+
+            info!(?trace, "payload published and saved!");
 
             // Calculate the remaining time needed to reach the target propagation duration.
             // Conditionally pause the execution until we hit
