@@ -36,8 +36,8 @@ pub fn build_router<A: Api>(
     builder_api: Arc<BuilderApi<A>>,
     proposer_api: Arc<ProposerApi<A>>,
     data_api: Arc<DataApi<A>>,
-    bids_cache: Arc<BidsCache>,
-    delivered_payloads_cache: Arc<DeliveredPayloadsCache>,
+    bids_cache: BidsCache,
+    delivered_payloads_cache: DeliveredPayloadsCache,
     terminating: Arc<AtomicBool>,
 ) -> Router {
     router_config.resolve_condensed_routes();

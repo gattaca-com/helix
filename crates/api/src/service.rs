@@ -130,19 +130,11 @@ pub async fn run_api_service<A: Api>(
 
     let data_api = Arc::new(DataApi::<A>::new(validator_preferences.clone(), db.clone()));
 
-    let bids_cache: Arc<BidsCache> = Arc::new(
-        Cache::builder()
-            .time_to_live(Duration::from_secs(10))
-            .time_to_idle(Duration::from_secs(5))
-            .build(),
-    );
+    let bids_cache: BidsCache =
+        Cache::builder().time_to_idle(Duration::from_secs(300)).max_capacity(10_000).build();
 
-    let delivered_payloads_cache: Arc<DeliveredPayloadsCache> = Arc::new(
-        Cache::builder()
-            .time_to_live(Duration::from_secs(10))
-            .time_to_idle(Duration::from_secs(5))
-            .build(),
-    );
+    let delivered_payloads_cache: DeliveredPayloadsCache =
+        Cache::builder().time_to_idle(Duration::from_secs(300)).max_capacity(10_000).build();
 
     let router = build_router(
         &mut config.router_config,

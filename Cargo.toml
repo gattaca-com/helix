@@ -66,7 +66,7 @@ lh-slot-clock = { package = "slot_clock", git = "https://github.com/ltitanb/ligh
 lh-test-random = { package = "test_random_derive", git = "https://github.com/ltitanb/lighthouse", rev = "304b026ea0b5da12507e1410e8dae2b28f9db812" }
 lh-types = { package = "types", git = "https://github.com/ltitanb/lighthouse", rev = "304b026ea0b5da12507e1410e8dae2b28f9db812" }
 mockito = "1.1.1"
-moka = "0.9"
+moka = { version = "0.12.10", features = ["sync"] }
 num-format = "0.4.4"
 opentelemetry = { version = "0.29", features = ["trace"] }
 opentelemetry-otlp = { version = "0.29", features = ["grpc-tonic", "trace"] }

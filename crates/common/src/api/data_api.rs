@@ -14,7 +14,7 @@ pub struct BidFilters {
     pub order_by: Option<i8>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub struct ProposerPayloadDeliveredParams {
     pub slot: Option<u64>,
     pub cursor: Option<u64>,
@@ -26,16 +26,16 @@ pub struct ProposerPayloadDeliveredParams {
     pub order_by: Option<String>,
 }
 
-impl From<ProposerPayloadDeliveredParams> for BidFilters {
-    fn from(value: ProposerPayloadDeliveredParams) -> Self {
+impl From<&ProposerPayloadDeliveredParams> for BidFilters {
+    fn from(value: &ProposerPayloadDeliveredParams) -> Self {
         BidFilters {
             slot: value.slot,
             cursor: value.cursor,
             limit: value.limit,
             block_hash: value.block_hash,
             block_number: value.block_number,
-            proposer_pubkey: value.proposer_pubkey,
-            builder_pubkey: value.builder_pubkey,
+            proposer_pubkey: value.proposer_pubkey.clone(),
+            builder_pubkey: value.builder_pubkey.clone(),
             order_by: match value.order_by.as_ref() {
                 Some(s) => match s.as_str() {
                     "value" => Some(1),
@@ -68,7 +68,7 @@ pub struct DeliveredPayloadsResponse {
     pub num_tx: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 pub struct BuilderBlocksReceivedParams {
     pub slot: Option<u64>,
     pub block_hash: Option<B256>,
@@ -77,8 +77,8 @@ pub struct BuilderBlocksReceivedParams {
     pub limit: Option<u64>,
 }
 
-impl From<BuilderBlocksReceivedParams> for BidFilters {
-    fn from(value: BuilderBlocksReceivedParams) -> Self {
+impl From<&BuilderBlocksReceivedParams> for BidFilters {
+    fn from(value: &BuilderBlocksReceivedParams) -> Self {
         BidFilters {
             slot: value.slot,
             cursor: None,
@@ -86,7 +86,7 @@ impl From<BuilderBlocksReceivedParams> for BidFilters {
             block_hash: value.block_hash,
             block_number: value.block_number,
             proposer_pubkey: None,
-            builder_pubkey: value.builder_pubkey,
+            builder_pubkey: value.builder_pubkey.clone(),
             order_by: None,
         }
     }

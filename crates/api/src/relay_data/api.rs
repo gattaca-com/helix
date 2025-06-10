@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     extract::{Extension, Query},
@@ -10,21 +10,27 @@ use helix_common::{
         BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
         ReceivedBlocksResponse, ValidatorRegistrationParams,
     },
-    ValidatorPreferences,
+    metrics, ValidatorPreferences,
 };
 use helix_database::{error::DatabaseError, DatabaseService};
 use moka::sync::Cache;
 use tracing::warn;
 
-use crate::{relay_data::error::DataApiError, Api};
+use crate::{
+    relay_data::{error::DataApiError, BuilderBlocksReceivedStats, ProposerPayloadDeliveredStats},
+    Api,
+};
 
-pub(crate) type BidsCache = Cache<String, Vec<ReceivedBlocksResponse>>;
-pub(crate) type DeliveredPayloadsCache = Cache<String, Vec<DeliveredPayloadsResponse>>;
+pub(crate) type BidsCache = Cache<BuilderBlocksReceivedParams, Vec<ReceivedBlocksResponse>>;
+pub(crate) type DeliveredPayloadsCache =
+    Cache<ProposerPayloadDeliveredParams, Vec<DeliveredPayloadsResponse>>;
 
 #[derive(Clone)]
 pub struct DataApi<A: Api> {
     validator_preferences: Arc<ValidatorPreferences>,
     db: Arc<A::DatabaseService>,
+    payload_delivered_stats: ProposerPayloadDeliveredStats,
+    builder_blocks_received_stats: BuilderBlocksReceivedStats,
 }
 
 impl<A: Api> DataApi<A> {
@@ -32,13 +38,31 @@ impl<A: Api> DataApi<A> {
         validator_preferences: Arc<ValidatorPreferences>,
         db: Arc<A::DatabaseService>,
     ) -> Self {
-        Self { validator_preferences, db }
+        let payload_delivered_stats = ProposerPayloadDeliveredStats::default();
+        let builder_blocks_received_stats = BuilderBlocksReceivedStats::default();
+
+        let delivered = payload_delivered_stats.clone();
+        let blocks = builder_blocks_received_stats.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                delivered.maybe_log_reset();
+                blocks.maybe_log_reset();
+            }
+        });
+
+        Self {
+            validator_preferences,
+            db,
+            payload_delivered_stats: Default::default(),
+            builder_blocks_received_stats: Default::default(),
+        }
     }
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getDeliveredPayloads>
     pub async fn proposer_payload_delivered(
         Extension(data_api): Extension<Arc<DataApi<A>>>,
-        Extension(cache): Extension<Arc<DeliveredPayloadsCache>>,
+        Extension(cache): Extension<DeliveredPayloadsCache>,
         Query(mut params): Query<ProposerPayloadDeliveredParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         if params.slot.is_some() && params.cursor.is_some() {
@@ -48,36 +72,21 @@ impl<A: Api> DataApi<A> {
         if params.limit.is_some() && params.limit.unwrap() > 200 {
             return Err(DataApiError::LimitReached { limit: 200 });
         }
+        data_api.payload_delivered_stats.record_total(&params);
 
         if params.limit.is_none() {
             params.limit = Some(200);
         }
 
-        if params.limit.is_some() && params.limit.unwrap() > 200 {
-            return Err(DataApiError::LimitReached { limit: 200 });
-        }
-
-        if params.limit.is_none() {
-            params.limit = Some(200);
-        }
-
-        if params.limit.is_some() && params.limit.unwrap() > 200 {
-            return Err(DataApiError::LimitReached { limit: 200 });
-        }
-
-        if params.limit.is_none() {
-            params.limit = Some(200);
-        }
-
-        let cache_key = format!("{:?}", params);
-
-        if let Some(cached_result) = cache.get(&cache_key) {
+        if let Some(cached_result) = cache.get(&params) {
+            data_api.payload_delivered_stats.record_cache_hit();
+            metrics::delivered_payloads_cache_hit();
             return Ok(Json(cached_result));
         }
 
         match data_api
             .db
-            .get_delivered_payloads(&params.into(), data_api.validator_preferences.clone())
+            .get_delivered_payloads(&(&params).into(), data_api.validator_preferences.clone())
             .await
         {
             Ok(result) => {
@@ -86,7 +95,7 @@ impl<A: Api> DataApi<A> {
                     .map(|b| b.into())
                     .collect::<Vec<DeliveredPayloadsResponse>>();
 
-                cache.insert(cache_key, response.clone());
+                cache.insert(params, response.clone());
 
                 Ok(Json(response))
             }
@@ -100,7 +109,7 @@ impl<A: Api> DataApi<A> {
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getReceivedBids>
     pub async fn builder_bids_received(
         Extension(data_api): Extension<Arc<DataApi<A>>>,
-        Extension(cache): Extension<Arc<BidsCache>>,
+        Extension(cache): Extension<BidsCache>,
         Query(mut params): Query<BuilderBlocksReceivedParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         if params.slot.is_none() &&
@@ -114,23 +123,25 @@ impl<A: Api> DataApi<A> {
         if params.limit.is_some() && params.limit.unwrap() > 500 {
             return Err(DataApiError::LimitReached { limit: 500 });
         }
+        data_api.builder_blocks_received_stats.record_total(&params);
 
         if params.limit.is_none() {
             params.limit = Some(500);
         }
 
-        let cache_key = format!("{:?}", params);
-
-        if let Some(cached_result) = cache.get(&cache_key) {
+        if let Some(cached_result) = cache.get(&params) {
+            data_api.builder_blocks_received_stats.record_cache_hit();
+            metrics::bids_cache_hit();
             return Ok(Json(cached_result));
         }
 
-        match data_api.db.get_bids(&params.into(), data_api.validator_preferences.clone()).await {
+        match data_api.db.get_bids(&(&params).into(), data_api.validator_preferences.clone()).await
+        {
             Ok(result) => {
                 let response =
                     result.into_iter().map(|b| b.into()).collect::<Vec<ReceivedBlocksResponse>>();
 
-                cache.insert(cache_key, response.clone());
+                cache.insert(params, response.clone());
 
                 Ok(Json(response))
             }
