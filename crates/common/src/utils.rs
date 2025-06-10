@@ -10,9 +10,12 @@ use std::{
 use alloy_primitives::B256;
 use helix_types::BlsPublicKey;
 use http::HeaderMap;
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_otlp::WithExportConfig;
 use reqwest::Url;
 use tracing::error;
 use tracing_appender::{non_blocking::WorkerGuard, rolling::Rotation};
+use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 use uuid::Uuid;
 
@@ -38,7 +41,7 @@ pub fn init_tracing_log(config: &LoggingConfig) -> WorkerGuard {
             guard
         }
 
-        LoggingConfig::File { dir_path, file_name } => {
+        LoggingConfig::File { dir_path, file_name, otlp_server } => {
             let file_appender = tracing_appender::rolling::Builder::new()
                 .filename_prefix(file_name)
                 .max_log_files(14)
@@ -47,12 +50,36 @@ pub fn init_tracing_log(config: &LoggingConfig) -> WorkerGuard {
                 .expect("failed to create file log appender");
 
             let (writer, guard) = tracing_appender::non_blocking(file_appender);
-            let layer = tracing_subscriber::fmt::layer()
+            let file_layer = tracing_subscriber::fmt::layer()
                 .event_format(format)
                 .with_writer(writer)
                 .with_filter(get_crate_filter(log_level));
 
-            tracing_subscriber::registry().with(layer).init();
+            match otlp_server {
+                Some(exporter_url) => {
+                    let exporter = opentelemetry_otlp::SpanExporter::builder()
+                        .with_tonic()
+                        .with_endpoint(exporter_url)
+                        .build()
+                        .unwrap();
+
+                    let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+                        .with_batch_exporter(exporter)
+                        .build()
+                        .tracer("helix_relay");
+
+                    let otel_layer = OpenTelemetryLayer::new(tracer)
+                        .with_tracked_inactivity(false)
+                        .with_threads(false)
+                        .with_filter(get_crate_filter(tracing::Level::TRACE));
+
+                    tracing_subscriber::registry().with(file_layer).with(otel_layer).init();
+                }
+                None => {
+                    tracing_subscriber::registry().with(file_layer).init();
+                }
+            }
+
             guard
         }
     }

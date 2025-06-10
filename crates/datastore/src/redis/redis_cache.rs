@@ -24,7 +24,7 @@ use redis::{AsyncCommands, Msg, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use ssz::Encode;
 use tokio::sync::broadcast;
-use tracing::{error, info};
+use tracing::{error, info, instrument};
 
 use super::utils::{
     get_hash_from_hex, get_header_tx_root_key, get_pending_block_builder_block_hash_key,
@@ -552,6 +552,7 @@ impl RedisCache {
 
 #[async_trait]
 impl Auctioneer for RedisCache {
+    #[instrument(skip_all)]
     async fn get_last_slot_delivered(&self) -> Result<Option<u64>, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_last_slot_delivered");
 
@@ -562,6 +563,7 @@ impl Auctioneer for RedisCache {
         Ok(last_slot_delivered)
     }
 
+    #[instrument(skip_all)]
     async fn check_and_set_last_slot_and_hash_delivered(
         &self,
         slot: u64,
@@ -616,6 +618,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn get_best_bid(
         &self,
         slot: u64,
@@ -631,10 +634,12 @@ impl Auctioneer for RedisCache {
         Ok(wrapped_bid.map(|wrapped_bid| wrapped_bid.bid))
     }
 
+    #[instrument(skip_all)]
     fn get_best_bids(&self) -> broadcast::Receiver<Bytes> {
         self.tx.subscribe()
     }
 
+    #[instrument(skip_all)]
     async fn save_execution_payload(
         &self,
         slot: u64,
@@ -651,6 +656,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn get_execution_payload(
         &self,
         slot: u64,
@@ -670,6 +676,7 @@ impl Auctioneer for RedisCache {
         Ok(execution_payload)
     }
 
+    #[instrument(skip_all)]
     async fn get_bid_trace(
         &self,
         slot: u64,
@@ -685,6 +692,7 @@ impl Auctioneer for RedisCache {
         Ok(bid_trace)
     }
 
+    #[instrument(skip_all)]
     async fn save_bid_trace(&self, bid_trace: &BidTrace) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("save_bid_trace");
 
@@ -699,6 +707,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn get_builder_latest_payload_received_at(
         &self,
         slot: u64,
@@ -719,6 +728,7 @@ impl Auctioneer for RedisCache {
     /// 1. Stores the full `SignedBuilderBid` object.
     /// 2. Stores the time at which this bid was received.
     /// 3. Stores the value of the bid.
+    #[instrument(skip_all)]
     async fn save_builder_bid(
         &self,
         slot: u64,
@@ -784,6 +794,7 @@ impl Auctioneer for RedisCache {
     /// 2. It then updates the top bid based on these fetched bids and a given floor value.
     /// 3. It saves the current submission as a new bid.
     /// 4. Optionally, it updates the floor value if the submission value is above the floor.
+    #[instrument(skip_all)]
     async fn save_bid_and_update_top_bid(
         &self,
         submission: &SignedBidSubmission,
@@ -830,6 +841,7 @@ impl Auctioneer for RedisCache {
         Ok(Some((builder_bid, submission.payload_and_blobs())))
     }
 
+    #[instrument(skip_all)]
     async fn get_top_bid_value(
         &self,
         slot: u64,
@@ -845,6 +857,7 @@ impl Auctioneer for RedisCache {
         Ok(top_bid_value)
     }
 
+    #[instrument(skip_all)]
     async fn get_builder_latest_value(
         &self,
         slot: u64,
@@ -861,6 +874,7 @@ impl Auctioneer for RedisCache {
         Ok(builder_latest_value)
     }
 
+    #[instrument(skip_all)]
     async fn get_floor_bid_value(
         &self,
         slot: u64,
@@ -876,6 +890,7 @@ impl Auctioneer for RedisCache {
         Ok(floor_bid_value)
     }
 
+    #[instrument(skip_all)]
     async fn delete_builder_bid(
         &self,
         slot: u64,
@@ -917,6 +932,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn get_builder_info(
         &self,
         builder_pub_key: &BlsPublicKey,
@@ -931,6 +947,7 @@ impl Auctioneer for RedisCache {
         Ok(builder_info)
     }
 
+    #[instrument(skip_all)]
     async fn demote_builder(&self, builder_pub_key: &BlsPublicKey) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("demote_builder");
         let mut builder_info = self.get_builder_info(builder_pub_key).await?;
@@ -947,6 +964,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn update_builder_infos(
         &self,
         builder_infos: Vec<BuilderInfoDocument>,
@@ -990,6 +1008,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn seen_or_insert_block_hash(
         &self,
         block_hash: &B256,
@@ -1005,6 +1024,7 @@ impl Auctioneer for RedisCache {
         Ok(seen)
     }
 
+    #[instrument(skip_all)]
     async fn save_signed_builder_bid_and_update_top_bid(
         &self,
         builder_bid: &SignedBuilderBid,
@@ -1100,6 +1120,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn get_header_tx_root(&self, block_hash: &B256) -> Result<Option<B256>, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_header_tx_root");
         let key = get_header_tx_root_key(block_hash);
@@ -1109,6 +1130,7 @@ impl Auctioneer for RedisCache {
         Ok(tx_root)
     }
 
+    #[instrument(skip_all)]
     async fn save_header_submission_and_update_top_bid(
         &self,
         submission: &SignedHeaderSubmission,
@@ -1149,6 +1171,7 @@ impl Auctioneer for RedisCache {
         Ok(Some(builder_bid))
     }
 
+    #[instrument(skip_all)]
     async fn update_trusted_proposers(
         &self,
         proposer_whitelist: Vec<ProposerInfo>,
@@ -1181,6 +1204,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn is_trusted_proposer(
         &self,
         proposer_pub_key: &BlsPublicKey,
@@ -1195,6 +1219,7 @@ impl Auctioneer for RedisCache {
         Ok(proposer_info.is_some())
     }
 
+    #[instrument(skip_all)]
     async fn update_primev_proposers(
         &self,
         primev_proposers: &[BlsPublicKey],
@@ -1227,6 +1252,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn is_primev_proposer(
         &self,
         proposer_pub_key: &BlsPublicKey,
@@ -1241,6 +1267,7 @@ impl Auctioneer for RedisCache {
         Ok(is_primev)
     }
 
+    #[instrument(skip_all)]
     async fn get_payload_url(
         &self,
         block_hash: &B256,
@@ -1252,6 +1279,7 @@ impl Auctioneer for RedisCache {
         Ok(payload_address)
     }
 
+    #[instrument(skip_all)]
     async fn save_payload_address(
         &self,
         block_hash: &B256,
@@ -1270,6 +1298,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn save_pending_block_header(
         &self,
         slot: u64,
@@ -1287,6 +1316,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn save_pending_block_payload(
         &self,
         slot: u64,
@@ -1304,6 +1334,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_pending_blocks");
 
@@ -1414,6 +1445,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     async fn update_current_inclusion_list(
         &self,
         inclusion_list: InclusionListWithMetadata,
@@ -1432,6 +1464,7 @@ impl Auctioneer for RedisCache {
         Ok(())
     }
 
+    #[instrument(skip_all)]
     fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey> {
         self.inclusion_list.subscribe()
     }
