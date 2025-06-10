@@ -52,6 +52,7 @@ struct PreferenceParams {
     trusted_builders: Option<Vec<String>>,
     header_delay: bool,
     gossip_blobs: bool,
+    disable_inclusion_lists: bool,
 }
 
 struct TrustedProposerParams {
@@ -287,6 +288,7 @@ impl PostgresDatabaseService {
                     trusted_builders: entry.registration_info.preferences.trusted_builders.clone(),
                     header_delay: entry.registration_info.preferences.header_delay,
                     gossip_blobs: entry.registration_info.preferences.gossip_blobs,
+                    disable_inclusion_lists: entry.registration_info.preferences.disable_inclusion_lists,
                 });
 
                 if name.is_some() {
@@ -341,14 +343,15 @@ impl PostgresDatabaseService {
                         &tuple.trusted_builders,
                         &tuple.header_delay,
                         &tuple.gossip_blobs,
+                        &tuple.disable_inclusion_lists,
                     ]
                 })
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql =
-                String::from("INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay, gossip_blobs) VALUES ");
-            let num_params_per_row = 5;
+                String::from("INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay, gossip_blobs, disable_inclusion_lists) VALUES ");
+            let num_params_per_row = 6;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -365,7 +368,8 @@ impl PostgresDatabaseService {
                             filtering = excluded.filtering, 
                             trusted_builders = excluded.trusted_builders, 
                             header_delay = excluded.header_delay,
-                            gossip_blobs = excluded.gossip_blobs
+                            gossip_blobs = excluded.gossip_blobs,
+                            disable_inclusion_lists = excluded.disable_inclusion_lists
                         WHERE validator_preferences.manual_override = FALSE",
             );
 
@@ -509,6 +513,7 @@ impl DatabaseService for PostgresDatabaseService {
                     validator_preferences.trusted_builders,
                     validator_preferences.header_delay,
                     validator_preferences.gossip_blobs,
+                    validator_preferences.disable_inclusion_lists,
                     validator_registrations.inserted_at,
                     validator_registrations.user_agent,
                     validator_preferences.delay_ms
