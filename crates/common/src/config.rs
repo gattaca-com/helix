@@ -44,8 +44,11 @@ pub struct RelayConfig {
     #[serde(default)]
     pub skip_floor_bid_builder_pubkeys: Vec<BlsPublicKey>,
     pub discord_webhook_url: Option<Url>,
+    /// If `header_gossip_enabled` is `false` this setting has no effect.
     #[serde(default)]
     pub payload_gossip_enabled: bool,
+    #[serde(default)]
+    pub header_gossip_enabled: bool,
     #[serde(default)]
     pub v3_port: Option<u16>,
     pub inclusion_list: Option<InclusionListConfig>,

@@ -239,7 +239,7 @@ impl<A: Api> BuilderApi<A> {
         {
             // If the bid was succesfully saved then we gossip the header and payload to all other
             // relays.
-            Some((builder_bid, execution_payload)) => {
+            Some((builder_bid, execution_payload)) if api.relay_config.header_gossip_enabled => {
                 api.gossip_header(
                     builder_bid,
                     payload.bid_trace().clone(),
@@ -252,6 +252,7 @@ impl<A: Api> BuilderApi<A> {
                     api.gossip_payload(&payload, execution_payload).await;
                 }
             }
+            Some(_) => { /* Gossiping is not enabled */ }
             None => { /* Bid wasn't saved so no need to gossip as it will never be served */ }
         }
 

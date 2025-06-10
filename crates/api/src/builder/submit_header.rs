@@ -52,14 +52,14 @@ impl<A: Api> BuilderApi<A> {
 
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) = decode_header_submission(req, &mut trace).await?;
-
+    
         Self::handle_submit_header(
             &api,
             payload,
             None,
             None,
             is_cancellations_enabled,
-            matches!(sharing, ShareHeader::All),
+            api.relay_config.header_gossip_enabled && matches!(sharing, ShareHeader::All),
             trace,
         )
         .await
