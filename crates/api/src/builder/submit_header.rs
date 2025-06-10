@@ -52,7 +52,7 @@ impl<A: Api> BuilderApi<A> {
 
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) = decode_header_submission(req, &mut trace).await?;
-    
+
         Self::handle_submit_header(
             &api,
             payload,
