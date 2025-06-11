@@ -77,7 +77,7 @@ pub async fn process_gossip_messages<A: Api>(
                 let head_slot = builder.get_current_head_slot();
                 if header.slot() <= head_slot {
                     debug!("received gossiped header for a past slot");
-                    return;
+                    continue;
                 }
 
                 let semaphore = builder_semaphores
