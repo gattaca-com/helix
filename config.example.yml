@@ -43,3 +43,8 @@ target_get_payload_propagation_duration_ms: 0
 primev_config: null
 skip_floor_bid_builder_pubkeys: []
 discord_webhook_url: null
+logging: !File
+  dir_path: /app/logs
+  file_name: titan_relay.log
+  otlp_server: http://localhost:4317
+  

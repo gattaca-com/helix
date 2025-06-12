@@ -265,7 +265,7 @@ pub enum LoggingConfig {
         dir_path: PathBuf,
         file_name: String,
         /// OpenTelemetry server URL
-        otlp_server: Option<String>,
+        otlp_server: Option<Url>,
     },
 }
 

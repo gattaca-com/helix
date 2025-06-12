@@ -60,7 +60,7 @@ pub fn init_tracing_log(config: &LoggingConfig, region: &str, instance_id: Strin
                 Some(exporter_url) => {
                     let exporter = opentelemetry_otlp::SpanExporter::builder()
                         .with_tonic()
-                        .with_endpoint(exporter_url)
+                        .with_endpoint(exporter_url.to_string())
                         .build()
                         .unwrap();
 
