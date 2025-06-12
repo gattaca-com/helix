@@ -10,8 +10,9 @@ use std::{
 use alloy_primitives::B256;
 use helix_types::BlsPublicKey;
 use http::HeaderMap;
-use opentelemetry::trace::TracerProvider as _;
+use opentelemetry::{trace::TracerProvider as _, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_sdk::Resource;
 use reqwest::Url;
 use tracing::error;
 use tracing_appender::{non_blocking::WorkerGuard, rolling::Rotation};
@@ -21,7 +22,11 @@ use uuid::Uuid;
 
 use crate::LoggingConfig;
 
-pub fn init_tracing_log(config: &LoggingConfig) -> WorkerGuard {
+pub fn init_tracing_log(
+    config: &LoggingConfig,
+    region: &str,
+    instance_id: Option<String>,
+) -> WorkerGuard {
     let format =
         tracing_subscriber::fmt::format().with_level(true).with_thread_ids(false).with_target(true);
 
@@ -63,8 +68,17 @@ pub fn init_tracing_log(config: &LoggingConfig) -> WorkerGuard {
                         .build()
                         .unwrap();
 
+                    let instance_id =
+                        instance_id.unwrap_or_else(|| format!("RelayUnknown_{region}"));
                     let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder()
                         .with_batch_exporter(exporter)
+                        .with_resource(
+                            Resource::builder()
+                                .with_attribute(KeyValue::new("service.name", "helix_relay"))
+                                .with_attribute(KeyValue::new("service.region", region.to_string()))
+                                .with_attribute(KeyValue::new("service.instance_id", instance_id))
+                                .build(),
+                        )
                         .build()
                         .tracer("helix_relay");
 

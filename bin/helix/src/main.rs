@@ -43,7 +43,8 @@ async fn main() {
     let config = load_config();
     let keypair = load_keypair();
 
-    let _guard = init_tracing_log(&config.logging);
+    let _guard =
+        init_tracing_log(&config.logging, &config.postgres.region_name, config.instance_id.clone());
 
     init_panic_hook(
         config.postgres.region_name.clone(),

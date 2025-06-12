@@ -10,6 +10,7 @@ use crate::{api::*, chain_info::ChainInfo, BuilderInfo, ValidatorPreferences};
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RelayConfig {
+    pub instance_id: Option<String>,
     #[serde(default)]
     pub website: WebsiteConfig,
     pub postgres: PostgresConfig,
