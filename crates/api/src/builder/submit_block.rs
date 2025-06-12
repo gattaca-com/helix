@@ -58,7 +58,7 @@ impl<A: Api> BuilderApi<A> {
 
         let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
-        tracing::Span::current().record("slot", head_slot.as_u64() + 1);
+        tracing::Span::current().record("slot", (head_slot.as_u64() + 1) as i64);
 
         // Verify that we have a validator connected for this slot
         let Some(next_duty) = next_duty else {
