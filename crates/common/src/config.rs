@@ -225,6 +225,15 @@ impl NetworkConfig {
             }
         }
     }
+
+    pub fn short_name(&self) -> &str {
+        match self {
+            NetworkConfig::Mainnet => "Mainnet",
+            NetworkConfig::Sepolia => "Sepolia",
+            NetworkConfig::Holesky => "Holesky",
+            NetworkConfig::Custom { .. } => "Custom",
+        }
+    }
 }
 
 impl std::fmt::Display for NetworkConfig {

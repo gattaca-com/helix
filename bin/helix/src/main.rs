@@ -43,8 +43,15 @@ async fn main() {
     let config = load_config();
     let keypair = load_keypair();
 
+    let instance_id = config.instance_id.clone().unwrap_or_else(|| {
+        format!(
+            "RelayUnknown_{}_{}",
+            config.network_config.short_name(),
+            config.postgres.region_name
+        )
+    });
     let _guard =
-        init_tracing_log(&config.logging, &config.postgres.region_name, config.instance_id.clone());
+        init_tracing_log(&config.logging, &config.postgres.region_name, instance_id.clone());
 
     init_panic_hook(
         config.postgres.region_name.clone(),
@@ -54,6 +61,7 @@ async fn main() {
     start_metrics_server(&config);
 
     info!(
+        instance_id,
         region = config.postgres.region_name,
         network =% config.network_config,
         pubkey =% keypair.pk,

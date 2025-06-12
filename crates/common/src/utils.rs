@@ -22,11 +22,7 @@ use uuid::Uuid;
 
 use crate::LoggingConfig;
 
-pub fn init_tracing_log(
-    config: &LoggingConfig,
-    region: &str,
-    instance_id: Option<String>,
-) -> WorkerGuard {
+pub fn init_tracing_log(config: &LoggingConfig, region: &str, instance_id: String) -> WorkerGuard {
     let format =
         tracing_subscriber::fmt::format().with_level(true).with_thread_ids(false).with_target(true);
 
@@ -68,8 +64,6 @@ pub fn init_tracing_log(
                         .build()
                         .unwrap();
 
-                    let instance_id =
-                        instance_id.unwrap_or_else(|| format!("RelayUnknown_{region}"));
                     let tracer = opentelemetry_sdk::trace::SdkTracerProvider::builder()
                         .with_batch_exporter(exporter)
                         .with_resource(
