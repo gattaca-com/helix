@@ -489,7 +489,7 @@ pub async fn decode_payload(
         body_bytes = buf.into();
     }
 
-    info!(payload_size = body_bytes.len(), is_gzip, is_ssz, "decoded payload");
+    debug!(payload_size = body_bytes.len(), is_gzip, is_ssz, "decoded payload");
 
     // Decode payload
     let payload: SignedBidSubmission = if is_ssz {

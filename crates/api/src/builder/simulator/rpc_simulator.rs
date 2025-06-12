@@ -71,7 +71,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
             })
         };
 
-        info!(
+        debug!(
             request.message.slot,
             block_hash = %request.execution_payload.block_hash(),
             size = rpc_payload.to_string().len(),
@@ -80,7 +80,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
 
         let res = self.http.post(&self.endpoint).headers(headers).json(&rpc_payload).send().await;
 
-        info!(
+        debug!(
             request.message.slot,
             block_hash = %request.execution_payload.block_hash(),
             size = rpc_payload.to_string().len(),

@@ -81,6 +81,8 @@ impl<A: Api> BuilderApi<A> {
 
         info!(
             slot = %payload.slot(),
+            block_hash = %block_hash,
+            builder_pub_key = %payload.builder_public_key(),
             block_value = %payload.value(),
             "payload decoded",
         );
