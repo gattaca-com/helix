@@ -5,7 +5,6 @@ use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEve
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, utils::utcnow_sec,
 };
-use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::{Slot, SlotClockTrait};
 use tokio::{
@@ -39,21 +38,19 @@ pub struct SlotUpdate {
 }
 
 /// Manages the update of head slots and the fetching of new proposer duties.
-pub struct ChainEventUpdater<D: DatabaseService + 'static, A: Auctioneer + 'static> {
+pub struct ChainEventUpdater<A: Auctioneer + 'static> {
     head_slot: u64,
     known_payload_attributes: HashMap<(B256, Slot), PayloadAttributesEvent>,
 
     proposer_duties: Vec<BuilderGetValidatorsResponseEntry>,
 
-    database: Arc<D>,
     auctioneer: Arc<A>,
     chain_info: Arc<ChainInfo>,
     curr_slot_info: CurrentSlotInfo,
 }
 
-impl<D: DatabaseService + 'static, A: Auctioneer + 'static> ChainEventUpdater<D, A> {
+impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
     pub fn new(
-        database: Arc<D>,
         auctioneer: Arc<A>,
         chain_info: Arc<ChainInfo>,
         curr_slot_info: CurrentSlotInfo,
@@ -61,7 +58,6 @@ impl<D: DatabaseService + 'static, A: Auctioneer + 'static> ChainEventUpdater<D,
         Self {
             head_slot: 0,
             known_payload_attributes: Default::default(),
-            database,
             auctioneer,
             proposer_duties: Vec::new(),
             chain_info,
@@ -80,10 +76,35 @@ impl<D: DatabaseService + 'static, A: Auctioneer + 'static> ChainEventUpdater<D,
             Duration::from_secs(CUTOFF_TIME);
         let mut timer =
             interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot()));
+
+        let mut head_event_redis_rx = self.auctioneer.get_head_event();
+        let mut payload_attributes_redis_rx = self.auctioneer.get_payload_attributes();
+
         loop {
             tokio::select! {
                 head_event_result = head_event_rx.recv() => {
                     match head_event_result {
+                        Ok(head_event) => {
+                            info!(head_slot =% head_event.slot, "Received head event");
+                            self.auctioneer.publish_head_event(&head_event)
+                                .await
+                                .unwrap_or_else(|err| {
+                                    error!(error = %err, "Failed to publish head event");
+                                });
+                            self.process_slot(head_event.slot.into()).await
+                        },
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("head events lagged by {n} events");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            error!("head event channel closed");
+                            break;
+                        }
+                    }
+                }
+
+                head_event_redis_result = head_event_redis_rx.recv() => {
+                    match head_event_redis_result {
                         Ok(head_event) => {
                             info!(head_slot =% head_event.slot, "Received head event");
                             self.process_slot(head_event.slot.into()).await
@@ -97,9 +118,32 @@ impl<D: DatabaseService + 'static, A: Auctioneer + 'static> ChainEventUpdater<D,
                         }
                     }
                 }
+
                 payload_attributes_result = payload_attributes_rx.recv() => {
                     match payload_attributes_result {
-                        Ok(payload_attributes) => self.process_payload_attributes(payload_attributes).await,
+                        Ok(payload_attributes) => {
+                            self.auctioneer.publish_payload_attributes(&payload_attributes)
+                                .await
+                                .unwrap_or_else(|err| {
+                                    error!(error = %err, "Failed to publish payload attributes");
+                                });
+                            self.process_payload_attributes(payload_attributes).await;
+                        }
+                        Err(broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("payload attributes events lagged by {n} events");
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            error!("payload attributes event channel closed");
+                            break;
+                        }
+                    }
+                }
+
+                payload_attributes_redis_result = payload_attributes_redis_rx.recv() => {
+                    match payload_attributes_redis_result {
+                        Ok(payload_attributes) => {
+                            self.process_payload_attributes(payload_attributes).await;
+                        }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("payload attributes events lagged by {n} events");
                         }
@@ -151,17 +195,17 @@ impl<D: DatabaseService + 'static, A: Auctioneer + 'static> ChainEventUpdater<D,
 
         // Give housekeeper some time to update proposer duties
         sleep(std::time::Duration::from_secs(1)).await;
-        let mut new_duties = match self.database.get_proposer_duties().await {
+        let mut new_duties = match self.auctioneer.get_proposer_duties().await {
             Ok(new_duties) => {
                 info!(
                     head_slot = slot,
                     new_duties = new_duties.len(),
-                    "Fetched proposer duties from db",
+                    "Fetched proposer duties from auctioneer",
                 );
                 Some(new_duties)
             }
             Err(err) => {
-                error!(error = %err, "Failed to get proposer duties from db");
+                error!(error = %err, "Failed to get proposer duties from auctioneer");
                 None
             }
         };

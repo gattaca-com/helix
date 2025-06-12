@@ -6,8 +6,11 @@ use alloy_primitives::{bytes::Bytes, B256, U256};
 use async_trait::async_trait;
 use deadpool_redis::{Config, Connection, CreatePoolError, Pool, Runtime};
 use futures_util::StreamExt;
+use helix_beacon::types::{HeadEventData, PayloadAttributesEvent};
 use helix_common::{
-    api::builder_api::{InclusionListWithMetadata, TopBidUpdate},
+    api::builder_api::{
+        BuilderGetValidatorsResponseEntry, InclusionListWithMetadata, TopBidUpdate,
+    },
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
     bid_submission_to_builder_bid, header_submission_to_builder_bid,
     metrics::{RedisMetricRecord, TopBidMetrics},
@@ -22,9 +25,10 @@ use helix_types::{
 };
 use redis::{AsyncCommands, Msg, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Serialize};
+use serde_json::from_str;
 use ssz::Encode;
 use tokio::sync::broadcast;
-use tracing::{error, info, instrument};
+use tracing::{error, info, instrument, warn};
 
 use super::utils::{
     get_hash_from_hex, get_header_tx_root_key, get_pending_block_builder_block_hash_key,
@@ -75,6 +79,8 @@ pub struct RedisCache {
     pool: Pool,
     tx: broadcast::Sender<Bytes>,
     inclusion_list: broadcast::Sender<InclusionListWithKey>,
+    payload_attributes: broadcast::Sender<PayloadAttributesEvent>,
+    head_event: broadcast::Sender<HeadEventData>,
 }
 
 #[allow(dead_code)]
@@ -87,12 +93,16 @@ impl RedisCache {
         let pool = cfg.create_pool(Some(Runtime::Tokio1))?;
         let (tx, mut tx_recv) = broadcast::channel(1000);
         let (inclusion_list, mut il_recv) = broadcast::channel(1);
+        let (payload_attributes, mut pa_recv) = broadcast::channel(1000);
+        let (head_event, mut he_recv) = broadcast::channel(1000);
 
         // ensure at least one subscriber is running
         tokio::spawn(async move { while let Ok(_message) = tx_recv.recv().await {} });
         tokio::spawn(async move { while let Ok(_message) = il_recv.recv().await {} });
+        tokio::spawn(async move { while let Ok(_message) = pa_recv.recv().await {} });
+        tokio::spawn(async move { while let Ok(_message) = he_recv.recv().await {} });
 
-        let cache = Self { pool, tx, inclusion_list };
+        let cache = Self { pool, tx, inclusion_list, payload_attributes, head_event };
 
         // Load in builder info
         if let Err(err) = cache.update_builder_infos(builder_infos).await {
@@ -253,6 +263,17 @@ impl RedisCache {
     async fn publish(&self, channel: &str, key: &str) -> Result<(), RedisCacheError> {
         let mut conn = self.pool.get().await?;
         Ok(conn.publish(channel, key).await?)
+    }
+
+    async fn publish_json<T: Serialize>(
+        &self,
+        channel: &str,
+        data: &T,
+    ) -> Result<(), RedisCacheError> {
+        let mut conn = self.pool.get().await?;
+        let json = serde_json::to_string(data)?;
+        conn.publish(channel, json).await?;
+        Ok(())
     }
 
     /// Attempts to set a lock in Redis with a specified key and expiry.
@@ -522,6 +543,62 @@ impl RedisCache {
             let list_with_key = InclusionListWithKey { key, inclusion_list: list };
             if let Err(err) = self.inclusion_list.send(list_with_key) {
                 error!(%err, "Failed to send inclusion list update");
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_payload_attributes_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe("payload_attributes_channel").await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        while let Some(msg) = message_stream.next().await {
+            let payload: redis::RedisResult<String> = msg.get_payload();
+
+            let Ok(json) = payload else {
+                warn!("Malformed Redis payload");
+                continue;
+            };
+
+            let Ok(event) = from_str::<PayloadAttributesEvent>(&json) else {
+                warn!("Failed to deserialize PayloadAttributesEvent");
+                continue;
+            };
+
+            if let Err(err) = self.payload_attributes.send(event) {
+                error!(%err, "Failed to forward payload attributes event");
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_head_event_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe("head_event_channel").await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        while let Some(msg) = message_stream.next().await {
+            let payload: redis::RedisResult<String> = msg.get_payload();
+
+            let Ok(json) = payload else {
+                warn!("Malformed Redis payload");
+                continue;
+            };
+
+            let Ok(event) = from_str::<HeadEventData>(&json) else {
+                warn!("Failed to deserialize HeadEventData");
+                continue;
+            };
+
+            if let Err(err) = self.head_event.send(event) {
+                error!(%err, "Failed to forward head event");
             }
         }
 
@@ -1467,6 +1544,47 @@ impl Auctioneer for RedisCache {
     #[instrument(skip_all)]
     fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey> {
         self.inclusion_list.subscribe()
+    }
+
+    #[instrument(skip_all)]
+    async fn publish_head_event(&self, head_event: &HeadEventData) -> Result<(), AuctioneerError> {
+        self.publish_json("head_event_channel", &head_event).await?;
+        Ok(())
+    }
+
+    fn get_head_event(&self) -> broadcast::Receiver<HeadEventData> {
+        self.head_event.subscribe()
+    }
+
+    #[instrument(skip_all)]
+    async fn publish_payload_attributes(
+        &self,
+        payload_attributes: &PayloadAttributesEvent,
+    ) -> Result<(), AuctioneerError> {
+        self.publish_json("payload_attributes_channel", &payload_attributes).await?;
+        Ok(())
+    }
+
+    fn get_payload_attributes(&self) -> broadcast::Receiver<PayloadAttributesEvent> {
+        self.payload_attributes.subscribe()
+    }
+
+    #[instrument(skip_all)]
+    async fn update_proposer_duties(
+        &self,
+        duties: Vec<BuilderGetValidatorsResponseEntry>,
+    ) -> Result<(), AuctioneerError> {
+        self.set("proposer_duties", &duties, Some(60 * 60)).await?; // 1 hour expiry
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    async fn get_proposer_duties(
+        &self,
+    ) -> Result<Vec<BuilderGetValidatorsResponseEntry>, AuctioneerError> {
+        let duties: Option<Vec<BuilderGetValidatorsResponseEntry>> =
+            self.get("proposer_duties").await?;
+        Ok(duties.unwrap_or_default())
     }
 }
 

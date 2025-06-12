@@ -2,8 +2,11 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use alloy_primitives::{bytes::Bytes, B256, U256};
 use async_trait::async_trait;
+use helix_beacon::types::PayloadAttributesEvent;
 use helix_common::{
-    api::builder_api::{InclusionListWithMetadata, TopBidUpdate},
+    api::builder_api::{
+        BuilderGetValidatorsResponseEntry, InclusionListWithMetadata, TopBidUpdate,
+    },
     bid_submission::v2::header_submission::SignedHeaderSubmission,
     pending_block::PendingBlock,
     signing::RelaySigningContext,
@@ -339,5 +342,44 @@ impl Auctioneer for MockAuctioneer {
         })
         .unwrap();
         rx
+    }
+
+    async fn publish_head_event(
+        &self,
+        _head_event: &helix_beacon::types::HeadEventData,
+    ) -> Result<(), AuctioneerError> {
+        Ok(())
+    }
+
+    fn get_head_event(&self) -> broadcast::Receiver<helix_beacon::types::HeadEventData> {
+        let (tx, rx) = broadcast::channel(1);
+        tx.send(helix_beacon::types::HeadEventData::default()).unwrap();
+        rx
+    }
+
+    async fn publish_payload_attributes(
+        &self,
+        _payload_attributes: &PayloadAttributesEvent,
+    ) -> Result<(), AuctioneerError> {
+        Ok(())
+    }
+
+    fn get_payload_attributes(&self) -> broadcast::Receiver<PayloadAttributesEvent> {
+        let (tx, rx) = broadcast::channel(1);
+        tx.send(PayloadAttributesEvent::default()).unwrap();
+        rx
+    }
+
+    async fn update_proposer_duties(
+        &self,
+        _duties: Vec<BuilderGetValidatorsResponseEntry>,
+    ) -> Result<(), AuctioneerError> {
+        Ok(())
+    }
+
+    async fn get_proposer_duties(
+        &self,
+    ) -> Result<Vec<BuilderGetValidatorsResponseEntry>, AuctioneerError> {
+        Ok(vec![])
     }
 }

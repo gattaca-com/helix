@@ -4094,6 +4094,7 @@ dependencies = [
  "ethereum_ssz",
  "eyre",
  "futures-util",
+ "helix-beacon",
  "helix-common",
  "helix-database",
  "helix-types",

@@ -15,6 +15,7 @@ deadpool-redis.workspace = true
 ethereum_ssz.workspace = true
 eyre.workspace = true
 futures-util.workspace = true
+helix-beacon.workspace = true
 helix-common.workspace = true
 helix-database.workspace = true
 helix-types.workspace = true
