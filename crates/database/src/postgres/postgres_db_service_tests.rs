@@ -8,7 +8,7 @@ mod tests {
         api::{
             builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
         },
-        bid_submission::v2::header_submission::{HeaderSubmissionDeneb, SignedHeaderSubmission},
+        bid_submission::v2::header_submission::{HeaderSubmissionElectra, SignedHeaderSubmission},
         simulator::BlockSimError,
         utils::{utcnow_ns, utcnow_sec},
         validator_preferences::ValidatorPreferences,
@@ -17,7 +17,7 @@ mod tests {
     };
     use helix_types::{
         BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsSecretKey, BlsSignature,
-        ExecutionPayloadDeneb, PayloadAndBlobs, SignedBidSubmissionDeneb, SignedMessage,
+        ExecutionPayloadElectra, PayloadAndBlobs, SignedBidSubmissionElectra, SignedMessage,
         SignedValidatorRegistration, TestRandomSeed, Validator, ValidatorRegistration, Withdrawal,
     };
     use rand::{seq::SliceRandom, thread_rng, Rng};
@@ -403,11 +403,12 @@ mod tests {
 
         let bid_trace = BidTrace { proposer_pubkey: pubkey, ..BidTrace::test_random() };
 
-        let signed_bid_submission = SignedBidSubmissionDeneb {
+        let signed_bid_submission = SignedBidSubmissionElectra {
             message: bid_trace.clone(),
-            execution_payload: ExecutionPayloadDeneb::default(),
+            execution_payload: ExecutionPayloadElectra::default(),
             blobs_bundle: BlobsBundle::default(),
             signature: BlsSignature::test_random(),
+            execution_requests: Default::default(),
         };
 
         let submission_trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
@@ -445,7 +446,7 @@ mod tests {
 
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
-        let mut execution_payload = ExecutionPayloadDeneb::test_random();
+        let mut execution_payload = ExecutionPayloadElectra::test_random();
 
         // execution_payload
         //     .transactions_mut()
@@ -565,10 +566,10 @@ mod tests {
 
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
-        let bid_submission = HeaderSubmissionDeneb::test_random();
+        let bid_submission = HeaderSubmissionElectra::test_random();
         let signed =
             SignedMessage { message: bid_submission, signature: BlsSignature::test_random() };
-        let signed_bid_submission = SignedHeaderSubmission::Deneb(signed);
+        let signed_bid_submission = SignedHeaderSubmission::Electra(signed);
 
         db_service
             .store_header_submission(

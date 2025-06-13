@@ -48,6 +48,6 @@ fn decode_ssz_payload_and_blobs(
     {
         Ok(payload_and_blobs)
     } else {
-        PayloadAndBlobs::from_ssz_bytes_by_fork(bytes, ForkName::Deneb)
+        Err(ssz::DecodeError::NoMatchingVariant)
     }
 }

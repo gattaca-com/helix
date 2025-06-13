@@ -1609,8 +1609,8 @@ mod tests {
     use alloy_primitives::U256;
     use helix_common::utils::utcnow_ns;
     use helix_types::{
-        get_fixed_pubkey, BlsSignature, BuilderBid, BuilderBidDeneb, ExecutionPayloadDeneb,
-        ExecutionPayloadHeaderDeneb, ForkName, KzgCommitments, SignedBidSubmissionDeneb,
+        get_fixed_pubkey, BlsSignature, BuilderBid, BuilderBidElectra, ExecutionPayloadElectra,
+        ExecutionPayloadHeaderElectra, ForkName, KzgCommitments, SignedBidSubmissionElectra,
         SignedBuilderBidInner, TestRandomSeed,
     };
     use serde::{Deserialize, Serialize};
@@ -1823,16 +1823,17 @@ mod tests {
 
         // Save prev best bid
         let prev_builder_pubkey = BlsPublicKey::test_random();
-        let mut deneb_builder_bid = BuilderBidDeneb {
+        let mut builder_bid = BuilderBidElectra {
             pubkey: prev_builder_pubkey.clone().into(),
-            header: ExecutionPayloadHeaderDeneb::test_random(),
+            header: ExecutionPayloadHeaderElectra::test_random(),
             value: U256::from(60),
             blob_kzg_commitments: Default::default(),
+            execution_requests: Default::default(),
         };
 
         let prev_best_bid =
-            SignedBuilderBid::new_no_metadata(Some(ForkName::Deneb), SignedBuilderBidInner {
-                message: deneb_builder_bid.clone().into(),
+            SignedBuilderBid::new_no_metadata(Some(ForkName::Electra), SignedBuilderBidInner {
+                message: builder_bid.clone().into(),
                 signature: BlsSignature::test_random(),
             });
 
@@ -1896,10 +1897,10 @@ mod tests {
         // Test with floor_value greater than top_bid_value
         let higher_floor_value = U256::from(70);
 
-        deneb_builder_bid.value = higher_floor_value;
+        builder_bid.value = higher_floor_value;
         let floor_bid =
-            SignedBuilderBid::new_no_metadata(Some(ForkName::Deneb), SignedBuilderBidInner {
-                message: deneb_builder_bid.into(),
+            SignedBuilderBid::new_no_metadata(Some(ForkName::Electra), SignedBuilderBidInner {
+                message: builder_bid.into(),
                 signature: BlsSignature::test_random(),
             });
 
@@ -2015,15 +2016,17 @@ mod tests {
         let parent_hash = B256::default();
         let proposer_pub_key = BlsPublicKey::test_random();
 
-        let bid = SignedBuilderBid::new_no_metadata(Some(ForkName::Deneb), SignedBuilderBidInner {
-            message: BuilderBid::Deneb(BuilderBidDeneb {
-                value: U256::from(1999),
-                header: ExecutionPayloadHeaderDeneb::test_random(),
-                blob_kzg_commitments: KzgCommitments::test_random(),
-                pubkey: BlsPublicKey::test_random().into(),
-            }),
-            signature: BlsSignature::test_random(),
-        });
+        let bid =
+            SignedBuilderBid::new_no_metadata(Some(ForkName::Electra), SignedBuilderBidInner {
+                message: BuilderBid::Electra(BuilderBidElectra {
+                    value: U256::from(1999),
+                    header: ExecutionPayloadHeaderElectra::test_random(),
+                    blob_kzg_commitments: KzgCommitments::test_random(),
+                    pubkey: BlsPublicKey::test_random().into(),
+                    execution_requests: Default::default(),
+                }),
+                signature: BlsSignature::test_random(),
+            });
 
         let best_bid = bid.into();
 
@@ -2058,11 +2061,9 @@ mod tests {
         let proposer_pub_key = BlsPublicKey::test_random();
         let block_hash = B256::test_random();
 
-        let deneb_payload = ExecutionPayloadDeneb { gas_limit: 999, ..Default::default() };
-        let versioned_execution_payload = PayloadAndBlobs {
-            execution_payload: deneb_payload.into(),
-            blobs_bundle: Default::default(),
-        };
+        let payload = ExecutionPayloadElectra { gas_limit: 999, ..Default::default() };
+        let versioned_execution_payload =
+            PayloadAndBlobs { execution_payload: payload.into(), blobs_bundle: Default::default() };
 
         // Save the execution payload
         let save_result = cache
@@ -2077,7 +2078,7 @@ mod tests {
 
         // Test: Get the execution payload
         let get_result: Result<Option<PayloadAndBlobs>, _> = cache
-            .get_execution_payload(slot, &proposer_pub_key, &block_hash, ForkName::Deneb)
+            .get_execution_payload(slot, &proposer_pub_key, &block_hash, ForkName::Electra)
             .await;
         assert!(get_result.is_ok(), "Failed to get the execution payload");
         assert!(get_result.as_ref().unwrap().is_some(), "Execution payload is None");
@@ -2105,17 +2106,19 @@ mod tests {
         let value = U256::from(100);
         let block_hash = B256::try_from([4u8; 32].as_ref()).unwrap();
 
-        let mut header = ExecutionPayloadHeaderDeneb::test_random();
+        let mut header = ExecutionPayloadHeaderElectra::test_random();
         header.block_hash = block_hash.into();
-        let bid = SignedBuilderBid::new_no_metadata(Some(ForkName::Deneb), SignedBuilderBidInner {
-            message: BuilderBid::Deneb(BuilderBidDeneb {
-                value,
-                header,
-                blob_kzg_commitments: KzgCommitments::test_random(),
-                pubkey: BlsPublicKey::test_random().into(),
-            }),
-            signature: BlsSignature::test_random(),
-        });
+        let bid =
+            SignedBuilderBid::new_no_metadata(Some(ForkName::Electra), SignedBuilderBidInner {
+                message: BuilderBid::Electra(BuilderBidElectra {
+                    value,
+                    header,
+                    blob_kzg_commitments: KzgCommitments::test_random(),
+                    pubkey: BlsPublicKey::test_random().into(),
+                    execution_requests: Default::default(),
+                }),
+                signature: BlsSignature::test_random(),
+            });
 
         let builder_bid = bid.into();
 
@@ -2370,12 +2373,13 @@ mod tests {
         // Save 2 builder bids. builder bid 1 > builder bid 2
         let builder_pub_key_1 = BlsPublicKey::test_random();
         let builder_bid_1 =
-            SignedBuilderBid::new_no_metadata(Some(ForkName::Deneb), SignedBuilderBidInner {
-                message: BuilderBidDeneb {
+            SignedBuilderBid::new_no_metadata(Some(ForkName::Electra), SignedBuilderBidInner {
+                message: BuilderBidElectra {
                     value: U256::from(100),
-                    header: ExecutionPayloadHeaderDeneb::test_random(),
+                    header: ExecutionPayloadHeaderElectra::test_random(),
                     blob_kzg_commitments: KzgCommitments::test_random(),
                     pubkey: BlsPublicKey::test_random().into(),
+                    execution_requests: Default::default(),
                 }
                 .into(),
                 signature: BlsSignature::test_random(),
@@ -2628,7 +2632,7 @@ mod tests {
         let received_at = 1000;
 
         let mut state = SaveBidAndUpdateTopBidResponse::default();
-        let mut submission = SignedBidSubmissionDeneb::test_random();
+        let mut submission = SignedBidSubmissionElectra::test_random();
 
         // Save floor value
 

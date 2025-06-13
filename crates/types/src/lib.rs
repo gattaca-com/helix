@@ -55,15 +55,11 @@ pub type BlobsBundle = lh_eth2::types::BlobsBundle<MainnetEthSpec>;
 pub type VersionedSignedProposal = lh_eth2::types::SignedBlockContents<MainnetEthSpec>;
 pub type SignedBlockContents = lh_eth2::types::SignedBlockContents<MainnetEthSpec>;
 pub type SignedBeaconBlock = lh_types::signed_beacon_block::SignedBeaconBlock<MainnetEthSpec>;
-pub type SignedBeaconBlockDeneb =
-    lh_types::signed_beacon_block::SignedBeaconBlockDeneb<MainnetEthSpec>;
 pub type SignedBeaconBlockElectra =
     lh_types::signed_beacon_block::SignedBeaconBlockElectra<MainnetEthSpec>;
 
 // Beacon block
-pub type BeaconBlockDeneb = lh_types::beacon_block::BeaconBlockDeneb<MainnetEthSpec>;
 pub type BeaconBlockElectra = lh_types::beacon_block::BeaconBlockElectra<MainnetEthSpec>;
-pub type BeaconBlockBodyDeneb = lh_types::beacon_block_body::BeaconBlockBodyDeneb<MainnetEthSpec>;
 pub type BeaconBlockBodyElectra =
     lh_types::beacon_block_body::BeaconBlockBodyElectra<MainnetEthSpec>;
 
@@ -74,12 +70,9 @@ pub type ExecutionPayloadHeaderRef<'a> =
     lh_types::execution_payload_header::ExecutionPayloadHeaderRef<'a, MainnetEthSpec>;
 pub type ExecutionPayloadBellatrix =
     lh_types::execution_payload::ExecutionPayloadBellatrix<MainnetEthSpec>;
-pub type ExecutionPayloadHeaderDeneb =
-    lh_types::execution_payload_header::ExecutionPayloadHeaderDeneb<MainnetEthSpec>;
 pub type ExecutionPayloadHeaderElectra =
     lh_types::execution_payload_header::ExecutionPayloadHeaderElectra<MainnetEthSpec>;
 pub type ExecutionPayload = lh_types::execution_payload::ExecutionPayload<MainnetEthSpec>;
-pub type ExecutionPayloadDeneb = lh_types::execution_payload::ExecutionPayloadDeneb<MainnetEthSpec>;
 pub type ExecutionPayloadElectra =
     lh_types::execution_payload::ExecutionPayloadElectra<MainnetEthSpec>;
 pub type ExecutionPayloadRef<'a> =
@@ -89,7 +82,6 @@ pub type ExecutionPayloadRefMut<'a> =
 
 // Get header
 pub type BuilderBid = lh_types::builder_bid::BuilderBid<MainnetEthSpec>;
-pub type BuilderBidDeneb = lh_types::builder_bid::BuilderBidDeneb<MainnetEthSpec>;
 pub type BuilderBidElectra = lh_types::builder_bid::BuilderBidElectra<MainnetEthSpec>;
 pub type SignedBuilderBidInner = lh_types::builder_bid::SignedBuilderBid<MainnetEthSpec>;
 // TODO: change names , below should be GetHeaderResponse
@@ -100,15 +92,10 @@ pub type SignedBuilderBid = lh_types::ForkVersionedResponse<SignedBuilderBidInne
 /// Request object of POST `/eth/v1/builder/blinded_blocks`
 pub type SignedBlindedBeaconBlock =
     lh_types::signed_beacon_block::SignedBlindedBeaconBlock<MainnetEthSpec>; // TODO: maybe re implement this to avoid trait
-pub type SignedBlindedBeaconBlockDeneb = lh_types::signed_beacon_block::SignedBeaconBlockDeneb<
-    MainnetEthSpec,
-    BlindedPayload<MainnetEthSpec>,
->;
 pub type SignedBlindedBeaconBlockElectra = lh_types::signed_beacon_block::SignedBeaconBlockElectra<
     MainnetEthSpec,
     BlindedPayload<MainnetEthSpec>,
 >;
-pub type BlindedPayloadDeneb = lh_types::payload::BlindedPayloadDeneb<MainnetEthSpec>;
 pub type BlindedPayloadElectra = lh_types::payload::BlindedPayloadElectra<MainnetEthSpec>;
 pub type PayloadAndBlobs = lh_eth2::types::ExecutionPayloadAndBlobs<MainnetEthSpec>;
 /// Response object of POST `/eth/v1/builder/blinded_blocks`
