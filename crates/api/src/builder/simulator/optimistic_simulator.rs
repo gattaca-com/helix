@@ -7,7 +7,9 @@ use std::{
 };
 
 use alloy_primitives::B256;
-use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, task, BuilderInfo};
+use helix_common::{
+    metrics::SimulatorMetrics, simulator::BlockSimError, task, BuilderInfo, SimulatorConfig,
+};
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::BlsPublicKey;
@@ -35,15 +37,20 @@ pub struct OptimisticSimulator<A: Auctioneer + 'static, DB: DatabaseService + 's
 }
 
 impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator<A, DB> {
-    pub fn new(auctioneer: Arc<A>, db: Arc<DB>, http: Client, endpoint: String) -> Self {
-        let simulator = Arc::new(RpcSimulator::new(http, endpoint, db.clone()));
+    pub fn new(
+        auctioneer: Arc<A>,
+        db: Arc<DB>,
+        http: Client,
+        simulator_config: SimulatorConfig,
+    ) -> Self {
+        let simulator = Arc::new(RpcSimulator::new(http, simulator_config, db.clone()));
         let failsafe_triggered = Arc::new(AtomicBool::new(false));
         let optimistic_state = Arc::new(PauseState::new(Duration::from_secs(60)));
         Self { simulator, auctioneer, db, failsafe_triggered, optimistic_state }
     }
 
     pub fn endpoint(&self) -> &str {
-        &self.simulator.endpoint
+        &self.simulator.simulator_config.url
     }
 
     /// This is a lightweight operation as all params are references.

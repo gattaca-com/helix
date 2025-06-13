@@ -56,7 +56,7 @@ pub async fn run_api_service<A: Api>(
             auctioneer.clone(),
             db.clone(),
             client.clone(),
-            cfg.url.clone(),
+            cfg.clone(),
         );
         simulators.push(simulator);
     }

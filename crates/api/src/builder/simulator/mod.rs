@@ -32,6 +32,7 @@ pub struct BlockSimRequest {
     pub execution_requests: Option<ExecutionRequests>,
     pub parent_beacon_block_root: Option<B256>,
     pub inclusion_list: Option<InclusionListWithMetadata>,
+    pub apply_blacklist: bool,
 }
 
 impl BlockSimRequest {
@@ -47,6 +48,7 @@ impl BlockSimRequest {
             message: block.bid_trace().clone(),
             execution_payload: block.execution_payload().clone_from_ref(),
             signature: block.signature().clone(),
+            apply_blacklist: proposer_preferences.filtering.is_regional(),
             proposer_preferences,
             blobs_bundle: Some(block.blobs_bundle().clone()),
             execution_requests: block.execution_requests().cloned(),

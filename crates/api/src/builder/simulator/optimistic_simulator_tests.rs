@@ -3,7 +3,9 @@ mod simulator_tests {
     use std::sync::{atomic::AtomicBool, Arc};
 
     use alloy_primitives::{b256, U256};
-    use helix_common::{simulator::BlockSimError, BuilderInfo, ValidatorPreferences};
+    use helix_common::{
+        simulator::BlockSimError, BuilderInfo, SimulatorConfig, ValidatorPreferences,
+    };
     use helix_database::mock_database_service::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_types::{
@@ -30,7 +32,10 @@ mod simulator_tests {
         auctioneer.builder_demoted = builder_demoted;
         let db =
             MockDatabaseService::new(Arc::new(Default::default()), Arc::new(Default::default()));
-        OptimisticSimulator::new(Arc::new(auctioneer), Arc::new(db), http, endpoint.to_string())
+        OptimisticSimulator::new(Arc::new(auctioneer), Arc::new(db), http, SimulatorConfig {
+            url: endpoint.to_string(),
+            namespace: "test".to_string(),
+        })
     }
 
     fn get_sim_req() -> BlockSimRequest {
