@@ -10,6 +10,7 @@ use crate::{api::*, chain_info::ChainInfo, BuilderInfo, ValidatorPreferences};
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RelayConfig {
+    pub instance_id: Option<String>,
     #[serde(default)]
     pub website: WebsiteConfig,
     pub postgres: PostgresConfig,
@@ -224,6 +225,15 @@ impl NetworkConfig {
             }
         }
     }
+
+    pub fn short_name(&self) -> &str {
+        match self {
+            NetworkConfig::Mainnet => "Mainnet",
+            NetworkConfig::Sepolia => "Sepolia",
+            NetworkConfig::Holesky => "Holesky",
+            NetworkConfig::Custom { .. } => "Custom",
+        }
+    }
 }
 
 impl std::fmt::Display for NetworkConfig {
@@ -255,7 +265,7 @@ pub enum LoggingConfig {
         dir_path: PathBuf,
         file_name: String,
         /// OpenTelemetry server URL
-        otlp_server: Option<String>,
+        otlp_server: Option<Url>,
     },
 }
 
