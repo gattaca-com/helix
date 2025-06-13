@@ -1,4 +1,9 @@
-use std::{collections::HashSet, ops::DerefMut, sync::Arc, time::SystemTime};
+use std::{
+    collections::HashSet,
+    ops::DerefMut,
+    sync::Arc,
+    time::{Instant, SystemTime},
+};
 
 use alloy_primitives::B256;
 use async_trait::async_trait;
@@ -1064,8 +1069,12 @@ impl DatabaseService for PostgresDatabaseService {
         let mut record = DbMetricRecord::new("store_block_submission");
 
         let region_id = self.region;
+
+        let start = Instant::now();
         let mut client = self.pool.get().await?;
+        let client_t = start.elapsed();
         let transaction = client.transaction().await?;
+        let transaction_t = start.elapsed() - client_t;
 
         transaction.execute(
             "
@@ -1094,6 +1103,8 @@ impl DatabaseService for PostgresDatabaseService {
             ],
         ).await?;
 
+        let tx1_t = start.elapsed() - transaction_t;
+
         transaction.execute(
             "
                 INSERT INTO
@@ -1117,6 +1128,8 @@ impl DatabaseService for PostgresDatabaseService {
             ],
         ).await?;
 
+        let tx2_t = start.elapsed() - tx1_t;
+
         transaction.execute(
             "
                 INSERT INTO slot_preferences (slot_number, proposer_pubkey, filtering, trusted_builders, header_delay, gossip_blobs)
@@ -1131,7 +1144,14 @@ impl DatabaseService for PostgresDatabaseService {
             ],
             ).await?;
 
+        let tx3_t = start.elapsed() - tx2_t;
+
         transaction.commit().await?;
+
+        let commit_t = start.elapsed() - tx3_t;
+        let status = self.pool.status();
+
+        info!("status: {status:?} client_t: {client_t:?}, transaction_t: {transaction_t:?}, tx1_t: {tx1_t:?}, tx2_t: {tx2_t:?}, tx3_t: {tx3_t:?}, commit_t: {commit_t:?}");
 
         record.record_success();
         Ok(())
