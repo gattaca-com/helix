@@ -72,12 +72,8 @@ impl WebsiteService {
             current_slot_info: current_slot_info.clone(),
         });
 
-        let chain_updater = ChainEventUpdater::new(
-            db.clone(),
-            Arc::new(MockAuctioneer::new()),
-            chain_info,
-            current_slot_info,
-        );
+        let chain_updater =
+            ChainEventUpdater::new(Arc::new(MockAuctioneer::new()), chain_info, current_slot_info);
         info!("ChainEventUpdater initialized");
 
         let (head_event_tx, head_event_rx) = broadcast::channel(100);

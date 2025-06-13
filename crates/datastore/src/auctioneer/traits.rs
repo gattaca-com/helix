@@ -1,9 +1,13 @@
 use alloy_primitives::{bytes::Bytes, B256, U256};
 use async_trait::async_trait;
+use helix_beacon::types::{HeadEventData, PayloadAttributesEvent};
 use helix_common::{
-    api::builder_api::InclusionListWithMetadata,
-    bid_submission::v2::header_submission::SignedHeaderSubmission, builder_info::BuilderInfo,
-    pending_block::PendingBlock, signing::RelaySigningContext, ProposerInfo,
+    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
+    bid_submission::v2::header_submission::SignedHeaderSubmission,
+    builder_info::BuilderInfo,
+    pending_block::PendingBlock,
+    signing::RelaySigningContext,
+    ProposerInfo,
 };
 use helix_database::BuilderInfoDocument;
 use helix_types::{
@@ -222,4 +226,24 @@ pub trait Auctioneer: Send + Sync + Clone {
     ) -> Result<(), AuctioneerError>;
 
     fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey>;
+
+    async fn publish_head_event(&self, head_event: &HeadEventData) -> Result<(), AuctioneerError>;
+
+    fn get_head_event(&self) -> broadcast::Receiver<HeadEventData>;
+
+    async fn publish_payload_attributes(
+        &self,
+        payload_attributes_event: &PayloadAttributesEvent,
+    ) -> Result<(), AuctioneerError>;
+
+    fn get_payload_attributes(&self) -> broadcast::Receiver<PayloadAttributesEvent>;
+
+    async fn update_proposer_duties(
+        &self,
+        duties: Vec<BuilderGetValidatorsResponseEntry>,
+    ) -> Result<(), AuctioneerError>;
+
+    async fn get_proposer_duties(
+        &self,
+    ) -> Result<Vec<BuilderGetValidatorsResponseEntry>, AuctioneerError>;
 }

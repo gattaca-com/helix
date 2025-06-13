@@ -476,6 +476,8 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             "storing proposer duties"
         );
 
+        self.auctioneer.update_proposer_duties(formatted_proposer_duties.clone()).await?;
+
         self.db.set_proposer_duties(formatted_proposer_duties).await?;
 
         Ok(())
