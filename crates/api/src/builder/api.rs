@@ -27,7 +27,7 @@ use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{BlsPublicKey, SignedBidSubmission, Slot};
 use parking_lot::RwLock;
 use ssz::Decode;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 use super::multi_simulator::MultiSimulator;
 use crate::{

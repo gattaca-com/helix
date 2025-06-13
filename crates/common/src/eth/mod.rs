@@ -2,17 +2,13 @@ pub mod blob_sidecars;
 
 use alloy_primitives::B256;
 use helix_types::{
-    BlsPublicKey, BuilderBid, BuilderBidDeneb, BuilderBidElectra, ExecutionPayloadHeaderDeneb,
-    ExecutionPayloadHeaderElectra, ForkName, SignedBidSubmission, SignedBuilderBid,
-    SignedBuilderBidInner, Slot,
+    BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeaderElectra, ForkName,
+    SignedBidSubmission, SignedBuilderBid, SignedBuilderBidInner, Slot,
 };
 
 use crate::{
     bid_submission::v2::header_submission::SignedHeaderSubmission, signing::RelaySigningContext,
 };
-
-/// Index of the `blob_kzg_commitments` leaf in the `BeaconBlockBody` tree post-deneb.
-pub const BLOB_KZG_COMMITMENTS_INDEX: usize = 11;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct BidRequest {
@@ -28,24 +24,6 @@ pub fn bid_submission_to_builder_bid(
     signing_ctx: &RelaySigningContext,
 ) -> SignedBuilderBid {
     match submission {
-        SignedBidSubmission::Deneb(bid) => {
-            let header: ExecutionPayloadHeaderDeneb = (&bid.execution_payload).into();
-            let blobs_bundle = &bid.blobs_bundle;
-            let message: BuilderBid = BuilderBidDeneb {
-                header,
-                blob_kzg_commitments: blobs_bundle.commitments.clone(),
-                value: bid.message.value,
-                pubkey: signing_ctx.pubkey().into(), // relay pubkey
-            }
-            .into();
-
-            let sig = signing_ctx.sign_builder_message(&message);
-            let fork = ForkName::Deneb;
-            SignedBuilderBid::new_no_metadata(Some(fork), SignedBuilderBidInner {
-                message,
-                signature: sig,
-            })
-        }
         SignedBidSubmission::Electra(bid) => {
             let header: ExecutionPayloadHeaderElectra = (&bid.execution_payload).into();
             let blobs_bundle = &bid.blobs_bundle;
@@ -75,23 +53,6 @@ pub fn header_submission_to_builder_bid(
     signing_ctx: &RelaySigningContext,
 ) -> SignedBuilderBid {
     match submission {
-        SignedHeaderSubmission::Deneb(bid) => {
-            let header = bid.message.execution_payload_header.clone();
-            let message: BuilderBid = BuilderBidDeneb {
-                header,
-                blob_kzg_commitments: bid.message.commitments.clone(),
-                value: bid.message.bid_trace.value,
-                pubkey: signing_ctx.pubkey().into(), // relay pubkey
-            }
-            .into();
-
-            let sig = signing_ctx.sign_builder_message(&message);
-            let fork = ForkName::Deneb;
-            SignedBuilderBid::new_no_metadata(Some(fork), SignedBuilderBidInner {
-                message,
-                signature: sig,
-            })
-        }
         SignedHeaderSubmission::Electra(bid) => {
             let header = bid.message.execution_payload_header.clone();
             let message: BuilderBid = BuilderBidElectra {

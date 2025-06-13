@@ -4,8 +4,8 @@ use alloy_primitives::b256;
 use helix_common::{simulator::BlockSimError, BuilderInfo, ValidatorPreferences};
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_types::{
-    BidTrace, BlobsBundle, BlsSignature, ExecutionPayloadDeneb, ExecutionRequests,
-    SignedBeaconBlock, SignedBidSubmissionDeneb, SignedBidSubmissionElectra, TestRandomSeed,
+    BidTrace, BlobsBundle, BlsSignature, ExecutionPayloadElectra, ExecutionRequests,
+    SignedBeaconBlock, SignedBidSubmissionElectra, TestRandomSeed,
 };
 use reqwest::Client;
 use serde_json::json;
@@ -65,7 +65,7 @@ async fn get_block(slot_number: u64) -> BlockSimRequest {
 }
 
 fn get_sim_req() -> BlockSimRequest {
-    let deneb_exec_payload = ExecutionPayloadDeneb {
+    let electra_exec_payload = ExecutionPayloadElectra {
         block_hash: b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5")
             .into(),
         ..Default::default()
@@ -76,11 +76,12 @@ fn get_sim_req() -> BlockSimRequest {
         ..BidTrace::test_random()
     };
 
-    let signed_bid_submission = SignedBidSubmissionDeneb {
+    let signed_bid_submission = SignedBidSubmissionElectra {
         message: bid_trace,
         signature: BlsSignature::test_random(),
-        execution_payload: deneb_exec_payload.into(),
+        execution_payload: electra_exec_payload.into(),
         blobs_bundle: BlobsBundle::default(),
+        execution_requests: ExecutionRequests::default(),
     };
 
     BlockSimRequest::new(

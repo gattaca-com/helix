@@ -1,9 +1,6 @@
 use alloy_primitives::{Address, B256, U256};
 use lh_test_random::TestRandom;
-use lh_types::{
-    test_utils::TestRandom, ExecutionPayloadDeneb, ExecutionPayloadElectra, MainnetEthSpec,
-    SignedRoot, Slot,
-};
+use lh_types::{test_utils::TestRandom, ExecutionPayloadElectra, MainnetEthSpec, SignedRoot, Slot};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
@@ -51,15 +48,6 @@ impl BidTrace {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
 #[serde(deny_unknown_fields)]
-pub struct SignedBidSubmissionDeneb {
-    pub message: BidTrace,
-    pub execution_payload: ExecutionPayloadDeneb<MainnetEthSpec>,
-    pub blobs_bundle: BlobsBundle,
-    pub signature: BlsSignature,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
-#[serde(deny_unknown_fields)]
 pub struct SignedBidSubmissionElectra {
     pub message: BidTrace,
     pub execution_payload: ExecutionPayloadElectra<MainnetEthSpec>,
@@ -73,14 +61,7 @@ pub struct SignedBidSubmissionElectra {
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]
 pub enum SignedBidSubmission {
-    Deneb(SignedBidSubmissionDeneb),
     Electra(SignedBidSubmissionElectra),
-}
-
-impl From<SignedBidSubmissionDeneb> for SignedBidSubmission {
-    fn from(value: SignedBidSubmissionDeneb) -> Self {
-        SignedBidSubmission::Deneb(value)
-    }
 }
 
 impl From<SignedBidSubmissionElectra> for SignedBidSubmission {
@@ -93,10 +74,6 @@ impl SignedBidSubmission {
     pub fn verify_signature(&self, spec: &ChainSpec) -> Result<(), SigError> {
         let domain = spec.get_builder_domain();
         let valid = match self {
-            SignedBidSubmission::Deneb(bid) => {
-                let message = bid.message.signing_root(domain);
-                bid.signature.verify(&bid.message.builder_pubkey, message)
-            }
             SignedBidSubmission::Electra(bid) => {
                 let message = bid.message.signing_root(domain);
                 bid.signature.verify(&bid.message.builder_pubkey, message)
@@ -115,9 +92,6 @@ impl SignedBidSubmission {
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 signed_bid_submission.execution_payload.transactions.len()
             }
-            SignedBidSubmission::Deneb(signed_bid_submission) => {
-                signed_bid_submission.execution_payload.transactions.len()
-            }
         }
     }
 
@@ -126,16 +100,12 @@ impl SignedBidSubmission {
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 &signed_bid_submission.blobs_bundle
             }
-            SignedBidSubmission::Deneb(signed_bid_submission) => {
-                &signed_bid_submission.blobs_bundle
-            }
         }
     }
 
     pub fn message(&self) -> &BidTrace {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => &signed_bid_submission.message,
-            SignedBidSubmission::Deneb(signed_bid_submission) => &signed_bid_submission.message,
         }
     }
 
@@ -144,15 +114,11 @@ impl SignedBidSubmission {
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 &mut signed_bid_submission.message
             }
-            SignedBidSubmission::Deneb(signed_bid_submission) => &mut signed_bid_submission.message,
         }
     }
 
     pub fn execution_payload_mut(&mut self) -> ExecutionPayloadRefMut {
         match self {
-            SignedBidSubmission::Deneb(signed_bid_submission) => {
-                ExecutionPayloadRefMut::Deneb(&mut signed_bid_submission.execution_payload)
-            }
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 ExecutionPayloadRefMut::Electra(&mut signed_bid_submission.execution_payload)
             }
@@ -161,9 +127,6 @@ impl SignedBidSubmission {
 
     pub fn execution_payload(&self) -> ExecutionPayloadRef {
         match self {
-            SignedBidSubmission::Deneb(signed_bid_submission) => {
-                (&signed_bid_submission.execution_payload).into()
-            }
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 (&signed_bid_submission.execution_payload).into()
             }
@@ -179,7 +142,6 @@ impl SignedBidSubmission {
 
     pub fn execution_requests(&self) -> Option<&ExecutionRequests> {
         match self {
-            SignedBidSubmission::Deneb(_) => None,
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 Some(&signed_bid_submission.execution_requests)
             }
@@ -194,26 +156,6 @@ mod tests {
 
     use super::*;
     use crate::test_utils::{test_encode_decode_json, test_encode_decode_ssz};
-
-    #[test]
-    // from the relay API spec, adding the blob and the proposer_pubkey field
-    fn deneb_bid_submission() {
-        let data_json = include_str!("testdata/signed-bid-submission-deneb.json");
-        let s = test_encode_decode_json::<SignedBidSubmission>(&data_json);
-        assert!(matches!(s, SignedBidSubmission::Deneb(_)));
-    }
-
-    #[test]
-    // from alloy
-    fn deneb_bid_submission_2() {
-        let data_json = include_str!("testdata/signed-bid-submission-deneb-2.json");
-        let s = test_encode_decode_json::<SignedBidSubmission>(&data_json);
-        assert!(matches!(s, SignedBidSubmission::Deneb(_)));
-
-        let data_ssz = include_bytes!("testdata/signed-bid-submission-deneb-2.ssz");
-        test_encode_decode_ssz::<SignedBidSubmission>(data_ssz);
-        assert_eq!(data_ssz, s.as_ssz_bytes().as_slice());
-    }
 
     #[test]
     // from the relay API spec, adding the blob and the proposer_pubkey field

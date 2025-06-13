@@ -7,7 +7,7 @@ use reqwest::{
     Client, Response, StatusCode,
 };
 use serde_json::{json, Value};
-use tracing::{debug, error, info, Instrument};
+use tracing::{debug, error, Instrument};
 
 use crate::builder::{BlockSimRequest, DbInfo};
 

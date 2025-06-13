@@ -48,6 +48,6 @@ fn decode_ssz_signed_blinded_beacon_block(
     {
         Ok(signed_blinded_beacon_block)
     } else {
-        SignedBlindedBeaconBlock::from_ssz_bytes_by_fork(bytes, ForkName::Deneb)
+        Err(ssz::DecodeError::NoMatchingVariant)
     }
 }

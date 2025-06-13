@@ -625,37 +625,11 @@ fn validate_block_equality(
     match local_header {
         ExecutionPayloadHeader::Bellatrix(_) |
         ExecutionPayloadHeader::Capella(_) |
+        ExecutionPayloadHeader::Deneb(_) |
         ExecutionPayloadHeader::Fulu(_) => {
             return Err(ProposerApiError::UnsupportedBeaconChainVersion)
         }
 
-        ExecutionPayloadHeader::Deneb(local_header) => {
-            let provided_header = &body
-                .execution_payload_deneb()
-                .map_err(|_| ProposerApiError::PayloadTypeMismatch)?
-                .execution_payload_header;
-
-            info!(
-                local_header = ?local_header,
-                provided_header = ?provided_header,
-                provided_version = %provided_signed_blinded_block.fork_name_unchecked(),
-                "validating block equality",
-            );
-
-            if &local_header != provided_header {
-                return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
-            }
-
-            let local_kzg_commitments = &local_versioned_payload.blobs_bundle.commitments;
-
-            let provided_kzg_commitments = body
-                .blob_kzg_commitments()
-                .map_err(|_| ProposerApiError::BlobKzgCommitmentsMismatch)?;
-
-            if local_kzg_commitments != provided_kzg_commitments {
-                return Err(ProposerApiError::BlobKzgCommitmentsMismatch);
-            }
-        }
         ExecutionPayloadHeader::Electra(local_header) => {
             let provided_header = &body
                 .execution_payload_electra()

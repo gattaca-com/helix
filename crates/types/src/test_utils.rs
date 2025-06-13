@@ -1,13 +1,13 @@
 use alloy_primitives::{b256, B256};
 use lh_types::{
     test_utils::{TestRandom, XorShiftRng},
-    BeaconBlockDeneb, BlindedPayload, FullPayload, MainnetEthSpec,
+    BeaconBlockElectra, BlindedPayload, FullPayload, MainnetEthSpec,
 };
 use rand::SeedableRng;
 use serde_json::Value;
 use ssz::{Decode, Encode};
 
-use crate::{Blob, BlobsBundle, BlsPublicKey, BlsSecretKey, ExecutionPayloadDeneb};
+use crate::{Blob, BlobsBundle, BlsPublicKey, BlsSecretKey, ExecutionPayloadElectra};
 
 /// Test that the encoding and decoding works, returns the decoded struct
 pub fn test_encode_decode_json<T: serde::Serialize + serde::de::DeserializeOwned>(d: &str) -> T {
@@ -59,13 +59,13 @@ pub fn get_fixed_secret(i: usize) -> BlsSecretKey {
     key
 }
 
-pub fn get_payload_deneb() -> (
-    ExecutionPayloadDeneb,
-    BeaconBlockDeneb<MainnetEthSpec, BlindedPayload<MainnetEthSpec>>,
+pub fn get_payload_electra() -> (
+    ExecutionPayloadElectra,
+    BeaconBlockElectra<MainnetEthSpec, BlindedPayload<MainnetEthSpec>>,
     BlobsBundle,
 ) {
-    let mut full_payload: BeaconBlockDeneb<MainnetEthSpec, FullPayload<MainnetEthSpec>> =
-        BeaconBlockDeneb::test_random();
+    let mut full_payload: BeaconBlockElectra<MainnetEthSpec, FullPayload<MainnetEthSpec>> =
+        BeaconBlockElectra::test_random();
 
     full_payload.body.blob_kzg_commitments = Default::default();
 

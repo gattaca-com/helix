@@ -2,8 +2,7 @@ use alloy_primitives::B256;
 use axum::http::HeaderValue;
 use helix_common::Filtering;
 use helix_types::{
-    BeaconBlockBodyDeneb, BeaconBlockBodyElectra, BeaconBlockDeneb, BeaconBlockElectra,
-    BlsPublicKey, PayloadAndBlobs, SignedBeaconBlock, SignedBeaconBlockDeneb,
+    BeaconBlockBodyElectra, BeaconBlockElectra, BlsPublicKey, PayloadAndBlobs, SignedBeaconBlock,
     SignedBeaconBlockElectra, SignedBlindedBeaconBlock, VersionedSignedProposal,
 };
 use serde::Deserialize;
@@ -28,56 +27,8 @@ pub fn unblind_beacon_block(
         SignedBlindedBeaconBlock::Base(_) |
         SignedBlindedBeaconBlock::Bellatrix(_) |
         SignedBlindedBeaconBlock::Capella(_) |
+        SignedBlindedBeaconBlock::Deneb(_) |
         SignedBlindedBeaconBlock::Fulu(_) => Err(ProposerApiError::UnsupportedBeaconChainVersion),
-
-        SignedBlindedBeaconBlock::Deneb(blinded_block) => {
-            let signature = blinded_block.signature.clone();
-            let block = &blinded_block.message;
-            let body = &block.body;
-            let execution_payload = versioned_execution_payload
-                .execution_payload
-                .as_deneb()
-                .map_err(|_| ProposerApiError::PayloadTypeMismatch)?
-                .clone();
-
-            let blobs_bundle = &versioned_execution_payload.blobs_bundle;
-
-            if body.blob_kzg_commitments.len() != blobs_bundle.blobs.len() {
-                return Err(ProposerApiError::BlindedBlobsBundleLengthMismatch);
-            }
-
-            let inner = SignedBeaconBlockDeneb {
-                message: BeaconBlockDeneb {
-                    slot: block.slot,
-                    proposer_index: block.proposer_index,
-                    parent_root: block.parent_root,
-                    state_root: block.state_root,
-                    body: BeaconBlockBodyDeneb {
-                        randao_reveal: body.randao_reveal.clone(),
-                        eth1_data: body.eth1_data.clone(),
-                        graffiti: body.graffiti,
-                        proposer_slashings: body.proposer_slashings.clone(),
-                        attester_slashings: body.attester_slashings.clone(),
-                        attestations: body.attestations.clone(),
-                        deposits: body.deposits.clone(),
-                        voluntary_exits: body.voluntary_exits.clone(),
-                        sync_aggregate: body.sync_aggregate.clone(),
-                        execution_payload: execution_payload.into(),
-                        bls_to_execution_changes: body.bls_to_execution_changes.clone(),
-                        blob_kzg_commitments: body.blob_kzg_commitments.clone(),
-                    },
-                },
-                signature,
-            };
-
-            let signed_block = SignedBeaconBlock::Deneb(inner).into();
-
-            Ok(VersionedSignedProposal {
-                signed_block,
-                kzg_proofs: blobs_bundle.proofs.clone(),
-                blobs: blobs_bundle.blobs.clone(),
-            })
-        }
         SignedBlindedBeaconBlock::Electra(blinded_block) => {
             let signature = blinded_block.signature.clone();
             let block = &blinded_block.message;
