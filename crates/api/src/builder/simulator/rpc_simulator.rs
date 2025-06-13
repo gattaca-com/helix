@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, task, BuilderInfo};
+use helix_common::{
+    metrics::SimulatorMetrics, simulator::BlockSimError, task, BuilderInfo, SimulatorConfig,
+};
 use helix_database::DatabaseService;
 use reqwest::{
     header::{HeaderMap, HeaderValue, CONTENT_TYPE},
@@ -26,13 +28,13 @@ pub struct BlockSimRpcResponse {
 #[derive(Clone)]
 pub struct RpcSimulator<DB: DatabaseService + 'static> {
     http: Client,
-    pub endpoint: String,
+    pub simulator_config: SimulatorConfig,
     db: Arc<DB>,
 }
 
 impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
-    pub fn new(http: Client, endpoint: String, db: Arc<DB>) -> Self {
-        Self { http, endpoint, db }
+    pub fn new(http: Client, simulator_config: SimulatorConfig, db: Arc<DB>) -> Self {
+        Self { http, simulator_config, db }
     }
 
     /// Sends an RPC request for block validation.
@@ -48,28 +50,12 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
             headers.insert("X-High-Priority", HeaderValue::from_static("true"));
         };
 
-        let rpc_payload = if request.parent_beacon_block_root.is_none() {
-            json!({
-                "jsonrpc": "2.0",
-                "id": "1",
-                "method": "flashbots_validateBuilderSubmissionV2",
-                "params": [request]
-            })
-        } else if request.execution_requests.is_none() {
-            json!({
-                "jsonrpc": "2.0",
-                "id": "1",
-                "method": "flashbots_validateBuilderSubmissionV3",
-                "params": [request]
-            })
-        } else {
-            json!({
-                "jsonrpc": "2.0",
-                "id": "1",
-                "method": "flashbots_validateBuilderSubmissionV4",
-                "params": [request]
-            })
-        };
+        let rpc_payload = json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": format!("{}_validateBuilderSubmissionV4", self.simulator_config.namespace),
+            "params": [request]
+        });
 
         debug!(
             request.message.slot,
@@ -78,7 +64,13 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
             "Sending RPC request",
         );
 
-        let res = self.http.post(&self.endpoint).headers(headers).json(&rpc_payload).send().await;
+        let res = self
+            .http
+            .post(&self.simulator_config.url)
+            .headers(headers)
+            .json(&rpc_payload)
+            .send()
+            .await;
 
         debug!(
             request.message.slot,
@@ -113,7 +105,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
         _builder_info: &BuilderInfo,
         is_top_bid: bool,
     ) -> Result<bool, BlockSimError> {
-        let timer = SimulatorMetrics::timer(&self.endpoint);
+        let timer = SimulatorMetrics::timer(&self.simulator_config.url);
 
         let block_hash = request.execution_payload.block_hash().0;
         debug!(
@@ -162,16 +154,22 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
             "params": []
         });
 
-        debug!(endpoint = %self.endpoint, "sending eth_syncing");
+        debug!(endpoint = %self.simulator_config.url, "sending eth_syncing");
 
-        let response =
-            match self.http.post(&self.endpoint).headers(headers).json(&payload).send().await {
-                Ok(response) => response,
-                Err(err) => {
-                    error!(%err, "error sending eth_syncing request");
-                    return Err(BlockSimError::RpcError(err.to_string()));
-                }
-            };
+        let response = match self
+            .http
+            .post(&self.simulator_config.url)
+            .headers(headers)
+            .json(&payload)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(err) => {
+                error!(%err, "error sending eth_syncing request");
+                return Err(BlockSimError::RpcError(err.to_string()));
+            }
+        };
 
         let json_response: Value = match response.json().await {
             Ok(json_response) => json_response,

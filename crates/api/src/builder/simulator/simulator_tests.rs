@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use alloy_primitives::b256;
-use helix_common::{simulator::BlockSimError, BuilderInfo, ValidatorPreferences};
+use helix_common::{simulator::BlockSimError, BuilderInfo, SimulatorConfig, ValidatorPreferences};
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_types::{
     BidTrace, BlobsBundle, BlsSignature, ExecutionPayloadElectra, ExecutionRequests,
@@ -17,7 +17,9 @@ use crate::builder::{
 
 fn get_simulator(endpoint: &str) -> RpcSimulator<MockDatabaseService> {
     let http = Client::new();
-    RpcSimulator::new(http, endpoint.to_string(), Arc::new(MockDatabaseService::default()))
+    let simulator_config =
+        SimulatorConfig { url: endpoint.to_string(), namespace: "test".to_string() };
+    RpcSimulator::new(http, simulator_config, Arc::new(MockDatabaseService::default()))
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

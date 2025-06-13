@@ -179,6 +179,12 @@ pub struct FiberConfig {
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct SimulatorConfig {
     pub url: String,
+    #[serde(default = "default_namespace")]
+    pub namespace: String,
+}
+
+fn default_namespace() -> String {
+    "flashbots".to_string()
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -442,7 +448,10 @@ fn test_config() {
 
     let mut config = RelayConfig::default();
     config.redis.url = "redis://localhost:6379".to_string();
-    config.simulators = vec![SimulatorConfig { url: "http://localhost:8080".to_string() }];
+    config.simulators = vec![SimulatorConfig {
+        url: "http://localhost:8080".to_string(),
+        namespace: "test".to_string(),
+    }];
     config.beacon_clients.push(BeaconClientConfig {
         url: Url::parse("http://localhost:8080").unwrap(),
         gossip_blobs_enabled: false,
