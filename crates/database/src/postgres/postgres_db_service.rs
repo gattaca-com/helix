@@ -68,11 +68,13 @@ pub struct PostgresDatabaseService {
     validator_pool_cache: Arc<DashMap<String, String>>,
     region: i16,
     pub pool: Arc<Pool>,
+    pub high_priority_pool: Arc<Pool>,
 }
 
 impl PostgresDatabaseService {
     pub fn new(cfg: &Config, region: i16) -> Result<Self, Box<dyn std::error::Error>> {
         let pool = cfg.create_pool(None, NoTls)?;
+        let high_priority_pool = cfg.create_pool(None, NoTls)?;
         Ok(PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
@@ -80,6 +82,7 @@ impl PostgresDatabaseService {
             validator_pool_cache: Arc::new(DashMap::new()),
             region,
             pool: Arc::new(pool),
+            high_priority_pool: Arc::new(high_priority_pool),
         })
     }
 
@@ -102,6 +105,16 @@ impl PostgresDatabaseService {
             }
         };
 
+        let high_priority_pool = loop {
+            match cfg.create_pool(None, NoTls) {
+                Ok(pool) => break pool,
+                Err(e) => {
+                    error!("Error creating pool: {}", e);
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            }
+        };
+
         PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
@@ -109,6 +122,7 @@ impl PostgresDatabaseService {
             validator_pool_cache: Arc::new(DashMap::new()),
             region: relay_config.postgres.region,
             pool: Arc::new(pool),
+            high_priority_pool: Arc::new(high_priority_pool),
         }
     }
 
@@ -429,6 +443,7 @@ impl Default for PostgresDatabaseService {
         cfg.manager = Some(ManagerConfig { recycling_method: RecyclingMethod::Fast });
 
         let pool = cfg.create_pool(None, NoTls).unwrap();
+        let high_priority_pool = cfg.create_pool(None, NoTls).unwrap();
 
         PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
@@ -437,6 +452,7 @@ impl Default for PostgresDatabaseService {
             validator_pool_cache: Arc::new(DashMap::new()),
             region: 1,
             pool: Arc::new(pool),
+            high_priority_pool: Arc::new(high_priority_pool),
         }
     }
 }
@@ -573,7 +589,7 @@ impl DatabaseService for PostgresDatabaseService {
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_validator_registrations_for_pub_keys");
 
-        let client = self.pool.get().await.map_err(DatabaseError::from)?;
+        let client = self.high_priority_pool.get().await.map_err(DatabaseError::from)?;
 
         // Constructing the query
         let placeholders: Vec<String> = (1..=pub_keys.len()).map(|i| format!("${}", i)).collect();
@@ -610,7 +626,7 @@ impl DatabaseService for PostgresDatabaseService {
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("set_proposer_duties");
 
-        let mut client = self.pool.get().await?;
+        let mut client = self.high_priority_pool.get().await?;
         let transaction = client.transaction().await?;
 
         transaction
@@ -681,7 +697,7 @@ impl DatabaseService for PostgresDatabaseService {
         let mut record = DbMetricRecord::new("get_proposer_duties");
 
         let rows = self
-            .pool
+            .high_priority_pool
             .get()
             .await?
             .query(
@@ -780,7 +796,7 @@ impl DatabaseService for PostgresDatabaseService {
     ) -> Result<HashSet<BlsPublicKey>, DatabaseError> {
         let mut record = DbMetricRecord::new("check_known_validators");
 
-        let client = self.pool.get().await?;
+        let client = self.high_priority_pool.get().await?;
         let mut pub_keys = HashSet::new();
 
         for public_key in public_keys.iter() {
@@ -812,7 +828,7 @@ impl DatabaseService for PostgresDatabaseService {
     ) -> Result<Option<String>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_validator_pool_name");
 
-        let client = self.pool.get().await?;
+        let client = self.high_priority_pool.get().await?;
 
         if self.validator_pool_cache.is_empty() {
             let rows = client.query("SELECT * FROM validator_pools", &[]).await?;
@@ -1194,7 +1210,8 @@ impl DatabaseService for PostgresDatabaseService {
     async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_all_builder_infos");
 
-        let rows = self.pool.get().await?.query("SELECT * FROM builder_info", &[]).await?;
+        let rows =
+            self.high_priority_pool.get().await?.query("SELECT * FROM builder_info", &[]).await?;
 
         record.record_success();
         parse_rows(rows)
@@ -1204,7 +1221,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn check_builder_api_key(&self, api_key: &str) -> Result<bool, DatabaseError> {
         let mut record = DbMetricRecord::new("check_builder_api_key");
 
-        let client = self.pool.get().await?;
+        let client = self.high_priority_pool.get().await?;
         let rows =
             client.query("SELECT * FROM builder_info WHERE api_key = $1", &[&(api_key)]).await?;
 
@@ -1222,7 +1239,7 @@ impl DatabaseService for PostgresDatabaseService {
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("db_demote_builder");
 
-        let mut client = self.pool.get().await?;
+        let mut client = self.high_priority_pool.get().await?;
         let transaction = client.transaction().await?;
         let builder_pub_key_bytes = builder_pub_key.serialize();
 
@@ -1815,7 +1832,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn get_trusted_proposers(&self) -> Result<Vec<ProposerInfo>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_trusted_proposers");
         let rows = self
-            .pool
+            .high_priority_pool
             .get()
             .await?
             .query(
@@ -1839,7 +1856,7 @@ impl DatabaseService for PostgresDatabaseService {
         proposer_pubkey: &BlsPublicKey,
     ) -> Result<(), Vec<DatabaseError>> {
         let mut record = DbMetricRecord::new("save_inclusion_list");
-        let client = self.pool.get().await.map_err(|err| vec![err.into()])?;
+        let client = self.high_priority_pool.get().await.map_err(|err| vec![err.into()])?;
         let mut errors = vec![];
 
         for tx in &inclusion_list.txs {
