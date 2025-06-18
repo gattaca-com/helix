@@ -1090,8 +1090,7 @@ impl DatabaseService for PostgresDatabaseService {
                 VALUES
                     ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                 ON CONFLICT (block_hash)
-                DO UPDATE SET
-                    first_seen = LEAST(block_submission.first_seen, excluded.first_seen)
+                DO NOTHING
                 ",
             &[
                 &(submission.block_number() as i32),
@@ -1720,8 +1719,7 @@ impl DatabaseService for PostgresDatabaseService {
                 VALUES
                     ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                 ON CONFLICT (block_hash)
-                DO UPDATE SET
-                    first_seen = LEAST(header_submission.first_seen, excluded.first_seen)
+                DO NOTHING
                 ",
             &[
                 &(submission.execution_payload_header().block_number() as i32),
