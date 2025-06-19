@@ -24,6 +24,7 @@ pub async fn start_db_service(config: &RelayConfig) -> eyre::Result<Arc<Postgres
     postgres_db.load_known_validators().await;
     //postgres_db.load_validator_registrations().await;
     postgres_db.start_registration_processor().await;
+    postgres_db.start_submission_processors().await;
 
     Ok(Arc::new(postgres_db))
 }
