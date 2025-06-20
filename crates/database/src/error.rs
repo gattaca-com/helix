@@ -37,6 +37,9 @@ pub enum DatabaseError {
     #[error("serde_json error: {0}")]
     SerdeJsonError(#[from] serde_json::Error),
 
+    #[error("Failed to send to block submission channel")]
+    ChannelSendError,
+
     #[error("Block submission already exists")]
     BlockSubmissionAlreadyExists,
 

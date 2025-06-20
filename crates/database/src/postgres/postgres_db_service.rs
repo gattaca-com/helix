@@ -26,7 +26,7 @@ use helix_common::{
 use helix_types::{
     BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
 };
-use tokio::time::interval;
+use tokio::sync::mpsc::Sender;
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{error, info, instrument, warn};
 
@@ -74,14 +74,13 @@ struct TrustedProposerParams {
 pub struct PostgresDatabaseService {
     validator_registration_cache: Arc<DashMap<BlsPublicKey, SignedValidatorRegistrationEntry>>,
     pending_validator_registrations: Arc<DashSet<BlsPublicKey>>,
-    pending_block_submissions: Arc<DashMap<Vec<u8>, PendingBlockSubmissionValue>>,
-    pending_header_submissions: Arc<DashMap<Vec<u8>, PendingHeaderSubmissionValue>>,
+    block_submissions_sender: Option<Sender<PendingBlockSubmissionValue>>,
+    header_submissions_sender: Option<Sender<PendingHeaderSubmissionValue>>,
     known_validators_cache: Arc<DashSet<BlsPublicKey>>,
     validator_pool_cache: Arc<DashMap<String, String>>,
     region: i16,
     pub pool: Arc<Pool>,
     pub high_priority_pool: Arc<Pool>,
-    processed_slots: Arc<DashSet<i32>>,
 }
 
 impl PostgresDatabaseService {
@@ -91,14 +90,13 @@ impl PostgresDatabaseService {
         Ok(PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
-            pending_block_submissions: Arc::new(DashMap::new()),
-            pending_header_submissions: Arc::new(DashMap::new()),
+            block_submissions_sender: None,
+            header_submissions_sender: None,
             known_validators_cache: Arc::new(DashSet::new()),
             validator_pool_cache: Arc::new(DashMap::new()),
             region,
             pool: Arc::new(pool),
             high_priority_pool: Arc::new(high_priority_pool),
-            processed_slots: Arc::new(DashSet::new()),
         })
     }
 
@@ -134,14 +132,13 @@ impl PostgresDatabaseService {
         PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
-            pending_block_submissions: Arc::new(DashMap::new()),
-            pending_header_submissions: Arc::new(DashMap::new()),
+            block_submissions_sender: None,
+            header_submissions_sender: None,
             known_validators_cache: Arc::new(DashSet::new()),
             validator_pool_cache: Arc::new(DashMap::new()),
             region: relay_config.postgres.region,
             pool: Arc::new(pool),
             high_priority_pool: Arc::new(high_priority_pool),
-            processed_slots: Arc::new(DashSet::new()),
         }
     }
 
@@ -265,48 +262,62 @@ impl PostgresDatabaseService {
         });
     }
 
-    pub async fn start_submission_processors(&self) {
-        // block submissions
-        let block_queue = self.pending_block_submissions.clone();
+    pub async fn start_block_submission_processor(&mut self) {
+        let (block_submissions_sender, mut block_submissions_receiver) =
+            tokio::sync::mpsc::channel(10_000);
+        self.block_submissions_sender = Some(block_submissions_sender);
         let svc_clone = self.clone();
         tokio::spawn(async move {
-            let mut tick = interval(Duration::from_secs(5));
+            let mut batch = Vec::with_capacity(1_000);
+            let mut ticker = tokio::time::interval(Duration::from_secs(5));
+            let mut last_slot_processed = 0;
             loop {
-                tick.tick().await;
-                if block_queue.is_empty() {
-                    continue
-                }
-                // drain
-                let mut batch = Vec::new();
-                for entry in block_queue.iter() {
-                    let (submission, trace, opt_version, ts) = entry.value().clone();
-                    batch.push((submission, trace, opt_version, ts));
-                    block_queue.remove(entry.key());
-                }
-                if let Err(e) = svc_clone._flush_block_submissions(batch).await {
-                    error!("flush block subs failed: {:?}", e);
+                tokio::select! {
+                    Some(item) = block_submissions_receiver.recv() => {
+                        batch.push(item);
+                        // drain to coalesce
+                        while let Ok(item) = block_submissions_receiver.try_recv() {
+                            batch.push(item);
+                            if batch.len() >= 1_000 { break }
+                        }
+                    }
+                    _ = ticker.tick() => {
+                        if !batch.is_empty() {
+                            if let Err(e) = svc_clone._flush_block_submissions(std::mem::take(&mut batch), &mut last_slot_processed).await {
+                                error!("block batch failed: {:?}", e);
+                            }
+                        }
+                    }
                 }
             }
         });
+    }
 
-        // header submissions
-        let header_queue = self.pending_header_submissions.clone();
+    pub async fn start_header_submission_processor(&mut self) {
+        let (header_submissions_sender, mut header_submissions_receiver) =
+            tokio::sync::mpsc::channel(10_000);
+        self.header_submissions_sender = Some(header_submissions_sender);
         let svc_clone = self.clone();
         tokio::spawn(async move {
-            let mut tick = interval(Duration::from_secs(5));
+            let mut batch = Vec::with_capacity(1_000);
+            let mut ticker = tokio::time::interval(Duration::from_secs(5));
             loop {
-                tick.tick().await;
-                if header_queue.is_empty() {
-                    continue
-                }
-                let mut batch = Vec::new();
-                for entry in header_queue.iter() {
-                    let (submission, trace, tx_count, ts) = entry.value().clone();
-                    batch.push((submission, trace, tx_count, ts));
-                    header_queue.remove(entry.key());
-                }
-                if let Err(e) = svc_clone._flush_header_submissions(batch).await {
-                    error!("flush header subs failed: {:?}", e);
+                tokio::select! {
+                    Some(item) = header_submissions_receiver.recv() => {
+                        batch.push(item);
+                        // drain to coalesce
+                        while let Ok(item) = header_submissions_receiver.try_recv() {
+                            batch.push(item);
+                            if batch.len() >= 1_000 { break }
+                        }
+                    }
+                    _ = ticker.tick() => {
+                        if !batch.is_empty() {
+                            if let Err(e) = svc_clone._flush_header_submissions(std::mem::take(&mut batch)).await {
+                                error!("header batch failed: {:?}", e);
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -500,6 +511,7 @@ impl PostgresDatabaseService {
     async fn _flush_block_submissions(
         &self,
         batch: Vec<(Arc<SignedBidSubmission>, SubmissionTrace, i16, SystemTime)>,
+        last_processed_slot: &mut i32,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("flush_block_submissions");
         let mut client = self.pool.get().await?;
@@ -650,9 +662,11 @@ impl PostgresDatabaseService {
         // Step 3: build structured params for slot_preferences, skipping already processed slots
         // Collect only new slots
         let mut new_rows: Vec<(i32, Vec<u8>)> = Vec::with_capacity(batch.len());
+        let mut tmp_last_processed_slot = *last_processed_slot;
         for (submission, _, _, _) in &batch {
             let slot = submission.slot().as_u64() as i32;
-            if !self.processed_slots.contains(&slot) {
+            if slot > tmp_last_processed_slot {
+                tmp_last_processed_slot = slot;
                 new_rows
                     .push((slot, submission.proposer_public_key().serialize().as_slice().to_vec()));
             }
@@ -681,14 +695,10 @@ impl PostgresDatabaseService {
             vp_sql.push_str("JOIN validator_preferences vp ON vp.public_key = r.proposer_pubkey ");
             vp_sql.push_str("ON CONFLICT (slot_number) DO NOTHING");
             transaction.execute(&vp_sql, &sp_params).await?;
-
-            // Mark processed slots in cache
-            for (slot, _) in new_rows {
-                self.processed_slots.insert(slot);
-            }
         }
 
         transaction.commit().await?;
+        *last_processed_slot = tmp_last_processed_slot;
         record.record_success();
         Ok(())
     }
@@ -861,14 +871,13 @@ impl Default for PostgresDatabaseService {
         PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
-            pending_block_submissions: Arc::new(DashMap::new()),
-            pending_header_submissions: Arc::new(DashMap::new()),
+            block_submissions_sender: None,
+            header_submissions_sender: None,
             known_validators_cache: Arc::new(DashSet::new()),
             validator_pool_cache: Arc::new(DashMap::new()),
             region: 1,
             pool: Arc::new(pool),
             high_priority_pool: Arc::new(high_priority_pool),
-            processed_slots: Arc::new(DashSet::new()),
         }
     }
 }
@@ -1494,11 +1503,14 @@ impl DatabaseService for PostgresDatabaseService {
         optimistic_version: i16,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_block_submission");
-
-        let key = submission.block_hash().as_slice().to_vec();
-        self.pending_block_submissions
-            .insert(key, (submission, trace, optimistic_version, SystemTime::now()));
-
+        if let Some(sender) = &self.block_submissions_sender {
+            sender
+                .send((submission.clone(), trace, optimistic_version, SystemTime::now()))
+                .await
+                .map_err(|_| DatabaseError::ChannelSendError)?;
+        } else {
+            return Err(DatabaseError::ChannelSendError);
+        }
         record.record_success();
         Ok(())
     }
@@ -2055,11 +2067,14 @@ impl DatabaseService for PostgresDatabaseService {
         tx_count: Option<u32>,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_header_submission");
-
-        let key = submission.block_hash().as_slice().to_vec();
-        self.pending_header_submissions
-            .insert(key, (submission, trace, tx_count, SystemTime::now()));
-
+        if let Some(sender) = &self.header_submissions_sender {
+            sender
+                .send((submission.clone(), trace, tx_count, SystemTime::now()))
+                .await
+                .map_err(|_| DatabaseError::ChannelSendError)?;
+        } else {
+            return Err(DatabaseError::ChannelSendError);
+        }
         record.record_success();
         Ok(())
     }
