@@ -322,6 +322,7 @@ impl RouterConfig {
             Route::SubmitHeader,
             Route::GetTopBid,
             Route::GetInclusionList,
+            Route::SubmitHeaderV3,
         ]);
 
         self.replace_condensed_with_real(Route::ProposerApi, &[
