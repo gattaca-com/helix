@@ -25,7 +25,7 @@ use crate::{
     gossip::{self},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::ProposerApi,
-    relay_data::{BidsCache, DataApi, DeliveredPayloadsCache},
+    relay_data::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry},
     router::build_router,
     Api,
 };
@@ -133,8 +133,11 @@ pub async fn run_api_service<A: Api>(
     let bids_cache: BidsCache =
         Cache::builder().time_to_idle(Duration::from_secs(300)).max_capacity(10_000).build();
 
-    let delivered_payloads_cache: DeliveredPayloadsCache =
-        Cache::builder().time_to_idle(Duration::from_secs(300)).max_capacity(10_000).build();
+    let delivered_payloads_cache: DeliveredPayloadsCache = Cache::builder()
+        .expire_after(SelectiveExpiry)
+        .time_to_idle(Duration::from_secs(300))
+        .max_capacity(10_000)
+        .build();
 
     let router = build_router(
         &mut config.router_config,

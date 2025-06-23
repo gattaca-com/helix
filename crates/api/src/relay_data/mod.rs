@@ -2,13 +2,19 @@ pub mod api;
 pub mod error;
 pub mod tests;
 
-use std::sync::{
-    atomic::{AtomicUsize, Ordering},
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::{Duration, Instant},
 };
 
 pub use api::*;
-use helix_common::api::data_api::{BuilderBlocksReceivedParams, ProposerPayloadDeliveredParams};
+use helix_common::api::data_api::{
+    BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
+};
+use moka::Expiry;
 use tracing::info;
 
 pub struct DataApiStats {}
@@ -143,6 +149,29 @@ impl BuilderBlocksReceivedStats {
                 with_builder_pubkey,
                 "builder blocks received stats"
             );
+        }
+    }
+}
+
+pub struct SelectiveExpiry;
+
+impl Expiry<ProposerPayloadDeliveredParams, Vec<DeliveredPayloadsResponse>> for SelectiveExpiry {
+    fn expire_after_create(
+        &self,
+        key: &ProposerPayloadDeliveredParams,
+        _val: &Vec<DeliveredPayloadsResponse>,
+        _now: Instant,
+    ) -> Option<Duration> {
+        if key.slot.is_none() &&
+            key.cursor.is_none() &&
+            key.block_hash.is_none() &&
+            key.block_number.is_none() &&
+            key.proposer_pubkey.is_none() &&
+            key.builder_pubkey.is_none()
+        {
+            Some(Duration::from_secs(12))
+        } else {
+            None
         }
     }
 }
