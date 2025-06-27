@@ -510,6 +510,10 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         let primev_validators =
             primev_service.get_registered_primev_validators(proposer_duties).await;
+        info!(
+            primev_validators = primev_validators.len(),
+            "updating primev proposers"
+        );
         auctioneer.update_primev_proposers(&primev_validators).await?;
 
         Ok(())

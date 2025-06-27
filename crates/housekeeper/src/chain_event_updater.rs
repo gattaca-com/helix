@@ -213,6 +213,10 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
         // Update local cache if new duties were fetched.
         if let Some(new_duties) = &mut new_duties {
             for duty in new_duties.iter_mut() {
+                info!(slot = slot,
+                    proposer = %duty.entry.registration.message.pubkey,
+                    "Checking if proposer is primev"
+                );
                 match self
                     .auctioneer
                     .is_primev_proposer(&duty.entry.registration.message.pubkey)
