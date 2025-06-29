@@ -42,9 +42,19 @@ use crate::{
     DatabaseService,
 };
 
-type PendingBlockSubmissionValue = (Arc<SignedBidSubmission>, SubmissionTrace, i16, SystemTime);
-type PendingHeaderSubmissionValue =
-    (Arc<SignedHeaderSubmission>, HeaderSubmissionTrace, Option<u32>, SystemTime);
+struct PendingBlockSubmissionValue {
+    pub submission: Arc<SignedBidSubmission>,
+    pub trace: SubmissionTrace,
+    pub optimistic_version: i16,
+}
+struct PendingHeaderSubmissionValue {
+    pub submission: Arc<SignedHeaderSubmission>,
+    pub trace: HeaderSubmissionTrace,
+    pub tx_count: Option<u32>,
+}
+
+const BLOCK_SUBMISSION_FIELD_COUNT: usize = 13;
+const HEADER_SUBMISSION_FIELD_COUNT: usize = 13;
 
 struct RegistrationParams<'a> {
     fee_recipient: &'a [u8],
@@ -227,6 +237,12 @@ impl PostgresDatabaseService {
         }
     }
 
+    pub async fn start_processors(&mut self) {
+        self.start_registration_processor().await;
+        self.start_block_submission_processor().await;
+        self.start_header_submission_processor().await;
+    }
+
     pub async fn start_registration_processor(&self) {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
         let self_clone = self.clone();
@@ -275,17 +291,13 @@ impl PostgresDatabaseService {
                 tokio::select! {
                     Some(item) = block_submissions_receiver.recv() => {
                         batch.push(item);
-                        // drain to coalesce
-                        while let Ok(item) = block_submissions_receiver.try_recv() {
-                            batch.push(item);
-                            if batch.len() >= 1_000 { break }
-                        }
                     }
                     _ = ticker.tick() => {
                         if !batch.is_empty() {
-                            if let Err(e) = svc_clone._flush_block_submissions(std::mem::take(&mut batch), &mut last_slot_processed).await {
+                            if let Err(e) = svc_clone._flush_block_submissions(&batch, &mut last_slot_processed).await {
                                 error!("block batch failed: {:?}", e);
                             }
+                            batch.clear();
                         }
                     }
                 }
@@ -305,17 +317,13 @@ impl PostgresDatabaseService {
                 tokio::select! {
                     Some(item) = header_submissions_receiver.recv() => {
                         batch.push(item);
-                        // drain to coalesce
-                        while let Ok(item) = header_submissions_receiver.try_recv() {
-                            batch.push(item);
-                            if batch.len() >= 1_000 { break }
-                        }
                     }
                     _ = ticker.tick() => {
                         if !batch.is_empty() {
-                            if let Err(e) = svc_clone._flush_header_submissions(std::mem::take(&mut batch)).await {
+                            if let Err(e) = svc_clone._flush_header_submissions(&batch).await {
                                 error!("header batch failed: {:?}", e);
                             }
+                            batch.clear();
                         }
                     }
                 }
@@ -510,7 +518,7 @@ impl PostgresDatabaseService {
 
     async fn _flush_block_submissions(
         &self,
-        batch: Vec<(Arc<SignedBidSubmission>, SubmissionTrace, i16, SystemTime)>,
+        batch: &Vec<PendingBlockSubmissionValue>,
         last_processed_slot: &mut i32,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("flush_block_submissions");
@@ -535,26 +543,41 @@ impl PostgresDatabaseService {
         }
 
         let mut structured_blocks: Vec<BlockParams> = Vec::with_capacity(batch.len());
-        for (submission, trace, _, _) in &batch {
+        for item in batch {
             structured_blocks.push(BlockParams {
-                block_number: submission.block_number() as i32,
-                slot_number: submission.slot().as_u64() as i32,
-                parent_hash: submission.parent_hash().as_slice().to_vec(),
-                block_hash: submission.block_hash().as_slice().to_vec(),
-                builder_pubkey: submission.builder_public_key().serialize().as_slice().to_vec(),
-                proposer_pubkey: submission.proposer_public_key().serialize().as_slice().to_vec(),
-                proposer_fee_recipient: submission.proposer_fee_recipient().as_slice().to_vec(),
-                gas_limit: submission.gas_limit() as i32,
-                gas_used: submission.gas_used() as i32,
-                value: PostgresNumeric::from(submission.value()),
-                num_txs: submission.num_txs() as i32,
-                timestamp: submission.timestamp() as i64,
-                first_seen: trace.receive as i64,
+                block_number: item.submission.block_number() as i32,
+                slot_number: item.submission.slot().as_u64() as i32,
+                parent_hash: item.submission.parent_hash().as_slice().to_vec(),
+                block_hash: item.submission.block_hash().as_slice().to_vec(),
+                builder_pubkey: item
+                    .submission
+                    .builder_public_key()
+                    .serialize()
+                    .as_slice()
+                    .to_vec(),
+                proposer_pubkey: item
+                    .submission
+                    .proposer_public_key()
+                    .serialize()
+                    .as_slice()
+                    .to_vec(),
+                proposer_fee_recipient: item
+                    .submission
+                    .proposer_fee_recipient()
+                    .as_slice()
+                    .to_vec(),
+                gas_limit: item.submission.gas_limit() as i32,
+                gas_used: item.submission.gas_used() as i32,
+                value: PostgresNumeric::from(item.submission.value()),
+                num_txs: item.submission.num_txs() as i32,
+                timestamp: item.submission.timestamp() as i64,
+                first_seen: item.trace.receive as i64,
             });
         }
 
         // Flatten into SQL params
-        let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(structured_blocks.len() * 13);
+        let mut params: Vec<&(dyn ToSql + Sync)> =
+            Vec::with_capacity(structured_blocks.len() * BLOCK_SUBMISSION_FIELD_COUNT);
         for blk in &structured_blocks {
             params.push(&blk.block_number);
             params.push(&blk.slot_number);
@@ -572,7 +595,7 @@ impl PostgresDatabaseService {
         }
 
         // Build and execute INSERT for block_submission
-        let num_cols = 13;
+        let num_cols = BLOCK_SUBMISSION_FIELD_COUNT;
         let mut sql = String::from(
             "INSERT INTO block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen) VALUES "
         );
@@ -605,20 +628,21 @@ impl PostgresDatabaseService {
         }
 
         let mut structured_traces: Vec<TraceParams> = Vec::with_capacity(batch.len());
-        for (submission, trace, optim, _) in &batch {
+        for item in batch {
             structured_traces.push(TraceParams {
-                block_hash: submission.block_hash().as_slice().to_vec(),
+                block_hash: item.submission.block_hash().as_slice().to_vec(),
                 region_id: self.region,
-                optimistic_version: *optim,
-                receive: trace.receive as i64,
-                decode: trace.decode as i64,
-                pre_checks: trace.pre_checks as i64,
-                signature: trace.signature as i64,
-                floor_bid_checks: trace.floor_bid_checks as i64,
-                simulation: trace.simulation as i64,
-                auctioneer_update: trace.auctioneer_update as i64,
-                request_finish: trace.request_finish as i64,
-                metadata: trace
+                optimistic_version: item.optimistic_version,
+                receive: item.trace.receive as i64,
+                decode: item.trace.decode as i64,
+                pre_checks: item.trace.pre_checks as i64,
+                signature: item.trace.signature as i64,
+                floor_bid_checks: item.trace.floor_bid_checks as i64,
+                simulation: item.trace.simulation as i64,
+                auctioneer_update: item.trace.auctioneer_update as i64,
+                request_finish: item.trace.request_finish as i64,
+                metadata: item
+                    .trace
                     .metadata
                     .as_ref()
                     .map(|s| s.as_bytes().to_vec())
@@ -663,12 +687,14 @@ impl PostgresDatabaseService {
         // Collect only new slots
         let mut new_rows: Vec<(i32, Vec<u8>)> = Vec::with_capacity(batch.len());
         let mut tmp_last_processed_slot = *last_processed_slot;
-        for (submission, _, _, _) in &batch {
-            let slot = submission.slot().as_u64() as i32;
+        for item in batch {
+            let slot = item.submission.slot().as_u64() as i32;
             if slot > tmp_last_processed_slot {
                 tmp_last_processed_slot = slot;
-                new_rows
-                    .push((slot, submission.proposer_public_key().serialize().as_slice().to_vec()));
+                new_rows.push((
+                    slot,
+                    item.submission.proposer_public_key().serialize().as_slice().to_vec(),
+                ));
             }
         }
         if !new_rows.is_empty() {
@@ -706,7 +732,7 @@ impl PostgresDatabaseService {
     /// Flush header submissions in bulk using structured params
     async fn _flush_header_submissions(
         &self,
-        batch: Vec<(Arc<SignedHeaderSubmission>, HeaderSubmissionTrace, Option<u32>, SystemTime)>,
+        batch: &Vec<PendingHeaderSubmissionValue>,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("flush_header_submissions");
         let mut client = self.pool.get().await?;
@@ -730,27 +756,41 @@ impl PostgresDatabaseService {
         }
 
         let mut structured_headers: Vec<HeaderParams> = Vec::with_capacity(batch.len());
-        for (submission, trace, tx_count, _) in &batch {
-            let hdr = submission.execution_payload_header();
+        for item in batch {
+            let hdr = item.submission.execution_payload_header();
             structured_headers.push(HeaderParams {
                 block_number: hdr.block_number() as i32,
-                slot_number: submission.slot().as_u64() as i32,
-                parent_hash: submission.parent_hash().as_slice().to_vec(),
-                block_hash: submission.block_hash().as_slice().to_vec(),
-                builder_pubkey: submission.builder_public_key().serialize().as_slice().to_vec(),
-                proposer_pubkey: submission.proposer_public_key().serialize().as_slice().to_vec(),
-                proposer_fee_recipient: submission.proposer_fee_recipient().as_slice().to_vec(),
-                gas_limit: submission.gas_limit() as i32,
-                gas_used: submission.gas_used() as i32,
-                value: PostgresNumeric::from(submission.value()),
-                timestamp: submission.timestamp() as i64,
-                first_seen: trace.receive as i64,
-                tx_count: tx_count.map(|c| c as i32),
+                slot_number: item.submission.slot().as_u64() as i32,
+                parent_hash: item.submission.parent_hash().as_slice().to_vec(),
+                block_hash: item.submission.block_hash().as_slice().to_vec(),
+                builder_pubkey: item
+                    .submission
+                    .builder_public_key()
+                    .serialize()
+                    .as_slice()
+                    .to_vec(),
+                proposer_pubkey: item
+                    .submission
+                    .proposer_public_key()
+                    .serialize()
+                    .as_slice()
+                    .to_vec(),
+                proposer_fee_recipient: item
+                    .submission
+                    .proposer_fee_recipient()
+                    .as_slice()
+                    .to_vec(),
+                gas_limit: item.submission.gas_limit() as i32,
+                gas_used: item.submission.gas_used() as i32,
+                value: PostgresNumeric::from(item.submission.value()),
+                timestamp: item.submission.timestamp() as i64,
+                first_seen: item.trace.receive as i64,
+                tx_count: item.tx_count.map(|c| c as i32),
             });
         }
 
         let mut params: Vec<&(dyn ToSql + Sync)> =
-            Vec::with_capacity(structured_headers.len() * 13);
+            Vec::with_capacity(structured_headers.len() * HEADER_SUBMISSION_FIELD_COUNT);
         for hdr in &structured_headers {
             params.push(&hdr.block_number);
             params.push(&hdr.slot_number);
@@ -768,7 +808,7 @@ impl PostgresDatabaseService {
         }
 
         // Build and execute INSERT for header_submission
-        let cols = 13;
+        let cols = HEADER_SUBMISSION_FIELD_COUNT;
         let mut sql = String::from(
             "INSERT INTO header_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, timestamp, first_seen, tx_count) VALUES "
         );
@@ -799,18 +839,19 @@ impl PostgresDatabaseService {
         }
 
         let mut structured_htraces: Vec<HTraceParams> = Vec::with_capacity(batch.len());
-        for (submission, trace, _, _) in &batch {
+        for item in batch {
             structured_htraces.push(HTraceParams {
-                block_hash: submission.block_hash().as_slice().to_vec(),
+                block_hash: item.submission.block_hash().as_slice().to_vec(),
                 region_id: self.region,
-                receive: trace.receive as i64,
-                decode: trace.decode as i64,
-                pre_checks: trace.pre_checks as i64,
-                signature: trace.signature as i64,
-                floor_bid_checks: trace.floor_bid_checks as i64,
-                auctioneer_update: trace.auctioneer_update as i64,
-                request_finish: trace.request_finish as i64,
-                metadata: trace
+                receive: item.trace.receive as i64,
+                decode: item.trace.decode as i64,
+                pre_checks: item.trace.pre_checks as i64,
+                signature: item.trace.signature as i64,
+                floor_bid_checks: item.trace.floor_bid_checks as i64,
+                auctioneer_update: item.trace.auctioneer_update as i64,
+                request_finish: item.trace.request_finish as i64,
+                metadata: item
+                    .trace
                     .metadata
                     .as_ref()
                     .map(|s| s.as_bytes().to_vec())
@@ -1505,7 +1546,11 @@ impl DatabaseService for PostgresDatabaseService {
         let mut record = DbMetricRecord::new("store_block_submission");
         if let Some(sender) = &self.block_submissions_sender {
             sender
-                .send((submission.clone(), trace, optimistic_version, SystemTime::now()))
+                .send(PendingBlockSubmissionValue {
+                    submission: submission.clone(),
+                    trace,
+                    optimistic_version,
+                })
                 .await
                 .map_err(|_| DatabaseError::ChannelSendError)?;
         } else {
@@ -2069,7 +2114,11 @@ impl DatabaseService for PostgresDatabaseService {
         let mut record = DbMetricRecord::new("store_header_submission");
         if let Some(sender) = &self.header_submissions_sender {
             sender
-                .send((submission.clone(), trace, tx_count, SystemTime::now()))
+                .send(PendingHeaderSubmissionValue {
+                    submission: submission.clone(),
+                    trace,
+                    tx_count,
+                })
                 .await
                 .map_err(|_| DatabaseError::ChannelSendError)?;
         } else {
