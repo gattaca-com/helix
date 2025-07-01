@@ -1195,11 +1195,82 @@ impl DatabaseService for PostgresDatabaseService {
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_builders_info");
 
-        // PERF: this is not the most performant approach but it is expected
-        // to add just a few builders only at startup
-        for builder in builders {
-            self.store_builder_info(&builder.pub_key, &builder.builder_info).await?;
+        if builders.is_empty() {
+            record.record_success();
+            return Ok(());
         }
+
+        // Define the number of SQL fields per builder row
+        const FIELD_COUNT: usize = 6;
+
+        // Step 1: materialize all temp values into a stable struct
+        struct BuilderParams {
+            pubkey: Vec<u8>,
+            collateral: PostgresNumeric,
+            is_optimistic: bool,
+            is_optimistic_for_regional_filtering: bool,
+            builder_id: Option<String>,
+            builder_ids: Option<Vec<String>>,
+        }
+
+        let mut structured_builders = Vec::with_capacity(builders.len());
+        for builder in builders {
+            structured_builders.push(BuilderParams {
+                pubkey: builder.pub_key.serialize().as_slice().to_vec(),
+                collateral: PostgresNumeric::from(builder.builder_info.collateral),
+                is_optimistic: builder.builder_info.is_optimistic,
+                is_optimistic_for_regional_filtering: builder
+                    .builder_info
+                    .is_optimistic_for_regional_filtering,
+                builder_id: builder.builder_info.builder_id.clone(),
+                builder_ids: builder.builder_info.builder_ids.clone(),
+            });
+        }
+
+        // Step 2: flatten into SQL param list
+        let mut values: Vec<&(dyn ToSql + Sync)> =
+            Vec::with_capacity(structured_builders.len() * FIELD_COUNT);
+        for b in &structured_builders {
+            values.push(&b.pubkey);
+            values.push(&b.collateral);
+            values.push(&b.is_optimistic);
+            values.push(&b.is_optimistic_for_regional_filtering);
+            values.push(&b.builder_id);
+            values.push(&b.builder_ids);
+        }
+
+        // Step 3: generate placeholder string
+        let rows: Vec<String> = (0..structured_builders.len())
+            .map(|i| {
+                let start = i * FIELD_COUNT + 1;
+                let placeholders: Vec<String> =
+                    (0..FIELD_COUNT).map(|j| format!("${}", start + j)).collect();
+                format!("({})", placeholders.join(", "))
+            })
+            .collect();
+
+        let sql = format!(
+            "
+            INSERT INTO builder_info (
+                public_key,
+                collateral,
+                is_optimistic,
+                is_optimistic_for_regional_filtering,
+                builder_id,
+                builder_ids
+            ) VALUES
+            {}
+            ON CONFLICT (public_key)
+            DO UPDATE SET
+                builder_ids = array_concat_uniq(
+                    COALESCE(builder_info.builder_ids, '{{}}'::character varying[]),
+                    EXCLUDED.builder_ids
+                )
+            ",
+            rows.join(", ")
+        );
+
+        self.pool.get().await?.execute(&sql, &values).await?;
 
         record.record_success();
         Ok(())
