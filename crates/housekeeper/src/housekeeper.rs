@@ -20,7 +20,7 @@ use helix_common::{
     pending_block::PendingBlock,
     task,
     utils::{utcnow_dur, utcnow_ms},
-    BuilderInfo, ProposerDuty, RelayConfig, SignedValidatorRegistrationEntry,
+    BuilderConfig, BuilderInfo, ProposerDuty, RelayConfig, SignedValidatorRegistrationEntry,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
@@ -384,7 +384,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     async fn sync_builder_info_changes(&self) -> Result<(), HousekeeperError> {
         let builder_infos = self.db.get_all_builder_infos().await?;
         debug!(builder_infos = builder_infos.len(), "updating builder infos");
-        self.auctioneer.update_builder_infos(builder_infos).await?;
+        self.auctioneer.update_builder_infos(&builder_infos).await?;
 
         Ok(())
     }
@@ -495,26 +495,70 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         db: Arc<DB>,
         proposer_duties: Vec<ProposerDuty>,
     ) -> Result<(), HousekeeperError> {
-        let primev_builders = primev_service.get_registered_primev_builders().await;
-
-        for builder_pubkey in primev_builders {
-            db.store_builder_info(&builder_pubkey, &BuilderInfo {
-                collateral: U256::ZERO,
-                is_optimistic: false,
-                is_optimistic_for_regional_filtering: false,
-                builder_id: Some("PrimevBuilder".to_string()),
-                builder_ids: Some(vec!["PrimevBuilder".to_string()]),
-            })
-            .await?;
-        }
-
         let primev_validators =
             primev_service.get_registered_primev_validators(proposer_duties).await;
-        info!(
-            primev_validators = primev_validators.len(),
-            "updating primev proposers"
-        );
+        info!(primev_validators = primev_validators.len(), "updating primev proposers");
         auctioneer.update_primev_proposers(&primev_validators).await?;
+
+        let primev_builders = primev_service.get_registered_primev_builders().await;
+
+        let mut primev_builders_config: Vec<BuilderConfig> = Vec::new();
+
+        for builder_pubkey in primev_builders {
+            match auctioneer.get_builder_info(&builder_pubkey).await.ok() {
+                Some(builder_info) => {
+                    if builder_info.builder_id == Some("PrimevBuilder".to_string()) ||
+                        builder_info
+                            .builder_ids
+                            .as_ref()
+                            .is_some_and(|v| v.contains(&"PrimevBuilder".to_string()))
+                    {
+                        // If the builder is already registered as PrimevBuilder, we skip it.
+                        continue;
+                    }
+                    let builder_config = BuilderConfig {
+                        pub_key: builder_pubkey,
+                        builder_info: BuilderInfo {
+                            collateral: builder_info.collateral,
+                            is_optimistic: builder_info.is_optimistic,
+                            is_optimistic_for_regional_filtering: builder_info
+                                .is_optimistic_for_regional_filtering,
+                            builder_id: builder_info.builder_id.clone(),
+                            builder_ids: {
+                                match builder_info.builder_ids {
+                                    Some(ids) => {
+                                        let mut ids = ids;
+                                        if !ids.contains(&"PrimevBuilder".to_string()) {
+                                            ids.push("PrimevBuilder".to_string());
+                                        }
+                                        Some(ids)
+                                    }
+                                    None => Some(vec!["PrimevBuilder".to_string()]),
+                                }
+                            },
+                        },
+                    };
+                    primev_builders_config.push(builder_config);
+                }
+                None => {
+                    let builder_config = BuilderConfig {
+                        pub_key: builder_pubkey,
+                        builder_info: BuilderInfo {
+                            collateral: U256::ZERO,
+                            is_optimistic: false,
+                            is_optimistic_for_regional_filtering: false,
+                            builder_id: Some("PrimevBuilder".to_string()),
+                            builder_ids: Some(vec!["PrimevBuilder".to_string()]),
+                        },
+                    };
+                    primev_builders_config.push(builder_config)
+                }
+            }
+        }
+
+        auctioneer.update_builder_infos(&primev_builders_config).await?;
+
+        db.store_builders_info(primev_builders_config.as_slice()).await?;
 
         Ok(())
     }

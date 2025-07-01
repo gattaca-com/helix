@@ -126,7 +126,7 @@ pub trait Auctioneer: Send + Sync + Clone {
 
     async fn update_builder_infos(
         &self,
-        builder_infos: Vec<BuilderInfoDocument>,
+        builder_infos: &[BuilderInfoDocument],
     ) -> Result<(), AuctioneerError>;
 
     async fn seen_or_insert_block_hash(

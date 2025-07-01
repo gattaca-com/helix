@@ -196,7 +196,7 @@ impl Auctioneer for MockAuctioneer {
 
     async fn update_builder_infos(
         &self,
-        _builder_infos: Vec<BuilderInfoDocument>,
+        _builder_infos: &[BuilderInfoDocument],
     ) -> Result<(), AuctioneerError> {
         Ok(())
     }

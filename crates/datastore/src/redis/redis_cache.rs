@@ -105,7 +105,7 @@ impl RedisCache {
         let cache = Self { pool, tx, inclusion_list, payload_attributes, head_event };
 
         // Load in builder info
-        if let Err(err) = cache.update_builder_infos(builder_infos).await {
+        if let Err(err) = cache.update_builder_infos(&builder_infos).await {
             error!(err=%err, "Failed to initialise builder info")
         }
 
@@ -1044,7 +1044,7 @@ impl Auctioneer for RedisCache {
     #[instrument(skip_all)]
     async fn update_builder_infos(
         &self,
-        builder_infos: Vec<BuilderInfoDocument>,
+        builder_infos: &[BuilderInfoDocument],
     ) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("update_builder_infos");
 
@@ -2747,7 +2747,7 @@ mod tests {
             pub_key: builder_pub_key.clone(),
         }];
 
-        cache.update_builder_infos(builder_infos).await.unwrap();
+        cache.update_builder_infos(&builder_infos).await.unwrap();
 
         let slot = 42;
         let block_hash = B256::try_from([5u8; 32].as_ref()).unwrap();
@@ -2788,7 +2788,7 @@ mod tests {
             pub_key: builder_pub_key.clone(),
         }];
 
-        cache.update_builder_infos(builder_infos).await.unwrap();
+        cache.update_builder_infos(&builder_infos).await.unwrap();
 
         let mut expected_pending_blocks = Vec::new();
 
@@ -2856,7 +2856,7 @@ mod tests {
             pub_key: builder_pub_key.clone(),
         }];
 
-        cache.update_builder_infos(builder_infos).await.unwrap();
+        cache.update_builder_infos(&builder_infos).await.unwrap();
 
         let slot = 42;
         let block_hash = B256::try_from([5u8; 32].as_ref()).unwrap();
@@ -2894,7 +2894,7 @@ mod tests {
             pub_key: builder_pub_key.clone(),
         }];
 
-        cache.update_builder_infos(builder_infos).await.unwrap();
+        cache.update_builder_infos(&builder_infos).await.unwrap();
 
         let slot = 42;
         let block_hash = B256::try_from([5u8; 32].as_ref()).unwrap();
@@ -2933,7 +2933,7 @@ mod tests {
             pub_key: builder_pub_key.clone(),
         }];
 
-        cache.update_builder_infos(builder_infos).await.unwrap();
+        cache.update_builder_infos(&builder_infos).await.unwrap();
 
         let slot = 42;
         let block_hash = B256::random();
