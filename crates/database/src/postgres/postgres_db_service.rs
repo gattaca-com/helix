@@ -1,4 +1,9 @@
-use std::{collections::HashSet, ops::DerefMut, sync::Arc, time::SystemTime};
+use std::{
+    collections::HashSet,
+    ops::DerefMut,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use alloy_primitives::B256;
 use async_trait::async_trait;
@@ -21,6 +26,7 @@ use helix_common::{
 use helix_types::{
     BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
 };
+use tokio::sync::mpsc::Sender;
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{error, info, instrument, warn};
 
@@ -35,6 +41,20 @@ use crate::{
     types::{BidSubmissionDocument, BuilderInfoDocument, DeliveredPayloadDocument},
     DatabaseService,
 };
+
+struct PendingBlockSubmissionValue {
+    pub submission: Arc<SignedBidSubmission>,
+    pub trace: SubmissionTrace,
+    pub optimistic_version: i16,
+}
+struct PendingHeaderSubmissionValue {
+    pub submission: Arc<SignedHeaderSubmission>,
+    pub trace: HeaderSubmissionTrace,
+    pub tx_count: Option<u32>,
+}
+
+const BLOCK_SUBMISSION_FIELD_COUNT: usize = 13;
+const HEADER_SUBMISSION_FIELD_COUNT: usize = 13;
 
 struct RegistrationParams<'a> {
     fee_recipient: &'a [u8],
@@ -64,6 +84,8 @@ struct TrustedProposerParams {
 pub struct PostgresDatabaseService {
     validator_registration_cache: Arc<DashMap<BlsPublicKey, SignedValidatorRegistrationEntry>>,
     pending_validator_registrations: Arc<DashSet<BlsPublicKey>>,
+    block_submissions_sender: Option<Sender<PendingBlockSubmissionValue>>,
+    header_submissions_sender: Option<Sender<PendingHeaderSubmissionValue>>,
     known_validators_cache: Arc<DashSet<BlsPublicKey>>,
     validator_pool_cache: Arc<DashMap<String, String>>,
     region: i16,
@@ -78,6 +100,8 @@ impl PostgresDatabaseService {
         Ok(PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
+            block_submissions_sender: None,
+            header_submissions_sender: None,
             known_validators_cache: Arc::new(DashSet::new()),
             validator_pool_cache: Arc::new(DashMap::new()),
             region,
@@ -118,6 +142,8 @@ impl PostgresDatabaseService {
         PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
+            block_submissions_sender: None,
+            header_submissions_sender: None,
             known_validators_cache: Arc::new(DashSet::new()),
             validator_pool_cache: Arc::new(DashMap::new()),
             region: relay_config.postgres.region,
@@ -211,6 +237,12 @@ impl PostgresDatabaseService {
         }
     }
 
+    pub async fn start_processors(&mut self) {
+        self.start_registration_processor().await;
+        self.start_block_submission_processor().await;
+        self.start_header_submission_processor().await;
+    }
+
     pub async fn start_registration_processor(&self) {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
         let self_clone = self.clone();
@@ -242,6 +274,59 @@ impl PostgresDatabaseService {
                         };
                     }
                 };
+            }
+        });
+    }
+
+    pub async fn start_block_submission_processor(&mut self) {
+        let (block_submissions_sender, mut block_submissions_receiver) =
+            tokio::sync::mpsc::channel(10_000);
+        self.block_submissions_sender = Some(block_submissions_sender);
+        let svc_clone = self.clone();
+        tokio::spawn(async move {
+            let mut batch = Vec::with_capacity(1_000);
+            let mut ticker = tokio::time::interval(Duration::from_secs(5));
+            let mut last_slot_processed = 0;
+            loop {
+                tokio::select! {
+                    Some(item) = block_submissions_receiver.recv() => {
+                        batch.push(item);
+                    }
+                    _ = ticker.tick() => {
+                        if !batch.is_empty() {
+                            if let Err(e) = svc_clone._flush_block_submissions(&batch, &mut last_slot_processed).await {
+                                error!("block batch failed: {:?}", e);
+                            }
+                            batch.clear();
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    pub async fn start_header_submission_processor(&mut self) {
+        let (header_submissions_sender, mut header_submissions_receiver) =
+            tokio::sync::mpsc::channel(10_000);
+        self.header_submissions_sender = Some(header_submissions_sender);
+        let svc_clone = self.clone();
+        tokio::spawn(async move {
+            let mut batch = Vec::with_capacity(1_000);
+            let mut ticker = tokio::time::interval(Duration::from_secs(5));
+            loop {
+                tokio::select! {
+                    Some(item) = header_submissions_receiver.recv() => {
+                        batch.push(item);
+                    }
+                    _ = ticker.tick() => {
+                        if !batch.is_empty() {
+                            if let Err(e) = svc_clone._flush_header_submissions(&batch).await {
+                                error!("header batch failed: {:?}", e);
+                            }
+                            batch.clear();
+                        }
+                    }
+                }
             }
         });
     }
@@ -430,6 +515,385 @@ impl PostgresDatabaseService {
         record.record_success();
         Ok(())
     }
+
+    async fn _flush_block_submissions(
+        &self,
+        batch: &Vec<PendingBlockSubmissionValue>,
+        last_processed_slot: &mut i32,
+    ) -> Result<(), DatabaseError> {
+        let mut record = DbMetricRecord::new("flush_block_submissions");
+        let mut client = self.pool.get().await?;
+        let transaction = client.transaction().await?;
+
+        // Step 1: build structured params for block_submission
+        struct BlockParams {
+            block_number: i32,
+            slot_number: i32,
+            parent_hash: Vec<u8>,
+            block_hash: Vec<u8>,
+            builder_pubkey: Vec<u8>,
+            proposer_pubkey: Vec<u8>,
+            proposer_fee_recipient: Vec<u8>,
+            gas_limit: i32,
+            gas_used: i32,
+            value: PostgresNumeric,
+            num_txs: i32,
+            timestamp: i64,
+            first_seen: i64,
+        }
+
+        let mut structured_blocks: Vec<BlockParams> = Vec::with_capacity(batch.len());
+        for item in batch {
+            structured_blocks.push(BlockParams {
+                block_number: item.submission.block_number() as i32,
+                slot_number: item.submission.slot().as_u64() as i32,
+                parent_hash: item.submission.parent_hash().as_slice().to_vec(),
+                block_hash: item.submission.block_hash().as_slice().to_vec(),
+                builder_pubkey: item
+                    .submission
+                    .builder_public_key()
+                    .serialize()
+                    .as_slice()
+                    .to_vec(),
+                proposer_pubkey: item
+                    .submission
+                    .proposer_public_key()
+                    .serialize()
+                    .as_slice()
+                    .to_vec(),
+                proposer_fee_recipient: item
+                    .submission
+                    .proposer_fee_recipient()
+                    .as_slice()
+                    .to_vec(),
+                gas_limit: item.submission.gas_limit() as i32,
+                gas_used: item.submission.gas_used() as i32,
+                value: PostgresNumeric::from(item.submission.value()),
+                num_txs: item.submission.num_txs() as i32,
+                timestamp: item.submission.timestamp() as i64,
+                first_seen: item.trace.receive as i64,
+            });
+        }
+
+        // Flatten into SQL params
+        let mut params: Vec<&(dyn ToSql + Sync)> =
+            Vec::with_capacity(structured_blocks.len() * BLOCK_SUBMISSION_FIELD_COUNT);
+        for blk in &structured_blocks {
+            params.push(&blk.block_number);
+            params.push(&blk.slot_number);
+            params.push(&blk.parent_hash);
+            params.push(&blk.block_hash);
+            params.push(&blk.builder_pubkey);
+            params.push(&blk.proposer_pubkey);
+            params.push(&blk.proposer_fee_recipient);
+            params.push(&blk.gas_limit);
+            params.push(&blk.gas_used);
+            params.push(&blk.value);
+            params.push(&blk.num_txs);
+            params.push(&blk.timestamp);
+            params.push(&blk.first_seen);
+        }
+
+        // Build and execute INSERT for block_submission
+        let num_cols = BLOCK_SUBMISSION_FIELD_COUNT;
+        let mut sql = String::from(
+            "INSERT INTO block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen) VALUES "
+        );
+        let clauses: Vec<String> = (0..structured_blocks.len())
+            .map(|i| {
+                let start = i * num_cols + 1;
+                let placeholders: Vec<String> =
+                    (0..num_cols).map(|j| format!("${}", start + j)).collect();
+                format!("({})", placeholders.join(", "))
+            })
+            .collect();
+        sql.push_str(&clauses.join(", "));
+        sql.push_str(" ON CONFLICT (block_hash) DO NOTHING");
+        transaction.execute(&sql, &params).await?;
+
+        // Step 2: build structured params for submission_trace
+        struct TraceParams {
+            block_hash: Vec<u8>,
+            region_id: i16,
+            optimistic_version: i16,
+            receive: i64,
+            decode: i64,
+            pre_checks: i64,
+            signature: i64,
+            floor_bid_checks: i64,
+            simulation: i64,
+            auctioneer_update: i64,
+            request_finish: i64,
+            metadata: Vec<u8>,
+        }
+
+        let mut structured_traces: Vec<TraceParams> = Vec::with_capacity(batch.len());
+        for item in batch {
+            structured_traces.push(TraceParams {
+                block_hash: item.submission.block_hash().as_slice().to_vec(),
+                region_id: self.region,
+                optimistic_version: item.optimistic_version,
+                receive: item.trace.receive as i64,
+                decode: item.trace.decode as i64,
+                pre_checks: item.trace.pre_checks as i64,
+                signature: item.trace.signature as i64,
+                floor_bid_checks: item.trace.floor_bid_checks as i64,
+                simulation: item.trace.simulation as i64,
+                auctioneer_update: item.trace.auctioneer_update as i64,
+                request_finish: item.trace.request_finish as i64,
+                metadata: item
+                    .trace
+                    .metadata
+                    .as_ref()
+                    .map(|s| s.as_bytes().to_vec())
+                    .unwrap_or_default(),
+            });
+        }
+
+        let mut ts_params: Vec<&(dyn ToSql + Sync)> =
+            Vec::with_capacity(structured_traces.len() * 12);
+        for tr in &structured_traces {
+            ts_params.push(&tr.block_hash);
+            ts_params.push(&tr.region_id);
+            ts_params.push(&tr.optimistic_version);
+            ts_params.push(&tr.receive);
+            ts_params.push(&tr.decode);
+            ts_params.push(&tr.pre_checks);
+            ts_params.push(&tr.signature);
+            ts_params.push(&tr.floor_bid_checks);
+            ts_params.push(&tr.simulation);
+            ts_params.push(&tr.auctioneer_update);
+            ts_params.push(&tr.request_finish);
+            ts_params.push(&tr.metadata);
+        }
+
+        // Build and execute INSERT for submission_trace
+        let trace_cols = 12;
+        let mut ts_sql = String::from(
+            "INSERT INTO submission_trace (block_hash, region_id, optimistic_version, receive, decode, pre_checks, signature, floor_bid_checks, simulation, auctioneer_update, request_finish, metadata) VALUES "
+        );
+        let ts_clauses: Vec<String> = (0..structured_traces.len())
+            .map(|i| {
+                let start = i * trace_cols + 1;
+                let placeholders: Vec<String> =
+                    (0..trace_cols).map(|j| format!("${}", start + j)).collect();
+                format!("({})", placeholders.join(", "))
+            })
+            .collect();
+        ts_sql.push_str(&ts_clauses.join(", "));
+        transaction.execute(&ts_sql, &ts_params).await?;
+
+        // Step 3: build structured params for slot_preferences, skipping already processed slots
+        // Collect only new slots
+        let mut new_rows: Vec<(i32, Vec<u8>)> = Vec::with_capacity(batch.len());
+        let mut tmp_last_processed_slot = *last_processed_slot;
+        for item in batch {
+            let slot = item.submission.slot().as_u64() as i32;
+            if slot > tmp_last_processed_slot {
+                tmp_last_processed_slot = slot;
+                new_rows.push((
+                    slot,
+                    item.submission.proposer_public_key().serialize().as_slice().to_vec(),
+                ));
+            }
+        }
+        if !new_rows.is_empty() {
+            // Flatten into SQL params
+            let mut sp_params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(new_rows.len() * 2);
+            for (slot, pk) in &new_rows {
+                sp_params.push(slot);
+                sp_params.push(pk);
+            }
+
+            // Build and execute a single INSERT...SELECT
+            let mut vp_sql = String::from(
+                "INSERT INTO slot_preferences (slot_number, proposer_pubkey, filtering, trusted_builders, header_delay, gossip_blobs) "
+            );
+            vp_sql.push_str("SELECT r.slot_number, r.proposer_pubkey, vp.filtering, vp.trusted_builders, vp.header_delay, vp.gossip_blobs FROM (VALUES ");
+            let val_clauses: Vec<String> = (0..new_rows.len())
+                .map(|i| {
+                    let start = i * 2 + 1;
+                    format!("(${}, ${})", start, start + 1)
+                })
+                .collect();
+            vp_sql.push_str(&val_clauses.join(", "));
+            vp_sql.push_str(") AS r(slot_number, proposer_pubkey) ");
+            vp_sql.push_str("JOIN validator_preferences vp ON vp.public_key = r.proposer_pubkey ");
+            vp_sql.push_str("ON CONFLICT (slot_number) DO NOTHING");
+            transaction.execute(&vp_sql, &sp_params).await?;
+        }
+
+        transaction.commit().await?;
+        *last_processed_slot = tmp_last_processed_slot;
+        record.record_success();
+        Ok(())
+    }
+
+    /// Flush header submissions in bulk using structured params
+    async fn _flush_header_submissions(
+        &self,
+        batch: &Vec<PendingHeaderSubmissionValue>,
+    ) -> Result<(), DatabaseError> {
+        let mut record = DbMetricRecord::new("flush_header_submissions");
+        let mut client = self.pool.get().await?;
+        let transaction = client.transaction().await?;
+
+        // Step 1: structured params for header_submission
+        struct HeaderParams {
+            block_number: i32,
+            slot_number: i32,
+            parent_hash: Vec<u8>,
+            block_hash: Vec<u8>,
+            builder_pubkey: Vec<u8>,
+            proposer_pubkey: Vec<u8>,
+            proposer_fee_recipient: Vec<u8>,
+            gas_limit: i32,
+            gas_used: i32,
+            value: PostgresNumeric,
+            timestamp: i64,
+            first_seen: i64,
+            tx_count: Option<i32>,
+        }
+
+        let mut structured_headers: Vec<HeaderParams> = Vec::with_capacity(batch.len());
+        for item in batch {
+            let hdr = item.submission.execution_payload_header();
+            structured_headers.push(HeaderParams {
+                block_number: hdr.block_number() as i32,
+                slot_number: item.submission.slot().as_u64() as i32,
+                parent_hash: item.submission.parent_hash().as_slice().to_vec(),
+                block_hash: item.submission.block_hash().as_slice().to_vec(),
+                builder_pubkey: item
+                    .submission
+                    .builder_public_key()
+                    .serialize()
+                    .as_slice()
+                    .to_vec(),
+                proposer_pubkey: item
+                    .submission
+                    .proposer_public_key()
+                    .serialize()
+                    .as_slice()
+                    .to_vec(),
+                proposer_fee_recipient: item
+                    .submission
+                    .proposer_fee_recipient()
+                    .as_slice()
+                    .to_vec(),
+                gas_limit: item.submission.gas_limit() as i32,
+                gas_used: item.submission.gas_used() as i32,
+                value: PostgresNumeric::from(item.submission.value()),
+                timestamp: item.submission.timestamp() as i64,
+                first_seen: item.trace.receive as i64,
+                tx_count: item.tx_count.map(|c| c as i32),
+            });
+        }
+
+        let mut params: Vec<&(dyn ToSql + Sync)> =
+            Vec::with_capacity(structured_headers.len() * HEADER_SUBMISSION_FIELD_COUNT);
+        for hdr in &structured_headers {
+            params.push(&hdr.block_number);
+            params.push(&hdr.slot_number);
+            params.push(&hdr.parent_hash);
+            params.push(&hdr.block_hash);
+            params.push(&hdr.builder_pubkey);
+            params.push(&hdr.proposer_pubkey);
+            params.push(&hdr.proposer_fee_recipient);
+            params.push(&hdr.gas_limit);
+            params.push(&hdr.gas_used);
+            params.push(&hdr.value);
+            params.push(&hdr.timestamp);
+            params.push(&hdr.first_seen);
+            params.push(&hdr.tx_count);
+        }
+
+        // Build and execute INSERT for header_submission
+        let cols = HEADER_SUBMISSION_FIELD_COUNT;
+        let mut sql = String::from(
+            "INSERT INTO header_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, timestamp, first_seen, tx_count) VALUES "
+        );
+        let clauses: Vec<String> = (0..structured_headers.len())
+            .map(|i| {
+                let start = i * cols + 1;
+                let placeholders: Vec<String> =
+                    (0..cols).map(|j| format!("${}", start + j)).collect();
+                format!("({})", placeholders.join(", "))
+            })
+            .collect();
+        sql.push_str(&clauses.join(", "));
+        sql.push_str(" ON CONFLICT (block_hash) DO NOTHING");
+        transaction.execute(&sql, &params).await?;
+
+        // Step 2: structured params for header_submission_trace
+        struct HTraceParams {
+            block_hash: Vec<u8>,
+            region_id: i16,
+            receive: i64,
+            decode: i64,
+            pre_checks: i64,
+            signature: i64,
+            floor_bid_checks: i64,
+            auctioneer_update: i64,
+            request_finish: i64,
+            metadata: Vec<u8>,
+        }
+
+        let mut structured_htraces: Vec<HTraceParams> = Vec::with_capacity(batch.len());
+        for item in batch {
+            structured_htraces.push(HTraceParams {
+                block_hash: item.submission.block_hash().as_slice().to_vec(),
+                region_id: self.region,
+                receive: item.trace.receive as i64,
+                decode: item.trace.decode as i64,
+                pre_checks: item.trace.pre_checks as i64,
+                signature: item.trace.signature as i64,
+                floor_bid_checks: item.trace.floor_bid_checks as i64,
+                auctioneer_update: item.trace.auctioneer_update as i64,
+                request_finish: item.trace.request_finish as i64,
+                metadata: item
+                    .trace
+                    .metadata
+                    .as_ref()
+                    .map(|s| s.as_bytes().to_vec())
+                    .unwrap_or_default(),
+            });
+        }
+
+        let mut hts_params: Vec<&(dyn ToSql + Sync)> =
+            Vec::with_capacity(structured_htraces.len() * 10);
+        for ht in &structured_htraces {
+            hts_params.push(&ht.block_hash);
+            hts_params.push(&ht.region_id);
+            hts_params.push(&ht.receive);
+            hts_params.push(&ht.decode);
+            hts_params.push(&ht.pre_checks);
+            hts_params.push(&ht.signature);
+            hts_params.push(&ht.floor_bid_checks);
+            hts_params.push(&ht.auctioneer_update);
+            hts_params.push(&ht.request_finish);
+            hts_params.push(&ht.metadata);
+        }
+
+        // Build and execute INSERT for header_submission_trace
+        let trace_cols = 10;
+        let mut tsql = String::from(
+            "INSERT INTO header_submission_trace (block_hash, region_id, receive, decode, pre_checks, signature, floor_bid_checks, auctioneer_update, request_finish, metadata) VALUES "
+        );
+        let tclauses: Vec<String> = (0..structured_htraces.len())
+            .map(|i| {
+                let start = i * trace_cols + 1;
+                let placeholders: Vec<String> =
+                    (0..trace_cols).map(|j| format!("${}", start + j)).collect();
+                format!("({})", placeholders.join(", "))
+            })
+            .collect();
+        tsql.push_str(&tclauses.join(", "));
+        transaction.execute(&tsql, &hts_params).await?;
+
+        transaction.commit().await?;
+        record.record_success();
+        Ok(())
+    }
 }
 
 impl Default for PostgresDatabaseService {
@@ -448,6 +912,8 @@ impl Default for PostgresDatabaseService {
         PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
+            block_submissions_sender: None,
+            header_submissions_sender: None,
             known_validators_cache: Arc::new(DashSet::new()),
             validator_pool_cache: Arc::new(DashMap::new()),
             region: 1,
@@ -1078,76 +1544,18 @@ impl DatabaseService for PostgresDatabaseService {
         optimistic_version: i16,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_block_submission");
-
-        let region_id = self.region;
-        let mut client = self.pool.get().await?;
-        let transaction = client.transaction().await?;
-
-        transaction.execute(
-            "
-                INSERT INTO
-                    block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen)
-                VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                ON CONFLICT (block_hash)
-                DO NOTHING
-                ",
-            &[
-                &(submission.block_number() as i32),
-                &(submission.slot().as_u64() as i32),
-                &(submission.parent_hash().as_slice()),
-                &(submission.block_hash().as_slice()),
-                &(submission.builder_public_key().serialize().as_slice()),
-                &(submission.proposer_public_key().serialize().as_slice()),
-                &(submission.proposer_fee_recipient().as_slice()),
-                &(submission.gas_limit() as i32),
-                &(submission.gas_used() as i32),
-                &(PostgresNumeric::from(submission.value())),
-                &(submission.num_txs() as i32),
-                &(submission.timestamp() as i64),
-                &(trace.receive as i64)
-            ],
-        ).await?;
-
-        transaction.execute(
-            "
-                INSERT INTO
-                    submission_trace (block_hash, region_id, optimistic_version, receive, decode, pre_checks, signature, floor_bid_checks, simulation, auctioneer_update, request_finish, metadata)
-                VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-            ",
-            &[
-                &(submission.block_hash().as_slice()),
-                &(region_id),
-                &(optimistic_version),
-                &(trace.receive as i64),
-                &(trace.decode as i64),
-                &(trace.pre_checks as i64),
-                &(trace.signature as i64),
-                &(trace.floor_bid_checks as i64),
-                &(trace.simulation as i64),
-                &(trace.auctioneer_update as i64),
-                &(trace.request_finish as i64),
-                &(trace.metadata),
-            ],
-        ).await?;
-
-        transaction.execute(
-            "
-                INSERT INTO slot_preferences (slot_number, proposer_pubkey, filtering, trusted_builders, header_delay, gossip_blobs)
-                SELECT $1, $2, filtering, trusted_builders, header_delay, gossip_blobs
-                FROM validator_preferences
-                WHERE public_key = $2
-                ON CONFLICT (slot_number) DO NOTHING;                
-            ",
-            &[
-                &(submission.slot().as_u64() as i32),
-                &(submission.proposer_public_key().serialize().as_slice()),
-            ],
-            ).await?;
-
-        transaction.commit().await?;
-
+        if let Some(sender) = &self.block_submissions_sender {
+            sender
+                .send(PendingBlockSubmissionValue {
+                    submission: submission.clone(),
+                    trace,
+                    optimistic_version,
+                })
+                .await
+                .map_err(|_| DatabaseError::ChannelSendError)?;
+        } else {
+            return Err(DatabaseError::ChannelSendError);
+        }
         record.record_success();
         Ok(())
     }
@@ -1775,63 +2183,18 @@ impl DatabaseService for PostgresDatabaseService {
         tx_count: Option<u32>,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_header_submission");
-
-        let region_id = self.region;
-        let mut client = self.pool.get().await?;
-        let transaction = client.transaction().await?;
-
-        let builder_pubkey = submission.builder_public_key().serialize();
-        let proposer_pubkey = submission.proposer_public_key().serialize();
-
-        transaction.execute(
-            "
-                INSERT INTO
-                    header_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, timestamp, first_seen, tx_count)
-                VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                ON CONFLICT (block_hash)
-                DO NOTHING
-                ",
-            &[
-                &(submission.execution_payload_header().block_number() as i32),
-                &(submission.slot().as_u64() as i32),
-                &(submission.parent_hash().as_slice()),
-                &(submission.block_hash().as_slice()),
-                &(builder_pubkey.as_ref()),
-                &(proposer_pubkey.as_ref()),
-                &(submission.proposer_fee_recipient().as_slice()),
-                &(submission.gas_limit() as i32),
-                &(submission.gas_used() as i32),
-                &(PostgresNumeric::from(submission.value())),
-                &(submission.timestamp() as i64),
-                &(trace.receive as i64),
-                &(tx_count.map(|c| c as i32)),
-            ],
-        ).await?;
-
-        transaction.execute(
-            "
-                INSERT INTO
-                    header_submission_trace (block_hash, region_id, receive, decode, pre_checks, signature, floor_bid_checks, auctioneer_update, request_finish, metadata)
-                VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ",
-            &[
-                &(submission.block_hash().as_slice()),
-                &(region_id),
-                &(trace.receive as i64),
-                &(trace.decode as i64),
-                &(trace.pre_checks as i64),
-                &(trace.signature as i64),
-                &(trace.floor_bid_checks as i64),
-                &(trace.auctioneer_update as i64),
-                &(trace.request_finish as i64),
-                &(trace.metadata),
-            ],
-        ).await?;
-
-        transaction.commit().await?;
-
+        if let Some(sender) = &self.header_submissions_sender {
+            sender
+                .send(PendingHeaderSubmissionValue {
+                    submission: submission.clone(),
+                    trace,
+                    tx_count,
+                })
+                .await
+                .map_err(|_| DatabaseError::ChannelSendError)?;
+        } else {
+            return Err(DatabaseError::ChannelSendError);
+        }
         record.record_success();
         Ok(())
     }
