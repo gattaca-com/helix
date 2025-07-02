@@ -98,7 +98,6 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
                         }
                         Err(broadcast::error::RecvError::Closed) => {
                             error!("head event channel closed");
-                            break;
                         }
                     }
                 }
@@ -114,7 +113,6 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
                         }
                         Err(broadcast::error::RecvError::Closed) => {
                             error!("head event channel closed");
-                            break;
                         }
                     }
                 }
@@ -134,7 +132,6 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
                         }
                         Err(broadcast::error::RecvError::Closed) => {
                             error!("payload attributes event channel closed");
-                            break;
                         }
                     }
                 }
@@ -149,7 +146,6 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
                         }
                         Err(broadcast::error::RecvError::Closed) => {
                             error!("payload attributes event channel closed");
-                            break;
                         }
                     }
                 }
