@@ -624,7 +624,7 @@ impl PostgresDatabaseService {
             simulation: i64,
             auctioneer_update: i64,
             request_finish: i64,
-            metadata: Vec<u8>,
+            metadata: Option<String>,
         }
 
         let mut structured_traces: Vec<TraceParams> = Vec::with_capacity(batch.len());
@@ -641,12 +641,7 @@ impl PostgresDatabaseService {
                 simulation: item.trace.simulation as i64,
                 auctioneer_update: item.trace.auctioneer_update as i64,
                 request_finish: item.trace.request_finish as i64,
-                metadata: item
-                    .trace
-                    .metadata
-                    .as_ref()
-                    .map(|s| s.as_bytes().to_vec())
-                    .unwrap_or_default(),
+                metadata: item.trace.metadata.clone(),
             });
         }
 
@@ -713,7 +708,7 @@ impl PostgresDatabaseService {
             let val_clauses: Vec<String> = (0..new_rows.len())
                 .map(|i| {
                     let start = i * 2 + 1;
-                    format!("(${}, ${})", start, start + 1)
+                    format!("(${}::INTEGER, ${}::BYTEA)", start, start + 1)
                 })
                 .collect();
             vp_sql.push_str(&val_clauses.join(", "));
@@ -835,7 +830,7 @@ impl PostgresDatabaseService {
             floor_bid_checks: i64,
             auctioneer_update: i64,
             request_finish: i64,
-            metadata: Vec<u8>,
+            metadata: Option<String>,
         }
 
         let mut structured_htraces: Vec<HTraceParams> = Vec::with_capacity(batch.len());
@@ -850,12 +845,7 @@ impl PostgresDatabaseService {
                 floor_bid_checks: item.trace.floor_bid_checks as i64,
                 auctioneer_update: item.trace.auctioneer_update as i64,
                 request_finish: item.trace.request_finish as i64,
-                metadata: item
-                    .trace
-                    .metadata
-                    .as_ref()
-                    .map(|s| s.as_bytes().to_vec())
-                    .unwrap_or_default(),
+                metadata: item.trace.metadata.clone(),
             });
         }
 
