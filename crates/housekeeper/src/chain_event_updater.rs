@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
+use futures::FutureExt;
 use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, utils::utcnow_sec,
@@ -65,9 +66,35 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
         }
     }
 
-    /// Starts the updater and listens to head events and new subscriptions.
     pub async fn start(
         mut self,
+        head_event_rx: broadcast::Receiver<HeadEventData>,
+        payload_attributes_rx: broadcast::Receiver<PayloadAttributesEvent>,
+    ) {
+        loop {
+            let result = std::panic::AssertUnwindSafe(
+                self.run(head_event_rx.resubscribe(), payload_attributes_rx.resubscribe()),
+            )
+            .catch_unwind()
+            .await;
+
+            match result {
+                Ok(()) => {
+                    info!("ChainEventUpdater exited normally");
+                    break;
+                }
+                Err(err) => {
+                    error!("ChainEventUpdater panicked: {:?}", err);
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+            }
+        }
+    }
+
+    /// Starts the updater and listens to head events and new subscriptions.
+    pub async fn run(
+        &mut self,
         mut head_event_rx: broadcast::Receiver<HeadEventData>,
         mut payload_attributes_rx: broadcast::Receiver<PayloadAttributesEvent>,
     ) {
