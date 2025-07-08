@@ -96,13 +96,6 @@ pub trait Auctioneer: Send + Sync + Clone {
         parent_hash: &B256,
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<Option<U256>, AuctioneerError>;
-    async fn get_builder_latest_value(
-        &self,
-        slot: u64,
-        parent_hash: &B256,
-        proposer_pub_key: &BlsPublicKey,
-        builder_pub_key: &BlsPublicKey,
-    ) -> Result<Option<U256>, AuctioneerError>;
     async fn get_floor_bid_value(
         &self,
         slot: u64,

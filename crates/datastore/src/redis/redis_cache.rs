@@ -1,6 +1,13 @@
 #![allow(dependency_on_unit_never_type_fallback)] // TODO: temp fix , needs to be fixed before upading to 2024 edition
 
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use alloy_primitives::{bytes::Bytes, B256, U256};
 use async_trait::async_trait;
@@ -23,6 +30,7 @@ use helix_types::{
     maybe_upgrade_execution_payload, BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs,
     SignedBidSubmission, SignedBuilderBid,
 };
+use moka::sync::Cache;
 use redis::{AsyncCommands, Msg, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::from_str;
@@ -65,7 +73,15 @@ const PAYLOAD_ADDRESS_EXPIRY_S: usize = 24;
 const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 45_000;
 
 const BEST_BIDS_CHANNEL: &str = "best_bids";
+const FLOOR_BIDS_CHANNEL: &str = "floor_bids";
 const CURRENT_INCLUSION_LIST_CHANNEL: &str = "inclusion_list_updates";
+const SEEN_BLOCK_HASHES_CHANNEL: &str = "seen_block_hashes_updates";
+const LAST_SLOT_DELIVERED_CHANNEL: &str = "last_slot_delivered_updates";
+const BUILDER_LAST_BID_RECEIVED_AT_CHANNEL: &str = "builder_last_bid_received_at_updates";
+const BUILDER_LAST_BID_RECEIVED_AT_DELETED_CHANNEL: &str =
+    "builder_last_bid_received_at_deleted_updates";
+const HEADER_TX_ROOT_CHANNEL: &str = "header_tx_root_updates";
+const BUILDER_INFO_CHANNEL: &str = "builder_info_channel";
 
 const RENEW_SCRIPT: &str = r#"
 if redis.call('get', KEYS[1]) == ARGV[1] then
@@ -81,6 +97,13 @@ pub struct RedisCache {
     inclusion_list: broadcast::Sender<InclusionListWithKey>,
     payload_attributes: broadcast::Sender<PayloadAttributesEvent>,
     head_event: broadcast::Sender<HeadEventData>,
+    top_bid_value_cache: Cache<String, U256>,
+    floor_bid_value_cache: Cache<String, U256>,
+    seen_block_hashes: Cache<String, ()>,
+    last_delivered_slot: Arc<AtomicU64>,
+    builder_latest_payload_received_at: Cache<String, u64>,
+    header_tx_root_cache: Cache<String, B256>,
+    builder_info_cache: Cache<String, BuilderInfo>,
 }
 
 #[allow(dead_code)]
@@ -89,7 +112,10 @@ impl RedisCache {
         conn_str: &str,
         builder_infos: Vec<BuilderInfoDocument>,
     ) -> Result<Self, CreatePoolError> {
-        let cfg = Config::from_url(conn_str);
+        let mut cfg = Config::from_url(conn_str);
+        let mut pool_config = deadpool_redis::PoolConfig::default();
+        pool_config.max_size += 10; // Increase max size to accommodate listeners
+        cfg.pool = Some(pool_config);
         let pool = cfg.create_pool(Some(Runtime::Tokio1))?;
         let (tx, mut tx_recv) = broadcast::channel(1000);
         let (inclusion_list, mut il_recv) = broadcast::channel(1);
@@ -102,7 +128,34 @@ impl RedisCache {
         tokio::spawn(async move { while let Ok(_message) = pa_recv.recv().await {} });
         tokio::spawn(async move { while let Ok(_message) = he_recv.recv().await {} });
 
-        let cache = Self { pool, tx, inclusion_list, payload_attributes, head_event };
+        let top_bid_value_cache =
+            Cache::builder().time_to_idle(Duration::from_secs(45)).max_capacity(10_000).build();
+        let floor_bid_value_cache =
+            Cache::builder().time_to_idle(Duration::from_secs(45)).max_capacity(10_000).build();
+        let seen_block_hashes =
+            Cache::builder().time_to_idle(Duration::from_secs(45)).max_capacity(10_000).build();
+        let builder_latest_payload_received_at =
+            Cache::builder().time_to_idle(Duration::from_secs(45)).max_capacity(10_000).build();
+        let header_tx_root_cache =
+            Cache::builder().time_to_idle(Duration::from_secs(45)).max_capacity(10_000).build();
+        let builder_info_cache =
+            Cache::builder().time_to_idle(Duration::from_secs(300)).max_capacity(10_000).build();
+        let last_delivered_slot = Arc::new(AtomicU64::new(0));
+
+        let cache = Self {
+            pool,
+            tx,
+            inclusion_list,
+            payload_attributes,
+            head_event,
+            top_bid_value_cache,
+            floor_bid_value_cache,
+            seen_block_hashes,
+            builder_latest_payload_received_at,
+            last_delivered_slot,
+            header_tx_root_cache,
+            builder_info_cache,
+        };
 
         // Load in builder info
         if let Err(err) = cache.update_builder_infos(&builder_infos).await {
@@ -122,7 +175,7 @@ impl RedisCache {
         let mut conn = self.pool.get().await?;
 
         while let Some(message) = message_stream.next().await {
-            let Ok((_, sig_bid)) =
+            let Ok((key, sig_bid)) =
                 Self::process_pubsub_update::<SignedBuilderBidWrapper>(message, &mut conn).await
             else {
                 continue;
@@ -131,6 +184,9 @@ impl RedisCache {
             let received_at = sig_bid.received_at_ms;
 
             let top_bid_update: TopBidUpdate = sig_bid.into();
+
+            self.top_bid_value_cache.insert(key, top_bid_update.value);
+
             //ssz encode the top bid update
             let serialized = Bytes::from(top_bid_update.as_ssz_bytes());
 
@@ -140,6 +196,228 @@ impl RedisCache {
                 error!(%err, "Failed to send top bid update");
                 continue;
             }
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_payload_attributes_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe("payload_attributes_channel").await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        while let Some(msg) = message_stream.next().await {
+            let payload: redis::RedisResult<String> = msg.get_payload();
+
+            let Ok(json) = payload else {
+                warn!("Malformed Redis payload");
+                continue;
+            };
+
+            let Ok(event) = from_str::<PayloadAttributesEvent>(&json) else {
+                warn!("Failed to deserialize PayloadAttributesEvent");
+                continue;
+            };
+
+            if let Err(err) = self.payload_attributes.send(event) {
+                error!(%err, "Failed to forward payload attributes event");
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_head_event_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe("head_event_channel").await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        while let Some(msg) = message_stream.next().await {
+            let payload: redis::RedisResult<String> = msg.get_payload();
+
+            let Ok(json) = payload else {
+                warn!("Malformed Redis payload");
+                continue;
+            };
+
+            let Ok(event) = from_str::<HeadEventData>(&json) else {
+                warn!("Failed to deserialize HeadEventData");
+                continue;
+            };
+
+            if let Err(err) = self.head_event.send(event) {
+                error!(%err, "Failed to forward head event");
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_inclusion_list_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(CURRENT_INCLUSION_LIST_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+        let mut conn = self.pool.get().await?;
+
+        while let Some(msg) = message_stream.next().await {
+            let Ok((key, list)) = Self::process_pubsub_update(msg, &mut conn).await else {
+                continue;
+            };
+
+            let list_with_key = InclusionListWithKey { key, inclusion_list: list };
+            if let Err(err) = self.inclusion_list.send(list_with_key) {
+                error!(%err, "Failed to send inclusion list update");
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_seen_block_hashes_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(SEEN_BLOCK_HASHES_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        while let Some(message) = message_stream.next().await {
+            let payload = message.get_payload::<String>().ok();
+            if let Some(key) = payload {
+                self.seen_block_hashes.insert(key, ());
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_last_slot_delivered_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(LAST_SLOT_DELIVERED_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        while let Some(message) = message_stream.next().await {
+            let Ok(slot) = message.get_payload::<u64>() else {
+                warn!("Malformed Redis payload for last slot delivered");
+                continue;
+            };
+
+            self.last_delivered_slot.store(slot, Ordering::SeqCst);
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_builder_last_bid_received_at_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(BUILDER_LAST_BID_RECEIVED_AT_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        while let Some(message) = message_stream.next().await {
+            let payload = message.get_payload::<String>().ok();
+
+            if let Some(payload_str) = payload {
+                if let Ok((key, received_at)) = from_str::<(String, u64)>(&payload_str) {
+                    self.builder_latest_payload_received_at.insert(key, received_at);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_builder_last_bid_received_at_deleted_listener(
+        &self,
+    ) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(BUILDER_LAST_BID_RECEIVED_AT_DELETED_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        while let Some(message) = message_stream.next().await {
+            let payload = message.get_payload::<String>().ok();
+            if let Some(key) = payload {
+                self.builder_latest_payload_received_at.remove(&key);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_header_tx_root_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(HEADER_TX_ROOT_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        let mut conn = self.pool.get().await?;
+
+        while let Some(message) = message_stream.next().await {
+            let Ok((key, tx_root)) = Self::process_pubsub_update::<B256>(message, &mut conn).await
+            else {
+                continue;
+            };
+
+            self.header_tx_root_cache.insert(key, tx_root);
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_builder_info_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(BUILDER_INFO_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        let mut conn = self.pool.get().await?;
+
+        while let Some(message) = message_stream.next().await {
+            let Ok((field, builder_info)) = Self::process_pubsub_update_hget::<BuilderInfo>(
+                BUILDER_INFO_KEY,
+                message,
+                &mut conn,
+            )
+            .await
+            else {
+                continue;
+            };
+
+            self.builder_info_cache.insert(field, builder_info);
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_floor_bid_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(FLOOR_BIDS_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        let mut conn = self.pool.get().await?;
+
+        while let Some(message) = message_stream.next().await {
+            let Ok((key, floor_value)) =
+                Self::process_pubsub_update::<U256>(message, &mut conn).await
+            else {
+                continue;
+            };
+
+            self.floor_bid_value_cache.insert(key, floor_value);
         }
 
         Ok(())
@@ -495,6 +773,7 @@ impl RedisCache {
 
         // Update the global top bid value
         let top_bid_value_key = get_top_bid_value_key(slot, parent_hash, proposer_pub_key);
+        self.top_bid_value_cache.insert(top_bid_value_key.clone(), state.top_bid_value);
         self.set(&top_bid_value_key, &state.top_bid_value, Some(BID_CACHE_EXPIRY_S)).await?;
 
         self.publish(BEST_BIDS_CHANNEL, &top_bid_key).await?;
@@ -524,83 +803,10 @@ impl RedisCache {
         self.copy(&key_bid_source, &key_floor_bid, Some(BID_CACHE_EXPIRY_S)).await?;
 
         let key_floor_bid_value = get_floor_bid_value_key(slot, parent_hash, proposer_pub_key);
-        self.set(&key_floor_bid_value, &new_floor_value, Some(BID_CACHE_EXPIRY_S)).await
-    }
+        self.floor_bid_value_cache.insert(key_floor_bid_value.clone(), new_floor_value);
+        self.set(&key_floor_bid_value, &new_floor_value, Some(BID_CACHE_EXPIRY_S)).await?;
 
-    pub async fn start_inclusion_list_listener(&self) -> Result<(), RedisCacheError> {
-        let conn = self.pool.get().await?;
-        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
-        pubsub.subscribe(CURRENT_INCLUSION_LIST_CHANNEL).await?;
-
-        let mut message_stream = pubsub.on_message();
-        let mut conn = self.pool.get().await?;
-
-        while let Some(msg) = message_stream.next().await {
-            let Ok((key, list)) = Self::process_pubsub_update(msg, &mut conn).await else {
-                continue;
-            };
-
-            let list_with_key = InclusionListWithKey { key, inclusion_list: list };
-            if let Err(err) = self.inclusion_list.send(list_with_key) {
-                error!(%err, "Failed to send inclusion list update");
-            }
-        }
-
-        Ok(())
-    }
-
-    pub async fn start_payload_attributes_listener(&self) -> Result<(), RedisCacheError> {
-        let conn = self.pool.get().await?;
-        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
-        pubsub.subscribe("payload_attributes_channel").await?;
-
-        let mut message_stream = pubsub.on_message();
-
-        while let Some(msg) = message_stream.next().await {
-            let payload: redis::RedisResult<String> = msg.get_payload();
-
-            let Ok(json) = payload else {
-                warn!("Malformed Redis payload");
-                continue;
-            };
-
-            let Ok(event) = from_str::<PayloadAttributesEvent>(&json) else {
-                warn!("Failed to deserialize PayloadAttributesEvent");
-                continue;
-            };
-
-            if let Err(err) = self.payload_attributes.send(event) {
-                error!(%err, "Failed to forward payload attributes event");
-            }
-        }
-
-        Ok(())
-    }
-
-    pub async fn start_head_event_listener(&self) -> Result<(), RedisCacheError> {
-        let conn = self.pool.get().await?;
-        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
-        pubsub.subscribe("head_event_channel").await?;
-
-        let mut message_stream = pubsub.on_message();
-
-        while let Some(msg) = message_stream.next().await {
-            let payload: redis::RedisResult<String> = msg.get_payload();
-
-            let Ok(json) = payload else {
-                warn!("Malformed Redis payload");
-                continue;
-            };
-
-            let Ok(event) = from_str::<HeadEventData>(&json) else {
-                warn!("Failed to deserialize HeadEventData");
-                continue;
-            };
-
-            if let Err(err) = self.head_event.send(event) {
-                error!(%err, "Failed to forward head event");
-            }
-        }
+        self.publish(FLOOR_BIDS_CHANNEL, &key_floor_bid_value).await?;
 
         Ok(())
     }
@@ -625,6 +831,26 @@ impl RedisCache {
 
         Ok((key, value))
     }
+
+    async fn process_pubsub_update_hget<T: DeserializeOwned>(
+        key: &str,
+        update: Msg,
+        conn: &mut Connection,
+    ) -> Result<(String, T), RedisCacheError> {
+        let field: String = update.get_payload().inspect_err(|err| {
+            error!(%err, "Failed to get payload from message");
+        })?;
+
+        let data: String = conn.hget(key, &field).await.inspect_err(|err| {
+            error!(%err, "Failed to get data from redis");
+        })?;
+
+        let value = serde_json::from_str(&data).inspect_err(|err| {
+            error!(%err, "Failed to deserialize data");
+        })?;
+
+        Ok((field, value))
+    }
 }
 
 #[async_trait]
@@ -633,11 +859,18 @@ impl Auctioneer for RedisCache {
     async fn get_last_slot_delivered(&self) -> Result<Option<u64>, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_last_slot_delivered");
 
-        let last_slot_delivered =
-            self.get(LAST_SLOT_DELIVERED_KEY).await.map_err(AuctioneerError::RedisError)?;
+        let last_slot_delivered = self.last_delivered_slot.load(Ordering::SeqCst);
+
+        if last_slot_delivered > 0 {
+            record.record_success();
+            return Ok(Some(last_slot_delivered));
+        }
+
+        let mut conn = self.pool.get().await.map_err(RedisCacheError::from)?;
+        let value = conn.get(LAST_SLOT_DELIVERED_KEY).await.map_err(RedisCacheError::from)?;
 
         record.record_success();
-        Ok(last_slot_delivered)
+        Ok(value)
     }
 
     #[instrument(skip_all)]
@@ -672,6 +905,8 @@ impl Auctioneer for RedisCache {
             }
         }
 
+        self.last_delivered_slot.store(slot, Ordering::SeqCst);
+
         let mut conn = self.pool.get().await.map_err(RedisCacheError::from)?;
         let mut pipe = redis::pipe();
 
@@ -682,7 +917,7 @@ impl Auctioneer for RedisCache {
         pipe.atomic()
             .cmd("SET")
             .arg(LAST_SLOT_DELIVERED_KEY)
-            .arg(slot_value)
+            .arg(&slot_value)
             .ignore()
             .cmd("SET")
             .arg(LAST_HASH_DELIVERED_KEY)
@@ -690,6 +925,8 @@ impl Auctioneer for RedisCache {
             .ignore();
 
         pipe.query_async(&mut conn).await.map_err(RedisCacheError::from)?;
+
+        self.publish(LAST_SLOT_DELIVERED_CHANNEL, slot_value.as_str()).await?;
 
         record.record_success();
         Ok(())
@@ -794,6 +1031,13 @@ impl Auctioneer for RedisCache {
     ) -> Result<Option<u64>, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_builder_latest_payload_received_at");
 
+        let key =
+            get_latest_bid_by_builder_key(slot, parent_hash, proposer_pub_key, builder_pub_key);
+        if let Some(cached) = self.builder_latest_payload_received_at.get(&key) {
+            record.record_success();
+            return Ok(Some(cached));
+        }
+
         let key = get_builder_latest_bid_time_key(slot, parent_hash, proposer_pub_key);
         let received_at = self.hget(&key, &format!("{builder_pub_key:?}")).await?;
 
@@ -860,6 +1104,10 @@ impl Auctioneer for RedisCache {
             .ignore();
 
         pipe.query_async(&mut conn).await.map_err(RedisCacheError::from)?;
+
+        self.builder_latest_payload_received_at.insert(key_latest_bid.clone(), received_at as u64);
+        let payload = (key_latest_bid.clone(), received_at as u64);
+        self.publish_json(BUILDER_LAST_BID_RECEIVED_AT_CHANNEL, &payload).await?;
 
         record.record_success();
         Ok(())
@@ -928,27 +1176,19 @@ impl Auctioneer for RedisCache {
         let mut record = RedisMetricRecord::new("get_top_bid_value");
 
         let key = get_top_bid_value_key(slot, parent_hash, proposer_pub_key);
+
+        if let Some(cached) = self.top_bid_value_cache.get(&key) {
+            record.record_success();
+            return Ok(Some(cached));
+        }
+
         let top_bid_value = self.get(&key).await?;
+        if let Some(val) = top_bid_value {
+            self.top_bid_value_cache.insert(key.clone(), val);
+        }
 
         record.record_success();
         Ok(top_bid_value)
-    }
-
-    #[instrument(skip_all)]
-    async fn get_builder_latest_value(
-        &self,
-        slot: u64,
-        parent_hash: &B256,
-        proposer_pub_key: &BlsPublicKey,
-        builder_pub_key: &BlsPublicKey,
-    ) -> Result<Option<U256>, AuctioneerError> {
-        let mut record = RedisMetricRecord::new("get_builder_latest_value");
-
-        let key = get_builder_latest_bid_value_key(slot, parent_hash, proposer_pub_key);
-        let builder_latest_value = self.hget(&key, &format!("{builder_pub_key:?}")).await?;
-
-        record.record_success();
-        Ok(builder_latest_value)
     }
 
     #[instrument(skip_all)]
@@ -961,7 +1201,14 @@ impl Auctioneer for RedisCache {
         let mut record = RedisMetricRecord::new("get_floor_bid_value");
 
         let key = get_floor_bid_value_key(slot, parent_hash, proposer_pub_key);
+        if let Some(cached) = self.floor_bid_value_cache.get(&key) {
+            record.record_success();
+            return Ok(Some(cached));
+        }
         let floor_bid_value = self.get(&key).await?;
+        if let Some(value) = floor_bid_value {
+            self.floor_bid_value_cache.insert(key.clone(), value);
+        }
 
         record.record_success();
         Ok(floor_bid_value)
@@ -985,6 +1232,11 @@ impl Auctioneer for RedisCache {
         // Delete the time
         let key_latest_time = get_builder_latest_bid_time_key(slot, parent_hash, proposer_pub_key);
         self.hdel(&key_latest_time, &format!("{builder_pub_key:?}")).await?;
+        self.publish(
+            BUILDER_LAST_BID_RECEIVED_AT_DELETED_CHANNEL,
+            &get_latest_bid_by_builder_key(slot, parent_hash, proposer_pub_key, builder_pub_key),
+        )
+        .await?;
 
         // Update bids now to determine current top bid
         let mut state = SaveBidAndUpdateTopBidResponse::default();
@@ -1015,8 +1267,14 @@ impl Auctioneer for RedisCache {
         builder_pub_key: &BlsPublicKey,
     ) -> Result<BuilderInfo, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_builder_info");
+        let key = format!("{builder_pub_key:?}");
+        if let Some(cached) = self.builder_info_cache.get(&key) {
+            record.record_success();
+            return Ok(cached);
+        }
+
         let builder_info = self
-            .hget(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"))
+            .hget(BUILDER_INFO_KEY, &key)
             .await?
             .ok_or(AuctioneerError::BuilderNotFound { pub_key: builder_pub_key.clone() })?;
 
@@ -1033,7 +1291,9 @@ impl Auctioneer for RedisCache {
         }
         builder_info.is_optimistic = false;
         builder_info.is_optimistic_for_regional_filtering = false;
+        self.builder_info_cache.insert(format!("{builder_pub_key:?}"), builder_info.clone());
         self.hset(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"), &builder_info).await?;
+        self.publish(BUILDER_INFO_CHANNEL, &format!("{builder_pub_key:?}")).await?;
 
         // TODO remove pending blocks
 
@@ -1062,8 +1322,11 @@ impl Auctioneer for RedisCache {
             let builder_pub_key_str = format!("{:?}", builder_info.pub_key);
             if let Some(redis_builder_info) = redis_builder_infos.get(&builder_pub_key_str) {
                 if builder_info.builder_info != *redis_builder_info {
+                    self.builder_info_cache
+                        .insert(builder_pub_key_str.clone(), builder_info.builder_info.clone());
                     self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info)
                         .await?;
+                    self.publish(BUILDER_INFO_CHANNEL, &builder_pub_key_str).await?;
                     info!(
                         pubkey = %builder_info.pub_key,
                         is_optimistic = builder_info.builder_info.is_optimistic,
@@ -1071,8 +1334,11 @@ impl Auctioneer for RedisCache {
                     );
                 }
             } else {
+                self.builder_info_cache
+                    .insert(builder_pub_key_str.clone(), builder_info.builder_info.clone());
                 self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info)
                     .await?;
+                self.publish(BUILDER_INFO_CHANNEL, &builder_pub_key_str).await?;
                 info!(
                     pubkey = %builder_info.pub_key,
                     is_optimistic = builder_info.builder_info.is_optimistic,
@@ -1094,11 +1360,18 @@ impl Auctioneer for RedisCache {
         proposer_pub_key: &BlsPublicKey,
     ) -> Result<bool, AuctioneerError> {
         let mut record = RedisMetricRecord::new("seen_or_insert_block_hash");
-        let key = get_seen_block_hashes_key(slot, parent_hash, proposer_pub_key);
-        let seen = self.seen_or_add(&key, block_hash).await?;
 
+        let key = get_seen_block_hashes_key(slot, parent_hash, proposer_pub_key, block_hash);
+
+        if self.seen_block_hashes.contains_key(&key) {
+            record.record_success();
+            return Ok(true);
+        }
+
+        self.seen_block_hashes.insert(key.clone(), ());
+        self.publish(SEEN_BLOCK_HASHES_CHANNEL, &key).await?;
         record.record_success();
-        Ok(seen)
+        Ok(false)
     }
 
     #[instrument(skip_all)]
@@ -1201,6 +1474,11 @@ impl Auctioneer for RedisCache {
     async fn get_header_tx_root(&self, block_hash: &B256) -> Result<Option<B256>, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_header_tx_root");
         let key = get_header_tx_root_key(block_hash);
+        if let Some(cached) = self.header_tx_root_cache.get(&key) {
+            record.record_success();
+            return Ok(Some(cached));
+        }
+
         let tx_root = self.get(&key).await?;
 
         record.record_success();
@@ -1228,7 +1506,9 @@ impl Auctioneer for RedisCache {
 
         // Cache the transaction root for the header
         let key = get_header_tx_root_key(submission.block_hash());
+        self.header_tx_root_cache.insert(key.clone(), submission.transactions_root());
         self.set(&key, &submission.transactions_root(), Some(24)).await?;
+        self.publish(HEADER_TX_ROOT_CHANNEL, &key).await?;
 
         // Sign builder bid with relay pubkey.
         let builder_bid = header_submission_to_builder_bid(submission, signing_context);
@@ -1606,6 +1886,8 @@ fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {
 
 #[cfg(test)]
 mod tests {
+    use std::clone;
+
     use alloy_primitives::U256;
     use helix_common::utils::utcnow_ns;
     use helix_types::{
@@ -2196,32 +2478,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_and_set_builder_latest_value() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
-        cache.clear_cache().await.unwrap();
-
-        let slot = 42;
-        let parent_hash = B256::default();
-        let proposer_pub_key = BlsPublicKey::test_random();
-        let builder_pub_key = BlsPublicKey::test_random();
-        let latest_value = U256::from(100);
-
-        // Set the latest value
-        let key = get_builder_latest_bid_value_key(slot, &parent_hash, &proposer_pub_key);
-        let set_result: Result<(), RedisCacheError> =
-            cache.hset(&key, &format!("{builder_pub_key:?}"), &latest_value).await;
-        assert!(set_result.is_ok(), "Failed to set the latest value");
-
-        // Test: Get the latest value
-        let get_result: Result<Option<U256>, _> = cache
-            .get_builder_latest_value(slot, &parent_hash, &proposer_pub_key, &builder_pub_key)
-            .await;
-        assert!(get_result.is_ok(), "Failed to get the latest value");
-        assert!(get_result.as_ref().unwrap().is_some(), "Latest value is None");
-        assert_eq!(get_result.unwrap().unwrap(), latest_value, "Value mismatch");
-    }
-
-    #[tokio::test]
     #[serial]
     async fn test_get_builder_info() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
@@ -2660,6 +2916,10 @@ mod tests {
     #[serial]
     async fn test_seen_or_insert_block_hash() {
         let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cloned_cache = cache.clone();
+        tokio::spawn(async move {
+            cloned_cache.start_seen_block_hashes_listener().await.unwrap();
+        });
         cache.clear_cache().await.unwrap();
 
         let slot = 42;

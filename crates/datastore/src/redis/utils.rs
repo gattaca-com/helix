@@ -97,8 +97,9 @@ pub fn get_seen_block_hashes_key(
     slot: u64,
     parent_hash: &B256,
     proposer_pub_key: &BlsPublicKey,
+    block_hash: &B256,
 ) -> String {
-    format!("{SEEN_BLOCK_HASHES_KEY}:{slot}_{parent_hash:?}_{proposer_pub_key:?}")
+    format!("{SEEN_BLOCK_HASHES_KEY}:{slot}_{parent_hash:?}_{proposer_pub_key:?}_{block_hash:?}")
 }
 
 pub fn get_pending_block_builder_key(builder_pub_key: &BlsPublicKey) -> String {

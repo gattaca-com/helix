@@ -4098,6 +4098,7 @@ dependencies = [
  "helix-common",
  "helix-database",
  "helix-types",
+ "moka",
  "redis",
  "serde",
  "serde_json",
