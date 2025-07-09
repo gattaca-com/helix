@@ -309,7 +309,7 @@ impl RedisCache {
                 continue;
             };
 
-            self.last_delivered_slot.store(slot, Ordering::SeqCst);
+            self.last_delivered_slot.store(slot, Ordering::Relaxed);
         }
 
         Ok(())
@@ -859,7 +859,7 @@ impl Auctioneer for RedisCache {
     async fn get_last_slot_delivered(&self) -> Result<Option<u64>, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_last_slot_delivered");
 
-        let last_slot_delivered = self.last_delivered_slot.load(Ordering::SeqCst);
+        let last_slot_delivered = self.last_delivered_slot.load(Ordering::Relaxed);
 
         if last_slot_delivered > 0 {
             record.record_success();
@@ -905,7 +905,7 @@ impl Auctioneer for RedisCache {
             }
         }
 
-        self.last_delivered_slot.store(slot, Ordering::SeqCst);
+        self.last_delivered_slot.store(slot, Ordering::Relaxed);
 
         let mut conn = self.pool.get().await.map_err(RedisCacheError::from)?;
         let mut pipe = redis::pipe();
