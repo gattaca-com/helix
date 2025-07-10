@@ -35,16 +35,7 @@ impl<A: Api> BuilderApi<A> {
         }
 
         // Handle duplicates.
-        if self
-            .check_for_duplicate_block_hash(
-                &block_hash,
-                req.slot().as_u64(),
-                req.parent_hash(),
-                req.proposer_pubkey(),
-            )
-            .await
-            .is_err()
-        {
+        if self.check_for_duplicate_block_hash(&block_hash).await.is_err() {
             return;
         }
 

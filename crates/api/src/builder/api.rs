@@ -127,15 +127,8 @@ impl<A: Api> BuilderApi<A> {
     pub(crate) async fn check_for_duplicate_block_hash(
         &self,
         block_hash: &B256,
-        slot: u64,
-        parent_hash: &B256,
-        proposer_public_key: &BlsPublicKey,
     ) -> Result<(), BuilderApiError> {
-        match self
-            .auctioneer
-            .seen_or_insert_block_hash(block_hash, slot, parent_hash, proposer_public_key)
-            .await
-        {
+        match self.auctioneer.seen_or_insert_block_hash(block_hash).await {
             Ok(false) => Ok(()),
             Ok(true) => {
                 debug!(?block_hash, "duplicate block hash");
