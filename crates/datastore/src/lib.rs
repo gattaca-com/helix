@@ -78,15 +78,6 @@ pub async fn start_auctioneer(
     let auctioneer_clone = auctioneer.clone();
     tokio::spawn(async move {
         loop {
-            if let Err(err) = auctioneer_clone.start_header_tx_root_listener().await {
-                error!("Header tx root listener error: {}", err);
-            }
-        }
-    });
-
-    let auctioneer_clone = auctioneer.clone();
-    tokio::spawn(async move {
-        loop {
             if let Err(err) = auctioneer_clone.start_last_slot_delivered_listener().await {
                 error!("Last slot delivered listener error: {}", err);
             }

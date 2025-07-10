@@ -50,8 +50,7 @@ use crate::{
             get_builder_latest_bid_time_key, get_builder_latest_bid_value_key,
             get_cache_bid_trace_key, get_cache_get_header_response_key, get_execution_payload_key,
             get_floor_bid_key, get_floor_bid_value_key, get_latest_bid_by_builder_key,
-            get_latest_bid_by_builder_key_str_builder_pub_key, get_seen_block_hashes_key,
-            get_top_bid_value_key,
+            get_latest_bid_by_builder_key_str_builder_pub_key, get_top_bid_value_key,
         },
     },
     types::{
@@ -80,7 +79,6 @@ const LAST_SLOT_DELIVERED_CHANNEL: &str = "last_slot_delivered_updates";
 const BUILDER_LAST_BID_RECEIVED_AT_CHANNEL: &str = "builder_last_bid_received_at_updates";
 const BUILDER_LAST_BID_RECEIVED_AT_DELETED_CHANNEL: &str =
     "builder_last_bid_received_at_deleted_updates";
-const HEADER_TX_ROOT_CHANNEL: &str = "header_tx_root_updates";
 const BUILDER_INFO_CHANNEL: &str = "builder_info_channel";
 
 const RENEW_SCRIPT: &str = r#"
@@ -99,11 +97,10 @@ pub struct RedisCache {
     head_event: broadcast::Sender<HeadEventData>,
     top_bid_value_cache: Cache<String, U256>,
     floor_bid_value_cache: Cache<String, U256>,
-    seen_block_hashes: Cache<String, ()>,
+    seen_block_hashes: Cache<B256, ()>,
     last_delivered_slot: Arc<AtomicU64>,
     builder_latest_payload_received_at: Cache<String, u64>,
-    header_tx_root_cache: Cache<String, B256>,
-    builder_info_cache: Cache<String, BuilderInfo>,
+    builder_info_cache: Cache<BlsPublicKey, BuilderInfo>,
 }
 
 #[allow(dead_code)]
@@ -136,8 +133,6 @@ impl RedisCache {
             Cache::builder().time_to_idle(Duration::from_secs(45)).max_capacity(10_000).build();
         let builder_latest_payload_received_at =
             Cache::builder().time_to_idle(Duration::from_secs(45)).max_capacity(10_000).build();
-        let header_tx_root_cache =
-            Cache::builder().time_to_idle(Duration::from_secs(45)).max_capacity(10_000).build();
         let builder_info_cache =
             Cache::builder().time_to_idle(Duration::from_secs(300)).max_capacity(10_000).build();
         let last_delivered_slot = Arc::new(AtomicU64::new(0));
@@ -153,7 +148,6 @@ impl RedisCache {
             seen_block_hashes,
             builder_latest_payload_received_at,
             last_delivered_slot,
-            header_tx_root_cache,
             builder_info_cache,
         };
 
@@ -289,7 +283,9 @@ impl RedisCache {
         while let Some(message) = message_stream.next().await {
             let payload = message.get_payload::<String>().ok();
             if let Some(key) = payload {
-                self.seen_block_hashes.insert(key, ());
+                if let Ok(block_hash) = from_str::<B256>(&key) {
+                    self.seen_block_hashes.insert(block_hash, ());
+                }
             }
         }
 
@@ -354,27 +350,6 @@ impl RedisCache {
         Ok(())
     }
 
-    pub async fn start_header_tx_root_listener(&self) -> Result<(), RedisCacheError> {
-        let conn = self.pool.get().await?;
-        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
-        pubsub.subscribe(HEADER_TX_ROOT_CHANNEL).await?;
-
-        let mut message_stream = pubsub.on_message();
-
-        let mut conn = self.pool.get().await?;
-
-        while let Some(message) = message_stream.next().await {
-            let Ok((key, tx_root)) = Self::process_pubsub_update::<B256>(message, &mut conn).await
-            else {
-                continue;
-            };
-
-            self.header_tx_root_cache.insert(key, tx_root);
-        }
-
-        Ok(())
-    }
-
     pub async fn start_builder_info_listener(&self) -> Result<(), RedisCacheError> {
         let conn = self.pool.get().await?;
         let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
@@ -395,7 +370,9 @@ impl RedisCache {
                 continue;
             };
 
-            self.builder_info_cache.insert(field, builder_info);
+            if let Ok(builder_pub_key) = get_pubkey_from_hex(&field) {
+                self.builder_info_cache.insert(builder_pub_key, builder_info);
+            }
         }
 
         Ok(())
@@ -434,6 +411,23 @@ impl RedisCache {
         } else {
             Err(RedisCacheError::UnexpectedValueType)
         }
+    }
+
+    async fn get_with_cache<T: Clone + Send + Sync + serde::de::DeserializeOwned + 'static>(
+        &self,
+        key: &str,
+        cache: &Cache<String, T>,
+    ) -> Result<Option<T>, RedisCacheError> {
+        if let Some(cached) = cache.get(key) {
+            return Ok(Some(cached));
+        }
+
+        let value = self.get::<T>(key).await?;
+        if let Some(ref val) = value {
+            cache.insert(key.to_string(), val.clone());
+        }
+
+        Ok(value)
     }
 
     async fn hget<T: DeserializeOwned>(
@@ -1176,16 +1170,7 @@ impl Auctioneer for RedisCache {
         let mut record = RedisMetricRecord::new("get_top_bid_value");
 
         let key = get_top_bid_value_key(slot, parent_hash, proposer_pub_key);
-
-        if let Some(cached) = self.top_bid_value_cache.get(&key) {
-            record.record_success();
-            return Ok(Some(cached));
-        }
-
-        let top_bid_value = self.get(&key).await?;
-        if let Some(val) = top_bid_value {
-            self.top_bid_value_cache.insert(key.clone(), val);
-        }
+        let top_bid_value = self.get_with_cache(&key, &self.top_bid_value_cache).await?;
 
         record.record_success();
         Ok(top_bid_value)
@@ -1201,14 +1186,7 @@ impl Auctioneer for RedisCache {
         let mut record = RedisMetricRecord::new("get_floor_bid_value");
 
         let key = get_floor_bid_value_key(slot, parent_hash, proposer_pub_key);
-        if let Some(cached) = self.floor_bid_value_cache.get(&key) {
-            record.record_success();
-            return Ok(Some(cached));
-        }
-        let floor_bid_value = self.get(&key).await?;
-        if let Some(value) = floor_bid_value {
-            self.floor_bid_value_cache.insert(key.clone(), value);
-        }
+        let floor_bid_value = self.get_with_cache(&key, &self.floor_bid_value_cache).await?;
 
         record.record_success();
         Ok(floor_bid_value)
@@ -1267,14 +1245,13 @@ impl Auctioneer for RedisCache {
         builder_pub_key: &BlsPublicKey,
     ) -> Result<BuilderInfo, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_builder_info");
-        let key = format!("{builder_pub_key:?}");
-        if let Some(cached) = self.builder_info_cache.get(&key) {
+        if let Some(cached) = self.builder_info_cache.get(builder_pub_key) {
             record.record_success();
             return Ok(cached);
         }
 
         let builder_info = self
-            .hget(BUILDER_INFO_KEY, &key)
+            .hget(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"))
             .await?
             .ok_or(AuctioneerError::BuilderNotFound { pub_key: builder_pub_key.clone() })?;
 
@@ -1291,7 +1268,7 @@ impl Auctioneer for RedisCache {
         }
         builder_info.is_optimistic = false;
         builder_info.is_optimistic_for_regional_filtering = false;
-        self.builder_info_cache.insert(format!("{builder_pub_key:?}"), builder_info.clone());
+        self.builder_info_cache.insert(builder_pub_key.clone(), builder_info.clone());
         self.hset(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"), &builder_info).await?;
         self.publish(BUILDER_INFO_CHANNEL, &format!("{builder_pub_key:?}")).await?;
 
@@ -1323,7 +1300,7 @@ impl Auctioneer for RedisCache {
             if let Some(redis_builder_info) = redis_builder_infos.get(&builder_pub_key_str) {
                 if builder_info.builder_info != *redis_builder_info {
                     self.builder_info_cache
-                        .insert(builder_pub_key_str.clone(), builder_info.builder_info.clone());
+                        .insert(builder_info.pub_key.clone(), builder_info.builder_info.clone());
                     self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info)
                         .await?;
                     self.publish(BUILDER_INFO_CHANNEL, &builder_pub_key_str).await?;
@@ -1335,7 +1312,7 @@ impl Auctioneer for RedisCache {
                 }
             } else {
                 self.builder_info_cache
-                    .insert(builder_pub_key_str.clone(), builder_info.builder_info.clone());
+                    .insert(builder_info.pub_key.clone(), builder_info.builder_info.clone());
                 self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info)
                     .await?;
                 self.publish(BUILDER_INFO_CHANNEL, &builder_pub_key_str).await?;
@@ -1352,24 +1329,16 @@ impl Auctioneer for RedisCache {
     }
 
     #[instrument(skip_all)]
-    async fn seen_or_insert_block_hash(
-        &self,
-        block_hash: &B256,
-        slot: u64,
-        parent_hash: &B256,
-        proposer_pub_key: &BlsPublicKey,
-    ) -> Result<bool, AuctioneerError> {
+    async fn seen_or_insert_block_hash(&self, block_hash: &B256) -> Result<bool, AuctioneerError> {
         let mut record = RedisMetricRecord::new("seen_or_insert_block_hash");
 
-        let key = get_seen_block_hashes_key(slot, parent_hash, proposer_pub_key, block_hash);
-
-        if self.seen_block_hashes.contains_key(&key) {
+        if self.seen_block_hashes.contains_key(block_hash) {
             record.record_success();
             return Ok(true);
         }
 
-        self.seen_block_hashes.insert(key.clone(), ());
-        self.publish(SEEN_BLOCK_HASHES_CHANNEL, &key).await?;
+        self.seen_block_hashes.insert(*block_hash, ());
+        self.publish_json(SEEN_BLOCK_HASHES_CHANNEL, &block_hash).await?;
         record.record_success();
         Ok(false)
     }
@@ -1474,11 +1443,6 @@ impl Auctioneer for RedisCache {
     async fn get_header_tx_root(&self, block_hash: &B256) -> Result<Option<B256>, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_header_tx_root");
         let key = get_header_tx_root_key(block_hash);
-        if let Some(cached) = self.header_tx_root_cache.get(&key) {
-            record.record_success();
-            return Ok(Some(cached));
-        }
-
         let tx_root = self.get(&key).await?;
 
         record.record_success();
@@ -1506,9 +1470,7 @@ impl Auctioneer for RedisCache {
 
         // Cache the transaction root for the header
         let key = get_header_tx_root_key(submission.block_hash());
-        self.header_tx_root_cache.insert(key.clone(), submission.transactions_root());
         self.set(&key, &submission.transactions_root(), Some(24)).await?;
-        self.publish(HEADER_TX_ROOT_CHANNEL, &key).await?;
 
         // Sign builder bid with relay pubkey.
         let builder_bid = header_submission_to_builder_bid(submission, signing_context);
@@ -2927,28 +2889,24 @@ mod tests {
         let pubkey = get_fixed_pubkey(0);
 
         // Test: Check if block hash has been seen before (should be false initially)
-        let seen_result =
-            cache.seen_or_insert_block_hash(&block_hash, slot, &B256::default(), &pubkey).await;
+        let seen_result = cache.seen_or_insert_block_hash(&block_hash).await;
         assert!(seen_result.is_ok(), "Failed to check if block hash was seen");
         assert!(!seen_result.unwrap(), "Block hash was incorrectly seen before");
 
         // Test: Insert the block hash and check again (should be true after insert)
-        let seen_result_again =
-            cache.seen_or_insert_block_hash(&block_hash, slot, &B256::default(), &pubkey).await;
+        let seen_result_again = cache.seen_or_insert_block_hash(&block_hash).await;
         assert!(seen_result_again.is_ok(), "Failed to check if block hash was seen after insert");
         assert!(seen_result_again.unwrap(), "Block hash was not seen after insert");
 
         // Test: Add a different new block hash (should be false initially)
         let block_hash_2 = B256::random();
-        let seen_result =
-            cache.seen_or_insert_block_hash(&block_hash_2, slot, &B256::default(), &pubkey).await;
+        let seen_result = cache.seen_or_insert_block_hash(&block_hash_2).await;
         assert!(seen_result.is_ok(), "Failed to check if block hash was seen");
         assert!(!seen_result.unwrap(), "Block hash was incorrectly seen before");
 
         // Test: Insert the original block hash again, ensure it wasn't overwritten (should be true
         // after insert)
-        let seen_result_again =
-            cache.seen_or_insert_block_hash(&block_hash, slot, &B256::default(), &pubkey).await;
+        let seen_result_again = cache.seen_or_insert_block_hash(&block_hash).await;
         assert!(seen_result_again.is_ok(), "Failed to check if block hash was seen after insert");
         assert!(seen_result_again.unwrap(), "Block hash was not seen after insert");
     }

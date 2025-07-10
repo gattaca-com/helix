@@ -122,13 +122,7 @@ pub trait Auctioneer: Send + Sync + Clone {
         builder_infos: &[BuilderInfoDocument],
     ) -> Result<(), AuctioneerError>;
 
-    async fn seen_or_insert_block_hash(
-        &self,
-        block_hash: &B256,
-        slot: u64,
-        parent_hash: &B256,
-        proposer_pub_key: &BlsPublicKey,
-    ) -> Result<bool, AuctioneerError>;
+    async fn seen_or_insert_block_hash(&self, block_hash: &B256) -> Result<bool, AuctioneerError>;
 
     async fn save_signed_builder_bid_and_update_top_bid(
         &self,

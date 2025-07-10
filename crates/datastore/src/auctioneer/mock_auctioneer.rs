@@ -192,13 +192,7 @@ impl Auctioneer for MockAuctioneer {
         Ok(())
     }
 
-    async fn seen_or_insert_block_hash(
-        &self,
-        _block_hash: &B256,
-        _slot: u64,
-        _parent_hash: &B256,
-        _proposer_pub_key: &BlsPublicKey,
-    ) -> Result<bool, AuctioneerError> {
+    async fn seen_or_insert_block_hash(&self, _block_hash: &B256) -> Result<bool, AuctioneerError> {
         Ok(false)
     }
 
