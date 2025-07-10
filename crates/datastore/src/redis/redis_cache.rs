@@ -99,8 +99,8 @@ pub struct RedisCache {
     floor_bid_value_cache: Cache<String, U256>,
     seen_block_hashes: Cache<B256, ()>,
     last_delivered_slot: Arc<AtomicU64>,
-    builder_latest_payload_received_at: Cache<String, u64>,
-    builder_info_cache: Cache<BlsPublicKey, BuilderInfo>,
+    builder_latest_payload_received_at: Cache<String, HashMap<String, u64>>,
+    builder_info_cache: Cache<String, HashMap<String, BuilderInfo>>,
 }
 
 #[allow(dead_code)]
@@ -322,8 +322,12 @@ impl RedisCache {
             let payload = message.get_payload::<String>().ok();
 
             if let Some(payload_str) = payload {
-                if let Ok((key, received_at)) = from_str::<(String, u64)>(&payload_str) {
-                    self.builder_latest_payload_received_at.insert(key, received_at);
+                if let Ok((key, builder_pub_key, received_at)) =
+                    from_str::<(String, String, u64)>(&payload_str)
+                {
+                    self.builder_latest_payload_received_at
+                        .get_with(key, HashMap::new)
+                        .insert(builder_pub_key, received_at);
                 }
             }
         }
@@ -342,8 +346,12 @@ impl RedisCache {
 
         while let Some(message) = message_stream.next().await {
             let payload = message.get_payload::<String>().ok();
-            if let Some(key) = payload {
-                self.builder_latest_payload_received_at.remove(&key);
+            if let Some(payload_str) = payload {
+                if let Ok((key, builder_pub_key)) = from_str::<(String, String)>(&payload_str) {
+                    self.builder_latest_payload_received_at
+                        .get_with(key, HashMap::new)
+                        .remove(&builder_pub_key);
+                }
             }
         }
 
@@ -370,9 +378,9 @@ impl RedisCache {
                 continue;
             };
 
-            if let Ok(builder_pub_key) = get_pubkey_from_hex(&field) {
-                self.builder_info_cache.insert(builder_pub_key, builder_info);
-            }
+            self.builder_info_cache
+                .get_with(BUILDER_INFO_KEY.to_string(), HashMap::new)
+                .insert(field, builder_info.clone());
         }
 
         Ok(())
@@ -447,10 +455,56 @@ impl RedisCache {
         }
     }
 
+    async fn hget_with_cache<T: Clone + Send + Sync + DeserializeOwned + 'static>(
+        &self,
+        key: &str,
+        field: &str,
+        cache: &Cache<String, HashMap<String, T>>,
+    ) -> Result<Option<T>, RedisCacheError> {
+        if let Some(cached_map) = cache.get(key) {
+            if let Some(cached_value) = cached_map.get(field) {
+                return Ok(Some(cached_value.clone()));
+            }
+        }
+
+        let value = self.hget::<T>(key, field).await?;
+        if let Some(ref val) = value {
+            cache
+                .get_with(key.to_string(), || HashMap::new())
+                .insert(field.to_string(), val.clone());
+        }
+
+        Ok(value)
+    }
+
     async fn hgetall<V: DeserializeOwned>(
         &self,
         key: &str,
     ) -> Result<Option<HashMap<String, V>>, RedisCacheError> {
+        let mut conn = self.pool.get().await?;
+        let entries: HashMap<String, Vec<u8>> = conn.hgetall(key).await?;
+        if entries.is_empty() {
+            return Ok(None);
+        }
+
+        let mut deserialized_entries = HashMap::with_capacity(entries.len());
+        for (key, value) in entries.into_iter() {
+            let deserialized_value: V = serde_json::from_slice(&value)?;
+            deserialized_entries.insert(key, deserialized_value);
+        }
+
+        Ok(Some(deserialized_entries))
+    }
+
+    async fn hgetall_with_cache<V: Clone + Send + Sync + DeserializeOwned + 'static>(
+        &self,
+        key: &str,
+        cache: &Cache<String, HashMap<String, V>>,
+    ) -> Result<Option<HashMap<String, V>>, RedisCacheError> {
+        if let Some(cached) = cache.get(key) {
+            return Ok(Some(cached.clone()));
+        }
+
         let mut conn = self.pool.get().await?;
         let entries: HashMap<String, Vec<u8>> = conn.hgetall(key).await?;
         if entries.is_empty() {
@@ -616,6 +670,19 @@ impl RedisCache {
         Ok(conn.hset(key, field, str_val).await?)
     }
 
+    async fn hset_with_cache<T: Clone + Serialize + Send + Sync + 'static>(
+        &self,
+        key: &str,
+        field: &str,
+        value: &T,
+        cache: &Cache<String, HashMap<String, T>>,
+    ) -> Result<(), RedisCacheError> {
+        let mut conn = self.pool.get().await?;
+        let str_val = serde_json::to_string(value)?;
+        cache.get_with(key.to_string(), || HashMap::new()).insert(field.to_string(), value.clone());
+        Ok(conn.hset(key, field, str_val).await?)
+    }
+
     async fn hset_multiple_not_exists<T: Serialize>(
         &self,
         key: &str,
@@ -645,6 +712,17 @@ impl RedisCache {
 
     async fn hdel(&self, key: &str, field: &str) -> Result<(), RedisCacheError> {
         let mut conn = self.pool.get().await?;
+        Ok(conn.hdel(key, field).await?)
+    }
+
+    async fn hdel_with_cache<T: Clone + Send + Sync + 'static>(
+        &self,
+        key: &str,
+        field: &str,
+        cache: &Cache<String, HashMap<String, T>>,
+    ) -> Result<(), RedisCacheError> {
+        let mut conn = self.pool.get().await?;
+        cache.get_with(key.to_string(), || HashMap::new()).remove(field);
         Ok(conn.hdel(key, field).await?)
     }
 
@@ -1025,15 +1103,14 @@ impl Auctioneer for RedisCache {
     ) -> Result<Option<u64>, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_builder_latest_payload_received_at");
 
-        let key =
-            get_latest_bid_by_builder_key(slot, parent_hash, proposer_pub_key, builder_pub_key);
-        if let Some(cached) = self.builder_latest_payload_received_at.get(&key) {
-            record.record_success();
-            return Ok(Some(cached));
-        }
-
         let key = get_builder_latest_bid_time_key(slot, parent_hash, proposer_pub_key);
-        let received_at = self.hget(&key, &format!("{builder_pub_key:?}")).await?;
+        let received_at = self
+            .hget_with_cache(
+                &key,
+                &format!("{builder_pub_key:?}"),
+                &self.builder_latest_payload_received_at,
+            )
+            .await?;
 
         record.record_success();
         Ok(received_at)
@@ -1099,8 +1176,11 @@ impl Auctioneer for RedisCache {
 
         pipe.query_async(&mut conn).await.map_err(RedisCacheError::from)?;
 
-        self.builder_latest_payload_received_at.insert(key_latest_bid.clone(), received_at as u64);
-        let payload = (key_latest_bid.clone(), received_at as u64);
+        let key_latest_bids_time_clone = key_latest_bids_time.clone();
+        self.builder_latest_payload_received_at
+            .get_with(key_latest_bids_time, HashMap::new)
+            .insert(builder_pub_key_str.clone(), received_at as u64);
+        let payload = (key_latest_bids_time_clone, builder_pub_key_str, received_at as u64);
         self.publish_json(BUILDER_LAST_BID_RECEIVED_AT_CHANNEL, &payload).await?;
 
         record.record_success();
@@ -1209,12 +1289,15 @@ impl Auctioneer for RedisCache {
 
         // Delete the time
         let key_latest_time = get_builder_latest_bid_time_key(slot, parent_hash, proposer_pub_key);
-        self.hdel(&key_latest_time, &format!("{builder_pub_key:?}")).await?;
-        self.publish(
-            BUILDER_LAST_BID_RECEIVED_AT_DELETED_CHANNEL,
-            &get_latest_bid_by_builder_key(slot, parent_hash, proposer_pub_key, builder_pub_key),
+        self.hdel_with_cache(
+            &key_latest_time,
+            &format!("{builder_pub_key:?}"),
+            &self.builder_latest_payload_received_at,
         )
         .await?;
+
+        let payload = (key_latest_time, format!("{builder_pub_key:?}"));
+        self.publish_json(BUILDER_LAST_BID_RECEIVED_AT_DELETED_CHANNEL, &payload).await?;
 
         // Update bids now to determine current top bid
         let mut state = SaveBidAndUpdateTopBidResponse::default();
@@ -1245,13 +1328,13 @@ impl Auctioneer for RedisCache {
         builder_pub_key: &BlsPublicKey,
     ) -> Result<BuilderInfo, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_builder_info");
-        if let Some(cached) = self.builder_info_cache.get(builder_pub_key) {
-            record.record_success();
-            return Ok(cached);
-        }
 
         let builder_info = self
-            .hget(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"))
+            .hget_with_cache(
+                BUILDER_INFO_KEY,
+                &format!("{builder_pub_key:?}"),
+                &self.builder_info_cache,
+            )
             .await?
             .ok_or(AuctioneerError::BuilderNotFound { pub_key: builder_pub_key.clone() })?;
 
@@ -1268,8 +1351,13 @@ impl Auctioneer for RedisCache {
         }
         builder_info.is_optimistic = false;
         builder_info.is_optimistic_for_regional_filtering = false;
-        self.builder_info_cache.insert(builder_pub_key.clone(), builder_info.clone());
-        self.hset(BUILDER_INFO_KEY, &format!("{builder_pub_key:?}"), &builder_info).await?;
+        self.hset_with_cache(
+            BUILDER_INFO_KEY,
+            &format!("{builder_pub_key:?}"),
+            &builder_info,
+            &self.builder_info_cache,
+        )
+        .await?;
         self.publish(BUILDER_INFO_CHANNEL, &format!("{builder_pub_key:?}")).await?;
 
         // TODO remove pending blocks
@@ -1291,18 +1379,23 @@ impl Auctioneer for RedisCache {
         }
 
         // Fetch current builder info
-        let redis_builder_infos: HashMap<String, BuilderInfo> =
-            self.hgetall(BUILDER_INFO_KEY).await?.unwrap_or_default();
+        let redis_builder_infos: HashMap<String, BuilderInfo> = self
+            .hgetall_with_cache(BUILDER_INFO_KEY, &self.builder_info_cache)
+            .await?
+            .unwrap_or_default();
 
         // Update Redis value if the builder info has changed or it's a new builder
         for builder_info in builder_infos {
             let builder_pub_key_str = format!("{:?}", builder_info.pub_key);
             if let Some(redis_builder_info) = redis_builder_infos.get(&builder_pub_key_str) {
                 if builder_info.builder_info != *redis_builder_info {
-                    self.builder_info_cache
-                        .insert(builder_info.pub_key.clone(), builder_info.builder_info.clone());
-                    self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info)
-                        .await?;
+                    self.hset_with_cache(
+                        BUILDER_INFO_KEY,
+                        &builder_pub_key_str,
+                        &builder_info.builder_info,
+                        &self.builder_info_cache,
+                    )
+                    .await?;
                     self.publish(BUILDER_INFO_CHANNEL, &builder_pub_key_str).await?;
                     info!(
                         pubkey = %builder_info.pub_key,
@@ -1311,10 +1404,13 @@ impl Auctioneer for RedisCache {
                     );
                 }
             } else {
-                self.builder_info_cache
-                    .insert(builder_info.pub_key.clone(), builder_info.builder_info.clone());
-                self.hset(BUILDER_INFO_KEY, &builder_pub_key_str, &builder_info.builder_info)
-                    .await?;
+                self.hset_with_cache(
+                    BUILDER_INFO_KEY,
+                    &builder_pub_key_str,
+                    &builder_info.builder_info,
+                    &self.builder_info_cache,
+                )
+                .await?;
                 self.publish(BUILDER_INFO_CHANNEL, &builder_pub_key_str).await?;
                 info!(
                     pubkey = %builder_info.pub_key,
@@ -1660,7 +1756,7 @@ impl Auctioneer for RedisCache {
         let mut pending_blocks: Vec<PendingBlock> = Vec::new();
 
         let redis_builder_infos: Option<HashMap<String, BuilderInfo>> =
-            self.hgetall(BUILDER_INFO_KEY).await?;
+            self.hgetall_with_cache(BUILDER_INFO_KEY, &self.builder_info_cache).await?;
 
         let Some(redis_builder_infos) = redis_builder_infos else {
             record.record_success();
