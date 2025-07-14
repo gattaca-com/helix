@@ -154,15 +154,6 @@ impl Auctioneer for MockAuctioneer {
     ) -> Result<Option<U256>, AuctioneerError> {
         Ok(None)
     }
-    async fn get_builder_latest_value(
-        &self,
-        _slot: u64,
-        _parent_hash: &B256,
-        _proposer_pub_key: &BlsPublicKey,
-        _builder_pub_key: &BlsPublicKey,
-    ) -> Result<Option<U256>, AuctioneerError> {
-        Ok(None)
-    }
     async fn get_floor_bid_value(
         &self,
         _slot: u64,
@@ -201,13 +192,7 @@ impl Auctioneer for MockAuctioneer {
         Ok(())
     }
 
-    async fn seen_or_insert_block_hash(
-        &self,
-        _block_hash: &B256,
-        _slot: u64,
-        _parent_hash: &B256,
-        _proposer_pub_key: &BlsPublicKey,
-    ) -> Result<bool, AuctioneerError> {
+    async fn seen_or_insert_block_hash(&self, _block_hash: &B256) -> Result<bool, AuctioneerError> {
         Ok(false)
     }
 

@@ -148,15 +148,7 @@ impl<A: Api> BuilderApi<A> {
         }
 
         // Handle duplicates.
-        if let Err(err) = api
-            .check_for_duplicate_block_hash(
-                block_hash,
-                payload.slot().as_u64(),
-                payload.parent_hash(),
-                payload.proposer_public_key(),
-            )
-            .await
-        {
+        if let Err(err) = api.check_for_duplicate_block_hash(block_hash).await {
             match err {
                 BuilderApiError::DuplicateBlockHash { block_hash } => {
                     // We dont return the error here as we want to continue processing the request.
