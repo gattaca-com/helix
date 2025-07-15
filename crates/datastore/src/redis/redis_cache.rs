@@ -1886,7 +1886,12 @@ impl Auctioneer for RedisCache {
 
     #[instrument(skip_all)]
     async fn publish_head_event(&self, head_event: &HeadEventData) -> Result<(), AuctioneerError> {
-        self.publish_json("head_event_channel", &head_event).await?;
+        let publish_fut = self.publish_json("head_event_channel", head_event);
+        let timeout = Duration::from_secs(3);
+
+        if tokio::time::timeout(timeout, publish_fut).await.is_err() {
+            error!("Failed to publish head event within timeout");
+        }
         Ok(())
     }
 
@@ -1899,7 +1904,12 @@ impl Auctioneer for RedisCache {
         &self,
         payload_attributes: &PayloadAttributesEvent,
     ) -> Result<(), AuctioneerError> {
-        self.publish_json("payload_attributes_channel", &payload_attributes).await?;
+        let publish_fut = self.publish_json("payload_attributes_channel", &payload_attributes);
+        let timeout = Duration::from_secs(3);
+
+        if tokio::time::timeout(timeout, publish_fut).await.is_err() {
+            error!("Failed to publish payload attributes within timeout");
+        }
         Ok(())
     }
 
