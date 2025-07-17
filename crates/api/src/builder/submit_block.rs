@@ -88,9 +88,15 @@ impl<A: Api> BuilderApi<A> {
         );
 
         // Verify the payload is for the current slot
-        if payload.slot() != head_slot + 1 {
-            debug!(?block_hash, "submission is for wrong slot");
-            return Err(BuilderApiError::SubmissionForWrongSlot {
+        if payload.slot() < head_slot + 1 {
+            return Err(BuilderApiError::SubmissionForPastSlot {
+                expected: head_slot + 1,
+                got: payload.slot(),
+            });
+        }
+
+        if payload.slot() > head_slot + 1 {
+            return Err(BuilderApiError::SubmissionForFutureSlot {
                 expected: head_slot + 1,
                 got: payload.slot(),
             });
