@@ -343,6 +343,15 @@ lazy_static! {
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
+
+
+    static ref BID_IS_CANCELLABLE: IntCounterVec = register_int_counter_vec_with_registry!(
+        "bid_is_cancellable",
+        "Count of cancellable bids",
+        &["is_cancellable"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 }
 
 pub struct ApiMetrics {
@@ -366,6 +375,10 @@ impl ApiMetrics {
 
     pub fn size(endpoint: &str, size: usize) {
         REQUEST_SIZE.with_label_values(&[endpoint]).observe(size as f64);
+    }
+
+    pub fn cancellable_bid(is_cancellable: bool) {
+        BID_IS_CANCELLABLE.with_label_values(&[is_cancellable.to_string().as_str()]).inc();
     }
 }
 

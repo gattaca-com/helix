@@ -10,6 +10,7 @@ use helix_common::{
     self,
     bid_submission::BidSubmission,
     metadata_provider::MetadataProvider,
+    metrics::ApiMetrics,
     task,
     utils::{extract_request_id, utcnow_ns},
     SubmissionTrace,
@@ -72,6 +73,8 @@ impl<A: Api> BuilderApi<A> {
 
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) = decode_payload(req, &mut trace).await?;
+        ApiMetrics::cancellable_bid(is_cancellations_enabled);
+
         let block_hash = payload.message().block_hash;
 
         tracing::Span::current()
