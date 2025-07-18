@@ -2,9 +2,13 @@
 
 use std::sync::{atomic::AtomicBool, Arc};
 
+use bytes::Bytes;
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
-    chain_info::ChainInfo, metadata_provider::MetadataProvider, signing::RelaySigningContext,
+    bid_sorter::{BestGetHeader, BidSortMessage},
+    chain_info::ChainInfo,
+    metadata_provider::MetadataProvider,
+    signing::RelaySigningContext,
     RelayConfig,
 };
 use helix_database::DatabaseService;
@@ -40,6 +44,9 @@ pub fn start_api_service<A: Api>(
     metadata_provider: Arc<A::MetadataProvider>,
     current_slot_info: CurrentSlotInfo,
     terminating: Arc<AtomicBool>,
+    sorter_tx: crossbeam_channel::Sender<BidSortMessage>,
+    top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
+    best_get_header: BestGetHeader,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),
@@ -51,6 +58,9 @@ pub fn start_api_service<A: Api>(
         multi_beacon_client,
         metadata_provider,
         terminating,
+        sorter_tx,
+        top_bid_tx,
+        best_get_header,
     ));
 }
 

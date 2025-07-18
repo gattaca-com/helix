@@ -1,5 +1,6 @@
 pub mod api;
 pub mod beacon_api;
+pub mod bid_sorter;
 pub mod bid_submission;
 pub mod builder_info;
 pub mod chain_info;
@@ -7,7 +8,6 @@ pub mod config;
 pub mod eth;
 pub mod metadata_provider;
 pub mod metrics;
-pub mod pending_block;
 pub mod proposer;
 pub mod signing;
 pub mod simulator;

@@ -23,6 +23,7 @@ use crate::{
     builder::{
         api::{decode_payload, sanity_check_block_submission},
         error::BuilderApiError,
+        v2_check::V2SubMessage,
         OptimisticVersion,
     },
     Api,
@@ -59,20 +60,6 @@ impl<A: Api> BuilderApi<A> {
             block_hash = ?payload.block_hash(),
             "payload decoded",
         );
-
-        // Save pending block payload to auctioneer
-        api.auctioneer
-            .save_pending_block_payload(
-                payload.slot().as_u64(),
-                payload.builder_public_key(),
-                payload.block_hash(),
-                trace.receive / 1_000_000, // convert to ms
-            )
-            .await
-            .map_err(|err| {
-                error!(%err, "failed to save pending block header");
-                BuilderApiError::AuctioneerError(err)
-            })?;
 
         Self::handle_optimistic_payload(api, payload, trace, OptimisticVersion::V2).await
     }
@@ -217,6 +204,12 @@ impl<A: Api> BuilderApi<A> {
             }
         };
 
+        if let Err(err) =
+            api.v2_checks_tx.send(V2SubMessage::new_from_block_submission(&payload, trace.receive))
+        {
+            error!(%err, "failed to send block to v2 checker");
+        }
+
         // Save bid to auctioneer
         if let Err(err) = api
             .auctioneer
@@ -267,27 +260,28 @@ impl<A: Api> BuilderApi<A> {
         &self,
         payload: &SignedBidSubmission,
     ) -> Result<(), BuilderApiError> {
-        match self.auctioneer.get_header_tx_root(payload.block_hash()).await {
-            Ok(Some(expected_tx_root)) => {
-                let tx_root = payload.transactions_root();
+        todo!();
+        // match self.auctioneer.get_header_tx_root(payload.block_hash()).await {
+        //     Ok(Some(expected_tx_root)) => {
+        //         let tx_root = payload.transactions_root();
 
-                if expected_tx_root != tx_root {
-                    warn!("tx root mismatch");
-                    return Err(BuilderApiError::TransactionsRootMismatch {
-                        got: tx_root,
-                        expected: expected_tx_root,
-                    });
-                }
-            }
-            Ok(None) => {
-                warn!("no tx root found for block hash");
-                return Err(BuilderApiError::MissingTransactionsRoot);
-            }
-            Err(err) => {
-                error!(%err, "failed to get tx root");
-                return Err(BuilderApiError::AuctioneerError(err));
-            }
-        };
+        //         if expected_tx_root != tx_root {
+        //             warn!("tx root mismatch");
+        //             return Err(BuilderApiError::TransactionsRootMismatch {
+        //                 got: tx_root,
+        //                 expected: expected_tx_root,
+        //             });
+        //         }
+        //     }
+        //     Ok(None) => {
+        //         warn!("no tx root found for block hash");
+        //         return Err(BuilderApiError::MissingTransactionsRoot);
+        //     }
+        //     Err(err) => {
+        //         error!(%err, "failed to get tx root");
+        //         return Err(BuilderApiError::AuctioneerError(err));
+        //     }
+        // };
         Ok(())
     }
 }

@@ -582,16 +582,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_gossiped_header() -> Result<(), Box<dyn std::error::Error>> {
-        run_setup().await;
-
-        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
-        db_service.save_gossiped_header_trace(Default::default(), Default::default()).await?;
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_gossiped_payload() -> Result<(), Box<dyn std::error::Error>> {
         run_setup().await;
 

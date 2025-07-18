@@ -16,6 +16,7 @@ use helix_common::{
         PATH_PROPOSER_API, PATH_PROPOSER_PAYLOAD_DELIVERED, PATH_REGISTER_VALIDATORS, PATH_STATUS,
         PATH_VALIDATOR_REGISTRATION,
     },
+    bid_sorter::BestGetHeader,
     chain_info::ChainInfo,
     metadata_provider::DefaultMetadataProvider,
     signing::RelaySigningContext,
@@ -24,7 +25,10 @@ use helix_common::{
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
 use helix_housekeeper::CurrentSlotInfo;
-use tokio::sync::mpsc::channel;
+use tokio::sync::{
+    broadcast,
+    mpsc::{self, channel},
+};
 use tower::{buffer::BufferLayer, limit::RateLimitLayer, timeout::TimeoutLayer, ServiceBuilder};
 use tower_http::limit::RequestBodyLimitLayer;
 
@@ -51,6 +55,7 @@ impl Api for MockApi {
 
 pub fn app() -> Router {
     let (v3_sender, _v3_receiver) = channel(32);
+
     let node = MockBeaconNode::new();
     let client = node.beacon_client();
 
@@ -59,6 +64,7 @@ pub fn app() -> Router {
         Arc::new(MockDatabaseService::default()),
         GrpcGossiperClientManager::mock().into(),
         Arc::new(DefaultMetadataProvider::default()),
+        Arc::new(RelaySigningContext::default()),
         vec![Arc::new(BlockBroadcaster::BeaconClient(client))],
         Arc::new(MultiBeaconClient::new(vec![])),
         Arc::new(ChainInfo::for_mainnet()),
@@ -66,6 +72,7 @@ pub fn app() -> Router {
         Default::default(),
         v3_sender,
         Default::default(),
+        BestGetHeader::new(),
     ));
 
     let data_api = Arc::new(DataApi::<MockApi>::new(
@@ -105,6 +112,9 @@ pub fn app() -> Router {
 
 pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) {
     let current_slot_info = CurrentSlotInfo::new();
+    let (sort_tx, _) = crossbeam_channel::unbounded();
+    let (br_tx, _) = broadcast::channel(1);
+    let (v2_tx, _) = mpsc::unbounded_channel();
 
     let builder_api_service = BuilderApi::<MockApi>::new(
         Arc::new(MockAuctioneer::default()),
@@ -113,10 +123,12 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
         MultiSimulator::new(vec![]),
         GrpcGossiperClientManager::mock().into(),
         Arc::new(DefaultMetadataProvider::default()),
-        Arc::new(RelaySigningContext::default()),
         RelayConfig::default(),
         Arc::new(ValidatorPreferences::default()),
         current_slot_info.clone(),
+        sort_tx,
+        br_tx,
+        v2_tx,
     );
     let builder_api_service = Arc::new(builder_api_service);
 
@@ -157,6 +169,7 @@ pub fn proposer_api_app(
         Arc::new(MockDatabaseService::default()),
         GrpcGossiperClientManager::mock().into(),
         Arc::new(DefaultMetadataProvider::default()),
+        Arc::new(RelaySigningContext::default()),
         vec![Arc::new(BlockBroadcaster::BeaconClient(client))],
         Arc::new(MultiBeaconClient::new(vec![])),
         Arc::new(ChainInfo::for_mainnet()),
@@ -164,6 +177,7 @@ pub fn proposer_api_app(
         Default::default(),
         v3_sender,
         current_slot_info.clone(),
+        BestGetHeader::new(),
     ));
 
     let router = Router::new()

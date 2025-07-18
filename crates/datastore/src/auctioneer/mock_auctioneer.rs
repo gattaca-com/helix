@@ -1,29 +1,17 @@
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
-use alloy_primitives::{bytes::Bytes, B256, U256};
+use alloy_primitives::B256;
 use async_trait::async_trait;
 use helix_beacon::types::PayloadAttributesEvent;
 use helix_common::{
-    api::builder_api::{
-        BuilderGetValidatorsResponseEntry, InclusionListWithMetadata, TopBidUpdate,
-    },
-    bid_submission::v2::header_submission::SignedHeaderSubmission,
-    pending_block::PendingBlock,
-    signing::RelaySigningContext,
+    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
-use helix_types::{
-    get_fixed_pubkey, BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, SignedBidSubmission,
-    SignedBuilderBid, TestRandomSeed,
-};
-use ssz::Encode;
+use helix_types::{BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, SignedBuilderBid};
 use tokio::sync::broadcast;
 
-use crate::{
-    error::AuctioneerError, redis::redis_cache::InclusionListWithKey,
-    types::SaveBidAndUpdateTopBidResponse, Auctioneer,
-};
+use crate::{error::AuctioneerError, redis::redis_cache::InclusionListWithKey, Auctioneer};
 
 #[derive(Default, Clone)]
 pub struct MockAuctioneer {
@@ -57,30 +45,6 @@ impl Auctioneer for MockAuctioneer {
         Ok(())
     }
 
-    async fn get_best_bid(
-        &self,
-        _slot: u64,
-        _parent_hash: &B256,
-        _proposer_pub_key: &BlsPublicKey,
-    ) -> Result<Option<SignedBuilderBid>, AuctioneerError> {
-        // check if the value is 9999 and than return an error for testing
-        if let Some(bid) = self.best_bid.lock().unwrap().clone() {
-            if bid.data.message.value() == &U256::from(9999) {
-                return Err(AuctioneerError::UnexpectedValueType);
-            }
-        }
-        Ok(self.best_bid.lock().unwrap().clone())
-    }
-
-    fn get_best_bids(&self) -> broadcast::Receiver<Bytes> {
-        let mut bid = TopBidUpdate::test_random();
-        bid.builder_pubkey = get_fixed_pubkey(0);
-        let bid = Bytes::from(bid.as_ssz_bytes());
-        let (tx, rx) = broadcast::channel(16);
-        tx.send(bid).unwrap();
-        rx
-    }
-
     async fn save_execution_payload(
         &self,
         _slot: u64,
@@ -112,67 +76,6 @@ impl Auctioneer for MockAuctioneer {
         Ok(())
     }
 
-    async fn get_builder_latest_payload_received_at(
-        &self,
-        _slot: u64,
-        _builder_pub_key: &BlsPublicKey,
-        _parent_hash: &B256,
-        _proposer_pub_key: &BlsPublicKey,
-    ) -> Result<Option<u64>, AuctioneerError> {
-        Ok(None)
-    }
-
-    async fn save_builder_bid(
-        &self,
-        _slot: u64,
-        _parent_hash: &B256,
-        _proposer_pub_key: &BlsPublicKey,
-        _builder_pub_key: &BlsPublicKey,
-        _received_at: u128,
-        _builder_bid: &SignedBuilderBid,
-    ) -> Result<(), AuctioneerError> {
-        Ok(())
-    }
-
-    async fn save_bid_and_update_top_bid(
-        &self,
-        _submission: &SignedBidSubmission,
-        _received_at: u128,
-        _cancellations_enabled: bool,
-        _floor_value: U256,
-        _state: &mut SaveBidAndUpdateTopBidResponse,
-        _signing_context: &RelaySigningContext,
-    ) -> Result<(), AuctioneerError> {
-        Ok(())
-    }
-
-    async fn get_top_bid_value(
-        &self,
-        _slot: u64,
-        _parent_hash: &B256,
-        _proposer_pub_key: &BlsPublicKey,
-    ) -> Result<Option<U256>, AuctioneerError> {
-        Ok(None)
-    }
-    async fn get_floor_bid_value(
-        &self,
-        _slot: u64,
-        _parent_hash: &B256,
-        _proposer_pub_key: &BlsPublicKey,
-    ) -> Result<Option<U256>, AuctioneerError> {
-        Ok(None)
-    }
-
-    async fn delete_builder_bid(
-        &self,
-        _slot: u64,
-        _parent_hash: &B256,
-        _proposer_pub_key: &BlsPublicKey,
-        _builder_pub_key: &BlsPublicKey,
-    ) -> Result<(), AuctioneerError> {
-        Ok(())
-    }
-
     async fn get_builder_info(
         &self,
         _builder_pub_key: &BlsPublicKey,
@@ -196,30 +99,6 @@ impl Auctioneer for MockAuctioneer {
         Ok(false)
     }
 
-    async fn save_signed_builder_bid_and_update_top_bid(
-        &self,
-        _builder_bid: &SignedBuilderBid,
-        _bid_trace: &BidTrace,
-        _received_at: u128,
-        __cancellations_enabled: bool,
-        _floor_value: U256,
-        _state: &mut SaveBidAndUpdateTopBidResponse,
-    ) -> Result<(), AuctioneerError> {
-        Ok(())
-    }
-
-    async fn save_header_submission_and_update_top_bid(
-        &self,
-        _submission: &SignedHeaderSubmission,
-        _received_at: u128,
-        _cancellations_enabled: bool,
-        _floor_value: U256,
-        _state: &mut SaveBidAndUpdateTopBidResponse,
-        _signing_context: &RelaySigningContext,
-    ) -> Result<(), AuctioneerError> {
-        Ok(())
-    }
-
     async fn update_trusted_proposers(
         &self,
         _proposer_whitelist: Vec<ProposerInfo>,
@@ -232,30 +111,6 @@ impl Auctioneer for MockAuctioneer {
         _proposer_pub_key: &BlsPublicKey,
     ) -> Result<bool, AuctioneerError> {
         Ok(true)
-    }
-
-    async fn get_pending_blocks(&self) -> Result<Vec<PendingBlock>, AuctioneerError> {
-        Ok(vec![])
-    }
-
-    async fn save_pending_block_header(
-        &self,
-        _slot: u64,
-        _builder_pub_key: &BlsPublicKey,
-        _block_hash: &B256,
-        _timestamp_ms: u64,
-    ) -> Result<(), AuctioneerError> {
-        Ok(())
-    }
-
-    async fn save_pending_block_payload(
-        &self,
-        _slot: u64,
-        _builder_pub_key: &BlsPublicKey,
-        _block_hash: &B256,
-        _timestamp_ms: u64,
-    ) -> Result<(), AuctioneerError> {
-        Ok(())
     }
 
     async fn try_acquire_or_renew_leadership(&self, _leader_id: &str) -> bool {
@@ -274,13 +129,6 @@ impl Auctioneer for MockAuctioneer {
         _proposer_pub_key: &BlsPublicKey,
     ) -> Result<bool, AuctioneerError> {
         Ok(true)
-    }
-
-    async fn get_header_tx_root(
-        &self,
-        _block_hash: &B256,
-    ) -> Result<Option<B256>, AuctioneerError> {
-        Ok(None)
     }
 
     async fn kill_switch_enabled(&self) -> Result<bool, AuctioneerError> {

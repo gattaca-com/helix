@@ -8,19 +8,16 @@ use std::{
 };
 
 use alloy_eips::merge::EPOCH_SLOTS;
-use alloy_primitives::{map::HashSet, B256, U256};
+use alloy_primitives::{B256, U256};
 use helix_beacon::{
     error::BeaconClientError,
     multi_beacon_client::MultiBeaconClient,
     types::{HeadEventData, StateId},
 };
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry,
-    chain_info::ChainInfo,
-    pending_block::PendingBlock,
-    task,
-    utils::{utcnow_dur, utcnow_ms},
-    BuilderConfig, BuilderInfo, ProposerDuty, RelayConfig, SignedValidatorRegistrationEntry,
+    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, task,
+    utils::utcnow_dur, BuilderConfig, BuilderInfo, ProposerDuty, RelayConfig,
+    SignedValidatorRegistrationEntry,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
@@ -41,14 +38,6 @@ const CUTOFF_TIME: Duration = Duration::from_secs(4);
 const MIN_SLOTS_BETWEEN_UPDATES: u64 = 6;
 const MAX_SLOTS_BEFORE_FORCED_UPDATE: u64 = 32;
 
-// Max time between header and payload for OptimsiticV2 submissions
-const MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS: u64 = 2_000;
-/// Max time to wait for payload after header is received for OptimsiticV2 submissions. We leave
-/// more time here to account for some overhead/processing time. Note This should be
-/// [`MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS`] + max overhead, but we leave some buffer. Note this also
-/// works because the keepalive of pending blocks in redis is longer than this
-const MAX_DELAY_WITH_NO_V2_PAYLOAD_MS: u64 = 20_000;
-
 #[derive(Default, Clone)]
 struct HousekeeperSlots {
     head: Arc<AtomicU64>,
@@ -56,7 +45,6 @@ struct HousekeeperSlots {
     refreshed_validators: Arc<AtomicU64>,
     trusted_proposers: Arc<AtomicU64>,
     // updating can take >> slot time, so we avoid concurrent updates by locking the mutex
-    updating_demotions: Arc<Mutex<()>>,
     updating_builder_infos: Arc<Mutex<()>>,
     updating_proposer_duties: Arc<Mutex<()>>,
     updating_refreshed_validators: Arc<Mutex<()>>,
@@ -191,25 +179,6 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             epoch_start = %epoch.start_slot(self.chain_info.slots_per_epoch()),
             epoch_end = %epoch.end_slot(self.chain_info.slots_per_epoch()),
             "processing new slot",
-        );
-
-        // v2 demotions checks every slot
-        let housekeeper = self.clone();
-        task::spawn(
-            file!(),
-            line!(),
-            async move {
-                let Ok(_guard) = housekeeper.slots.updating_demotions.try_lock() else {
-                    debug!("demotions update already in progress");
-                    return;
-                };
-                let start = Instant::now();
-                if let Err(err) = housekeeper.demote_builders_with_expired_pending_blocks().await {
-                    error!(%err, "failed to demote builders");
-                }
-                info!(duration = ?start.elapsed(), "demote builders task completed");
-            }
-            .in_current_span(),
         );
 
         // proposer duties
@@ -385,46 +354,6 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         let builder_infos = self.db.get_all_builder_infos().await?;
         debug!(builder_infos = builder_infos.len(), "updating builder infos");
         self.auctioneer.update_builder_infos(&builder_infos).await?;
-
-        Ok(())
-    }
-
-    /// Handle valid payload Optimistic V2 demotions.
-    ///
-    /// There are two cases where we might demote a builder here.
-    /// 1) They sent a header but we received no accompanying payload.
-    /// 2) The payload was received > 2 seconds after we received the header.
-    ///
-    /// DB entries are also removed if they have been waiting for over 45 seconds.
-    // TODO: here we're most likely processing the same pending blocks several times
-    async fn demote_builders_with_expired_pending_blocks(&self) -> Result<(), HousekeeperError> {
-        let mut demoted_builders = HashSet::new();
-        let pending_blocks = self.auctioneer.get_pending_blocks().await?;
-
-        debug!(pending_blocks = pending_blocks.len(), "checking expired pending blocks");
-
-        for pending_block in pending_blocks {
-            if demoted_builders.contains(&pending_block.builder_pubkey) {
-                continue;
-            }
-
-            if v2_submission_late(&pending_block) {
-                let reason =
-                    format!("builder demoted due to missing payload submission. {pending_block:?}");
-                info!(builder_pubkey = ?pending_block.builder_pubkey, reason);
-                self.auctioneer.demote_builder(&pending_block.builder_pubkey).await?;
-                self.db
-                    .db_demote_builder(
-                        pending_block.slot,
-                        &pending_block.builder_pubkey,
-                        &pending_block.block_hash,
-                        reason,
-                    )
-                    .await?;
-
-                demoted_builders.insert(pending_block.builder_pubkey);
-            }
-        }
 
         Ok(())
     }
@@ -621,26 +550,6 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             self.fetch_signed_validator_registrations(&pubkeys).await?;
 
         Ok((proposer_duties, signed_validator_registrations))
-    }
-}
-
-/// Calculates the delay in submission of the payload after a header.
-///
-/// Returns true if the payload was received over 2 seconds after the header or if the payload was
-/// never received. Otherwise, returns false.
-fn v2_submission_late(pending_block: &PendingBlock) -> bool {
-    match (pending_block.header_receive_ms, pending_block.payload_receive_ms) {
-        // no header
-        (None, _) => false,
-        // no payload yet
-        (Some(header_receive_ms), None) => {
-            (utcnow_ms().saturating_sub(header_receive_ms)) > MAX_DELAY_WITH_NO_V2_PAYLOAD_MS
-        }
-        // payload received
-        (Some(header_receive_ms), Some(payload_receive_ms)) => {
-            payload_receive_ms.saturating_sub(header_receive_ms) >
-                MAX_DELAY_BETWEEN_V2_SUBMISSIONS_MS
-        }
     }
 }
 

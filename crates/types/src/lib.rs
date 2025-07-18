@@ -33,6 +33,7 @@ pub type BlsPublicKey = lh_types::PublicKey;
 pub type BlsSignature = lh_types::Signature;
 pub type BlsSecretKey = lh_types::SecretKey;
 pub type BlsKeypair = lh_types::Keypair;
+pub type PublicKeyBytes = lh_types::PublicKeyBytes;
 
 // Fields
 pub type Withdrawal = lh_types::withdrawal::Withdrawal;
@@ -141,4 +142,8 @@ pub fn maybe_upgrade_execution_payload(
     }
 
     payload
+}
+
+pub fn mock_public_key_bytes() -> PublicKeyBytes {
+    PublicKeyBytes::empty()
 }

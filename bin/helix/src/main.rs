@@ -10,6 +10,7 @@ use eyre::eyre;
 use helix_api::{start_api_service, Api};
 use helix_beacon::start_beacon_client;
 use helix_common::{
+    bid_sorter::{start_bid_sorter, BestGetHeader},
     load_config, load_keypair,
     metadata_provider::DefaultMetadataProvider,
     metrics::start_metrics_server,
@@ -86,12 +87,22 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     let db = start_db_service(&config).await?;
     let auctioneer = start_auctioneer(&config, &db).await?;
 
+    let (sorter_tx, sorter_rx) = crossbeam_channel::unbounded();
+    let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
+    let best_get_header = BestGetHeader::new();
+
+    if config.router_config.validate_bid_sorter() {
+        // TODO: assert that it contains submit block, get top bid,
+        start_bid_sorter(sorter_rx, top_bid_tx.clone(), best_get_header.clone());
+    }
+
     let current_slot_info = start_housekeeper(
         db.clone(),
         auctioneer.clone(),
         &config,
         beacon_client.clone(),
         chain_info.clone(),
+        sorter_tx.clone(),
     )
     .await
     .map_err(|e| eyre!("housekeeper init: {e}"))?;
@@ -108,6 +119,9 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         Arc::new(DefaultMetadataProvider {}),
         current_slot_info,
         terminating.clone(),
+        sorter_tx,
+        top_bid_tx,
+        best_get_header,
     );
 
     let termination_grace_period = config.router_config.shutdown_delay_ms;
