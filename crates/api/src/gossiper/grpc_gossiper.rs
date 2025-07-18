@@ -14,8 +14,8 @@ use crate::{
     gossiper::{
         error::GossipError,
         types::{
-            BroadcastGetPayloadParams, BroadcastHeaderParams, BroadcastPayloadParams,
-            GossipedMessage, RequestPayloadParams,
+            BroadcastGetPayloadParams, BroadcastPayloadParams, GossipedMessage,
+            RequestPayloadParams,
         },
     },
     grpc::{
@@ -25,7 +25,6 @@ use crate::{
     },
 };
 
-const HEADER_ID: &str = "header";
 const PAYLOAD_ID: &str = "payload";
 const GET_PAYLOAD_ID: &str = "get_payload";
 const REQUEST_PAYLOAD_ID: &str = "request_payload";
@@ -74,42 +73,6 @@ impl GrpcGossiperClient {
     fn client(&self) -> Option<GossipServiceClient<Channel>> {
         let client_guard = self.client.read();
         client_guard.clone()
-    }
-
-    pub async fn broadcast_header(
-        &self,
-        request: grpc::BroadcastHeaderParams,
-    ) -> Result<(), GossipError> {
-        let _timer = GossipMetrics::out_timer(HEADER_ID);
-        let size = request.encoded_len();
-        GossipMetrics::out_size(HEADER_ID, size);
-
-        let request = Request::new(request);
-
-        if let Some(mut client) = self.client() {
-            let result =
-                tokio::time::timeout(Duration::from_secs(5), client.broadcast_header(request))
-                    .await;
-            match result {
-                Ok(Ok(_)) => {
-                    GossipMetrics::out_count(HEADER_ID, true);
-                    Ok(())
-                }
-                Ok(Err(err)) => {
-                    error!(%err, "Client call failed.");
-                    GossipMetrics::out_count(HEADER_ID, false);
-                    Err(GossipError::BroadcastError(err))
-                }
-                Err(_) => {
-                    error!("Client call timed out.");
-                    GossipMetrics::out_count(HEADER_ID, false);
-                    Err(GossipError::TimeoutError)
-                }
-            }
-        } else {
-            GossipMetrics::out_count(HEADER_ID, false);
-            Err(GossipError::ClientNotConnected)
-        }
     }
 
     pub async fn broadcast_payload(
@@ -263,22 +226,6 @@ impl GrpcGossiperClientManager {
 }
 
 impl GrpcGossiperClientManager {
-    /// Broadcast a header. The header will be saved if it is the best header for the receiving
-    /// relay. Only validated Headers are gossiped.
-    pub async fn broadcast_header(&self, request: BroadcastHeaderParams) {
-        let request = request.to_proto();
-
-        for client in self.clients.iter() {
-            let client = client.clone();
-            let request = request.clone();
-            task::spawn(file!(), line!(), async move {
-                if let Err(err) = client.broadcast_header(request).await {
-                    error!(%err, "failed to broadcast header");
-                }
-            });
-        }
-    }
-
     /// Broadcast a payload. This payload will always be saved to the receiving relay's Autcioneer.
     /// This is because, the local relay has saved the payload's header and may have served it for
     /// get_header. Only validated Payloads are gossiped.
@@ -336,29 +283,6 @@ pub struct GrpcGossiperService {
 
 #[tonic::async_trait]
 impl GossipService for GrpcGossiperService {
-    async fn broadcast_header(
-        &self,
-        request: Request<grpc::BroadcastHeaderParams>,
-    ) -> Result<Response<()>, Status> {
-        GossipMetrics::in_count(HEADER_ID);
-        let inner = request.into_inner();
-        let size = inner.encoded_len();
-        GossipMetrics::in_size(HEADER_ID, size);
-
-        let request = match BroadcastHeaderParams::from_proto(inner) {
-            Ok(request) => request,
-            Err(err) => {
-                error!(%err, "failed to decode header");
-                return Ok(Response::new(()));
-            }
-        };
-        if let Err(err) = self.gossip_sender.send(GossipedMessage::Header(Box::new(request))).await
-        {
-            error!(%err, "failed to send header to builder");
-        }
-        Ok(Response::new(()))
-    }
-
     async fn broadcast_payload(
         &self,
         request: Request<grpc::BroadcastPayloadParams>,

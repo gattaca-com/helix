@@ -5,18 +5,9 @@ package gossip;
 import "google/protobuf/empty.proto";
 
 service GossipService {
-  rpc BroadcastHeader (BroadcastHeaderParams) returns (google.protobuf.Empty);
   rpc BroadcastPayload (BroadcastPayloadParams) returns (google.protobuf.Empty);
   rpc BroadcastGetPayload (BroadcastGetPayloadParams) returns (google.protobuf.Empty);
   rpc RequestPayload (RequestPayloadParams) returns (google.protobuf.Empty);
-}
-
-message BroadcastHeaderParams {
-  bytes signed_builder_bid = 1;
-  bytes bid_trace = 2;
-  bool is_cancellations_enabled = 7;
-  uint64 on_receive = 8;
-  optional bytes payload_address = 9;
 }
 
 message BroadcastPayloadParams {

@@ -20,7 +20,6 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
-use helix_types::SignedBuilderBid;
 use hyper::HeaderMap;
 use ssz::Decode;
 use tracing::{debug, error, info, warn, Instrument};
@@ -31,7 +30,6 @@ use crate::{
         api::{sanity_check_block_submission, MAX_PAYLOAD_LENGTH},
         error::BuilderApiError,
     },
-    proposer::{ShareHeader, HELIX_SHARE_HEADER},
     Api,
 };
 
@@ -49,22 +47,11 @@ impl<A: Api> BuilderApi<A> {
 
         debug!(timestamp_request_start = trace.receive,);
 
-        let sharing = headers.get(HELIX_SHARE_HEADER).map(ShareHeader::from).unwrap_or_default();
-
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) = decode_header_submission(req, &mut trace).await?;
         ApiMetrics::cancellable_bid(is_cancellations_enabled);
 
-        Self::handle_submit_header(
-            &api,
-            payload,
-            None,
-            None,
-            is_cancellations_enabled,
-            api.relay_config.header_gossip_enabled && matches!(sharing, ShareHeader::All),
-            trace,
-        )
-        .await
+        Self::handle_submit_header(&api, payload, None, None, is_cancellations_enabled, trace).await
     }
 
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
@@ -82,15 +69,12 @@ impl<A: Api> BuilderApi<A> {
         let (payload, is_cancellations_enabled) =
             decode_header_submission_v3(req, &mut trace).await?;
 
-        let sharing = headers.get(HELIX_SHARE_HEADER).map(ShareHeader::from).unwrap_or_default();
-
         Self::handle_submit_header(
             &api,
             payload.submission,
             Some(payload.url),
             Some(payload.tx_count),
             is_cancellations_enabled,
-            matches!(sharing, ShareHeader::All),
             trace,
         )
         .await
@@ -102,7 +86,6 @@ impl<A: Api> BuilderApi<A> {
         payload_address: Option<Vec<u8>>,
         block_tx_count: Option<u32>,
         is_cancellations_enabled: bool,
-        is_gossip_enabled: bool,
         mut trace: HeaderSubmissionTrace,
     ) -> Result<StatusCode, BuilderApiError> {
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
@@ -240,30 +223,13 @@ impl<A: Api> BuilderApi<A> {
         trace.floor_bid_checks = utcnow_ns();
 
         // Save bid to auctioneer
-        match api
-            .save_header_bid_to_auctioneer(
-                payload.clone(),
-                &mut trace,
-                is_cancellations_enabled,
-                floor_bid_value,
-            )
-            .await?
-        {
-            // v3 header submissions (`block_tx_count` is set) are not gossiped
-            Some(builder_bid) if block_tx_count.is_none() => {
-                if is_gossip_enabled {
-                    api.gossip_header(
-                        builder_bid,
-                        payload.bid_trace().clone(),
-                        is_cancellations_enabled,
-                        trace.receive,
-                        payload_address.clone(),
-                    )
-                    .await;
-                }
-            }
-            _ => { /* Bid wasn't saved so no need to gossip as it will never be served */ }
-        }
+        api.save_header_bid_to_auctioneer(
+            payload.clone(),
+            &mut trace,
+            is_cancellations_enabled,
+            floor_bid_value,
+        )
+        .await?;
 
         // Log some final info
         trace.request_finish = utcnow_ns();
@@ -329,7 +295,7 @@ impl<A: Api> BuilderApi<A> {
         trace: &mut HeaderSubmissionTrace,
         is_cancellations_enabled: bool,
         floor_bid_value: U256,
-    ) -> Result<Option<SignedBuilderBid>, BuilderApiError> {
+    ) -> Result<(), BuilderApiError> {
         let mut update_bid_result = SaveBidAndUpdateTopBidResponse::default();
         match self
             .auctioneer
@@ -343,7 +309,7 @@ impl<A: Api> BuilderApi<A> {
             )
             .await
         {
-            Ok(Some(builder_bid)) => {
+            Ok(_) => {
                 // Log the results of the bid submission
                 trace.auctioneer_update = utcnow_ns();
                 log_save_bid_info(
@@ -352,9 +318,9 @@ impl<A: Api> BuilderApi<A> {
                     trace.auctioneer_update,
                 );
 
-                Ok(Some(builder_bid))
+                Ok(())
             }
-            Ok(None) => Ok(None),
+
             Err(err) => {
                 error!(%err, "could not save header submission and update top bid");
                 Err(BuilderApiError::AuctioneerError(err))

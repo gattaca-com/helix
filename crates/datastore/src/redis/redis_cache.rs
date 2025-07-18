@@ -1202,14 +1202,14 @@ impl Auctioneer for RedisCache {
         floor_value: U256,
         state: &mut SaveBidAndUpdateTopBidResponse,
         signing_context: &RelaySigningContext,
-    ) -> Result<Option<(SignedBuilderBid, PayloadAndBlobs)>, AuctioneerError> {
+    ) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("save_bid_and_update_top_bid");
 
         // Exit early if cancellations aren't enabled and the bid is below the floor.
         let is_bid_above_floor = submission.bid_trace().value > floor_value;
         if !cancellations_enabled && !is_bid_above_floor {
             record.record_success();
-            return Ok(None);
+            return Ok(());
         }
 
         // Save the execution payload
@@ -1237,7 +1237,7 @@ impl Auctioneer for RedisCache {
         .await?;
 
         record.record_success();
-        Ok(Some((builder_bid, submission.payload_and_blobs())))
+        Ok(())
     }
 
     #[instrument(skip_all)]
@@ -1554,14 +1554,14 @@ impl Auctioneer for RedisCache {
         floor_value: U256,
         state: &mut SaveBidAndUpdateTopBidResponse,
         signing_context: &RelaySigningContext,
-    ) -> Result<Option<SignedBuilderBid>, AuctioneerError> {
+    ) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("save_header_submission_and_update_top_bid");
 
         // Exit early if cancellations aren't enabled and the bid is below the floor.
         let is_bid_above_floor = submission.value() > floor_value;
         if !cancellations_enabled && !is_bid_above_floor {
             record.record_success();
-            return Ok(None);
+            return Ok(());
         }
 
         // Cache the transaction root for the header
@@ -1583,7 +1583,7 @@ impl Auctioneer for RedisCache {
         .await?;
 
         record.record_success();
-        Ok(Some(builder_bid))
+        Ok(())
     }
 
     #[instrument(skip_all)]
@@ -1954,7 +1954,6 @@ fn get_top_bid(bid_values: &HashMap<String, U256>) -> Option<(String, U256)> {
 
 #[cfg(test)]
 mod tests {
-    use std::clone;
 
     use alloy_primitives::U256;
     use helix_common::utils::utcnow_ns;
@@ -2990,9 +2989,9 @@ mod tests {
         });
         cache.clear_cache().await.unwrap();
 
-        let slot = 42;
+        let _slot = 42;
         let block_hash = B256::random();
-        let pubkey = get_fixed_pubkey(0);
+        let _pubkey = get_fixed_pubkey(0);
 
         // Test: Check if block hash has been seen before (should be false initially)
         let seen_result = cache.seen_or_insert_block_hash(&block_hash).await;

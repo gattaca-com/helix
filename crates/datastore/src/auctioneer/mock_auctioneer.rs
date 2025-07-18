@@ -142,8 +142,8 @@ impl Auctioneer for MockAuctioneer {
         _floor_value: U256,
         _state: &mut SaveBidAndUpdateTopBidResponse,
         _signing_context: &RelaySigningContext,
-    ) -> Result<Option<(SignedBuilderBid, PayloadAndBlobs)>, AuctioneerError> {
-        Ok(None)
+    ) -> Result<(), AuctioneerError> {
+        Ok(())
     }
 
     async fn get_top_bid_value(
@@ -216,8 +216,8 @@ impl Auctioneer for MockAuctioneer {
         _floor_value: U256,
         _state: &mut SaveBidAndUpdateTopBidResponse,
         _signing_context: &RelaySigningContext,
-    ) -> Result<Option<SignedBuilderBid>, AuctioneerError> {
-        Ok(None)
+    ) -> Result<(), AuctioneerError> {
+        Ok(())
     }
 
     async fn update_trusted_proposers(

@@ -204,11 +204,6 @@ async fn process_db_additions<DB: DatabaseService + 'static>(db: Arc<DB>, db_inf
                 error!(%err, "failed to store header submission")
             }
         }
-        DbInfo::GossipedHeader { block_hash, trace } => {
-            if let Err(err) = db.save_gossiped_header_trace(block_hash, trace).await {
-                error!(%err, "failed to store gossiped header trace")
-            }
-        }
         DbInfo::GossipedPayload { block_hash, trace } => {
             if let Err(err) = db.save_gossiped_payload_trace(block_hash, trace).await {
                 error!(%err, "failed to store gossiped payload trace")

@@ -88,7 +88,7 @@ pub trait Auctioneer: Send + Sync + Clone {
         floor_value: U256,
         state: &mut SaveBidAndUpdateTopBidResponse,
         signing_context: &RelaySigningContext,
-    ) -> Result<Option<(SignedBuilderBid, PayloadAndBlobs)>, AuctioneerError>;
+    ) -> Result<(), AuctioneerError>;
 
     async fn get_top_bid_value(
         &self,
@@ -142,7 +142,7 @@ pub trait Auctioneer: Send + Sync + Clone {
         floor_value: U256,
         state: &mut SaveBidAndUpdateTopBidResponse,
         signing_context: &RelaySigningContext,
-    ) -> Result<Option<SignedBuilderBid>, AuctioneerError>;
+    ) -> Result<(), AuctioneerError>;
 
     async fn update_trusted_proposers(
         &self,
