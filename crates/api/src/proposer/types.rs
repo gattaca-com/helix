@@ -1,5 +1,4 @@
 use alloy_primitives::B256;
-use axum::http::HeaderValue;
 use helix_common::Filtering;
 use helix_types::{
     BeaconBlockBodyElectra, BeaconBlockElectra, BlsPublicKey, PayloadAndBlobs, SignedBeaconBlock,
@@ -99,31 +98,4 @@ pub struct PreferencesHeader {
     pub header_delay: Option<bool>,
 
     pub gossip_blobs: Option<bool>,
-}
-
-pub const HELIX_SHARE_HEADER: &str = "share";
-
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
-pub enum ShareHeader {
-    #[default]
-    All,
-    None,
-    Us,
-    Europe,
-    Asia,
-}
-
-impl From<&HeaderValue> for ShareHeader {
-    fn from(value: &HeaderValue) -> Self {
-        match value.to_str() {
-            Ok(s) => match s.to_lowercase().as_str() {
-                "none" => Self::None,
-                "asia" => Self::Asia,
-                "us" => Self::Us,
-                "europe" => Self::Europe,
-                _ => Self::All,
-            },
-            Err(_) => Self::All,
-        }
-    }
 }

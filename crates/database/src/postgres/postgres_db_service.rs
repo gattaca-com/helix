@@ -19,8 +19,8 @@ use helix_common::{
     metrics::DbMetricRecord,
     simulator::BlockSimError,
     utils::utcnow_ms,
-    BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace,
-    GossipedPayloadTrace, HeaderSubmissionTrace, PostgresConfig, ProposerInfo, RelayConfig,
+    BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace,
+    HeaderSubmissionTrace, PostgresConfig, ProposerInfo, RelayConfig,
     SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
 };
 use helix_types::{
@@ -2185,37 +2185,6 @@ impl DatabaseService for PostgresDatabaseService {
         } else {
             return Err(DatabaseError::ChannelSendError);
         }
-        record.record_success();
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn save_gossiped_header_trace(
-        &self,
-        block_hash: B256,
-        trace: GossipedHeaderTrace,
-    ) -> Result<(), DatabaseError> {
-        let mut record = DbMetricRecord::new("save_gossiped_header_trace");
-
-        let region_id = self.region;
-
-        self.pool.get().await?.execute(
-            "
-                INSERT INTO
-                    gossiped_header_trace (block_hash, region_id, on_receive, on_gossip_receive, pre_checks, auctioneer_update)
-                VALUES
-                    ($1, $2, $3, $4, $5, $6)
-            ",
-            &[
-                &(block_hash.as_slice()),
-                &(region_id),
-                &(trace.on_receive as i64),
-                &(trace.on_gossip_receive as i64),
-                &(trace.pre_checks as i64),
-                &(trace.auctioneer_update as i64),
-            ],
-        ).await?;
-
         record.record_success();
         Ok(())
     }

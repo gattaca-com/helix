@@ -255,11 +255,6 @@ impl<A: Api> BuilderApi<A> {
         }
     }
 
-    /// Gets current head slot
-    pub(crate) fn get_current_head_slot(&self) -> Slot {
-        self.curr_slot_info.head_slot()
-    }
-
     /// Simulates a new block payload.
     ///
     /// 1. Checks the current top bid value from the auctioneer.

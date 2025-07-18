@@ -11,9 +11,8 @@ use helix_common::{
     bid_submission::v2::header_submission::SignedHeaderSubmission,
     builder_info::BuilderInfo,
     simulator::BlockSimError,
-    GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace,
-    HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace,
-    ValidatorPreferences, ValidatorSummary,
+    GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo,
+    SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
 };
 use helix_types::{
     BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
@@ -159,12 +158,6 @@ pub trait DatabaseService: Send + Sync + Clone {
         submission: Arc<SignedHeaderSubmission>,
         trace: HeaderSubmissionTrace,
         tx_count: Option<u32>,
-    ) -> Result<(), DatabaseError>;
-
-    async fn save_gossiped_header_trace(
-        &self,
-        block_hash: B256,
-        trace: GossipedHeaderTrace,
     ) -> Result<(), DatabaseError>;
 
     async fn save_gossiped_payload_trace(

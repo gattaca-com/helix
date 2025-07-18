@@ -13,9 +13,9 @@ use helix_common::{
     },
     bid_submission::v2::header_submission::SignedHeaderSubmission,
     simulator::BlockSimError,
-    BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedHeaderTrace, GossipedPayloadTrace,
-    HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace,
-    ValidatorPreferences, ValidatorSummary,
+    BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, HeaderSubmissionTrace,
+    ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences,
+    ValidatorSummary,
 };
 use helix_types::{
     BidTrace, BlsPublicKey, BlsSignature, PayloadAndBlobs, SignedBidSubmission,
@@ -255,14 +255,6 @@ impl DatabaseService for MockDatabaseService {
         _submission: Arc<SignedHeaderSubmission>,
         _trace: HeaderSubmissionTrace,
         _tx_count: Option<u32>,
-    ) -> Result<(), DatabaseError> {
-        Ok(())
-    }
-
-    async fn save_gossiped_header_trace(
-        &self,
-        _block_hash: B256,
-        _trace: GossipedHeaderTrace,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }

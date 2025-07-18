@@ -16,7 +16,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
-use helix_types::{PayloadAndBlobs, SignedBidSubmission, SignedBuilderBid};
+use helix_types::SignedBidSubmission;
 use hyper::HeaderMap;
 use tracing::{debug, error, info, trace, warn, Instrument, Level};
 
@@ -255,28 +255,8 @@ impl<A: Api> BuilderApi<A> {
         trace!(is_cancellations_enabled, "checked for later submissions");
 
         // Save bid to auctioneer
-        match api
-            .save_bid_to_auctioneer(&payload, &mut trace, is_cancellations_enabled, floor_bid_value)
-            .await?
-        {
-            // If the bid was succesfully saved then we gossip the header and payload to all other
-            // relays.
-            Some((builder_bid, execution_payload)) if api.relay_config.header_gossip_enabled => {
-                api.gossip_header(
-                    builder_bid,
-                    payload.bid_trace().clone(),
-                    is_cancellations_enabled,
-                    trace.receive,
-                    None,
-                )
-                .await;
-                if api.relay_config.payload_gossip_enabled {
-                    api.gossip_payload(&payload, execution_payload).await;
-                }
-            }
-            Some(_) => { /* Gossiping is not enabled */ }
-            None => { /* Bid wasn't saved so no need to gossip as it will never be served */ }
-        }
+        api.save_bid_to_auctioneer(&payload, &mut trace, is_cancellations_enabled, floor_bid_value)
+            .await?;
         trace!("saved bid to auctioneer");
 
         // Log some final info
@@ -316,7 +296,7 @@ impl<A: Api> BuilderApi<A> {
         trace: &mut SubmissionTrace,
         is_cancellations_enabled: bool,
         floor_bid_value: U256,
-    ) -> Result<Option<(SignedBuilderBid, PayloadAndBlobs)>, BuilderApiError> {
+    ) -> Result<(), BuilderApiError> {
         let mut update_bid_result = SaveBidAndUpdateTopBidResponse::default();
 
         match self
@@ -331,14 +311,14 @@ impl<A: Api> BuilderApi<A> {
             )
             .await
         {
-            Ok(Some((builder_bid, execution_payload))) => {
+            Ok(_) => {
                 // Log the results of the bid submission
                 trace.auctioneer_update = utcnow_ns();
                 log_save_bid_info(&update_bid_result, trace.simulation, trace.auctioneer_update);
 
-                Ok(Some((builder_bid, execution_payload)))
+                Ok(())
             }
-            Ok(None) => Ok(None),
+
             Err(err) => {
                 error!(%err, "could not save bid and update top bids");
                 Err(BuilderApiError::AuctioneerError(err))

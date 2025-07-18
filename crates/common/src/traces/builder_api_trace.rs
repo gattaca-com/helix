@@ -31,11 +31,3 @@ pub struct GossipedPayloadTrace {
     pub pre_checks: u64,
     pub auctioneer_update: u64,
 }
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub struct GossipedHeaderTrace {
-    pub on_receive: u64,
-    pub on_gossip_receive: u64,
-    pub pre_checks: u64,
-    pub auctioneer_update: u64,
-}

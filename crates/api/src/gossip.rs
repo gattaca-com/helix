@@ -1,7 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use helix_common::{task, utils::utcnow_ns, GetPayloadTrace};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::mpsc;
 use tracing::{debug, error};
 use uuid::Uuid;
 
@@ -12,14 +12,11 @@ use crate::{
     Api,
 };
 
-const MAX_TASKS_PER_BUILDER: usize = 100;
-
 pub async fn process_gossip_messages<A: Api>(
     builder_api: Arc<BuilderApi<A>>,
     proposer_api: Arc<ProposerApi<A>>,
     mut rx: mpsc::Receiver<GossipedMessage>,
 ) {
-    let mut builder_semaphores = HashMap::new();
     while let Some(msg) = rx.recv().await {
         match msg {
             GossipedMessage::GetPayload(payload) => {
@@ -71,29 +68,7 @@ pub async fn process_gossip_messages<A: Api>(
                     }
                 });
             }
-            GossipedMessage::Header(header) => {
-                let builder = builder_api.clone();
 
-                let head_slot = builder.get_current_head_slot();
-                if header.slot() <= head_slot {
-                    debug!("received gossiped header for a past slot");
-                    continue;
-                }
-
-                let semaphore = builder_semaphores
-                    .entry(header.builder_pubkey().clone())
-                    .or_insert_with(|| Arc::new(Semaphore::new(MAX_TASKS_PER_BUILDER)))
-                    .clone();
-
-                if let Ok(permit) = semaphore.try_acquire_owned() {
-                    task::spawn(file!(), line!(), async move {
-                        builder.process_gossiped_header(*header).await;
-                        drop(permit);
-                    });
-                } else {
-                    debug!(builder = ?header.builder_pubkey(), "dropping header due to rate limit");
-                }
-            }
             GossipedMessage::Payload(payload) => {
                 let builder = builder_api.clone();
                 task::spawn(file!(), line!(), async move {
