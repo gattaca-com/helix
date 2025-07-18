@@ -13,6 +13,7 @@ use helix_common::{
         v3::header_submission_v3::HeaderSubmissionV3, BidSubmission,
     },
     metadata_provider::MetadataProvider,
+    metrics::ApiMetrics,
     task,
     utils::{extract_request_id, utcnow_ns},
     HeaderSubmissionTrace,
@@ -52,6 +53,7 @@ impl<A: Api> BuilderApi<A> {
 
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) = decode_header_submission(req, &mut trace).await?;
+        ApiMetrics::cancellable_bid(is_cancellations_enabled);
 
         Self::handle_submit_header(
             &api,
