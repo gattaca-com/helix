@@ -103,6 +103,7 @@ pub async fn run_api_service<A: Api>(
         top_bid_tx,
         v2_checks_tx,
         shared_floor,
+        shared_best_header.clone(),
     );
     let builder_api = Arc::new(builder_api);
 

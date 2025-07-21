@@ -357,9 +357,9 @@ impl RouterConfig {
         }
     }
 
-    /// If we serve get headers we should also receive submissions
-    pub fn validate(&self) -> bool {
-        // TODO: assert that if it contains submit block, it should have get_header, get top bid..
+    /// Validate routes, returns true if the bid sorter should be started
+    pub fn validate_bid_sorter(&self) -> eyre::Result<bool> {
+        // TODO!!: assert that if it contains submit block, it should have get_header, get top bid..
         todo!()
     }
 }

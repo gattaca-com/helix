@@ -133,6 +133,7 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
         br_tx,
         v2_tx,
         shared_floor,
+        BestGetHeader::new(),
     );
     let builder_api_service = Arc::new(builder_api_service);
 

@@ -94,7 +94,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     let shared_best_header = BestGetHeader::new();
     let shared_floor_bid = Arc::new(RwLock::new(Default::default()));
 
-    if config.router_config.validate() {
+    if config.router_config.validate_bid_sorter()? {
         start_bid_sorter(
             sorter_rx,
             top_bid_tx.clone(),

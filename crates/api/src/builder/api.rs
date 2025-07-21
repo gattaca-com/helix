@@ -13,7 +13,7 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
     },
-    bid_sorter::BidSorterMessage,
+    bid_sorter::{BestGetHeader, BidSorterMessage},
     bid_submission::BidSubmission,
     chain_info::ChainInfo,
     simulator::BlockSimError,
@@ -60,6 +60,8 @@ pub struct BuilderApi<A: Api> {
     pub shared_floor: Arc<RwLock<U256>>,
     /// Cache of tx roots for v2 submissions
     pub tx_root_cache: Cache<B256, B256>,
+    /// Best get header to check the current top bid on simulations
+    pub shared_best_header: BestGetHeader,
 }
 
 impl<A: Api> BuilderApi<A> {
@@ -77,6 +79,7 @@ impl<A: Api> BuilderApi<A> {
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
         v2_checks_tx: tokio::sync::mpsc::Sender<V2SubMessage>,
         shared_floor: Arc<RwLock<U256>>,
+        shared_best_header: BestGetHeader,
     ) -> Self {
         let tx_root_cache =
             Cache::builder().time_to_live(Duration::from_secs(60)).max_capacity(10_000).build();
@@ -100,6 +103,7 @@ impl<A: Api> BuilderApi<A> {
             shared_floor,
 
             tx_root_cache,
+            shared_best_header,
         }
     }
 
@@ -183,9 +187,19 @@ impl<A: Api> BuilderApi<A> {
         trace!("verified signature");
         trace.signature = utcnow_ns();
 
+        let curr_best = self.shared_best_header.best_bid(payload.slot().as_u64());
+        let is_top_bid = payload.value() > curr_best;
+
         // Simulate the submission
         let was_simulated_optimistically = self
-            .simulate_submission(payload, builder_info, trace, next_duty.entry, payload_attributes)
+            .simulate_submission(
+                payload,
+                builder_info,
+                trace,
+                next_duty.entry,
+                payload_attributes,
+                is_top_bid,
+            )
             .await?;
 
         Ok(was_simulated_optimistically)
@@ -233,10 +247,8 @@ impl<A: Api> BuilderApi<A> {
         trace: &mut SubmissionTrace,
         registration_info: ValidatorRegistrationInfo,
         payload_attributes: &PayloadAttributesUpdate,
+        is_top_bid: bool,
     ) -> Result<bool, BuilderApiError> {
-        // TODO!!: set this
-        let is_top_bid = false;
-
         debug!("validating block");
 
         let current_slot_coord = get_slot_coordinate(

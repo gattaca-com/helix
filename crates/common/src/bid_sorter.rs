@@ -40,6 +40,10 @@ impl BestGetHeader {
         *self.0.write() = Some(bid);
     }
 
+    pub fn best_bid(&self, _slot: u64) -> U256 {
+        self.0.read().as_ref().map(|b| b.value().clone()).unwrap_or_default()
+    }
+
     pub fn load(
         &self,
         _slot: u64,
