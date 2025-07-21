@@ -20,25 +20,36 @@ use crate::{
 type BlsPubkey = [u8; 48];
 
 /// Shared container for get_header response, thread safe
+// TODO!!: use arc swap, validate params in load, avoid cloning
 #[derive(Clone)]
-pub struct BestGetHeader(Arc<RwLock<BuilderBid>>);
+pub struct BestGetHeader(Arc<RwLock<Option<BuilderBid>>>);
 
 impl BestGetHeader {
     pub fn new() -> Self {
-        todo!()
+        Self(Arc::new(RwLock::new(None)))
     }
 
-    pub fn store(&self, bid: BuilderBid) {
-        *self.0.write() = bid;
+    fn store(&self, bid: BuilderBid) {
+        *self.0.write() = Some(bid);
     }
 
     pub fn load(
         &self,
         _slot: u64,
-        _parent_hash: &B256,
+        parent_hash: &B256,
         _validator_pubkey: &BlsPublicKey,
     ) -> Option<BuilderBid> {
-        None
+        let bid = (*self.0.read()).clone()?;
+
+        if bid.header().parent_hash().0 == *parent_hash {
+            return None
+        }
+
+        Some(bid)
+    }
+
+    fn reset(&self) {
+        *self.0.write() = None
     }
 }
 
@@ -354,9 +365,12 @@ impl BidSorter {
         self.curr_slot = slot;
         self.bids.clear();
         self.headers.clear();
+        self.demotions.clear();
+
         self.curr_bid = None;
         self.curr_floor = None;
-        self.demotions.clear();
+
+        self.shared_best_header.reset();
     }
 
     fn update_top_bid(&mut self, builder_pubkey: BlsPubkey, bid: Bid) {

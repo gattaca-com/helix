@@ -48,7 +48,6 @@ tracing-subscriber.workspace = true
 url.workspace = true
 uuid.workspace = true
 
-
 [dev-dependencies]
 tracing-subscriber.workspace = true
 
