@@ -84,11 +84,12 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     let relay_signing_context =
         Arc::new(RelaySigningContext { keypair, context: chain_info.clone() });
 
+    let (sorter_tx, sorter_rx) = crossbeam_channel::bounded(10_000);
+
     let beacon_client = start_beacon_client(&config);
     let db = start_db_service(&config).await?;
-    let auctioneer = start_auctioneer(&config, &db).await?;
+    let auctioneer = start_auctioneer(&config, sorter_tx.clone(), &db).await?;
 
-    let (sorter_tx, sorter_rx) = crossbeam_channel::bounded(10_000);
     let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
     let shared_best_header = BestGetHeader::new();
     let shared_floor_bid = Arc::new(RwLock::new(Default::default()));

@@ -6,18 +6,20 @@ pub mod types;
 use std::sync::Arc;
 
 pub use auctioneer::*;
-use helix_common::RelayConfig;
+use helix_common::{bid_sorter::BidSorterMessage, RelayConfig};
 use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
 use redis::redis_cache::RedisCache;
 use tracing::error;
 
 pub async fn start_auctioneer(
     config: &RelayConfig,
+    sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     db: &PostgresDatabaseService,
 ) -> eyre::Result<Arc<RedisCache>> {
     let builder_infos = db.get_all_builder_infos().await.expect("failed to load builder infos");
 
-    let auctioneer = Arc::new(RedisCache::new(&config.redis.url, builder_infos).await.unwrap());
+    let auctioneer =
+        Arc::new(RedisCache::new(&config.redis.url, builder_infos, sorter_tx).await.unwrap());
 
     let auctioneer_clone = auctioneer.clone();
     tokio::spawn(async move {

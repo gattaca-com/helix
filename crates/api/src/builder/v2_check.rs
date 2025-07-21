@@ -12,7 +12,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::{BlsPublicKey, SignedBidSubmission};
-use tracing::error;
+use tracing::{error, info};
 
 use crate::Api;
 
@@ -73,15 +73,16 @@ impl<A: Api> V2SubChecker<A> {
         auctioneer: Arc<A::Auctioneer>,
         db: Arc<A::DatabaseService>,
     ) -> Self {
-        Self { v2_check_rx, auctioneer, db, pending_blocks: HashMap::with_capacity(256) }
+        Self { v2_check_rx, auctioneer, db, pending_blocks: HashMap::with_capacity(1000) }
     }
+
     /// Handle valid payload Optimistic V2 demotions checks and demotions.
     ///
     /// There are two cases where we might demote a builder here.
     /// 1) They sent a header but we received no accompanying payload.
     /// 2) The payload was received > 2 seconds after we received the header.
     pub async fn run(mut self) {
-        // TODO!!: local telemetry
+        info!("starting v2 submission checker");
 
         let mut tick = tokio::time::interval(Duration::from_secs(3));
         let mut demoted = HashSet::default();
@@ -171,10 +172,9 @@ fn demote_builder<A: Api>(
     auctioneer: Arc<A::Auctioneer>,
     db: Arc<A::DatabaseService>,
 ) {
-    let reason = format!(
-        "builder demoted due to missing payload submission.
-{pending_block:?}"
-    );
+    info!(%block_hash, builder =? pending_block.builder_pubkey, "demoting builder for v2 submission");
+
+    let reason = format!("builder demoted due to missing payload submission. {pending_block:?}");
 
     let builder_pubkey = pending_block.builder_pubkey.clone();
     task::spawn(file!(), line!(), async move {

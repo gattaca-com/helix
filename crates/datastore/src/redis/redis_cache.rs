@@ -16,6 +16,7 @@ use futures_util::StreamExt;
 use helix_beacon::types::{HeadEventData, PayloadAttributesEvent};
 use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
+    bid_sorter::BidSorterMessage,
     metrics::RedisMetricRecord,
     BuilderInfo, ProposerInfo,
 };
@@ -76,6 +77,8 @@ pub struct RedisCache {
     last_delivered_slot: Arc<AtomicU64>,
     builder_latest_payload_received_at: Cache<String, HashMap<String, u64>>,
     builder_info_cache: Cache<String, HashMap<String, BuilderInfo>>,
+
+    sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
 }
 
 #[allow(dead_code)]
@@ -83,6 +86,7 @@ impl RedisCache {
     pub async fn new(
         conn_str: &str,
         builder_infos: Vec<BuilderInfoDocument>,
+        sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     ) -> Result<Self, CreatePoolError> {
         let mut cfg = Config::from_url(conn_str);
         let mut pool_config = deadpool_redis::PoolConfig::default();
@@ -116,6 +120,7 @@ impl RedisCache {
             builder_latest_payload_received_at,
             last_delivered_slot,
             builder_info_cache,
+            sorter_tx,
         };
 
         // Load in builder info
@@ -918,6 +923,8 @@ impl Auctioneer for RedisCache {
 
     #[instrument(skip_all)]
     async fn demote_builder(&self, builder_pub_key: &BlsPublicKey) -> Result<(), AuctioneerError> {
+        let _ = self.sorter_tx.send(BidSorterMessage::Demotion(builder_pub_key.clone()));
+
         let mut record = RedisMetricRecord::new("demote_builder");
         let mut builder_info = self.get_builder_info(builder_pub_key).await?;
         if !builder_info.is_optimistic {
@@ -1308,15 +1315,11 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_new() {
-        let result = RedisCache::new("redis://127.0.0.1/", Vec::new()).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    #[serial]
     async fn test_get_and_set_object() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -1340,7 +1343,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_hget_and_hset_object() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let value = "test_value";
@@ -1360,7 +1366,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_hgetall() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let field_val_pairs: HashMap<String, String> = [
@@ -1387,7 +1396,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_lrange() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let values = vec!["value1", "value2", "value3"];
@@ -1406,7 +1418,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_rpush() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let value = "test_value";
@@ -1417,7 +1432,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_clear_key() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let key = "test_clear_key";
@@ -1442,7 +1460,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_get_and_check_last_slot_and_hash_delivered() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let slot = 42;
@@ -1461,7 +1482,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_set_past_slot() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let slot = 42;
@@ -1481,7 +1505,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_set_same_slot_different_hash() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let slot = 42;
@@ -1499,7 +1526,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_set_same_slot_no_hash() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let slot = 42;
@@ -1516,7 +1546,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_get_and_save_execution_payload() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let slot = 42;
@@ -1556,7 +1589,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_get_builder_info() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let builder_pub_key = BlsPublicKey::test_random();
@@ -1595,7 +1631,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_get_trusted_proposers_and_update_trusted_proposers() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random()).await.unwrap();
@@ -1635,7 +1674,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_demote_non_optimistic_builder() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let builder_pub_key = BlsPublicKey::test_random();
@@ -1660,7 +1702,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_demote_optimistic_builder() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let builder_pub_key_optimistic = BlsPublicKey::test_random();
@@ -1693,7 +1738,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_seen_or_insert_block_hash() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         let cloned_cache = cache.clone();
         tokio::spawn(async move {
             cloned_cache.start_seen_block_hashes_listener().await.unwrap();
@@ -1730,7 +1778,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_can_aquire_lock() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
         assert!(cache.try_acquire_or_renew_leadership("leader").await)
     }
@@ -1738,7 +1789,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_others_cant_aquire_lock_if_held() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
         assert!(cache.try_acquire_or_renew_leadership("leader").await);
         assert!(!cache.try_acquire_or_renew_leadership("others").await);
@@ -1747,7 +1801,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_can_renew_lock() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
         assert!(cache.try_acquire_or_renew_leadership("leader").await);
         assert!(cache.try_acquire_or_renew_leadership("leader").await);
@@ -1756,7 +1813,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_others_cannot_renew() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
         assert!(cache.try_acquire_or_renew_leadership("leader").await);
         assert!(cache.try_acquire_or_renew_leadership("leader").await);
@@ -1766,7 +1826,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_kill_switch() {
-        let cache = RedisCache::new("redis://127.0.0.1/", Vec::new()).await.unwrap();
+        let cache =
+            RedisCache::new("redis://127.0.0.1/", Vec::new(), crossbeam_channel::bounded(1).0)
+                .await
+                .unwrap();
         cache.clear_cache().await.unwrap();
 
         let result = cache.kill_switch_enabled().await.unwrap();

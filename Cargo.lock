@@ -4096,6 +4096,7 @@ dependencies = [
  "async-trait",
  "auto_impl",
  "axum 0.8.3",
+ "crossbeam-channel",
  "deadpool-redis",
  "ethereum_ssz",
  "eyre",
