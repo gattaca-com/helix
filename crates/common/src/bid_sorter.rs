@@ -23,7 +23,7 @@ type BlsPubkey = [u8; 48];
 #[derive(Clone)]
 struct GetHeaderEntry {
     slot: u64,
-    bid: Arc<BuilderBid>,
+    bid: BuilderBid,
 }
 
 /// Shared container for get_header response, thread safe
@@ -41,7 +41,7 @@ impl BestGetHeader {
         Self(Arc::new(RwLock::new(None)))
     }
 
-    fn store(&self, slot: u64, bid: Arc<BuilderBid>) {
+    fn store(&self, slot: u64, bid: BuilderBid) {
         *self.0.write() = Some(GetHeaderEntry { slot, bid });
     }
 
@@ -63,7 +63,7 @@ impl BestGetHeader {
         slot: u64,
         parent_hash: &B256,
         _validator_pubkey: &BlsPublicKey,
-    ) -> Option<Arc<BuilderBid>> {
+    ) -> Option<BuilderBid> {
         let entry = (*self.0.read()).clone()?;
 
         if entry.slot != slot || entry.bid.header().parent_hash().0 == *parent_hash {
@@ -225,7 +225,7 @@ pub struct BidSorter {
     bids: HashMap<BlsPubkey, BidEntry>,
     /// All headers received for this slot
     /// on_receive_ns -> header
-    headers: HashMap<u64, Arc<BuilderBid>>,
+    headers: HashMap<u64, BuilderBid>,
     /// Demoted builders in this slot for live demotions
     demotions: HashSet<BlsPubkey>,
     /// Current best bid
@@ -290,7 +290,7 @@ impl BidSorter {
                         continue;
                     }
 
-                    self.headers.insert(bid.on_receive_ns, Arc::new(header));
+                    self.headers.insert(bid.on_receive_ns, header);
                     self.process_header(builder_pubkey, bid, is_cancellable);
 
                     // telemetry
