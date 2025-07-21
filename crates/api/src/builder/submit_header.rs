@@ -236,8 +236,9 @@ impl<A: Api> BuilderApi<A> {
             "submit_header request finished"
         );
 
-        if let Err(err) =
-            api.v2_checks_tx.send(V2SubMessage::new_from_header_submission(&payload, trace.receive))
+        if let Err(err) = api
+            .v2_checks_tx
+            .try_send(V2SubMessage::new_from_header_submission(&payload, trace.receive))
         {
             error!(%err, "failed to send block to v2 checker");
         }
