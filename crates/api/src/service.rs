@@ -85,7 +85,7 @@ pub async fn run_api_service<A: Api>(
 
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
-    let (v2_checks_tx, v2_checks_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (v2_checks_tx, v2_checks_rx) = tokio::sync::mpsc::channel(10_000);
     let v2_checker = V2SubChecker::<A>::new(v2_checks_rx, auctioneer.clone(), db.clone());
     tokio::spawn(v2_checker.run());
 

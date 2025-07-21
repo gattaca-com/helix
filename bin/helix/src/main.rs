@@ -88,7 +88,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     let db = start_db_service(&config).await?;
     let auctioneer = start_auctioneer(&config, &db).await?;
 
-    let (sorter_tx, sorter_rx) = crossbeam_channel::unbounded();
+    let (sorter_tx, sorter_rx) = crossbeam_channel::bounded(10_000);
     let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
     let shared_best_header = BestGetHeader::new();
     let shared_floor_bid = Arc::new(RwLock::new(Default::default()));

@@ -61,7 +61,7 @@ struct PendingBlock {
 }
 
 pub struct V2SubChecker<A: Api> {
-    v2_check_rx: tokio::sync::mpsc::UnboundedReceiver<V2SubMessage>,
+    v2_check_rx: tokio::sync::mpsc::Receiver<V2SubMessage>,
     auctioneer: Arc<A::Auctioneer>,
     db: Arc<A::DatabaseService>,
     pending_blocks: HashMap<B256, PendingBlock>,
@@ -69,7 +69,7 @@ pub struct V2SubChecker<A: Api> {
 
 impl<A: Api> V2SubChecker<A> {
     pub fn new(
-        v2_check_rx: tokio::sync::mpsc::UnboundedReceiver<V2SubMessage>,
+        v2_check_rx: tokio::sync::mpsc::Receiver<V2SubMessage>,
         auctioneer: Arc<A::Auctioneer>,
         db: Arc<A::DatabaseService>,
     ) -> Self {

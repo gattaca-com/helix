@@ -72,7 +72,7 @@ impl WebsiteService {
             current_slot_info: current_slot_info.clone(),
         });
 
-        let (tx, _) = crossbeam_channel::unbounded();
+        let (tx, _) = crossbeam_channel::bounded(0);
         let chain_updater = ChainEventUpdater::new(
             Arc::new(MockAuctioneer::new()),
             chain_info,

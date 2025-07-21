@@ -55,7 +55,7 @@ pub struct BuilderApi<A: Api> {
     /// Subscriber for TopBid updates, SSZ encoded
     pub top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     /// Send headers/blocks to be checked for V2 submissions
-    pub v2_checks_tx: tokio::sync::mpsc::UnboundedSender<V2SubMessage>,
+    pub v2_checks_tx: tokio::sync::mpsc::Sender<V2SubMessage>,
     /// Set in sorter loop
     pub shared_floor: Arc<RwLock<U256>>,
     /// Cache of tx roots for v2 submissions
@@ -75,7 +75,7 @@ impl<A: Api> BuilderApi<A> {
         curr_slot_info: CurrentSlotInfo,
         sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-        v2_checks_tx: tokio::sync::mpsc::UnboundedSender<V2SubMessage>,
+        v2_checks_tx: tokio::sync::mpsc::Sender<V2SubMessage>,
         shared_floor: Arc<RwLock<U256>>,
     ) -> Self {
         let tx_root_cache =
