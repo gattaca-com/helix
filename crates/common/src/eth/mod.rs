@@ -24,8 +24,6 @@ pub struct BidRequest {
 
 /// Signs the builder bid with the relay key. This is necessary because the relay is the "builder"
 /// from the proposer point of view
-///
-/// TODO!!: add some timings/metric here
 pub fn resign_builder_bid(
     mut message: BuilderBid,
     signing_ctx: &RelaySigningContext,
