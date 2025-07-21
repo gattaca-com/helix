@@ -2,6 +2,7 @@ use std::{collections::HashSet, fs::File, path::PathBuf};
 
 use alloy_primitives::B256;
 use clap::Parser;
+use eyre::ensure;
 use helix_types::{BlsKeypair, BlsPublicKey, BlsSecretKey};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -359,8 +360,47 @@ impl RouterConfig {
 
     /// Validate routes, returns true if the bid sorter should be started
     pub fn validate_bid_sorter(&self) -> eyre::Result<bool> {
-        // TODO!!: assert that if it contains submit block, it should have get_header, get top bid..
-        todo!()
+        let routes = self.enabled_routes.iter().map(|r| r.route).collect::<Vec<_>>();
+
+        if routes.contains(&Route::All) {
+            return Ok(true);
+        }
+
+        if routes.contains(&Route::SubmitHeader) {
+            ensure!(
+                routes.contains(&Route::SubmitBlockOptimistic),
+                "v2 enabled but missing submit block"
+            );
+        }
+
+        if routes.contains(&Route::SubmitBlockOptimistic) {
+            ensure!(routes.contains(&Route::SubmitHeader), "v2 enabled but missing submit header");
+        }
+
+        let is_get_header_instance =
+            routes.contains(&Route::ProposerApi) || routes.contains(&Route::GetHeader);
+        let is_submission_instance =
+            routes.contains(&Route::SubmitBlock) || routes.contains(&Route::SubmitHeader);
+
+        if is_get_header_instance {
+            ensure!(
+                is_submission_instance,
+                "relay is serving headers so should have submissions enabled"
+            );
+            ensure!(routes.contains(&Route::GetTopBid), "routes should have get_top_bid enabled");
+
+            Ok(true)
+        } else if is_submission_instance {
+            ensure!(
+                is_get_header_instance,
+                "relay is receiving blocks so should have get_header enabled"
+            );
+            ensure!(routes.contains(&Route::GetTopBid), "routes should have get_top_bid enabled");
+
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 }
 
