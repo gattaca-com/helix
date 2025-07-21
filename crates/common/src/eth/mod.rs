@@ -1,14 +1,18 @@
 pub mod blob_sidecars;
 
+use std::time::Instant;
+
 use alloy_primitives::B256;
 use helix_types::{
     mock_public_key_bytes, BlsPublicKey, BuilderBid, BuilderBidElectra,
     ExecutionPayloadHeaderElectra, ForkName, SignedBidSubmission, SignedBuilderBid,
     SignedBuilderBidInner, Slot,
 };
+use tracing::debug;
 
 use crate::{
-    bid_submission::v2::header_submission::SignedHeaderSubmission, signing::RelaySigningContext,
+    bid_submission::v2::header_submission::SignedHeaderSubmission, metrics::BID_SIGNING_LATENCY,
+    signing::RelaySigningContext,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -27,9 +31,19 @@ pub fn resign_builder_bid(
     signing_ctx: &RelaySigningContext,
     fork: ForkName,
 ) -> SignedBuilderBid {
+    let start = Instant::now();
+
     *message.pubkey_mut() = signing_ctx.pubkey().clone().into();
     let sig = signing_ctx.sign_builder_message(&message);
-    SignedBuilderBid::new_no_metadata(Some(fork), SignedBuilderBidInner { message, signature: sig })
+    let bid = SignedBuilderBid::new_no_metadata(Some(fork), SignedBuilderBidInner {
+        message,
+        signature: sig,
+    });
+
+    BID_SIGNING_LATENCY.observe(start.elapsed().as_micros() as f64);
+    debug!("re-signing builder bid took {:?}", start.elapsed());
+
+    bid
 }
 
 pub fn bid_submission_to_builder_bid_unsigned(submission: &SignedBidSubmission) -> BuilderBid {

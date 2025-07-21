@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{sync::Arc, time::Duration};
 
 use alloy_primitives::{B256, U256};
 use axum::{extract::Path, http::HeaderMap, response::IntoResponse, Extension};
@@ -174,9 +171,7 @@ impl<A: Api> ProposerApi<A> {
                 return Err(ProposerApiError::InternalServerError);
             };
 
-            let start = Instant::now();
             let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
-            debug!("re-signing builder bid took {:?}", start.elapsed()); // TODO!!: add a metric
 
             if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
                 // Request payload in the background
