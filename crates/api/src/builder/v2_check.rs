@@ -1,6 +1,9 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use alloy_primitives::{map::foldhash::HashSet, B256};
+use alloy_primitives::{
+    map::foldhash::{HashMap, HashMapExt as _, HashSet},
+    B256,
+};
 use helix_common::{
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
     task,
@@ -80,10 +83,11 @@ impl<A: Api> V2SubChecker<A> {
     pub async fn run(mut self) {
         // TODO!!: local telemetry
 
-        let mut tick = tokio::time::interval(Duration::from_secs(5));
+        let mut tick = tokio::time::interval(Duration::from_secs(3));
+        let mut demoted = HashSet::default();
 
         tokio::select! {
-            _ = tick.tick() => self.check_demotions(),
+            _ = tick.tick() => self.check_demotions(&mut demoted),
             Some(msg) = self.v2_check_rx.recv() => self.process_message(msg),
         }
     }
@@ -115,9 +119,10 @@ impl<A: Api> V2SubChecker<A> {
     /// - for blocks with only header, demote if time is older than
     ///   MAX_DELAY_BETWEEN_V2_SUBMISSIONS_NS
     /// - otherwise leave
-    fn check_demotions(&mut self) {
+    fn check_demotions(&mut self, demoted: &mut HashSet<BlsPublicKey>) {
+        demoted.clear();
+
         let now_ns = utcnow_ns();
-        let mut demoted = HashSet::default();
 
         self.pending_blocks.retain(|block_hash, pending| {
             match (pending.header_receive_ns, pending.payload_receive_ns) {
