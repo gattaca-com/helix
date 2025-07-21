@@ -371,6 +371,7 @@ impl BidSorter {
         self.curr_floor = None;
 
         self.shared_best_header.reset();
+        *self.shared_floor.write() = U256::ZERO;
     }
 
     fn update_top_bid(&mut self, builder_pubkey: BlsPubkey, bid: Bid) {
