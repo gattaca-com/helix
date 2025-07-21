@@ -8,6 +8,7 @@ use axum::{
     Extension,
 };
 use bytes::Bytes;
+use dashmap::DashMap;
 use flate2::read::GzDecoder;
 use helix_common::{
     api::{
@@ -24,7 +25,6 @@ use helix_database::DatabaseService;
 use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{BlsPublicKey, SignedBidSubmission, Slot};
-use moka::sync::Cache;
 use parking_lot::RwLock;
 use ssz::Decode;
 use tracing::{debug, error, trace, warn};
@@ -59,7 +59,7 @@ pub struct BuilderApi<A: Api> {
     /// Set in sorter loop
     pub shared_floor: Arc<RwLock<U256>>,
     /// Cache of tx roots for v2 submissions
-    pub tx_root_cache: Cache<B256, B256>,
+    pub tx_root_cache: DashMap<(u64, B256), B256>,
     /// Best get header to check the current top bid on simulations
     pub shared_best_header: BestGetHeader,
 }
@@ -81,8 +81,24 @@ impl<A: Api> BuilderApi<A> {
         shared_floor: Arc<RwLock<U256>>,
         shared_best_header: BestGetHeader,
     ) -> Self {
-        let tx_root_cache =
-            Cache::builder().time_to_live(Duration::from_secs(60)).max_capacity(10_000).build();
+        let tx_root_cache = DashMap::with_capacity(1000);
+
+        let cache = tx_root_cache.clone();
+        let info = chain_info.clone();
+        tokio::spawn(async move {
+            // cleanup cache, keep only last 2 slots worth of roots
+            let mut last_cleared_slot = 0;
+
+            loop {
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                let curr_slot = info.current_slot().as_u64();
+
+                if curr_slot > last_cleared_slot {
+                    last_cleared_slot = curr_slot;
+                    cache.retain(|(slot, _), _| curr_slot.saturating_sub(*slot) <= 2);
+                }
+            }
+        });
 
         Self {
             auctioneer,
