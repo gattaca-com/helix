@@ -167,7 +167,7 @@ impl<A: Api> ProposerApi<A> {
             let proposer_pubkey_clone = bid_request.pubkey;
             let block_hash = bid.header().block_hash().0;
 
-            let fork = if let Ok(_) = bid.as_electra() {
+            let fork = if bid.as_electra().is_ok() {
                 helix_types::ForkName::Electra
             } else {
                 error!("builder bid is not on Electra fork!! This should not happen");

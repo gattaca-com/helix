@@ -25,6 +25,12 @@ type BlsPubkey = [u8; 48];
 #[derive(Clone)]
 pub struct BestGetHeader(Arc<RwLock<Option<BuilderBid>>>);
 
+impl Default for BestGetHeader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BestGetHeader {
     pub fn new() -> Self {
         Self(Arc::new(RwLock::new(None)))
@@ -54,6 +60,8 @@ impl BestGetHeader {
     }
 }
 
+// ignoring warning because submissions variant will be 99% of messages
+#[allow(clippy::large_enum_variant)]
 pub enum BidSorterMessage {
     /// Pre-validated submissions ready to be processed. Submissions could come from:
     /// - V1 submissions, either optimistic, or non-optimistic after simulation
@@ -351,7 +359,7 @@ impl BidSorter {
                 self.traverse_update_floor_bid();
             }
 
-            _ => return,
+            _ => {}
         }
     }
 

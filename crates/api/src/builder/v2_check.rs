@@ -128,15 +128,15 @@ impl<A: Api> V2SubChecker<A> {
             match (pending.header_receive_ns, pending.payload_receive_ns) {
                 (Some(header), Some(payload)) => {
                     let delta = header.saturating_sub(payload);
-                    if delta > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_NS {
-                        if demoted.insert(pending.builder_pubkey.clone()) {
-                            demote_builder::<A>(
-                                *block_hash,
-                                pending.clone(),
-                                self.auctioneer.clone(),
-                                self.db.clone(),
-                            );
-                        }
+                    if delta > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_NS &&
+                        demoted.insert(pending.builder_pubkey.clone())
+                    {
+                        demote_builder::<A>(
+                            *block_hash,
+                            pending.clone(),
+                            self.auctioneer.clone(),
+                            self.db.clone(),
+                        );
                     }
 
                     false

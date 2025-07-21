@@ -43,8 +43,7 @@ pub fn bid_submission_to_builder_bid_unsigned(submission: &SignedBidSubmission) 
                 value: bid.message.value,
                 execution_requests: bid.execution_requests.clone(),
                 pubkey: mock_public_key_bytes(), // this will replaced when signing the header
-            }
-            .into();
+            };
 
             BuilderBid::Electra(message)
         }
