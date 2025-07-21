@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use alloy_primitives::U256;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -8,6 +7,7 @@ use axum::{
 };
 use helix_common::{
     self,
+    bid_sorter::BidSorterMessage,
     bid_submission::BidSubmission,
     metadata_provider::MetadataProvider,
     metrics::ApiMetrics,
@@ -16,12 +16,11 @@ use helix_common::{
     SubmissionTrace,
 };
 use helix_database::DatabaseService;
-use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
-use helix_types::SignedBidSubmission;
+use helix_datastore::Auctioneer;
 use hyper::HeaderMap;
 use tracing::{debug, error, info, trace, warn, Instrument, Level};
 
-use super::api::{log_save_bid_info, BuilderApi};
+use super::api::BuilderApi;
 use crate::{
     builder::{
         api::{decode_payload, sanity_check_block_submission},
@@ -130,16 +129,10 @@ impl<A: Api> BuilderApi<A> {
         trace!("checked for duplicates");
 
         // Verify the payload value is above the floor bid
-        let floor_bid_value = api
-            .check_if_bid_is_below_floor(
-                payload.slot().into(),
-                payload.parent_hash(),
-                payload.proposer_public_key(),
-                payload.builder_public_key(),
-                payload.value(),
-                is_cancellations_enabled,
-            )
-            .await?;
+        let floor_bid_value = api.get_current_floor();
+        if payload.value() < floor_bid_value {
+            return Err(BuilderApiError::BidBelowFloor);
+        }
         trace!(%floor_bid_value, "floor bid checked");
         trace.floor_bid_checks = utcnow_ns();
 
@@ -202,65 +195,33 @@ impl<A: Api> BuilderApi<A> {
             .await?;
         trace!(is_optimistic = was_simulated_optimistically, "verified submitted block");
 
-        // If cancellations are enabled, then abort now if there is a later submission
-        if is_cancellations_enabled {
-            if let Err(err) = api.check_for_later_submissions(&payload, trace.receive).await {
-                warn!(%err, "already processing later submission");
+        if let Err(err) = api.sorter_tx.send(BidSorterMessage::new_from_block_submission(
+            &payload,
+            trace.receive,
+            is_cancellations_enabled,
+        )) {
+            error!(?err, "failed to send submission to sorter");
+            return Err(BuilderApiError::InternalError)
+        };
+        trace!("sent bid to bid sorter");
 
-                // Save bid to auctioneer
-                if let Err(err) = api
-                    .auctioneer
-                    .save_execution_payload(
-                        payload.slot().into(),
-                        &payload.message().proposer_pubkey,
-                        payload.block_hash(),
-                        &payload.payload_and_blobs(),
-                    )
-                    .await
-                {
-                    error!(%err, "failed to save execution payload");
-                    return Err(BuilderApiError::AuctioneerError(err));
-                }
-
-                // Log some final info
-                trace.request_finish = utcnow_ns();
-                debug!(
-                    ?trace,
-                    request_duration_ns = trace.request_finish.saturating_sub(trace.receive),
-                    "submit_block request finished"
-                );
-
-                let optimistic_version = if was_simulated_optimistically {
-                    OptimisticVersion::V1
-                } else {
-                    OptimisticVersion::NotOptimistic
-                };
-
-                // Save submission to db.
-                task::spawn(
-                    file!(),
-                    line!(),
-                    async move {
-                        if let Err(err) = api
-                            .db
-                            .store_block_submission(payload, trace, optimistic_version as i16)
-                            .await
-                        {
-                            error!(%err, "failed to store block submission")
-                        }
-                    }
-                    .in_current_span(),
-                );
-
-                return Err(err);
-            }
-        }
-        trace!(is_cancellations_enabled, "checked for later submissions");
-
-        // Save bid to auctioneer
-        api.save_bid_to_auctioneer(&payload, &mut trace, is_cancellations_enabled, floor_bid_value)
+        // TODO!!: should we move this before the sorter? if this fails we can't serve the
+        // get_payload Save the execution payload
+        api.auctioneer
+            .save_execution_payload(
+                payload.slot().as_u64(),
+                payload.proposer_public_key(),
+                payload.block_hash(),
+                &payload.payload_and_blobs(),
+            )
             .await?;
-        trace!("saved bid to auctioneer");
+        trace!("saved payload to redis");
+
+        if let Err(err) = api.auctioneer.save_bid_trace(payload.bid_trace()).await {
+            error!(%err, "failed to save bid trace");
+            return Err(BuilderApiError::AuctioneerError(err));
+        }
+        trace!("saved bid trace to redis");
 
         // Log some final info
         trace.request_finish = utcnow_ns();
@@ -291,74 +252,5 @@ impl<A: Api> BuilderApi<A> {
         );
 
         Ok(StatusCode::OK)
-    }
-
-    async fn save_bid_to_auctioneer(
-        &self,
-        payload: &SignedBidSubmission,
-        trace: &mut SubmissionTrace,
-        is_cancellations_enabled: bool,
-        floor_bid_value: U256,
-    ) -> Result<(), BuilderApiError> {
-        let mut update_bid_result = SaveBidAndUpdateTopBidResponse::default();
-
-        match self
-            .auctioneer
-            .save_bid_and_update_top_bid(
-                payload,
-                trace.receive.into(),
-                is_cancellations_enabled,
-                floor_bid_value,
-                &mut update_bid_result,
-                &self.signing_context,
-            )
-            .await
-        {
-            Ok(_) => {
-                // Log the results of the bid submission
-                trace.auctioneer_update = utcnow_ns();
-                log_save_bid_info(&update_bid_result, trace.simulation, trace.auctioneer_update);
-
-                Ok(())
-            }
-
-            Err(err) => {
-                error!(%err, "could not save bid and update top bids");
-                Err(BuilderApiError::AuctioneerError(err))
-            }
-        }
-    }
-
-    /// Checks for later bid submissions from the same builder.
-    ///
-    /// This function should be called only if cancellations are enabled.
-    /// It checks if there is a later submission.
-    /// If a later submission exists, it returns an error.
-    async fn check_for_later_submissions(
-        &self,
-        payload: &impl BidSubmission,
-        on_receive: u64,
-    ) -> Result<(), BuilderApiError> {
-        match self
-            .auctioneer
-            .get_builder_latest_payload_received_at(
-                payload.slot().as_u64(),
-                payload.builder_public_key(),
-                payload.parent_hash(),
-                payload.proposer_public_key(),
-            )
-            .await
-        {
-            Ok(Some(latest_payload_received_at)) => {
-                if on_receive < latest_payload_received_at {
-                    return Err(BuilderApiError::AlreadyProcessingNewerPayload);
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                error!(%err, "failed to get last slot delivered");
-            }
-        }
-        Ok(())
     }
 }

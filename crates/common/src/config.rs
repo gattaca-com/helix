@@ -39,11 +39,6 @@ pub struct RelayConfig {
     pub timing_game_config: TimingGameConfig,
     #[serde(default)]
     pub primev_config: Option<PrimevConfig>,
-    /// Submissions from these builder pubkeys will never be dropped early
-    /// for having a low bid. They will always be simulated and fully verified.
-    /// This is useful when testing builder strategies.
-    #[serde(default)]
-    pub skip_floor_bid_builder_pubkeys: Vec<BlsPublicKey>,
     pub discord_webhook_url: Option<Url>,
     /// If `header_gossip_enabled` is `false` this setting has no effect.
     #[serde(default)]
@@ -360,6 +355,12 @@ impl RouterConfig {
             self.remove(&special_variant);
             self.extend(real_routes.iter().cloned());
         }
+    }
+
+    /// If we serve get headers we should also receive submissions
+    pub fn validate(&self) -> bool {
+        // TODO: assert that if it contains submit block, it should have get_header, get top bid..
+        todo!()
     }
 }
 

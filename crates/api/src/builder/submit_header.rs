@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use alloy_primitives::U256;
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -8,6 +7,7 @@ use axum::{
 };
 use helix_common::{
     self,
+    bid_sorter::BidSorterMessage,
     bid_submission::{
         v2::header_submission::SignedHeaderSubmission,
         v3::header_submission_v3::HeaderSubmissionV3, BidSubmission,
@@ -19,16 +19,17 @@ use helix_common::{
     HeaderSubmissionTrace,
 };
 use helix_database::DatabaseService;
-use helix_datastore::{types::SaveBidAndUpdateTopBidResponse, Auctioneer};
+use helix_datastore::Auctioneer;
 use hyper::HeaderMap;
 use ssz::Decode;
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{debug, error, info, trace, warn, Instrument};
 
-use super::api::{log_save_bid_info, BuilderApi};
+use super::api::BuilderApi;
 use crate::{
     builder::{
         api::{sanity_check_block_submission, MAX_PAYLOAD_LENGTH},
         error::BuilderApiError,
+        v2_check::V2SubMessage,
     },
     Api,
 };
@@ -210,26 +211,22 @@ impl<A: Api> BuilderApi<A> {
         let payload = Arc::new(payload);
 
         // Verify the payload value is above the floor bid
-        let floor_bid_value = api
-            .check_if_bid_is_below_floor(
-                payload.slot().as_u64(),
-                payload.parent_hash(),
-                payload.proposer_public_key(),
-                payload.builder_public_key(),
-                payload.value(),
-                is_cancellations_enabled,
-            )
-            .await?;
+        let floor_bid_value = api.get_current_floor();
+        if payload.value() < floor_bid_value {
+            return Err(BuilderApiError::BidBelowFloor);
+        }
+        trace!(%floor_bid_value, "floor bid checked");
+
         trace.floor_bid_checks = utcnow_ns();
 
-        // Save bid to auctioneer
-        api.save_header_bid_to_auctioneer(
-            payload.clone(),
-            &mut trace,
+        if let Err(err) = api.sorter_tx.send(BidSorterMessage::new_from_header_submission(
+            &payload,
+            trace.receive,
             is_cancellations_enabled,
-            floor_bid_value,
-        )
-        .await?;
+        )) {
+            error!(?err, "failed to send submission to sorter");
+            return Err(BuilderApiError::InternalError)
+        };
 
         // Log some final info
         trace.request_finish = utcnow_ns();
@@ -239,36 +236,27 @@ impl<A: Api> BuilderApi<A> {
             "submit_header request finished"
         );
 
-        match payload_address {
-            None => {
-                // Save pending block header to auctioneer
-                api.auctioneer
-                    .save_pending_block_header(
-                        payload.slot().as_u64(),
-                        payload.builder_public_key(),
-                        payload.block_hash(),
-                        trace.receive / 1_000_000, // convert to ms
-                    )
-                    .await
-                    .map_err(|err| {
-                        error!(%err, "failed to save pending block header");
-                        BuilderApiError::AuctioneerError(err)
-                    })?;
-            }
-            Some(payload_addr) => {
-                api.auctioneer
-                    .save_payload_address(
-                        payload.block_hash(),
-                        payload.builder_public_key(),
-                        payload_addr,
-                    )
-                    .await
-                    .map_err(|err| {
-                        error!(%err, "failed to save payload address");
-                        BuilderApiError::AuctioneerError(err)
-                    })?;
-            }
+        if let Err(err) =
+            api.v2_checks_tx.send(V2SubMessage::new_from_header_submission(&payload, trace.receive))
+        {
+            error!(%err, "failed to send block to v2 checker");
         }
+
+        if let Some(payload_addr) = payload_address {
+            api.auctioneer
+                .save_payload_address(
+                    payload.block_hash(),
+                    payload.builder_public_key(),
+                    payload_addr,
+                )
+                .await
+                .map_err(|err| {
+                    error!(%err, "failed to save payload address");
+                    BuilderApiError::AuctioneerError(err)
+                })?;
+        };
+
+        api.tx_root_cache.insert(*payload.block_hash(), payload.transactions_root());
 
         // Save submission to db
         let db = api.db.clone();
@@ -287,45 +275,6 @@ impl<A: Api> BuilderApi<A> {
         );
 
         Ok(StatusCode::OK)
-    }
-
-    async fn save_header_bid_to_auctioneer(
-        &self,
-        payload: Arc<SignedHeaderSubmission>,
-        trace: &mut HeaderSubmissionTrace,
-        is_cancellations_enabled: bool,
-        floor_bid_value: U256,
-    ) -> Result<(), BuilderApiError> {
-        let mut update_bid_result = SaveBidAndUpdateTopBidResponse::default();
-        match self
-            .auctioneer
-            .save_header_submission_and_update_top_bid(
-                &payload,
-                trace.receive.into(),
-                is_cancellations_enabled,
-                floor_bid_value,
-                &mut update_bid_result,
-                &self.signing_context,
-            )
-            .await
-        {
-            Ok(_) => {
-                // Log the results of the bid submission
-                trace.auctioneer_update = utcnow_ns();
-                log_save_bid_info(
-                    &update_bid_result,
-                    trace.floor_bid_checks,
-                    trace.auctioneer_update,
-                );
-
-                Ok(())
-            }
-
-            Err(err) => {
-                error!(%err, "could not save header submission and update top bid");
-                Err(BuilderApiError::AuctioneerError(err))
-            }
-        }
     }
 }
 

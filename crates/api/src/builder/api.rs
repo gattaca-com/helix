@@ -1,4 +1,4 @@
-use std::{io::Read, sync::Arc};
+use std::{io::Read, sync::Arc, time::Duration};
 
 use alloy_primitives::{B256, U256};
 use axum::{
@@ -7,31 +7,31 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
+use bytes::Bytes;
 use flate2::read::GzDecoder;
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
     },
+    bid_sorter::BidSorterMessage,
     bid_submission::BidSubmission,
     chain_info::ChainInfo,
-    signing::RelaySigningContext,
     simulator::BlockSimError,
     utils::{get_slot_coordinate, utcnow_ns},
     BuilderInfo, RelayConfig, SubmissionTrace, ValidatorPreferences,
 };
 use helix_database::DatabaseService;
-use helix_datastore::{
-    redis::redis_cache::InclusionListWithKey, types::SaveBidAndUpdateTopBidResponse, Auctioneer,
-};
+use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{BlsPublicKey, SignedBidSubmission, Slot};
+use moka::sync::Cache;
 use parking_lot::RwLock;
 use ssz::Decode;
 use tracing::{debug, error, trace, warn};
 
 use super::multi_simulator::MultiSimulator;
 use crate::{
-    builder::{error::BuilderApiError, BlockSimRequest},
+    builder::{error::BuilderApiError, v2_check::V2SubMessage, BlockSimRequest},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     Api,
 };
@@ -46,11 +46,20 @@ pub struct BuilderApi<A: Api> {
     pub simulator: MultiSimulator<A::Auctioneer, A::DatabaseService>,
     pub gossiper: Arc<GrpcGossiperClientManager>,
     pub metadata_provider: Arc<A::MetadataProvider>,
-    pub signing_context: Arc<RelaySigningContext>,
     pub relay_config: Arc<RelayConfig>,
     pub curr_slot_info: CurrentSlotInfo,
     pub _validator_preferences: Arc<ValidatorPreferences>,
     pub current_inclusion_list: Arc<RwLock<Option<InclusionListWithKey>>>,
+    /// Send blocks to the bid sorter
+    pub sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
+    /// Subscriber for TopBid updates, SSZ encoded
+    pub top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
+    /// Send headers/blocks to be checked for V2 submissions
+    pub v2_checks_tx: tokio::sync::mpsc::UnboundedSender<V2SubMessage>,
+    /// Set in sorter loop
+    pub shared_floor: Arc<RwLock<U256>>,
+    /// Cache of tx roots for v2 submissions
+    pub tx_root_cache: Cache<B256, B256>,
 }
 
 impl<A: Api> BuilderApi<A> {
@@ -61,11 +70,17 @@ impl<A: Api> BuilderApi<A> {
         simulator: MultiSimulator<A::Auctioneer, A::DatabaseService>,
         gossiper: Arc<GrpcGossiperClientManager>,
         metadata_provider: Arc<A::MetadataProvider>,
-        signing_context: Arc<RelaySigningContext>,
         relay_config: RelayConfig,
         validator_preferences: Arc<ValidatorPreferences>,
         curr_slot_info: CurrentSlotInfo,
+        sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
+        top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
+        v2_checks_tx: tokio::sync::mpsc::UnboundedSender<V2SubMessage>,
+        shared_floor: Arc<RwLock<U256>>,
     ) -> Self {
+        let tx_root_cache =
+            Cache::builder().time_to_live(Duration::from_secs(60)).max_capacity(10_000).build();
+
         Self {
             auctioneer,
             db,
@@ -73,12 +88,18 @@ impl<A: Api> BuilderApi<A> {
             simulator,
             gossiper,
             metadata_provider,
-            signing_context,
             relay_config: Arc::new(relay_config),
 
             curr_slot_info,
             _validator_preferences: validator_preferences,
             current_inclusion_list: Default::default(),
+
+            sorter_tx,
+            top_bid_tx,
+            v2_checks_tx,
+            shared_floor,
+
+            tx_root_cache,
         }
     }
 
@@ -170,60 +191,6 @@ impl<A: Api> BuilderApi<A> {
         Ok(was_simulated_optimistically)
     }
 
-    /// Checks if the bid in the payload is below the floor value.
-    ///
-    /// - If cancellations are enabled and the bid is below the floor, it deletes the previous bid.
-    /// - If cancellations are not enabled and the bid is at or below the floor, then skip the
-    ///   submission.
-    ///
-    /// Returns the floor bid value.
-    pub(crate) async fn check_if_bid_is_below_floor(
-        &self,
-        slot: u64,
-        parent_hash: &B256,
-        proposer_public_key: &BlsPublicKey,
-        builder_public_key: &BlsPublicKey,
-        value: U256,
-        is_cancellations_enabled: bool,
-    ) -> Result<U256, BuilderApiError> {
-        let floor_bid_value =
-            match self.auctioneer.get_floor_bid_value(slot, parent_hash, proposer_public_key).await
-            {
-                Ok(floor_value) => floor_value.unwrap_or(U256::ZERO),
-                Err(err) => {
-                    error!(%err, "Failed to get floor bid value");
-                    return Err(BuilderApiError::InternalError);
-                }
-            };
-
-        // Ignore floor bid checks if this builder pubkey is part of the
-        // `skip_floor_bid_builder_pubkeys` config.
-        if self.relay_config.skip_floor_bid_builder_pubkeys.contains(builder_public_key) {
-            debug!(?builder_public_key, "skipping floor bid checks for submission");
-            return Ok(floor_bid_value);
-        }
-
-        let is_bid_below_floor = value < floor_bid_value;
-        let is_bid_at_or_below_floor = value <= floor_bid_value;
-
-        if is_cancellations_enabled && is_bid_below_floor {
-            debug!("submission below floor bid value, with cancellation");
-            if let Err(err) = self
-                .auctioneer
-                .delete_builder_bid(slot, parent_hash, proposer_public_key, builder_public_key)
-                .await
-            {
-                error!(%err, "Failed processing cancellable bid below floor. Could not delete builder bid.");
-                return Err(BuilderApiError::InternalError);
-            }
-            return Err(BuilderApiError::BidBelowFloor);
-        } else if !is_cancellations_enabled && is_bid_at_or_below_floor {
-            debug!("submission at or below floor bid value, without cancellation");
-            return Err(BuilderApiError::BidBelowFloor);
-        }
-        Ok(floor_bid_value)
-    }
-
     /// If the proposer has specified a list of trusted builders ensure
     /// that the submitting builder pubkey is in that list.
     /// Verifies that if the proposer has specified a list of trusted builders,
@@ -267,25 +234,8 @@ impl<A: Api> BuilderApi<A> {
         registration_info: ValidatorRegistrationInfo,
         payload_attributes: &PayloadAttributesUpdate,
     ) -> Result<bool, BuilderApiError> {
-        let mut is_top_bid = false;
-        match self
-            .auctioneer
-            .get_top_bid_value(
-                payload.slot().as_u64(),
-                payload.parent_hash(),
-                payload.proposer_public_key(),
-            )
-            .await
-        {
-            Ok(top_bid_value) => {
-                let top_bid_value = top_bid_value.unwrap_or(U256::ZERO);
-                is_top_bid = payload.value() > top_bid_value;
-                debug!(?top_bid_value, new_bid_is_top_bid = is_top_bid);
-            }
-            Err(err) => {
-                error!(%err, "failed to get top bid value from auctioneer");
-            }
-        }
+        // TODO!!: set this
+        let is_top_bid = false;
 
         debug!("validating block");
 
@@ -416,6 +366,10 @@ impl<A: Api> BuilderApi<A> {
         {
             error!(%err,  %builder, "Failed to demote builder in database");
         }
+    }
+
+    pub(crate) fn get_current_floor(&self) -> U256 {
+        *self.shared_floor.read()
     }
 }
 
@@ -582,27 +536,6 @@ pub(crate) fn sanity_check_block_submission(
     }
 
     Ok(())
-}
-
-pub(crate) fn log_save_bid_info(
-    update_bid_result: &SaveBidAndUpdateTopBidResponse,
-    bid_update_start: u64,
-    bid_update_finish: u64,
-) {
-    debug!(
-        bid_update_latency = bid_update_finish.saturating_sub(bid_update_start),
-        was_bid_saved_in = update_bid_result.was_bid_saved,
-        was_top_bid_updated = update_bid_result.was_top_bid_updated,
-        top_bid_value = ?update_bid_result.top_bid_value,
-        prev_top_bid_value = ?update_bid_result.prev_top_bid_value,
-        save_payload = update_bid_result.latency_save_payload,
-        update_top_bid = update_bid_result.latency_update_top_bid,
-        update_floor = update_bid_result.latency_update_floor,
-    );
-
-    if update_bid_result.was_bid_saved {
-        debug!(eligible_at = bid_update_finish);
-    }
 }
 
 #[cfg(test)]

@@ -16,7 +16,10 @@ use std::sync::{
 use alloy_primitives::B256;
 use axum::{response::IntoResponse, Extension};
 use helix_beacon::{multi_beacon_client::MultiBeaconClient, BlockBroadcaster};
-use helix_common::{chain_info::ChainInfo, RelayConfig, ValidatorPreferences};
+use helix_common::{
+    bid_sorter::BestGetHeader, chain_info::ChainInfo, signing::RelaySigningContext, RelayConfig,
+    ValidatorPreferences,
+};
 use helix_housekeeper::CurrentSlotInfo;
 use helix_types::BlsPublicKey;
 use hyper::StatusCode;
@@ -33,6 +36,7 @@ pub struct ProposerApi<A: Api> {
     pub broadcasters: Vec<Arc<BlockBroadcaster>>,
     pub multi_beacon_client: Arc<MultiBeaconClient>,
     pub metadata_provider: Arc<A::MetadataProvider>,
+    pub signing_context: Arc<RelaySigningContext>,
 
     /// Information about the current head slot and next proposer duty
     pub curr_slot_info: CurrentSlotInfo,
@@ -41,6 +45,9 @@ pub struct ProposerApi<A: Api> {
     pub relay_config: RelayConfig,
     /// Channel on which to send v3 payload fetch requests.
     pub v3_payload_request: Sender<(u64, B256, BlsPublicKey, Vec<u8>)>,
+
+    /// Set in the sorter loop
+    pub shared_best_header: BestGetHeader,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -49,6 +56,8 @@ impl<A: Api> ProposerApi<A> {
         db: Arc<A::DatabaseService>,
         gossiper: Arc<GrpcGossiperClientManager>,
         metadata_provider: Arc<A::MetadataProvider>,
+        signing_context: Arc<RelaySigningContext>,
+
         broadcasters: Vec<Arc<BlockBroadcaster>>,
         multi_beacon_client: Arc<MultiBeaconClient>,
         chain_info: Arc<ChainInfo>,
@@ -56,12 +65,14 @@ impl<A: Api> ProposerApi<A> {
         relay_config: RelayConfig,
         v3_payload_request: Sender<(u64, B256, BlsPublicKey, Vec<u8>)>,
         curr_slot_info: CurrentSlotInfo,
+        shared_best_header: BestGetHeader,
     ) -> Self {
         Self {
             auctioneer,
             db,
             gossiper,
             broadcasters,
+            signing_context,
             multi_beacon_client,
             chain_info,
             metadata_provider,
@@ -69,6 +80,7 @@ impl<A: Api> ProposerApi<A> {
             relay_config,
             v3_payload_request,
             curr_slot_info,
+            shared_best_header,
         }
     }
 }
