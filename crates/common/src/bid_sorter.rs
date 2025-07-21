@@ -130,7 +130,7 @@ impl BidEntry {
     fn maybe_update(&mut self, bid: Bid, is_cancellable: bool) -> bool {
         // check that it's higher than non-cancel bid
         if let Some(curr_non_cancel) = self.bid_non_cancel {
-            if curr_non_cancel.value > bid.value {
+            if curr_non_cancel.value >= bid.value {
                 return false;
             }
         }
@@ -138,7 +138,7 @@ impl BidEntry {
         if is_cancellable {
             // keep only if it's the latest
             if let Some(curr_cancel) = self.bid_cancel {
-                if curr_cancel.on_receive_ns > bid.on_receive_ns {
+                if curr_cancel.on_receive_ns >= bid.on_receive_ns {
                     return false;
                 }
             }
