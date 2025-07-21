@@ -130,7 +130,7 @@ impl<A: Api> BuilderApi<A> {
 
         // Verify the payload value is above the floor bid
         let floor_bid_value = api.get_current_floor();
-        if payload.value() < floor_bid_value {
+        if payload.value() <= floor_bid_value {
             return Err(BuilderApiError::BidBelowFloor);
         }
         trace!(%floor_bid_value, "floor bid checked");
