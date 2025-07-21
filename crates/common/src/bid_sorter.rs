@@ -20,10 +20,15 @@ use crate::{
 
 type BlsPubkey = [u8; 48];
 
-/// Shared container for get_header response, thread safe
-// TODO!!: use arc swap, validate params in load, avoid cloning
 #[derive(Clone)]
-pub struct BestGetHeader(Arc<RwLock<Option<BuilderBid>>>);
+struct GetHeaderEntry {
+    slot: u64,
+    bid: Arc<BuilderBid>,
+}
+
+/// Shared container for get_header response, thread safe
+#[derive(Clone)]
+pub struct BestGetHeader(Arc<RwLock<Option<GetHeaderEntry>>>);
 
 impl Default for BestGetHeader {
     fn default() -> Self {
@@ -36,27 +41,36 @@ impl BestGetHeader {
         Self(Arc::new(RwLock::new(None)))
     }
 
-    fn store(&self, bid: BuilderBid) {
-        *self.0.write() = Some(bid);
+    fn store(&self, slot: u64, bid: Arc<BuilderBid>) {
+        *self.0.write() = Some(GetHeaderEntry { slot, bid });
     }
 
     pub fn best_bid(&self, _slot: u64) -> U256 {
-        self.0.read().as_ref().map(|b| *b.value()).unwrap_or_default()
+        let guard = self.0.read();
+        let Some(entry) = guard.as_ref() else {
+            return U256::ZERO;
+        };
+
+        if entry.slot != _slot {
+            return U256::ZERO;
+        }
+
+        *entry.bid.value()
     }
 
     pub fn load(
         &self,
-        _slot: u64,
+        slot: u64,
         parent_hash: &B256,
         _validator_pubkey: &BlsPublicKey,
-    ) -> Option<BuilderBid> {
-        let bid = (*self.0.read()).clone()?;
+    ) -> Option<Arc<BuilderBid>> {
+        let entry = (*self.0.read()).clone()?;
 
-        if bid.header().parent_hash().0 == *parent_hash {
+        if entry.slot != slot || entry.bid.header().parent_hash().0 == *parent_hash {
             return None
         }
 
-        Some(bid)
+        Some(entry.bid)
     }
 
     fn reset(&self) {
@@ -211,7 +225,7 @@ pub struct BidSorter {
     bids: HashMap<BlsPubkey, BidEntry>,
     /// All headers received for this slot
     /// on_receive_ns -> header
-    headers: HashMap<u64, BuilderBid>,
+    headers: HashMap<u64, Arc<BuilderBid>>,
     /// Demoted builders in this slot for live demotions
     demotions: HashSet<BlsPubkey>,
     /// Current best bid
@@ -276,7 +290,7 @@ impl BidSorter {
                         continue;
                     }
 
-                    self.headers.insert(bid.on_receive_ns, header);
+                    self.headers.insert(bid.on_receive_ns, Arc::new(header));
                     self.process_header(builder_pubkey, bid, is_cancellable);
 
                     // telemetry
@@ -450,7 +464,7 @@ impl BidSorter {
         let _ = self.top_bid_tx.send(top_bid_update);
 
         self.curr_bid = Some((builder_pubkey, bid));
-        self.shared_best_header.store(h.clone());
+        self.shared_best_header.store(self.curr_bid_slot, h.clone());
 
         TopBidMetrics::top_bid_update_count();
     }
