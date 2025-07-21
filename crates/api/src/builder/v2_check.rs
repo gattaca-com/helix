@@ -84,7 +84,7 @@ impl<A: Api> V2SubChecker<A> {
 
         tokio::select! {
             _ = tick.tick() => self.check_demotions(),
-            Some(msg) =self.v2_check_rx.recv() => self.process_message(msg),
+            Some(msg) = self.v2_check_rx.recv() => self.process_message(msg),
         }
     }
 
@@ -124,7 +124,7 @@ impl<A: Api> V2SubChecker<A> {
                 (Some(header), Some(payload)) => {
                     let delta = header.saturating_sub(payload);
                     if delta > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_NS {
-                        if demoted.insert(*block_hash) {
+                        if demoted.insert(pending.builder_pubkey.clone()) {
                             demote_builder::<A>(
                                 *block_hash,
                                 pending.clone(),
@@ -139,7 +139,7 @@ impl<A: Api> V2SubChecker<A> {
 
                 (Some(t), None) | (None, Some(t)) => {
                     if now_ns.saturating_sub(t) > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_NS {
-                        if demoted.insert(*block_hash) {
+                        if demoted.insert(pending.builder_pubkey.clone()) {
                             demote_builder::<A>(
                                 *block_hash,
                                 pending.clone(),
