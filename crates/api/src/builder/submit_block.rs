@@ -205,8 +205,9 @@ impl<A: Api> BuilderApi<A> {
         };
         trace!("sent bid to bid sorter");
 
-        // TODO!!: should we move this before the sorter? if this fails we can't serve the
-        // get_payload Save the execution payload
+        // Save the execution payload
+        // TODO: if this and similar other calls fail we should stop serving headers and send an
+        // alert, not much we can do
         api.auctioneer
             .save_execution_payload(
                 payload.slot().as_u64(),
