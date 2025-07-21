@@ -1,7 +1,7 @@
-use std::{collections::hash_map::Entry, sync::Arc};
+use std::{collections::hash_map::Entry, sync::Arc, time::Duration};
 
 use alloy_primitives::{
-    map::foldhash::{HashMap, HashSet},
+    map::foldhash::{HashMap, HashMapExt, HashSet, HashSetExt},
     B256, U256,
 };
 use bytes::Bytes;
@@ -14,7 +14,8 @@ use crate::{
     api::builder_api::TopBidUpdate,
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
     bid_submission_to_builder_bid_unsigned, header_submission_to_builder_bid_unsigned,
-    utils::utcnow_ms,
+    metrics::TopBidMetrics,
+    utils::{utcnow_ms, utcnow_ns},
 };
 
 type BlsPubkey = [u8; 48];
@@ -171,12 +172,29 @@ pub struct Bid {
     on_receive_ns: u64,
 }
 
+#[derive(Default)]
+struct BidSorterTelemetry {
+    valid_subs: u32,
+    past_subs: u32,
+    demoted_subs: u32,
+    /// Time when bid was first received to when it arrived in the sorter
+    subs_recv_time: Duration,
+    /// Internal bid processing time of the sorter
+    subs_process_time: Duration,
+    top_bids: u32,
+    non_cancel_bids: u32,
+    new_demotions: u32,
+    duplicate_demotions: u32,
+    /// Internal demotion processing time of the sorter
+    demotions_process_time: Duration,
+}
+
 pub struct BidSorter {
     sorter_rx: crossbeam_channel::Receiver<BidSorterMessage>,
     /// Sender for ws updates, TopBidUpdate SSZ encoded
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-    /// Current slot
-    curr_slot: u64,
+    /// Head slot + 1
+    curr_bid_slot: u64,
     /// All bid entries for the current slot, used for sorting
     bids: HashMap<BlsPubkey, BidEntry>,
     /// All headers received for this slot
@@ -193,6 +211,7 @@ pub struct BidSorter {
     shared_best_header: BestGetHeader,
     /// TODO: can use atomicu64 with 100 wei precision
     shared_floor: Arc<RwLock<U256>>,
+    local_telemetry: BidSorterTelemetry,
 }
 
 impl BidSorter {
@@ -205,14 +224,15 @@ impl BidSorter {
         Self {
             sorter_rx,
             top_bid_tx,
-            curr_slot: 0,
-            bids: HashMap::default(),
-            headers: HashMap::default(),
-            demotions: HashSet::default(),
+            curr_bid_slot: 0,
+            bids: HashMap::with_capacity(250),
+            headers: HashMap::with_capacity(2500),
+            demotions: HashSet::with_capacity(50),
             curr_bid: None,
             curr_floor: None,
             shared_best_header,
             shared_floor,
+            local_telemetry: BidSorterTelemetry::default(),
         }
     }
 
@@ -224,6 +244,8 @@ impl BidSorter {
                 continue;
             };
 
+            let recv_ns = utcnow_ns();
+
             match msg {
                 BidSorterMessage::Submission {
                     bid,
@@ -232,19 +254,45 @@ impl BidSorter {
                     header,
                     is_cancellable,
                 } => {
-                    if self.curr_slot != slot {
-                        return;
+                    if self.curr_bid_slot != slot {
+                        self.local_telemetry.past_subs += 1;
+                        continue;
                     }
 
                     if self.demotions.contains(&builder_pubkey) {
-                        return;
+                        self.local_telemetry.demoted_subs += 1;
+                        continue;
                     }
 
                     self.headers.insert(bid.on_receive_ns, header);
                     self.process_header(builder_pubkey, bid, is_cancellable);
+
+                    // telemetry
+                    self.local_telemetry.valid_subs += 1;
+                    self.local_telemetry.subs_recv_time +=
+                        Duration::from_nanos(recv_ns.saturating_sub(bid.on_receive_ns));
+                    self.local_telemetry.subs_process_time +=
+                        Duration::from_nanos(utcnow_ns().saturating_sub(recv_ns));
+                    if !is_cancellable {
+                        self.local_telemetry.non_cancel_bids += 1;
+                    }
                 }
-                BidSorterMessage::Demotion(demotion) => self.process_demotion(demotion),
-                BidSorterMessage::Slot(slot) => self.process_slot(slot),
+                BidSorterMessage::Demotion(demoted) => {
+                    let demoted = demoted.serialize();
+                    if !self.demotions.insert(demoted) {
+                        // already demoted
+                        self.local_telemetry.duplicate_demotions += 1;
+                        continue;
+                    }
+
+                    self.process_demotion(demoted);
+
+                    // telemetry
+                    self.local_telemetry.new_demotions += 1;
+                    self.local_telemetry.demotions_process_time +=
+                        Duration::from_nanos(utcnow_ns().saturating_sub(recv_ns));
+                }
+                BidSorterMessage::Slot(head_slot) => self.process_slot(head_slot),
             }
         }
     }
@@ -286,20 +334,14 @@ impl BidSorter {
 
     /// This is only for in-slot demotions. For builder that were demoted in a past slot we don't
     /// expect to receive optimistic bids here
-    fn process_demotion(&mut self, demoted: BlsPublicKey) {
-        let pubkey = demoted.serialize();
-        if !self.demotions.insert(pubkey) {
-            // already demoted
-            return;
-        }
-
+    fn process_demotion(&mut self, demoted: BlsPubkey) {
         // remove entire entry for this builder
-        let Some(entry) = self.bids.remove(&pubkey) else {
+        let Some(entry) = self.bids.remove(&demoted) else {
             return;
         };
 
         if let Some((curr, _)) = self.curr_bid {
-            if curr == pubkey {
+            if curr == demoted {
                 self.traverse_update_top_bid();
             }
         }
@@ -360,9 +402,10 @@ impl BidSorter {
         }
     }
 
-    fn process_slot(&mut self, slot: u64) {
-        // TODO: local telemetry
-        self.curr_slot = slot;
+    fn process_slot(&mut self, head_slot: u64) {
+        self.report();
+
+        self.curr_bid_slot = head_slot + 1;
         self.bids.clear();
         self.headers.clear();
         self.demotions.clear();
@@ -382,7 +425,7 @@ impl BidSorter {
 
         let top_bid_update = TopBidUpdate {
             timestamp: utcnow_ms(),
-            slot: 0,
+            slot: self.curr_bid_slot,
             block_number: h.header().block_number(),
             block_hash: h.header().block_hash().0,
             parent_hash: h.header().parent_hash().0,
@@ -396,11 +439,39 @@ impl BidSorter {
 
         self.curr_bid = Some((builder_pubkey, bid));
         self.shared_best_header.store(h.clone());
+
+        TopBidMetrics::top_bid_update_count();
     }
 
     fn update_floor_bid(&mut self, floor: U256) {
         self.curr_floor = Some(floor);
         *self.shared_floor.write() = floor;
+    }
+
+    fn report(&mut self) {
+        let tel = std::mem::take(&mut self.local_telemetry);
+
+        let avg_sub_process = tel.demotions_process_time / tel.valid_subs;
+
+        let total_subs = tel.valid_subs + tel.past_subs + tel.demoted_subs;
+        let avg_sub_recv = tel.subs_recv_time / total_subs;
+
+        let avg_demotion_process = tel.demotions_process_time / tel.new_demotions;
+
+        info!(
+            slot = self.curr_bid_slot,
+            valid_subs = tel.valid_subs,
+            past_subs = tel.past_subs,
+            demoted_subs = tel.demoted_subs,
+            ?avg_sub_process,
+            ?avg_sub_recv,
+            top_bids = tel.top_bids,
+            non_cancel_bids = tel.non_cancel_bids,
+            new_demotions = tel.new_demotions,
+            duplicate_demotions = tel.duplicate_demotions,
+            ?avg_demotion_process,
+            "bid sorter telemetry"
+        )
     }
 }
 
