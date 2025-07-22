@@ -204,3 +204,12 @@ pub fn get_slot_coordinate(
 ) -> String {
     format!("{slot}_{proposer_pub_key}_{parent_hash}")
 }
+
+
+pub fn avg_duration(duration: Duration, count: u32) -> Option<Duration> {
+    if count != 0 {
+        Some(duration / count)
+    } else {
+        None
+    }
+}
