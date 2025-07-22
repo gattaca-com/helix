@@ -213,6 +213,7 @@ pub enum NetworkConfig {
     Mainnet,
     Sepolia,
     Holesky,
+    Hoodi,
     Custom {
         dir_path: String,
         genesis_validator_root: B256,
@@ -226,6 +227,7 @@ impl NetworkConfig {
             NetworkConfig::Mainnet => ChainInfo::for_mainnet(),
             NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
             NetworkConfig::Holesky => ChainInfo::for_holesky(),
+            NetworkConfig::Hoodi => ChainInfo::for_hoodi(),
             NetworkConfig::Custom { ref dir_path, ref genesis_validator_root, genesis_time } => {
                 ChainInfo::for_custom(dir_path.clone(), *genesis_validator_root, *genesis_time)
             }
@@ -237,6 +239,7 @@ impl NetworkConfig {
             NetworkConfig::Mainnet => "Mainnet",
             NetworkConfig::Sepolia => "Sepolia",
             NetworkConfig::Holesky => "Holesky",
+            NetworkConfig::Hoodi => "Hoodi",
             NetworkConfig::Custom { .. } => "Custom",
         }
     }
@@ -248,6 +251,7 @@ impl std::fmt::Display for NetworkConfig {
             NetworkConfig::Mainnet => write!(f, "mainnet"),
             NetworkConfig::Sepolia => write!(f, "sepolia"),
             NetworkConfig::Holesky => write!(f, "holesky"),
+            NetworkConfig::Hoodi => write!(f, "hoodi"),
             NetworkConfig::Custom { dir_path, genesis_validator_root, genesis_time } => {
                 write!(f, "custom ({}, {}, {})", dir_path, genesis_validator_root, genesis_time)
             }

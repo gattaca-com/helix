@@ -42,9 +42,9 @@ impl WebsiteService {
         // ChainInfo
         let chain_info = Arc::new(match config.network_config {
             NetworkConfig::Mainnet => ChainInfo::for_mainnet(),
-
             NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
             NetworkConfig::Holesky => ChainInfo::for_holesky(),
+            NetworkConfig::Hoodi => ChainInfo::for_hoodi(),
             NetworkConfig::Custom { ref dir_path, ref genesis_validator_root, genesis_time } => {
                 ChainInfo::for_custom(dir_path.clone(), *genesis_validator_root, genesis_time)
             }
