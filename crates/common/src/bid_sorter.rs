@@ -477,10 +477,9 @@ impl BidSorter {
     fn report(&mut self) {
         let tel = std::mem::take(&mut self.local_telemetry);
 
-        let avg_sub_process = tel.demotions_process_time / tel.valid_subs;
-
         let total_subs = tel.valid_subs + tel.past_subs + tel.demoted_subs;
         let avg_sub_recv = tel.subs_recv_time / total_subs;
+        let avg_sub_process = tel.subs_process_time / tel.valid_subs;
 
         let avg_demotion_process = tel.demotions_process_time / tel.new_demotions;
 
