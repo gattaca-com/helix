@@ -10,6 +10,7 @@ use eyre::eyre;
 use helix_api::{start_api_service, Api};
 use helix_beacon::start_beacon_client;
 use helix_common::{
+    bid_sorter::{start_bid_sorter, BestGetHeader},
     load_config, load_keypair,
     metadata_provider::DefaultMetadataProvider,
     metrics::start_metrics_server,
@@ -22,6 +23,7 @@ use helix_datastore::{redis::redis_cache::RedisCache, start_auctioneer};
 use helix_housekeeper::start_housekeeper;
 use helix_types::BlsKeypair;
 use helix_website::website_service::WebsiteService;
+use parking_lot::RwLock;
 use tikv_jemallocator::Jemalloc;
 use tokio::signal::unix::SignalKind;
 use tracing::{error, info};
@@ -82,9 +84,24 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     let relay_signing_context =
         Arc::new(RelaySigningContext { keypair, context: chain_info.clone() });
 
+    let (sorter_tx, sorter_rx) = crossbeam_channel::bounded(10_000);
+
     let beacon_client = start_beacon_client(&config);
     let db = start_db_service(&config).await?;
-    let auctioneer = start_auctioneer(&config, &db).await?;
+    let auctioneer = start_auctioneer(&config, sorter_tx.clone(), &db).await?;
+
+    let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
+    let shared_best_header = BestGetHeader::new();
+    let shared_floor_bid = Arc::new(RwLock::new(Default::default()));
+
+    if config.router_config.validate_bid_sorter()? {
+        start_bid_sorter(
+            sorter_rx,
+            top_bid_tx.clone(),
+            shared_best_header.clone(),
+            shared_floor_bid.clone(),
+        );
+    }
 
     let current_slot_info = start_housekeeper(
         db.clone(),
@@ -92,6 +109,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         &config,
         beacon_client.clone(),
         chain_info.clone(),
+        sorter_tx.clone(),
     )
     .await
     .map_err(|e| eyre!("housekeeper init: {e}"))?;
@@ -108,6 +126,10 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         Arc::new(DefaultMetadataProvider {}),
         current_slot_info,
         terminating.clone(),
+        sorter_tx,
+        top_bid_tx,
+        shared_best_header,
+        shared_floor_bid,
     );
 
     let termination_grace_period = config.router_config.shutdown_delay_ms;

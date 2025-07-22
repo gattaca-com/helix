@@ -72,8 +72,13 @@ impl WebsiteService {
             current_slot_info: current_slot_info.clone(),
         });
 
-        let chain_updater =
-            ChainEventUpdater::new(Arc::new(MockAuctioneer::new()), chain_info, current_slot_info);
+        let (tx, _) = crossbeam_channel::bounded(0);
+        let chain_updater = ChainEventUpdater::new(
+            Arc::new(MockAuctioneer::new()),
+            chain_info,
+            current_slot_info,
+            tx,
+        );
         info!("ChainEventUpdater initialized");
 
         let (head_event_tx, head_event_rx) = broadcast::channel(100);

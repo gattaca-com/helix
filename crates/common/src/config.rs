@@ -2,6 +2,7 @@ use std::{collections::HashSet, fs::File, path::PathBuf};
 
 use alloy_primitives::B256;
 use clap::Parser;
+use eyre::ensure;
 use helix_types::{BlsKeypair, BlsPublicKey, BlsSecretKey};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -39,11 +40,6 @@ pub struct RelayConfig {
     pub timing_game_config: TimingGameConfig,
     #[serde(default)]
     pub primev_config: Option<PrimevConfig>,
-    /// Submissions from these builder pubkeys will never be dropped early
-    /// for having a low bid. They will always be simulated and fully verified.
-    /// This is useful when testing builder strategies.
-    #[serde(default)]
-    pub skip_floor_bid_builder_pubkeys: Vec<BlsPublicKey>,
     pub discord_webhook_url: Option<Url>,
     /// If `header_gossip_enabled` is `false` this setting has no effect.
     #[serde(default)]
@@ -361,6 +357,59 @@ impl RouterConfig {
             self.extend(real_routes.iter().cloned());
         }
     }
+
+    /// Validate routes, returns true if the bid sorter should be started
+    pub fn validate_bid_sorter(&self) -> eyre::Result<bool> {
+        let routes = self.enabled_routes.iter().map(|r| r.route).collect::<Vec<_>>();
+
+        if routes.contains(&Route::All) {
+            return Ok(true);
+        }
+
+        if routes.contains(&Route::SubmitHeader) {
+            ensure!(
+                routes.contains(&Route::SubmitBlockOptimistic),
+                "v2 enabled but missing submit block"
+            );
+        }
+
+        if routes.contains(&Route::SubmitBlockOptimistic) {
+            ensure!(routes.contains(&Route::SubmitHeader), "v2 enabled but missing submit header");
+        }
+
+        let is_get_header_instance =
+            routes.contains(&Route::ProposerApi) || routes.contains(&Route::GetHeader);
+        let is_submission_instance = routes.contains(&Route::BuilderApi) ||
+            routes.contains(&Route::SubmitBlock) ||
+            routes.contains(&Route::SubmitHeader) ||
+            routes.contains(&Route::SubmitHeaderV3);
+
+        if is_get_header_instance {
+            ensure!(
+                is_submission_instance,
+                "relay is serving headers so should have submissions enabled"
+            );
+            ensure!(
+                routes.contains(&Route::BuilderApi) || routes.contains(&Route::GetTopBid),
+                "routes should have get_top_bid enabled"
+            );
+
+            Ok(true)
+        } else if is_submission_instance {
+            ensure!(
+                is_get_header_instance,
+                "relay is receiving blocks so should have get_header enabled"
+            );
+            ensure!(
+                routes.contains(&Route::BuilderApi) || routes.contains(&Route::GetTopBid),
+                "routes should have get_top_bid enabled"
+            );
+
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -498,4 +547,149 @@ fn test_config() {
         shutdown_delay_ms: 12_000,
     };
     println!("{}", serde_yaml::to_string(&config).unwrap());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_router_config(routes: Vec<Route>) -> RouterConfig {
+        RouterConfig {
+            enabled_routes: routes
+                .into_iter()
+                .map(|route| RouteInfo { route, rate_limit: None })
+                .collect(),
+            shutdown_delay_ms: 12_000,
+        }
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_empty_routes() {
+        let config = create_router_config(vec![]);
+
+        let result = config.validate_bid_sorter();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), false);
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_all_route() {
+        let config = create_router_config(vec![Route::All]);
+
+        let result = config.validate_bid_sorter();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), true);
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_submit_header_without_optimistic() {
+        let config = create_router_config(vec![Route::SubmitHeader]);
+
+        let result = config.validate_bid_sorter();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("v2 enabled but missing submit block"));
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_optimistic_without_submit_header() {
+        let config = create_router_config(vec![Route::SubmitBlockOptimistic]);
+
+        let result = config.validate_bid_sorter();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("v2 enabled but missing submit header"));
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_valid_get_header_instance() {
+        let config =
+            create_router_config(vec![Route::GetHeader, Route::SubmitBlock, Route::GetTopBid]);
+
+        let result = config.validate_bid_sorter();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), true);
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_valid_proposer_api_instance() {
+        let config = create_router_config(vec![Route::ProposerApi, Route::BuilderApi]);
+
+        let result = config.validate_bid_sorter();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), true);
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_get_header_without_submission() {
+        let config = create_router_config(vec![Route::GetHeader, Route::GetTopBid]);
+
+        let result = config.validate_bid_sorter();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("relay is serving headers so should have submissions enabled"));
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_submission_without_get_header() {
+        let config = create_router_config(vec![Route::SubmitBlock, Route::GetTopBid]);
+
+        let result = config.validate_bid_sorter();
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("relay is receiving blocks so should have get_header enabled"));
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_get_header_without_top_bid() {
+        let config = create_router_config(vec![Route::GetHeader, Route::SubmitBlock]);
+
+        let result = config.validate_bid_sorter();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("routes should have get_top_bid enabled"));
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_submission_without_top_bid() {
+        let config = create_router_config(vec![Route::SubmitBlock, Route::GetHeader]);
+
+        let result = config.validate_bid_sorter();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("routes should have get_top_bid enabled"));
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_valid_v2_routes() {
+        let config = create_router_config(vec![
+            Route::SubmitHeader,
+            Route::SubmitBlockOptimistic,
+            Route::GetHeader,
+            Route::GetTopBid,
+        ]);
+
+        let result = config.validate_bid_sorter();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), true);
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_valid_v3_routes() {
+        let config =
+            create_router_config(vec![Route::SubmitHeaderV3, Route::GetHeader, Route::BuilderApi]);
+
+        let result = config.validate_bid_sorter();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), true);
+    }
+
+    #[test]
+    fn test_validate_bid_sorter_data_api_only() {
+        let config = create_router_config(vec![Route::DataApi, Route::ProposerPayloadDelivered]);
+
+        let result = config.validate_bid_sorter();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), false);
+    }
 }

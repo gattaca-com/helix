@@ -23,6 +23,7 @@ use crate::{
     builder::{
         api::{decode_payload, sanity_check_block_submission},
         error::BuilderApiError,
+        v2_check::V2SubMessage,
         OptimisticVersion,
     },
     Api,
@@ -59,20 +60,6 @@ impl<A: Api> BuilderApi<A> {
             block_hash = ?payload.block_hash(),
             "payload decoded",
         );
-
-        // Save pending block payload to auctioneer
-        api.auctioneer
-            .save_pending_block_payload(
-                payload.slot().as_u64(),
-                payload.builder_public_key(),
-                payload.block_hash(),
-                trace.receive / 1_000_000, // convert to ms
-            )
-            .await
-            .map_err(|err| {
-                error!(%err, "failed to save pending block header");
-                BuilderApiError::AuctioneerError(err)
-            })?;
 
         Self::handle_optimistic_payload(api, payload, trace, OptimisticVersion::V2).await
     }
@@ -165,7 +152,7 @@ impl<A: Api> BuilderApi<A> {
         }
 
         // Check for tx root against header received
-        if let Err(err) = api.check_tx_root_against_header(&payload).await {
+        if let Err(err) = api.check_tx_root_against_header(&payload) {
             match err {
                 // Could have just received the payload before the header
                 BuilderApiError::MissingTransactionsRoot => {}
@@ -217,6 +204,13 @@ impl<A: Api> BuilderApi<A> {
             }
         };
 
+        if let Err(err) = api
+            .v2_checks_tx
+            .try_send(V2SubMessage::new_from_block_submission(&payload, trace.receive))
+        {
+            error!(%err, "failed to send block to v2 checker");
+        }
+
         // Save bid to auctioneer
         if let Err(err) = api
             .auctioneer
@@ -232,6 +226,11 @@ impl<A: Api> BuilderApi<A> {
             return Err(BuilderApiError::AuctioneerError(err));
         }
         trace.auctioneer_update = utcnow_ns();
+
+        if let Err(err) = api.auctioneer.save_bid_trace(payload.bid_trace()).await {
+            error!(%err, "failed to save bid trace");
+            return Err(BuilderApiError::AuctioneerError(err));
+        }
 
         // Gossip to other relays
         if api.relay_config.payload_gossip_enabled {
@@ -263,31 +262,30 @@ impl<A: Api> BuilderApi<A> {
         Ok(StatusCode::OK)
     }
 
-    async fn check_tx_root_against_header(
+    fn check_tx_root_against_header(
         &self,
         payload: &SignedBidSubmission,
     ) -> Result<(), BuilderApiError> {
-        match self.auctioneer.get_header_tx_root(payload.block_hash()).await {
-            Ok(Some(expected_tx_root)) => {
+        match self.tx_root_cache.get(payload.block_hash()) {
+            Some(expected_tx_root) => {
+                let expected_tx_root = expected_tx_root.1;
                 let tx_root = payload.transactions_root();
-
-                if expected_tx_root != tx_root {
+                if *expected_tx_root != tx_root {
                     warn!("tx root mismatch");
-                    return Err(BuilderApiError::TransactionsRootMismatch {
+
+                    Err(BuilderApiError::TransactionsRootMismatch {
                         got: tx_root,
                         expected: expected_tx_root,
-                    });
+                    })
+                } else {
+                    Ok(())
                 }
             }
-            Ok(None) => {
+            None => {
                 warn!("no tx root found for block hash");
-                return Err(BuilderApiError::MissingTransactionsRoot);
+
+                Err(BuilderApiError::MissingTransactionsRoot)
             }
-            Err(err) => {
-                error!(%err, "failed to get tx root");
-                return Err(BuilderApiError::AuctioneerError(err));
-            }
-        };
-        Ok(())
+        }
     }
 }

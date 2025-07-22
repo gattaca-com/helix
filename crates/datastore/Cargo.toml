@@ -11,6 +11,7 @@ alloy-primitives.workspace = true
 async-trait.workspace = true
 auto_impl.workspace = true
 axum.workspace = true
+crossbeam-channel.workspace = true
 deadpool-redis.workspace = true
 ethereum_ssz.workspace = true
 eyre.workspace = true

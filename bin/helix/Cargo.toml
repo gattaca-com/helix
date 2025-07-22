@@ -7,6 +7,7 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+crossbeam-channel.workspace = true
 eyre.workspace = true
 futures.workspace = true
 helix-api.workspace = true
@@ -17,6 +18,7 @@ helix-datastore.workspace = true
 helix-housekeeper.workspace = true
 helix-types.workspace = true
 helix-website.workspace = true
+parking_lot.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-appender.workspace = true

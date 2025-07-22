@@ -4,23 +4,29 @@ use std::{
     time::Duration,
 };
 
+use alloy_primitives::U256;
+use bytes::Bytes;
 use helix_beacon::{
     beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
     multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
 };
 use helix_common::{
-    chain_info::ChainInfo, signing::RelaySigningContext, BroadcasterConfig, RelayConfig,
+    bid_sorter::{BestGetHeader, BidSorterMessage},
+    chain_info::ChainInfo,
+    signing::RelaySigningContext,
+    BroadcasterConfig, RelayConfig,
 };
 use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
 use moka::sync::Cache;
+use parking_lot::RwLock;
 use tokio::{sync::mpsc, time::timeout};
 use tracing::{error, info};
 
 use crate::{
     builder::{
         self, api::BuilderApi, multi_simulator::MultiSimulator,
-        optimistic_simulator::OptimisticSimulator,
+        optimistic_simulator::OptimisticSimulator, v2_check::V2SubChecker,
     },
     gossip::{self},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
@@ -44,6 +50,10 @@ pub async fn run_api_service<A: Api>(
     multi_beacon_client: Arc<MultiBeaconClient>,
     metadata_provider: Arc<A::MetadataProvider>,
     terminating: Arc<AtomicBool>,
+    sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
+    top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
+    shared_best_header: BestGetHeader,
+    shared_floor: Arc<RwLock<U256>>,
 ) {
     let broadcasters = init_broadcasters(&config).await;
 
@@ -75,6 +85,10 @@ pub async fn run_api_service<A: Api>(
 
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
+    let (v2_checks_tx, v2_checks_rx) = tokio::sync::mpsc::channel(10_000);
+    let v2_checker = V2SubChecker::<A>::new(v2_checks_rx, auctioneer.clone(), db.clone());
+    tokio::spawn(v2_checker.run());
+
     let builder_api = BuilderApi::<A>::new(
         auctioneer.clone(),
         db.clone(),
@@ -82,10 +96,14 @@ pub async fn run_api_service<A: Api>(
         simulator,
         gossiper.clone(),
         metadata_provider.clone(),
-        relay_signing_context.clone(),
         config.clone(),
         validator_preferences.clone(),
         current_slot_info.clone(),
+        sorter_tx,
+        top_bid_tx,
+        v2_checks_tx,
+        shared_floor,
+        shared_best_header.clone(),
     );
     let builder_api = Arc::new(builder_api);
 
@@ -101,7 +119,7 @@ pub async fn run_api_service<A: Api>(
     tokio::spawn(builder::v3::payload::fetch_builder_blocks(
         builder_api.clone(),
         v3_payload_request_recv,
-        relay_signing_context,
+        relay_signing_context.clone(),
     ));
 
     if config.inclusion_list.is_some() {
@@ -113,6 +131,7 @@ pub async fn run_api_service<A: Api>(
         db.clone(),
         gossiper.clone(),
         metadata_provider.clone(),
+        relay_signing_context,
         broadcasters,
         multi_beacon_client,
         chain_info.clone(),
@@ -120,6 +139,7 @@ pub async fn run_api_service<A: Api>(
         config.clone(),
         v3_payload_request_send,
         current_slot_info,
+        shared_best_header,
     ));
 
     tokio::spawn(gossip::process_gossip_messages(

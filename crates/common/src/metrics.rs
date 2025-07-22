@@ -352,6 +352,14 @@ lazy_static! {
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
+
+    pub static ref BID_SIGNING_LATENCY: Histogram = register_histogram_with_registry!(
+        "bid_signing_latency_us",
+        "Latency of re-singing the get header bid in us",
+        vec![1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 100_000.],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 }
 
 pub struct ApiMetrics {

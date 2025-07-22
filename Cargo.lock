@@ -2109,9 +2109,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.14"
+version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06ba6d68e24814cb8de6bb986db8222d3a027d15872cabc0d18817bc3c0e4471"
+checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -3930,6 +3930,7 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 name = "helix"
 version = "0.0.1"
 dependencies = [
+ "crossbeam-channel",
  "eyre",
  "futures 0.3.31",
  "helix-api",
@@ -3940,6 +3941,7 @@ dependencies = [
  "helix-housekeeper",
  "helix-types",
  "helix-website",
+ "parking_lot",
  "tikv-jemallocator",
  "tokio",
  "tracing",
@@ -3957,6 +3959,7 @@ dependencies = [
  "axum 0.8.3",
  "bytes",
  "cbor4ii",
+ "crossbeam-channel",
  "dashmap 5.5.3",
  "ethereum_serde_utils",
  "ethereum_ssz",
@@ -4030,7 +4033,9 @@ dependencies = [
  "axum 0.8.3",
  "backtrace",
  "bitflags 2.9.0",
+ "bytes",
  "clap",
+ "crossbeam-channel",
  "ethereum_serde_utils",
  "ethereum_ssz",
  "ethereum_ssz_derive",
@@ -4041,6 +4046,7 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
+ "parking_lot",
  "prometheus",
  "rand 0.8.5",
  "reqwest 0.11.27",
@@ -4090,6 +4096,7 @@ dependencies = [
  "async-trait",
  "auto_impl",
  "axum 0.8.3",
+ "crossbeam-channel",
  "deadpool-redis",
  "ethereum_ssz",
  "eyre",
@@ -4114,6 +4121,7 @@ version = "0.0.1"
 dependencies = [
  "alloy-eips 0.12.6",
  "alloy-primitives 0.8.25",
+ "crossbeam-channel",
  "ethers",
  "eyre",
  "futures 0.3.31",
@@ -4168,6 +4176,7 @@ dependencies = [
  "askama",
  "async-trait",
  "axum 0.8.3",
+ "crossbeam-channel",
  "deadpool-postgres",
  "helix-beacon",
  "helix-common",

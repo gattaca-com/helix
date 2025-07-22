@@ -9,7 +9,6 @@ use bytes::Bytes;
 use futures::StreamExt;
 use helix_common::{self, metrics::TopBidMetrics};
 use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use hyper::HeaderMap;
 use tokio::time::{self};
 use tracing::{debug, error};
@@ -37,7 +36,8 @@ impl<A: Api> BuilderApi<A> {
             None => return Err(BuilderApiError::InvalidApiKey),
         }
 
-        Ok(ws.on_upgrade(move |socket| push_top_bids(socket, api.auctioneer.clone())))
+        let sub = api.top_bid_tx.subscribe();
+        Ok(ws.on_upgrade(move |socket| push_top_bids(socket, sub)))
     }
 }
 
@@ -53,9 +53,11 @@ impl<A: Api> BuilderApi<A> {
 /// This function operates in an asynchronous loop until the WebSocket connection is closed either
 /// due to an error or when the auction ends. It returns after the socket has been closed, logging
 /// the closure status.
-async fn push_top_bids<A: Auctioneer + 'static>(mut socket: WebSocket, auctioneer: Arc<A>) {
+async fn push_top_bids(
+    mut socket: WebSocket,
+    mut bid_stream: tokio::sync::broadcast::Receiver<Bytes>,
+) {
     let _conn = TopBidMetrics::connection();
-    let mut bid_stream = auctioneer.get_best_bids();
     let mut interval = time::interval(Duration::from_secs(10));
 
     loop {

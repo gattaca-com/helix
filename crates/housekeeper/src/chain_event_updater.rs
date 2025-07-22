@@ -4,7 +4,8 @@ use alloy_primitives::B256;
 use futures::{future, FutureExt};
 use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, utils::utcnow_sec,
+    api::builder_api::BuilderGetValidatorsResponseEntry, bid_sorter::BidSorterMessage,
+    chain_info::ChainInfo, utils::utcnow_sec,
 };
 use helix_datastore::Auctioneer;
 use helix_types::{Slot, SlotClockTrait};
@@ -48,6 +49,8 @@ pub struct ChainEventUpdater<A: Auctioneer + 'static> {
     auctioneer: Arc<A>,
     chain_info: Arc<ChainInfo>,
     curr_slot_info: CurrentSlotInfo,
+
+    sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
 }
 
 impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
@@ -55,6 +58,7 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
         auctioneer: Arc<A>,
         chain_info: Arc<ChainInfo>,
         curr_slot_info: CurrentSlotInfo,
+        sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     ) -> Self {
         Self {
             head_slot: 0,
@@ -63,6 +67,7 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
             proposer_duties: Vec::new(),
             chain_info,
             curr_slot_info,
+            sorter_tx,
         }
     }
 
@@ -310,6 +315,7 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
         tokio::spawn(async move {
             curr_slot_info.handle_new_slot(update, &chain_info);
         });
+        let _ = self.sorter_tx.send(BidSorterMessage::Slot(slot));
     }
 
     // Handles a new payload attributes event

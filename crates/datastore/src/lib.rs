@@ -3,32 +3,23 @@ pub mod error;
 pub mod redis;
 pub mod types;
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 pub use auctioneer::*;
-use helix_common::RelayConfig;
+use helix_common::{bid_sorter::BidSorterMessage, RelayConfig};
 use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, DatabaseService};
 use redis::redis_cache::RedisCache;
-use tokio::time::sleep;
 use tracing::error;
 
 pub async fn start_auctioneer(
     config: &RelayConfig,
+    sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     db: &PostgresDatabaseService,
 ) -> eyre::Result<Arc<RedisCache>> {
     let builder_infos = db.get_all_builder_infos().await.expect("failed to load builder infos");
 
-    let auctioneer = Arc::new(RedisCache::new(&config.redis.url, builder_infos).await.unwrap());
-
-    let auctioneer_clone = auctioneer.clone();
-    tokio::spawn(async move {
-        loop {
-            if let Err(err) = auctioneer_clone.start_best_bid_listener().await {
-                error!("Bid listener error: {}", err);
-                sleep(Duration::from_secs(5)).await;
-            }
-        }
-    });
+    let auctioneer =
+        Arc::new(RedisCache::new(&config.redis.url, builder_infos, sorter_tx).await.unwrap());
 
     let auctioneer_clone = auctioneer.clone();
     tokio::spawn(async move {
@@ -53,15 +44,6 @@ pub async fn start_auctioneer(
         loop {
             if let Err(err) = auctioneer_clone.start_builder_last_bid_received_at_listener().await {
                 error!("Builder last bid received listener error: {}", err);
-            }
-        }
-    });
-
-    let auctioneer_clone = auctioneer.clone();
-    tokio::spawn(async move {
-        loop {
-            if let Err(err) = auctioneer_clone.start_floor_bid_listener().await {
-                error!("Floor bid listener error: {}", err);
             }
         }
     });
