@@ -390,7 +390,7 @@ impl RouterConfig {
                 "relay is serving headers so should have submissions enabled"
             );
             ensure!(
-                routes.contains(&Route::ProposerApi) || routes.contains(&Route::GetTopBid),
+                routes.contains(&Route::BuilderApi) || routes.contains(&Route::GetTopBid),
                 "routes should have get_top_bid enabled"
             );
 
@@ -401,7 +401,7 @@ impl RouterConfig {
                 "relay is receiving blocks so should have get_header enabled"
             );
             ensure!(
-                routes.contains(&Route::ProposerApi) || routes.contains(&Route::GetTopBid),
+                routes.contains(&Route::BuilderApi) || routes.contains(&Route::GetTopBid),
                 "routes should have get_top_bid enabled"
             );
 
@@ -677,7 +677,7 @@ mod tests {
     #[test]
     fn test_validate_bid_sorter_valid_v3_routes() {
         let config =
-            create_router_config(vec![Route::SubmitHeaderV3, Route::GetHeader, Route::ProposerApi]);
+            create_router_config(vec![Route::SubmitHeaderV3, Route::GetHeader, Route::BuilderApi]);
 
         let result = config.validate_bid_sorter();
         assert!(result.is_ok());
