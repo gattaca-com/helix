@@ -15,7 +15,7 @@ use crate::{
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
     bid_submission_to_builder_bid_unsigned, header_submission_to_builder_bid_unsigned,
     metrics::TopBidMetrics,
-    utils::{utcnow_ms, utcnow_ns},
+    utils::{avg_duration, utcnow_ms, utcnow_ns},
 };
 
 type BlsPubkey = [u8; 48];
@@ -478,10 +478,9 @@ impl BidSorter {
         let tel = std::mem::take(&mut self.local_telemetry);
 
         let total_subs = tel.valid_subs + tel.past_subs + tel.demoted_subs;
-        let avg_sub_recv = tel.subs_recv_time / total_subs;
-        let avg_sub_process = tel.subs_process_time / tel.valid_subs;
-
-        let avg_demotion_process = tel.demotions_process_time / tel.new_demotions;
+        let avg_sub_recv = avg_duration(tel.subs_recv_time, total_subs);
+        let avg_sub_process = avg_duration(tel.subs_process_time, tel.valid_subs);
+        let avg_demotion_process = avg_duration(tel.demotions_process_time, tel.new_demotions);
 
         info!(
             slot = self.curr_bid_slot,
