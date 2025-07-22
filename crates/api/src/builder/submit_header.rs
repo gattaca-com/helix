@@ -258,7 +258,7 @@ impl<A: Api> BuilderApi<A> {
         };
 
         api.tx_root_cache
-            .insert((payload.slot().as_u64(), *payload.block_hash()), payload.transactions_root());
+            .insert(*payload.block_hash(), (payload.slot().as_u64(), payload.transactions_root()));
 
         // Save submission to db
         let db = api.db.clone();

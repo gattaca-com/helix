@@ -266,15 +266,16 @@ impl<A: Api> BuilderApi<A> {
         &self,
         payload: &SignedBidSubmission,
     ) -> Result<(), BuilderApiError> {
-        match self.tx_root_cache.get(&(payload.slot().as_u64(), *payload.block_hash())) {
+        match self.tx_root_cache.get(payload.block_hash()) {
             Some(expected_tx_root) => {
+                let expected_tx_root = expected_tx_root.1;
                 let tx_root = payload.transactions_root();
                 if *expected_tx_root != tx_root {
                     warn!("tx root mismatch");
 
                     Err(BuilderApiError::TransactionsRootMismatch {
                         got: tx_root,
-                        expected: *expected_tx_root,
+                        expected: expected_tx_root,
                     })
                 } else {
                     Ok(())

@@ -59,7 +59,7 @@ pub struct BuilderApi<A: Api> {
     /// Set in sorter loop
     pub shared_floor: Arc<RwLock<U256>>,
     /// Cache of tx roots for v2 submissions
-    pub tx_root_cache: DashMap<(u64, B256), B256>,
+    pub tx_root_cache: DashMap<B256, (u64, B256)>,
     /// Best get header to check the current top bid on simulations
     pub shared_best_header: BestGetHeader,
 }
@@ -95,7 +95,7 @@ impl<A: Api> BuilderApi<A> {
 
                 if curr_slot > last_cleared_slot {
                     last_cleared_slot = curr_slot;
-                    cache.retain(|(slot, _), _| curr_slot.saturating_sub(*slot) <= 2);
+                    cache.retain(|_, (slot, _)| curr_slot.saturating_sub(*slot) <= 2);
                 }
             }
         });
