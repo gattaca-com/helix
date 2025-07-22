@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
-use futures::FutureExt;
+use futures::{future, FutureExt};
 use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, bid_sorter::BidSorterMessage,
@@ -11,7 +11,7 @@ use helix_datastore::Auctioneer;
 use helix_types::{Slot, SlotClockTrait};
 use tokio::{
     sync::broadcast,
-    time::{interval_at, sleep, Instant},
+    time::{interval, interval_at, sleep, timeout, Instant},
 };
 use tracing::{error, info, warn};
 use tree_hash::TreeHash;
@@ -112,24 +112,31 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
         let mut head_event_redis_rx = self.auctioneer.get_head_event();
         let mut payload_attributes_redis_rx = self.auctioneer.get_payload_attributes();
 
+        // Watchdog to confirm the loop is alive
+        let mut watchdog = interval(Duration::from_secs(60));
+
         loop {
             tokio::select! {
                 head_event_result = head_event_rx.recv() => {
                     match head_event_result {
                         Ok(head_event) => {
-                            info!(head_slot =% head_event.slot, "Received head event");
-                            self.auctioneer.publish_head_event(&head_event)
-                                .await
-                                .unwrap_or_else(|err| {
-                                    error!(error = %err, "Failed to publish head event");
-                                });
-                            self.process_slot(head_event.slot.into()).await
-                        },
+                            info!(head_slot =% head_event.slot, "Received head event from beacon node");
+                            let publish_event = head_event.clone();
+                            let this = self.auctioneer.clone();
+                            tokio::spawn(async move {
+                                if let Err(err) = this.publish_head_event(&publish_event).await {
+                                    error!(%err, "Failed to publish head event");
+                                }
+                            });
+
+                            self.process_slot(head_event.slot.into()).await;
+                        }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("head events lagged by {n} events");
                         }
                         Err(broadcast::error::RecvError::Closed) => {
-                            error!("head event channel closed");
+                            error!("head event channel closed, resubscribing...");
+                            head_event_rx = head_event_rx.resubscribe();
                         }
                     }
                 }
@@ -137,14 +144,15 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
                 head_event_redis_result = head_event_redis_rx.recv() => {
                     match head_event_redis_result {
                         Ok(head_event) => {
-                            info!(head_slot =% head_event.slot, "Received head event");
-                            self.process_slot(head_event.slot.into()).await
-                        },
+                            info!(head_slot =% head_event.slot, "Received head event from Redis");
+                            self.process_slot(head_event.slot.into()).await;
+                        }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
-                            warn!("head events lagged by {n} events");
+                            warn!("head redis events lagged by {n} events");
                         }
                         Err(broadcast::error::RecvError::Closed) => {
-                            error!("head event channel closed");
+                            error!("head redis channel closed, resubscribing...");
+                            head_event_redis_rx = self.auctioneer.get_head_event();
                         }
                     }
                 }
@@ -152,18 +160,22 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
                 payload_attributes_result = payload_attributes_rx.recv() => {
                     match payload_attributes_result {
                         Ok(payload_attributes) => {
-                            self.auctioneer.publish_payload_attributes(&payload_attributes)
-                                .await
-                                .unwrap_or_else(|err| {
-                                    error!(error = %err, "Failed to publish payload attributes");
-                                });
+                            let publish_event = payload_attributes.clone();
+                            let this = self.auctioneer.clone();
+                            tokio::spawn(async move {
+                                if let Err(err) = this.publish_payload_attributes(&publish_event).await {
+                                    error!(%err, "Failed to publish payload attributes");
+                                }
+                            });
+
                             self.process_payload_attributes(payload_attributes).await;
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
                             warn!("payload attributes events lagged by {n} events");
                         }
                         Err(broadcast::error::RecvError::Closed) => {
-                            error!("payload attributes event channel closed");
+                            error!("payload attributes channel closed, resubscribing...");
+                            payload_attributes_rx = payload_attributes_rx.resubscribe();
                         }
                     }
                 }
@@ -174,45 +186,47 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
                             self.process_payload_attributes(payload_attributes).await;
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
-                            warn!("payload attributes events lagged by {n} events");
+                            warn!("payload attributes redis events lagged by {n} events");
                         }
                         Err(broadcast::error::RecvError::Closed) => {
-                            error!("payload attributes event channel closed");
+                            error!("payload attributes redis channel closed, resubscribing...");
+                            payload_attributes_redis_rx = self.auctioneer.get_payload_attributes();
                         }
                     }
                 }
 
                 _ = timer.tick() => {
-                    info!("4 seconds into slot. Attempting to slot update...");
+                    info!("4 seconds into slot. Attempting slot update...");
                     match self.chain_info.clock.now() {
                         Some(slot) => self.process_slot(slot.as_u64()).await,
-                        None => {
-                            error!("could not get current slot");
-                        }
+                        None => error!("could not get current slot"),
                     }
+                }
+
+                _ = watchdog.tick() => {
+                    info!("ChainEventUpdater alive, head_slot = {}", self.head_slot);
                 }
             }
         }
     }
 
-    /// Handles a new slot.
+    /// Handles a new slot in a non-blocking, timeout-safe way.
     async fn process_slot(&mut self, slot: u64) {
         if self.head_slot >= slot {
             return;
         }
 
-        info!(head_slot =% slot, "Processing slot",);
+        info!(head_slot =% slot, "Processing slot");
 
         // Validate this isn't a faulty head slot
-
         let slot_timestamp =
             self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot());
         if slot_timestamp > utcnow_sec() + MAX_DISTANCE_FOR_FUTURE_SLOT {
-            warn!(head_slot = slot, "slot is too far in the future",);
+            warn!(head_slot = slot, "slot is too far in the future");
             return;
         }
 
-        // Log any missed slots
+        // Log missed slots
         if self.head_slot != 0 {
             for s in (self.head_slot + 1)..slot {
                 warn!(missed_slot = s, "missed slot");
@@ -221,37 +235,49 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
 
         self.head_slot = slot;
 
-        // Give housekeeper some time to update proposer duties
-        sleep(std::time::Duration::from_secs(1)).await;
-        let mut new_duties = match self.auctioneer.get_proposer_duties().await {
-            Ok(new_duties) => {
-                info!(
-                    head_slot = slot,
-                    new_duties = new_duties.len(),
-                    "Fetched proposer duties from auctioneer",
-                );
-                Some(new_duties)
-            }
-            Err(err) => {
-                error!(error = %err, "Failed to get proposer duties from auctioneer");
-                None
-            }
-        };
+        sleep(Duration::from_secs(1)).await;
 
-        // Update local cache if new duties were fetched.
-        if let Some(new_duties) = &mut new_duties {
-            for duty in new_duties.iter_mut() {
-                info!(slot = slot,
-                    proposer = %duty.entry.registration.message.pubkey,
-                    "Checking if proposer is primev"
-                );
-                match self
-                    .auctioneer
-                    .is_primev_proposer(&duty.entry.registration.message.pubkey)
-                    .await
-                {
-                    Ok(is_primev) => {
-                        if is_primev {
+        let new_duties =
+            match timeout(Duration::from_secs(1), self.auctioneer.get_proposer_duties()).await {
+                Ok(Ok(mut new_duties)) => {
+                    info!(
+                        head_slot = slot,
+                        new_duties = new_duties.len(),
+                        "Fetched proposer duties from auctioneer"
+                    );
+
+                    let auctioneer = self.auctioneer.clone();
+                    let futures = new_duties.iter_mut().map(|duty| {
+                        let auctioneer = auctioneer.clone();
+                        let pubkey = duty.entry.registration.message.pubkey.clone();
+                        async move {
+                            match timeout(
+                                Duration::from_secs(1),
+                                auctioneer.is_primev_proposer(&pubkey),
+                            )
+                            .await
+                            {
+                                Ok(Ok(true)) => {
+                                    Some(duty.entry.registration.message.pubkey.clone())
+                                }
+                                Ok(Ok(false)) => None,
+                                Ok(Err(err)) => {
+                                    error!(%err, "Failed to check if proposer is primev");
+                                    None
+                                }
+                                Err(_) => {
+                                    error!("Timeout checking if proposer is primev");
+                                    None
+                                }
+                            }
+                        }
+                    });
+
+                    let results: Vec<_> = future::join_all(futures).await;
+
+                    // Update duties with Primev builder if needed
+                    for (duty, is_primev) in new_duties.iter_mut().zip(results.into_iter()) {
+                        if is_primev.is_some() {
                             info!(head_slot = slot, "Primev proposer duty found");
                             match &mut duty.entry.preferences.trusted_builders {
                                 Some(trusted_builders) => {
@@ -264,20 +290,31 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
                             }
                         }
                     }
-                    Err(err) => {
-                        error!(error = %err, "Failed to check if proposer is primev");
-                    }
-                }
-            }
 
-            self.proposer_duties.clone_from(new_duties);
-        }
+                    self.proposer_duties.clone_from(&new_duties);
+                    Some(new_duties)
+                }
+                Ok(Err(err)) => {
+                    error!(%err, "Failed to get proposer duties from auctioneer");
+                    None
+                }
+                Err(_) => {
+                    error!("Timeout fetching proposer duties");
+                    None
+                }
+            };
 
         // Get the next proposer duty for the new slot.
         let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
 
         let update = SlotUpdate { slot: slot.into(), new_duties, next_duty };
-        self.curr_slot_info.handle_new_slot(update, &self.chain_info);
+
+        // Run handle_new_slot in a spawned task so it can't block the select loop.
+        let curr_slot_info = self.curr_slot_info.clone();
+        let chain_info = self.chain_info.clone();
+        tokio::spawn(async move {
+            curr_slot_info.handle_new_slot(update, &chain_info);
+        });
         let _ = self.sorter_tx.send(BidSorterMessage::Slot(slot));
     }
 
