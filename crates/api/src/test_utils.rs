@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use alloy_primitives::U256;
 use axum::{
     error_handling::HandleErrorLayer,
     http::StatusCode,
@@ -17,7 +16,7 @@ use helix_common::{
         PATH_PROPOSER_API, PATH_PROPOSER_PAYLOAD_DELIVERED, PATH_REGISTER_VALIDATORS, PATH_STATUS,
         PATH_VALIDATOR_REGISTRATION,
     },
-    bid_sorter::BestGetHeader,
+    bid_sorter::{BestGetHeader, FloorBid},
     chain_info::ChainInfo,
     metadata_provider::DefaultMetadataProvider,
     signing::RelaySigningContext,
@@ -26,7 +25,6 @@ use helix_common::{
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
 use helix_housekeeper::CurrentSlotInfo;
-use parking_lot::RwLock;
 use tokio::sync::{
     broadcast,
     mpsc::{self, channel},
@@ -117,7 +115,7 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
     let (sort_tx, _) = crossbeam_channel::bounded(1000);
     let (br_tx, _) = broadcast::channel(1);
     let (v2_tx, _) = mpsc::channel(100);
-    let shared_floor = Arc::new(RwLock::new(U256::ZERO));
+    let shared_floor = FloorBid::new();
 
     let builder_api_service = BuilderApi::<MockApi>::new(
         Arc::new(MockAuctioneer::default()),

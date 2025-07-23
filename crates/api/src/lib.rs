@@ -2,11 +2,10 @@
 
 use std::sync::{atomic::AtomicBool, Arc};
 
-use alloy_primitives::U256;
 use bytes::Bytes;
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
-    bid_sorter::{BestGetHeader, BidSorterMessage},
+    bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     chain_info::ChainInfo,
     metadata_provider::MetadataProvider,
     signing::RelaySigningContext,
@@ -15,7 +14,6 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
-use parking_lot::RwLock;
 use service::run_api_service;
 
 pub mod builder;
@@ -49,7 +47,7 @@ pub fn start_api_service<A: Api>(
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
-    shared_floor: Arc<RwLock<U256>>,
+    shared_floor: FloorBid,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),

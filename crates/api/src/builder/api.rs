@@ -14,7 +14,7 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
     },
-    bid_sorter::{BestGetHeader, BidSorterMessage},
+    bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     bid_submission::BidSubmission,
     chain_info::ChainInfo,
     simulator::BlockSimError,
@@ -57,7 +57,7 @@ pub struct BuilderApi<A: Api> {
     /// Send headers/blocks to be checked for V2 submissions
     pub v2_checks_tx: tokio::sync::mpsc::Sender<V2SubMessage>,
     /// Set in sorter loop
-    pub shared_floor: Arc<RwLock<U256>>,
+    pub shared_floor: FloorBid,
     /// Cache of tx roots for v2 submissions
     pub tx_root_cache: DashMap<B256, (u64, B256)>,
     /// Best get header to check the current top bid on simulations
@@ -78,7 +78,7 @@ impl<A: Api> BuilderApi<A> {
         sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
         v2_checks_tx: tokio::sync::mpsc::Sender<V2SubMessage>,
-        shared_floor: Arc<RwLock<U256>>,
+        shared_floor: FloorBid,
         shared_best_header: BestGetHeader,
     ) -> Self {
         let tx_root_cache = DashMap::with_capacity(1000);
@@ -396,8 +396,8 @@ impl<A: Api> BuilderApi<A> {
         }
     }
 
-    pub(crate) fn get_current_floor(&self) -> U256 {
-        *self.shared_floor.read()
+    pub(crate) fn get_current_floor(&self, bid_slot: Slot) -> U256 {
+        self.shared_floor.get(bid_slot.as_u64())
     }
 }
 
