@@ -87,9 +87,11 @@ impl<A: Api> V2SubChecker<A> {
         let mut tick = tokio::time::interval(Duration::from_secs(3));
         let mut demoted = HashSet::default();
 
-        tokio::select! {
-            _ = tick.tick() => self.check_demotions(&mut demoted),
-            Some(msg) = self.v2_check_rx.recv() => self.process_message(msg),
+        loop {
+            tokio::select! {
+                    _ = tick.tick() => self.check_demotions(&mut demoted),
+                    Some(msg) = self.v2_check_rx.recv() => self.process_message(msg),
+            }
         }
     }
 
