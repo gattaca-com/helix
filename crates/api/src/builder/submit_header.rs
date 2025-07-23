@@ -211,7 +211,7 @@ impl<A: Api> BuilderApi<A> {
         let payload = Arc::new(payload);
 
         // Verify the payload value is above the floor bid
-        let floor_bid_value = api.get_current_floor();
+        let floor_bid_value = api.get_current_floor(payload.slot());
         if payload.value() <= floor_bid_value {
             return Err(BuilderApiError::BidBelowFloor);
         }

@@ -4,14 +4,13 @@ use std::{
     time::Duration,
 };
 
-use alloy_primitives::U256;
 use bytes::Bytes;
 use helix_beacon::{
     beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
     multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
 };
 use helix_common::{
-    bid_sorter::{BestGetHeader, BidSorterMessage},
+    bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     chain_info::ChainInfo,
     signing::RelaySigningContext,
     BroadcasterConfig, RelayConfig,
@@ -19,7 +18,6 @@ use helix_common::{
 use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
 use moka::sync::Cache;
-use parking_lot::RwLock;
 use tokio::{sync::mpsc, time::timeout};
 use tracing::{error, info};
 
@@ -53,7 +51,7 @@ pub async fn run_api_service<A: Api>(
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
-    shared_floor: Arc<RwLock<U256>>,
+    shared_floor: FloorBid,
 ) {
     let broadcasters = init_broadcasters(&config).await;
 

@@ -78,6 +78,38 @@ impl BestGetHeader {
     }
 }
 
+/// Shared container for floor bid, thread safe
+#[derive(Clone)]
+pub struct FloorBid(Arc<RwLock<(u64, U256)>>);
+
+impl Default for FloorBid {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FloorBid {
+    pub fn new() -> Self {
+        Self(Arc::new(RwLock::new((0, U256::ZERO))))
+    }
+    pub fn get(&self, bid_slot: u64) -> U256 {
+        let (slot, floor) = *self.0.read();
+        if slot == bid_slot {
+            floor
+        } else {
+            U256::ZERO
+        }
+    }
+
+    fn update(&self, bid_slot: u64, floor: U256) {
+        *self.0.write() = (bid_slot, floor);
+    }
+
+    fn reset(&self) {
+        *self.0.write() = (0, U256::ZERO);
+    }
+}
+
 // ignoring warning because submissions variant will be 99% of messages
 #[allow(clippy::large_enum_variant)]
 pub enum BidSorterMessage {
@@ -233,10 +265,9 @@ pub struct BidSorter {
     /// Current floor bid value
     curr_floor: Option<U256>,
     /// Current response for get_header
-    /// TODO: use arc swap
     shared_best_header: BestGetHeader,
-    /// TODO: can use atomicu64 with 100 wei precision
-    shared_floor: Arc<RwLock<U256>>,
+    /// Current floor bid value
+    shared_floor: FloorBid,
     local_telemetry: BidSorterTelemetry,
 }
 
@@ -245,7 +276,7 @@ impl BidSorter {
         sorter_rx: crossbeam_channel::Receiver<BidSorterMessage>,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
         shared_best_header: BestGetHeader,
-        shared_floor: Arc<RwLock<U256>>,
+        shared_floor: FloorBid,
     ) -> Self {
         Self {
             sorter_rx,
@@ -354,7 +385,7 @@ impl BidSorter {
         }
 
         if !is_cancellable && new_bid.value > self.curr_floor.unwrap_or_default() {
-            self.update_floor_bid(new_bid.value);
+            self.update_floor_bid(self.curr_bid_slot, new_bid.value);
         }
     }
 
@@ -401,6 +432,9 @@ impl BidSorter {
 
         if let Some((best_pk, best_bid)) = best {
             self.update_top_bid(best_pk, best_bid);
+        } else {
+            self.shared_best_header.reset();
+            self.curr_bid = None;
         }
     }
 
@@ -423,9 +457,8 @@ impl BidSorter {
             }
         }
 
-        if let Some(floor) = best {
-            self.update_floor_bid(floor);
-        }
+        let new_floor = best.unwrap_or(U256::ZERO);
+        self.update_floor_bid(self.curr_bid_slot, new_floor);
     }
 
     fn process_slot(&mut self, head_slot: u64) {
@@ -440,7 +473,7 @@ impl BidSorter {
         self.curr_floor = None;
 
         self.shared_best_header.reset();
-        *self.shared_floor.write() = U256::ZERO;
+        self.shared_floor.reset();
     }
 
     fn update_top_bid(&mut self, builder_pubkey: BlsPubkey, bid: Bid) {
@@ -466,12 +499,13 @@ impl BidSorter {
         self.curr_bid = Some((builder_pubkey, bid));
         self.shared_best_header.store(self.curr_bid_slot, h.clone());
 
+        self.local_telemetry.top_bids += 1;
         TopBidMetrics::top_bid_update_count();
     }
 
-    fn update_floor_bid(&mut self, floor: U256) {
+    fn update_floor_bid(&mut self, bid_slot: u64, floor: U256) {
         self.curr_floor = Some(floor);
-        *self.shared_floor.write() = floor;
+        self.shared_floor.update(bid_slot, floor);
     }
 
     fn report(&mut self) {
@@ -503,7 +537,7 @@ pub fn start_bid_sorter(
     sorter_rx: crossbeam_channel::Receiver<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
-    shared_floor: Arc<RwLock<U256>>,
+    shared_floor: FloorBid,
 ) {
     let bid_sorter = BidSorter::new(sorter_rx, top_bid_tx, shared_best_header, shared_floor);
     std::thread::spawn(|| bid_sorter.run());
