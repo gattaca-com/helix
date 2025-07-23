@@ -82,6 +82,12 @@ impl BestGetHeader {
 #[derive(Clone)]
 pub struct FloorBid(Arc<RwLock<(u64, U256)>>);
 
+impl Default for FloorBid {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FloorBid {
     pub fn new() -> Self {
         Self(Arc::new(RwLock::new((0, U256::ZERO))))
