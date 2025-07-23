@@ -78,11 +78,20 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             self.simulator.process_request(request.clone(), &builder_info, is_top_bid).await
         {
             if builder_info.is_optimistic {
-                if err.is_aleady_known() {
+                if err.is_already_known() {
                     warn!(
                         builder=%request.message.builder_pubkey,
                         block_hash=%request.execution_payload.block_hash(),
                         "Block already known. Skipping demotion"
+                    );
+                    return Ok(());
+                }
+
+                if err.is_too_old() {
+                    warn!(
+                        builder=%request.message.builder_pubkey,
+                        block_hash=%request.execution_payload.block_hash(),
+                        "Block is too old. Skipping demotion"
                     );
                     return Ok(());
                 }
