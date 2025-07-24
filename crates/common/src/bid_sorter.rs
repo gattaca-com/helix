@@ -14,7 +14,7 @@ use crate::{
     api::builder_api::TopBidUpdate,
     bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
     bid_submission_to_builder_bid_unsigned, header_submission_to_builder_bid_unsigned,
-    metrics::TopBidMetrics,
+    metrics::{TopBidMetrics, BID_SORTER_PROCESS_LATENCY_US, BID_SORTER_RECV_LATENCY_US},
     utils::{avg_duration, utcnow_ms, utcnow_ns},
 };
 
@@ -325,14 +325,19 @@ impl BidSorter {
                     self.process_header(builder_pubkey, bid, is_cancellable);
 
                     // telemetry
+                    let recv_latency_ns = recv_ns.saturating_sub(bid.on_receive_ns);
+                    let process_latency_ns = utcnow_ns().saturating_sub(recv_ns);
+
                     self.local_telemetry.valid_subs += 1;
-                    self.local_telemetry.subs_recv_time +=
-                        Duration::from_nanos(recv_ns.saturating_sub(bid.on_receive_ns));
+                    self.local_telemetry.subs_recv_time += Duration::from_nanos(recv_latency_ns);
                     self.local_telemetry.subs_process_time +=
-                        Duration::from_nanos(utcnow_ns().saturating_sub(recv_ns));
+                        Duration::from_nanos(process_latency_ns);
                     if !is_cancellable {
                         self.local_telemetry.non_cancel_bids += 1;
                     }
+
+                    BID_SORTER_RECV_LATENCY_US.observe(recv_latency_ns as f64 / 1000.);
+                    BID_SORTER_PROCESS_LATENCY_US.observe(recv_latency_ns as f64 / 1000.);
                 }
                 BidSorterMessage::Demotion(demoted) => {
                     let demoted = demoted.serialize();

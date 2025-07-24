@@ -18,7 +18,7 @@ use prometheus::{
 use tokio::net::TcpListener;
 use tracing::{error, info};
 
-use crate::{utils::utcnow_ms, RelayConfig};
+use crate::RelayConfig;
 
 pub fn start_metrics_server(config: &RelayConfig) {
     let port =
@@ -309,14 +309,21 @@ lazy_static! {
     )
     .unwrap();
 
-    pub static ref TOP_BID_UPDATE_LATENCY: Histogram = register_histogram_with_registry!(
-        "top_bid_update_latency_secs",
-        "Latency of top bid updates",
-        vec![0.0001, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 5.0, 10.0],
+    pub static ref BID_SORTER_RECV_LATENCY_US: Histogram = register_histogram_with_registry!(
+        "bid_sorter_recv_latency_us",
+        "Latency of bid sorter recv in us",
+        vec![1., 5., 10., 25., 50., 100., 500., 1_000., 5_000., 10_000., 50_000., 100_000., 1_000_000.],
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
 
+    pub static ref BID_SORTER_PROCESS_LATENCY_US: Histogram = register_histogram_with_registry!(
+        "bid_sorter_process_latency_us",
+        "Latency of bid sorter process in us",
+        vec![1., 5., 10., 25., 50., 100., 500., 1_000., 5_000., 10_000., 50_000., 100_000., 1_000_000.],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 
     //////////////// TIMING GAMES ////////////////
 
@@ -490,11 +497,6 @@ impl TopBidMetrics {
 
     pub fn top_bid_update_count() {
         TOP_BID_UPDATE_COUNT.inc();
-    }
-
-    pub fn received_at(timestamp_ms: u64) {
-        let latency = utcnow_ms().saturating_sub(timestamp_ms) as f64 / 1000.0;
-        TOP_BID_UPDATE_LATENCY.observe(latency);
     }
 }
 
