@@ -1,4 +1,4 @@
-# Helix 🧬 - A Rust based high-performance MEV-Boost Relay 
+# Helix 🧬 - A Rust based high-performance MEV-Boost Relay
 
 ## About Helix
 
@@ -15,7 +15,7 @@ The PBS relay operates using two distinct flows, each with its own unique key re
 - **Submit_block -> Get_header Flow (Latency):** Currently, this is the only flow where latency is critically important. Our primary focus is on minimising latency while considering redundancy as a secondary priority. Future enhancements will include hyper-optimising the `get_header` and `get_payload` flows for latency (see the Future Work section for more details).
 - **Get_header -> Get_payload Flow (Redundancy):** Promptly delivering the payload following a `get_header` request is essential. A delay in this process risks the proposer missing their slot, making high redundancy in this flow extremely important.
 
-### Geo-Distribution and Global Accessibility: 
+### Geo-Distribution and Global Accessibility:
 The current Flashbots MEV-Boost relay [implementation](https://github.com/flashbots/mev-boost-relay) is limited to operating as a single cluster. As a result, relays tend to aggregate in areas with a high density of proposers, particularly AWS data centres in North Virginia and Europe. This situation poses a significant disadvantage for proposers in locations with high network latency in these areas. To prevent missed slots, proposers in such locations are compelled to adjust their MEV-Boost configuration to call `get_header` earlier, which leads to reduced MEV rewards. In response, we have designed our relay to support geo-distribution. This allows multiple clusters to be operated in different geographical locations simultaneously, whilst collectively serving the relay API as one unified relay endpoint.
 
 - Our design supports multiple geo-distributed clusters under a single relay URL.
@@ -40,9 +40,9 @@ To efficiently manage transactions based on regional policies, our relay operati
 
 
 ### Modular and Generic Design
-- Emphasising generic design, Helix allows for flexible integration with various databases and libraries. 
+- Emphasising generic design, Helix allows for flexible integration with various databases and libraries.
 - Key Traits include: `Database`, `Auctioneer`, `Simulator` and `BeaconClient`.
-- The current `Auctioneer` implementation supports Redis due to the ease of implementation when synchronising multiple processes in the same cluster. 
+- The current `Auctioneer` implementation supports Redis due to the ease of implementation when synchronising multiple processes in the same cluster.
 - The `Simulator` is also purposely generic, allowing for implementations of all optimistic relaying implementations and different forms of simulation. For example, communicating with the execution client via RPC or gRPC.
 
 ### Optimised Block Propagation
@@ -88,6 +88,16 @@ $ docker build -t helix_mev_relayer -f local.Dockerfile .
 # Run the container
 $ docker run --name helix_mev_relayer helix_mev_relayer
 ```
+
+#### Nix development setup
+
+Using  nix flakes provides a reproducible, declarative, and shareable development environment. With Nix flakes, all your dependencies including compilers, libraries, tools, and even shell scripts are pinned and versioned, so everyone working on the project gets the same setup, every time.
+
+In case you're not using [NixOS](https://nixos.org/) you need to install the [Nix Package Manager](https://nixos.org/download/).
+
+When that's done:
+- Should you have [direnv](https://github.com/direnv/direnv) installed, it will automatically load the required development packages for you.
+- Otherwise, executing `nix develop` in the project directory will accomplish the same.
 
 #### Staging or Production-Ready setup
 AWS configuration is required as a cloud storage option for [sccache](https://github.com/mozilla/sccache.git) (a rust wrapper for caching builds for faster development).
