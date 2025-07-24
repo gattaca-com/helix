@@ -12,7 +12,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::{BlsPublicKey, SignedBidSubmission};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::Api;
 
@@ -145,7 +145,7 @@ impl<A: Api> V2SubChecker<A> {
                     false
                 }
 
-                (Some(t), None) | (None, Some(t)) => {
+                (Some(t), None) => {
                     if now_ns.saturating_sub(t) > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_NS {
                         if demoted.insert(pending.builder_pubkey.clone()) {
                             demote_builder::<A>(
@@ -156,6 +156,16 @@ impl<A: Api> V2SubChecker<A> {
                             );
                         };
                         false
+                    } else {
+                        // builder may still send missing message
+                        true
+                    }
+                }
+
+                (None, Some(t)) => {
+                    if now_ns.saturating_sub(t) > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_NS {
+                        warn!(%block_hash, ?pending.builder_pubkey, "received v2 payload without header");
+                        true
                     } else {
                         // builder may still send missing message
                         true

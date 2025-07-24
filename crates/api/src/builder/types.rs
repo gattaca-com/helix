@@ -16,7 +16,7 @@ pub enum DbInfo {
     SimulationResult { block_hash: B256, block_sim_result: Result<(), BlockSimError> },
 }
 
-#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+#[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(i16)]
 pub enum OptimisticVersion {
     #[default]
