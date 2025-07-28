@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use alloy_primitives::{B256, U256};
 use axum::{extract::Path, http::HeaderMap, response::IntoResponse, Extension};
 use helix_common::{
+    api::data_api::BidFilters,
     chain_info::ChainInfo,
     metadata_provider::MetadataProvider,
     metrics::GetHeaderMetric,
@@ -136,65 +137,64 @@ impl<A: Api> ProposerApi<A> {
         trace.best_bid_fetched = utcnow_ns();
         debug!(trace = ?trace, "best bid fetched");
 
-        if let Some(bid) = get_best_bid_res {
-            if bid.value() == &U256::ZERO {
-                warn!("best bid value is 0");
-                return Err(ProposerApiError::BidValueZero);
-            }
-
-            debug!(
-                value = ?bid.value(),
-                block_hash = ?bid.header().block_hash(),
-                "delivering bid",
-            );
-
-            // Save trace to DB
-            save_get_header_call(
-                proposer_api.db.clone(),
-                slot,
-                bid_request.parent_hash,
-                bid_request.pubkey.clone(),
-                bid.header().block_hash().0,
-                trace,
-                mev_boost,
-                user_agent.clone(),
-            )
-            .await;
-
-            let proposer_pubkey_clone = bid_request.pubkey;
-            let block_hash = bid.header().block_hash().0;
-
-            let fork = if bid.as_electra().is_ok() {
-                helix_types::ForkName::Electra
-            } else {
-                error!("builder bid is not on Electra fork!! This should not happen");
-                return Err(ProposerApiError::InternalServerError);
-            };
-
-            let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
-
-            if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
-                // Request payload in the background
-                task::spawn(file!(), line!(), async move {
-                    proposer_api
-                        .gossiper
-                        .request_payload(RequestPayloadParams {
-                            slot,
-                            proposer_pub_key: proposer_pubkey_clone,
-                            block_hash,
-                        })
-                        .await
-                });
-            }
-
-            let signed_bid = serde_json::to_value(signed_bid)?;
-            info!(%signed_bid, "delivering bid");
-
-            Ok(axum::Json(signed_bid))
-        } else {
+        let Some(bid) = get_best_bid_res else {
             warn!("no bid found");
-            Err(ProposerApiError::NoBidPrepared)
+            return Err(ProposerApiError::NoBidPrepared);
+        };
+        if bid.value() == &U256::ZERO {
+            warn!("best bid value is 0");
+            return Err(ProposerApiError::BidValueZero);
         }
+
+        debug!(
+            value = ?bid.value(),
+            block_hash = ?bid.header().block_hash(),
+            "delivering bid",
+        );
+
+        // Save trace to DB
+        save_get_header_call(
+            proposer_api.db.clone(),
+            slot,
+            bid_request.parent_hash,
+            bid_request.pubkey.clone(),
+            bid.header().block_hash().0,
+            trace,
+            mev_boost,
+            user_agent.clone(),
+        )
+        .await;
+
+        let proposer_pubkey_clone = bid_request.pubkey.clone();
+        let block_hash = bid.header().block_hash().0;
+
+        let fork = if bid.as_electra().is_ok() {
+            helix_types::ForkName::Electra
+        } else {
+            error!("builder bid is not on Electra fork!! This should not happen");
+            return Err(ProposerApiError::InternalServerError);
+        };
+
+        let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
+
+        if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
+            // Request payload in the background
+            task::spawn(file!(), line!(), async move {
+                proposer_api
+                    .gossiper
+                    .request_payload(RequestPayloadParams {
+                        slot,
+                        proposer_pub_key: proposer_pubkey_clone,
+                        block_hash,
+                    })
+                    .await
+            });
+        }
+
+        let signed_bid = serde_json::to_value(signed_bid)?;
+        info!(%signed_bid, "delivering bid");
+
+        Ok(axum::Json(signed_bid))
     }
 }
 
@@ -241,8 +241,8 @@ fn validate_bid_request_time(
     bid_request: &BidRequest,
 ) -> Result<u64, ProposerApiError> {
     let curr_timestamp_ms = utcnow_ms() as i64;
-    let slot_start_timestamp = chain_info.genesis_time_in_secs +
-        (bid_request.slot.as_u64() * chain_info.seconds_per_slot());
+    let slot_start_timestamp = chain_info.genesis_time_in_secs
+        + (bid_request.slot.as_u64() * chain_info.seconds_per_slot());
     let ms_into_slot = curr_timestamp_ms.saturating_sub((slot_start_timestamp * 1000) as i64);
 
     if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {
