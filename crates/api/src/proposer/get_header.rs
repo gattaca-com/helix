@@ -3,7 +3,6 @@ use std::{sync::Arc, time::Duration};
 use alloy_primitives::{B256, U256};
 use axum::{extract::Path, http::HeaderMap, response::IntoResponse, Extension};
 use helix_common::{
-    api::data_api::BidFilters,
     chain_info::ChainInfo,
     metadata_provider::MetadataProvider,
     metrics::GetHeaderMetric,
@@ -174,6 +173,20 @@ impl<A: Api> ProposerApi<A> {
             error!("builder bid is not on Electra fork!! This should not happen");
             return Err(ProposerApiError::InternalServerError);
         };
+
+        // Check if block allows merging
+        let block_allows_merging = proposer_api
+            .auctioneer
+            .get_block_merging_data(slot, &bid_request.pubkey, &block_hash)
+            .await?
+            .map(|merging_data| merging_data.allow_appending)
+            .unwrap_or(false);
+
+        if block_allows_merging {
+            debug!("merging block");
+
+            // TODO: merge block...
+        }
 
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
 

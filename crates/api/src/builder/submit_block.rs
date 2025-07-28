@@ -201,7 +201,7 @@ impl<A: Api> BuilderApi<A> {
             is_cancellations_enabled,
         )) {
             error!(?err, "failed to send submission to sorter");
-            return Err(BuilderApiError::InternalError)
+            return Err(BuilderApiError::InternalError);
         };
         trace!("sent bid to bid sorter");
 
@@ -223,6 +223,22 @@ impl<A: Api> BuilderApi<A> {
             return Err(BuilderApiError::AuctioneerError(err));
         }
         trace!("saved bid trace to redis");
+
+        // TODO: validate merging data
+        if let Err(err) = api
+            .auctioneer
+            .save_block_merging_data(
+                payload.slot().as_u64(),
+                payload.proposer_public_key(),
+                payload.block_hash(),
+                payload.merging_data(),
+            )
+            .await
+        {
+            error!(%err, "failed to save block merging data");
+            return Err(BuilderApiError::AuctioneerError(err));
+        }
+        trace!("saved block merging data to redis");
 
         // Log some final info
         trace.request_finish = utcnow_ns();

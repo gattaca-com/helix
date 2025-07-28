@@ -74,7 +74,7 @@ impl<A: Api> BuilderApi<A> {
         debug!(%head_slot, timestamp_request_start = trace.receive);
 
         let builder_pub_key = payload.builder_public_key().clone();
-        let block_hash = payload.message().block_hash;
+        let block_hash = payload.block_hash();
 
         // Verify the payload is for the current slot
         if payload.slot() < head_slot + 1 {
@@ -115,8 +115,8 @@ impl<A: Api> BuilderApi<A> {
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional() &&
-            !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional()
+            && !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering enabled, discarding {optimistic_version:?} submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
@@ -218,8 +218,8 @@ impl<A: Api> BuilderApi<A> {
             .auctioneer
             .save_execution_payload(
                 payload.slot().as_u64(),
-                &payload.message().proposer_pubkey,
-                payload.block_hash(),
+                payload.proposer_public_key(),
+                block_hash,
                 &payload.payload_and_blobs(),
             )
             .await
@@ -231,6 +231,20 @@ impl<A: Api> BuilderApi<A> {
 
         if let Err(err) = api.auctioneer.save_bid_trace(payload.bid_trace()).await {
             error!(%err, "failed to save bid trace");
+            return Err(BuilderApiError::AuctioneerError(err));
+        }
+
+        if let Err(err) = api
+            .auctioneer
+            .save_block_merging_data(
+                payload.slot().as_u64(),
+                payload.proposer_public_key(),
+                block_hash,
+                payload.merging_data(),
+            )
+            .await
+        {
+            error!(%err, "failed to save block merging data");
             return Err(BuilderApiError::AuctioneerError(err));
         }
 

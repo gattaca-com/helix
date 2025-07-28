@@ -8,7 +8,9 @@ use helix_common::{
     BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
-use helix_types::{BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, SignedBuilderBid};
+use helix_types::{
+    BidTrace, BlockMergingData, BlsPublicKey, ForkName, PayloadAndBlobs, SignedBuilderBid,
+};
 use tokio::sync::broadcast;
 
 use crate::{error::AuctioneerError, redis::redis_cache::InclusionListWithKey, Auctioneer};
@@ -73,6 +75,24 @@ impl Auctioneer for MockAuctioneer {
         Ok(None)
     }
     async fn save_bid_trace(&self, _bid_trace: &BidTrace) -> Result<(), AuctioneerError> {
+        Ok(())
+    }
+
+    async fn get_block_merging_data(
+        &self,
+        _slot: u64,
+        _proposer_pub_key: &BlsPublicKey,
+        _block_hash: &B256,
+    ) -> Result<Option<BlockMergingData>, AuctioneerError> {
+        Ok(None)
+    }
+    async fn save_block_merging_data(
+        &self,
+        _slot: u64,
+        _proposer_pub_key: &BlsPublicKey,
+        _block_hash: &B256,
+        _merging_data: &BlockMergingData,
+    ) -> Result<(), AuctioneerError> {
         Ok(())
     }
 
