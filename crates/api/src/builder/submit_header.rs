@@ -219,7 +219,7 @@ impl<A: Api> BuilderApi<A> {
 
         trace.floor_bid_checks = utcnow_ns();
 
-        if let Err(err) = api.sorter_tx.send(BidSorterMessage::new_from_header_submission(
+        if let Err(err) = api.sorter_tx.try_send(BidSorterMessage::new_from_header_submission(
             &payload,
             trace.receive,
             is_cancellations_enabled,

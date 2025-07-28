@@ -315,7 +315,7 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
         tokio::spawn(async move {
             curr_slot_info.handle_new_slot(update, &chain_info);
         });
-        let _ = self.sorter_tx.send(BidSorterMessage::Slot(slot));
+        let _ = self.sorter_tx.try_send(BidSorterMessage::Slot(slot));
     }
 
     // Handles a new payload attributes event

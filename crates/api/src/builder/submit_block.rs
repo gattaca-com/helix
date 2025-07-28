@@ -195,7 +195,7 @@ impl<A: Api> BuilderApi<A> {
             .await?;
         trace!(is_optimistic = was_simulated_optimistically, "verified submitted block");
 
-        if let Err(err) = api.sorter_tx.send(BidSorterMessage::new_from_block_submission(
+        if let Err(err) = api.sorter_tx.try_send(BidSorterMessage::new_from_block_submission(
             &payload,
             trace.receive,
             is_cancellations_enabled,
