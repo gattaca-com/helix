@@ -7,7 +7,7 @@ use crate::Slot;
 pub const MAINNET_GENESIS_TIME: u64 = 1606824023;
 pub const SEPOLIA_GENESIS_TIME: u64 = 1655733600;
 pub const HOLESKY_GENESIS_TIME: u64 = 1695902400;
-pub const HOODI_GENESIS_TIME: u64 = 1742212800;
+pub const HOODI_GENESIS_TIME: u64 = 1742213400;
 
 pub fn mainnet_slot_clock(seconds_per_slot: u64) -> SlotClock {
     SlotClock::new(

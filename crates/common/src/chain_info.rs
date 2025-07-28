@@ -22,7 +22,7 @@ pub(crate) const HOLESKY_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
 ];
 
 pub(crate) const HOODI_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
-    33, 47, 19, 252, 77, 240, 120, 182, 203, 125, 178, 40, 241, 200, 48, 117, 102, 220, 236, 249, 
+    33, 47, 19, 252, 77, 240, 120, 182, 203, 125, 178, 40, 241, 200, 48, 117, 102, 220, 236, 249,
     0, 134, 116, 1, 169, 32, 35, 215, 186, 153, 203, 95,
 ];
 
@@ -105,7 +105,7 @@ impl ChainInfo {
             genesis_time_in_secs: HOODI_GENESIS_TIME,
         }
     }
-    
+
     pub fn for_custom(
         config: String,
         genesis_validators_root: B256,
