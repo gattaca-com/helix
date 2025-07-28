@@ -1,4 +1,5 @@
 mod bid_submission;
+mod block_merging;
 mod clock;
 mod error;
 mod spec;
@@ -8,6 +9,7 @@ mod validator;
 use std::sync::Arc;
 
 pub use bid_submission::*;
+pub use block_merging::*;
 pub use clock::*;
 pub use error::*;
 pub use lh_kzg::KzgProof;

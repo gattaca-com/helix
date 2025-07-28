@@ -1,0 +1,52 @@
+use lh_test_random::TestRandom;
+use lh_types::test_utils::TestRandom;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+use ssz_derive::{Decode, Encode};
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+#[ssz(enum_behaviour = "transparent")]
+#[serde(untagged)]
+pub enum Order {
+    Tx(Transaction),
+    Bundle(Bundle),
+}
+
+impl TestRandom for Order {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        if rng.gen() {
+            Order::Tx(Transaction::random_for_test(rng))
+        } else {
+            Order::Bundle(Bundle::random_for_test(rng))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
+#[serde(deny_unknown_fields)]
+pub struct Transaction {
+    /// Index into block.transactions
+    pub index: u32,
+    /// If the transaction is allowed to revert
+    pub can_revert: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
+#[serde(deny_unknown_fields)]
+/// All indices are taken from block.transactions.
+pub struct Bundle {
+    /// Signals txs that are part of the bundle
+    /// and ordering of txs.
+    pub txs: Vec<usize>,
+    /// Txs that may revert.
+    pub reverting_txs: Vec<usize>,
+    /// Txs that are allowed to be omitted, but not revert.
+    pub dropping_txs: Vec<usize>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
+#[serde(deny_unknown_fields)]
+pub struct BlockMergingData {
+    pub allow_appending: bool,
+    pub merge_orders: Vec<Order>,
+}
