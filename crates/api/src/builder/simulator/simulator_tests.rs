@@ -53,6 +53,7 @@ async fn get_block(slot_number: u64) -> BlockSimRequest {
         message: bid_trace,
         signature: block_response.data.signature().clone(),
         execution_payload: electra_exec_payload.into(),
+        merging_data: Default::default(),
         blobs_bundle: BlobsBundle::default(),
         execution_requests: ExecutionRequests::default(),
     };
@@ -81,6 +82,7 @@ fn get_sim_req() -> BlockSimRequest {
     let signed_bid_submission = SignedBidSubmissionElectra {
         message: bid_trace,
         signature: BlsSignature::test_random(),
+        merging_data: Default::default(),
         execution_payload: electra_exec_payload.into(),
         blobs_bundle: BlobsBundle::default(),
         execution_requests: ExecutionRequests::default(),

@@ -32,10 +32,12 @@ mod simulator_tests {
         auctioneer.builder_demoted = builder_demoted;
         let db =
             MockDatabaseService::new(Arc::new(Default::default()), Arc::new(Default::default()));
-        OptimisticSimulator::new(Arc::new(auctioneer), Arc::new(db), http, SimulatorConfig {
-            url: endpoint.to_string(),
-            namespace: "test".to_string(),
-        })
+        OptimisticSimulator::new(
+            Arc::new(auctioneer),
+            Arc::new(db),
+            http,
+            SimulatorConfig { url: endpoint.to_string(), namespace: "test".to_string() },
+        )
     }
 
     fn get_sim_req() -> BlockSimRequest {
@@ -53,6 +55,7 @@ mod simulator_tests {
         let signed_bid_submission = SignedBidSubmissionElectra {
             message: bid_trace,
             execution_payload: electra_exec_payload.into(),
+            merging_data: Default::default(),
             signature: BlsSignature::test_random(),
             blobs_bundle: BlobsBundle::default(),
             execution_requests: Default::default(),
