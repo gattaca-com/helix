@@ -167,6 +167,22 @@ impl SignedBidSubmission {
         }
     }
 
+    pub fn merging_data(&self) -> &BlockMergingData {
+        match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                &signed_bid_submission.merging_data
+            }
+        }
+    }
+
+    pub fn merging_data_mut(&mut self) -> &mut BlockMergingData {
+        match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                &mut signed_bid_submission.merging_data
+            }
+        }
+    }
+
     pub fn execution_payload_mut(&mut self) -> ExecutionPayloadRefMut {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
