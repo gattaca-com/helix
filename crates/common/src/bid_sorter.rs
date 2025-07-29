@@ -139,7 +139,8 @@ impl BidSorterMessage {
     ) -> Self {
         let bid_trace = submission.bid_trace();
         let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
-        let simulation_time_ns = trace.simulation.saturating_sub(trace.signature);
+        let simulation_time_ns =
+            if trace.is_optimistic { 0 } else { trace.simulation.saturating_sub(trace.signature) };
 
         let header = bid_submission_to_builder_bid_unsigned(submission);
         Self::Submission {
