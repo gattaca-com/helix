@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::metrics::SUB_TRACE_LATENCY;
 
+// all timestamps are in nanoseconds
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SubmissionTrace {
     pub receive: u64,
@@ -22,14 +23,12 @@ impl SubmissionTrace {
         let read_body = self.read_body.saturating_sub(self.receive) as f64 / 1000.;
         let decode = self.decode.saturating_sub(self.read_body) as f64 / 1000.;
         let floor_bid_checks = self.floor_bid_checks.saturating_sub(self.decode) as f64 / 1000.;
-        let pre_checks =
-            self.pre_checks.saturating_sub(self.floor_bid_checks) as f64 as f64 / 1000.;
-        let signature = self.signature.saturating_sub(self.pre_checks) as f64 as f64 / 1000.;
-        let simulation = self.simulation.saturating_sub(self.signature) as f64 as f64 / 1000.;
+        let pre_checks = self.pre_checks.saturating_sub(self.floor_bid_checks) as f64 / 1000.;
+        let signature = self.signature.saturating_sub(self.pre_checks) as f64 / 1000.;
+        let simulation = self.simulation.saturating_sub(self.signature) as f64 / 1000.;
         let auctioneer_update =
-            self.auctioneer_update.saturating_sub(self.simulation) as f64 as f64 / 1000.;
-        let finish =
-            self.request_finish.saturating_sub(self.auctioneer_update) as f64 as f64 / 1000.;
+            self.auctioneer_update.saturating_sub(self.simulation) as f64 / 1000.;
+        let finish = self.request_finish.saturating_sub(self.auctioneer_update) as f64 / 1000.;
 
         SUB_TRACE_LATENCY.with_label_values(&["receive"]).observe(decode);
         SUB_TRACE_LATENCY.with_label_values(&["read_body"]).observe(read_body);
