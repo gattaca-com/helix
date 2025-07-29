@@ -344,7 +344,7 @@ impl BidSorter {
                     }
 
                     BID_SORTER_RECV_LATENCY_US.observe(recv_latency_ns as f64 / 1000.);
-                    BID_SORTER_PROCESS_LATENCY_US.observe(recv_latency_ns as f64 / 1000.);
+                    BID_SORTER_PROCESS_LATENCY_US.observe(process_latency_ns as f64 / 1000.);
                 }
                 BidSorterMessage::Demotion(demoted) => {
                     let demoted = demoted.serialize();
