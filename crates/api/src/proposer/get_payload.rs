@@ -41,7 +41,7 @@ impl<A: Api> ProposerApi<A> {
     /// 1. Validates the proposer index and verifies the block's signature.
     /// 2. Retrieves the corresponding execution payload from the auctioneer.
     /// 3. Validates the payload and publishes it to the multi-beacon client.
-    /// 4. Optionally broadcasts the payload to `broadcasters` (e.g., bloXroute, Fiber).
+    /// 4. Optionally broadcasts the payload to `broadcasters`
     /// 5. Stores the delivered payload information to database.
     /// 6. Returns the unblinded payload to proposer.
     ///
@@ -524,7 +524,6 @@ impl<A: Api> ProposerApi<A> {
     }
 
     /// `broadcast_signed_block` sends the provided signed block to all registered broadcasters
-    /// (e.g., BloXroute, Fiber).
     fn broadcast_signed_block(
         &self,
         signed_block: Arc<VersionedSignedProposal>,
