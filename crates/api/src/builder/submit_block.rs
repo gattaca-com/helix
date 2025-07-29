@@ -197,7 +197,7 @@ impl<A: Api> BuilderApi<A> {
 
         if let Err(err) = api.sorter_tx.try_send(BidSorterMessage::new_from_block_submission(
             &payload,
-            trace.receive,
+            &trace,
             is_cancellations_enabled,
         )) {
             error!(?err, "failed to send submission to sorter");
