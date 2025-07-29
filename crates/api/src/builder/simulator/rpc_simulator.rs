@@ -11,7 +11,7 @@ use reqwest::{
 use serde_json::{json, Value};
 use tracing::{debug, error, Instrument};
 
-use crate::builder::{BlockSimRequest, DbInfo};
+use crate::builder::BlockSimRequest;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct JsonRpcError {
@@ -104,7 +104,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
         request: BlockSimRequest,
         _builder_info: &BuilderInfo,
         is_top_bid: bool,
-    ) -> Result<bool, BlockSimError> {
+    ) -> Result<(), BlockSimError> {
         let timer = SimulatorMetrics::timer(&self.simulator_config.url);
 
         let block_hash = request.execution_payload.block_hash().0;
@@ -121,17 +121,21 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
                 SimulatorMetrics::sim_status(result.is_ok());
 
                 // Send sim result to db processor task
-                let db_info =
-                    DbInfo::SimulationResult { block_hash, block_sim_result: result.clone() };
+                let block_sim_result = result.clone();
+
                 let db_clone = self.db.clone();
                 task::spawn(file!(), line!(), {
                     async move {
-                        process_db_additions(db_clone, db_info).await;
+                        if let Err(err) =
+                            db_clone.save_simulation_result(block_hash, block_sim_result).await
+                        {
+                            error!(%err, "failed to store simulation result")
+                        }
                     }
                     .in_current_span()
                 });
 
-                result.map(|_| false)
+                result
             }
             Err(err) => {
                 timer.stop_and_discard();
@@ -186,33 +190,6 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
             Value::Bool(false) => Ok(true),
             // Still syncing, or unexpected format
             _ => Ok(false),
-        }
-    }
-}
-
-/// Should be called as a new async task.
-/// Stores updates to the db out of the critical path.
-async fn process_db_additions<DB: DatabaseService + 'static>(db: Arc<DB>, db_info: DbInfo) {
-    match db_info {
-        DbInfo::NewSubmission(submission, trace, version) => {
-            if let Err(err) = db.store_block_submission(submission, trace, version as i16).await {
-                error!(%err, "failed to store block submission")
-            }
-        }
-        DbInfo::NewHeaderSubmission(header_submission, trace) => {
-            if let Err(err) = db.store_header_submission(header_submission, trace, None).await {
-                error!(%err, "failed to store header submission")
-            }
-        }
-        DbInfo::GossipedPayload { block_hash, trace } => {
-            if let Err(err) = db.save_gossiped_payload_trace(block_hash, trace).await {
-                error!(%err, "failed to store gossiped payload trace")
-            }
-        }
-        DbInfo::SimulationResult { block_hash, block_sim_result } => {
-            if let Err(err) = db.save_simulation_result(block_hash, block_sim_result).await {
-                error!(%err, "failed to store simulation result")
-            }
         }
     }
 }

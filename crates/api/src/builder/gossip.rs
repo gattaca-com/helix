@@ -69,15 +69,15 @@ impl<A: Api> BuilderApi<A> {
         });
     }
 
-    pub(crate) async fn gossip_payload<'a>(
+    pub(crate) async fn gossip_payload(
         &self,
         payload: &SignedBidSubmission,
-        execution_payload: PayloadAndBlobsRef<'a>,
+        execution_payload: PayloadAndBlobsRef<'_>,
     ) {
         let params = BroadcastPayloadParams::to_proto(
             execution_payload,
             payload.slot().as_u64(),
-            &payload.proposer_public_key(),
+            payload.proposer_public_key(),
         );
         self.gossiper.broadcast_payload(params).await
     }
