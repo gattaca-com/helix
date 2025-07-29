@@ -66,7 +66,7 @@ impl<A: Api> BuilderApi<A> {
 
     pub(crate) async fn handle_optimistic_payload(
         api: Arc<BuilderApi<A>>,
-        payload: Arc<SignedBidSubmission>,
+        payload: SignedBidSubmission,
         mut trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,
     ) -> Result<StatusCode, BuilderApiError> {
@@ -187,7 +187,7 @@ impl<A: Api> BuilderApi<A> {
 
         match api
             .verify_submitted_block(
-                payload.clone(),
+                &payload,
                 next_duty,
                 &builder_info,
                 &mut trace,
@@ -220,7 +220,7 @@ impl<A: Api> BuilderApi<A> {
                 payload.slot().as_u64(),
                 &payload.message().proposer_pubkey,
                 payload.block_hash(),
-                &payload.payload_and_blobs(),
+                payload.payload_and_blobs_ref(),
             )
             .await
         {
@@ -236,7 +236,7 @@ impl<A: Api> BuilderApi<A> {
 
         // Gossip to other relays
         if api.relay_config.payload_gossip_enabled {
-            api.gossip_payload(&payload, payload.payload_and_blobs()).await;
+            api.gossip_payload(&payload, payload.payload_and_blobs_ref()).await;
         }
 
         // Log some final info

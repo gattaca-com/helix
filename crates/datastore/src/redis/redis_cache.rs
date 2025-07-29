@@ -23,6 +23,7 @@ use helix_common::{
 use helix_database::types::BuilderInfoDocument;
 use helix_types::{
     maybe_upgrade_execution_payload, BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs,
+    PayloadAndBlobsRef,
 };
 use moka::sync::Cache;
 use redis::{AsyncCommands, Msg, RedisResult, Script, Value};
@@ -834,12 +835,12 @@ impl Auctioneer for RedisCache {
     }
 
     #[instrument(skip_all)]
-    async fn save_execution_payload(
+    async fn save_execution_payload<'a>(
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
-        execution_payload: &PayloadAndBlobs,
+        execution_payload: PayloadAndBlobsRef<'a>,
     ) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("save_execution_payload");
 
@@ -1284,7 +1285,10 @@ impl<'a> From<&'a InclusionListWithKey> for (&'a InclusionListWithMetadata, &'a 
 mod tests {
 
     use alloy_primitives::U256;
-    use helix_types::{get_fixed_pubkey, ExecutionPayloadElectra, ForkName, TestRandomSeed};
+    use helix_types::{
+        get_fixed_pubkey, BlobsBundle, ExecutionPayloadElectra, ExecutionPayloadRef, ForkName,
+        TestRandomSeed,
+    };
     use serde::{Deserialize, Serialize};
     use serial_test::serial;
 
@@ -1557,8 +1561,11 @@ mod tests {
         let block_hash = B256::test_random();
 
         let payload = ExecutionPayloadElectra { gas_limit: 999, ..Default::default() };
-        let versioned_execution_payload =
-            PayloadAndBlobs { execution_payload: payload.into(), blobs_bundle: Default::default() };
+        let blobs_bundle = BlobsBundle::default();
+        let versioned_execution_payload = PayloadAndBlobsRef {
+            execution_payload: ExecutionPayloadRef::Electra(&payload),
+            blobs_bundle: &blobs_bundle,
+        };
 
         // Save the execution payload
         let save_result = cache
@@ -1566,7 +1573,7 @@ mod tests {
                 slot,
                 &proposer_pub_key,
                 &block_hash,
-                &versioned_execution_payload,
+                versioned_execution_payload,
             )
             .await;
         assert!(save_result.is_ok(), "Failed to save the execution payload");

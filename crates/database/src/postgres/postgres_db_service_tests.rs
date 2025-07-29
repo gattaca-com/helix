@@ -405,8 +405,8 @@ mod tests {
 
         let signed_bid_submission = SignedBidSubmissionElectra {
             message: bid_trace.clone(),
-            execution_payload: ExecutionPayloadElectra::default(),
-            blobs_bundle: BlobsBundle::default(),
+            execution_payload: ExecutionPayloadElectra::default().into(),
+            blobs_bundle: BlobsBundle::default().into(),
             signature: BlsSignature::test_random(),
             execution_requests: Default::default(),
         };
@@ -414,7 +414,7 @@ mod tests {
         let submission_trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
 
         db_service
-            .store_block_submission(Arc::new(signed_bid_submission.into()), submission_trace, 0)
+            .store_block_submission(signed_bid_submission.into(), submission_trace, 0)
             .await?;
         Ok(())
     }

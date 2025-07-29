@@ -7,7 +7,7 @@ use helix_common::{
     ProposerInfo,
 };
 use helix_database::BuilderInfoDocument;
-use helix_types::{BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs};
+use helix_types::{BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, PayloadAndBlobsRef};
 use tokio::sync::broadcast;
 
 use crate::{error::AuctioneerError, redis::redis_cache::InclusionListWithKey};
@@ -22,12 +22,12 @@ pub trait Auctioneer: Send + Sync + Clone {
         hash: &B256,
     ) -> Result<(), AuctioneerError>;
 
-    async fn save_execution_payload(
+    async fn save_execution_payload<'a>(
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
-        versioned_execution_payload: &PayloadAndBlobs,
+        versioned_execution_payload: PayloadAndBlobsRef<'a>,
     ) -> Result<(), AuctioneerError>;
     async fn get_execution_payload(
         &self,

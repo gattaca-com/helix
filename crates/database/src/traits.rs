@@ -87,7 +87,7 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn store_block_submission(
         &self,
-        submission: Arc<SignedBidSubmission>,
+        submission: SignedBidSubmission,
         trace: SubmissionTrace,
         optimistic_version: i16,
     ) -> Result<(), DatabaseError>;

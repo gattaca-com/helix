@@ -229,9 +229,7 @@ impl GrpcGossiperClientManager {
     /// Broadcast a payload. This payload will always be saved to the receiving relay's Autcioneer.
     /// This is because, the local relay has saved the payload's header and may have served it for
     /// get_header. Only validated Payloads are gossiped.
-    pub async fn broadcast_payload(&self, request: BroadcastPayloadParams) {
-        let request = request.to_proto();
-
+    pub async fn broadcast_payload(&self, request: grpc::BroadcastPayloadParams) {
         for client in self.clients.iter() {
             let client = client.clone();
             let request = request.clone();

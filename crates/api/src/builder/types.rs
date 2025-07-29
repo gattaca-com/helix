@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub enum DbInfo {
-    NewSubmission(Arc<SignedBidSubmission>, SubmissionTrace, OptimisticVersion),
+    NewSubmission(SignedBidSubmission, SubmissionTrace, OptimisticVersion),
     NewHeaderSubmission(Arc<SignedHeaderSubmission>, HeaderSubmissionTrace),
     GossipedPayload { block_hash: B256, trace: GossipedPayloadTrace },
     SimulationResult { block_hash: B256, block_sim_result: Result<(), BlockSimError> },

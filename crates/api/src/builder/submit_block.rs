@@ -186,7 +186,7 @@ impl<A: Api> BuilderApi<A> {
 
         let was_simulated_optimistically = api
             .verify_submitted_block(
-                payload.clone(),
+                &payload,
                 next_duty,
                 &builder_info,
                 &mut trace,
@@ -213,7 +213,7 @@ impl<A: Api> BuilderApi<A> {
                 payload.slot().as_u64(),
                 payload.proposer_public_key(),
                 payload.block_hash(),
-                &payload.payload_and_blobs(),
+                payload.payload_and_blobs_ref(),
             )
             .await?;
         trace!("saved payload to redis");

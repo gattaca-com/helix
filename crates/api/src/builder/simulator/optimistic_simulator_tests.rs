@@ -10,7 +10,7 @@ mod simulator_tests {
     use helix_datastore::MockAuctioneer;
     use helix_types::{
         BidTrace, BlobsBundle, BlsPublicKey, BlsSignature, ExecutionPayloadElectra,
-        SignedBidSubmissionElectra, TestRandomSeed,
+        SignedBidSubmission, SignedBidSubmissionElectra, TestRandomSeed,
     };
     use reqwest::Client;
     use serde_json::json;
@@ -54,17 +54,13 @@ mod simulator_tests {
             message: bid_trace,
             execution_payload: electra_exec_payload.into(),
             signature: BlsSignature::test_random(),
-            blobs_bundle: BlobsBundle::default(),
+            blobs_bundle: BlobsBundle::default().into(),
             execution_requests: Default::default(),
         };
 
-        BlockSimRequest::new(
-            0,
-            Arc::new(signed_bid_submission.into()),
-            ValidatorPreferences::default(),
-            None,
-            None,
-        )
+        let signed_bid_submission = SignedBidSubmission::Electra(signed_bid_submission);
+
+        BlockSimRequest::new(0, &signed_bid_submission, ValidatorPreferences::default(), None, None)
     }
 
     #[tokio::test]
