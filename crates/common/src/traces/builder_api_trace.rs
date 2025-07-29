@@ -5,6 +5,7 @@ use crate::metrics::SUB_TRACE_LATENCY;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SubmissionTrace {
     pub receive: u64,
+    pub read_body: u64,
     pub decode: u64,
     pub floor_bid_checks: u64,
     pub pre_checks: u64,
@@ -18,7 +19,8 @@ pub struct SubmissionTrace {
 
 impl SubmissionTrace {
     pub fn record_metrics(&self) {
-        let decode = self.decode.saturating_sub(self.receive) as f64 / 1000.;
+        let read_body = self.read_body.saturating_sub(self.receive) as f64 / 1000.;
+        let decode = self.decode.saturating_sub(self.read_body) as f64 / 1000.;
         let floor_bid_checks = self.floor_bid_checks.saturating_sub(self.decode) as f64 / 1000.;
         let pre_checks =
             self.pre_checks.saturating_sub(self.floor_bid_checks) as f64 as f64 / 1000.;
@@ -30,6 +32,7 @@ impl SubmissionTrace {
             self.request_finish.saturating_sub(self.auctioneer_update) as f64 as f64 / 1000.;
 
         SUB_TRACE_LATENCY.with_label_values(&["receive"]).observe(decode);
+        SUB_TRACE_LATENCY.with_label_values(&["read_body"]).observe(read_body);
         SUB_TRACE_LATENCY.with_label_values(&["decode"]).observe(decode);
         SUB_TRACE_LATENCY.with_label_values(&["floor_bid_checks"]).observe(floor_bid_checks);
         SUB_TRACE_LATENCY.with_label_values(&["pre_checks"]).observe(pre_checks);

@@ -447,7 +447,10 @@ pub async fn decode_payload(
             size: body_bytes.len(),
         });
     }
+    trace!("read body");
+    trace.read_body = utcnow_ns();
 
+    let size_compressed = body_bytes.len();
     // Decompress if necessary
     if is_gzip {
         let mut decoder = GzDecoder::new(&body_bytes[..]);
@@ -460,7 +463,7 @@ pub async fn decode_payload(
         body_bytes = buf.into();
     }
 
-    debug!(payload_size = body_bytes.len(), is_gzip, is_ssz, "decoded payload");
+    trace!(size_compressed, size_uncompressed = body_bytes.len(), is_gzip, "decompressed payload");
 
     // Decode payload
     let payload: SignedBidSubmission = if is_ssz {
@@ -476,7 +479,6 @@ pub async fn decode_payload(
         serde_json::from_slice(&body_bytes)?
     };
 
-    trace.decode = utcnow_ns();
     debug!(
         timestamp_after_decoding = trace.decode,
         decode_latency_ns = trace.decode.saturating_sub(trace.receive),
