@@ -923,7 +923,7 @@ impl Auctioneer for RedisCache {
 
     #[instrument(skip_all)]
     async fn demote_builder(&self, builder_pub_key: &BlsPublicKey) -> Result<(), AuctioneerError> {
-        let _ = self.sorter_tx.send(BidSorterMessage::Demotion(builder_pub_key.clone()));
+        let _ = self.sorter_tx.try_send(BidSorterMessage::Demotion(builder_pub_key.clone()));
 
         let mut record = RedisMetricRecord::new("demote_builder");
         let mut builder_info = self.get_builder_info(builder_pub_key).await?;

@@ -89,8 +89,8 @@ impl<A: Api> V2SubChecker<A> {
 
         loop {
             tokio::select! {
-                    _ = tick.tick() => self.check_demotions(&mut demoted),
-                    Some(msg) = self.v2_check_rx.recv() => self.process_message(msg),
+                _ = tick.tick() => self.check_demotions(&mut demoted),
+                Some(msg) = self.v2_check_rx.recv() => self.process_message(msg),
             }
         }
     }
