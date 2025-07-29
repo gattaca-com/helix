@@ -30,7 +30,6 @@ impl SubmissionTrace {
             self.auctioneer_update.saturating_sub(self.simulation) as f64 / 1000.;
         let finish = self.request_finish.saturating_sub(self.auctioneer_update) as f64 / 1000.;
 
-        SUB_TRACE_LATENCY.with_label_values(&["receive"]).observe(decode);
         SUB_TRACE_LATENCY.with_label_values(&["read_body"]).observe(read_body);
         SUB_TRACE_LATENCY.with_label_values(&["decode"]).observe(decode);
         SUB_TRACE_LATENCY.with_label_values(&["floor_bid_checks"]).observe(floor_bid_checks);
@@ -42,7 +41,7 @@ impl SubmissionTrace {
             SUB_TRACE_LATENCY.with_label_values(&["sim_non_optimistic"]).observe(simulation);
         }
         SUB_TRACE_LATENCY.with_label_values(&["auctioneer_update"]).observe(auctioneer_update);
-        SUB_TRACE_LATENCY.with_label_values(&["request_finish"]).observe(finish);
+        SUB_TRACE_LATENCY.with_label_values(&["finish"]).observe(finish);
     }
 }
 
