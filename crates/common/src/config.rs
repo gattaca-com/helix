@@ -162,14 +162,7 @@ pub struct RedisConfig {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum BroadcasterConfig {
-    Fiber(FiberConfig),
     BeaconClient(BeaconClientConfig),
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct FiberConfig {
-    pub url: String,
-    pub api_key: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
