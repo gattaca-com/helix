@@ -15,7 +15,9 @@ use helix_common::{
         data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
-    bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
+    bid_submission::{
+        v2::header_submission::SignedHeaderSubmission, BidSubmission, OptimisticVersion,
+    },
     metrics::DbMetricRecord,
     simulator::BlockSimError,
     utils::utcnow_ms,
@@ -45,7 +47,7 @@ use crate::{
 struct PendingBlockSubmissionValue {
     pub submission: SignedBidSubmission,
     pub trace: SubmissionTrace,
-    pub optimistic_version: i16,
+    pub optimistic_version: OptimisticVersion,
 }
 struct PendingHeaderSubmissionValue {
     pub submission: Arc<SignedHeaderSubmission>,
@@ -632,7 +634,7 @@ impl PostgresDatabaseService {
             structured_traces.push(TraceParams {
                 block_hash: item.submission.block_hash().as_slice().to_vec(),
                 region_id: self.region,
-                optimistic_version: item.optimistic_version,
+                optimistic_version: item.optimistic_version as i16,
                 receive: item.trace.receive as i64,
                 decode: item.trace.decode as i64,
                 pre_checks: item.trace.pre_checks as i64,
@@ -1531,9 +1533,9 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         submission: SignedBidSubmission,
         trace: SubmissionTrace,
-        optimistic_version: i16,
+        optimistic_version: OptimisticVersion,
     ) -> Result<(), DatabaseError> {
-        trace.record_metrics();
+        trace.record_metrics(optimistic_version);
         let mut record = DbMetricRecord::new("store_block_submission");
         if let Some(sender) = &self.block_submissions_sender {
             sender

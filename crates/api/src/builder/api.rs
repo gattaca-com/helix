@@ -293,7 +293,6 @@ impl<A: Api> BuilderApi<A> {
         match result {
             Ok(sim_optimistic) => {
                 trace.simulation = utcnow_ns();
-                trace.is_optimistic = sim_optimistic;
                 debug!(
                     sim_latency = trace.simulation.saturating_sub(trace.signature),
                     "block simulation successful"
@@ -479,6 +478,7 @@ pub async fn decode_payload(
         serde_json::from_slice(&body_bytes)?
     };
 
+    trace.decode = utcnow_ns();
     debug!(
         timestamp_after_decoding = trace.decode,
         decode_latency_ns = trace.decode.saturating_sub(trace.receive),

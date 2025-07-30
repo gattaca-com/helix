@@ -12,7 +12,9 @@ use tracing::info;
 
 use crate::{
     api::builder_api::TopBidUpdate,
-    bid_submission::{v2::header_submission::SignedHeaderSubmission, BidSubmission},
+    bid_submission::{
+        v2::header_submission::SignedHeaderSubmission, BidSubmission, OptimisticVersion,
+    },
     bid_submission_to_builder_bid_unsigned, header_submission_to_builder_bid_unsigned,
     metrics::{TopBidMetrics, BID_SORTER_PROCESS_LATENCY_US, BID_SORTER_RECV_LATENCY_US},
     utils::{avg_duration, utcnow_ms, utcnow_ns},
@@ -135,12 +137,17 @@ impl BidSorterMessage {
     pub fn new_from_block_submission(
         submission: &SignedBidSubmission,
         trace: &SubmissionTrace,
+        optimistic_version: OptimisticVersion,
         is_cancellable: bool,
     ) -> Self {
         let bid_trace = submission.bid_trace();
         let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
-        let simulation_time_ns =
-            if trace.is_optimistic { 0 } else { trace.simulation.saturating_sub(trace.signature) };
+        let simulation_time_ns = if optimistic_version.is_optimistic() {
+            0
+        } else {
+            // this removes also the optimistic check overhead
+            trace.simulation.saturating_sub(trace.signature)
+        };
 
         let header = bid_submission_to_builder_bid_unsigned(submission);
         Self::Submission {

@@ -8,7 +8,7 @@ use axum::{
 use helix_common::{
     self,
     bid_sorter::BidSorterMessage,
-    bid_submission::BidSubmission,
+    bid_submission::{BidSubmission, OptimisticVersion},
     metadata_provider::MetadataProvider,
     metrics::ApiMetrics,
     task,
@@ -25,7 +25,6 @@ use crate::{
     builder::{
         api::{decode_payload, sanity_check_block_submission},
         error::BuilderApiError,
-        OptimisticVersion,
     },
     Api,
 };
@@ -193,11 +192,18 @@ impl<A: Api> BuilderApi<A> {
                 &payload_attributes,
             )
             .await?;
+
+        let optimistic_version = if was_simulated_optimistically {
+            OptimisticVersion::V1
+        } else {
+            OptimisticVersion::NotOptimistic
+        };
         trace!(is_optimistic = was_simulated_optimistically, "verified submitted block");
 
         if let Err(err) = api.sorter_tx.try_send(BidSorterMessage::new_from_block_submission(
             &payload,
             &trace,
+            optimistic_version,
             is_cancellations_enabled,
         )) {
             error!(?err, "failed to send submission to sorter");
@@ -233,19 +239,13 @@ impl<A: Api> BuilderApi<A> {
             "submit_block request finished"
         );
 
-        let optimistic_version = if was_simulated_optimistically {
-            OptimisticVersion::V1
-        } else {
-            OptimisticVersion::NotOptimistic
-        };
-
         // Save submission to db.
         task::spawn(
             file!(),
             line!(),
             async move {
                 if let Err(err) =
-                    api.db.store_block_submission(payload, trace, optimistic_version as i16).await
+                    api.db.store_block_submission(payload, trace, optimistic_version).await
                 {
                     error!(%err, "failed to store block submission")
                 }
