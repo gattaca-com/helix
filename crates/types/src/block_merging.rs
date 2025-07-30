@@ -1,3 +1,5 @@
+use alloy_primitives::bytes::Bytes;
+use alloy_primitives::Address;
 use lh_test_random::TestRandom;
 use lh_types::test_utils::TestRandom;
 use rand::Rng;
@@ -49,4 +51,29 @@ pub struct Bundle {
 pub struct BlockMergingData {
     pub allow_appending: bool,
     pub merge_orders: Vec<Order>,
+}
+
+/// Represents one or more transactions to be appended into a block atomically.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct MergeableBundle {
+    /// List of transactions that can be merged into the block.
+    pub transactions: Vec<Bytes>,
+    /// Txs that may revert.
+    pub reverting_txs: Vec<usize>,
+    /// Txs that are allowed to be omitted, but not revert.
+    pub dropping_txs: Vec<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct MergeableBundles {
+    /// Address of the builder that submitted these bundles.
+    pub origin: Address,
+    /// List of mergeable bundles.
+    pub bundles: Vec<MergeableBundle>,
+}
+
+impl MergeableBundles {
+    pub fn new(origin: Address, bundles: Vec<MergeableBundle>) -> Self {
+        Self { origin, bundles }
+    }
 }

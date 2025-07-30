@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
+use alloy_primitives::Address;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
     Extension,
 };
+use bytes::Bytes;
 use helix_common::{
     self,
     bid_sorter::BidSorterMessage,
@@ -17,6 +19,9 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
+use helix_types::{
+    BlockMergingData, MergeableBundle, MergeableBundles, Order, SignedBidSubmission,
+};
 use hyper::HeaderMap;
 use tracing::{debug, error, info, trace, warn, Instrument, Level};
 
@@ -195,18 +200,13 @@ impl<A: Api> BuilderApi<A> {
             .await?;
         trace!(is_optimistic = was_simulated_optimistically, "verified submitted block");
 
-        let mergeable_txs = if was_simulated_optimistically {
-            // TODO: support optimistic simulation
-            vec![]
-        } else {
-            vec![]
-        };
+        let mergeable_bundles = get_mergeable_bundles(&payload, payload.merging_data())?;
 
         if let Err(err) = api.sorter_tx.send(BidSorterMessage::new_from_block_submission(
             &payload,
             trace.receive,
             is_cancellations_enabled,
-            mergeable_txs,
+            mergeable_bundles,
         )) {
             error!(?err, "failed to send submission to sorter");
             return Err(BuilderApiError::InternalError);
@@ -278,4 +278,66 @@ impl<A: Api> BuilderApi<A> {
 
         Ok(StatusCode::OK)
     }
+}
+
+fn get_mergeable_bundles(
+    payload: &SignedBidSubmission,
+    merging_data: &BlockMergingData,
+) -> Result<MergeableBundles, BuilderApiError> {
+    let txs = payload.execution_payload().transactions();
+    let mergeable_bundles = merging_data
+        .merge_orders
+        .iter()
+        .map(|order| match order {
+            Order::Tx(tx) => {
+                let raw_tx = txs
+                    .get(tx.index as usize)
+                    .cloned()
+                    // TODO: use a better error
+                    .ok_or(BuilderApiError::MissingTransactions)?;
+                let reverting_txs = if tx.can_revert { vec![0] } else { vec![] };
+
+                Ok(MergeableBundle {
+                    transactions: vec![Bytes::from_owner(raw_tx.to_vec())],
+                    reverting_txs,
+                    dropping_txs: vec![],
+                })
+            }
+            Order::Bundle(bundle) => {
+                let transactions = bundle
+                    .txs
+                    .iter()
+                    .map(|tx_index| {
+                        let raw_tx = txs
+                            .get(*tx_index)
+                            .cloned()
+                            // TODO: use a better error
+                            .ok_or(BuilderApiError::MissingTransactions)?;
+
+                        Ok(Bytes::from_owner(raw_tx.to_vec()))
+                    })
+                    .collect::<Result<_, BuilderApiError>>()?;
+
+                let reverting_txs = bundle
+                    .txs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, tx_index)| bundle.reverting_txs.contains(tx_index))
+                    .map(|(i, _)| i)
+                    .collect();
+                let dropping_txs = bundle
+                    .txs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, tx_index)| bundle.dropping_txs.contains(tx_index))
+                    .map(|(i, _)| i)
+                    .collect();
+
+                Ok(MergeableBundle { transactions, reverting_txs, dropping_txs })
+            }
+        })
+        .collect::<Result<Vec<_>, BuilderApiError>>()?;
+
+    // TODO: which address should we use here?
+    Ok(MergeableBundles::new(Address::default(), mergeable_bundles))
 }
