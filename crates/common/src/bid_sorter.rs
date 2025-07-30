@@ -16,6 +16,7 @@ use crate::{
     bid_submission_to_builder_bid_unsigned, header_submission_to_builder_bid_unsigned,
     metrics::{TopBidMetrics, BID_SORTER_PROCESS_LATENCY_US, BID_SORTER_RECV_LATENCY_US},
     utils::{avg_duration, utcnow_ms, utcnow_ns},
+    SubmissionTrace,
 };
 
 type BlsPubkey = [u8; 48];
@@ -122,6 +123,7 @@ pub enum BidSorterMessage {
         slot: u64,
         header: BuilderBid,
         is_cancellable: bool,
+        simulation_time_ns: u64,
     },
     /// Demotion of a builder pubkey, all its bids are invalidated for this slot
     Demotion(BlsPublicKey),
@@ -132,11 +134,13 @@ pub enum BidSorterMessage {
 impl BidSorterMessage {
     pub fn new_from_block_submission(
         submission: &SignedBidSubmission,
-        on_receive_ns: u64,
+        trace: &SubmissionTrace,
         is_cancellable: bool,
     ) -> Self {
         let bid_trace = submission.bid_trace();
-        let bid = Bid { value: bid_trace.value, on_receive_ns };
+        let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
+        let simulation_time_ns =
+            if trace.is_optimistic { 0 } else { trace.simulation.saturating_sub(trace.signature) };
 
         let header = bid_submission_to_builder_bid_unsigned(submission);
         Self::Submission {
@@ -145,6 +149,7 @@ impl BidSorterMessage {
             slot: bid_trace.slot,
             header,
             is_cancellable,
+            simulation_time_ns,
         }
     }
 
@@ -163,6 +168,7 @@ impl BidSorterMessage {
             slot: bid_trace.slot,
             header,
             is_cancellable,
+            simulation_time_ns: 0,
         }
     }
 }
@@ -310,6 +316,7 @@ impl BidSorter {
                     slot,
                     header,
                     is_cancellable,
+                    simulation_time_ns,
                 } => {
                     if self.curr_bid_slot != slot {
                         self.local_telemetry.past_subs += 1;
@@ -325,7 +332,8 @@ impl BidSorter {
                     self.process_header(builder_pubkey, bid, is_cancellable);
 
                     // telemetry
-                    let recv_latency_ns = recv_ns.saturating_sub(bid.on_receive_ns);
+                    let recv_latency_ns =
+                        recv_ns.saturating_sub(bid.on_receive_ns + simulation_time_ns);
                     let process_latency_ns = utcnow_ns().saturating_sub(recv_ns);
 
                     self.local_telemetry.valid_subs += 1;
@@ -337,7 +345,7 @@ impl BidSorter {
                     }
 
                     BID_SORTER_RECV_LATENCY_US.observe(recv_latency_ns as f64 / 1000.);
-                    BID_SORTER_PROCESS_LATENCY_US.observe(recv_latency_ns as f64 / 1000.);
+                    BID_SORTER_PROCESS_LATENCY_US.observe(process_latency_ns as f64 / 1000.);
                 }
                 BidSorterMessage::Demotion(demoted) => {
                     let demoted = demoted.serialize();

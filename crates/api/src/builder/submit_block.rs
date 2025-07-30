@@ -197,7 +197,7 @@ impl<A: Api> BuilderApi<A> {
 
         if let Err(err) = api.sorter_tx.try_send(BidSorterMessage::new_from_block_submission(
             &payload,
-            trace.receive,
+            &trace,
             is_cancellations_enabled,
         )) {
             error!(?err, "failed to send submission to sorter");
@@ -216,6 +216,7 @@ impl<A: Api> BuilderApi<A> {
                 &payload.payload_and_blobs(),
             )
             .await?;
+        trace.auctioneer_update = utcnow_ns();
         trace!("saved payload to redis");
 
         if let Err(err) = api.auctioneer.save_bid_trace(payload.bid_trace()).await {

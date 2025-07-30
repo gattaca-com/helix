@@ -1533,6 +1533,7 @@ impl DatabaseService for PostgresDatabaseService {
         trace: SubmissionTrace,
         optimistic_version: i16,
     ) -> Result<(), DatabaseError> {
+        trace.record_metrics();
         let mut record = DbMetricRecord::new("store_block_submission");
         if let Some(sender) = &self.block_submissions_sender {
             sender
