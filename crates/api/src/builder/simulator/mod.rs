@@ -57,3 +57,7 @@ impl BlockSimRequest {
         }
     }
 }
+
+pub struct BlockMergeRequest {
+    // TODO: populate
+}

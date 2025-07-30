@@ -62,6 +62,7 @@ pub fn app() -> Router {
     let api_service = Arc::new(ProposerApi::<MockApi>::new(
         Arc::new(MockAuctioneer::default()),
         Arc::new(MockDatabaseService::default()),
+        MultiSimulator::new(vec![]),
         GrpcGossiperClientManager::mock().into(),
         Arc::new(DefaultMetadataProvider::default()),
         Arc::new(RelaySigningContext::default()),
@@ -170,6 +171,7 @@ pub fn proposer_api_app(
     let proposer_api_service = Arc::new(ProposerApi::<MockApi>::new(
         auctioneer.clone(),
         Arc::new(MockDatabaseService::default()),
+        MultiSimulator::new(vec![]),
         GrpcGossiperClientManager::mock().into(),
         Arc::new(DefaultMetadataProvider::default()),
         Arc::new(RelaySigningContext::default()),

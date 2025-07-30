@@ -539,7 +539,7 @@ impl BidSorter {
         let _ = self.top_bid_tx.send(top_bid_update);
 
         self.curr_bid = Some((builder_pubkey, bid));
-        let bundles = self.bundles.iter().map(|(_, b)| b.clone()).collect();
+        let bundles = self.get_mergeable_bundles();
         self.shared_best_header.store(self.curr_bid_slot, h.clone(), bundles);
 
         self.local_telemetry.top_bids += 1;
@@ -573,6 +573,28 @@ impl BidSorter {
             ?avg_demotion_process,
             "bid sorter telemetry"
         )
+    }
+
+    fn get_mergeable_bundles(&self) -> Vec<MergeableBundles> {
+        let mut seen_txs = HashSet::new();
+        self.bundles
+            .iter()
+            .rev()
+            .map(|(_, b)| {
+                let bundles: Vec<helix_types::MergeableBundle> =
+                    b.bundles
+                        .iter()
+                        .filter(|b| {
+                            !b.transactions.iter().enumerate().any(|(i, tx)| {
+                                seen_txs.contains(tx) && !b.dropping_txs.contains(&i)
+                            })
+                        })
+                        .cloned()
+                        .collect();
+                seen_txs.extend(bundles.clone().into_iter().flat_map(|b| b.transactions));
+                MergeableBundles { origin: b.origin, bundles }
+            })
+            .collect()
     }
 }
 

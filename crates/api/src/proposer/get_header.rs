@@ -191,7 +191,8 @@ impl<A: Api> ProposerApi<A> {
                 .await?;
 
             // Here we would somehow get all the appendable transactions, with bundle/revert metadata
-            let new_bid = append_transactions_to_payload(bid, payload, bundles).await?;
+            let new_bid =
+                proposer_api.append_transactions_to_payload(bid, payload, bundles).await?;
 
             let latest_bid_res = proposer_api.shared_best_header.load(
                 bid_request.slot.into(),
@@ -231,6 +232,23 @@ impl<A: Api> ProposerApi<A> {
         info!(%signed_bid, "delivering bid");
 
         Ok(axum::Json(signed_bid))
+    }
+
+    async fn append_transactions_to_payload(
+        &self,
+        bid: BuilderBid,
+        payload: PayloadAndBlobs,
+        mergeable_txs: Vec<MergeableBundles>,
+    ) -> Result<BuilderBid, ProposerApiError> {
+        // We should send an RPC request to the simulator to append transactions to the payload
+        // For each appendable transaction or bundle, we try at each step to append it to the payload
+        // and check if the payload is still valid.
+        // If it is, we keep it, otherwise we revert the change and keep trying until we run out of
+        // transactions or gas.
+        // TODO: turn into merge request and call simulator
+        // self.simulator.process_merge_request(merge_request).await?;
+
+        Ok(bid)
     }
 }
 
@@ -308,18 +326,4 @@ fn get_x_mev_boost_header_start_ms(header_map: &HeaderMap) -> Option<u64> {
     let start_time_str = header.to_str().ok()?;
     let start_time_ms: u64 = start_time_str.parse().ok()?;
     Some(start_time_ms)
-}
-
-async fn append_transactions_to_payload(
-    bid: BuilderBid,
-    payload: PayloadAndBlobs,
-    mergeable_txs: Vec<MergeableBundles>,
-) -> Result<BuilderBid, ProposerApiError> {
-    // TODO: implement block-merging logic
-    // We should send an RPC request to the simulator to append transactions to the payload
-    // For each appendable transaction or bundle, we try at each step to append it to the payload
-    // and check if the payload is still valid.
-    // If it is, we keep it, otherwise we revert the change and keep trying until we run out of
-    // transactions or gas.
-    Ok(bid)
 }

@@ -91,7 +91,7 @@ pub async fn run_api_service<A: Api>(
         auctioneer.clone(),
         db.clone(),
         chain_info.clone(),
-        simulator,
+        simulator.clone(),
         gossiper.clone(),
         metadata_provider.clone(),
         config.clone(),
@@ -127,6 +127,7 @@ pub async fn run_api_service<A: Api>(
     let proposer_api = Arc::new(ProposerApi::<A>::new(
         auctioneer.clone(),
         db.clone(),
+        simulator,
         gossiper.clone(),
         metadata_provider.clone(),
         relay_signing_context,

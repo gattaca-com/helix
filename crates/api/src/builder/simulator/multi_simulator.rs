@@ -11,7 +11,7 @@ use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use tokio::time::sleep;
 
-use super::{optimistic_simulator::OptimisticSimulator, BlockSimRequest};
+use super::{optimistic_simulator::OptimisticSimulator, BlockMergeRequest, BlockSimRequest};
 
 #[derive(Clone)]
 pub struct MultiSimulator<A: Auctioneer + 'static, DB: DatabaseService + 'static> {
@@ -89,5 +89,13 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> MultiSimulator<A, D
         }
 
         Ok(false)
+    }
+
+    pub async fn process_merge_request(
+        &self,
+        request: BlockMergeRequest,
+    ) -> Result<(), BlockSimError> {
+        // TODO: send request to simulator
+        Ok(())
     }
 }
