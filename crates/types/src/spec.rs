@@ -16,6 +16,12 @@ pub fn holesky_spec() -> ChainSpec {
     ChainSpec::from_config::<MainnetEthSpec>(&config).unwrap()
 }
 
+pub fn hoodi_spec() -> ChainSpec {
+    let spec = include_bytes!("specs/hoodi_spec.json");
+    let config: lh_types::Config = serde_json::from_slice(spec).unwrap();
+    ChainSpec::from_config::<MainnetEthSpec>(&config).unwrap()
+}
+
 pub fn spec_from_file<P: AsRef<Path>>(path: P) -> ChainSpec {
     let file = std::fs::File::open(path).unwrap();
     let config: lh_types::Config = serde_json::from_reader(file).unwrap();
