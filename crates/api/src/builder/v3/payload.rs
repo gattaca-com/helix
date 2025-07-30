@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use alloy_primitives::B256;
 use helix_common::{
-    bid_submission::v3::header_submission_v3::{GetPayloadV3, SignedGetPayloadV3},
+    bid_submission::{
+        v3::header_submission_v3::{GetPayloadV3, SignedGetPayloadV3},
+        OptimisticVersion,
+    },
     signing::RelaySigningContext,
     utils::{utcnow_ms, utcnow_ns},
     SubmissionTrace,
@@ -15,7 +18,7 @@ use tracing::{error, info, warn};
 
 use super::V3Error;
 use crate::{
-    builder::{api::BuilderApi, error::BuilderApiError, OptimisticVersion},
+    builder::{api::BuilderApi, error::BuilderApiError},
     Api,
 };
 

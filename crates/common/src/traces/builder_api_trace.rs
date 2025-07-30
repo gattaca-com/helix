@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::metrics::SUB_TRACE_LATENCY;
+use crate::{bid_submission::OptimisticVersion, metrics::SUB_TRACE_LATENCY};
 
 // all timestamps are in nanoseconds
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -14,12 +14,11 @@ pub struct SubmissionTrace {
     pub simulation: u64,
     pub auctioneer_update: u64,
     pub request_finish: u64,
-    pub is_optimistic: bool,
     pub metadata: Option<String>,
 }
 
 impl SubmissionTrace {
-    pub fn record_metrics(&self) {
+    pub fn record_metrics(&self, optimistic_version: OptimisticVersion) {
         let read_body = self.read_body.saturating_sub(self.receive) as f64 / 1000.;
         let decode = self.decode.saturating_sub(self.read_body) as f64 / 1000.;
         let floor_bid_checks = self.floor_bid_checks.saturating_sub(self.decode) as f64 / 1000.;
@@ -35,7 +34,7 @@ impl SubmissionTrace {
         SUB_TRACE_LATENCY.with_label_values(&["floor_bid_checks"]).observe(floor_bid_checks);
         SUB_TRACE_LATENCY.with_label_values(&["pre_checks"]).observe(pre_checks);
         SUB_TRACE_LATENCY.with_label_values(&["signature"]).observe(signature);
-        if self.is_optimistic {
+        if optimistic_version.is_optimistic() {
             SUB_TRACE_LATENCY.with_label_values(&["sim_optimistic"]).observe(simulation);
         } else {
             SUB_TRACE_LATENCY.with_label_values(&["sim_non_optimistic"]).observe(simulation);

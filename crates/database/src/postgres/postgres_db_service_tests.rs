@@ -8,7 +8,10 @@ mod tests {
         api::{
             builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
         },
-        bid_submission::v2::header_submission::{HeaderSubmissionElectra, SignedHeaderSubmission},
+        bid_submission::{
+            v2::header_submission::{HeaderSubmissionElectra, SignedHeaderSubmission},
+            OptimisticVersion,
+        },
         simulator::BlockSimError,
         utils::{utcnow_ns, utcnow_sec},
         validator_preferences::ValidatorPreferences,
@@ -414,7 +417,11 @@ mod tests {
         let submission_trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
 
         db_service
-            .store_block_submission(signed_bid_submission.into(), submission_trace, 0)
+            .store_block_submission(
+                signed_bid_submission.into(),
+                submission_trace,
+                OptimisticVersion::NotOptimistic,
+            )
             .await?;
         Ok(())
     }

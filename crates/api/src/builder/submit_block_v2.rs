@@ -6,7 +6,7 @@ use axum::{
     Extension,
 };
 use helix_common::{
-    bid_submission::BidSubmission,
+    bid_submission::{BidSubmission, OptimisticVersion},
     metadata_provider::MetadataProvider,
     task,
     utils::{extract_request_id, utcnow_ns},
@@ -24,7 +24,6 @@ use crate::{
         api::{decode_payload, sanity_check_block_submission},
         error::BuilderApiError,
         v2_check::V2SubMessage,
-        OptimisticVersion,
     },
     Api,
 };
@@ -253,7 +252,7 @@ impl<A: Api> BuilderApi<A> {
             line!(),
             async move {
                 if let Err(err) =
-                    api.db.store_block_submission(payload, trace, optimistic_version as i16).await
+                    api.db.store_block_submission(payload, trace, optimistic_version).await
                 {
                     error!(%err, "failed to store block submission")
                 }

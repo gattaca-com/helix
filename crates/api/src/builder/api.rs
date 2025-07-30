@@ -293,7 +293,6 @@ impl<A: Api> BuilderApi<A> {
         match result {
             Ok(sim_optimistic) => {
                 trace.simulation = utcnow_ns();
-                trace.is_optimistic = sim_optimistic;
                 debug!(
                     sim_latency = trace.simulation.saturating_sub(trace.signature),
                     "block simulation successful"
