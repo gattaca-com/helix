@@ -5,7 +5,7 @@ use helix_common::{simulator::BlockSimError, BuilderInfo, SimulatorConfig, Valid
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_types::{
     BidTrace, BlobsBundle, BlsSignature, ExecutionPayloadElectra, ExecutionRequests,
-    SignedBeaconBlock, SignedBidSubmissionElectra, TestRandomSeed,
+    SignedBeaconBlock, SignedBidSubmission, SignedBidSubmissionElectra, TestRandomSeed,
 };
 use reqwest::Client;
 use serde_json::json;
@@ -53,13 +53,15 @@ async fn get_block(slot_number: u64) -> BlockSimRequest {
         message: bid_trace,
         signature: block_response.data.signature().clone(),
         execution_payload: electra_exec_payload.into(),
-        blobs_bundle: BlobsBundle::default(),
-        execution_requests: ExecutionRequests::default(),
+        blobs_bundle: BlobsBundle::default().into(),
+        execution_requests: ExecutionRequests::default().into(),
     };
+
+    let signed_bid_submission = SignedBidSubmission::Electra(signed_bid_submission);
 
     BlockSimRequest::new(
         30000000,
-        Arc::new(signed_bid_submission.into()),
+        &signed_bid_submission,
         ValidatorPreferences::default(),
         Some(block_response.data.message().parent_root()),
         None,
@@ -82,17 +84,13 @@ fn get_sim_req() -> BlockSimRequest {
         message: bid_trace,
         signature: BlsSignature::test_random(),
         execution_payload: electra_exec_payload.into(),
-        blobs_bundle: BlobsBundle::default(),
-        execution_requests: ExecutionRequests::default(),
+        blobs_bundle: BlobsBundle::default().into(),
+        execution_requests: ExecutionRequests::default().into(),
     };
 
-    BlockSimRequest::new(
-        0,
-        Arc::new(signed_bid_submission.into()),
-        ValidatorPreferences::default(),
-        None,
-        None,
-    )
+    let signed_bid_submission = SignedBidSubmission::Electra(signed_bid_submission);
+
+    BlockSimRequest::new(0, &signed_bid_submission, ValidatorPreferences::default(), None, None)
 }
 
 #[tokio::test]

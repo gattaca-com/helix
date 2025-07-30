@@ -43,7 +43,7 @@ use crate::{
 };
 
 struct PendingBlockSubmissionValue {
-    pub submission: Arc<SignedBidSubmission>,
+    pub submission: SignedBidSubmission,
     pub trace: SubmissionTrace,
     pub optimistic_version: i16,
 }
@@ -1529,7 +1529,7 @@ impl DatabaseService for PostgresDatabaseService {
     #[instrument(skip_all)]
     async fn store_block_submission(
         &self,
-        submission: Arc<SignedBidSubmission>,
+        submission: SignedBidSubmission,
         trace: SubmissionTrace,
         optimistic_version: i16,
     ) -> Result<(), DatabaseError> {
@@ -1537,11 +1537,7 @@ impl DatabaseService for PostgresDatabaseService {
         let mut record = DbMetricRecord::new("store_block_submission");
         if let Some(sender) = &self.block_submissions_sender {
             sender
-                .send(PendingBlockSubmissionValue {
-                    submission: submission.clone(),
-                    trace,
-                    optimistic_version,
-                })
+                .send(PendingBlockSubmissionValue { submission, trace, optimistic_version })
                 .await
                 .map_err(|_| DatabaseError::ChannelSendError)?;
         } else {

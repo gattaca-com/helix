@@ -1,20 +1,6 @@
-use std::sync::Arc;
-
 use alloy_primitives::B256;
-use helix_common::{
-    bid_submission::v2::header_submission::SignedHeaderSubmission, simulator::BlockSimError,
-    GossipedPayloadTrace, HeaderSubmissionTrace, SubmissionTrace,
-};
-use helix_types::{BlsPublicKey, SignedBidSubmission};
+use helix_types::BlsPublicKey;
 use serde::{Deserialize, Serialize};
-
-#[derive(Clone)]
-pub enum DbInfo {
-    NewSubmission(Arc<SignedBidSubmission>, SubmissionTrace, OptimisticVersion),
-    NewHeaderSubmission(Arc<SignedHeaderSubmission>, HeaderSubmissionTrace),
-    GossipedPayload { block_hash: B256, trace: GossipedPayloadTrace },
-    SimulationResult { block_hash: B256, block_sim_result: Result<(), BlockSimError> },
-}
 
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[repr(i16)]

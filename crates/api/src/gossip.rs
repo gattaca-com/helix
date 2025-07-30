@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use helix_common::{task, utils::utcnow_ns, GetPayloadTrace};
+use helix_types::PayloadAndBlobsRef;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 use uuid::Uuid;
@@ -55,11 +56,11 @@ pub async fn process_gossip_messages<A: Api>(
                         Ok(execution_payload) => {
                             proposer
                                 .gossiper
-                                .broadcast_payload(BroadcastPayloadParams {
-                                    execution_payload,
-                                    slot: payload.slot,
-                                    proposer_pub_key: payload.proposer_pub_key,
-                                })
+                                .broadcast_payload(BroadcastPayloadParams::to_proto(
+                                    PayloadAndBlobsRef::from(&execution_payload),
+                                    payload.slot,
+                                    &payload.proposer_pub_key,
+                                ))
                                 .await
                         }
                         Err(err) => {

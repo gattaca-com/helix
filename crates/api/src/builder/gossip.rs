@@ -1,7 +1,7 @@
 use helix_common::{bid_submission::BidSubmission, task, utils::utcnow_ns, GossipedPayloadTrace};
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::{PayloadAndBlobs, SignedBidSubmission};
+use helix_types::{PayloadAndBlobsRef, SignedBidSubmission};
 use tracing::{debug, error};
 use uuid::Uuid;
 
@@ -48,7 +48,7 @@ impl<A: Api> BuilderApi<A> {
                 req.slot,
                 &req.proposer_pub_key,
                 &req.execution_payload.execution_payload.block_hash().0,
-                &req.execution_payload,
+                PayloadAndBlobsRef::from(&req.execution_payload),
             )
             .await
         {
@@ -72,13 +72,13 @@ impl<A: Api> BuilderApi<A> {
     pub(crate) async fn gossip_payload(
         &self,
         payload: &SignedBidSubmission,
-        execution_payload: PayloadAndBlobs,
+        execution_payload: PayloadAndBlobsRef<'_>,
     ) {
-        let params = BroadcastPayloadParams {
+        let params = BroadcastPayloadParams::to_proto(
             execution_payload,
-            slot: payload.slot().as_u64(),
-            proposer_pub_key: payload.proposer_public_key().clone(),
-        };
+            payload.slot().as_u64(),
+            payload.proposer_public_key(),
+        );
         self.gossiper.broadcast_payload(params).await
     }
 }

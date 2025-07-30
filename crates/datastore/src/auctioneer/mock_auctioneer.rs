@@ -8,7 +8,9 @@ use helix_common::{
     BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
-use helix_types::{BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, SignedBuilderBid};
+use helix_types::{
+    BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, PayloadAndBlobsRef, SignedBuilderBid,
+};
 use tokio::sync::broadcast;
 
 use crate::{error::AuctioneerError, redis::redis_cache::InclusionListWithKey, Auctioneer};
@@ -45,12 +47,12 @@ impl Auctioneer for MockAuctioneer {
         Ok(())
     }
 
-    async fn save_execution_payload(
+    async fn save_execution_payload<'a>(
         &self,
         _slot: u64,
         _proposer_pub_key: &BlsPublicKey,
         _block_hash: &B256,
-        _execution_payload: &PayloadAndBlobs,
+        _execution_payload: PayloadAndBlobsRef<'a>,
     ) -> Result<(), AuctioneerError> {
         Ok(())
     }

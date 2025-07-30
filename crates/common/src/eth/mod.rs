@@ -47,13 +47,15 @@ pub fn resign_builder_bid(
 pub fn bid_submission_to_builder_bid_unsigned(submission: &SignedBidSubmission) -> BuilderBid {
     match submission {
         SignedBidSubmission::Electra(bid) => {
-            let header: ExecutionPayloadHeaderElectra = (&bid.execution_payload).into();
-            let blobs_bundle = &bid.blobs_bundle;
+            // TODO: avoid clone here
+            let header: ExecutionPayloadHeaderElectra = (&*bid.execution_payload).into();
+            let execution_requests = (*bid.execution_requests).clone();
+
             let message = BuilderBidElectra {
                 header,
-                blob_kzg_commitments: blobs_bundle.commitments.clone(),
+                blob_kzg_commitments: bid.blobs_bundle.commitments.clone(),
                 value: bid.message.value,
-                execution_requests: bid.execution_requests.clone(),
+                execution_requests,
                 pubkey: mock_public_key_bytes(), // this will replaced when signing the header
             };
 
