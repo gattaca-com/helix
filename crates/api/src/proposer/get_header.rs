@@ -12,7 +12,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::{BlsPublicKey, BuilderBid, PayloadAndBlobs};
+use helix_types::{BlsPublicKey, BuilderBid, MergeableBundles, PayloadAndBlobs};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
 
@@ -136,7 +136,7 @@ impl<A: Api> ProposerApi<A> {
         trace.best_bid_fetched = utcnow_ns();
         debug!(trace = ?trace, "best bid fetched");
 
-        let Some(mut bid) = get_best_bid_res else {
+        let Some((mut bid, bundles)) = get_best_bid_res else {
             warn!("no bid found");
             return Err(ProposerApiError::NoBidPrepared);
         };
@@ -190,11 +190,8 @@ impl<A: Api> ProposerApi<A> {
                 .get_execution_payload(slot, &bid_request.pubkey, &block_hash, true)
                 .await?;
 
-            // TODO: fetch mergeable transactions (`u64` is a placeholder)
             // Here we would somehow get all the appendable transactions, with bundle/revert metadata
-            let mergeable_txs: Vec<u64> = vec![];
-
-            let new_bid = append_transactions_to_payload(bid, payload, mergeable_txs).await?;
+            let new_bid = append_transactions_to_payload(bid, payload, bundles).await?;
 
             let latest_bid_res = proposer_api.shared_best_header.load(
                 bid_request.slot.into(),
@@ -203,11 +200,11 @@ impl<A: Api> ProposerApi<A> {
             );
             // TODO: do additional checks and ensure previous variables don't reference the old bid
             if latest_bid_res.is_some()
-                && latest_bid_res.as_ref().unwrap().value() >= new_bid.value()
+                && latest_bid_res.as_ref().unwrap().0.value() >= new_bid.value()
             {
                 // If the latest bid has a higher value, we return that bid
                 debug!("returning merged payload");
-                bid = latest_bid_res.unwrap();
+                bid = latest_bid_res.unwrap().0;
             } else {
                 warn!("latest bid is not valid anymore, returning original payload");
                 bid = new_bid;
@@ -316,7 +313,7 @@ fn get_x_mev_boost_header_start_ms(header_map: &HeaderMap) -> Option<u64> {
 async fn append_transactions_to_payload(
     bid: BuilderBid,
     payload: PayloadAndBlobs,
-    mergeable_txs: Vec<u64>,
+    mergeable_txs: Vec<MergeableBundles>,
 ) -> Result<BuilderBid, ProposerApiError> {
     // TODO: implement block-merging logic
     // We should send an RPC request to the simulator to append transactions to the payload
