@@ -524,8 +524,7 @@ impl PostgresDatabaseService {
         last_processed_slot: &mut i32,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("flush_block_submissions");
-        let mut client = self.pool.get().await?;
-        let transaction = client.transaction().await?;
+        let client = self.pool.get().await?;
 
         // Step 1: build structured params for block_submission
         struct BlockParams {
@@ -611,7 +610,7 @@ impl PostgresDatabaseService {
             .collect();
         sql.push_str(&clauses.join(", "));
         sql.push_str(" ON CONFLICT (block_hash) DO NOTHING");
-        transaction.execute(&sql, &params).await?;
+        client.execute(&sql, &params).await?;
 
         // Step 2: build structured params for submission_trace
         struct TraceParams {
@@ -678,7 +677,7 @@ impl PostgresDatabaseService {
             })
             .collect();
         ts_sql.push_str(&ts_clauses.join(", "));
-        transaction.execute(&ts_sql, &ts_params).await?;
+        client.execute(&ts_sql, &ts_params).await?;
 
         // Step 3: build structured params for slot_preferences, skipping already processed slots
         // Collect only new slots
@@ -717,10 +716,9 @@ impl PostgresDatabaseService {
             vp_sql.push_str(") AS r(slot_number, proposer_pubkey) ");
             vp_sql.push_str("JOIN validator_preferences vp ON vp.public_key = r.proposer_pubkey ");
             vp_sql.push_str("ON CONFLICT (slot_number) DO NOTHING");
-            transaction.execute(&vp_sql, &sp_params).await?;
+            client.execute(&vp_sql, &sp_params).await?;
         }
 
-        transaction.commit().await?;
         *last_processed_slot = tmp_last_processed_slot;
         record.record_success();
         Ok(())
@@ -732,8 +730,7 @@ impl PostgresDatabaseService {
         batch: &Vec<PendingHeaderSubmissionValue>,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("flush_header_submissions");
-        let mut client = self.pool.get().await?;
-        let transaction = client.transaction().await?;
+        let client = self.pool.get().await?;
 
         // Step 1: structured params for header_submission
         struct HeaderParams {
@@ -819,7 +816,7 @@ impl PostgresDatabaseService {
             .collect();
         sql.push_str(&clauses.join(", "));
         sql.push_str(" ON CONFLICT (block_hash) DO NOTHING");
-        transaction.execute(&sql, &params).await?;
+        client.execute(&sql, &params).await?;
 
         // Step 2: structured params for header_submission_trace
         struct HTraceParams {
@@ -880,9 +877,8 @@ impl PostgresDatabaseService {
             })
             .collect();
         tsql.push_str(&tclauses.join(", "));
-        transaction.execute(&tsql, &hts_params).await?;
+        client.execute(&tsql, &hts_params).await?;
 
-        transaction.commit().await?;
         record.record_success();
         Ok(())
     }
