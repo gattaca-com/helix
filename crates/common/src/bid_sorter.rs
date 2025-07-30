@@ -67,7 +67,7 @@ impl BestGetHeader {
         let entry = (*self.0.read()).clone()?;
 
         if entry.slot != slot || entry.bid.header().parent_hash().0 != *parent_hash {
-            return None
+            return None;
         }
 
         Some(entry.bid)
@@ -122,6 +122,7 @@ pub enum BidSorterMessage {
         slot: u64,
         header: BuilderBid,
         is_cancellable: bool,
+        mergeable_txs: Vec<Bytes>,
     },
     /// Demotion of a builder pubkey, all its bids are invalidated for this slot
     Demotion(BlsPublicKey),
@@ -134,6 +135,7 @@ impl BidSorterMessage {
         submission: &SignedBidSubmission,
         on_receive_ns: u64,
         is_cancellable: bool,
+        mergeable_txs: Vec<Bytes>,
     ) -> Self {
         let bid_trace = submission.bid_trace();
         let bid = Bid { value: bid_trace.value, on_receive_ns };
@@ -145,6 +147,7 @@ impl BidSorterMessage {
             slot: bid_trace.slot,
             header,
             is_cancellable,
+            mergeable_txs,
         }
     }
 
@@ -163,6 +166,7 @@ impl BidSorterMessage {
             slot: bid_trace.slot,
             header,
             is_cancellable,
+            mergeable_txs: vec![],
         }
     }
 }
@@ -310,6 +314,7 @@ impl BidSorter {
                     slot,
                     header,
                     is_cancellable,
+                    mergeable_txs,
                 } => {
                     if self.curr_bid_slot != slot {
                         self.local_telemetry.past_subs += 1;

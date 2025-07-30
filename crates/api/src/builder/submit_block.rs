@@ -195,10 +195,18 @@ impl<A: Api> BuilderApi<A> {
             .await?;
         trace!(is_optimistic = was_simulated_optimistically, "verified submitted block");
 
+        let mergeable_txs = if was_simulated_optimistically {
+            // TODO: support optimistic simulation
+            vec![]
+        } else {
+            vec![]
+        };
+
         if let Err(err) = api.sorter_tx.send(BidSorterMessage::new_from_block_submission(
             &payload,
             trace.receive,
             is_cancellations_enabled,
+            mergeable_txs,
         )) {
             error!(?err, "failed to send submission to sorter");
             return Err(BuilderApiError::InternalError);
