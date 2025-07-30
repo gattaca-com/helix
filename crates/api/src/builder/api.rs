@@ -478,6 +478,7 @@ pub async fn decode_payload(
         serde_json::from_slice(&body_bytes)?
     };
 
+    trace.decode = utcnow_ns();
     debug!(
         timestamp_after_decoding = trace.decode,
         decode_latency_ns = trace.decode.saturating_sub(trace.receive),

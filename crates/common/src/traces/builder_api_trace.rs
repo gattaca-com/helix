@@ -19,6 +19,11 @@ pub struct SubmissionTrace {
 
 impl SubmissionTrace {
     pub fn record_metrics(&self, optimistic_version: OptimisticVersion) {
+        if matches!(optimistic_version, OptimisticVersion::V2 | OptimisticVersion::V3) {
+            // ignore v2/v3 as the traces come from the payload only
+            return;
+        }
+
         let read_body = self.read_body.saturating_sub(self.receive) as f64 / 1000.;
         let decode = self.decode.saturating_sub(self.read_body) as f64 / 1000.;
         let floor_bid_checks = self.floor_bid_checks.saturating_sub(self.decode) as f64 / 1000.;
