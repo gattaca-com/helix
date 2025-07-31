@@ -240,6 +240,9 @@ impl<A: Api> ProposerApi<A> {
         Ok(axum::Json(signed_bid))
     }
 
+    /// Appends transactions to the payload and returns a new bid.
+    /// The payload referenced in the bid is stored in the DB.
+    /// This function might return the original bid if somehow the merged payload has a lower value.
     async fn append_transactions_to_payload(
         &self,
         slot: u64,
