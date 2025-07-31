@@ -50,12 +50,13 @@ impl<A: Api> BuilderApi<A> {
     ), err, ret(level = Level::DEBUG))]
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
+        Extension(on_receive_ns): Extension<u64>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         trace!("new block submission");
 
-        let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
+        let mut trace = SubmissionTrace { receive: on_receive_ns, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
         tracing::Span::current().record("slot", (head_slot.as_u64() + 1) as i64);
 

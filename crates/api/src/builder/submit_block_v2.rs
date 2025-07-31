@@ -43,10 +43,11 @@ impl<A: Api> BuilderApi<A> {
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_block_v2(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
+        Extension(on_receive_ns): Extension<u64>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
+        let mut trace = SubmissionTrace { receive: on_receive_ns, ..Default::default() };
         trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         // Decode the incoming request body into a payload

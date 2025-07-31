@@ -40,10 +40,11 @@ impl<A: Api> BuilderApi<A> {
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_header(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
+        Extension(on_receive_ns): Extension<u64>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = HeaderSubmissionTrace { receive: utcnow_ns(), ..Default::default() };
+        let mut trace = HeaderSubmissionTrace { receive: on_receive_ns, ..Default::default() };
         trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         debug!(timestamp_request_start = trace.receive,);
@@ -58,10 +59,11 @@ impl<A: Api> BuilderApi<A> {
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_header_v3(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
+        Extension(on_receive_ns): Extension<u64>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = HeaderSubmissionTrace { receive: utcnow_ns(), ..Default::default() };
+        let mut trace = HeaderSubmissionTrace { receive: on_receive_ns, ..Default::default() };
         trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         debug!(timestamp_request_start = trace.receive,);
