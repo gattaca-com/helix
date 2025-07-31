@@ -49,13 +49,14 @@ impl<A: Api> ProposerApi<A> {
     #[tracing::instrument(skip_all, fields(id))]
     pub async fn get_payload(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
+        Extension(on_receive_ns): Extension<u64>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         let request_id = extract_request_id(&headers);
         tracing::Span::current().record("id", request_id.to_string());
 
-        let mut trace = GetPayloadTrace { receive: utcnow_ns(), ..Default::default() };
+        let mut trace = GetPayloadTrace { receive: on_receive_ns, ..Default::default() };
 
         let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
 

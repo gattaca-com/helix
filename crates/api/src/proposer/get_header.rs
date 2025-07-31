@@ -37,6 +37,7 @@ impl<A: Api> ProposerApi<A> {
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
+        Extension(on_receive_ns): Extension<u64>,
         headers: HeaderMap,
         Path(GetHeaderParams { slot, parent_hash, pubkey }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
@@ -44,7 +45,7 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
 
-        let mut trace = GetHeaderTrace { receive: utcnow_ns(), ..Default::default() };
+        let mut trace = GetHeaderTrace { receive: on_receive_ns, ..Default::default() };
 
         let (head_slot, duty) = proposer_api.curr_slot_info.slot_info();
         debug!(

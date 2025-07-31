@@ -218,7 +218,9 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             let cloned_self = self.clone_for_async();
             let builder_info = builder_info.clone();
 
-            task::spawn(file!(), line!(), {
+            task::spawn(
+                file!(),
+                line!(),
                 async move {
                     if let Err(e) =
                         cloned_self.handle_simulation(request, is_top_bid, builder_info).await
@@ -226,8 +228,8 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
                         error!("Simulation failed: {:?}", e);
                     }
                 }
-                .in_current_span()
-            });
+                .in_current_span(),
+            );
 
             Ok(true)
         } else {
