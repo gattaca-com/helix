@@ -251,8 +251,12 @@ impl<A: Api> ProposerApi<A> {
         payload: PayloadAndBlobs,
         merging_data: Vec<MergeableBundles>,
     ) -> Result<BuilderBid, ProposerApiError> {
-        let merge_request =
-            BlockMergeRequest::new(payload.execution_payload, payload.blobs_bundle, merging_data);
+        let merge_request = BlockMergeRequest::new(
+            bid.value().clone(),
+            payload.execution_payload,
+            payload.blobs_bundle,
+            merging_data,
+        );
 
         // TODO: remove unwrap
         let response = self.simulator.process_merge_request(merge_request).await.unwrap();
