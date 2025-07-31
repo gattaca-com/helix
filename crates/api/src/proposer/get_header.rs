@@ -168,7 +168,7 @@ impl<A: Api> ProposerApi<A> {
         )
         .await;
 
-        let proposer_pubkey_clone = bid_request.pubkey.clone();
+        let proposer_pubkey = bid_request.pubkey.clone();
         let block_hash = bid.header().block_hash().0;
 
         let fork = if bid.as_electra().is_ok() {
@@ -179,6 +179,7 @@ impl<A: Api> ProposerApi<A> {
         };
 
         // Check if block allows merging
+        // TODO: store somewhere else?
         let block_allows_merging = proposer_api
             .auctioneer
             .get_block_merging_data(slot, &bid_request.pubkey, &block_hash)
@@ -195,8 +196,9 @@ impl<A: Api> ProposerApi<A> {
                 .await?;
 
             // Here we would somehow get all the appendable transactions, with bundle/revert metadata
-            let new_bid =
-                proposer_api.append_transactions_to_payload(bid, payload, bundles).await?;
+            let new_bid = proposer_api
+                .append_transactions_to_payload(slot, &proposer_pubkey, bid, payload, bundles)
+                .await?;
 
             let latest_bid_res = proposer_api.shared_best_header.load(
                 bid_request.slot.into(),
@@ -225,7 +227,7 @@ impl<A: Api> ProposerApi<A> {
                     .gossiper
                     .request_payload(RequestPayloadParams {
                         slot,
-                        proposer_pub_key: proposer_pubkey_clone,
+                        proposer_pub_key: proposer_pubkey,
                         block_hash,
                     })
                     .await
@@ -240,6 +242,8 @@ impl<A: Api> ProposerApi<A> {
 
     async fn append_transactions_to_payload(
         &self,
+        slot: u64,
+        proposer_pubkey: &BlsPublicKey,
         bid: BuilderBid,
         payload: PayloadAndBlobs,
         merging_data: Vec<MergeableBundles>,
@@ -264,14 +268,26 @@ impl<A: Api> ProposerApi<A> {
             .as_electra()
             .unwrap()
             .clone();
+        let blob_kzg_commitments = response.blobs_bundle.commitments.clone();
+        let block_hash = response.execution_payload.block_hash().0;
 
         let new_bid = BuilderBidElectra {
             header,
-            blob_kzg_commitments: response.blobs_bundle.commitments,
+            blob_kzg_commitments,
             execution_requests: response.execution_requests,
             value: response.value,
             pubkey: bid.pubkey().clone(),
         };
+        let payload_and_blobs = PayloadAndBlobs {
+            execution_payload: response.execution_payload,
+            blobs_bundle: response.blobs_bundle,
+        };
+
+        // TODO: how do we handle errors here?
+        self.auctioneer
+            .save_execution_payload(slot, proposer_pubkey, &block_hash, &payload_and_blobs)
+            .await
+            .unwrap();
 
         Ok(new_bid.into())
     }
