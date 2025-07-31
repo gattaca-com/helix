@@ -17,7 +17,8 @@ use helix_common::{
     ValidatorPreferences,
 };
 use helix_types::{
-    BidTrace, BlobsBundle, BlsSignature, ExecutionPayload, ExecutionRequests, SignedBidSubmission,
+    BidTrace, BlobsBundle, BlsSignature, ExecutionPayload, ExecutionRequests, MergeableBundles,
+    SignedBidSubmission,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -58,6 +59,19 @@ impl BlockSimRequest {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockMergeRequest {
-    // TODO: populate
+    pub execution_payload: ExecutionPayload,
+    pub blobs_bundle: BlobsBundle,
+    pub merging_data: Vec<MergeableBundles>,
+}
+
+impl BlockMergeRequest {
+    pub fn new(
+        execution_payload: ExecutionPayload,
+        blobs_bundle: BlobsBundle,
+        merging_data: Vec<MergeableBundles>,
+    ) -> Self {
+        Self { execution_payload, blobs_bundle, merging_data }
+    }
 }

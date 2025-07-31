@@ -11,6 +11,8 @@ use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use tokio::time::sleep;
 
+use crate::builder::rpc_simulator::BlockMergeResponse;
+
 use super::{optimistic_simulator::OptimisticSimulator, BlockMergeRequest, BlockSimRequest};
 
 #[derive(Clone)]
@@ -94,8 +96,32 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> MultiSimulator<A, D
     pub async fn process_merge_request(
         &self,
         request: BlockMergeRequest,
-    ) -> Result<(), BlockSimError> {
-        // TODO: send request to simulator
-        Ok(())
+    ) -> Result<BlockMergeResponse, BlockSimError> {
+        let mut attempts = 0;
+
+        loop {
+            // Load balancing: round-robin selection
+            let index = self
+                .next_index
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+                    Some((x + 1) % self.simulators.len())
+                })
+                .unwrap_or(0);
+
+            // Check if the simulator is enabled
+            let simulator_enabled = self.enabled[index].load(Ordering::Relaxed);
+            if simulator_enabled {
+                let simulator = &self.simulators[index];
+
+                // Process the request with the selected simulator
+                return simulator.process_merge_request(request).await;
+            }
+
+            // If reached max attempts, return an error
+            attempts += 1;
+            if attempts >= self.simulators.len() {
+                return Err(BlockSimError::NoSimulatorAvailable);
+            }
+        }
     }
 }

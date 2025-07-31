@@ -18,6 +18,7 @@ use tracing::{debug, error, info, warn, Instrument};
 
 use super::ProposerApi;
 use crate::{
+    builder::BlockMergeRequest,
     gossiper::types::RequestPayloadParams,
     proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
     Api,
@@ -238,15 +239,13 @@ impl<A: Api> ProposerApi<A> {
         &self,
         bid: BuilderBid,
         payload: PayloadAndBlobs,
-        mergeable_txs: Vec<MergeableBundles>,
+        merging_data: Vec<MergeableBundles>,
     ) -> Result<BuilderBid, ProposerApiError> {
-        // We should send an RPC request to the simulator to append transactions to the payload
-        // For each appendable transaction or bundle, we try at each step to append it to the payload
-        // and check if the payload is still valid.
-        // If it is, we keep it, otherwise we revert the change and keep trying until we run out of
-        // transactions or gas.
-        // TODO: turn into merge request and call simulator
-        // self.simulator.process_merge_request(merge_request).await?;
+        let merge_request =
+            BlockMergeRequest::new(payload.execution_payload, payload.blobs_bundle, merging_data);
+
+        // TODO: remove unwrap
+        let response = self.simulator.process_merge_request(merge_request).await.unwrap();
 
         Ok(bid)
     }

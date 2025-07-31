@@ -17,7 +17,10 @@ use reqwest::Client;
 use tokio::time::sleep;
 use tracing::{debug, error, warn, Instrument};
 
-use crate::builder::{rpc_simulator::RpcSimulator, BlockSimRequest};
+use crate::builder::{
+    rpc_simulator::{BlockMergeResponse, RpcSimulator},
+    BlockMergeRequest, BlockSimRequest,
+};
 
 /// OptimisticSimulator is responsible for running simulations optimistically or synchronously based
 /// on the builder's status.
@@ -174,8 +177,8 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         builder_info: &BuilderInfo,
     ) -> bool {
         if builder_info.is_optimistic && request.message.value <= builder_info.collateral {
-            if request.proposer_preferences.filtering.is_regional() &&
-                !builder_info.can_process_regional_slot_optimistically()
+            if request.proposer_preferences.filtering.is_regional()
+                && !builder_info.can_process_regional_slot_optimistically()
             {
                 return false;
             }
@@ -237,7 +240,6 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             SimulatorMetrics::sim_count(false);
 
             debug!(
-
                 block_hash=?request.execution_payload.block_hash(),
                 block_parent_hash=?request.execution_payload.parent_hash(),
                 block_number=%request.execution_payload.block_number(),
@@ -246,6 +248,14 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             );
             self.handle_simulation(request, is_top_bid, builder_info.clone()).await.map(|_| false)
         }
+    }
+
+    pub async fn process_merge_request(
+        &self,
+        request: BlockMergeRequest,
+    ) -> Result<BlockMergeResponse, BlockSimError> {
+        // Process the merge request using the simulator
+        self.simulator.process_merge_request(request).await
     }
 
     pub async fn is_synced(&self) -> Result<bool, BlockSimError> {
