@@ -43,11 +43,11 @@ impl<T> RpcResult<T> {
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct BlockMergeResponse {
-    execution_payload: ExecutionPayload,
-    execution_requests: ExecutionRequests,
-    blobs_bundle: BlobsBundle,
+    pub execution_payload: ExecutionPayload,
+    pub execution_requests: ExecutionRequests,
+    pub blobs_bundle: BlobsBundle,
     /// Total value for the proposer
-    value: U256,
+    pub value: U256,
 }
 
 /// RpcSimulator is responsible for sending block requests to the RPC endpoint for validation.

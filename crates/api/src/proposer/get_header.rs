@@ -12,7 +12,10 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::{BlsPublicKey, BuilderBid, MergeableBundles, PayloadAndBlobs};
+use helix_types::{
+    BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeader, MergeableBundles,
+    PayloadAndBlobs,
+};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
 
@@ -247,7 +250,30 @@ impl<A: Api> ProposerApi<A> {
         // TODO: remove unwrap
         let response = self.simulator.process_merge_request(merge_request).await.unwrap();
 
-        Ok(bid)
+        // Sanity check: if the merged payload has a lower value than the original bid,
+        // we return the original bid.
+        if bid.value() >= &response.value {
+            warn!(
+                original_value = %bid.value(),
+                %response.value,
+                "merged payload has lower value than original bid, returning original bid"
+            );
+            return Ok(bid);
+        }
+        let header = ExecutionPayloadHeader::from(response.execution_payload.to_ref())
+            .as_electra()
+            .unwrap()
+            .clone();
+
+        let new_bid = BuilderBidElectra {
+            header,
+            blob_kzg_commitments: response.blobs_bundle.commitments,
+            execution_requests: response.execution_requests,
+            value: response.value,
+            pubkey: bid.pubkey().clone(),
+        };
+
+        Ok(new_bid.into())
     }
 }
 
