@@ -21,6 +21,7 @@ helix-common.workspace = true
 helix-database.workspace = true
 helix-types.workspace = true
 moka.workspace = true
+parking_lot.workspace = true
 redis.workspace = true
 serde.workspace = true
 serde_json.workspace = true

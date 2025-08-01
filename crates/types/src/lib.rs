@@ -158,6 +158,15 @@ impl<'a> From<&'a PayloadAndBlobs> for PayloadAndBlobsRef<'a> {
     }
 }
 
+impl PayloadAndBlobsRef<'_> {
+    /// Clone out an owned `PayloadAndBlobs`
+    pub fn to_owned(&self) -> PayloadAndBlobs {
+        let execution_payload = self.execution_payload.clone_from_ref();
+        let blobs_bundle = (*self.blobs_bundle).clone();
+        PayloadAndBlobs { execution_payload, blobs_bundle }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Encode)]
 #[serde(untagged)]
 #[ssz(enum_behaviour = "transparent")]
