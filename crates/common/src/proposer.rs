@@ -17,7 +17,7 @@ pub struct ProposerSchedule {
     pub entry: SignedValidatorRegistration,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct ProposerInfo {
     pub name: String,
     pub pubkey: BlsPublicKey,

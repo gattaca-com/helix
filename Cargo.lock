@@ -3427,6 +3427,7 @@ dependencies = [
  "helix-database",
  "helix-types",
  "moka",
+ "parking_lot",
  "redis",
  "serde",
  "serde_json",

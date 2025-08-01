@@ -42,6 +42,42 @@ pub async fn start_auctioneer(
     let auctioneer_clone = auctioneer.clone();
     tokio::spawn(async move {
         loop {
+            if let Err(err) = auctioneer_clone.start_trusted_proposers_listener().await {
+                error!("Proposer whitelist listener error: {}", err);
+            }
+        }
+    });
+
+    let auctioneer_clone = auctioneer.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = auctioneer_clone.start_proposer_whitelist_deleted_listener().await {
+                error!("Proposer whitelist deleted listener error: {}", err);
+            }
+        }
+    });
+
+    let auctioneer_clone = auctioneer.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = auctioneer_clone.start_execution_payload_listener().await {
+                error!("Execution payload listener error: {}", err);
+            }
+        }
+    });
+
+    let auctioneer_clone = auctioneer.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = auctioneer_clone.start_payload_address_listener().await {
+                error!("Payload address listener error: {}", err);
+            }
+        }
+    });
+
+    let auctioneer_clone = auctioneer.clone();
+    tokio::spawn(async move {
+        loop {
             if let Err(err) = auctioneer_clone.start_builder_last_bid_received_at_listener().await {
                 error!("Builder last bid received listener error: {}", err);
             }
@@ -62,6 +98,15 @@ pub async fn start_auctioneer(
         loop {
             if let Err(err) = auctioneer_clone.start_last_slot_delivered_listener().await {
                 error!("Last slot delivered listener error: {}", err);
+            }
+        }
+    });
+
+    let auctioneer_clone = auctioneer.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = auctioneer_clone.start_last_hash_delivered_listener().await {
+                error!("Last hash delivered listener error: {}", err);
             }
         }
     });
