@@ -407,7 +407,10 @@ impl RedisCache {
     }
 
     pub async fn start_trusted_proposers_listener(&self) -> Result<(), RedisCacheError> {
+        self.load_trusted_proposers().await?;
+
         let conn = self.pool.get().await?;
+
         let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
         pubsub.subscribe(PROPOSER_WHITELIST_CHANNEL).await?;
 
@@ -430,6 +433,24 @@ impl RedisCache {
                 .get_with(PROPOSER_WHITELIST_KEY.to_string(), HashMap::new)
                 .insert(field, proposer_info.clone());
         }
+
+        Ok(())
+    }
+
+    async fn load_trusted_proposers(&self) -> Result<(), RedisCacheError> {
+        let mut conn = self.pool.get().await?;
+        let entries: HashMap<String, Vec<u8>> = conn.hgetall(PROPOSER_WHITELIST_KEY).await?;
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let mut deserialized_entries = HashMap::with_capacity(entries.len());
+        for (key, value) in entries.into_iter() {
+            let deserialized_value = serde_json::from_slice(&value)?;
+            deserialized_entries.insert(key, deserialized_value);
+        }
+
+        self.trusted_proposers.insert(PROPOSER_WHITELIST_KEY.to_string(), deserialized_entries);
 
         Ok(())
     }
@@ -1285,11 +1306,14 @@ impl Auctioneer for RedisCache {
         let mut record = RedisMetricRecord::new("is_trusted_proposer");
 
         let key_str = format!("{proposer_pub_key:?}");
-        let proposer_info: Option<ProposerInfo> =
-            self.hget_with_cache(PROPOSER_WHITELIST_KEY, &key_str, &self.trusted_proposers).await?;
+
+        if let Some(cached_map) = self.trusted_proposers.get(PROPOSER_WHITELIST_KEY) {
+            record.record_success();
+            return Ok(cached_map.contains_key(&key_str));
+        }
 
         record.record_success();
-        Ok(proposer_info.is_some())
+        Ok(false)
     }
 
     #[instrument(skip_all)]
