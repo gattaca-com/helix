@@ -1071,7 +1071,8 @@ impl Auctioneer for RedisCache {
             Some(BID_CACHE_EXPIRY_S),
         )
         .await?;
-        self.publish(EXECUTION_PAYLOAD_CHANNEL, &key).await?;
+    
+        // self.publish(EXECUTION_PAYLOAD_CHANNEL, &key).await?;
 
         record.record_success();
         Ok(())
