@@ -1,4 +1,10 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use alloy_primitives::{B256, U256};
 use axum::{extract::Path, http::HeaderMap, response::IntoResponse, Extension};
@@ -38,10 +44,13 @@ impl<A: Api> ProposerApi<A> {
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
         Extension(on_receive_ns): Extension<u64>,
+        Extension(terminating): Extension<Arc<AtomicBool>>,
         headers: HeaderMap,
         Path(GetHeaderParams { slot, parent_hash, pubkey }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
-        if proposer_api.auctioneer.kill_switch_enabled().await? {
+        if terminating.load(Ordering::Relaxed) ||
+            proposer_api.auctioneer.kill_switch_enabled().await?
+        {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
 
