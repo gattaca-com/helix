@@ -524,6 +524,7 @@ impl BidSorter {
         self.curr_bid_slot = head_slot + 1;
         self.bids.clear();
         self.headers.clear();
+        self.bundles.clear();
         self.demotions.clear();
 
         self.curr_bid = None;
