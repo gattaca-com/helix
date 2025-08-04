@@ -41,7 +41,7 @@ impl<A: Api> ProposerApi<A> {
     /// 1. Validates the proposer index and verifies the block's signature.
     /// 2. Retrieves the corresponding execution payload from the auctioneer.
     /// 3. Validates the payload and publishes it to the multi-beacon client.
-    /// 4. Optionally broadcasts the payload to `broadcasters` (e.g., bloXroute, Fiber).
+    /// 4. Optionally broadcasts the payload to `broadcasters`
     /// 5. Stores the delivered payload information to database.
     /// 6. Returns the unblinded payload to proposer.
     ///
@@ -49,13 +49,14 @@ impl<A: Api> ProposerApi<A> {
     #[tracing::instrument(skip_all, fields(id))]
     pub async fn get_payload(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
+        Extension(on_receive_ns): Extension<u64>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         let request_id = extract_request_id(&headers);
         tracing::Span::current().record("id", request_id.to_string());
 
-        let mut trace = GetPayloadTrace { receive: utcnow_ns(), ..Default::default() };
+        let mut trace = GetPayloadTrace { receive: on_receive_ns, ..Default::default() };
 
         let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
 
@@ -524,7 +525,6 @@ impl<A: Api> ProposerApi<A> {
     }
 
     /// `broadcast_signed_block` sends the provided signed block to all registered broadcasters
-    /// (e.g., BloXroute, Fiber).
     fn broadcast_signed_block(
         &self,
         signed_block: Arc<VersionedSignedProposal>,

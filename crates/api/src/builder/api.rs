@@ -189,7 +189,7 @@ impl<A: Api> BuilderApi<A> {
     /// Returns: the bid submission in an Arc.
     pub(crate) async fn verify_submitted_block(
         &self,
-        payload: Arc<SignedBidSubmission>,
+        payload: &SignedBidSubmission,
         next_duty: BuilderGetValidatorsResponseEntry,
         builder_info: &BuilderInfo,
         trace: &mut SubmissionTrace,
@@ -258,7 +258,7 @@ impl<A: Api> BuilderApi<A> {
     /// 3. Invokes the block simulator for validation.
     async fn simulate_submission(
         &self,
-        payload: Arc<SignedBidSubmission>,
+        payload: &SignedBidSubmission,
         builder_info: &BuilderInfo,
         trace: &mut SubmissionTrace,
         registration_info: ValidatorRegistrationInfo,
@@ -412,7 +412,7 @@ impl<A: Api> BuilderApi<A> {
 pub async fn decode_payload(
     req: Request<Body>,
     trace: &mut SubmissionTrace,
-) -> Result<(Arc<SignedBidSubmission>, bool), BuilderApiError> {
+) -> Result<(SignedBidSubmission, bool), BuilderApiError> {
     // Extract the query parameters
     let is_cancellations_enabled = req
         .uri()
@@ -446,7 +446,10 @@ pub async fn decode_payload(
             size: body_bytes.len(),
         });
     }
+    trace!("read body");
+    trace.read_body = utcnow_ns();
 
+    let size_compressed = body_bytes.len();
     // Decompress if necessary
     if is_gzip {
         let mut decoder = GzDecoder::new(&body_bytes[..]);
@@ -459,7 +462,7 @@ pub async fn decode_payload(
         body_bytes = buf.into();
     }
 
-    debug!(payload_size = body_bytes.len(), is_gzip, is_ssz, "decoded payload");
+    trace!(size_compressed, size_uncompressed = body_bytes.len(), is_gzip, "decompressed payload");
 
     // Decode payload
     let payload: SignedBidSubmission = if is_ssz {
@@ -484,10 +487,11 @@ pub async fn decode_payload(
         proposer_pubkey = ?payload.proposer_public_key(),
         parent_hash = ?payload.parent_hash(),
         value = ?payload.value(),
-        num_tx = payload.execution_payload().transactions().len(),
+        num_tx = payload.execution_payload_ref().transactions().len(),
+        "payload info"
     );
 
-    Ok((Arc::new(payload), is_cancellations_enabled))
+    Ok((payload, is_cancellations_enabled))
 }
 
 /// - Validates the expected block.timestamp.

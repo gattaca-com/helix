@@ -10,7 +10,7 @@ use bytes::Bytes;
 use helix_common::{
     self,
     bid_sorter::BidSorterMessage,
-    bid_submission::BidSubmission,
+    bid_submission::{BidSubmission, OptimisticVersion},
     metadata_provider::MetadataProvider,
     metrics::ApiMetrics,
     task,
@@ -30,7 +30,6 @@ use crate::{
     builder::{
         api::{decode_payload, sanity_check_block_submission},
         error::BuilderApiError,
-        OptimisticVersion,
     },
     Api,
 };
@@ -56,12 +55,13 @@ impl<A: Api> BuilderApi<A> {
     ), err, ret(level = Level::DEBUG))]
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
+        Extension(on_receive_ns): Extension<u64>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         trace!("new block submission");
 
-        let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
+        let mut trace = SubmissionTrace { receive: on_receive_ns, ..Default::default() };
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
         tracing::Span::current().record("slot", (head_slot.as_u64() + 1) as i64);
 
@@ -191,20 +191,27 @@ impl<A: Api> BuilderApi<A> {
 
         let was_simulated_optimistically = api
             .verify_submitted_block(
-                payload.clone(),
+                &payload,
                 next_duty,
                 &builder_info,
                 &mut trace,
                 &payload_attributes,
             )
             .await?;
+
+        let optimistic_version = if was_simulated_optimistically {
+            OptimisticVersion::V1
+        } else {
+            OptimisticVersion::NotOptimistic
+        };
         trace!(is_optimistic = was_simulated_optimistically, "verified submitted block");
 
         let mergeable_bundles = get_mergeable_bundles(&payload, payload.merging_data())?;
 
-        if let Err(err) = api.sorter_tx.send(BidSorterMessage::new_from_block_submission(
+        if let Err(err) = api.sorter_tx.try_send(BidSorterMessage::new_from_block_submission(
             &payload,
-            trace.receive,
+            &trace,
+            optimistic_version,
             is_cancellations_enabled,
             mergeable_bundles,
         )) {
@@ -221,9 +228,10 @@ impl<A: Api> BuilderApi<A> {
                 payload.slot().as_u64(),
                 payload.proposer_public_key(),
                 payload.block_hash(),
-                &payload.payload_and_blobs(),
+                payload.payload_and_blobs_ref(),
             )
             .await?;
+        trace.auctioneer_update = utcnow_ns();
         trace!("saved payload to redis");
 
         if let Err(err) = api.auctioneer.save_bid_trace(payload.bid_trace()).await {
@@ -256,19 +264,13 @@ impl<A: Api> BuilderApi<A> {
             "submit_block request finished"
         );
 
-        let optimistic_version = if was_simulated_optimistically {
-            OptimisticVersion::V1
-        } else {
-            OptimisticVersion::NotOptimistic
-        };
-
         // Save submission to db.
         task::spawn(
             file!(),
             line!(),
             async move {
                 if let Err(err) =
-                    api.db.store_block_submission(payload, trace, optimistic_version as i16).await
+                    api.db.store_block_submission(payload, trace, optimistic_version).await
                 {
                     error!(%err, "failed to store block submission")
                 }
@@ -284,7 +286,8 @@ fn get_mergeable_bundles(
     payload: &SignedBidSubmission,
     merging_data: &BlockMergingData,
 ) -> Result<MergeableBundles, BuilderApiError> {
-    let txs = payload.execution_payload().transactions();
+    let execution_payload = payload.execution_payload_ref();
+    let txs = execution_payload.transactions();
     let mergeable_bundles = merging_data
         .merge_orders
         .iter()

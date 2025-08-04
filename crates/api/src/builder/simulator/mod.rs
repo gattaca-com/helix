@@ -29,8 +29,8 @@ pub struct BlockSimRequest {
     pub execution_payload: ExecutionPayload,
     pub signature: BlsSignature,
     pub proposer_preferences: ValidatorPreferences,
-    pub blobs_bundle: Option<BlobsBundle>,
-    pub execution_requests: Option<ExecutionRequests>,
+    pub blobs_bundle: Option<Arc<BlobsBundle>>,
+    pub execution_requests: Option<Arc<ExecutionRequests>>,
     pub parent_beacon_block_root: Option<B256>,
     pub inclusion_list: Option<InclusionListWithMetadata>,
     pub apply_blacklist: bool,
@@ -39,7 +39,7 @@ pub struct BlockSimRequest {
 impl BlockSimRequest {
     pub fn new(
         registered_gas_limit: u64,
-        block: Arc<SignedBidSubmission>,
+        block: &SignedBidSubmission,
         proposer_preferences: ValidatorPreferences,
         parent_beacon_block_root: Option<B256>,
         inclusion_list: Option<InclusionListWithMetadata>,
@@ -47,12 +47,12 @@ impl BlockSimRequest {
         Self {
             registered_gas_limit,
             message: block.bid_trace().clone(),
-            execution_payload: block.execution_payload().clone_from_ref(),
+            execution_payload: block.execution_payload_ref().clone_from_ref(),
             signature: block.signature().clone(),
             apply_blacklist: proposer_preferences.filtering.is_regional(),
             proposer_preferences,
             blobs_bundle: Some(block.blobs_bundle().clone()),
-            execution_requests: block.execution_requests().cloned(),
+            execution_requests: block.execution_requests(),
             parent_beacon_block_root,
             inclusion_list,
         }

@@ -11,7 +11,7 @@ use helix_common::{
         data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
-    bid_submission::v2::header_submission::SignedHeaderSubmission,
+    bid_submission::{v2::header_submission::SignedHeaderSubmission, OptimisticVersion},
     simulator::BlockSimError,
     BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, HeaderSubmissionTrace,
     ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences,
@@ -150,9 +150,9 @@ impl DatabaseService for MockDatabaseService {
 
     async fn store_block_submission(
         &self,
-        _submission: Arc<SignedBidSubmission>,
+        _submission: SignedBidSubmission,
         _trace: SubmissionTrace,
-        _optimistic_version: i16,
+        _optimistic_version: OptimisticVersion,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }

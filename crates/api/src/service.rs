@@ -6,8 +6,7 @@ use std::{
 
 use bytes::Bytes;
 use helix_beacon::{
-    beacon_client::BeaconClient, fiber_broadcaster::FiberBroadcaster,
-    multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
+    beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
 };
 use helix_common::{
     bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
@@ -18,7 +17,7 @@ use helix_common::{
 use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
 use moka::sync::Cache;
-use tokio::{sync::mpsc, time::timeout};
+use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::{
@@ -36,7 +35,6 @@ use crate::{
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
-const INIT_BROADCASTER_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub async fn run_api_service<A: Api>(
     mut config: RelayConfig,
@@ -179,24 +177,6 @@ async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
     let mut broadcasters = vec![];
     for cfg in &config.broadcasters {
         match cfg {
-            BroadcasterConfig::Fiber(cfg) => {
-                let result = timeout(
-                    INIT_BROADCASTER_TIMEOUT,
-                    FiberBroadcaster::new(cfg.url.clone(), cfg.api_key.clone()),
-                )
-                .await;
-                match result {
-                    Ok(Ok(broadcaster)) => {
-                        broadcasters.push(Arc::new(BlockBroadcaster::Fiber(broadcaster)));
-                    }
-                    Ok(Err(err)) => {
-                        error!(broadcaster = "Fiber", cfg = ?cfg, error = %err, "Initializing broadcaster failed");
-                    }
-                    Err(err) => {
-                        error!(broadcaster = "Fiber", cfg = ?cfg, error = %err, "Initializing broadcaster timed out");
-                    }
-                }
-            }
             BroadcasterConfig::BeaconClient(cfg) => {
                 broadcasters.push(Arc::new(BlockBroadcaster::BeaconClient(
                     BeaconClient::from_config(cfg.clone()),

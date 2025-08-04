@@ -23,9 +23,10 @@ use helix_common::{
 use helix_database::types::BuilderInfoDocument;
 use helix_types::{
     maybe_upgrade_execution_payload, BidTrace, BlockMergingData, BlsPublicKey, ForkName,
-    PayloadAndBlobs,
+    PayloadAndBlobs, PayloadAndBlobsRef,
 };
 use moka::sync::Cache;
+use parking_lot::RwLock;
 use redis::{AsyncCommands, Msg, RedisResult, Script, Value};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::from_str;
@@ -56,10 +57,15 @@ const HOUSEKEEPER_LOCK_EXPIRY_MS: usize = 45_000;
 const CURRENT_INCLUSION_LIST_CHANNEL: &str = "inclusion_list_updates";
 const SEEN_BLOCK_HASHES_CHANNEL: &str = "seen_block_hashes_updates";
 const LAST_SLOT_DELIVERED_CHANNEL: &str = "last_slot_delivered_updates";
+const LAST_HASH_DELIVERED_CHANNEL: &str = "last_hash_delivered_updates";
 const BUILDER_LAST_BID_RECEIVED_AT_CHANNEL: &str = "builder_last_bid_received_at_updates";
 const BUILDER_LAST_BID_RECEIVED_AT_DELETED_CHANNEL: &str =
     "builder_last_bid_received_at_deleted_updates";
 const BUILDER_INFO_CHANNEL: &str = "builder_info_channel";
+const EXECUTION_PAYLOAD_CHANNEL: &str = "execution_payload_updates";
+const PAYLOAD_ADDRESS_CHANNEL: &str = "payload_address_updates";
+const PROPOSER_WHITELIST_CHANNEL: &str = "proposer_whitelist_updates";
+const PROPOSER_WHITELIST_DELETED_CHANNEL: &str = "proposer_whitelist_deleted_updates";
 
 const RENEW_SCRIPT: &str = r#"
 if redis.call('get', KEYS[1]) == ARGV[1] then
@@ -78,8 +84,12 @@ pub struct RedisCache {
 
     seen_block_hashes: Cache<B256, ()>,
     last_delivered_slot: Arc<AtomicU64>,
+    last_delivered_hash: Arc<RwLock<Option<B256>>>,
     builder_latest_payload_received_at: Cache<String, HashMap<String, u64>>,
     builder_info_cache: Cache<String, HashMap<String, BuilderInfo>>,
+    trusted_proposers: Cache<String, HashMap<String, ProposerInfo>>,
+    execution_payload_cache: Cache<String, PayloadAndBlobs>,
+    payload_address_cache: Cache<String, (BlsPublicKey, Vec<u8>)>,
 
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
 }
@@ -93,7 +103,7 @@ impl RedisCache {
     ) -> Result<Self, CreatePoolError> {
         let mut cfg = Config::from_url(conn_str);
         let mut pool_config = deadpool_redis::PoolConfig::default();
-        pool_config.max_size += 10; // Increase max size to accommodate listeners
+        pool_config.max_size += 12; // Increase max size to accommodate listeners
         cfg.pool = Some(pool_config);
         let pool = cfg.create_pool(Some(Runtime::Tokio1))?;
 
@@ -113,6 +123,16 @@ impl RedisCache {
         let builder_info_cache =
             Cache::builder().time_to_idle(Duration::from_secs(300)).max_capacity(10_000).build();
         let last_delivered_slot = Arc::new(AtomicU64::new(0));
+        let last_delivered_hash = Arc::new(RwLock::new(None));
+        let execution_payload_cache =
+            Cache::builder().time_to_idle(Duration::from_secs(45)).max_capacity(10_000).build();
+
+        let trusted_proposers = Cache::builder().max_capacity(200_000).build();
+
+        let payload_address_cache = Cache::builder()
+            .time_to_idle(Duration::from_secs(PAYLOAD_ADDRESS_EXPIRY_S as u64))
+            .max_capacity(10_000)
+            .build();
 
         let cache = Self {
             pool,
@@ -122,7 +142,11 @@ impl RedisCache {
             seen_block_hashes,
             builder_latest_payload_received_at,
             last_delivered_slot,
+            last_delivered_hash,
             builder_info_cache,
+            trusted_proposers,
+            execution_payload_cache,
+            payload_address_cache,
             sorter_tx,
         };
 
@@ -212,6 +236,46 @@ impl RedisCache {
         Ok(())
     }
 
+    pub async fn start_execution_payload_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(EXECUTION_PAYLOAD_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+        let mut conn = self.pool.get().await?;
+
+        while let Some(msg) = message_stream.next().await {
+            let Ok((key, execution_payload)) = Self::process_pubsub_update(msg, &mut conn).await
+            else {
+                continue;
+            };
+
+            self.execution_payload_cache.insert(key, execution_payload);
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_payload_address_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(PAYLOAD_ADDRESS_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+        let mut conn = self.pool.get().await?;
+
+        while let Some(msg) = message_stream.next().await {
+            let Ok((key, payload_address)) = Self::process_pubsub_update(msg, &mut conn).await
+            else {
+                continue;
+            };
+
+            self.payload_address_cache.insert(key, payload_address);
+        }
+
+        Ok(())
+    }
+
     pub async fn start_seen_block_hashes_listener(&self) -> Result<(), RedisCacheError> {
         let conn = self.pool.get().await?;
         let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
@@ -245,6 +309,25 @@ impl RedisCache {
             };
 
             self.last_delivered_slot.store(slot, Ordering::Relaxed);
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_last_hash_delivered_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(LAST_HASH_DELIVERED_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        while let Some(message) = message_stream.next().await {
+            let payload = message.get_payload::<String>().ok();
+            if let Some(key) = payload {
+                if let Ok(block_hash) = from_str::<B256>(&key) {
+                    self.last_delivered_hash.write().replace(block_hash);
+                }
+            }
         }
 
         Ok(())
@@ -320,6 +403,74 @@ impl RedisCache {
             self.builder_info_cache
                 .get_with(BUILDER_INFO_KEY.to_string(), HashMap::new)
                 .insert(field, builder_info.clone());
+        }
+
+        Ok(())
+    }
+
+    pub async fn start_trusted_proposers_listener(&self) -> Result<(), RedisCacheError> {
+        self.load_trusted_proposers().await?;
+
+        let conn = self.pool.get().await?;
+
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(PROPOSER_WHITELIST_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        let mut conn = self.pool.get().await?;
+
+        while let Some(message) = message_stream.next().await {
+            let Ok((field, proposer_info)) = Self::process_pubsub_update_hget::<ProposerInfo>(
+                PROPOSER_WHITELIST_KEY,
+                message,
+                &mut conn,
+            )
+            .await
+            else {
+                continue;
+            };
+
+            self.trusted_proposers
+                .get_with(PROPOSER_WHITELIST_KEY.to_string(), HashMap::new)
+                .insert(field, proposer_info.clone());
+        }
+
+        Ok(())
+    }
+
+    async fn load_trusted_proposers(&self) -> Result<(), RedisCacheError> {
+        let mut conn = self.pool.get().await?;
+        let entries: HashMap<String, Vec<u8>> = conn.hgetall(PROPOSER_WHITELIST_KEY).await?;
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        let mut deserialized_entries = HashMap::with_capacity(entries.len());
+        for (key, value) in entries.into_iter() {
+            let deserialized_value = serde_json::from_slice(&value)?;
+            deserialized_entries.insert(key, deserialized_value);
+        }
+
+        self.trusted_proposers.insert(PROPOSER_WHITELIST_KEY.to_string(), deserialized_entries);
+
+        Ok(())
+    }
+
+    pub async fn start_proposer_whitelist_deleted_listener(&self) -> Result<(), RedisCacheError> {
+        let conn = self.pool.get().await?;
+        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
+        pubsub.subscribe(PROPOSER_WHITELIST_DELETED_CHANNEL).await?;
+
+        let mut message_stream = pubsub.on_message();
+
+        while let Some(message) = message_stream.next().await {
+            let payload = message.get_payload::<String>().ok();
+            if let Some(key) = payload {
+                self.trusted_proposers
+                    .get_with(PROPOSER_WHITELIST_KEY.to_string(), HashMap::new)
+                    .remove(&key);
+            }
         }
 
         Ok(())
@@ -434,6 +585,10 @@ impl RedisCache {
             deserialized_entries.insert(key, deserialized_value);
         }
 
+        if cache.get(key).is_none() {
+            cache.insert(key.to_string(), deserialized_entries.clone());
+        }
+
         Ok(Some(deserialized_entries))
     }
 
@@ -496,6 +651,23 @@ impl RedisCache {
     ) -> Result<(), RedisCacheError> {
         let mut conn = self.pool.get().await?;
         let str_val = serde_json::to_string(value)?;
+
+        match expiry {
+            Some(expiry) => Ok(conn.set_ex(key, str_val, expiry).await?),
+            None => Ok(conn.set(key, str_val).await?),
+        }
+    }
+
+    async fn set_with_cache<T: Clone + Serialize + Send + Sync + 'static>(
+        &self,
+        key: &str,
+        value: &T,
+        cache: &Cache<String, T>,
+        expiry: Option<usize>,
+    ) -> Result<(), RedisCacheError> {
+        let mut conn = self.pool.get().await?;
+        let str_val = serde_json::to_string(value)?;
+        cache.insert(key.to_string(), value.clone());
 
         match expiry {
             Some(expiry) => Ok(conn.set_ex(key, str_val, expiry).await?),
@@ -712,6 +884,15 @@ impl RedisCache {
     }
 
     async fn get_last_hash_delivered(&self) -> Result<Option<B256>, RedisCacheError> {
+        let maybe = {
+            let guard = self.last_delivered_hash.read();
+            *guard
+        };
+
+        if maybe.is_some() {
+            return Ok(maybe);
+        }
+
         self.get(LAST_HASH_DELIVERED_KEY).await
     }
 
@@ -810,44 +991,90 @@ impl Auctioneer for RedisCache {
         }
 
         self.last_delivered_slot.store(slot, Ordering::Relaxed);
+        self.last_delivered_hash.write().replace(*hash);
 
-        let mut conn = self.pool.get().await.map_err(RedisCacheError::from)?;
-        let mut pipe = redis::pipe();
+        // Clone what is needed for the spawned task
+        let pool = self.pool.clone();
+        let slot_value = match serde_json::to_string(&slot) {
+            Ok(value) => value,
+            Err(err) => {
+                error!(%err, "Failed to serialize slot");
+                record.record_success();
+                return Ok(());
+            }
+        };
+        let hash_string = format!("{hash:?}");
+        let hash_value = match serde_json::to_string(&hash_string) {
+            Ok(value) => value,
+            Err(err) => {
+                error!(%err, "Failed to serialize hash");
+                record.record_success();
+                return Ok(());
+            }
+        };
+        let slot_value_clone = slot_value.clone();
 
-        // Add the SET commands to the pipeline
-        let slot_value = serde_json::to_string(&slot).map_err(RedisCacheError::from)?;
-        let hash_value =
-            serde_json::to_string(&format!("{hash:?}")).map_err(RedisCacheError::from)?;
-        pipe.atomic()
-            .cmd("SET")
-            .arg(LAST_SLOT_DELIVERED_KEY)
-            .arg(&slot_value)
-            .ignore()
-            .cmd("SET")
-            .arg(LAST_HASH_DELIVERED_KEY)
-            .arg(hash_value)
-            .ignore();
+        tokio::spawn(async move {
+            let mut conn = match pool.get().await {
+                Ok(conn) => conn,
+                Err(err) => {
+                    error!(%err, "Failed to get redis connection");
+                    return;
+                }
+            };
 
-        pipe.query_async(&mut conn).await.map_err(RedisCacheError::from)?;
+            let mut pipe = redis::pipe();
+            pipe.atomic()
+                .cmd("SET")
+                .arg(LAST_SLOT_DELIVERED_KEY)
+                .arg(&slot_value)
+                .ignore()
+                .cmd("SET")
+                .arg(LAST_HASH_DELIVERED_KEY)
+                .arg(&hash_value)
+                .ignore()
+                .cmd("PUBLISH")
+                .arg(LAST_SLOT_DELIVERED_CHANNEL)
+                .arg(&slot_value_clone)
+                .ignore()
+                .cmd("PUBLISH")
+                .arg(LAST_HASH_DELIVERED_CHANNEL)
+                .arg(&hash_value)
+                .ignore();
 
-        self.publish(LAST_SLOT_DELIVERED_CHANNEL, slot_value.as_str()).await?;
+            if let Err(err) = pipe
+                .query_async::<deadpool_redis::Connection, ()>(&mut conn)
+                .await
+                .map_err(RedisCacheError::from)
+            {
+                error!(%err, "Failed to execute redis pipeline");
+            }
+        });
 
         record.record_success();
         Ok(())
     }
 
     #[instrument(skip_all)]
-    async fn save_execution_payload(
+    async fn save_execution_payload<'a>(
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
-        execution_payload: &PayloadAndBlobs,
+        execution_payload: PayloadAndBlobsRef<'a>,
     ) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("save_execution_payload");
 
         let key = get_execution_payload_key(slot, proposer_pub_key, block_hash);
-        self.set(&key, &execution_payload, Some(BID_CACHE_EXPIRY_S)).await?;
+        self.set_with_cache(
+            &key,
+            &execution_payload.to_owned(),
+            &self.execution_payload_cache,
+            Some(BID_CACHE_EXPIRY_S),
+        )
+        .await?;
+
+        // self.publish(EXECUTION_PAYLOAD_CHANNEL, &key).await?;
 
         record.record_success();
         Ok(())
@@ -864,10 +1091,13 @@ impl Auctioneer for RedisCache {
         let mut record = RedisMetricRecord::new("get_execution_payload");
 
         let key = get_execution_payload_key(slot, proposer_pub_key, block_hash);
-        let execution_payload = self.get::<PayloadAndBlobs>(&key).await?.map(|p| PayloadAndBlobs {
-            execution_payload: maybe_upgrade_execution_payload(p.execution_payload, fork_name),
-            blobs_bundle: p.blobs_bundle,
-        });
+        let execution_payload = self
+            .get_with_cache::<PayloadAndBlobs>(&key, &self.execution_payload_cache)
+            .await?
+            .map(|p| PayloadAndBlobs {
+                execution_payload: maybe_upgrade_execution_payload(p.execution_payload, fork_name),
+                blobs_bundle: p.blobs_bundle,
+            });
 
         record.record_success();
         Ok(execution_payload)
@@ -959,7 +1189,7 @@ impl Auctioneer for RedisCache {
 
     #[instrument(skip_all)]
     async fn demote_builder(&self, builder_pub_key: &BlsPublicKey) -> Result<(), AuctioneerError> {
-        let _ = self.sorter_tx.send(BidSorterMessage::Demotion(builder_pub_key.clone()));
+        let _ = self.sorter_tx.try_send(BidSorterMessage::Demotion(builder_pub_key.clone()));
 
         let mut record = RedisMetricRecord::new("demote_builder");
         let mut builder_info = self.get_builder_info(builder_pub_key).await?;
@@ -1065,20 +1295,37 @@ impl Auctioneer for RedisCache {
         let proposer_keys: Vec<String> =
             proposer_whitelist.iter().map(|proposer| format!("{:?}", proposer.pubkey)).collect();
 
+        let proposer_info: Option<HashMap<String, ProposerInfo>> =
+            self.hgetall_with_cache(PROPOSER_WHITELIST_KEY, &self.trusted_proposers).await?;
+
         // add or update proposers
         for proposer in proposer_whitelist {
+            // If the proposer is already in the cache, we can skip the hset operation
+            if let Some(existing_proposer) =
+                proposer_info.as_ref().and_then(|info| info.get(&format!("{:?}", proposer.pubkey)))
+            {
+                if existing_proposer == &proposer {
+                    continue; // No change needed
+                }
+            }
             let key_str = format!("{:?}", proposer.pubkey);
-            self.hset(PROPOSER_WHITELIST_KEY, &key_str, &proposer).await?;
+            self.hset_with_cache(
+                PROPOSER_WHITELIST_KEY,
+                &key_str,
+                &proposer,
+                &self.trusted_proposers,
+            )
+            .await?;
+            self.publish(PROPOSER_WHITELIST_CHANNEL, &key_str).await?;
         }
 
         // remove any proposers that are no longer in the list
-        let proposer_info: Option<HashMap<String, ProposerInfo>> =
-            self.hgetall(PROPOSER_WHITELIST_KEY).await?;
-
         if let Some(proposer_info) = proposer_info {
             for key in proposer_info.keys() {
                 if !proposer_keys.contains(key) {
-                    self.hdel(PROPOSER_WHITELIST_KEY, key).await?;
+                    self.hdel_with_cache(PROPOSER_WHITELIST_KEY, key, &self.trusted_proposers)
+                        .await?;
+                    self.publish(PROPOSER_WHITELIST_DELETED_CHANNEL, key).await?;
                 }
             }
         }
@@ -1095,11 +1342,14 @@ impl Auctioneer for RedisCache {
         let mut record = RedisMetricRecord::new("is_trusted_proposer");
 
         let key_str = format!("{proposer_pub_key:?}");
-        let proposer_info: Option<ProposerInfo> =
-            self.hget(PROPOSER_WHITELIST_KEY, &key_str).await?;
+
+        if let Some(cached_map) = self.trusted_proposers.get(PROPOSER_WHITELIST_KEY) {
+            record.record_success();
+            return Ok(cached_map.contains_key(&key_str));
+        }
 
         record.record_success();
-        Ok(proposer_info.is_some())
+        Ok(false)
     }
 
     #[instrument(skip_all)]
@@ -1157,7 +1407,12 @@ impl Auctioneer for RedisCache {
     ) -> Result<Option<(BlsPublicKey, Vec<u8>)>, AuctioneerError> {
         let mut record = RedisMetricRecord::new("get_payload_url");
         let key = format!("{PAYLOAD_ADDRESS_KEY}_{block_hash:?}");
-        let payload_address: Option<(BlsPublicKey, Vec<u8>)> = self.get(&key).await?;
+        // TODO: This should use get_with_cache
+        // but currently V3 isn't really used yet in production
+        // so that would always fall back to redis and delay payload processing
+        // ultimately causing a missed slot
+        // when V3 is used in production, we should switch to get_with_cache
+        let payload_address: Option<(BlsPublicKey, Vec<u8>)> = self.payload_address_cache.get(&key);
         record.record_success();
         Ok(payload_address)
     }
@@ -1171,12 +1426,14 @@ impl Auctioneer for RedisCache {
     ) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("save_payload_address");
         let key = format!("{PAYLOAD_ADDRESS_KEY}_{block_hash:?}");
-        self.set(
+        self.set_with_cache(
             &key,
             &(builder_pub_key.clone(), payload_socket_address),
+            &self.payload_address_cache,
             Some(PAYLOAD_ADDRESS_EXPIRY_S),
         )
         .await?;
+        self.publish(PAYLOAD_ADDRESS_CHANNEL, &key).await?;
         record.record_success();
         Ok(())
     }
@@ -1320,7 +1577,10 @@ impl<'a> From<&'a InclusionListWithKey> for (&'a InclusionListWithMetadata, &'a 
 mod tests {
 
     use alloy_primitives::U256;
-    use helix_types::{get_fixed_pubkey, ExecutionPayloadElectra, ForkName, TestRandomSeed};
+    use helix_types::{
+        get_fixed_pubkey, BlobsBundle, ExecutionPayloadElectra, ExecutionPayloadRef, ForkName,
+        TestRandomSeed,
+    };
     use serde::{Deserialize, Serialize};
     use serial_test::serial;
 
@@ -1593,8 +1853,11 @@ mod tests {
         let block_hash = B256::test_random();
 
         let payload = ExecutionPayloadElectra { gas_limit: 999, ..Default::default() };
-        let versioned_execution_payload =
-            PayloadAndBlobs { execution_payload: payload.into(), blobs_bundle: Default::default() };
+        let blobs_bundle = BlobsBundle::default();
+        let versioned_execution_payload = PayloadAndBlobsRef {
+            execution_payload: ExecutionPayloadRef::Electra(&payload),
+            blobs_bundle: &blobs_bundle,
+        };
 
         // Save the execution payload
         let save_result = cache
@@ -1602,7 +1865,7 @@ mod tests {
                 slot,
                 &proposer_pub_key,
                 &block_hash,
-                &versioned_execution_payload,
+                versioned_execution_payload,
             )
             .await;
         assert!(save_result.is_ok(), "Failed to save the execution payload");

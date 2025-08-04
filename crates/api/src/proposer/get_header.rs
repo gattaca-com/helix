@@ -1,4 +1,10 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 
 use alloy_primitives::{B256, U256};
 use axum::{extract::Path, http::HeaderMap, response::IntoResponse, Extension};
@@ -14,7 +20,7 @@ use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::{
     BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeader, MergeableBundles,
-    PayloadAndBlobs,
+    PayloadAndBlobs, PayloadAndBlobsRef,
 };
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
@@ -41,14 +47,18 @@ impl<A: Api> ProposerApi<A> {
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
+        Extension(on_receive_ns): Extension<u64>,
+        Extension(terminating): Extension<Arc<AtomicBool>>,
         headers: HeaderMap,
         Path(GetHeaderParams { slot, parent_hash, pubkey }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
-        if proposer_api.auctioneer.kill_switch_enabled().await? {
+        if terminating.load(Ordering::Relaxed)
+            || proposer_api.auctioneer.kill_switch_enabled().await?
+        {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
 
-        let mut trace = GetHeaderTrace { receive: utcnow_ns(), ..Default::default() };
+        let mut trace = GetHeaderTrace { receive: on_receive_ns, ..Default::default() };
 
         let (head_slot, duty) = proposer_api.curr_slot_info.slot_info();
         debug!(
@@ -285,14 +295,14 @@ impl<A: Api> ProposerApi<A> {
             value: response.value,
             pubkey: bid.pubkey().clone(),
         };
-        let payload_and_blobs = PayloadAndBlobs {
-            execution_payload: response.execution_payload,
-            blobs_bundle: response.blobs_bundle,
+        let payload_and_blobs = PayloadAndBlobsRef {
+            execution_payload: (&response.execution_payload).into(),
+            blobs_bundle: &response.blobs_bundle,
         };
 
         // TODO: how do we handle errors here?
         self.auctioneer
-            .save_execution_payload(slot, proposer_pubkey, &block_hash, &payload_and_blobs)
+            .save_execution_payload(slot, proposer_pubkey, &block_hash, payload_and_blobs)
             .await
             .unwrap();
 

@@ -2,10 +2,10 @@ use std::time::Duration;
 
 use alloy_primitives::B256;
 use helix_types::{
-    custom_slot_clock, duration_into_slot, holesky_slot_clock, holesky_spec, mainnet_slot_clock,
-    sepolia_slot_clock, sepolia_spec, spec_from_file, ChainSpec, EthSpec, ForkName, MainnetEthSpec,
-    Slot, SlotClock, SlotClockTrait, HOLESKY_GENESIS_TIME, MAINNET_GENESIS_TIME,
-    SEPOLIA_GENESIS_TIME,
+    custom_slot_clock, duration_into_slot, holesky_slot_clock, holesky_spec, hoodi_slot_clock,
+    hoodi_spec, mainnet_slot_clock, sepolia_slot_clock, sepolia_spec, spec_from_file, ChainSpec,
+    EthSpec, ForkName, MainnetEthSpec, Slot, SlotClock, SlotClockTrait, HOLESKY_GENESIS_TIME,
+    HOODI_GENESIS_TIME, MAINNET_GENESIS_TIME, SEPOLIA_GENESIS_TIME,
 };
 
 pub(crate) const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
@@ -21,6 +21,11 @@ pub(crate) const HOLESKY_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
     174, 112, 95, 186, 157, 243, 155, 121, 197, 159, 168, 177,
 ];
 
+pub(crate) const HOODI_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
+    33, 47, 19, 252, 77, 240, 120, 182, 203, 125, 178, 40, 241, 200, 48, 117, 102, 220, 236, 249,
+    0, 134, 116, 1, 169, 32, 35, 215, 186, 153, 203, 95,
+];
+
 #[derive(Default, Debug, Clone, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Network {
@@ -28,6 +33,7 @@ pub enum Network {
     Mainnet,
     Sepolia,
     Holesky,
+    Hoodi,
     Custom(String),
 }
 
@@ -37,6 +43,7 @@ impl std::fmt::Display for Network {
             Self::Mainnet => write!(f, "mainnet"),
             Self::Sepolia => write!(f, "sepolia"),
             Self::Holesky => write!(f, "holesky"),
+            Self::Hoodi => write!(f, "hoodi"),
             Self::Custom(config) => write!(f, "custom network with config at `{config}`"),
         }
     }
@@ -85,6 +92,17 @@ impl ChainInfo {
             clock: holesky_slot_clock(context.seconds_per_slot),
             context,
             genesis_time_in_secs: HOLESKY_GENESIS_TIME,
+        }
+    }
+
+    pub fn for_hoodi() -> Self {
+        let context = hoodi_spec();
+        Self {
+            network: Network::Hoodi,
+            genesis_validators_root: B256::from(HOODI_GENESIS_VALIDATOR_ROOT),
+            clock: hoodi_slot_clock(context.seconds_per_slot),
+            context,
+            genesis_time_in_secs: HOODI_GENESIS_TIME,
         }
     }
 

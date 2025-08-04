@@ -9,7 +9,8 @@ use helix_common::{
 };
 use helix_database::types::BuilderInfoDocument;
 use helix_types::{
-    BidTrace, BlockMergingData, BlsPublicKey, ForkName, PayloadAndBlobs, SignedBuilderBid,
+    BidTrace, BlockMergingData, BlsPublicKey, ForkName, PayloadAndBlobs, PayloadAndBlobsRef,
+    SignedBuilderBid,
 };
 use tokio::sync::broadcast;
 
@@ -47,12 +48,12 @@ impl Auctioneer for MockAuctioneer {
         Ok(())
     }
 
-    async fn save_execution_payload(
+    async fn save_execution_payload<'a>(
         &self,
         _slot: u64,
         _proposer_pub_key: &BlsPublicKey,
         _block_hash: &B256,
-        _execution_payload: &PayloadAndBlobs,
+        _execution_payload: PayloadAndBlobsRef<'a>,
     ) -> Result<(), AuctioneerError> {
         Ok(())
     }

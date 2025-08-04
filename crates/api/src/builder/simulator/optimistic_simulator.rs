@@ -77,14 +77,16 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         is_top_bid: bool,
         builder_info: BuilderInfo,
     ) -> Result<(), BlockSimError> {
-        if let Err(err) =
-            self.simulator.process_request(request.clone(), &builder_info, is_top_bid).await
-        {
+        let builder = request.message.builder_pubkey.clone();
+        let block_hash = request.execution_payload.block_hash();
+        let slot = request.message.slot;
+
+        if let Err(err) = self.simulator.process_request(request, &builder_info, is_top_bid).await {
             if builder_info.is_optimistic {
                 if err.is_already_known() {
                     warn!(
-                        builder=%request.message.builder_pubkey,
-                        block_hash=%request.execution_payload.block_hash(),
+                        %builder,
+                        %block_hash,
                         "Block already known. Skipping demotion"
                     );
                     return Ok(());
@@ -92,8 +94,8 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
 
                 if err.is_too_old() {
                     warn!(
-                        builder=%request.message.builder_pubkey,
-                        block_hash=%request.execution_payload.block_hash(),
+                        %builder,
+                        %block_hash,
                         "Block is too old. Skipping demotion"
                     );
                     return Ok(());
@@ -104,27 +106,22 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
 
                     // Pause optimistic simulations until the node is synced
                     warn!(
-                        builder=%request.message.builder_pubkey,
-                        block_hash=%request.execution_payload.block_hash(),
-                        err=%err,
+                        %builder,
+                        %block_hash,
+                        %err,
                         "Block simulation resulted in a temporary error. Pausing optimistic simulations...",
                     );
                     return Err(err);
                 }
 
                 warn!(
-                    builder=%request.message.builder_pubkey,
-                    block_hash=%request.execution_payload.block_hash(),
-                    err=%err,
+                    %builder,
+                    %block_hash,
+                    %err,
                     "Block simulation resulted in an error. Demoting builder...",
                 );
-                self.demote_builder_due_to_error(
-                    request.message.slot,
-                    &request.message.builder_pubkey,
-                    &request.execution_payload.block_hash().0,
-                    err.to_string(),
-                )
-                .await;
+                self.demote_builder_due_to_error(slot, &builder, &block_hash.0, err.to_string())
+                    .await;
             }
             return Err(err);
         }
@@ -224,7 +221,9 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             let cloned_self = self.clone_for_async();
             let builder_info = builder_info.clone();
 
-            task::spawn(file!(), line!(), {
+            task::spawn(
+                file!(),
+                line!(),
                 async move {
                     if let Err(e) =
                         cloned_self.handle_simulation(request, is_top_bid, builder_info).await
@@ -232,8 +231,8 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
                         error!("Simulation failed: {:?}", e);
                     }
                 }
-                .in_current_span()
-            });
+                .in_current_span(),
+            );
 
             Ok(true)
         } else {

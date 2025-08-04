@@ -2,7 +2,10 @@ use std::sync::Arc;
 
 use alloy_primitives::B256;
 use helix_common::{
-    bid_submission::v3::header_submission_v3::{GetPayloadV3, SignedGetPayloadV3},
+    bid_submission::{
+        v3::header_submission_v3::{GetPayloadV3, SignedGetPayloadV3},
+        OptimisticVersion,
+    },
     signing::RelaySigningContext,
     utils::{utcnow_ms, utcnow_ns},
     SubmissionTrace,
@@ -15,7 +18,7 @@ use tracing::{error, info, warn};
 
 use super::V3Error;
 use crate::{
-    builder::{api::BuilderApi, error::BuilderApiError, OptimisticVersion},
+    builder::{api::BuilderApi, error::BuilderApiError},
     Api,
 };
 
@@ -33,7 +36,7 @@ pub async fn fetch_builder_blocks<A: Api>(
         match fetch_block(block_hash, &builder_address, &signing_ctx).await {
             Ok(block) => match BuilderApi::handle_optimistic_payload(
                 api.clone(),
-                Arc::new(block),
+                block,
                 trace,
                 OptimisticVersion::V3,
             )

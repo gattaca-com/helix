@@ -1,7 +1,6 @@
 use alloy_primitives::{Address, B256, U256};
 use helix_types::{
-    BidTrace, Bloom, BlsPublicKey, BlsSignature, ExecutionPayloadRef, ExtraData,
-    SignedBidSubmission, Slot,
+    BidTrace, Bloom, BlsPublicKey, BlsSignature, ExtraData, SignedBidSubmission, Slot,
 };
 use tree_hash::TreeHash;
 
@@ -167,21 +166,19 @@ impl BidSubmission for SignedBidSubmission {
 
     fn validate(&self) -> Result<(), super::BidValidationError> {
         let bid_trace = self.bid_trace();
-        let execution_payload: ExecutionPayloadRef = match self {
-            SignedBidSubmission::Electra(bid) => (&bid.execution_payload).into(),
-        };
+        let execution_payload = self.execution_payload_ref();
 
-        if bid_trace.parent_hash != execution_payload.parent_hash().0 {
+        if bid_trace.parent_hash != *execution_payload.parent_hash() {
             return Err(BidValidationError::ParentHashMismatch {
                 message: bid_trace.parent_hash,
-                payload: execution_payload.parent_hash().0,
+                payload: *execution_payload.parent_hash(),
             });
         }
 
-        if bid_trace.block_hash != execution_payload.block_hash().0 {
+        if bid_trace.block_hash != *execution_payload.block_hash() {
             return Err(BidValidationError::BlockHashMismatch {
                 message: bid_trace.block_hash,
-                payload: execution_payload.block_hash().0,
+                payload: *execution_payload.block_hash(),
             });
         }
 

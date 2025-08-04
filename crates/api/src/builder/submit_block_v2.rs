@@ -6,7 +6,7 @@ use axum::{
     Extension,
 };
 use helix_common::{
-    bid_submission::BidSubmission,
+    bid_submission::{BidSubmission, OptimisticVersion},
     metadata_provider::MetadataProvider,
     task,
     utils::{extract_request_id, utcnow_ns},
@@ -24,7 +24,6 @@ use crate::{
         api::{decode_payload, sanity_check_block_submission},
         error::BuilderApiError,
         v2_check::V2SubMessage,
-        OptimisticVersion,
     },
     Api,
 };
@@ -44,10 +43,11 @@ impl<A: Api> BuilderApi<A> {
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn submit_block_v2(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
+        Extension(on_receive_ns): Extension<u64>,
         headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = SubmissionTrace { receive: utcnow_ns(), ..Default::default() };
+        let mut trace = SubmissionTrace { receive: on_receive_ns, ..Default::default() };
         trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         // Decode the incoming request body into a payload
@@ -66,7 +66,7 @@ impl<A: Api> BuilderApi<A> {
 
     pub(crate) async fn handle_optimistic_payload(
         api: Arc<BuilderApi<A>>,
-        payload: Arc<SignedBidSubmission>,
+        payload: SignedBidSubmission,
         mut trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,
     ) -> Result<StatusCode, BuilderApiError> {
@@ -187,7 +187,7 @@ impl<A: Api> BuilderApi<A> {
 
         match api
             .verify_submitted_block(
-                payload.clone(),
+                &payload,
                 next_duty,
                 &builder_info,
                 &mut trace,
@@ -218,9 +218,9 @@ impl<A: Api> BuilderApi<A> {
             .auctioneer
             .save_execution_payload(
                 payload.slot().as_u64(),
-                payload.proposer_public_key(),
-                block_hash,
-                &payload.payload_and_blobs(),
+                &payload.message().proposer_pubkey,
+                payload.block_hash(),
+                payload.payload_and_blobs_ref(),
             )
             .await
         {
@@ -250,7 +250,7 @@ impl<A: Api> BuilderApi<A> {
 
         // Gossip to other relays
         if api.relay_config.payload_gossip_enabled {
-            api.gossip_payload(&payload, payload.payload_and_blobs()).await;
+            api.gossip_payload(&payload, payload.payload_and_blobs_ref()).await;
         }
 
         // Log some final info
@@ -267,7 +267,7 @@ impl<A: Api> BuilderApi<A> {
             line!(),
             async move {
                 if let Err(err) =
-                    api.db.store_block_submission(payload, trace, optimistic_version as i16).await
+                    api.db.store_block_submission(payload, trace, optimistic_version).await
                 {
                     error!(%err, "failed to store block submission")
                 }

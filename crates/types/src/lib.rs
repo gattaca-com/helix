@@ -8,6 +8,7 @@ mod validator;
 
 use std::sync::Arc;
 
+use alloy_primitives::B256;
 pub use bid_submission::*;
 pub use block_merging::*;
 pub use clock::*;
@@ -78,10 +79,6 @@ pub type ExecutionPayloadHeaderElectra =
 pub type ExecutionPayload = lh_types::execution_payload::ExecutionPayload<MainnetEthSpec>;
 pub type ExecutionPayloadElectra =
     lh_types::execution_payload::ExecutionPayloadElectra<MainnetEthSpec>;
-pub type ExecutionPayloadRef<'a> =
-    lh_types::execution_payload::ExecutionPayloadRef<'a, MainnetEthSpec>;
-pub type ExecutionPayloadRefMut<'a> =
-    lh_types::execution_payload::ExecutionPayloadRefMut<'a, MainnetEthSpec>;
 
 // Get header
 pub type BuilderBid = lh_types::builder_bid::BuilderBid<MainnetEthSpec>;
@@ -148,4 +145,123 @@ pub fn maybe_upgrade_execution_payload(
 
 pub fn mock_public_key_bytes() -> PublicKeyBytes {
     PublicKeyBytes::empty()
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Encode)]
+pub struct PayloadAndBlobsRef<'a> {
+    pub execution_payload: ExecutionPayloadRef<'a>,
+    pub blobs_bundle: &'a BlobsBundle,
+}
+
+impl<'a> From<&'a PayloadAndBlobs> for PayloadAndBlobsRef<'a> {
+    fn from(payload_and_blobs: &'a PayloadAndBlobs) -> Self {
+        let execution_payload = ExecutionPayloadRef::from(&payload_and_blobs.execution_payload);
+        PayloadAndBlobsRef { execution_payload, blobs_bundle: &payload_and_blobs.blobs_bundle }
+    }
+}
+
+impl PayloadAndBlobsRef<'_> {
+    /// Clone out an owned `PayloadAndBlobs`
+    pub fn to_owned(&self) -> PayloadAndBlobs {
+        let execution_payload = self.execution_payload.clone_from_ref();
+        let blobs_bundle = (*self.blobs_bundle).clone();
+        PayloadAndBlobs { execution_payload, blobs_bundle }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Encode)]
+#[serde(untagged)]
+#[ssz(enum_behaviour = "transparent")]
+pub enum ExecutionPayloadRef<'a> {
+    Bellatrix(&'a lh_types::ExecutionPayloadBellatrix<MainnetEthSpec>),
+    Capella(&'a lh_types::ExecutionPayloadCapella<MainnetEthSpec>),
+    Deneb(&'a lh_types::ExecutionPayloadDeneb<MainnetEthSpec>),
+    Electra(&'a lh_types::ExecutionPayloadElectra<MainnetEthSpec>),
+    Fulu(&'a lh_types::ExecutionPayloadFulu<MainnetEthSpec>),
+}
+
+impl<'a> From<&'a ExecutionPayload> for ExecutionPayloadRef<'a> {
+    fn from(payload: &'a ExecutionPayload) -> Self {
+        match payload {
+            ExecutionPayload::Bellatrix(payload) => ExecutionPayloadRef::Bellatrix(payload),
+            ExecutionPayload::Capella(payload) => ExecutionPayloadRef::Capella(payload),
+            ExecutionPayload::Deneb(payload) => ExecutionPayloadRef::Deneb(payload),
+            ExecutionPayload::Electra(payload) => ExecutionPayloadRef::Electra(payload),
+            ExecutionPayload::Fulu(payload) => ExecutionPayloadRef::Fulu(payload),
+        }
+    }
+}
+
+impl ExecutionPayloadRef<'_> {
+    pub fn clone_from_ref(&self) -> ExecutionPayload {
+        match self {
+            ExecutionPayloadRef::Bellatrix(payload) => {
+                ExecutionPayload::Bellatrix((*payload).clone())
+            }
+            ExecutionPayloadRef::Capella(payload) => ExecutionPayload::Capella((*payload).clone()),
+            ExecutionPayloadRef::Deneb(payload) => ExecutionPayload::Deneb((*payload).clone()),
+            ExecutionPayloadRef::Electra(payload) => ExecutionPayload::Electra((*payload).clone()),
+            ExecutionPayloadRef::Fulu(payload) => ExecutionPayload::Fulu((*payload).clone()),
+        }
+    }
+
+    pub fn fork_name(&self) -> ForkName {
+        match self {
+            ExecutionPayloadRef::Bellatrix(_) => ForkName::Bellatrix,
+            ExecutionPayloadRef::Capella(_) => ForkName::Capella,
+            ExecutionPayloadRef::Deneb(_) => ForkName::Deneb,
+            ExecutionPayloadRef::Electra(_) => ForkName::Electra,
+            ExecutionPayloadRef::Fulu(_) => ForkName::Fulu,
+        }
+    }
+
+    pub fn parent_hash(&self) -> &B256 {
+        match self {
+            ExecutionPayloadRef::Bellatrix(payload) => &payload.parent_hash.0,
+            ExecutionPayloadRef::Capella(payload) => &payload.parent_hash.0,
+            ExecutionPayloadRef::Deneb(payload) => &payload.parent_hash.0,
+            ExecutionPayloadRef::Electra(payload) => &payload.parent_hash.0,
+            ExecutionPayloadRef::Fulu(payload) => &payload.parent_hash.0,
+        }
+    }
+
+    pub fn block_hash(&self) -> &B256 {
+        match self {
+            ExecutionPayloadRef::Bellatrix(payload) => &payload.block_hash.0,
+            ExecutionPayloadRef::Capella(payload) => &payload.block_hash.0,
+            ExecutionPayloadRef::Deneb(payload) => &payload.block_hash.0,
+            ExecutionPayloadRef::Electra(payload) => &payload.block_hash.0,
+            ExecutionPayloadRef::Fulu(payload) => &payload.block_hash.0,
+        }
+    }
+
+    pub fn gas_limit(&self) -> u64 {
+        match &self {
+            ExecutionPayloadRef::Bellatrix(payload) => payload.gas_limit,
+            ExecutionPayloadRef::Capella(payload) => payload.gas_limit,
+            ExecutionPayloadRef::Deneb(payload) => payload.gas_limit,
+            ExecutionPayloadRef::Electra(payload) => payload.gas_limit,
+            ExecutionPayloadRef::Fulu(payload) => payload.gas_limit,
+        }
+    }
+
+    pub fn gas_used(&self) -> u64 {
+        match &self {
+            ExecutionPayloadRef::Bellatrix(payload) => payload.gas_used,
+            ExecutionPayloadRef::Capella(payload) => payload.gas_used,
+            ExecutionPayloadRef::Deneb(payload) => payload.gas_used,
+            ExecutionPayloadRef::Electra(payload) => payload.gas_used,
+            ExecutionPayloadRef::Fulu(payload) => payload.gas_used,
+        }
+    }
+
+    pub fn transactions(&self) -> &Transactions {
+        match &self {
+            ExecutionPayloadRef::Bellatrix(payload) => &payload.transactions,
+            ExecutionPayloadRef::Capella(payload) => &payload.transactions,
+            ExecutionPayloadRef::Deneb(payload) => &payload.transactions,
+            ExecutionPayloadRef::Electra(payload) => &payload.transactions,
+            ExecutionPayloadRef::Fulu(payload) => &payload.transactions,
+        }
+    }
 }

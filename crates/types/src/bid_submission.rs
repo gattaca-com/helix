@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use alloy_primitives::{Address, B256, U256};
 use lh_test_random::TestRandom;
 use lh_types::{test_utils::TestRandom, ExecutionPayloadElectra, MainnetEthSpec, SignedRoot, Slot};
@@ -7,7 +9,7 @@ use tree_hash_derive::TreeHash;
 
 use crate::{
     error::SigError, BlobsBundle, BlockMergingData, BlsPublicKey, BlsSignature, ChainSpec,
-    ExecutionPayloadRef, ExecutionPayloadRefMut, ExecutionRequests, PayloadAndBlobs,
+    ExecutionPayloadRef, ExecutionRequests, PayloadAndBlobsRef,
 };
 
 #[derive(
@@ -50,9 +52,9 @@ impl BidTrace {
 #[serde(deny_unknown_fields)]
 pub struct SignedBidSubmissionElectra {
     pub message: BidTrace,
-    pub execution_payload: ExecutionPayloadElectra<MainnetEthSpec>,
-    pub blobs_bundle: BlobsBundle,
-    pub execution_requests: ExecutionRequests,
+    pub execution_payload: Arc<ExecutionPayloadElectra<MainnetEthSpec>>,
+    pub blobs_bundle: Arc<BlobsBundle>,
+    pub execution_requests: Arc<ExecutionRequests>,
     #[serde(default)]
     pub merging_data: BlockMergingData,
     pub signature: BlsSignature,
@@ -97,10 +99,10 @@ impl SignedBidSubmission {
         }
     }
 
-    pub fn blobs_bundle(&self) -> &BlobsBundle {
+    pub fn blobs_bundle(&self) -> Arc<BlobsBundle> {
         match &self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
-                &signed_bid_submission.blobs_bundle
+                signed_bid_submission.blobs_bundle.clone()
             }
         }
     }
@@ -135,33 +137,27 @@ impl SignedBidSubmission {
         }
     }
 
-    pub fn execution_payload_mut(&mut self) -> ExecutionPayloadRefMut {
+    pub fn execution_payload_ref(&self) -> ExecutionPayloadRef {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
-                ExecutionPayloadRefMut::Electra(&mut signed_bid_submission.execution_payload)
+                ExecutionPayloadRef::Electra(&signed_bid_submission.execution_payload)
             }
         }
     }
 
-    pub fn execution_payload(&self) -> ExecutionPayloadRef {
+    pub fn payload_and_blobs_ref(&self) -> PayloadAndBlobsRef {
         match self {
-            SignedBidSubmission::Electra(signed_bid_submission) => {
-                (&signed_bid_submission.execution_payload).into()
-            }
+            SignedBidSubmission::Electra(signed_bid_submission) => PayloadAndBlobsRef {
+                execution_payload: self.execution_payload_ref(),
+                blobs_bundle: &signed_bid_submission.blobs_bundle,
+            },
         }
     }
 
-    pub fn payload_and_blobs(&self) -> PayloadAndBlobs {
-        PayloadAndBlobs {
-            execution_payload: self.execution_payload().clone_from_ref(),
-            blobs_bundle: self.blobs_bundle().clone(),
-        }
-    }
-
-    pub fn execution_requests(&self) -> Option<&ExecutionRequests> {
+    pub fn execution_requests(&self) -> Option<Arc<ExecutionRequests>> {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
-                Some(&signed_bid_submission.execution_requests)
+                Some(signed_bid_submission.execution_requests.clone())
             }
         }
     }

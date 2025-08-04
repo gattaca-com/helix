@@ -8,7 +8,7 @@ use helix_common::{
         data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
-    bid_submission::v2::header_submission::SignedHeaderSubmission,
+    bid_submission::{v2::header_submission::SignedHeaderSubmission, OptimisticVersion},
     builder_info::BuilderInfo,
     simulator::BlockSimError,
     GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo,
@@ -87,9 +87,9 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn store_block_submission(
         &self,
-        submission: Arc<SignedBidSubmission>,
+        submission: SignedBidSubmission,
         trace: SubmissionTrace,
-        optimistic_version: i16,
+        optimistic_version: OptimisticVersion,
     ) -> Result<(), DatabaseError>;
 
     async fn store_builder_info(

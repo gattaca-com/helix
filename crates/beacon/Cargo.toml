@@ -12,7 +12,6 @@ auto_impl.workspace = true
 axum.workspace = true
 ethereum_serde_utils.workspace = true
 ethereum_ssz.workspace = true
-fiber.workspace = true
 futures.workspace = true
 helix-common.workspace = true
 helix-types.workspace = true

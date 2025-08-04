@@ -44,7 +44,6 @@ ethereum_ssz = "0.8"
 ethereum_ssz_derive = "0.8"
 ethers = "2.0.14"
 eyre = "0.6.12"
-fiber = { git = "https://github.com/chainbound/fiber-rs.git", tag = "v0.8.0" }
 flate2 = "1.0"
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
@@ -90,8 +89,8 @@ thiserror = "1.0.49"
 tikv-jemallocator = { version = "0.5", features = ["profiling"] }
 tokio = { version = "1.43", features = ["full"] }
 tokio-postgres = "0.7.10"
-tokio-tungstenite = "0.16"
-tonic = "0.10"
+tonic = { version = "0.10", features = ["gzip"] }
+tokio-tungstenite = "0.27.0"
 tonic-build = "0.10"
 tower = { version = "0.4.13", features = ["full"] }
 tower-http = { version = "0.5.1", features = ["full"] }
