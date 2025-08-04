@@ -262,8 +262,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
         &self,
         request: BlockMergeRequest,
     ) -> Result<BlockMergeResponse, BlockSimError> {
-        // TODO: update metrics
-        let timer = SimulatorMetrics::timer(&self.simulator_config.url);
+        let timer = SimulatorMetrics::block_merge_timer(&self.simulator_config.url);
 
         let block_hash = request.execution_payload.block_hash().0;
         debug!(
@@ -275,13 +274,13 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
             Ok(response) => {
                 timer.stop_and_record();
                 let result = Self::process_merge_rpc_response(response).await;
-                SimulatorMetrics::sim_status(result.is_ok());
+                SimulatorMetrics::block_merge_status(result.is_ok());
                 result
             }
             Err(err) => {
                 timer.stop_and_discard();
                 error!(?err, "Error sending RPC request");
-                SimulatorMetrics::sim_status(false);
+                SimulatorMetrics::block_merge_status(false);
                 Err(BlockSimError::RpcError(err.to_string()))
             }
         }
