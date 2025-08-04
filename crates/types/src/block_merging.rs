@@ -28,7 +28,7 @@ impl TestRandom for Order {
 #[serde(deny_unknown_fields)]
 pub struct Transaction {
     /// Index into block.transactions
-    pub index: u32,
+    pub index: usize,
     /// If the transaction is allowed to revert
     pub can_revert: bool,
 }

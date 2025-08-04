@@ -29,7 +29,7 @@ use tracing::{debug, error, info, trace, warn, Instrument, Level};
 use super::api::BuilderApi;
 use crate::{
     builder::{
-        api::{decode_payload, sanity_check_block_submission},
+        api::{decode_payload, sanity_check_block_submission, verify_block_merging_data},
         error::BuilderApiError,
     },
     Api,
@@ -207,6 +207,8 @@ impl<A: Api> BuilderApi<A> {
         };
         trace!(is_optimistic = was_simulated_optimistically, "verified submitted block");
 
+        verify_block_merging_data(&payload, payload.merging_data())?;
+
         let mergeable_bundles = get_mergeable_bundles(&payload, payload.merging_data())?;
 
         if let Err(err) = api.sorter_tx.try_send(BidSorterMessage::new_from_block_submission(
@@ -241,7 +243,6 @@ impl<A: Api> BuilderApi<A> {
         }
         trace!("saved bid trace to redis");
 
-        // TODO: validate merging data
         let merging_preferences =
             BlockMergingPreferences { allow_appending: payload.merging_data().allow_appending };
 
@@ -297,11 +298,9 @@ fn get_mergeable_bundles(
         .iter()
         .map(|order| match order {
             Order::Tx(tx) => {
-                let raw_tx = txs
-                    .get(tx.index as usize)
-                    .cloned()
-                    // TODO: use a better error
-                    .ok_or(BuilderApiError::MissingTransactions)?;
+                let raw_tx = txs.get(tx.index as usize).cloned().ok_or(
+                    BuilderApiError::InvalidBlockMergingData { got: tx.index, tx_count: txs.len() },
+                )?;
                 let reverting_txs = if tx.can_revert { vec![0] } else { vec![] };
 
                 Ok(MergeableBundle {
@@ -315,11 +314,12 @@ fn get_mergeable_bundles(
                     .txs
                     .iter()
                     .map(|tx_index| {
-                        let raw_tx = txs
-                            .get(*tx_index)
-                            .cloned()
-                            // TODO: use a better error
-                            .ok_or(BuilderApiError::MissingTransactions)?;
+                        let raw_tx = txs.get(*tx_index).cloned().ok_or(
+                            BuilderApiError::InvalidBlockMergingData {
+                                got: *tx_index,
+                                tx_count: txs.len(),
+                            },
+                        )?;
 
                         Ok(Bytes::from_owner(raw_tx.to_vec()))
                     })

@@ -24,7 +24,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
-use helix_types::{BlsPublicKey, SignedBidSubmission, Slot};
+use helix_types::{BlockMergingData, BlsPublicKey, SignedBidSubmission, Slot};
 use parking_lot::RwLock;
 use ssz::Decode;
 use tracing::{debug, error, trace, warn};
@@ -433,8 +433,8 @@ pub async fn decode_payload(
     let is_gzip =
         req.headers().get("Content-Encoding").and_then(|val| val.to_str().ok()) == Some("gzip");
 
-    let is_ssz = req.headers().get("Content-Type").and_then(|val| val.to_str().ok()) ==
-        Some("application/octet-stream");
+    let is_ssz = req.headers().get("Content-Type").and_then(|val| val.to_str().ok())
+        == Some("application/octet-stream");
 
     // Read the body
     let body = req.into_body();
@@ -568,6 +568,42 @@ pub(crate) fn sanity_check_block_submission(
     }
 
     Ok(())
+}
+
+/// Validates all tx indices in the block merging data are within bounds
+pub(crate) fn verify_block_merging_data(
+    payload: &SignedBidSubmission,
+    merging_data: &BlockMergingData,
+) -> Result<(), BuilderApiError> {
+    let tx_count = payload.execution_payload_ref().transactions().len();
+    merging_data.merge_orders.iter().try_fold((), |(), order| match order {
+        helix_types::Order::Tx(transaction) => {
+            if transaction.index >= tx_count {
+                return Err(BuilderApiError::InvalidBlockMergingData {
+                    got: transaction.index,
+                    tx_count,
+                });
+            }
+            Ok(())
+        }
+        helix_types::Order::Bundle(bundle) => {
+            bundle
+                .txs
+                .iter()
+                .chain(bundle.reverting_txs.iter())
+                .chain(bundle.dropping_txs.iter())
+                .try_fold((), |(), tx_index| {
+                    if tx_index >= &tx_count {
+                        return Err(BuilderApiError::InvalidBlockMergingData {
+                            got: *tx_index,
+                            tx_count,
+                        });
+                    }
+                    Ok(())
+                })?;
+            Ok(())
+        }
+    })
 }
 
 #[cfg(test)]

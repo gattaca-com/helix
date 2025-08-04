@@ -154,6 +154,11 @@ pub enum BuilderApiError {
 
     #[error("not {fork_name:?} payload")]
     InvalidPayloadType { fork_name: String },
+
+    #[error(
+        "block merging data is invalid. got index: {got}, but the body has only {tx_count} transactions"
+    )]
+    InvalidBlockMergingData { got: usize, tx_count: usize },
 }
 
 impl IntoResponse for BuilderApiError {
@@ -189,6 +194,7 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::MissingWithdrawlsRoot |
             BuilderApiError::WithdrawalsRootMismatch { .. } |
             BuilderApiError::MissingTransactions |
+            BuilderApiError::InvalidBlockMergingData { .. } |
             BuilderApiError::MissingTransactionsRoot |
             BuilderApiError::TransactionsRootMismatch { .. } |
             BuilderApiError::PayloadAttributesNotYetKnown |
@@ -198,7 +204,8 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::BuilderNotOptimistic { .. } |
             BuilderApiError::BuilderNotInProposersTrustedList { .. } |
             BuilderApiError::PayloadError(_) |
-            BuilderApiError::BidValidationError(_) => StatusCode::BAD_REQUEST,
+            BuilderApiError::BidValidationError(_) |
+            BuilderApiError::InvalidPayloadType { .. } => StatusCode::BAD_REQUEST,
 
             BuilderApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
 
@@ -211,7 +218,6 @@ impl IntoResponse for BuilderApiError {
 
                 _ => StatusCode::BAD_REQUEST,
             },
-            BuilderApiError::InvalidPayloadType { .. } => StatusCode::BAD_REQUEST,
         };
 
         (code, self.to_string()).into_response()
