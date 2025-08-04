@@ -8,7 +8,7 @@ use helix_common::{
 };
 use helix_database::BuilderInfoDocument;
 use helix_types::{
-    BidTrace, BlockMergingData, BlsPublicKey, ForkName, PayloadAndBlobs, PayloadAndBlobsRef,
+    BidTrace, BlockMergingPreferences, BlsPublicKey, ForkName, PayloadAndBlobs, PayloadAndBlobsRef,
 };
 use tokio::sync::broadcast;
 
@@ -48,19 +48,19 @@ pub trait Auctioneer: Send + Sync + Clone {
 
     async fn save_bid_trace(&self, bid_trace: &BidTrace) -> Result<(), AuctioneerError>;
 
-    async fn get_block_merging_data(
+    async fn get_block_merging_preferences(
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
-    ) -> Result<Option<BlockMergingData>, AuctioneerError>;
+    ) -> Result<Option<BlockMergingPreferences>, AuctioneerError>;
 
-    async fn save_block_merging_data(
+    async fn save_block_merging_preferences(
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
-        merging_data: &BlockMergingData,
+        merging_preferences: &BlockMergingPreferences,
     ) -> Result<(), AuctioneerError>;
 
     async fn get_builder_info(

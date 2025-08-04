@@ -22,7 +22,7 @@ use helix_common::{
 };
 use helix_database::types::BuilderInfoDocument;
 use helix_types::{
-    maybe_upgrade_execution_payload, BidTrace, BlockMergingData, BlsPublicKey, ForkName,
+    maybe_upgrade_execution_payload, BidTrace, BlockMergingPreferences, BlsPublicKey, ForkName,
     PayloadAndBlobs, PayloadAndBlobsRef,
 };
 use moka::sync::Cache;
@@ -38,7 +38,8 @@ use crate::{
     redis::{
         error::RedisCacheError,
         utils::{
-            get_cache_bid_trace_key, get_cache_block_merging_data_key, get_execution_payload_key,
+            get_cache_bid_trace_key, get_cache_block_merging_preferences_key,
+            get_execution_payload_key,
         },
     },
     types::keys::{
@@ -1135,15 +1136,15 @@ impl Auctioneer for RedisCache {
     }
 
     #[instrument(skip_all)]
-    async fn get_block_merging_data(
+    async fn get_block_merging_preferences(
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
-    ) -> Result<Option<BlockMergingData>, AuctioneerError> {
-        let mut record = RedisMetricRecord::new("get_block_merging_data");
+    ) -> Result<Option<BlockMergingPreferences>, AuctioneerError> {
+        let mut record = RedisMetricRecord::new("get_block_merging_preferences");
 
-        let key = get_cache_block_merging_data_key(slot, proposer_pub_key, block_hash);
+        let key = get_cache_block_merging_preferences_key(slot, proposer_pub_key, block_hash);
         let bid_trace = self.get(&key).await?;
 
         record.record_success();
@@ -1151,17 +1152,17 @@ impl Auctioneer for RedisCache {
     }
 
     #[instrument(skip_all)]
-    async fn save_block_merging_data(
+    async fn save_block_merging_preferences(
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
-        merging_data: &BlockMergingData,
+        merging_preferences: &BlockMergingPreferences,
     ) -> Result<(), AuctioneerError> {
-        let mut record = RedisMetricRecord::new("save_block_merging_data");
+        let mut record = RedisMetricRecord::new("save_block_merging_preferences");
 
-        let key = get_cache_block_merging_data_key(slot, proposer_pub_key, block_hash);
-        self.set(&key, merging_data, Some(BID_CACHE_EXPIRY_S)).await?;
+        let key = get_cache_block_merging_preferences_key(slot, proposer_pub_key, block_hash);
+        self.set(&key, merging_preferences, Some(BID_CACHE_EXPIRY_S)).await?;
 
         record.record_success();
         Ok(())

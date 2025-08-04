@@ -53,6 +53,11 @@ pub struct BlockMergingData {
     pub merge_orders: Vec<Order>,
 }
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
+pub struct BlockMergingPreferences {
+    pub allow_appending: bool,
+}
+
 /// Represents one or more transactions to be appended into a block atomically.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct MergeableBundle {

@@ -189,10 +189,9 @@ impl<A: Api> ProposerApi<A> {
         };
 
         // Check if block allows merging
-        // TODO: store somewhere else?
         let block_allows_merging = proposer_api
             .auctioneer
-            .get_block_merging_data(slot, &bid_request.pubkey, &block_hash)
+            .get_block_merging_preferences(slot, &bid_request.pubkey, &block_hash)
             .await?
             .map(|merging_data| merging_data.allow_appending)
             .unwrap_or(false);

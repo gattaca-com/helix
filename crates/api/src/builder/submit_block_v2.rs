@@ -14,7 +14,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::SignedBidSubmission;
+use helix_types::{BlockMergingPreferences, SignedBidSubmission};
 use hyper::HeaderMap;
 use tracing::{debug, error, info, warn, Instrument};
 
@@ -234,13 +234,17 @@ impl<A: Api> BuilderApi<A> {
             return Err(BuilderApiError::AuctioneerError(err));
         }
 
+        // TODO: validate merging data
+        let merging_preferences =
+            BlockMergingPreferences { allow_appending: payload.merging_data().allow_appending };
+
         if let Err(err) = api
             .auctioneer
-            .save_block_merging_data(
+            .save_block_merging_preferences(
                 payload.slot().as_u64(),
                 payload.proposer_public_key(),
                 block_hash,
-                payload.merging_data(),
+                &merging_preferences,
             )
             .await
         {
