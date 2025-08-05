@@ -21,7 +21,7 @@ use tracing::{debug, error, info, warn, Instrument};
 use super::api::BuilderApi;
 use crate::{
     builder::{
-        api::{decode_payload, sanity_check_block_submission},
+        api::{decode_payload, sanity_check_block_submission, verify_block_merging_data},
         error::BuilderApiError,
         v2_check::V2SubMessage,
     },
@@ -234,7 +234,8 @@ impl<A: Api> BuilderApi<A> {
             return Err(BuilderApiError::AuctioneerError(err));
         }
 
-        // TODO: validate merging data
+        verify_block_merging_data(&payload, payload.merging_data())?;
+
         let merging_preferences =
             BlockMergingPreferences { allow_appending: payload.merging_data().allow_appending };
 
