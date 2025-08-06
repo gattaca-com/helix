@@ -13,6 +13,7 @@ auto_impl.workspace = true
 axum.workspace = true
 crossbeam-channel.workspace = true
 deadpool-redis.workspace = true
+dashmap.workspace = true
 ethereum_ssz.workspace = true
 eyre.workspace = true
 futures-util.workspace = true
