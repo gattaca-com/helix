@@ -264,4 +264,14 @@ impl ExecutionPayloadRef<'_> {
             ExecutionPayloadRef::Fulu(payload) => &payload.transactions,
         }
     }
+
+    pub fn fee_recipient(&self) -> lh_types::Address {
+        match &self {
+            ExecutionPayloadRef::Bellatrix(payload) => payload.fee_recipient,
+            ExecutionPayloadRef::Capella(payload) => payload.fee_recipient,
+            ExecutionPayloadRef::Deneb(payload) => payload.fee_recipient,
+            ExecutionPayloadRef::Electra(payload) => payload.fee_recipient,
+            ExecutionPayloadRef::Fulu(payload) => payload.fee_recipient,
+        }
+    }
 }

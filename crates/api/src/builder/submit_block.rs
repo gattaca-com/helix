@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use alloy_primitives::Address;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -345,6 +344,5 @@ fn get_mergeable_bundles(
         })
         .collect::<Result<Vec<_>, BuilderApiError>>()?;
 
-    // TODO: which address should we use here?
-    Ok(MergeableBundles::new(Address::default(), mergeable_bundles))
+    Ok(MergeableBundles::new(execution_payload.fee_recipient(), mergeable_bundles))
 }

@@ -197,6 +197,7 @@ impl<A: Api> ProposerApi<A> {
             .unwrap_or(false);
 
         // Re-bind variables to ensure they don't reference the old bid
+        // TODO: move to before the sleep
         let (bid, block_hash) = if !block_allows_merging {
             (bid, block_hash)
         } else {
