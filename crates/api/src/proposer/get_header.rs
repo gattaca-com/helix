@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{Address, B256, U256};
 use axum::{extract::Path, http::HeaderMap, response::IntoResponse, Extension};
 use helix_common::{
     chain_info::ChainInfo,
@@ -209,8 +209,16 @@ impl<A: Api> ProposerApi<A> {
                 .await?;
 
             // Here we would somehow get all the appendable transactions, with bundle/revert metadata
+            let proposer_fee_recipient = duty.entry.registration.message.fee_recipient;
             let new_bid = proposer_api
-                .append_transactions_to_payload(slot, &proposer_pubkey, bid, payload, bundles)
+                .append_transactions_to_payload(
+                    slot,
+                    proposer_fee_recipient,
+                    &proposer_pubkey,
+                    bid,
+                    payload,
+                    bundles,
+                )
                 .await?;
 
             let latest_bid_res = proposer_api.shared_best_header.load(
@@ -262,6 +270,7 @@ impl<A: Api> ProposerApi<A> {
     async fn append_transactions_to_payload(
         &self,
         slot: u64,
+        proposer_fee_recipient: Address,
         proposer_pubkey: &BlsPublicKey,
         bid: BuilderBid,
         payload: PayloadAndBlobs,
@@ -269,6 +278,7 @@ impl<A: Api> ProposerApi<A> {
     ) -> Result<BuilderBid, ProposerApiError> {
         let merge_request = BlockMergeRequest::new(
             bid.value().clone(),
+            proposer_fee_recipient,
             payload.execution_payload,
             payload.blobs_bundle,
             merging_data,
