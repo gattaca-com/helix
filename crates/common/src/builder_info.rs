@@ -10,6 +10,8 @@ pub struct BuilderInfo {
     pub is_optimistic_for_regional_filtering: bool,
     pub builder_id: Option<String>,
     pub builder_ids: Option<Vec<String>>,
+    // TODO: add reward address?
+    // pub reward_address: Option<Address>,
 }
 
 impl BuilderInfo {
