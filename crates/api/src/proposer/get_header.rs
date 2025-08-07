@@ -203,7 +203,6 @@ impl<A: Api> ProposerApi<A> {
         } else {
             proposer_api
                 .start_block_merging(
-                    slot,
                     &bid_request,
                     block_hash,
                     duty.entry.registration.message.fee_recipient,
@@ -237,7 +236,6 @@ impl<A: Api> ProposerApi<A> {
 
     async fn start_block_merging(
         &self,
-        slot: u64,
         bid_request: &BidRequest,
         block_hash: B256,
         proposer_fee_recipient: Address,
@@ -247,14 +245,13 @@ impl<A: Api> ProposerApi<A> {
         debug!("merging block");
 
         // Get execution payload from auctioneer
-        let payload =
-            self.get_execution_payload(slot, &bid_request.pubkey, &block_hash, true).await?;
+        let payload = self
+            .get_execution_payload(bid_request.slot.into(), &bid_request.pubkey, &block_hash, true)
+            .await?;
 
-        // Here we would somehow get all the appendable transactions, with bundle/revert metadata
-        let proposer_fee_recipient = proposer_fee_recipient;
         let new_bid = self
             .append_transactions_to_payload(
-                slot,
+                bid_request.slot.into(),
                 proposer_fee_recipient,
                 &bid_request.pubkey,
                 bid,
