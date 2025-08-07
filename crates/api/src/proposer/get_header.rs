@@ -12,7 +12,7 @@ use helix_common::{
     chain_info::ChainInfo,
     metadata_provider::MetadataProvider,
     metrics::GetHeaderMetric,
-    resign_builder_bid, task,
+    proposer, resign_builder_bid, task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
     BidRequest, GetHeaderTrace,
 };
@@ -111,10 +111,18 @@ impl<A: Api> ProposerApi<A> {
         // TODO: remove is trusted proposer once people start using header verification
 
         if duty.entry.preferences.header_delay {
-            new_bid = proposer_api
-                .start_block_merging(&bid_request, duty.entry.registration.message.fee_recipient)
-                .await
-                .ok();
+            // Start block merging in the background
+            // TODO: should we wait a bit before block merging?
+            let block_merging = tokio::spawn({
+                let proposer_api = proposer_api.clone();
+                let bid_request = bid_request.clone();
+                async move {
+                    proposer_api
+                        .merge_block(&bid_request, duty.entry.registration.message.fee_recipient)
+                        .await
+                        .ok()
+                }
+            });
 
             let latest_header_delay_ms_in_slot =
                 proposer_api.relay_config.timing_game_config.latest_header_delay_ms_in_slot;
@@ -146,6 +154,13 @@ impl<A: Api> ProposerApi<A> {
             }
 
             get_header_metric.record();
+
+            // If block merging didn't finish, we abort it
+            if block_merging.is_finished() {
+                new_bid = block_merging.await.ok();
+            } else {
+                block_merging.abort();
+            }
         }
 
         let get_best_bid_res = proposer_api.shared_best_header.load(
@@ -225,7 +240,7 @@ impl<A: Api> ProposerApi<A> {
         Ok(axum::Json(signed_bid))
     }
 
-    async fn start_block_merging(
+    async fn merge_block(
         &self,
         bid_request: &BidRequest,
         proposer_fee_recipient: Address,
