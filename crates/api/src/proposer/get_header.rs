@@ -105,10 +105,17 @@ impl<A: Api> ProposerApi<A> {
             mev_boost = true;
         }
 
+        let mut new_bid = None;
+
         // If timing games are enabled for the proposer then we sleep a fixed amount
         // TODO: remove is trusted proposer once people start using header verification
 
         if duty.entry.preferences.header_delay {
+            new_bid = proposer_api
+                .start_block_merging(&bid_request, duty.entry.registration.message.fee_recipient)
+                .await
+                .ok();
+
             let latest_header_delay_ms_in_slot =
                 proposer_api.relay_config.timing_game_config.latest_header_delay_ms_in_slot;
 
@@ -150,9 +157,17 @@ impl<A: Api> ProposerApi<A> {
         trace.best_bid_fetched = utcnow_ns();
         debug!(trace = ?trace, "best bid fetched");
 
-        let Some((bid, _bundles)) = get_best_bid_res else {
-            warn!("no bid found");
-            return Err(ProposerApiError::NoBidPrepared);
+        let bid = match (get_best_bid_res, new_bid) {
+            (Some((bid, _)), None) => bid,
+            (None, Some(bid)) => bid,
+            // If the merged payload has a higher value, we use that
+            (Some((bid, _)), Some(new_bid)) if new_bid.value() > bid.value() => new_bid,
+            // Otherwise, we use the top bid
+            (Some((bid, _)), Some(_new_bid)) => bid,
+            (None, None) => {
+                warn!("no bid found");
+                return Err(ProposerApiError::NoBidPrepared);
+            }
         };
         if bid.value() == &U256::ZERO {
             warn!("best bid value is 0");
@@ -188,42 +203,6 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::InternalServerError);
         };
 
-        // Check if block allows merging
-        let block_allows_merging = proposer_api
-            .auctioneer
-            .get_block_merging_preferences(slot, &bid_request.pubkey, &block_hash)
-            .await?
-            .map(|merging_data| merging_data.allow_appending)
-            .unwrap_or(false);
-
-        // Re-bind variables to ensure they don't reference the old bid
-        // TODO: move to before the sleep
-        let bid = if !block_allows_merging {
-            bid
-        } else {
-            let new_bid = proposer_api
-                .start_block_merging(&bid_request, duty.entry.registration.message.fee_recipient)
-                .await?;
-
-            let latest_bid_res = proposer_api.shared_best_header.load(
-                bid_request.slot.into(),
-                &bid_request.parent_hash,
-                &bid_request.pubkey,
-            );
-            // Replace with latest bid if it has a higher value
-            if latest_bid_res.is_some()
-                && latest_bid_res.as_ref().unwrap().0.value() >= new_bid.value()
-            {
-                // If the latest bid has a higher value, we return that bid
-                debug!("returning merged payload");
-                latest_bid_res.unwrap().0
-            } else {
-                warn!("latest bid is not valid anymore, returning original payload");
-                new_bid
-            }
-        };
-        let block_hash = bid.header().block_hash().0;
-
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
 
         if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
@@ -253,12 +232,27 @@ impl<A: Api> ProposerApi<A> {
     ) -> Result<BuilderBid, ProposerApiError> {
         debug!("merging block");
 
+        let slot = bid_request.slot.into();
+
         let (bid, bundles) = self
             .shared_best_header
-            .load(bid_request.slot.into(), &bid_request.parent_hash, &bid_request.pubkey)
+            .load(slot, &bid_request.parent_hash, &bid_request.pubkey)
             .ok_or(ProposerApiError::NoBidPrepared)?;
 
         let block_hash = bid.header().block_hash().0;
+
+        // Check if block allows merging
+        let block_allows_merging = self
+            .auctioneer
+            .get_block_merging_preferences(slot, &bid_request.pubkey, &block_hash)
+            .await?
+            .map(|merging_data| merging_data.allow_appending)
+            .unwrap_or(false);
+
+        // If block does not allow merging, we return the original bid
+        if !block_allows_merging {
+            return Ok(bid);
+        }
 
         // Get execution payload from auctioneer
         let payload = self
