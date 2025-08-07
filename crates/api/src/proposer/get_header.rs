@@ -150,7 +150,7 @@ impl<A: Api> ProposerApi<A> {
         trace.best_bid_fetched = utcnow_ns();
         debug!(trace = ?trace, "best bid fetched");
 
-        let Some((bid, bundles)) = get_best_bid_res else {
+        let Some((bid, _bundles)) = get_best_bid_res else {
             warn!("no bid found");
             return Err(ProposerApiError::NoBidPrepared);
         };
@@ -198,19 +198,31 @@ impl<A: Api> ProposerApi<A> {
 
         // Re-bind variables to ensure they don't reference the old bid
         // TODO: move to before the sleep
-        let (bid, block_hash) = if !block_allows_merging {
-            (bid, block_hash)
+        let bid = if !block_allows_merging {
+            bid
         } else {
-            proposer_api
-                .start_block_merging(
-                    &bid_request,
-                    block_hash,
-                    duty.entry.registration.message.fee_recipient,
-                    bid,
-                    bundles,
-                )
-                .await?
+            let new_bid = proposer_api
+                .start_block_merging(&bid_request, duty.entry.registration.message.fee_recipient)
+                .await?;
+
+            let latest_bid_res = proposer_api.shared_best_header.load(
+                bid_request.slot.into(),
+                &bid_request.parent_hash,
+                &bid_request.pubkey,
+            );
+            // Replace with latest bid if it has a higher value
+            if latest_bid_res.is_some()
+                && latest_bid_res.as_ref().unwrap().0.value() >= new_bid.value()
+            {
+                // If the latest bid has a higher value, we return that bid
+                debug!("returning merged payload");
+                latest_bid_res.unwrap().0
+            } else {
+                warn!("latest bid is not valid anymore, returning original payload");
+                new_bid
+            }
         };
+        let block_hash = bid.header().block_hash().0;
 
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
 
@@ -237,12 +249,16 @@ impl<A: Api> ProposerApi<A> {
     async fn start_block_merging(
         &self,
         bid_request: &BidRequest,
-        block_hash: B256,
         proposer_fee_recipient: Address,
-        bid: BuilderBid,
-        bundles: Vec<MergeableBundles>,
-    ) -> Result<(BuilderBid, B256), ProposerApiError> {
+    ) -> Result<BuilderBid, ProposerApiError> {
         debug!("merging block");
+
+        let (bid, bundles) = self
+            .shared_best_header
+            .load(bid_request.slot.into(), &bid_request.parent_hash, &bid_request.pubkey)
+            .ok_or(ProposerApiError::NoBidPrepared)?;
+
+        let block_hash = bid.header().block_hash().0;
 
         // Get execution payload from auctioneer
         let payload = self
@@ -260,24 +276,7 @@ impl<A: Api> ProposerApi<A> {
             )
             .await?;
 
-        let latest_bid_res = self.shared_best_header.load(
-            bid_request.slot.into(),
-            &bid_request.parent_hash,
-            &bid_request.pubkey,
-        );
-        // Replace with latest bid if it has a higher value
-        if latest_bid_res.is_some() && latest_bid_res.as_ref().unwrap().0.value() >= new_bid.value()
-        {
-            // If the latest bid has a higher value, we return that bid
-            debug!("returning merged payload");
-            let bid = latest_bid_res.unwrap().0;
-            let block_hash = bid.header().block_hash().0;
-            Ok((bid, block_hash))
-        } else {
-            warn!("latest bid is not valid anymore, returning original payload");
-            let block_hash = new_bid.header().block_hash().0;
-            Ok((new_bid, block_hash))
-        }
+        Ok(new_bid)
     }
 
     /// Appends transactions to the payload and returns a new bid.
