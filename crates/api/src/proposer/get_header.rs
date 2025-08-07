@@ -12,7 +12,7 @@ use helix_common::{
     chain_info::ChainInfo,
     metadata_provider::MetadataProvider,
     metrics::GetHeaderMetric,
-    proposer, resign_builder_bid, task,
+    resign_builder_bid, task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
     BidRequest, GetHeaderTrace,
 };
@@ -120,7 +120,6 @@ impl<A: Api> ProposerApi<A> {
                     proposer_api
                         .merge_block(&bid_request, duty.entry.registration.message.fee_recipient)
                         .await
-                        .ok()
                 }
             });
 
@@ -157,7 +156,7 @@ impl<A: Api> ProposerApi<A> {
 
             // If block merging didn't finish, we abort it
             if block_merging.is_finished() {
-                new_bid = block_merging.await.ok();
+                new_bid = block_merging.await.ok().flatten();
             } else {
                 block_merging.abort();
             }
@@ -244,15 +243,13 @@ impl<A: Api> ProposerApi<A> {
         &self,
         bid_request: &BidRequest,
         proposer_fee_recipient: Address,
-    ) -> Result<BuilderBid, ProposerApiError> {
+    ) -> Option<BuilderBid> {
         debug!("merging block");
 
         let slot = bid_request.slot.into();
 
-        let (bid, bundles) = self
-            .shared_best_header
-            .load(slot, &bid_request.parent_hash, &bid_request.pubkey)
-            .ok_or(ProposerApiError::NoBidPrepared)?;
+        let (bid, bundles) =
+            self.shared_best_header.load(slot, &bid_request.parent_hash, &bid_request.pubkey)?;
 
         let block_hash = bid.header().block_hash().0;
 
@@ -260,19 +257,21 @@ impl<A: Api> ProposerApi<A> {
         let block_allows_merging = self
             .auctioneer
             .get_block_merging_preferences(slot, &bid_request.pubkey, &block_hash)
-            .await?
+            .await
+            .ok()?
             .map(|merging_data| merging_data.allow_appending)
             .unwrap_or(false);
 
-        // If block does not allow merging, we return the original bid
+        // If block does not allow merging, we stop
         if !block_allows_merging {
-            return Ok(bid);
+            return None;
         }
 
         // Get execution payload from auctioneer
         let payload = self
             .get_execution_payload(bid_request.slot.into(), &bid_request.pubkey, &block_hash, true)
-            .await?;
+            .await
+            .ok()?;
 
         let new_bid = self
             .append_transactions_to_payload(
@@ -285,7 +284,7 @@ impl<A: Api> ProposerApi<A> {
             )
             .await?;
 
-        Ok(new_bid)
+        Some(new_bid)
     }
 
     /// Appends transactions to the payload and returns a new bid.
@@ -299,7 +298,7 @@ impl<A: Api> ProposerApi<A> {
         bid: BuilderBid,
         payload: PayloadAndBlobs,
         merging_data: Vec<MergeableBundles>,
-    ) -> Result<BuilderBid, ProposerApiError> {
+    ) -> Option<BuilderBid> {
         let merge_request = BlockMergeRequest::new(
             bid.value().clone(),
             proposer_fee_recipient,
@@ -308,8 +307,7 @@ impl<A: Api> ProposerApi<A> {
             merging_data,
         );
 
-        // TODO: remove unwrap
-        let response = self.simulator.process_merge_request(merge_request).await.unwrap();
+        let response = self.simulator.process_merge_request(merge_request).await.ok()?;
 
         // Sanity check: if the merged payload has a lower value than the original bid,
         // we return the original bid.
@@ -317,13 +315,13 @@ impl<A: Api> ProposerApi<A> {
             warn!(
                 original_value = %bid.value(),
                 %response.value,
-                "merged payload has lower value than original bid, returning original bid"
+                "merged payload has lower value than original bid"
             );
-            return Ok(bid);
+            return None;
         }
         let header = ExecutionPayloadHeader::from(response.execution_payload.to_ref())
             .as_electra()
-            .unwrap()
+            .ok()?
             .clone();
         let blob_kzg_commitments = response.blobs_bundle.commitments.clone();
         let block_hash = response.execution_payload.block_hash().0;
@@ -340,13 +338,12 @@ impl<A: Api> ProposerApi<A> {
             blobs_bundle: &response.blobs_bundle,
         };
 
-        // TODO: how do we handle errors here?
         self.auctioneer
             .save_execution_payload(slot, proposer_pubkey, &block_hash, payload_and_blobs)
             .await
-            .unwrap();
+            .ok()?;
 
-        Ok(new_bid.into())
+        Some(new_bid.into())
     }
 }
 
