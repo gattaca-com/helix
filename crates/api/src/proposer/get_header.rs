@@ -201,45 +201,16 @@ impl<A: Api> ProposerApi<A> {
         let (bid, block_hash) = if !block_allows_merging {
             (bid, block_hash)
         } else {
-            debug!("merging block");
-
-            // Get execution payload from auctioneer
-            let payload = proposer_api
-                .get_execution_payload(slot, &bid_request.pubkey, &block_hash, true)
-                .await?;
-
-            // Here we would somehow get all the appendable transactions, with bundle/revert metadata
-            let proposer_fee_recipient = duty.entry.registration.message.fee_recipient;
-            let new_bid = proposer_api
-                .append_transactions_to_payload(
+            proposer_api
+                .start_block_merging(
                     slot,
-                    proposer_fee_recipient,
-                    &proposer_pubkey,
+                    &bid_request,
+                    block_hash,
+                    duty.entry.registration.message.fee_recipient,
                     bid,
-                    payload,
                     bundles,
                 )
-                .await?;
-
-            let latest_bid_res = proposer_api.shared_best_header.load(
-                bid_request.slot.into(),
-                &bid_request.parent_hash,
-                &bid_request.pubkey,
-            );
-            // Replace with latest bid if it has a higher value
-            if latest_bid_res.is_some()
-                && latest_bid_res.as_ref().unwrap().0.value() >= new_bid.value()
-            {
-                // If the latest bid has a higher value, we return that bid
-                debug!("returning merged payload");
-                let bid = latest_bid_res.unwrap().0;
-                let block_hash = bid.header().block_hash().0;
-                (bid, block_hash)
-            } else {
-                warn!("latest bid is not valid anymore, returning original payload");
-                let block_hash = new_bid.header().block_hash().0;
-                (new_bid, block_hash)
-            }
+                .await?
         };
 
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
@@ -262,6 +233,54 @@ impl<A: Api> ProposerApi<A> {
         info!(%signed_bid, "delivering bid");
 
         Ok(axum::Json(signed_bid))
+    }
+
+    async fn start_block_merging(
+        &self,
+        slot: u64,
+        bid_request: &BidRequest,
+        block_hash: B256,
+        proposer_fee_recipient: Address,
+        bid: BuilderBid,
+        bundles: Vec<MergeableBundles>,
+    ) -> Result<(BuilderBid, B256), ProposerApiError> {
+        debug!("merging block");
+
+        // Get execution payload from auctioneer
+        let payload =
+            self.get_execution_payload(slot, &bid_request.pubkey, &block_hash, true).await?;
+
+        // Here we would somehow get all the appendable transactions, with bundle/revert metadata
+        let proposer_fee_recipient = proposer_fee_recipient;
+        let new_bid = self
+            .append_transactions_to_payload(
+                slot,
+                proposer_fee_recipient,
+                &bid_request.pubkey,
+                bid,
+                payload,
+                bundles,
+            )
+            .await?;
+
+        let latest_bid_res = self.shared_best_header.load(
+            bid_request.slot.into(),
+            &bid_request.parent_hash,
+            &bid_request.pubkey,
+        );
+        // Replace with latest bid if it has a higher value
+        if latest_bid_res.is_some() && latest_bid_res.as_ref().unwrap().0.value() >= new_bid.value()
+        {
+            // If the latest bid has a higher value, we return that bid
+            debug!("returning merged payload");
+            let bid = latest_bid_res.unwrap().0;
+            let block_hash = bid.header().block_hash().0;
+            Ok((bid, block_hash))
+        } else {
+            warn!("latest bid is not valid anymore, returning original payload");
+            let block_hash = new_bid.header().block_hash().0;
+            Ok((new_bid, block_hash))
+        }
     }
 
     /// Appends transactions to the payload and returns a new bid.
