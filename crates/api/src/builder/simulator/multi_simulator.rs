@@ -11,7 +11,9 @@ use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use tokio::time::sleep;
 
-use super::{optimistic_simulator::OptimisticSimulator, BlockSimRequest};
+use crate::builder::rpc_simulator::BlockMergeResponse;
+
+use super::{optimistic_simulator::OptimisticSimulator, BlockMergeRequest, BlockSimRequest};
 
 #[derive(Clone)]
 pub struct MultiSimulator<A: Auctioneer + 'static, DB: DatabaseService + 'static> {
@@ -55,17 +57,9 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> MultiSimulator<A, D
         let mut attempts = 0;
 
         loop {
-            // Load balancing: round-robin selection
-            let index = self
-                .next_index
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
-                    Some((x + 1) % self.simulators.len())
-                })
-                .unwrap_or(0);
+            let index = self.next_index();
 
-            // Check if the simulator is enabled
-            let simulator_enabled = self.enabled[index].load(Ordering::Relaxed);
-            if simulator_enabled {
+            if self.is_simulator_enabled(index) {
                 let simulator = &self.simulators[index];
 
                 // Process the request with the selected simulator
@@ -89,5 +83,42 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> MultiSimulator<A, D
         }
 
         Ok(false)
+    }
+
+    pub async fn process_merge_request(
+        &self,
+        request: BlockMergeRequest,
+    ) -> Result<BlockMergeResponse, BlockSimError> {
+        let mut attempts = 0;
+
+        loop {
+            let index = self.next_index();
+
+            if self.is_simulator_enabled(index) {
+                let simulator = &self.simulators[index];
+
+                // Process the request with the selected simulator
+                return simulator.process_merge_request(request).await;
+            }
+
+            // If reached max attempts, return an error
+            attempts += 1;
+            if attempts >= self.simulators.len() {
+                return Err(BlockSimError::NoSimulatorAvailable);
+            }
+        }
+    }
+
+    fn next_index(&self) -> usize {
+        // Load balancing: round-robin selection
+        self.next_index
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+                Some((x + 1) % self.simulators.len())
+            })
+            .unwrap_or(0)
+    }
+
+    fn is_simulator_enabled(&self, index: usize) -> bool {
+        self.enabled[index].load(Ordering::Relaxed)
     }
 }

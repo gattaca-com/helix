@@ -1,11 +1,15 @@
-use std::{collections::hash_map::Entry, sync::Arc, time::Duration};
+use std::{
+    collections::{hash_map::Entry, BTreeMap},
+    sync::Arc,
+    time::Duration,
+};
 
 use alloy_primitives::{
     map::foldhash::{HashMap, HashMapExt, HashSet, HashSetExt},
     B256, U256,
 };
 use bytes::Bytes;
-use helix_types::{BlsPublicKey, BuilderBid, SignedBidSubmission};
+use helix_types::{BlsPublicKey, BuilderBid, MergeableBundles, SignedBidSubmission};
 use parking_lot::RwLock;
 use ssz::Encode;
 use tracing::info;
@@ -27,6 +31,8 @@ type BlsPubkey = [u8; 48];
 struct GetHeaderEntry {
     slot: u64,
     bid: BuilderBid,
+    /// List of mergeable bundles, ordered by bid value
+    bundles: Vec<MergeableBundles>,
 }
 
 /// Shared container for get_header response, thread safe
@@ -44,8 +50,8 @@ impl BestGetHeader {
         Self(Arc::new(RwLock::new(None)))
     }
 
-    fn store(&self, slot: u64, bid: BuilderBid) {
-        *self.0.write() = Some(GetHeaderEntry { slot, bid });
+    fn store(&self, slot: u64, bid: BuilderBid, bundles: Vec<MergeableBundles>) {
+        *self.0.write() = Some(GetHeaderEntry { slot, bid, bundles });
     }
 
     pub fn best_bid(&self, _slot: u64) -> U256 {
@@ -66,14 +72,14 @@ impl BestGetHeader {
         slot: u64,
         parent_hash: &B256,
         _validator_pubkey: &BlsPublicKey,
-    ) -> Option<BuilderBid> {
+    ) -> Option<(BuilderBid, Vec<MergeableBundles>)> {
         let entry = (*self.0.read()).clone()?;
 
         if entry.slot != slot || entry.bid.header().parent_hash().0 != *parent_hash {
-            return None
+            return None;
         }
 
-        Some(entry.bid)
+        Some((entry.bid, entry.bundles))
     }
 
     fn reset(&self) {
@@ -125,6 +131,8 @@ pub enum BidSorterMessage {
         slot: u64,
         header: BuilderBid,
         is_cancellable: bool,
+        /// Transactions that can be appended to the building block.
+        mergeable_bundles: Option<MergeableBundles>,
         simulation_time_ns: u64,
     },
     /// Demotion of a builder pubkey, all its bids are invalidated for this slot
@@ -139,6 +147,7 @@ impl BidSorterMessage {
         trace: &SubmissionTrace,
         optimistic_version: OptimisticVersion,
         is_cancellable: bool,
+        mergeable_bundles: MergeableBundles,
     ) -> Self {
         let bid_trace = submission.bid_trace();
         let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
@@ -156,6 +165,7 @@ impl BidSorterMessage {
             slot: bid_trace.slot,
             header,
             is_cancellable,
+            mergeable_bundles: Some(mergeable_bundles),
             simulation_time_ns,
         }
     }
@@ -175,6 +185,7 @@ impl BidSorterMessage {
             slot: bid_trace.slot,
             header,
             is_cancellable,
+            mergeable_bundles: None,
             simulation_time_ns: 0,
         }
     }
@@ -236,11 +247,29 @@ impl BidEntry {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Bid {
     value: U256,
     /// Timestamp in ns when the bid was received. Assume this is unique across all bids
     on_receive_ns: u64,
+}
+
+impl PartialOrd for Bid {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Bid {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // The bid with greater value wins
+        let value_cmp = self.value.cmp(&other.value);
+        if !value_cmp.is_eq() {
+            return value_cmp;
+        }
+        // If both values are equal, the earliest bid wins
+        self.on_receive_ns.cmp(&other.on_receive_ns).reverse()
+    }
 }
 
 #[derive(Default)]
@@ -271,6 +300,9 @@ pub struct BidSorter {
     /// All headers received for this slot
     /// on_receive_ns -> header
     headers: HashMap<u64, BuilderBid>,
+    /// All bundles received for this slot, ordered by bid value
+    /// value -> MergeableBundles
+    bundles: BTreeMap<Bid, MergeableBundles>,
     /// Demoted builders in this slot for live demotions
     demotions: HashSet<BlsPubkey>,
     /// Current best bid
@@ -297,6 +329,7 @@ impl BidSorter {
             curr_bid_slot: 0,
             bids: HashMap::with_capacity(250),
             headers: HashMap::with_capacity(2500),
+            bundles: BTreeMap::new(),
             demotions: HashSet::with_capacity(50),
             curr_bid: None,
             curr_floor: None,
@@ -323,6 +356,7 @@ impl BidSorter {
                     slot,
                     header,
                     is_cancellable,
+                    mergeable_bundles,
                     simulation_time_ns,
                 } => {
                     if self.curr_bid_slot != slot {
@@ -336,6 +370,9 @@ impl BidSorter {
                     }
 
                     self.headers.insert(bid.on_receive_ns, header);
+                    if let Some(bundles) = mergeable_bundles {
+                        self.bundles.insert(bid, bundles);
+                    }
                     self.process_header(builder_pubkey, bid, is_cancellable);
 
                     // telemetry
@@ -487,6 +524,7 @@ impl BidSorter {
         self.curr_bid_slot = head_slot + 1;
         self.bids.clear();
         self.headers.clear();
+        self.bundles.clear();
         self.demotions.clear();
 
         self.curr_bid = None;
@@ -517,7 +555,8 @@ impl BidSorter {
         let _ = self.top_bid_tx.send(top_bid_update);
 
         self.curr_bid = Some((builder_pubkey, bid));
-        self.shared_best_header.store(self.curr_bid_slot, h.clone());
+        let bundles = self.get_mergeable_bundles();
+        self.shared_best_header.store(self.curr_bid_slot, h.clone(), bundles);
 
         self.local_telemetry.top_bids += 1;
         TopBidMetrics::top_bid_update_count();
@@ -551,6 +590,28 @@ impl BidSorter {
             "bid sorter telemetry"
         )
     }
+
+    fn get_mergeable_bundles(&self) -> Vec<MergeableBundles> {
+        let mut seen_txs = HashSet::new();
+        self.bundles
+            .iter()
+            .rev()
+            .map(|(_, b)| {
+                let bundles: Vec<helix_types::MergeableBundle> =
+                    b.bundles
+                        .iter()
+                        .filter(|b| {
+                            !b.transactions.iter().enumerate().any(|(i, tx)| {
+                                seen_txs.contains(tx) && !b.dropping_txs.contains(&i)
+                            })
+                        })
+                        .cloned()
+                        .collect();
+                seen_txs.extend(bundles.clone().into_iter().flat_map(|b| b.transactions));
+                MergeableBundles { origin: b.origin, bundles }
+            })
+            .collect()
+    }
 }
 
 pub fn start_bid_sorter(
@@ -561,4 +622,29 @@ pub fn start_bid_sorter(
 ) {
     let bid_sorter = BidSorter::new(sorter_rx, top_bid_tx, shared_best_header, shared_floor);
     std::thread::spawn(|| bid_sorter.run());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bid_order() {
+        let bid0 = Bid { value: U256::from(100), on_receive_ns: 1 };
+        let bid1 = bid0.clone();
+        let bid2 = Bid { value: U256::from(100), on_receive_ns: 2 };
+        let bid3 = Bid { value: U256::from(200), on_receive_ns: 3 };
+
+        assert_eq!(bid0, bid1);
+        assert_eq!(bid1, bid0);
+
+        assert!(bid1 > bid2);
+        assert!(bid2 < bid1);
+
+        assert!(bid2 < bid3);
+        assert!(bid3 > bid2);
+
+        assert!(bid1 < bid3);
+        assert!(bid3 > bid1);
+    }
 }

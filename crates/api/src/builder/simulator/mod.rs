@@ -11,13 +11,14 @@ mod simulator_tests;
 
 use std::sync::Arc;
 
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256, U256};
 use helix_common::{
     api::builder_api::InclusionListWithMetadata, bid_submission::BidSubmission,
     ValidatorPreferences,
 };
 use helix_types::{
-    BidTrace, BlobsBundle, BlsSignature, ExecutionPayload, ExecutionRequests, SignedBidSubmission,
+    BidTrace, BlobsBundle, BlsSignature, ExecutionPayload, ExecutionRequests, MergeableBundles,
+    SignedBidSubmission,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -55,5 +56,27 @@ impl BlockSimRequest {
             parent_beacon_block_root,
             inclusion_list,
         }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlockMergeRequest {
+    /// The original payload value
+    pub value: U256,
+    pub proposer_fee_recipient: Address,
+    pub execution_payload: ExecutionPayload,
+    pub blobs_bundle: BlobsBundle,
+    pub merging_data: Vec<MergeableBundles>,
+}
+
+impl BlockMergeRequest {
+    pub fn new(
+        value: U256,
+        proposer_fee_recipient: Address,
+        execution_payload: ExecutionPayload,
+        blobs_bundle: BlobsBundle,
+        merging_data: Vec<MergeableBundles>,
+    ) -> Self {
+        Self { value, proposer_fee_recipient, execution_payload, blobs_bundle, merging_data }
     }
 }

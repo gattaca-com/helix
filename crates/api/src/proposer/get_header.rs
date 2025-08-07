@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{Address, B256, U256};
 use axum::{extract::Path, http::HeaderMap, response::IntoResponse, Extension};
 use helix_common::{
     chain_info::ChainInfo,
@@ -18,12 +18,16 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::BlsPublicKey;
+use helix_types::{
+    BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeader, MergeableBundles,
+    PayloadAndBlobs, PayloadAndBlobsRef,
+};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
 
 use super::ProposerApi;
 use crate::{
+    builder::BlockMergeRequest,
     gossiper::types::RequestPayloadParams,
     proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
     Api,
@@ -48,8 +52,8 @@ impl<A: Api> ProposerApi<A> {
         headers: HeaderMap,
         Path(GetHeaderParams { slot, parent_hash, pubkey }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
-        if terminating.load(Ordering::Relaxed) ||
-            proposer_api.auctioneer.kill_switch_enabled().await?
+        if terminating.load(Ordering::Relaxed)
+            || proposer_api.auctioneer.kill_switch_enabled().await?
         {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
@@ -101,10 +105,24 @@ impl<A: Api> ProposerApi<A> {
             mev_boost = true;
         }
 
+        let mut new_bid = None;
+
         // If timing games are enabled for the proposer then we sleep a fixed amount
         // TODO: remove is trusted proposer once people start using header verification
 
         if duty.entry.preferences.header_delay {
+            // Start block merging in the background
+            // TODO: should we wait a bit before block merging?
+            let block_merging = tokio::spawn({
+                let proposer_api = proposer_api.clone();
+                let bid_request = bid_request.clone();
+                async move {
+                    proposer_api
+                        .merge_block(&bid_request, duty.entry.registration.message.fee_recipient)
+                        .await
+                }
+            });
+
             let latest_header_delay_ms_in_slot =
                 proposer_api.relay_config.timing_game_config.latest_header_delay_ms_in_slot;
 
@@ -135,6 +153,13 @@ impl<A: Api> ProposerApi<A> {
             }
 
             get_header_metric.record();
+
+            // If block merging didn't finish, we abort it
+            if block_merging.is_finished() {
+                new_bid = block_merging.await.ok().flatten();
+            } else {
+                block_merging.abort();
+            }
         }
 
         let get_best_bid_res = proposer_api.shared_best_header.load(
@@ -146,65 +171,179 @@ impl<A: Api> ProposerApi<A> {
         trace.best_bid_fetched = utcnow_ns();
         debug!(trace = ?trace, "best bid fetched");
 
-        if let Some(bid) = get_best_bid_res {
-            if bid.value() == &U256::ZERO {
-                warn!("best bid value is 0");
-                return Err(ProposerApiError::BidValueZero);
+        let bid = match (get_best_bid_res, new_bid) {
+            (Some((bid, _)), None) => bid,
+            (None, Some(bid)) => bid,
+            // If the merged payload has a higher value, we use that
+            (Some((bid, _)), Some(new_bid)) if new_bid.value() > bid.value() => new_bid,
+            // Otherwise, we use the top bid
+            (Some((bid, _)), Some(_new_bid)) => bid,
+            (None, None) => {
+                warn!("no bid found");
+                return Err(ProposerApiError::NoBidPrepared);
             }
-
-            debug!(
-                value = ?bid.value(),
-                block_hash = ?bid.header().block_hash(),
-                "delivering bid",
-            );
-
-            // Save trace to DB
-            save_get_header_call(
-                proposer_api.db.clone(),
-                slot,
-                bid_request.parent_hash,
-                bid_request.pubkey.clone(),
-                bid.header().block_hash().0,
-                trace,
-                mev_boost,
-                user_agent.clone(),
-            )
-            .await;
-
-            let proposer_pubkey_clone = bid_request.pubkey;
-            let block_hash = bid.header().block_hash().0;
-
-            let fork = if bid.as_electra().is_ok() {
-                helix_types::ForkName::Electra
-            } else {
-                error!("builder bid is not on Electra fork!! This should not happen");
-                return Err(ProposerApiError::InternalServerError);
-            };
-
-            let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
-
-            if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
-                // Request payload in the background
-                task::spawn(file!(), line!(), async move {
-                    proposer_api
-                        .gossiper
-                        .request_payload(RequestPayloadParams {
-                            slot,
-                            proposer_pub_key: proposer_pubkey_clone,
-                            block_hash,
-                        })
-                        .await
-                });
-            }
-
-            let signed_bid = serde_json::to_value(signed_bid)?;
-            info!(%signed_bid, "delivering bid");
-
-            Ok(axum::Json(signed_bid))
-        } else {
-            warn!("no bid found");
-            Err(ProposerApiError::NoBidPrepared)
+        };
+        if bid.value() == &U256::ZERO {
+            warn!("best bid value is 0");
+            return Err(ProposerApiError::BidValueZero);
         }
+
+        debug!(
+            value = ?bid.value(),
+            block_hash = ?bid.header().block_hash(),
+            "delivering bid",
+        );
+
+        // Save trace to DB
+        save_get_header_call(
+            proposer_api.db.clone(),
+            slot,
+            bid_request.parent_hash,
+            bid_request.pubkey.clone(),
+            bid.header().block_hash().0,
+            trace,
+            mev_boost,
+            user_agent.clone(),
+        )
+        .await;
+
+        let proposer_pubkey = bid_request.pubkey.clone();
+        let block_hash = bid.header().block_hash().0;
+
+        let fork = if bid.as_electra().is_ok() {
+            helix_types::ForkName::Electra
+        } else {
+            error!("builder bid is not on Electra fork!! This should not happen");
+            return Err(ProposerApiError::InternalServerError);
+        };
+
+        let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
+
+        if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
+            // Request payload in the background
+            task::spawn(file!(), line!(), async move {
+                proposer_api
+                    .gossiper
+                    .request_payload(RequestPayloadParams {
+                        slot,
+                        proposer_pub_key: proposer_pubkey,
+                        block_hash,
+                    })
+                    .await
+            });
+        }
+
+        let signed_bid = serde_json::to_value(signed_bid)?;
+        info!(%signed_bid, "delivering bid");
+
+        Ok(axum::Json(signed_bid))
+    }
+
+    async fn merge_block(
+        &self,
+        bid_request: &BidRequest,
+        proposer_fee_recipient: Address,
+    ) -> Option<BuilderBid> {
+        debug!("merging block");
+
+        let slot = bid_request.slot.into();
+
+        let (bid, bundles) =
+            self.shared_best_header.load(slot, &bid_request.parent_hash, &bid_request.pubkey)?;
+
+        let block_hash = bid.header().block_hash().0;
+
+        // Check if block allows merging
+        let block_allows_merging = self
+            .auctioneer
+            .get_block_merging_preferences(slot, &bid_request.pubkey, &block_hash)
+            .await
+            .ok()?
+            .map(|merging_data| merging_data.allow_appending)
+            .unwrap_or(false);
+
+        // If block does not allow merging, we stop
+        if !block_allows_merging {
+            return None;
+        }
+
+        // Get execution payload from auctioneer
+        let payload = self
+            .get_execution_payload(bid_request.slot.into(), &bid_request.pubkey, &block_hash, true)
+            .await
+            .ok()?;
+
+        let new_bid = self
+            .append_transactions_to_payload(
+                bid_request.slot.into(),
+                proposer_fee_recipient,
+                &bid_request.pubkey,
+                bid,
+                payload,
+                bundles,
+            )
+            .await?;
+
+        Some(new_bid)
+    }
+
+    /// Appends transactions to the payload and returns a new bid.
+    /// The payload referenced in the bid is stored in the DB.
+    /// This function might return the original bid if somehow the merged payload has a lower value.
+    async fn append_transactions_to_payload(
+        &self,
+        slot: u64,
+        proposer_fee_recipient: Address,
+        proposer_pubkey: &BlsPublicKey,
+        bid: BuilderBid,
+        payload: PayloadAndBlobs,
+        merging_data: Vec<MergeableBundles>,
+    ) -> Option<BuilderBid> {
+        let merge_request = BlockMergeRequest::new(
+            bid.value().clone(),
+            proposer_fee_recipient,
+            payload.execution_payload,
+            payload.blobs_bundle,
+            merging_data,
+        );
+
+        let response = self.simulator.process_merge_request(merge_request).await.ok()?;
+
+        // Sanity check: if the merged payload has a lower value than the original bid,
+        // we return the original bid.
+        if bid.value() >= &response.value {
+            warn!(
+                original_value = %bid.value(),
+                %response.value,
+                "merged payload has lower value than original bid"
+            );
+            return None;
+        }
+        let header = ExecutionPayloadHeader::from(response.execution_payload.to_ref())
+            .as_electra()
+            .ok()?
+            .clone();
+        let blob_kzg_commitments = response.blobs_bundle.commitments.clone();
+        let block_hash = response.execution_payload.block_hash().0;
+
+        let new_bid = BuilderBidElectra {
+            header,
+            blob_kzg_commitments,
+            execution_requests: response.execution_requests,
+            value: response.value,
+            pubkey: bid.pubkey().clone(),
+        };
+        let payload_and_blobs = PayloadAndBlobsRef {
+            execution_payload: (&response.execution_payload).into(),
+            blobs_bundle: &response.blobs_bundle,
+        };
+
+        self.auctioneer
+            .save_execution_payload(slot, proposer_pubkey, &block_hash, payload_and_blobs)
+            .await
+            .ok()?;
+
+        Some(new_bid.into())
     }
 }
 
@@ -251,8 +390,8 @@ fn validate_bid_request_time(
     bid_request: &BidRequest,
 ) -> Result<u64, ProposerApiError> {
     let curr_timestamp_ms = utcnow_ms() as i64;
-    let slot_start_timestamp = chain_info.genesis_time_in_secs +
-        (bid_request.slot.as_u64() * chain_info.seconds_per_slot());
+    let slot_start_timestamp = chain_info.genesis_time_in_secs
+        + (bid_request.slot.as_u64() * chain_info.seconds_per_slot());
     let ms_into_slot = curr_timestamp_ms.saturating_sub((slot_start_timestamp * 1000) as i64);
 
     if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {

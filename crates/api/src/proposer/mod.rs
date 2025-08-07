@@ -26,12 +26,16 @@ use hyper::StatusCode;
 use tokio::sync::mpsc::Sender;
 pub use types::*;
 
-use crate::{gossiper::grpc_gossiper::GrpcGossiperClientManager, Api};
+use crate::{
+    builder::multi_simulator::MultiSimulator, gossiper::grpc_gossiper::GrpcGossiperClientManager,
+    Api,
+};
 
 #[derive(Clone)]
 pub struct ProposerApi<A: Api> {
     pub auctioneer: Arc<A::Auctioneer>,
     pub db: Arc<A::DatabaseService>,
+    pub simulator: MultiSimulator<A::Auctioneer, A::DatabaseService>,
     pub gossiper: Arc<GrpcGossiperClientManager>,
     pub broadcasters: Vec<Arc<BlockBroadcaster>>,
     pub multi_beacon_client: Arc<MultiBeaconClient>,
@@ -54,6 +58,7 @@ impl<A: Api> ProposerApi<A> {
     pub fn new(
         auctioneer: Arc<A::Auctioneer>,
         db: Arc<A::DatabaseService>,
+        simulator: MultiSimulator<A::Auctioneer, A::DatabaseService>,
         gossiper: Arc<GrpcGossiperClientManager>,
         metadata_provider: Arc<A::MetadataProvider>,
         signing_context: Arc<RelaySigningContext>,
@@ -72,6 +77,7 @@ impl<A: Api> ProposerApi<A> {
             db,
             gossiper,
             broadcasters,
+            simulator,
             signing_context,
             multi_beacon_client,
             chain_info,

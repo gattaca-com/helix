@@ -1,4 +1,5 @@
 mod bid_submission;
+mod block_merging;
 mod clock;
 mod error;
 mod spec;
@@ -9,6 +10,7 @@ use std::sync::Arc;
 
 use alloy_primitives::B256;
 pub use bid_submission::*;
+pub use block_merging::*;
 pub use clock::*;
 pub use error::*;
 pub use lh_kzg::KzgProof;
@@ -260,6 +262,16 @@ impl ExecutionPayloadRef<'_> {
             ExecutionPayloadRef::Deneb(payload) => &payload.transactions,
             ExecutionPayloadRef::Electra(payload) => &payload.transactions,
             ExecutionPayloadRef::Fulu(payload) => &payload.transactions,
+        }
+    }
+
+    pub fn fee_recipient(&self) -> lh_types::Address {
+        match &self {
+            ExecutionPayloadRef::Bellatrix(payload) => payload.fee_recipient,
+            ExecutionPayloadRef::Capella(payload) => payload.fee_recipient,
+            ExecutionPayloadRef::Deneb(payload) => payload.fee_recipient,
+            ExecutionPayloadRef::Electra(payload) => payload.fee_recipient,
+            ExecutionPayloadRef::Fulu(payload) => payload.fee_recipient,
         }
     }
 }

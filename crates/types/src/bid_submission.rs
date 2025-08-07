@@ -8,8 +8,8 @@ use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    error::SigError, BlobsBundle, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayloadRef,
-    ExecutionRequests, PayloadAndBlobsRef,
+    error::SigError, BlobsBundle, BlockMergingData, BlsPublicKey, BlsSignature, ChainSpec,
+    ExecutionPayloadRef, ExecutionRequests, PayloadAndBlobsRef,
 };
 
 #[derive(
@@ -55,6 +55,8 @@ pub struct SignedBidSubmissionElectra {
     pub execution_payload: Arc<ExecutionPayloadElectra<MainnetEthSpec>>,
     pub blobs_bundle: Arc<BlobsBundle>,
     pub execution_requests: Arc<ExecutionRequests>,
+    #[serde(default)]
+    pub merging_data: BlockMergingData,
     pub signature: BlsSignature,
 }
 
@@ -115,6 +117,22 @@ impl SignedBidSubmission {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 &mut signed_bid_submission.message
+            }
+        }
+    }
+
+    pub fn merging_data(&self) -> &BlockMergingData {
+        match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                &signed_bid_submission.merging_data
+            }
+        }
+    }
+
+    pub fn merging_data_mut(&mut self) -> &mut BlockMergingData {
+        match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                &mut signed_bid_submission.merging_data
             }
         }
     }

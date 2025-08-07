@@ -196,8 +196,8 @@ mod tests {
             let result = result
                 .iter()
                 .find(|r| {
-                    r.registration_info.registration.message.pubkey ==
-                        registration.registration.message.pubkey
+                    r.registration_info.registration.message.pubkey
+                        == registration.registration.message.pubkey
                 })
                 .unwrap();
             assert_eq!(
@@ -409,6 +409,7 @@ mod tests {
         let signed_bid_submission = SignedBidSubmissionElectra {
             message: bid_trace.clone(),
             execution_payload: ExecutionPayloadElectra::default().into(),
+            merging_data: Default::default(),
             blobs_bundle: BlobsBundle::default().into(),
             signature: BlsSignature::test_random(),
             execution_requests: Default::default(),
