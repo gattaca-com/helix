@@ -529,6 +529,9 @@ impl BidSorter {
 
             _ => {}
         }
+        [entry.bid_non_cancel, entry.bid_cancel].iter().flat_map(|x| x).for_each(|bid| {
+            self.bundles.remove(bid);
+        });
     }
 
     fn traverse_update_top_bid(&mut self) {
