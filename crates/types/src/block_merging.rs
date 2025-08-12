@@ -53,6 +53,12 @@ pub struct BlockMergingData {
     pub merge_orders: Vec<Order>,
 }
 
+impl BlockMergingData {
+    pub fn is_default(&self) -> bool {
+        self.allow_appending == false && self.merge_orders.is_empty()
+    }
+}
+
 #[derive(
     Debug, Default, PartialEq, Eq, Clone, Serialize, Deserialize, Encode, Decode, TestRandom,
 )]

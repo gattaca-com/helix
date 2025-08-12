@@ -56,6 +56,7 @@ pub struct SignedBidSubmissionElectra {
     pub blobs_bundle: Arc<BlobsBundle>,
     pub execution_requests: Arc<ExecutionRequests>,
     #[serde(default)]
+    #[serde(skip_serializing_if = "BlockMergingData::is_default")]
     pub merging_data: BlockMergingData,
     pub signature: BlsSignature,
 }
