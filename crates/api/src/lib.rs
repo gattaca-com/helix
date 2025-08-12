@@ -71,3 +71,5 @@ pub trait Api: Clone + Send + Sync + 'static {
     type DatabaseService: DatabaseService;
     type MetadataProvider: MetadataProvider;
 }
+
+pub const HEADER_DELAY_MS: &str = "x-header-delay-ms";

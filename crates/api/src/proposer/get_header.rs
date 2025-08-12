@@ -26,7 +26,7 @@ use super::ProposerApi;
 use crate::{
     gossiper::types::RequestPayloadParams,
     proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
-    Api,
+    Api, HEADER_DELAY_MS,
 };
 
 impl<A: Api> ProposerApi<A> {
@@ -101,16 +101,31 @@ impl<A: Api> ProposerApi<A> {
             mev_boost = true;
         }
 
+        let call_header_delay_ms = headers
+            .get(HEADER_DELAY_MS)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|h| match h.parse::<u64>() {
+                Ok(delay) => {
+                    // TODO: move to debug at some point
+                    info!("header delay ms: {}", delay);
+                    Some(delay)
+                }
+                Err(err) => {
+                    warn!(%err, "invalid header delay ms");
+                    None
+                }
+            });
+
         // If timing games are enabled for the proposer then we sleep a fixed amount
         // TODO: remove is trusted proposer once people start using header verification
-
-        if duty.entry.preferences.header_delay {
+        if duty.entry.preferences.header_delay || call_header_delay_ms.is_some() {
             let latest_header_delay_ms_in_slot =
                 proposer_api.relay_config.timing_game_config.latest_header_delay_ms_in_slot;
 
             let max_header_delay_ms =
                 proposer_api.relay_config.timing_game_config.max_header_delay_ms;
-            let proposer_delay = duty.entry.preferences.delay_ms.unwrap_or(max_header_delay_ms);
+            let proposer_delay = call_header_delay_ms
+                .unwrap_or(duty.entry.preferences.delay_ms.unwrap_or(max_header_delay_ms));
 
             let sleep_time_ms = std::cmp::min(
                 latest_header_delay_ms_in_slot.saturating_sub(ms_into_slot),
