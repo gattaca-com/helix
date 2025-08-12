@@ -6,6 +6,7 @@ use axum::{
     Extension,
 };
 use helix_common::{
+    bid_sorter::BidSorterMessage,
     bid_submission::{BidSubmission, OptimisticVersion},
     metadata_provider::MetadataProvider,
     task,
@@ -14,14 +15,17 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::SignedBidSubmission;
+use helix_types::{BlockMergingPreferences, SignedBidSubmission};
 use hyper::HeaderMap;
 use tracing::{debug, error, info, warn, Instrument};
 
 use super::api::BuilderApi;
 use crate::{
     builder::{
-        api::{decode_payload, sanity_check_block_submission, verify_block_merging_data},
+        api::{
+            decode_payload, get_mergeable_bundles, sanity_check_block_submission,
+            verify_block_merging_data,
+        },
         error::BuilderApiError,
         v2_check::V2SubMessage,
     },
@@ -204,12 +208,30 @@ impl<A: Api> BuilderApi<A> {
             }
         };
 
+        let merging_data = payload.merging_data();
+        verify_block_merging_data(&payload, merging_data)?;
+
         if optimistic_version == OptimisticVersion::V2 {
             if let Err(err) = api
                 .v2_checks_tx
                 .try_send(V2SubMessage::new_from_block_submission(&payload, trace.receive))
             {
                 error!(%err, "failed to send block to v2 checker");
+            }
+        }
+
+        let merging_preferences =
+            BlockMergingPreferences { allow_appending: merging_data.allow_appending };
+        let mergeable_bundles = get_mergeable_bundles(&payload, merging_data)?;
+
+        // Send the new block merging data to the bid sorter (if it's not the default one)
+        if !mergeable_bundles.bundles.is_empty() || merging_preferences != Default::default() {
+            if let Err(err) = api.sorter_tx.try_send(BidSorterMessage::new_from_payload_submission(
+                &payload,
+                merging_preferences,
+                mergeable_bundles,
+            )) {
+                error!(%err, "failed to send block merging data to bid sorter");
             }
         }
 
@@ -233,11 +255,6 @@ impl<A: Api> BuilderApi<A> {
             error!(%err, "failed to save bid trace");
             return Err(BuilderApiError::AuctioneerError(err));
         }
-
-        verify_block_merging_data(&payload, payload.merging_data())?;
-
-        // let merging_preferences =
-        //     BlockMergingPreferences { allow_appending: payload.merging_data().allow_appending };
 
         // Gossip to other relays
         if api.relay_config.payload_gossip_enabled {

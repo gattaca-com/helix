@@ -271,7 +271,7 @@ impl<A: Api> ProposerApi<A> {
                 &bid_request.pubkey,
                 bid,
                 payload,
-                metadata.bundles,
+                metadata.mergeable_bundles,
             )
             .await?;
 

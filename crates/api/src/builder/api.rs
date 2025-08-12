@@ -24,7 +24,10 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
-use helix_types::{BlockMergingData, BlsPublicKey, SignedBidSubmission, Slot};
+use helix_types::{
+    BlockMergingData, BlsPublicKey, MergeableBundle, MergeableBundles, Order, SignedBidSubmission,
+    Slot,
+};
 use parking_lot::RwLock;
 use ssz::Decode;
 use tracing::{debug, error, trace, warn};
@@ -604,6 +607,67 @@ pub(crate) fn verify_block_merging_data(
             Ok(())
         }
     })
+}
+
+pub fn get_mergeable_bundles(
+    payload: &SignedBidSubmission,
+    merging_data: &BlockMergingData,
+) -> Result<MergeableBundles, BuilderApiError> {
+    let execution_payload = payload.execution_payload_ref();
+    let txs = execution_payload.transactions();
+    let mergeable_bundles = merging_data
+        .merge_orders
+        .iter()
+        .map(|order| match order {
+            Order::Tx(tx) => {
+                let raw_tx = txs.get(tx.index as usize).cloned().ok_or(
+                    BuilderApiError::InvalidBlockMergingData { got: tx.index, tx_count: txs.len() },
+                )?;
+                let reverting_txs = if tx.can_revert { vec![0] } else { vec![] };
+
+                Ok(MergeableBundle {
+                    transactions: vec![Bytes::from_owner(raw_tx.to_vec())],
+                    reverting_txs,
+                    dropping_txs: vec![],
+                })
+            }
+            Order::Bundle(bundle) => {
+                let transactions = bundle
+                    .txs
+                    .iter()
+                    .map(|tx_index| {
+                        let raw_tx = txs.get(*tx_index).cloned().ok_or(
+                            BuilderApiError::InvalidBlockMergingData {
+                                got: *tx_index,
+                                tx_count: txs.len(),
+                            },
+                        )?;
+
+                        Ok(Bytes::from_owner(raw_tx.to_vec()))
+                    })
+                    .collect::<Result<_, BuilderApiError>>()?;
+
+                let reverting_txs = bundle
+                    .txs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, tx_index)| bundle.reverting_txs.contains(tx_index))
+                    .map(|(i, _)| i)
+                    .collect();
+                let dropping_txs = bundle
+                    .txs
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, tx_index)| bundle.dropping_txs.contains(tx_index))
+                    .map(|(i, _)| i)
+                    .collect();
+
+                Ok(MergeableBundle { transactions, reverting_txs, dropping_txs })
+            }
+        })
+        .collect::<Result<Vec<_>, BuilderApiError>>()?;
+
+    Ok(MergeableBundles::new(execution_payload.fee_recipient(), mergeable_bundles))
 }
 
 #[cfg(test)]

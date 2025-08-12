@@ -41,7 +41,7 @@ pub struct BidMetadata {
     /// Preferences related to block merging.
     pub merging_preferences: BlockMergingPreferences,
     /// List of mergeable bundles, ordered by bid value
-    pub bundles: Vec<MergeableBundles>,
+    pub mergeable_bundles: Vec<MergeableBundles>,
 }
 
 /// Shared container for get_header response, thread safe
@@ -146,6 +146,15 @@ pub enum BidSorterMessage {
         mergeable_bundles: Option<MergeableBundles>,
         simulation_time_ns: u64,
     },
+    PayloadSubmission {
+        builder_pubkey: BlsPubkey,
+        slot: u64,
+        value: U256,
+        /// Preferences related to block merging.
+        merging_preferences: BlockMergingPreferences,
+        /// Transactions that can be appended to the building block.
+        mergeable_bundles: MergeableBundles,
+    },
     /// Demotion of a builder pubkey, all its bids are invalidated for this slot
     Demotion(BlsPublicKey),
     /// New slot update
@@ -201,6 +210,21 @@ impl BidSorterMessage {
             merging_preferences: BlockMergingPreferences::default(),
             mergeable_bundles: None,
             simulation_time_ns: 0,
+        }
+    }
+
+    pub fn new_from_payload_submission(
+        submission: &SignedBidSubmission,
+        merging_preferences: BlockMergingPreferences,
+        mergeable_bundles: MergeableBundles,
+    ) -> Self {
+        let bid_trace = submission.bid_trace();
+        Self::PayloadSubmission {
+            builder_pubkey: bid_trace.builder_pubkey.serialize(),
+            value: bid_trace.value,
+            slot: bid_trace.slot,
+            merging_preferences,
+            mergeable_bundles,
         }
     }
 }
@@ -406,6 +430,29 @@ impl BidSorter {
                     BID_SORTER_RECV_LATENCY_US.observe(recv_latency_ns as f64 / 1000.);
                     BID_SORTER_PROCESS_LATENCY_US.observe(process_latency_ns as f64 / 1000.);
                 }
+                BidSorterMessage::PayloadSubmission {
+                    builder_pubkey,
+                    value,
+                    slot,
+                    merging_preferences,
+                    mergeable_bundles,
+                } => {
+                    if self.curr_bid_slot != slot {
+                        self.local_telemetry.past_subs += 1;
+                        continue;
+                    }
+
+                    if self.demotions.contains(&builder_pubkey) {
+                        self.local_telemetry.demoted_subs += 1;
+                        continue;
+                    }
+                    self.update_bid_with_block_merging_data(
+                        &builder_pubkey,
+                        value,
+                        merging_preferences,
+                        mergeable_bundles,
+                    );
+                }
                 BidSorterMessage::Demotion(demoted) => {
                     let demoted = demoted.serialize();
                     if !self.demotions.insert(demoted) {
@@ -571,7 +618,10 @@ impl BidSorter {
 
         self.curr_bid = Some((builder_pubkey, bid));
         let bundles = self.get_mergeable_bundles();
-        let metadata = BidMetadata { merging_preferences: merging_preferences.clone(), bundles };
+        let metadata = BidMetadata {
+            merging_preferences: merging_preferences.clone(),
+            mergeable_bundles: bundles,
+        };
         self.shared_best_header.store(self.curr_bid_slot, h.clone(), metadata);
 
         self.local_telemetry.top_bids += 1;
@@ -627,6 +677,34 @@ impl BidSorter {
                 MergeableBundles { origin: b.origin, bundles }
             })
             .collect()
+    }
+
+    fn update_bid_with_block_merging_data(
+        &mut self,
+        builder_pubkey: &BlsPubkey,
+        value: U256,
+        merging_preferences: BlockMergingPreferences,
+        mergeable_bundles: MergeableBundles,
+    ) {
+        let Some(entry) = self.bids.get(builder_pubkey) else {
+            return;
+        };
+        // Check the current bid of the builder and update it
+        if entry.bid_cancel.is_some() && entry.bid_cancel.as_ref().unwrap().value == value {
+            let bid = entry.bid_cancel.as_ref().unwrap();
+            // Update header with latest merging preferences
+            self.headers.entry(bid.on_receive_ns).and_modify(|e| e.1 = merging_preferences);
+            // Add mergeable bundles
+            self.bundles.insert(bid.clone(), mergeable_bundles);
+        } else if entry.bid_non_cancel.is_some()
+            && entry.bid_non_cancel.as_ref().unwrap().value == value
+        {
+            let bid = entry.bid_non_cancel.as_ref().unwrap();
+            // Update header with latest merging preferences
+            self.headers.entry(bid.on_receive_ns).and_modify(|e| e.1 = merging_preferences);
+            // Add mergeable bundles
+            self.bundles.insert(bid.clone(), mergeable_bundles);
+        }
     }
 }
 

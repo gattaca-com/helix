@@ -53,7 +53,9 @@ pub struct BlockMergingData {
     pub merge_orders: Vec<Order>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
+#[derive(
+    Debug, Default, PartialEq, Eq, Clone, Serialize, Deserialize, Encode, Decode, TestRandom,
+)]
 pub struct BlockMergingPreferences {
     pub allow_appending: bool,
 }
