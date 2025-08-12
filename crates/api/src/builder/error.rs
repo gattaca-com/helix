@@ -154,11 +154,6 @@ pub enum BuilderApiError {
 
     #[error("not {fork_name:?} payload")]
     InvalidPayloadType { fork_name: String },
-
-    #[error(
-        "block merging data is invalid. got index: {got}, but the body has only {tx_count} transactions"
-    )]
-    InvalidBlockMergingData { got: usize, tx_count: usize },
 }
 
 impl IntoResponse for BuilderApiError {
@@ -194,7 +189,6 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::MissingWithdrawlsRoot |
             BuilderApiError::WithdrawalsRootMismatch { .. } |
             BuilderApiError::MissingTransactions |
-            BuilderApiError::InvalidBlockMergingData { .. } |
             BuilderApiError::MissingTransactionsRoot |
             BuilderApiError::TransactionsRootMismatch { .. } |
             BuilderApiError::PayloadAttributesNotYetKnown |

@@ -24,10 +24,7 @@ use tracing::{debug, error, info, trace, warn, Instrument, Level};
 use super::api::BuilderApi;
 use crate::{
     builder::{
-        api::{
-            decode_payload, get_mergeable_bundles, sanity_check_block_submission,
-            verify_block_merging_data,
-        },
+        api::{decode_payload, get_mergeable_bundles, sanity_check_block_submission},
         error::BuilderApiError,
     },
     Api,
@@ -207,9 +204,7 @@ impl<A: Api> BuilderApi<A> {
 
         let merging_data = payload.merging_data();
 
-        verify_block_merging_data(&payload, merging_data)?;
-
-        let mergeable_bundles = get_mergeable_bundles(&payload, merging_data)?;
+        let mergeable_bundles = get_mergeable_bundles(&payload, merging_data);
 
         let merging_preferences =
             BlockMergingPreferences { allow_appending: merging_data.allow_appending };

@@ -573,46 +573,13 @@ pub(crate) fn sanity_check_block_submission(
     Ok(())
 }
 
-/// Validates all tx indices in the block merging data are within bounds
-pub(crate) fn verify_block_merging_data(
-    payload: &SignedBidSubmission,
-    merging_data: &BlockMergingData,
-) -> Result<(), BuilderApiError> {
-    let tx_count = payload.execution_payload_ref().transactions().len();
-    merging_data.merge_orders.iter().try_fold((), |(), order| match order {
-        helix_types::Order::Tx(transaction) => {
-            if transaction.index >= tx_count {
-                return Err(BuilderApiError::InvalidBlockMergingData {
-                    got: transaction.index,
-                    tx_count,
-                });
-            }
-            Ok(())
-        }
-        helix_types::Order::Bundle(bundle) => {
-            bundle
-                .txs
-                .iter()
-                .chain(bundle.reverting_txs.iter())
-                .chain(bundle.dropping_txs.iter())
-                .try_fold((), |(), tx_index| {
-                    if tx_index >= &tx_count {
-                        return Err(BuilderApiError::InvalidBlockMergingData {
-                            got: *tx_index,
-                            tx_count,
-                        });
-                    }
-                    Ok(())
-                })?;
-            Ok(())
-        }
-    })
-}
-
+/// Expands the references in [`BlockMergingData`] from the transactions in the
+/// payload of the given submission. If any bundle references a transaction not in
+/// the payload, it will be silently ignored.
 pub fn get_mergeable_bundles(
     payload: &SignedBidSubmission,
     merging_data: &BlockMergingData,
-) -> Result<MergeableBundles, BuilderApiError> {
+) -> MergeableBundles {
     let execution_payload = payload.execution_payload_ref();
     let txs = execution_payload.transactions();
     let mergeable_bundles = merging_data
@@ -620,34 +587,43 @@ pub fn get_mergeable_bundles(
         .iter()
         .map(|order| match order {
             Order::Tx(tx) => {
-                let raw_tx =
-                    txs.get(tx.index).cloned().ok_or(BuilderApiError::InvalidBlockMergingData {
-                        got: tx.index,
-                        tx_count: txs.len(),
-                    })?;
+                let Some(raw_tx) = txs.get(tx.index).cloned() else {
+                    debug!(
+                        "Got invalid block merging index {}, with a tx count of {}",
+                        tx.index,
+                        txs.len()
+                    );
+                    return None;
+                };
                 let reverting_txs = if tx.can_revert { vec![0] } else { vec![] };
 
-                Ok(MergeableBundle {
+                Some(MergeableBundle {
                     transactions: vec![Bytes::from_owner(raw_tx.to_vec())],
                     reverting_txs,
                     dropping_txs: vec![],
                 })
             }
             Order::Bundle(bundle) => {
-                let transactions = bundle
+                let transactions_res = bundle
                     .txs
                     .iter()
                     .map(|tx_index| {
-                        let raw_tx = txs.get(*tx_index).cloned().ok_or(
-                            BuilderApiError::InvalidBlockMergingData {
-                                got: *tx_index,
-                                tx_count: txs.len(),
-                            },
-                        )?;
+                        let Some(raw_tx) = txs.get(*tx_index).cloned() else {
+                            debug!(
+                                "Got invalid block merging index {} in bundle, with a tx count of {}",
+                                tx_index,
+                                txs.len()
+                            );
+                            return Err(());
+                        };
 
                         Ok(Bytes::from_owner(raw_tx.to_vec()))
                     })
-                    .collect::<Result<_, BuilderApiError>>()?;
+                    .collect::<Result<_, ()>>();
+
+                let Ok(transactions) = transactions_res else {
+                    return None;
+                };
 
                 let reverting_txs = bundle
                     .txs
@@ -664,12 +640,13 @@ pub fn get_mergeable_bundles(
                     .map(|(i, _)| i)
                     .collect();
 
-                Ok(MergeableBundle { transactions, reverting_txs, dropping_txs })
+                Some(MergeableBundle { transactions, reverting_txs, dropping_txs })
             }
         })
-        .collect::<Result<Vec<_>, BuilderApiError>>()?;
+        .flatten()
+        .collect();
 
-    Ok(MergeableBundles::new(execution_payload.fee_recipient(), mergeable_bundles))
+    MergeableBundles::new(execution_payload.fee_recipient(), mergeable_bundles)
 }
 
 #[cfg(test)]
