@@ -620,9 +620,11 @@ pub fn get_mergeable_bundles(
         .iter()
         .map(|order| match order {
             Order::Tx(tx) => {
-                let raw_tx = txs.get(tx.index as usize).cloned().ok_or(
-                    BuilderApiError::InvalidBlockMergingData { got: tx.index, tx_count: txs.len() },
-                )?;
+                let raw_tx =
+                    txs.get(tx.index).cloned().ok_or(BuilderApiError::InvalidBlockMergingData {
+                        got: tx.index,
+                        tx_count: txs.len(),
+                    })?;
                 let reverting_txs = if tx.can_revert { vec![0] } else { vec![] };
 
                 Ok(MergeableBundle {

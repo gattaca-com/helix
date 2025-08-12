@@ -55,7 +55,7 @@ pub struct BlockMergingData {
 
 impl BlockMergingData {
     pub fn is_default(&self) -> bool {
-        self.allow_appending == false && self.merge_orders.is_empty()
+        !self.allow_appending && self.merge_orders.is_empty()
     }
 }
 

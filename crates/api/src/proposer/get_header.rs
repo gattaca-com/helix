@@ -291,7 +291,7 @@ impl<A: Api> ProposerApi<A> {
         merging_data: Vec<MergeableBundles>,
     ) -> Option<BuilderBid> {
         let merge_request = BlockMergeRequest::new(
-            bid.value().clone(),
+            *bid.value(),
             proposer_fee_recipient,
             payload.execution_payload,
             payload.blobs_bundle,
@@ -322,7 +322,7 @@ impl<A: Api> ProposerApi<A> {
             blob_kzg_commitments,
             execution_requests: response.execution_requests,
             value: response.value,
-            pubkey: bid.pubkey().clone(),
+            pubkey: *bid.pubkey(),
         };
         let payload_and_blobs = PayloadAndBlobsRef {
             execution_payload: (&response.execution_payload).into(),

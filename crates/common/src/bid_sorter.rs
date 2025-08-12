@@ -529,7 +529,8 @@ impl BidSorter {
 
             _ => {}
         }
-        [entry.bid_non_cancel, entry.bid_cancel].iter().flat_map(|x| x).for_each(|bid| {
+        // Remove bundles related to builder's bids
+        [entry.bid_non_cancel, entry.bid_cancel].iter().flatten().for_each(|bid| {
             self.bundles.remove(bid);
         });
     }
@@ -698,7 +699,7 @@ impl BidSorter {
             // Update header with latest merging preferences
             self.headers.entry(bid.on_receive_ns).and_modify(|e| e.1 = merging_preferences);
             // Add mergeable bundles
-            self.bundles.insert(bid.clone(), mergeable_bundles);
+            self.bundles.insert(*bid, mergeable_bundles);
         } else if entry.bid_non_cancel.is_some()
             && entry.bid_non_cancel.as_ref().unwrap().value == value
         {
@@ -706,7 +707,7 @@ impl BidSorter {
             // Update header with latest merging preferences
             self.headers.entry(bid.on_receive_ns).and_modify(|e| e.1 = merging_preferences);
             // Add mergeable bundles
-            self.bundles.insert(bid.clone(), mergeable_bundles);
+            self.bundles.insert(*bid, mergeable_bundles);
         }
     }
 }
