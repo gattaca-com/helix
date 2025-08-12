@@ -248,22 +248,13 @@ impl<A: Api> ProposerApi<A> {
 
         let slot = bid_request.slot.into();
 
-        let (bid, bundles) =
+        let (bid, metadata) =
             self.shared_best_header.load(slot, &bid_request.parent_hash, &bid_request.pubkey)?;
 
         let block_hash = bid.header().block_hash().0;
 
-        // Check if block allows merging
-        let block_allows_merging = self
-            .auctioneer
-            .get_block_merging_preferences(slot, &bid_request.pubkey, &block_hash)
-            .await
-            .ok()?
-            .map(|merging_data| merging_data.allow_appending)
-            .unwrap_or(false);
-
         // If block does not allow merging, we stop
-        if !block_allows_merging {
+        if !metadata.merging_preferences.allow_appending {
             return None;
         }
 
@@ -280,7 +271,7 @@ impl<A: Api> ProposerApi<A> {
                 &bid_request.pubkey,
                 bid,
                 payload,
-                bundles,
+                metadata.bundles,
             )
             .await?;
 

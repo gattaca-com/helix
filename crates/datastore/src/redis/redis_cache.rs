@@ -22,8 +22,8 @@ use helix_common::{
 };
 use helix_database::types::BuilderInfoDocument;
 use helix_types::{
-    maybe_upgrade_execution_payload, BidTrace, BlockMergingPreferences, BlsPublicKey, ForkName,
-    PayloadAndBlobs, PayloadAndBlobsRef,
+    maybe_upgrade_execution_payload, BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs,
+    PayloadAndBlobsRef,
 };
 use moka::sync::Cache;
 use parking_lot::RwLock;
@@ -37,10 +37,7 @@ use crate::{
     error::AuctioneerError,
     redis::{
         error::RedisCacheError,
-        utils::{
-            get_cache_bid_trace_key, get_cache_block_merging_preferences_key,
-            get_execution_payload_key,
-        },
+        utils::{get_cache_bid_trace_key, get_execution_payload_key},
     },
     types::keys::{
         BUILDER_INFO_KEY, CURRENT_INCLUSION_LIST_KEY, HOUSEKEEPER_LOCK_KEY, KILL_SWITCH,
@@ -1130,39 +1127,6 @@ impl Auctioneer for RedisCache {
             &bid_trace.block_hash,
         );
         self.set(&key, &bid_trace, Some(BID_CACHE_EXPIRY_S)).await?;
-
-        record.record_success();
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn get_block_merging_preferences(
-        &self,
-        slot: u64,
-        proposer_pub_key: &BlsPublicKey,
-        block_hash: &B256,
-    ) -> Result<Option<BlockMergingPreferences>, AuctioneerError> {
-        let mut record = RedisMetricRecord::new("get_block_merging_preferences");
-
-        let key = get_cache_block_merging_preferences_key(slot, proposer_pub_key, block_hash);
-        let bid_trace = self.get(&key).await?;
-
-        record.record_success();
-        Ok(bid_trace)
-    }
-
-    #[instrument(skip_all)]
-    async fn save_block_merging_preferences(
-        &self,
-        slot: u64,
-        proposer_pub_key: &BlsPublicKey,
-        block_hash: &B256,
-        merging_preferences: &BlockMergingPreferences,
-    ) -> Result<(), AuctioneerError> {
-        let mut record = RedisMetricRecord::new("save_block_merging_preferences");
-
-        let key = get_cache_block_merging_preferences_key(slot, proposer_pub_key, block_hash);
-        self.set(&key, merging_preferences, Some(BID_CACHE_EXPIRY_S)).await?;
 
         record.record_success();
         Ok(())

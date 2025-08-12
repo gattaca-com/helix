@@ -9,8 +9,7 @@ use helix_common::{
 };
 use helix_database::types::BuilderInfoDocument;
 use helix_types::{
-    BidTrace, BlockMergingPreferences, BlsPublicKey, ForkName, PayloadAndBlobs, PayloadAndBlobsRef,
-    SignedBuilderBid,
+    BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, PayloadAndBlobsRef, SignedBuilderBid,
 };
 use tokio::sync::broadcast;
 
@@ -76,24 +75,6 @@ impl Auctioneer for MockAuctioneer {
         Ok(None)
     }
     async fn save_bid_trace(&self, _bid_trace: &BidTrace) -> Result<(), AuctioneerError> {
-        Ok(())
-    }
-
-    async fn get_block_merging_preferences(
-        &self,
-        _slot: u64,
-        _proposer_pub_key: &BlsPublicKey,
-        _block_hash: &B256,
-    ) -> Result<Option<BlockMergingPreferences>, AuctioneerError> {
-        Ok(None)
-    }
-    async fn save_block_merging_preferences(
-        &self,
-        _slot: u64,
-        _proposer_pub_key: &BlsPublicKey,
-        _block_hash: &B256,
-        _merging_data: &BlockMergingPreferences,
-    ) -> Result<(), AuctioneerError> {
         Ok(())
     }
 

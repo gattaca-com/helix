@@ -1,7 +1,6 @@
 // Auctioneer
 pub(crate) const LAST_HASH_DELIVERED_KEY: &str = "last-hash-delivered";
 pub(crate) const LAST_SLOT_DELIVERED_KEY: &str = "last-slot-delivered";
-pub(crate) const BLOCK_MERGING_PREFERENCES_KEY: &str = "cache-block-merging-preferences";
 pub(crate) const BID_TRACE_KEY: &str = "cache-bid-trace";
 pub(crate) const EXEC_PAYLOAD_KEY: &str = "cache-exec-payload";
 pub(crate) const BUILDER_INFO_KEY: &str = "builder-info";

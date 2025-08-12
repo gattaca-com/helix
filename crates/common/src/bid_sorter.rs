@@ -9,7 +9,9 @@ use alloy_primitives::{
     B256, U256,
 };
 use bytes::Bytes;
-use helix_types::{BlsPublicKey, BuilderBid, MergeableBundles, SignedBidSubmission};
+use helix_types::{
+    BlockMergingPreferences, BlsPublicKey, BuilderBid, MergeableBundles, SignedBidSubmission,
+};
 use parking_lot::RwLock;
 use ssz::Encode;
 use tracing::info;
@@ -31,8 +33,15 @@ type BlsPubkey = [u8; 48];
 struct GetHeaderEntry {
     slot: u64,
     bid: BuilderBid,
+    metadata: BidMetadata,
+}
+
+#[derive(Debug, Clone)]
+pub struct BidMetadata {
+    /// Preferences related to block merging.
+    pub merging_preferences: BlockMergingPreferences,
     /// List of mergeable bundles, ordered by bid value
-    bundles: Vec<MergeableBundles>,
+    pub bundles: Vec<MergeableBundles>,
 }
 
 /// Shared container for get_header response, thread safe
@@ -50,8 +59,8 @@ impl BestGetHeader {
         Self(Arc::new(RwLock::new(None)))
     }
 
-    fn store(&self, slot: u64, bid: BuilderBid, bundles: Vec<MergeableBundles>) {
-        *self.0.write() = Some(GetHeaderEntry { slot, bid, bundles });
+    fn store(&self, slot: u64, bid: BuilderBid, metadata: BidMetadata) {
+        *self.0.write() = Some(GetHeaderEntry { slot, bid, metadata });
     }
 
     pub fn best_bid(&self, _slot: u64) -> U256 {
@@ -72,14 +81,14 @@ impl BestGetHeader {
         slot: u64,
         parent_hash: &B256,
         _validator_pubkey: &BlsPublicKey,
-    ) -> Option<(BuilderBid, Vec<MergeableBundles>)> {
+    ) -> Option<(BuilderBid, BidMetadata)> {
         let entry = (*self.0.read()).clone()?;
 
         if entry.slot != slot || entry.bid.header().parent_hash().0 != *parent_hash {
             return None;
         }
 
-        Some((entry.bid, entry.bundles))
+        Some((entry.bid, entry.metadata))
     }
 
     fn reset(&self) {
@@ -131,6 +140,8 @@ pub enum BidSorterMessage {
         slot: u64,
         header: BuilderBid,
         is_cancellable: bool,
+        /// Preferences related to block merging.
+        merging_preferences: BlockMergingPreferences,
         /// Transactions that can be appended to the building block.
         mergeable_bundles: Option<MergeableBundles>,
         simulation_time_ns: u64,
@@ -147,6 +158,7 @@ impl BidSorterMessage {
         trace: &SubmissionTrace,
         optimistic_version: OptimisticVersion,
         is_cancellable: bool,
+        merging_preferences: BlockMergingPreferences,
         mergeable_bundles: MergeableBundles,
     ) -> Self {
         let bid_trace = submission.bid_trace();
@@ -165,6 +177,7 @@ impl BidSorterMessage {
             slot: bid_trace.slot,
             header,
             is_cancellable,
+            merging_preferences,
             mergeable_bundles: Some(mergeable_bundles),
             simulation_time_ns,
         }
@@ -185,6 +198,7 @@ impl BidSorterMessage {
             slot: bid_trace.slot,
             header,
             is_cancellable,
+            merging_preferences: BlockMergingPreferences::default(),
             mergeable_bundles: None,
             simulation_time_ns: 0,
         }
@@ -298,8 +312,8 @@ pub struct BidSorter {
     /// All bid entries for the current slot, used for sorting
     bids: HashMap<BlsPubkey, BidEntry>,
     /// All headers received for this slot
-    /// on_receive_ns -> header
-    headers: HashMap<u64, BuilderBid>,
+    /// on_receive_ns -> (header, merging_preferences)
+    headers: HashMap<u64, (BuilderBid, BlockMergingPreferences)>,
     /// All bundles received for this slot, ordered by bid value
     /// value -> MergeableBundles
     bundles: BTreeMap<Bid, MergeableBundles>,
@@ -356,6 +370,7 @@ impl BidSorter {
                     slot,
                     header,
                     is_cancellable,
+                    merging_preferences,
                     mergeable_bundles,
                     simulation_time_ns,
                 } => {
@@ -369,7 +384,7 @@ impl BidSorter {
                         continue;
                     }
 
-                    self.headers.insert(bid.on_receive_ns, header);
+                    self.headers.insert(bid.on_receive_ns, (header, merging_preferences));
                     if let Some(bundles) = mergeable_bundles {
                         self.bundles.insert(bid, bundles);
                     }
@@ -535,7 +550,7 @@ impl BidSorter {
     }
 
     fn update_top_bid(&mut self, builder_pubkey: BlsPubkey, bid: Bid) {
-        let Some(h) = self.headers.get(&bid.on_receive_ns) else {
+        let Some((h, merging_preferences)) = self.headers.get(&bid.on_receive_ns) else {
             // this should never happen
             return;
         };
@@ -556,7 +571,8 @@ impl BidSorter {
 
         self.curr_bid = Some((builder_pubkey, bid));
         let bundles = self.get_mergeable_bundles();
-        self.shared_best_header.store(self.curr_bid_slot, h.clone(), bundles);
+        let metadata = BidMetadata { merging_preferences: merging_preferences.clone(), bundles };
+        self.shared_best_header.store(self.curr_bid_slot, h.clone(), metadata);
 
         self.local_telemetry.top_bids += 1;
         TopBidMetrics::top_bid_update_count();

@@ -7,9 +7,7 @@ use helix_common::{
     ProposerInfo,
 };
 use helix_database::BuilderInfoDocument;
-use helix_types::{
-    BidTrace, BlockMergingPreferences, BlsPublicKey, ForkName, PayloadAndBlobs, PayloadAndBlobsRef,
-};
+use helix_types::{BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, PayloadAndBlobsRef};
 use tokio::sync::broadcast;
 
 use crate::{error::AuctioneerError, redis::redis_cache::InclusionListWithKey};
@@ -47,21 +45,6 @@ pub trait Auctioneer: Send + Sync + Clone {
     ) -> Result<Option<BidTrace>, AuctioneerError>;
 
     async fn save_bid_trace(&self, bid_trace: &BidTrace) -> Result<(), AuctioneerError>;
-
-    async fn get_block_merging_preferences(
-        &self,
-        slot: u64,
-        proposer_pub_key: &BlsPublicKey,
-        block_hash: &B256,
-    ) -> Result<Option<BlockMergingPreferences>, AuctioneerError>;
-
-    async fn save_block_merging_preferences(
-        &self,
-        slot: u64,
-        proposer_pub_key: &BlsPublicKey,
-        block_hash: &B256,
-        merging_preferences: &BlockMergingPreferences,
-    ) -> Result<(), AuctioneerError>;
 
     async fn get_builder_info(
         &self,

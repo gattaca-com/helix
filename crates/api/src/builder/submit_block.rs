@@ -206,15 +206,22 @@ impl<A: Api> BuilderApi<A> {
         };
         trace!(is_optimistic = was_simulated_optimistically, "verified submitted block");
 
-        verify_block_merging_data(&payload, payload.merging_data())?;
+        let merging_data = payload.merging_data();
 
-        let mergeable_bundles = get_mergeable_bundles(&payload, payload.merging_data())?;
+        verify_block_merging_data(&payload, merging_data)?;
 
+        let mergeable_bundles = get_mergeable_bundles(&payload, merging_data)?;
+
+        let merging_preferences =
+            BlockMergingPreferences { allow_appending: merging_data.allow_appending };
+
+        // TODO: send merging preferences here too
         if let Err(err) = api.sorter_tx.try_send(BidSorterMessage::new_from_block_submission(
             &payload,
             &trace,
             optimistic_version,
             is_cancellations_enabled,
+            merging_preferences,
             mergeable_bundles,
         )) {
             error!(?err, "failed to send submission to sorter");
@@ -241,24 +248,6 @@ impl<A: Api> BuilderApi<A> {
             return Err(BuilderApiError::AuctioneerError(err));
         }
         trace!("saved bid trace to redis");
-
-        let merging_preferences =
-            BlockMergingPreferences { allow_appending: payload.merging_data().allow_appending };
-
-        if let Err(err) = api
-            .auctioneer
-            .save_block_merging_preferences(
-                payload.slot().as_u64(),
-                payload.proposer_public_key(),
-                payload.block_hash(),
-                &merging_preferences,
-            )
-            .await
-        {
-            error!(%err, "failed to save block merging data");
-            return Err(BuilderApiError::AuctioneerError(err));
-        }
-        trace!("saved block merging data to redis");
 
         // Log some final info
         trace.request_finish = utcnow_ns();
