@@ -135,6 +135,9 @@ pub struct TimingGameConfig {
     /// Max ms into slot we will sleep up to. e.g., if a request is made 2.4s into the next slot
     /// and the limit is 2.5s we will only sleep 100ms.
     pub latest_header_delay_ms_in_slot: u64,
+    /// Default latency to assume if the client does not provide a "request start timestamp"
+    /// header.
+    pub default_client_latency_ms: u64,
 }
 
 impl Default for TimingGameConfig {
@@ -143,6 +146,7 @@ impl Default for TimingGameConfig {
             // very safe by default
             max_header_delay_ms: 650,
             latest_header_delay_ms_in_slot: 2000,
+            default_client_latency_ms: 150,
         }
     }
 }

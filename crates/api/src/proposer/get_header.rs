@@ -26,7 +26,7 @@ use super::ProposerApi;
 use crate::{
     gossiper::types::RequestPayloadParams,
     proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
-    Api, HEADER_DELAY_MS,
+    Api, HEADER_TIMEOUT_MS,
 };
 
 impl<A: Api> ProposerApi<A> {
@@ -95,42 +95,54 @@ impl<A: Api> ProposerApi<A> {
 
         let mut mev_boost = false;
 
-        if let Some(request_initiated_ms) = get_x_mev_boost_header_start_ms(&headers) {
-            let latency = utcnow_ms().saturating_sub(request_initiated_ms);
-            debug!(%request_initiated_ms, %latency, "mev-boost start ts header found");
-            mev_boost = true;
-        }
+        // how far is the client
+        let client_latency_ms = match get_x_mev_boost_header_start_ms(&headers) {
+            Some(request_initiated_ms) => {
+                let latency = utcnow_ms().saturating_sub(request_initiated_ms);
+                mev_boost = true;
+                latency * 105 / 100 // add some buffer
+            }
+            None => proposer_api.relay_config.timing_game_config.default_client_latency_ms,
+        };
 
-        let call_header_delay_ms = headers
-            .get(HEADER_DELAY_MS)
+        info!(client_latency_ms, mev_boost, "request latency");
+
+        let client_timeout_ms = headers
+            .get(HEADER_TIMEOUT_MS)
             .and_then(|h| h.to_str().ok())
             .and_then(|h| match h.parse::<u64>() {
                 Ok(delay) => {
                     // TODO: move to debug at some point
-                    info!("header delay ms: {}", delay);
+                    info!("header timeout ms: {}", delay);
                     Some(delay)
                 }
                 Err(err) => {
-                    warn!(%err, "invalid header delay ms");
+                    warn!(%err, "invalid header timeout ms");
                     None
                 }
             });
 
-        // If timing games are enabled for the proposer then we sleep a fixed amount
-        // TODO: remove is trusted proposer once people start using header verification
-        if duty.entry.preferences.header_delay || call_header_delay_ms.is_some() {
-            let latest_header_delay_ms_in_slot =
-                proposer_api.relay_config.timing_game_config.latest_header_delay_ms_in_slot;
+        // If timing games are enabled for the proposer then we sleep a fixed amount before
+        // returning the header
+        if duty.entry.preferences.header_delay || client_timeout_ms.is_some() {
+            let max_sleep_time = proposer_api
+                .relay_config
+                .timing_game_config
+                .latest_header_delay_ms_in_slot
+                .saturating_sub(ms_into_slot);
 
-            let max_header_delay_ms =
-                proposer_api.relay_config.timing_game_config.max_header_delay_ms;
-            let proposer_delay = call_header_delay_ms
-                .unwrap_or(duty.entry.preferences.delay_ms.unwrap_or(max_header_delay_ms));
+            let target_sleep_time = match client_timeout_ms {
+                Some(timeout_ms) => timeout_ms.saturating_sub(client_latency_ms),
+                None => {
+                    // TODO: convert this to a timeout instead of a delay
+                    duty.entry
+                        .preferences
+                        .delay_ms
+                        .unwrap_or(proposer_api.relay_config.timing_game_config.max_header_delay_ms)
+                }
+            };
 
-            let sleep_time_ms = std::cmp::min(
-                latest_header_delay_ms_in_slot.saturating_sub(ms_into_slot),
-                proposer_delay,
-            );
+            let sleep_time_ms = std::cmp::min(max_sleep_time, target_sleep_time);
 
             let sleep_time = Duration::from_millis(sleep_time_ms);
             let mut get_header_metric = GetHeaderMetric::new(sleep_time);
@@ -138,9 +150,8 @@ impl<A: Api> ProposerApi<A> {
             debug!(target: "timing_games", 
                 ?sleep_time,
                 %ms_into_slot,
-                %proposer_delay,
-                max_header_delay_ms,
-                latest_header_delay_ms_in_slot,
+                target_sleep_time,
+                max_sleep_time,
                 slot,
                 pubkey = ?bid_request.pubkey,
                 "timing game sleep");

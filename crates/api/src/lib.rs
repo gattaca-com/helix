@@ -72,4 +72,5 @@ pub trait Api: Clone + Send + Sync + 'static {
     type MetadataProvider: MetadataProvider;
 }
 
-pub const HEADER_DELAY_MS: &str = "x-header-delay-ms";
+/// Timeout in milliseconds from when the call started
+pub const HEADER_TIMEOUT_MS: &str = "x-timeout-ms";
