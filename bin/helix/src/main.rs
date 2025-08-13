@@ -10,7 +10,7 @@ use eyre::eyre;
 use helix_api::{start_api_service, Api};
 use helix_beacon::start_beacon_client;
 use helix_common::{
-    bid_sorter::{start_bid_sorter, BestGetHeader, FloorBid},
+    bid_sorter::{start_bid_sorter, BestGetHeader, BestMergeableOrders, FloorBid},
     load_config, load_keypair,
     metadata_provider::DefaultMetadataProvider,
     metrics::start_metrics_server,
@@ -91,6 +91,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
 
     let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
     let shared_best_header = BestGetHeader::new();
+    let shared_best_orders = BestMergeableOrders::new();
     let shared_floor_bid = FloorBid::new();
 
     if config.router_config.validate_bid_sorter()? {
@@ -98,6 +99,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
             sorter_rx,
             top_bid_tx.clone(),
             shared_best_header.clone(),
+            shared_best_orders.clone(),
             shared_floor_bid.clone(),
         );
     }
@@ -128,6 +130,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         sorter_tx,
         top_bid_tx,
         shared_best_header,
+        shared_best_orders,
         shared_floor_bid,
     );
 

@@ -67,7 +67,7 @@ pub struct BlockMergingPreferences {
 }
 
 /// Represents one or more transactions to be appended into a block atomically.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
 pub enum MergeableOrder {
     Tx(MergeableTransaction),
     Bundle(MergeableBundle),
@@ -86,7 +86,7 @@ impl From<MergeableBundle> for MergeableOrder {
 }
 
 /// Represents a single transaction to be appended into a block atomically.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
 pub struct MergeableTransaction {
     /// Transaction that can be merged into the block.
     pub transaction: Bytes,
@@ -95,7 +95,7 @@ pub struct MergeableTransaction {
 }
 
 /// Represents a bundle of transactions to be appended into a block atomically.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
 pub struct MergeableBundle {
     /// List of transactions that can be merged into the block.
     pub transactions: Vec<Bytes>,

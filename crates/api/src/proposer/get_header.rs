@@ -290,9 +290,11 @@ impl<A: Api> ProposerApi<A> {
         let block_hash = bid.header().block_hash().0;
 
         // If block does not allow merging, we stop
-        if !metadata.merging_preferences.allow_appending {
+        if !metadata.allow_appending {
             return None;
         }
+
+        let mergeable_orders = self.shared_best_orders.load();
 
         // Get execution payload from auctioneer
         let payload = self
@@ -307,7 +309,7 @@ impl<A: Api> ProposerApi<A> {
                 &bid_request.pubkey,
                 bid,
                 payload,
-                metadata.mergeable_orders,
+                mergeable_orders,
             )
             .await?;
 

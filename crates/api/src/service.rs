@@ -9,7 +9,7 @@ use helix_beacon::{
     beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
 };
 use helix_common::{
-    bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
+    bid_sorter::{BestGetHeader, BestMergeableOrders, BidSorterMessage, FloorBid},
     chain_info::ChainInfo,
     signing::RelaySigningContext,
     BroadcasterConfig, RelayConfig,
@@ -49,6 +49,7 @@ pub async fn run_api_service<A: Api>(
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
+    shared_best_orders: BestMergeableOrders,
     shared_floor: FloorBid,
 ) {
     let broadcasters = init_broadcasters(&config).await;
@@ -137,6 +138,7 @@ pub async fn run_api_service<A: Api>(
         v3_payload_request_send,
         current_slot_info,
         shared_best_header,
+        shared_best_orders,
     ));
 
     tokio::spawn(gossip::process_gossip_messages(

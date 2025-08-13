@@ -17,8 +17,10 @@ use alloy_primitives::B256;
 use axum::{response::IntoResponse, Extension};
 use helix_beacon::{multi_beacon_client::MultiBeaconClient, BlockBroadcaster};
 use helix_common::{
-    bid_sorter::BestGetHeader, chain_info::ChainInfo, signing::RelaySigningContext, RelayConfig,
-    ValidatorPreferences,
+    bid_sorter::{BestGetHeader, BestMergeableOrders},
+    chain_info::ChainInfo,
+    signing::RelaySigningContext,
+    RelayConfig, ValidatorPreferences,
 };
 use helix_housekeeper::CurrentSlotInfo;
 use helix_types::BlsPublicKey;
@@ -52,6 +54,7 @@ pub struct ProposerApi<A: Api> {
 
     /// Set in the sorter loop
     pub shared_best_header: BestGetHeader,
+    pub shared_best_orders: BestMergeableOrders,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -71,6 +74,7 @@ impl<A: Api> ProposerApi<A> {
         v3_payload_request: Sender<(u64, B256, BlsPublicKey, Vec<u8>)>,
         curr_slot_info: CurrentSlotInfo,
         shared_best_header: BestGetHeader,
+        shared_best_orders: BestMergeableOrders,
     ) -> Self {
         Self {
             auctioneer,
@@ -87,6 +91,7 @@ impl<A: Api> ProposerApi<A> {
             v3_payload_request,
             curr_slot_info,
             shared_best_header,
+            shared_best_orders,
         }
     }
 }

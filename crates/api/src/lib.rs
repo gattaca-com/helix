@@ -5,7 +5,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 use bytes::Bytes;
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
-    bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
+    bid_sorter::{BestGetHeader, BestMergeableOrders, BidSorterMessage, FloorBid},
     chain_info::ChainInfo,
     metadata_provider::MetadataProvider,
     signing::RelaySigningContext,
@@ -47,6 +47,7 @@ pub fn start_api_service<A: Api>(
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
+    shared_best_orders: BestMergeableOrders,
     shared_floor: FloorBid,
 ) {
     tokio::spawn(run_api_service::<A>(
@@ -62,6 +63,7 @@ pub fn start_api_service<A: Api>(
         sorter_tx,
         top_bid_tx,
         shared_best_header,
+        shared_best_orders,
         shared_floor,
     ));
 }

@@ -1,18 +1,15 @@
-use std::{
-    collections::{hash_map::Entry, BTreeMap},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::hash_map::Entry, sync::Arc, time::Duration};
 
 use alloy_primitives::{
     map::foldhash::{HashMap, HashMapExt, HashSet, HashSetExt},
-    B256, U256,
+    Address, B256, U256,
 };
 use bytes::Bytes;
 use helix_types::{
-    BlockMergingPreferences, BlsPublicKey, BuilderBid, MergeableOrders, SignedBidSubmission,
+    BlockMergingPreferences, BlsPublicKey, BuilderBid, MergeableOrder, MergeableOrders,
+    SignedBidSubmission,
 };
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use ssz::Encode;
 use tracing::info;
 
@@ -33,7 +30,7 @@ type BlsPubkey = [u8; 48];
 struct GetHeaderEntry {
     slot: u64,
     bid: BuilderBid,
-    metadata: BidMetadata,
+    metadata: BlockMergingPreferences,
 }
 
 #[derive(Debug, Clone)]
@@ -41,7 +38,7 @@ pub struct BidMetadata {
     /// Preferences related to block merging.
     pub merging_preferences: BlockMergingPreferences,
     /// List of mergeable orders, ordered by bid value
-    pub mergeable_orders: Vec<MergeableOrders>,
+    pub mergeable_orders: HashMap<MergeableOrder, (U256, Address)>,
 }
 
 /// Shared container for get_header response, thread safe
@@ -59,7 +56,7 @@ impl BestGetHeader {
         Self(Arc::new(RwLock::new(None)))
     }
 
-    fn store(&self, slot: u64, bid: BuilderBid, metadata: BidMetadata) {
+    fn store(&self, slot: u64, bid: BuilderBid, metadata: BlockMergingPreferences) {
         *self.0.write() = Some(GetHeaderEntry { slot, bid, metadata });
     }
 
@@ -81,7 +78,7 @@ impl BestGetHeader {
         slot: u64,
         parent_hash: &B256,
         _validator_pubkey: &BlsPublicKey,
-    ) -> Option<(BuilderBid, BidMetadata)> {
+    ) -> Option<(BuilderBid, BlockMergingPreferences)> {
         let entry = (*self.0.read()).clone()?;
 
         if entry.slot != slot || entry.bid.header().parent_hash().0 != *parent_hash {
@@ -93,6 +90,53 @@ impl BestGetHeader {
 
     fn reset(&self) {
         *self.0.write() = None
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BestMergeableOrders(Arc<Mutex<HashMap<MergeableOrder, (U256, Address)>>>);
+
+impl BestMergeableOrders {
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(HashMap::with_capacity(5000))))
+    }
+
+    pub fn load(&self) -> Vec<MergeableOrders> {
+        let order_map = self.0.lock();
+        let mut orders: Vec<(MergeableOrder, (U256, Address))> =
+            order_map.iter().map(|(a, b)| (a.clone(), b.clone())).collect();
+        // Sort all the orders by value in decreasing order
+        orders.sort_by_key(|(_, (value, _))| U256::MAX - *value);
+        // Merge contiguous orders with the same origin
+        orders.into_iter().fold(vec![], |mut acc, (order, (_, origin))| {
+            let last = acc.last_mut();
+            if last.is_none() || last.as_ref().unwrap().origin != origin {
+                acc.push(MergeableOrders::new(origin, vec![order]));
+            } else {
+                last.unwrap().orders.push(order);
+            };
+            acc
+        })
+    }
+
+    pub fn insert_orders(&self, bid_value: U256, mergeable_orders: MergeableOrders) {
+        let mut order_map = self.0.lock();
+        let origin = mergeable_orders.origin;
+
+        mergeable_orders.orders.into_iter().for_each(|o| {
+            order_map
+                .entry(o.clone())
+                .and_modify(|e| {
+                    if e.0 < bid_value {
+                        *e = (bid_value, origin);
+                    }
+                })
+                .or_insert((bid_value, origin));
+        });
+    }
+
+    fn reset(&self) {
+        self.0.lock().clear();
     }
 }
 
@@ -338,9 +382,6 @@ pub struct BidSorter {
     /// All headers received for this slot
     /// on_receive_ns -> (header, merging_preferences)
     headers: HashMap<u64, (BuilderBid, BlockMergingPreferences)>,
-    /// All orders received for this slot, ordered by bid value
-    /// value -> MergeableOrders
-    orders: BTreeMap<Bid, MergeableOrders>,
     /// Demoted builders in this slot for live demotions
     demotions: HashSet<BlsPubkey>,
     /// Current best bid
@@ -349,6 +390,8 @@ pub struct BidSorter {
     curr_floor: Option<U256>,
     /// Current response for get_header
     shared_best_header: BestGetHeader,
+    /// Current map of mergeable orders
+    shared_best_orders: BestMergeableOrders,
     /// Current floor bid value
     shared_floor: FloorBid,
     local_telemetry: BidSorterTelemetry,
@@ -359,6 +402,7 @@ impl BidSorter {
         sorter_rx: crossbeam_channel::Receiver<BidSorterMessage>,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
         shared_best_header: BestGetHeader,
+        shared_best_orders: BestMergeableOrders,
         shared_floor: FloorBid,
     ) -> Self {
         Self {
@@ -367,11 +411,11 @@ impl BidSorter {
             curr_bid_slot: 0,
             bids: HashMap::with_capacity(250),
             headers: HashMap::with_capacity(2500),
-            orders: BTreeMap::new(),
             demotions: HashSet::with_capacity(50),
             curr_bid: None,
             curr_floor: None,
             shared_best_header,
+            shared_best_orders,
             shared_floor,
             local_telemetry: BidSorterTelemetry::default(),
         }
@@ -410,7 +454,7 @@ impl BidSorter {
 
                     self.headers.insert(bid.on_receive_ns, (header, merging_preferences));
                     if let Some(orders) = mergeable_orders {
-                        self.orders.insert(bid, orders);
+                        self.shared_best_orders.insert_orders(bid.value, orders);
                     }
                     self.process_header(builder_pubkey, bid, is_cancellable);
 
@@ -529,10 +573,7 @@ impl BidSorter {
 
             _ => {}
         }
-        // Remove orders related to builder's bids
-        [entry.bid_non_cancel, entry.bid_cancel].iter().flatten().for_each(|bid| {
-            self.orders.remove(bid);
-        });
+        // TODO: remove orders related to builder's bids
     }
 
     fn traverse_update_top_bid(&mut self) {
@@ -590,13 +631,13 @@ impl BidSorter {
         self.curr_bid_slot = head_slot + 1;
         self.bids.clear();
         self.headers.clear();
-        self.orders.clear();
         self.demotions.clear();
 
         self.curr_bid = None;
         self.curr_floor = None;
 
         self.shared_best_header.reset();
+        self.shared_best_orders.reset();
         self.shared_floor.reset();
     }
 
@@ -621,10 +662,7 @@ impl BidSorter {
         let _ = self.top_bid_tx.send(top_bid_update);
 
         self.curr_bid = Some((builder_pubkey, bid));
-        let mergeable_orders = self.get_mergeable_orders();
-        let metadata =
-            BidMetadata { merging_preferences: merging_preferences.clone(), mergeable_orders };
-        self.shared_best_header.store(self.curr_bid_slot, h.clone(), metadata);
+        self.shared_best_header.store(self.curr_bid_slot, h.clone(), merging_preferences.clone());
 
         self.local_telemetry.top_bids += 1;
         TopBidMetrics::top_bid_update_count();
@@ -659,34 +697,6 @@ impl BidSorter {
         )
     }
 
-    fn get_mergeable_orders(&self) -> Vec<MergeableOrders> {
-        let mut seen_txs = HashSet::new();
-        self.orders
-            .iter()
-            .rev()
-            .map(|(_, b)| {
-                let orders: Vec<helix_types::MergeableOrder> = b
-                    .orders
-                    .iter()
-                    .filter(|o| match o {
-                        helix_types::MergeableOrder::Tx(tx) => !seen_txs.contains(&tx.transaction),
-                        helix_types::MergeableOrder::Bundle(bundle) => {
-                            !bundle.transactions.iter().enumerate().any(|(i, tx)| {
-                                seen_txs.contains(tx) && !bundle.dropping_txs.contains(&i)
-                            })
-                        }
-                    })
-                    .cloned()
-                    .collect();
-                seen_txs.extend(orders.clone().into_iter().flat_map(|o| match o {
-                    helix_types::MergeableOrder::Tx(tx) => vec![tx.transaction],
-                    helix_types::MergeableOrder::Bundle(bundle) => bundle.transactions.clone(),
-                }));
-                MergeableOrders::new(b.origin, orders)
-            })
-            .collect()
-    }
-
     fn update_bid_with_block_merging_data(
         &mut self,
         builder_pubkey: &BlsPubkey,
@@ -703,7 +713,7 @@ impl BidSorter {
             // Update header with latest merging preferences
             self.headers.entry(bid.on_receive_ns).and_modify(|e| e.1 = merging_preferences);
             // Add mergeable orders
-            self.orders.insert(*bid, mergeable_orders);
+            self.shared_best_orders.insert_orders(bid.value, mergeable_orders);
         } else if entry.bid_non_cancel.is_some()
             && entry.bid_non_cancel.as_ref().unwrap().value == value
         {
@@ -711,7 +721,7 @@ impl BidSorter {
             // Update header with latest merging preferences
             self.headers.entry(bid.on_receive_ns).and_modify(|e| e.1 = merging_preferences);
             // Add mergeable orders
-            self.orders.insert(*bid, mergeable_orders);
+            self.shared_best_orders.insert_orders(bid.value, mergeable_orders);
         }
     }
 }
@@ -720,9 +730,11 @@ pub fn start_bid_sorter(
     sorter_rx: crossbeam_channel::Receiver<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
+    shared_best_orders: BestMergeableOrders,
     shared_floor: FloorBid,
 ) {
-    let bid_sorter = BidSorter::new(sorter_rx, top_bid_tx, shared_best_header, shared_floor);
+    let bid_sorter =
+        BidSorter::new(sorter_rx, top_bid_tx, shared_best_header, shared_best_orders, shared_floor);
     std::thread::spawn(|| bid_sorter.run());
 }
 
