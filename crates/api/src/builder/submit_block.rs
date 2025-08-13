@@ -209,7 +209,6 @@ impl<A: Api> BuilderApi<A> {
         let merging_preferences =
             BlockMergingPreferences { allow_appending: merging_data.allow_appending };
 
-        // TODO: send merging preferences here too
         if let Err(err) = api.sorter_tx.try_send(BidSorterMessage::new_from_block_submission(
             &payload,
             &trace,
