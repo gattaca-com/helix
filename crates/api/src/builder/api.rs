@@ -25,8 +25,8 @@ use helix_database::DatabaseService;
 use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{
-    BlockMergingData, BlsPublicKey, ExecutionPayloadElectra, MergeableBundle, MergeableOrders,
-    MergeableTransaction, Order, SignedBidSubmission, Slot,
+    BlockMergingData, BlsPublicKey, MergeableBundle, MergeableOrders, MergeableTransaction, Order,
+    SignedBidSubmission, Slot,
 };
 use parking_lot::RwLock;
 use ssz::Decode;
@@ -581,11 +581,7 @@ pub fn get_mergeable_orders(
     merging_data: &BlockMergingData,
 ) -> MergeableOrders {
     let execution_payload = payload.execution_payload_ref();
-    let txs = execution_payload
-        .transactions()
-        .iter()
-        .map(|l| Bytes::from(l.to_vec()))
-        .collect::<Vec<_>>();
+    let txs = execution_payload.transactions();
     let mergeable_orders = merging_data
         .merge_orders
         .iter()
@@ -601,7 +597,7 @@ pub fn get_mergeable_orders(
                 };
 
                 Some(MergeableTransaction{
-                    transaction: raw_tx.clone(),
+                    transaction: Bytes::from(raw_tx.to_vec()),
                     can_revert: tx.can_revert,
                 }.into())
             }
@@ -619,7 +615,7 @@ pub fn get_mergeable_orders(
                             return Err(());
                         };
 
-                        Ok(raw_tx.clone())
+                        Ok(Bytes::from_owner(raw_tx.to_vec()))
                     })
                     .collect::<Result<_, ()>>();
 
@@ -648,7 +644,7 @@ pub fn get_mergeable_orders(
         .flatten()
         .collect();
 
-    MergeableOrders::new(payload.fee_recipient, mergeable_orders)
+    MergeableOrders::new(execution_payload.fee_recipient(), mergeable_orders)
 }
 
 #[cfg(test)]
