@@ -362,15 +362,25 @@ impl<A: Api> ProposerApi<A> {
             value: response.value,
             pubkey: *bid.pubkey(),
         };
-        let payload_and_blobs = PayloadAndBlobsRef {
-            execution_payload: (&response.execution_payload).into(),
-            blobs_bundle: &response.blobs_bundle,
-        };
 
-        self.auctioneer
-            .save_execution_payload(slot, proposer_pubkey, &block_hash, payload_and_blobs)
-            .await
-            .ok()?;
+        // Store the payload in the background
+        tokio::task::spawn({
+            let auctioneer = self.auctioneer.clone();
+            let proposer_pubkey = proposer_pubkey.clone();
+            async move {
+                let payload_and_blobs = PayloadAndBlobsRef {
+                    execution_payload: (&response.execution_payload).into(),
+                    blobs_bundle: &response.blobs_bundle,
+                };
+                // We just log the errors as we can't really do anything about them
+                if let Err(err) = auctioneer
+                    .save_execution_payload(slot, &proposer_pubkey, &block_hash, payload_and_blobs)
+                    .await
+                {
+                    error!(%err, "failed to store merged payload in auctioneer");
+                }
+            }
+        });
 
         Some(new_bid.into())
     }
