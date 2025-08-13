@@ -68,6 +68,34 @@ pub struct BlockMergingPreferences {
 
 /// Represents one or more transactions to be appended into a block atomically.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub enum MergeableOrder {
+    Tx(MergeableTransaction),
+    Bundle(MergeableBundle),
+}
+
+impl From<MergeableTransaction> for MergeableOrder {
+    fn from(tx: MergeableTransaction) -> Self {
+        MergeableOrder::Tx(tx)
+    }
+}
+
+impl From<MergeableBundle> for MergeableOrder {
+    fn from(bundle: MergeableBundle) -> Self {
+        MergeableOrder::Bundle(bundle)
+    }
+}
+
+/// Represents a single transaction to be appended into a block atomically.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct MergeableTransaction {
+    /// Transaction that can be merged into the block.
+    pub transaction: Bytes,
+    /// Txs that may revert.
+    pub can_revert: bool,
+}
+
+/// Represents a bundle of transactions to be appended into a block atomically.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct MergeableBundle {
     /// List of transactions that can be merged into the block.
     pub transactions: Vec<Bytes>,
@@ -78,15 +106,15 @@ pub struct MergeableBundle {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct MergeableBundles {
-    /// Address of the builder that submitted these bundles.
+pub struct MergeableOrders {
+    /// Address of the builder that submitted these orders.
     pub origin: Address,
-    /// List of mergeable bundles.
-    pub bundles: Vec<MergeableBundle>,
+    /// List of mergeable orders.
+    pub orders: Vec<MergeableOrder>,
 }
 
-impl MergeableBundles {
-    pub fn new(origin: Address, bundles: Vec<MergeableBundle>) -> Self {
-        Self { origin, bundles }
+impl MergeableOrders {
+    pub fn new(origin: Address, orders: Vec<MergeableOrder>) -> Self {
+        Self { origin, orders }
     }
 }

@@ -25,8 +25,8 @@ use helix_database::DatabaseService;
 use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{
-    BlockMergingData, BlsPublicKey, MergeableBundle, MergeableBundles, Order, SignedBidSubmission,
-    Slot,
+    BlockMergingData, BlsPublicKey, MergeableBundle, MergeableOrders, MergeableTransaction, Order,
+    SignedBidSubmission, Slot,
 };
 use parking_lot::RwLock;
 use ssz::Decode;
@@ -576,13 +576,13 @@ pub(crate) fn sanity_check_block_submission(
 /// Expands the references in [`BlockMergingData`] from the transactions in the
 /// payload of the given submission. If any bundle references a transaction not in
 /// the payload, it will be silently ignored.
-pub fn get_mergeable_bundles(
+pub fn get_mergeable_orders(
     payload: &SignedBidSubmission,
     merging_data: &BlockMergingData,
-) -> MergeableBundles {
+) -> MergeableOrders {
     let execution_payload = payload.execution_payload_ref();
     let txs = execution_payload.transactions();
-    let mergeable_bundles = merging_data
+    let mergeable_orders = merging_data
         .merge_orders
         .iter()
         .map(|order| match order {
@@ -595,13 +595,11 @@ pub fn get_mergeable_bundles(
                     );
                     return None;
                 };
-                let reverting_txs = if tx.can_revert { vec![0] } else { vec![] };
 
-                Some(MergeableBundle {
-                    transactions: vec![Bytes::from_owner(raw_tx.to_vec())],
-                    reverting_txs,
-                    dropping_txs: vec![],
-                })
+                Some(MergeableTransaction{
+                    transaction: Bytes::from_owner(raw_tx.to_vec()),
+                    can_revert: tx.can_revert,
+                }.into())
             }
             Order::Bundle(bundle) => {
                 let transactions_res = bundle
@@ -640,13 +638,13 @@ pub fn get_mergeable_bundles(
                     .map(|(i, _)| i)
                     .collect();
 
-                Some(MergeableBundle { transactions, reverting_txs, dropping_txs })
+                Some(MergeableBundle { transactions, reverting_txs, dropping_txs }.into())
             }
         })
         .flatten()
         .collect();
 
-    MergeableBundles::new(execution_payload.fee_recipient(), mergeable_bundles)
+    MergeableOrders::new(execution_payload.fee_recipient(), mergeable_orders)
 }
 
 #[cfg(test)]

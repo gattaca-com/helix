@@ -19,7 +19,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::{
-    BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeader, MergeableBundles,
+    BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeader, MergeableOrders,
     PayloadAndBlobs, PayloadAndBlobsRef,
 };
 use tokio::time::sleep;
@@ -307,7 +307,7 @@ impl<A: Api> ProposerApi<A> {
                 &bid_request.pubkey,
                 bid,
                 payload,
-                metadata.mergeable_bundles,
+                metadata.mergeable_orders,
             )
             .await?;
 
@@ -324,7 +324,7 @@ impl<A: Api> ProposerApi<A> {
         proposer_pubkey: &BlsPublicKey,
         bid: BuilderBid,
         payload: PayloadAndBlobs,
-        merging_data: Vec<MergeableBundles>,
+        merging_data: Vec<MergeableOrders>,
     ) -> Option<BuilderBid> {
         let merge_request = BlockMergeRequest::new(
             *bid.value(),

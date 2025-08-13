@@ -22,7 +22,7 @@ use tracing::{debug, error, info, warn, Instrument};
 use super::api::BuilderApi;
 use crate::{
     builder::{
-        api::{decode_payload, get_mergeable_bundles, sanity_check_block_submission},
+        api::{decode_payload, get_mergeable_orders, sanity_check_block_submission},
         error::BuilderApiError,
         v2_check::V2SubMessage,
     },
@@ -218,14 +218,14 @@ impl<A: Api> BuilderApi<A> {
 
         let merging_preferences =
             BlockMergingPreferences { allow_appending: merging_data.allow_appending };
-        let mergeable_bundles = get_mergeable_bundles(&payload, merging_data);
+        let mergeable_orders = get_mergeable_orders(&payload, merging_data);
 
         // Send the new block merging data to the bid sorter (if it's not the default one)
-        if !mergeable_bundles.bundles.is_empty() || merging_preferences != Default::default() {
+        if !mergeable_orders.orders.is_empty() || merging_preferences != Default::default() {
             if let Err(err) = api.sorter_tx.try_send(BidSorterMessage::new_from_payload_submission(
                 &payload,
                 merging_preferences,
-                mergeable_bundles,
+                mergeable_orders,
             )) {
                 error!(%err, "failed to send block merging data to bid sorter");
             }
