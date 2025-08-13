@@ -103,20 +103,10 @@ impl BestMergeableOrders {
 
     pub fn load(&self) -> Vec<MergeableOrders> {
         let order_map = self.0.read();
-        let mut orders: Vec<(MergeableOrder, (U256, Address))> =
-            order_map.iter().map(|(a, b)| (a.clone(), b.clone())).collect();
-        // Sort all the orders by value in decreasing order
-        orders.sort_by_key(|(_, (value, _))| U256::MAX - *value);
-        // Merge contiguous orders with the same origin
-        orders.into_iter().fold(vec![], |mut acc, (order, (_, origin))| {
-            let last = acc.last_mut();
-            if last.is_none() || last.as_ref().unwrap().origin != origin {
-                acc.push(MergeableOrders::new(origin, vec![order]));
-            } else {
-                last.unwrap().orders.push(order);
-            };
-            acc
-        })
+        order_map
+            .iter()
+            .map(|(order, (_, origin))| MergeableOrders::new(origin.clone(), vec![order.clone()]))
+            .collect()
     }
 
     pub fn insert_orders(&self, bid_value: U256, mergeable_orders: MergeableOrders) {
