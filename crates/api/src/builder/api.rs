@@ -587,7 +587,7 @@ pub fn get_mergeable_orders(
         .iter()
         .map(|order| match order {
             Order::Tx(tx) => {
-                let Some(raw_tx) = txs.get(tx.index).cloned() else {
+                let Some(raw_tx) = txs.get(tx.index) else {
                     debug!(
                         "Got invalid block merging index {}, with a tx count of {}",
                         tx.index,
@@ -597,7 +597,7 @@ pub fn get_mergeable_orders(
                 };
 
                 Some(MergeableTransaction{
-                    transaction: Bytes::from_owner(raw_tx.to_vec()),
+                    transaction: Bytes::from(raw_tx.to_vec()),
                     can_revert: tx.can_revert,
                 }.into())
             }
