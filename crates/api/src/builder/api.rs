@@ -606,7 +606,7 @@ pub fn get_mergeable_orders(
                     .txs
                     .iter()
                     .map(|tx_index| {
-                        let Some(raw_tx) = txs.get(*tx_index).cloned() else {
+                        let Some(raw_tx) = txs.get(*tx_index) else {
                             debug!(
                                 "Got invalid block merging index {} in bundle, with a tx count of {}",
                                 tx_index,
