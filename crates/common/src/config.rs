@@ -38,6 +38,9 @@ pub struct RelayConfig {
     /// Configuration for timing game parameters.
     #[serde(default)]
     pub timing_game_config: TimingGameConfig,
+    /// Configuration for block merging parameters.
+    #[serde(default)]
+    pub block_merging_config: BlockMergingConfig,
     #[serde(default)]
     pub primev_config: Option<PrimevConfig>,
     pub discord_webhook_url: Option<Url>,
@@ -141,6 +144,14 @@ pub struct TimingGameConfig {
     /// header.
     #[serde(default = "default_u64::<150>")]
     pub default_client_latency_ms: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct BlockMergingConfig {
+    /// Max time to reserve for block merging. e.g., if we were going to sleep for 1s due to
+    /// timing games, we instead wait until the last 250ms before we start block merging.
+    #[serde(default = "default_u64::<250>")]
+    pub block_merging_buffer_ms: u64,
 }
 
 fn default_port() -> u16 {

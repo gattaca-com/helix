@@ -131,18 +131,6 @@ impl<A: Api> ProposerApi<A> {
         // If timing games are enabled for the proposer then we sleep a fixed amount before
         // returning the header
         if duty.entry.preferences.header_delay || client_timeout_ms.is_some() {
-            // Start block merging in the background
-            // TODO: should we wait a bit before block merging?
-            let block_merging = tokio::spawn({
-                let proposer_api = proposer_api.clone();
-                let bid_request = bid_request.clone();
-                async move {
-                    proposer_api
-                        .merge_block(&bid_request, duty.entry.registration.message.fee_recipient)
-                        .await
-                }
-            });
-
             let max_sleep_time = proposer_api
                 .relay_config
                 .timing_game_config
@@ -174,8 +162,30 @@ impl<A: Api> ProposerApi<A> {
                 pubkey = ?bid_request.pubkey,
                 "timing game sleep");
 
-            if sleep_time > Duration::ZERO {
-                sleep(sleep_time).await;
+            // If time buffer is bigger than sleep time, wait for a bit before block merging
+            let block_merging_buffer = Duration::from_millis(
+                proposer_api.relay_config.block_merging_config.block_merging_buffer_ms,
+            );
+            let remaining_sleep_time = if sleep_time > block_merging_buffer {
+                sleep(sleep_time - block_merging_buffer).await;
+                block_merging_buffer
+            } else {
+                sleep_time
+            };
+
+            // Start block merging in the background
+            let block_merging = tokio::spawn({
+                let proposer_api = proposer_api.clone();
+                let bid_request = bid_request.clone();
+                async move {
+                    proposer_api
+                        .merge_block(&bid_request, duty.entry.registration.message.fee_recipient)
+                        .await
+                }
+            });
+
+            if remaining_sleep_time > Duration::ZERO {
+                sleep(remaining_sleep_time).await;
             }
 
             get_header_metric.record();
