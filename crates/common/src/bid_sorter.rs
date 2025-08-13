@@ -96,6 +96,12 @@ impl BestGetHeader {
 #[derive(Debug, Clone)]
 pub struct BestMergeableOrders(Arc<RwLock<HashMap<MergeableOrder, (U256, Address)>>>);
 
+impl Default for BestMergeableOrders {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BestMergeableOrders {
     pub fn new() -> Self {
         Self(Arc::new(RwLock::new(HashMap::with_capacity(5000))))
@@ -105,9 +111,7 @@ impl BestMergeableOrders {
         let order_map = self.0.read();
         order_map
             .iter()
-            .map(|(order, (_, origin))| {
-                MergeableOrderWithOrigin::new(origin.clone(), order.clone())
-            })
+            .map(|(order, (_, origin))| MergeableOrderWithOrigin::new(*origin, order.clone()))
             .collect()
     }
 
@@ -117,7 +121,7 @@ impl BestMergeableOrders {
 
         mergeable_orders.orders.into_iter().for_each(|o| {
             order_map
-                .entry(o.clone())
+                .entry(o)
                 .and_modify(|e| {
                     if e.0 < bid_value {
                         *e = (bid_value, origin);
