@@ -3418,6 +3418,7 @@ dependencies = [
  "auto_impl",
  "axum 0.8.3",
  "crossbeam-channel",
+ "dashmap 5.5.3",
  "deadpool-redis",
  "ethereum_ssz",
  "eyre",

@@ -60,15 +60,6 @@ pub async fn start_auctioneer(
     let auctioneer_clone = auctioneer.clone();
     tokio::spawn(async move {
         loop {
-            if let Err(err) = auctioneer_clone.start_execution_payload_listener().await {
-                error!("Execution payload listener error: {}", err);
-            }
-        }
-    });
-
-    let auctioneer_clone = auctioneer.clone();
-    tokio::spawn(async move {
-        loop {
             if let Err(err) = auctioneer_clone.start_payload_address_listener().await {
                 error!("Payload address listener error: {}", err);
             }

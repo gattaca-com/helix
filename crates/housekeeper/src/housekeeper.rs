@@ -189,7 +189,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                 line!(),
                 async move {
                     let Ok(_guard) = housekeeper.slots.updating_proposer_duties.try_lock() else {
-                        debug!("proposer duties update already in progress");
+                        warn!("proposer duties update already in progress");
                         return;
                     };
                     let start = Instant::now();
@@ -211,7 +211,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                 async move {
                     let Ok(_guard) = housekeeper.slots.updating_refreshed_validators.try_lock()
                     else {
-                        debug!("refreshed validators update already in progress");
+                        warn!("refreshed validators update already in progress");
                         return;
                     };
                     let start = Instant::now();
@@ -233,7 +233,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             line!(),
             async move {
                 let Ok(_guard) = housekeeper.slots.updating_builder_infos.try_lock() else {
-                    debug!("builder info update already in progress");
+                    warn!("builder info update already in progress");
                     return;
                 };
                 let start = Instant::now();
@@ -253,7 +253,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                 line!(),
                 async move {
                     let Ok(_guard) = housekeeper.slots.updating_trusted_proposers.try_lock() else {
-                        debug!("trusted proposer update already in progress");
+                        warn!("trusted proposer update already in progress");
                         return;
                     };
                     let start = Instant::now();

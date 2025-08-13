@@ -71,3 +71,6 @@ pub trait Api: Clone + Send + Sync + 'static {
     type DatabaseService: DatabaseService;
     type MetadataProvider: MetadataProvider;
 }
+
+/// Timeout in milliseconds from when the call started
+pub const HEADER_TIMEOUT_MS: &str = "x-timeout-ms";

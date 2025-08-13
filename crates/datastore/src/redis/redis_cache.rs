@@ -11,6 +11,7 @@ use std::{
 
 use alloy_primitives::B256;
 use async_trait::async_trait;
+use dashmap::DashMap;
 use deadpool_redis::{Config, Connection, CreatePoolError, Pool, Runtime};
 use futures_util::StreamExt;
 use helix_beacon::types::{HeadEventData, PayloadAttributesEvent};
@@ -60,7 +61,6 @@ const BUILDER_LAST_BID_RECEIVED_AT_CHANNEL: &str = "builder_last_bid_received_at
 const BUILDER_LAST_BID_RECEIVED_AT_DELETED_CHANNEL: &str =
     "builder_last_bid_received_at_deleted_updates";
 const BUILDER_INFO_CHANNEL: &str = "builder_info_channel";
-const EXECUTION_PAYLOAD_CHANNEL: &str = "execution_payload_updates";
 const PAYLOAD_ADDRESS_CHANNEL: &str = "payload_address_updates";
 const PROPOSER_WHITELIST_CHANNEL: &str = "proposer_whitelist_updates";
 const PROPOSER_WHITELIST_DELETED_CHANNEL: &str = "proposer_whitelist_deleted_updates";
@@ -83,9 +83,9 @@ pub struct RedisCache {
     seen_block_hashes: Cache<B256, ()>,
     last_delivered_slot: Arc<AtomicU64>,
     last_delivered_hash: Arc<RwLock<Option<B256>>>,
-    builder_latest_payload_received_at: Cache<String, HashMap<String, u64>>,
-    builder_info_cache: Cache<String, HashMap<String, BuilderInfo>>,
-    trusted_proposers: Cache<String, HashMap<String, ProposerInfo>>,
+    builder_latest_payload_received_at: Cache<String, Arc<DashMap<String, u64>>>,
+    builder_info_cache: Cache<String, Arc<DashMap<String, BuilderInfo>>>,
+    trusted_proposers: Cache<String, Arc<DashMap<String, ProposerInfo>>>,
     execution_payload_cache: Cache<String, PayloadAndBlobs>,
     payload_address_cache: Cache<String, (BlsPublicKey, Vec<u8>)>,
 
@@ -234,26 +234,6 @@ impl RedisCache {
         Ok(())
     }
 
-    pub async fn start_execution_payload_listener(&self) -> Result<(), RedisCacheError> {
-        let conn = self.pool.get().await?;
-        let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
-        pubsub.subscribe(EXECUTION_PAYLOAD_CHANNEL).await?;
-
-        let mut message_stream = pubsub.on_message();
-        let mut conn = self.pool.get().await?;
-
-        while let Some(msg) = message_stream.next().await {
-            let Ok((key, execution_payload)) = Self::process_pubsub_update(msg, &mut conn).await
-            else {
-                continue;
-            };
-
-            self.execution_payload_cache.insert(key, execution_payload);
-        }
-
-        Ok(())
-    }
-
     pub async fn start_payload_address_listener(&self) -> Result<(), RedisCacheError> {
         let conn = self.pool.get().await?;
         let mut pubsub = deadpool_redis::Connection::take(conn).into_pubsub();
@@ -346,7 +326,7 @@ impl RedisCache {
                     from_str::<(String, String, u64)>(&payload_str)
                 {
                     self.builder_latest_payload_received_at
-                        .get_with(key, HashMap::new)
+                        .get_with(key, || Arc::new(DashMap::new()))
                         .insert(builder_pub_key, received_at);
                 }
             }
@@ -369,7 +349,7 @@ impl RedisCache {
             if let Some(payload_str) = payload {
                 if let Ok((key, builder_pub_key)) = from_str::<(String, String)>(&payload_str) {
                     self.builder_latest_payload_received_at
-                        .get_with(key, HashMap::new)
+                        .get_with(key, || Arc::new(DashMap::new()))
                         .remove(&builder_pub_key);
                 }
             }
@@ -399,7 +379,7 @@ impl RedisCache {
             };
 
             self.builder_info_cache
-                .get_with(BUILDER_INFO_KEY.to_string(), HashMap::new)
+                .get_with(BUILDER_INFO_KEY.to_string(), || Arc::new(DashMap::new()))
                 .insert(field, builder_info.clone());
         }
 
@@ -430,7 +410,7 @@ impl RedisCache {
             };
 
             self.trusted_proposers
-                .get_with(PROPOSER_WHITELIST_KEY.to_string(), HashMap::new)
+                .get_with(PROPOSER_WHITELIST_KEY.to_string(), || Arc::new(DashMap::new()))
                 .insert(field, proposer_info.clone());
         }
 
@@ -444,13 +424,14 @@ impl RedisCache {
             return Ok(());
         }
 
-        let mut deserialized_entries = HashMap::with_capacity(entries.len());
+        let deserialized_entries = DashMap::with_capacity(entries.len());
         for (key, value) in entries.into_iter() {
             let deserialized_value = serde_json::from_slice(&value)?;
             deserialized_entries.insert(key, deserialized_value);
         }
 
-        self.trusted_proposers.insert(PROPOSER_WHITELIST_KEY.to_string(), deserialized_entries);
+        self.trusted_proposers
+            .insert(PROPOSER_WHITELIST_KEY.to_string(), Arc::new(deserialized_entries));
 
         Ok(())
     }
@@ -466,7 +447,7 @@ impl RedisCache {
             let payload = message.get_payload::<String>().ok();
             if let Some(key) = payload {
                 self.trusted_proposers
-                    .get_with(PROPOSER_WHITELIST_KEY.to_string(), HashMap::new)
+                    .get_with(PROPOSER_WHITELIST_KEY.to_string(), || Arc::new(DashMap::new()))
                     .remove(&key);
             }
         }
@@ -525,22 +506,38 @@ impl RedisCache {
         &self,
         key: &str,
         field: &str,
-        cache: &Cache<String, HashMap<String, T>>,
+        cache: &Cache<String, Arc<DashMap<String, T>>>,
     ) -> Result<Option<T>, RedisCacheError> {
-        if let Some(cached_map) = cache.get(key) {
-            if let Some(cached_value) = cached_map.get(field) {
-                return Ok(Some(cached_value.clone()));
+        if let Some(cached) = cache.get(key) {
+            if let Some(value) = cached.get(field) {
+                return Ok(Some(value.clone()));
             }
         }
 
         let value = self.hget::<T>(key, field).await?;
         if let Some(ref val) = value {
             cache
-                .get_with(key.to_string(), || HashMap::new())
+                .get_with(key.to_string(), || Arc::new(DashMap::new()))
                 .insert(field.to_string(), val.clone());
         }
 
         Ok(value)
+    }
+
+    async fn hset_with_cache<T: Clone + Serialize + Send + Sync + 'static>(
+        &self,
+        key: &str,
+        field: &str,
+        value: &T,
+        cache: &Cache<String, Arc<DashMap<String, T>>>,
+    ) -> Result<(), RedisCacheError> {
+        let mut conn = self.pool.get().await?;
+        let str_val = serde_json::to_string(value)?;
+        cache
+            .get_with(key.to_string(), || Arc::new(DashMap::new()))
+            .insert(field.to_string(), value.clone());
+        conn.hset(key, field, str_val).await?;
+        Ok(())
     }
 
     async fn hgetall<V: DeserializeOwned>(
@@ -565,10 +562,12 @@ impl RedisCache {
     async fn hgetall_with_cache<V: Clone + Send + Sync + DeserializeOwned + 'static>(
         &self,
         key: &str,
-        cache: &Cache<String, HashMap<String, V>>,
+        cache: &Cache<String, Arc<DashMap<String, V>>>,
     ) -> Result<Option<HashMap<String, V>>, RedisCacheError> {
         if let Some(cached) = cache.get(key) {
-            return Ok(Some(cached.clone()));
+            let map: HashMap<String, V> =
+                cached.iter().map(|kv| (kv.key().clone(), kv.value().clone())).collect();
+            return Ok(Some(map));
         }
 
         let mut conn = self.pool.get().await?;
@@ -578,14 +577,12 @@ impl RedisCache {
         }
 
         let mut deserialized_entries = HashMap::with_capacity(entries.len());
-        for (key, value) in entries.into_iter() {
+        for (field_key, value) in entries.into_iter() {
             let deserialized_value: V = serde_json::from_slice(&value)?;
-            deserialized_entries.insert(key, deserialized_value);
+            deserialized_entries.insert(field_key, deserialized_value);
         }
 
-        if cache.get(key).is_none() {
-            cache.insert(key.to_string(), deserialized_entries.clone());
-        }
+        cache.insert(key.to_string(), Arc::new(DashMap::from_iter(deserialized_entries.clone())));
 
         Ok(Some(deserialized_entries))
     }
@@ -757,19 +754,6 @@ impl RedisCache {
         Ok(conn.hset(key, field, str_val).await?)
     }
 
-    async fn hset_with_cache<T: Clone + Serialize + Send + Sync + 'static>(
-        &self,
-        key: &str,
-        field: &str,
-        value: &T,
-        cache: &Cache<String, HashMap<String, T>>,
-    ) -> Result<(), RedisCacheError> {
-        let mut conn = self.pool.get().await?;
-        let str_val = serde_json::to_string(value)?;
-        cache.get_with(key.to_string(), || HashMap::new()).insert(field.to_string(), value.clone());
-        Ok(conn.hset(key, field, str_val).await?)
-    }
-
     async fn hset_multiple_not_exists<T: Serialize>(
         &self,
         key: &str,
@@ -806,10 +790,10 @@ impl RedisCache {
         &self,
         key: &str,
         field: &str,
-        cache: &Cache<String, HashMap<String, T>>,
+        cache: &Cache<String, Arc<DashMap<String, T>>>,
     ) -> Result<(), RedisCacheError> {
         let mut conn = self.pool.get().await?;
-        cache.get_with(key.to_string(), || HashMap::new()).remove(field);
+        cache.get_with(key.to_string(), || Arc::new(DashMap::new())).remove(field);
         Ok(conn.hdel(key, field).await?)
     }
 
@@ -1188,46 +1172,40 @@ impl Auctioneer for RedisCache {
             return Ok(());
         }
 
-        // Fetch current builder info
         let redis_builder_infos: HashMap<String, BuilderInfo> = self
             .hgetall_with_cache(BUILDER_INFO_KEY, &self.builder_info_cache)
             .await?
             .unwrap_or_default();
 
-        // Update Redis value if the builder info has changed or it's a new builder
+        let mut updates = Vec::new();
+
         for builder_info in builder_infos {
             let builder_pub_key_str = format!("{:?}", builder_info.pub_key);
-            if let Some(redis_builder_info) = redis_builder_infos.get(&builder_pub_key_str) {
-                if builder_info.builder_info != *redis_builder_info {
-                    self.hset_with_cache(
-                        BUILDER_INFO_KEY,
-                        &builder_pub_key_str,
-                        &builder_info.builder_info,
-                        &self.builder_info_cache,
-                    )
-                    .await?;
-                    self.publish(BUILDER_INFO_CHANNEL, &builder_pub_key_str).await?;
-                    info!(
-                        pubkey = %builder_info.pub_key,
-                        is_optimistic = builder_info.builder_info.is_optimistic,
-                        "updated builder info",
-                    );
-                }
-            } else {
-                self.hset_with_cache(
-                    BUILDER_INFO_KEY,
-                    &builder_pub_key_str,
-                    &builder_info.builder_info,
-                    &self.builder_info_cache,
-                )
-                .await?;
-                self.publish(BUILDER_INFO_CHANNEL, &builder_pub_key_str).await?;
-                info!(
-                    pubkey = %builder_info.pub_key,
-                    is_optimistic = builder_info.builder_info.is_optimistic,
-                    "updated builder info",
-                );
+
+            let should_update =
+                redis_builder_infos.get(&builder_pub_key_str) != Some(&builder_info.builder_info);
+
+            if should_update {
+                updates.push((builder_pub_key_str, builder_info));
             }
+        }
+
+        for (builder_pub_key_str, builder_info) in updates {
+            self.hset_with_cache(
+                BUILDER_INFO_KEY,
+                &builder_pub_key_str,
+                &builder_info.builder_info,
+                &self.builder_info_cache,
+            )
+            .await?;
+
+            self.publish(BUILDER_INFO_CHANNEL, &builder_pub_key_str).await?;
+
+            info!(
+                pubkey = %builder_info.pub_key,
+                is_optimistic = builder_info.builder_info.is_optimistic,
+                "updated builder info",
+            );
         }
 
         record.record_success();
@@ -1256,42 +1234,62 @@ impl Auctioneer for RedisCache {
     ) -> Result<(), AuctioneerError> {
         let mut record = RedisMetricRecord::new("update_trusted_proposers");
 
-        // get keys
-        let proposer_keys: Vec<String> =
-            proposer_whitelist.iter().map(|proposer| format!("{:?}", proposer.pubkey)).collect();
+        let new_proposers: HashMap<String, ProposerInfo> = proposer_whitelist
+            .into_iter()
+            .map(|proposer| (format!("{:?}", proposer.pubkey), proposer))
+            .collect();
 
         let proposer_info: Option<HashMap<String, ProposerInfo>> =
             self.hgetall_with_cache(PROPOSER_WHITELIST_KEY, &self.trusted_proposers).await?;
 
-        // add or update proposers
-        for proposer in proposer_whitelist {
-            // If the proposer is already in the cache, we can skip the hset operation
-            if let Some(existing_proposer) =
-                proposer_info.as_ref().and_then(|info| info.get(&format!("{:?}", proposer.pubkey)))
-            {
-                if existing_proposer == &proposer {
-                    continue; // No change needed
-                }
+        let mut updates = Vec::new();
+        let mut deletions = Vec::new();
+
+        for (key_str, proposer) in &new_proposers {
+            let should_update =
+                proposer_info.as_ref().and_then(|info| info.get(key_str)) != Some(proposer);
+
+            if should_update {
+                updates.push((key_str.clone(), proposer.clone()));
             }
-            let key_str = format!("{:?}", proposer.pubkey);
-            self.hset_with_cache(
-                PROPOSER_WHITELIST_KEY,
-                &key_str,
-                &proposer,
-                &self.trusted_proposers,
-            )
-            .await?;
-            self.publish(PROPOSER_WHITELIST_CHANNEL, &key_str).await?;
         }
 
-        // remove any proposers that are no longer in the list
         if let Some(proposer_info) = proposer_info {
             for key in proposer_info.keys() {
-                if !proposer_keys.contains(key) {
-                    self.hdel_with_cache(PROPOSER_WHITELIST_KEY, key, &self.trusted_proposers)
-                        .await?;
-                    self.publish(PROPOSER_WHITELIST_DELETED_CHANNEL, key).await?;
+                if !new_proposers.contains_key(key) {
+                    deletions.push(key.clone());
                 }
+            }
+        }
+
+        if !updates.is_empty() || !deletions.is_empty() {
+            let mut conn = self.pool.get().await.map_err(RedisCacheError::from)?;
+            let mut pipeline = redis::pipe();
+
+            for (key_str, proposer) in &updates {
+                let str_val = serde_json::to_string(proposer).map_err(RedisCacheError::from)?;
+                pipeline.hset(PROPOSER_WHITELIST_KEY, key_str, str_val);
+                pipeline.publish(PROPOSER_WHITELIST_CHANNEL, key_str);
+            }
+
+            for key in &deletions {
+                pipeline.hdel(PROPOSER_WHITELIST_KEY, key);
+                pipeline.publish(PROPOSER_WHITELIST_DELETED_CHANNEL, key);
+            }
+
+            pipeline.query_async(&mut conn).await.map_err(RedisCacheError::from)?;
+
+            // Update local cache after successful Redis operations
+            let cache_map = self
+                .trusted_proposers
+                .get_with(PROPOSER_WHITELIST_KEY.to_string(), || Arc::new(DashMap::new()));
+
+            for (key_str, proposer) in updates {
+                cache_map.insert(key_str, proposer);
+            }
+
+            for key in deletions {
+                cache_map.remove(&key);
             }
         }
 
