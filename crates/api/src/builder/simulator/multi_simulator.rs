@@ -112,7 +112,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> MultiSimulator<A, D
     fn next_index(&self) -> usize {
         // Load balancing: round-robin selection
         self.next_index
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |x| {
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |x| {
                 Some((x + 1) % self.simulators.len())
             })
             .unwrap_or(0)
