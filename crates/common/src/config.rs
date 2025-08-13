@@ -128,27 +128,19 @@ pub struct PostgresConfig {
     pub region_name: String,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Default)]
 pub struct TimingGameConfig {
     /// Max time we will delay for before returning get header.
+    #[serde(default = "default_u64::<650>")]
     pub max_header_delay_ms: u64,
     /// Max ms into slot we will sleep up to. e.g., if a request is made 2.4s into the next slot
     /// and the limit is 2.5s we will only sleep 100ms.
+    #[serde(default = "default_u64::<2000>")]
     pub latest_header_delay_ms_in_slot: u64,
     /// Default latency to assume if the client does not provide a "request start timestamp"
     /// header.
+    #[serde(default = "default_u64::<150>")]
     pub default_client_latency_ms: u64,
-}
-
-impl Default for TimingGameConfig {
-    fn default() -> Self {
-        Self {
-            // very safe by default
-            max_header_delay_ms: 650,
-            latest_header_delay_ms_in_slot: 2000,
-            default_client_latency_ms: 150,
-        }
-    }
 }
 
 fn default_port() -> u16 {
@@ -157,6 +149,10 @@ fn default_port() -> u16 {
 
 pub const fn default_bool<const B: bool>() -> bool {
     B
+}
+
+pub const fn default_u64<const D: u64>() -> u64 {
+    D
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -481,10 +477,6 @@ impl Route {
 
 fn default_duration() -> u64 {
     1000
-}
-
-fn default_u64<const D: u64>() -> u64 {
-    D
 }
 
 #[derive(Clone, Deserialize, Serialize)]
