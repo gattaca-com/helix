@@ -6,8 +6,8 @@ use alloy_primitives::{
 };
 use bytes::Bytes;
 use helix_types::{
-    BlockMergingPreferences, BlsPublicKey, BuilderBid, MergeableOrder, MergeableOrders,
-    SignedBidSubmission,
+    BlockMergingPreferences, BlsPublicKey, BuilderBid, MergeableOrder, MergeableOrderWithOrigin,
+    MergeableOrders, SignedBidSubmission,
 };
 use parking_lot::RwLock;
 use ssz::Encode;
@@ -101,11 +101,13 @@ impl BestMergeableOrders {
         Self(Arc::new(RwLock::new(HashMap::with_capacity(5000))))
     }
 
-    pub fn load(&self) -> Vec<MergeableOrders> {
+    pub fn load(&self) -> Vec<MergeableOrderWithOrigin> {
         let order_map = self.0.read();
         order_map
             .iter()
-            .map(|(order, (_, origin))| MergeableOrders::new(origin.clone(), vec![order.clone()]))
+            .map(|(order, (_, origin))| {
+                MergeableOrderWithOrigin::new(origin.clone(), order.clone())
+            })
             .collect()
     }
 

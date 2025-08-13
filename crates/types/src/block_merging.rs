@@ -118,3 +118,17 @@ impl MergeableOrders {
         Self { origin, orders }
     }
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MergeableOrderWithOrigin {
+    /// Address of the builder that submitted this order.
+    pub origin: Address,
+    /// Mergeable order.
+    pub order: MergeableOrder,
+}
+
+impl MergeableOrderWithOrigin {
+    pub fn new(origin: Address, order: MergeableOrder) -> Self {
+        Self { origin, order }
+    }
+}

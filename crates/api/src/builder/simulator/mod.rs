@@ -17,8 +17,8 @@ use helix_common::{
     ValidatorPreferences,
 };
 use helix_types::{
-    BidTrace, BlobsBundle, BlsSignature, ExecutionPayload, ExecutionRequests, MergeableOrders,
-    SignedBidSubmission,
+    BidTrace, BlobsBundle, BlsSignature, ExecutionPayload, ExecutionRequests,
+    MergeableOrderWithOrigin, SignedBidSubmission,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -66,7 +66,7 @@ pub struct BlockMergeRequest {
     pub proposer_fee_recipient: Address,
     pub execution_payload: ExecutionPayload,
     pub blobs_bundle: BlobsBundle,
-    pub merging_data: Vec<MergeableOrders>,
+    pub merging_data: Vec<MergeableOrderWithOrigin>,
 }
 
 impl BlockMergeRequest {
@@ -75,7 +75,7 @@ impl BlockMergeRequest {
         proposer_fee_recipient: Address,
         execution_payload: ExecutionPayload,
         blobs_bundle: BlobsBundle,
-        merging_data: Vec<MergeableOrders>,
+        merging_data: Vec<MergeableOrderWithOrigin>,
     ) -> Self {
         Self { value, proposer_fee_recipient, execution_payload, blobs_bundle, merging_data }
     }
