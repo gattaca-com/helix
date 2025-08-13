@@ -9,7 +9,7 @@ use helix_types::{
     BlockMergingPreferences, BlsPublicKey, BuilderBid, MergeableOrder, MergeableOrders,
     SignedBidSubmission,
 };
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 use ssz::Encode;
 use tracing::info;
 
@@ -94,15 +94,15 @@ impl BestGetHeader {
 }
 
 #[derive(Debug, Clone)]
-pub struct BestMergeableOrders(Arc<Mutex<HashMap<MergeableOrder, (U256, Address)>>>);
+pub struct BestMergeableOrders(Arc<RwLock<HashMap<MergeableOrder, (U256, Address)>>>);
 
 impl BestMergeableOrders {
     pub fn new() -> Self {
-        Self(Arc::new(Mutex::new(HashMap::with_capacity(5000))))
+        Self(Arc::new(RwLock::new(HashMap::with_capacity(5000))))
     }
 
     pub fn load(&self) -> Vec<MergeableOrders> {
-        let order_map = self.0.lock();
+        let order_map = self.0.read();
         let mut orders: Vec<(MergeableOrder, (U256, Address))> =
             order_map.iter().map(|(a, b)| (a.clone(), b.clone())).collect();
         // Sort all the orders by value in decreasing order
@@ -120,7 +120,7 @@ impl BestMergeableOrders {
     }
 
     pub fn insert_orders(&self, bid_value: U256, mergeable_orders: MergeableOrders) {
-        let mut order_map = self.0.lock();
+        let mut order_map = self.0.write();
         let origin = mergeable_orders.origin;
 
         mergeable_orders.orders.into_iter().for_each(|o| {
@@ -136,7 +136,7 @@ impl BestMergeableOrders {
     }
 
     fn reset(&self) {
-        self.0.lock().clear();
+        self.0.write().clear();
     }
 }
 
