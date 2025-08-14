@@ -1,5 +1,6 @@
 use std::{io::Read, sync::Arc, time::Duration};
 
+use alloy_consensus::{TxEip4844, TxType};
 use alloy_primitives::{B256, U256};
 use axum::{
     body::{to_bytes, Body},
@@ -25,8 +26,8 @@ use helix_database::DatabaseService;
 use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{
-    BlockMergingData, BlsPublicKey, MergeableBundle, MergeableOrders, MergeableTransaction, Order,
-    SignedBidSubmission, Slot,
+    BlobsBundle, BlockMergingData, BlsPublicKey, MergeableBundle, MergeableOrders,
+    MergeableTransaction, Order, SignedBidSubmission, Slot,
 };
 use parking_lot::RwLock;
 use ssz::Decode;
@@ -581,6 +582,9 @@ pub fn get_mergeable_orders(
     merging_data: &BlockMergingData,
 ) -> MergeableOrders {
     let execution_payload = payload.execution_payload_ref();
+    let block_blobs_bundles = payload.blobs_bundle();
+    let blob_versioned_hashes: Vec<_> =
+        block_blobs_bundles.commitments.iter().map(|c| c.calculate_versioned_hash()).collect();
     let txs = execution_payload.transactions();
     let mergeable_orders = merging_data
         .merge_orders
@@ -595,13 +599,23 @@ pub fn get_mergeable_orders(
                     );
                     return None;
                 };
+                let mut blobs_bundle = None;
+                if is_blob_transaction(raw_tx) {
+                    // If the tx references bundles not in the block, we drop it
+                    let Some(bundle) = get_blobs_bundle_from_blob_transaction(raw_tx, &blob_versioned_hashes, &block_blobs_bundles) else {
+                        return None;
+                    };
+                    blobs_bundle = Some(bundle);
+                }
 
                 Some(MergeableTransaction{
                     transaction: Bytes::from(raw_tx.to_vec()),
                     can_revert: tx.can_revert,
+                    blobs_bundle,
                 }.into())
             }
             Order::Bundle(bundle) => {
+                let mut blobs_bundle: Option<BlobsBundle> = None;
                 let transactions_res = bundle
                     .txs
                     .iter()
@@ -614,6 +628,22 @@ pub fn get_mergeable_orders(
                             );
                             return Err(());
                         };
+
+                        if is_blob_transaction(raw_tx) {
+                            // If the tx references bundles not in the block, we drop the bundle
+                            let Some(bundle) = get_blobs_bundle_from_blob_transaction(raw_tx, &blob_versioned_hashes, &block_blobs_bundles) else {
+                                return Err(());
+                            };
+                            // Add blobs to current bundle
+                            if let Some(existing_bundle) = &mut blobs_bundle {
+                                // If number of blobs goes over limit, we skip the bundle
+                                bundle.commitments.into_iter().map(|c| existing_bundle.commitments.push(c)).collect::<Result<(),_>>().map_err(|_| ())?;
+                                bundle.proofs.into_iter().map(|c| existing_bundle.proofs.push(c)).collect::<Result<(),_>>().map_err(|_| ())?;
+                                bundle.blobs.into_iter().map(|c| existing_bundle.blobs.push(c)).collect::<Result<(),_>>().map_err(|_| ())?;
+                            } else {
+                                blobs_bundle = Some(bundle);
+                            }
+                        }
 
                         Ok(Bytes::from_owner(raw_tx.to_vec()))
                     })
@@ -638,13 +668,55 @@ pub fn get_mergeable_orders(
                     .map(|(i, _)| i)
                     .collect();
 
-                Some(MergeableBundle { transactions, reverting_txs, dropping_txs }.into())
+                Some(MergeableBundle { transactions, reverting_txs, dropping_txs, blobs_bundle }.into())
             }
         })
         .flatten()
         .collect();
 
     MergeableOrders::new(execution_payload.fee_recipient(), mergeable_orders)
+}
+
+fn is_blob_transaction(raw_tx: &[u8]) -> bool {
+    raw_tx.get(0).copied().unwrap_or(0) == TxType::Eip4844
+}
+
+fn get_tx_versioned_hashes(mut raw_tx: &[u8]) -> Vec<B256> {
+    use alloy_consensus::transaction::RlpEcdsaDecodableTx;
+    TxEip4844::rlp_decode_with_signature(&mut raw_tx)
+        .map(|(b, _)| b.blob_versioned_hashes)
+        .unwrap_or(vec![])
+}
+
+fn get_blobs_bundle_from_blob_transaction(
+    raw_tx: &[u8],
+    blob_versioned_hashes: &[B256],
+    block_blobs_bundles: &BlobsBundle,
+) -> Option<BlobsBundle> {
+    let versioned_hashes = get_tx_versioned_hashes(raw_tx);
+    let num_blobs = versioned_hashes.len();
+    if num_blobs == 0 {
+        debug!("Blob transaction does not reference any blobs");
+        return None;
+    }
+    let (commitments, (proofs, blobs)): (Vec<_>, (Vec<_>, Vec<_>)) = versioned_hashes
+        .into_iter()
+        .map(|h| {
+            let index = blob_versioned_hashes.iter().position(|vh| *vh == h)?;
+            let commitment = block_blobs_bundles.commitments[index].clone();
+            let proof = block_blobs_bundles.proofs[index].clone();
+            let blob = block_blobs_bundles.blobs[index].clone();
+            Some((commitment, (proof, blob)))
+        })
+        .flatten()
+        .unzip();
+    if commitments.len() != num_blobs {
+        debug!("Blob transaction references {} blobs, but only {} were found in the block blobs bundle", num_blobs, commitments.len());
+        return None;
+    }
+    let bundle =
+        BlobsBundle { commitments: commitments.into(), proofs: proofs.into(), blobs: blobs.into() };
+    Some(bundle)
 }
 
 #[cfg(test)]

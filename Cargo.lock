@@ -3275,6 +3275,7 @@ dependencies = [
 name = "helix-api"
 version = "0.0.1"
 dependencies = [
+ "alloy-consensus",
  "alloy-primitives",
  "async-trait",
  "auto_impl",

@@ -1,3 +1,6 @@
+use std::hash::Hash;
+
+use crate::BlobsBundle;
 use alloy_primitives::bytes::Bytes;
 use alloy_primitives::Address;
 use lh_test_random::TestRandom;
@@ -86,16 +89,35 @@ impl From<MergeableBundle> for MergeableOrder {
 }
 
 /// Represents a single transaction to be appended into a block atomically.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
+/// Note that [`PartialEq`] and [`Hash`] implementations ignore the blobs field.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MergeableTransaction {
     /// Transaction that can be merged into the block.
     pub transaction: Bytes,
     /// Txs that may revert.
     pub can_revert: bool,
+    /// Blobs used by the transaction
+    pub blobs_bundle: Option<BlobsBundle>,
+}
+
+impl Eq for MergeableTransaction {}
+
+impl PartialEq for MergeableTransaction {
+    fn eq(&self, other: &Self) -> bool {
+        self.transaction == other.transaction && self.can_revert == other.can_revert
+    }
+}
+
+impl Hash for MergeableTransaction {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.transaction.hash(state);
+        self.can_revert.hash(state);
+    }
 }
 
 /// Represents a bundle of transactions to be appended into a block atomically.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
+/// Note that [`PartialEq`] and [`Hash`] implementations ignore the blobs field.
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MergeableBundle {
     /// List of transactions that can be merged into the block.
     pub transactions: Vec<Bytes>,
@@ -103,6 +125,26 @@ pub struct MergeableBundle {
     pub reverting_txs: Vec<usize>,
     /// Txs that are allowed to be omitted, but not revert.
     pub dropping_txs: Vec<usize>,
+    /// Blobs used by the bundle
+    pub blobs_bundle: Option<BlobsBundle>,
+}
+
+impl Eq for MergeableBundle {}
+
+impl PartialEq for MergeableBundle {
+    fn eq(&self, other: &Self) -> bool {
+        self.transactions == other.transactions
+            && self.reverting_txs == other.reverting_txs
+            && self.dropping_txs == other.dropping_txs
+    }
+}
+
+impl Hash for MergeableBundle {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.transactions.hash(state);
+        self.reverting_txs.hash(state);
+        self.dropping_txs.hash(state);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
