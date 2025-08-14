@@ -26,8 +26,8 @@ use helix_database::DatabaseService;
 use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{
-    BlobsBundle, BlockMergingData, BlsPublicKey, MergeableBundle, MergeableOrders,
-    MergeableTransaction, Order, SignedBidSubmission, Slot,
+    BlobsBundle, BlockMergingData, BlsPublicKey, MergeableBundle, MergeableOrder, MergeableOrders,
+    MergeableTransaction, Order, SignedBidSubmission, Slot, Transactions,
 };
 use parking_lot::RwLock;
 use ssz::Decode;
@@ -589,92 +589,127 @@ pub fn get_mergeable_orders(
     let mergeable_orders = merging_data
         .merge_orders
         .iter()
-        .map(|order| match order {
-            Order::Tx(tx) => {
-                let Some(raw_tx) = txs.get(tx.index) else {
-                    debug!(
-                        "Got invalid block merging index {}, with a tx count of {}",
-                        tx.index,
-                        txs.len()
-                    );
-                    return None;
-                };
-                let mut blobs_bundle = None;
-                if is_blob_transaction(raw_tx) {
-                    // If the tx references bundles not in the block, we drop it
-                    let Some(bundle) = get_blobs_bundle_from_blob_transaction(raw_tx, &blob_versioned_hashes, &block_blobs_bundles) else {
-                        return None;
-                    };
-                    blobs_bundle = Some(bundle);
-                }
-
-                Some(MergeableTransaction{
-                    transaction: Bytes::from(raw_tx.to_vec()),
-                    can_revert: tx.can_revert,
-                    blobs_bundle,
-                }.into())
-            }
-            Order::Bundle(bundle) => {
-                let mut blobs_bundle: Option<BlobsBundle> = None;
-                let transactions_res = bundle
-                    .txs
-                    .iter()
-                    .map(|tx_index| {
-                        let Some(raw_tx) = txs.get(*tx_index) else {
-                            debug!(
-                                "Got invalid block merging index {} in bundle, with a tx count of {}",
-                                tx_index,
-                                txs.len()
-                            );
-                            return Err(());
-                        };
-
-                        if is_blob_transaction(raw_tx) {
-                            // If the tx references bundles not in the block, we drop the bundle
-                            let Some(bundle) = get_blobs_bundle_from_blob_transaction(raw_tx, &blob_versioned_hashes, &block_blobs_bundles) else {
-                                return Err(());
-                            };
-                            // Add blobs to current bundle
-                            if let Some(existing_bundle) = &mut blobs_bundle {
-                                // If number of blobs goes over limit, we skip the bundle
-                                bundle.commitments.into_iter().map(|c| existing_bundle.commitments.push(c)).collect::<Result<(),_>>().map_err(|_| ())?;
-                                bundle.proofs.into_iter().map(|c| existing_bundle.proofs.push(c)).collect::<Result<(),_>>().map_err(|_| ())?;
-                                bundle.blobs.into_iter().map(|c| existing_bundle.blobs.push(c)).collect::<Result<(),_>>().map_err(|_| ())?;
-                            } else {
-                                blobs_bundle = Some(bundle);
-                            }
-                        }
-
-                        Ok(Bytes::from_owner(raw_tx.to_vec()))
-                    })
-                    .collect::<Result<_, ()>>();
-
-                let Ok(transactions) = transactions_res else {
-                    return None;
-                };
-
-                let reverting_txs = bundle
-                    .txs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, tx_index)| bundle.reverting_txs.contains(tx_index))
-                    .map(|(i, _)| i)
-                    .collect();
-                let dropping_txs = bundle
-                    .txs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, tx_index)| bundle.dropping_txs.contains(tx_index))
-                    .map(|(i, _)| i)
-                    .collect();
-
-                Some(MergeableBundle { transactions, reverting_txs, dropping_txs, blobs_bundle }.into())
-            }
-        })
+        .map(|order| order_to_mergeable(order, &txs, &blob_versioned_hashes, &block_blobs_bundles))
         .flatten()
         .collect();
 
     MergeableOrders::new(execution_payload.fee_recipient(), mergeable_orders)
+}
+
+fn order_to_mergeable(
+    order: &Order,
+    txs: &Transactions,
+    blob_versioned_hashes: &[B256],
+    block_blobs_bundles: &BlobsBundle,
+) -> Option<MergeableOrder> {
+    match order {
+        Order::Tx(tx) => {
+            let Some(raw_tx) = txs.get(tx.index) else {
+                debug!(
+                    "Got invalid block merging index {}, with a tx count of {}",
+                    tx.index,
+                    txs.len()
+                );
+                return None;
+            };
+            let mut blobs_bundle = None;
+            if is_blob_transaction(raw_tx) {
+                // If the tx references bundles not in the block, we drop it
+                let Some(bundle) = get_blobs_bundle_from_blob_transaction(
+                    raw_tx,
+                    &blob_versioned_hashes,
+                    &block_blobs_bundles,
+                ) else {
+                    return None;
+                };
+                blobs_bundle = Some(bundle);
+            }
+
+            Some(
+                MergeableTransaction {
+                    transaction: Bytes::from(raw_tx.to_vec()),
+                    can_revert: tx.can_revert,
+                    blobs_bundle,
+                }
+                .into(),
+            )
+        }
+        Order::Bundle(bundle) => {
+            let mut blobs_bundle: Option<BlobsBundle> = None;
+            let transactions_res = bundle
+                .txs
+                .iter()
+                .map(|tx_index| {
+                    let Some(raw_tx) = txs.get(*tx_index) else {
+                        debug!(
+                            "Got invalid block merging index {} in bundle, with a tx count of {}",
+                            tx_index,
+                            txs.len()
+                        );
+                        return Err(());
+                    };
+
+                    if is_blob_transaction(raw_tx) {
+                        // If the tx references bundles not in the block, we drop the bundle
+                        let Some(bundle) = get_blobs_bundle_from_blob_transaction(
+                            raw_tx,
+                            &blob_versioned_hashes,
+                            &block_blobs_bundles,
+                        ) else {
+                            return Err(());
+                        };
+                        // Add blobs to current bundle
+                        if let Some(existing_bundle) = &mut blobs_bundle {
+                            // If number of blobs goes over limit, we skip the bundle
+                            bundle
+                                .commitments
+                                .into_iter()
+                                .map(|c| existing_bundle.commitments.push(c))
+                                .collect::<Result<(), _>>()
+                                .map_err(|_| ())?;
+                            bundle
+                                .proofs
+                                .into_iter()
+                                .map(|c| existing_bundle.proofs.push(c))
+                                .collect::<Result<(), _>>()
+                                .map_err(|_| ())?;
+                            bundle
+                                .blobs
+                                .into_iter()
+                                .map(|c| existing_bundle.blobs.push(c))
+                                .collect::<Result<(), _>>()
+                                .map_err(|_| ())?;
+                        } else {
+                            blobs_bundle = Some(bundle);
+                        }
+                    }
+
+                    Ok(Bytes::from_owner(raw_tx.to_vec()))
+                })
+                .collect::<Result<_, ()>>();
+
+            let Ok(transactions) = transactions_res else {
+                return None;
+            };
+
+            let reverting_txs = bundle
+                .txs
+                .iter()
+                .enumerate()
+                .filter(|(_, tx_index)| bundle.reverting_txs.contains(tx_index))
+                .map(|(i, _)| i)
+                .collect();
+            let dropping_txs = bundle
+                .txs
+                .iter()
+                .enumerate()
+                .filter(|(_, tx_index)| bundle.dropping_txs.contains(tx_index))
+                .map(|(i, _)| i)
+                .collect();
+
+            Some(MergeableBundle { transactions, reverting_txs, dropping_txs, blobs_bundle }.into())
+        }
+    }
 }
 
 fn is_blob_transaction(raw_tx: &[u8]) -> bool {
