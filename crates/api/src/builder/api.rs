@@ -661,24 +661,7 @@ fn order_to_mergeable(
                         // Add blobs to current bundle
                         if let Some(existing_bundle) = &mut blobs_bundle {
                             // If number of blobs goes over limit, we skip the bundle
-                            bundle
-                                .commitments
-                                .into_iter()
-                                .map(|c| existing_bundle.commitments.push(c))
-                                .collect::<Result<(), _>>()
-                                .map_err(|_| ())?;
-                            bundle
-                                .proofs
-                                .into_iter()
-                                .map(|c| existing_bundle.proofs.push(c))
-                                .collect::<Result<(), _>>()
-                                .map_err(|_| ())?;
-                            bundle
-                                .blobs
-                                .into_iter()
-                                .map(|c| existing_bundle.blobs.push(c))
-                                .collect::<Result<(), _>>()
-                                .map_err(|_| ())?;
+                            extend_bundle(existing_bundle, bundle)?;
                         } else {
                             blobs_bundle = Some(bundle);
                         }
@@ -692,24 +675,44 @@ fn order_to_mergeable(
                 return None;
             };
 
-            let reverting_txs = bundle
-                .txs
-                .iter()
-                .enumerate()
-                .filter(|(_, tx_index)| bundle.reverting_txs.contains(tx_index))
-                .map(|(i, _)| i)
-                .collect();
-            let dropping_txs = bundle
-                .txs
-                .iter()
-                .enumerate()
-                .filter(|(_, tx_index)| bundle.dropping_txs.contains(tx_index))
-                .map(|(i, _)| i)
-                .collect();
+            let reverting_txs = update_flagged_indices(&bundle.txs, &bundle.reverting_txs);
+            let dropping_txs = update_flagged_indices(&bundle.txs, &bundle.dropping_txs);
 
             Some(MergeableBundle { transactions, reverting_txs, dropping_txs, blobs_bundle }.into())
         }
     }
+}
+
+fn extend_bundle(bundle: &mut BlobsBundle, other_bundle: BlobsBundle) -> Result<(), ()> {
+    other_bundle
+        .commitments
+        .into_iter()
+        .map(|c| bundle.commitments.push(c))
+        .collect::<Result<(), _>>()
+        .map_err(|_| ())?;
+    other_bundle
+        .proofs
+        .into_iter()
+        .map(|c| bundle.proofs.push(c))
+        .collect::<Result<(), _>>()
+        .map_err(|_| ())?;
+    other_bundle
+        .blobs
+        .into_iter()
+        .map(|c| bundle.blobs.push(c))
+        .collect::<Result<(), _>>()
+        .map_err(|_| ())?;
+
+    Ok(())
+}
+
+fn update_flagged_indices(old_indices: &[usize], flagged_indices: &[usize]) -> Vec<usize> {
+    old_indices
+        .iter()
+        .enumerate()
+        .filter(|(_, tx_index)| flagged_indices.contains(tx_index))
+        .map(|(i, _)| i)
+        .collect()
 }
 
 fn is_blob_transaction(raw_tx: &[u8]) -> bool {
