@@ -7,7 +7,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_types::{BlobsBundle, ExecutionPayload, ExecutionRequests};
 use reqwest::{
-    header::{HeaderMap, HeaderValue, CONTENT_TYPE},
+    header::{HeaderMap, HeaderValue},
     Client, Response, StatusCode,
 };
 use serde_json::{json, Value};
