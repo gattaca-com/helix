@@ -28,6 +28,9 @@ impl TestRandom for Order {
     }
 }
 
+/// Vector of transaction indices. Aliased for easier use.
+pub type TxIndices = SmallVec<[usize; 2]>;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
 #[serde(deny_unknown_fields)]
 pub struct Transaction {
@@ -43,11 +46,11 @@ pub struct Transaction {
 pub struct Bundle {
     /// Signals txs that are part of the bundle
     /// and ordering of txs.
-    pub txs: SmallVec<[usize; 2]>,
+    pub txs: TxIndices,
     /// Txs that may revert.
-    pub reverting_txs: SmallVec<[usize; 2]>,
+    pub reverting_txs: TxIndices,
     /// Txs that are allowed to be omitted, but not revert.
-    pub dropping_txs: SmallVec<[usize; 2]>,
+    pub dropping_txs: TxIndices,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
@@ -124,9 +127,9 @@ pub struct MergeableBundle {
     /// List of transactions that can be merged into the block.
     pub transactions: Vec<Bytes>,
     /// Txs that may revert.
-    pub reverting_txs: SmallVec<[usize; 2]>,
+    pub reverting_txs: TxIndices,
     /// Txs that are allowed to be omitted, but not revert.
-    pub dropping_txs: SmallVec<[usize; 2]>,
+    pub dropping_txs: TxIndices,
     /// Blobs used by the bundle
     pub blobs_bundle: Option<BlobsBundle>,
 }

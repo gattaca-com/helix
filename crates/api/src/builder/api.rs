@@ -28,7 +28,7 @@ use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{
     BlobsBundle, BlockMergingData, BlsPublicKey, MergeableBundle, MergeableOrder, MergeableOrders,
-    MergeableTransaction, Order, SignedBidSubmission, Slot, Transactions,
+    MergeableTransaction, Order, SignedBidSubmission, Slot, Transactions, TxIndices,
 };
 use parking_lot::RwLock;
 use ssz::Decode;
@@ -703,8 +703,8 @@ fn extend_bundle(bundle: &mut BlobsBundle, other_bundle: BlobsBundle) -> Result<
 fn update_flagged_indices(
     tx_indices: &[usize],
     flagged_indices: &[usize],
-) -> Result<Vec<usize>, &'static str> {
-    let new_indices: Vec<_> = tx_indices
+) -> Result<TxIndices, &'static str> {
+    let new_indices: TxIndices = tx_indices
         .iter()
         .enumerate()
         .filter(|(_, tx_index)| flagged_indices.contains(tx_index))
