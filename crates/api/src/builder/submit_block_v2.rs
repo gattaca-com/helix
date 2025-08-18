@@ -51,7 +51,8 @@ impl<A: Api> BuilderApi<A> {
         trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         // Decode the incoming request body into a payload
-        let (payload, _) = decode_payload(req, &mut trace).await?;
+        let (payload_with_merging_data, _) = decode_payload(req, &mut trace, false).await?;
+        let payload = payload_with_merging_data.submission;
 
         info!(
             slot = %payload.slot(),

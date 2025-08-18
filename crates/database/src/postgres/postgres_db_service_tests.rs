@@ -409,7 +409,6 @@ mod tests {
         let signed_bid_submission = SignedBidSubmissionElectra {
             message: bid_trace.clone(),
             execution_payload: ExecutionPayloadElectra::default().into(),
-            merging_data: Default::default(),
             blobs_bundle: BlobsBundle::default().into(),
             signature: BlsSignature::test_random(),
             execution_requests: Default::default(),

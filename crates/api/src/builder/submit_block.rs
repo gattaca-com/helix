@@ -72,8 +72,15 @@ impl<A: Api> BuilderApi<A> {
 
         debug!(%head_slot, timestamp_request_start = trace.receive);
 
+        let has_mergeable_data = headers.get("x-mergeable").is_some();
+
         // Decode the incoming request body into a payload
-        let (payload, is_cancellations_enabled) = decode_payload(req, &mut trace).await?;
+        let (payload_with_merging_data, is_cancellations_enabled) =
+            decode_payload(req, &mut trace, has_mergeable_data).await?;
+
+        let payload = payload_with_merging_data.submission;
+        let merging_data = payload_with_merging_data.merging_data;
+
         ApiMetrics::cancellable_bid(is_cancellations_enabled);
 
         let block_hash = payload.message().block_hash;
@@ -203,8 +210,6 @@ impl<A: Api> BuilderApi<A> {
         };
         trace!(is_optimistic = was_simulated_optimistically, "verified submitted block");
 
-        let merging_data = payload.merging_data();
-
         let merging_preferences =
             BlockMergingPreferences { allow_appending: merging_data.allow_appending };
 
@@ -221,7 +226,7 @@ impl<A: Api> BuilderApi<A> {
         trace!("sent bid to bid sorter");
 
         // In case the merging data is malformed, we log any error and discard it
-        let mergeable_orders = get_mergeable_orders(&payload, merging_data)
+        let mergeable_orders = get_mergeable_orders(&payload, &merging_data)
             .inspect_err(|e| warn!(%e, "failed to get mergeable orders"))
             .ok();
 

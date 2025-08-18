@@ -28,10 +28,10 @@ use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{
     BlobsBundle, BlockMergingData, BlsPublicKey, MergeableBundle, MergeableOrder, MergeableOrders,
-    MergeableTransaction, Order, SignedBidSubmission, Slot, Transactions, TxIndices,
+    MergeableTransaction, Order, SignedBidSubmission, SignedBidSubmissionWithMergingData, Slot,
+    Transactions, TxIndices,
 };
 use parking_lot::RwLock;
-use ssz::Decode;
 use tracing::{debug, error, trace, warn};
 
 use super::multi_simulator::MultiSimulator;
@@ -421,7 +421,8 @@ impl<A: Api> BuilderApi<A> {
 pub async fn decode_payload(
     req: Request<Body>,
     trace: &mut SubmissionTrace,
-) -> Result<(SignedBidSubmission, bool), BuilderApiError> {
+    has_mergeable_data: bool,
+) -> Result<(SignedBidSubmissionWithMergingData, bool), BuilderApiError> {
     // Extract the query parameters
     let is_cancellations_enabled = req
         .uri()
@@ -474,33 +475,45 @@ pub async fn decode_payload(
     trace!(size_compressed, size_uncompressed = body_bytes.len(), is_gzip, "decompressed payload");
 
     // Decode payload
-    let payload: SignedBidSubmission = if is_ssz {
-        match SignedBidSubmission::from_ssz_bytes(&body_bytes) {
-            Ok(payload) => payload,
-            Err(err) => {
-                // Fallback to JSON
-                warn!(?err, "failed to decode payload using SSZ; falling back to JSON");
-                serde_json::from_slice(&body_bytes)?
-            }
-        }
+    let payload: SignedBidSubmissionWithMergingData = if has_mergeable_data {
+        decode_submission(&body_bytes, is_ssz)?
     } else {
-        serde_json::from_slice(&body_bytes)?
+        let submission = decode_submission(&body_bytes, is_ssz)?;
+        SignedBidSubmissionWithMergingData { submission, merging_data: Default::default() }
     };
 
     trace.decode = utcnow_ns();
     debug!(
         timestamp_after_decoding = trace.decode,
         decode_latency_ns = trace.decode.saturating_sub(trace.receive),
-        builder_pub_key = ?payload.builder_public_key(),
-        block_hash = ?payload.block_hash(),
-        proposer_pubkey = ?payload.proposer_public_key(),
-        parent_hash = ?payload.parent_hash(),
-        value = ?payload.value(),
-        num_tx = payload.execution_payload_ref().transactions().len(),
+        builder_pub_key = ?payload.submission.builder_public_key(),
+        block_hash = ?payload.submission.block_hash(),
+        proposer_pubkey = ?payload.submission.proposer_public_key(),
+        parent_hash = ?payload.submission.parent_hash(),
+        value = ?payload.submission.value(),
+        num_tx = payload.submission.execution_payload_ref().transactions().len(),
         "payload info"
     );
 
     Ok((payload, is_cancellations_enabled))
+}
+
+fn decode_submission<'a, T>(body_bytes: &'a Bytes, is_ssz: bool) -> Result<T, BuilderApiError>
+where
+    T: ssz::Decode + serde::Deserialize<'a>,
+{
+    if is_ssz {
+        match T::from_ssz_bytes(body_bytes) {
+            Ok(payload) => Ok(payload),
+            Err(err) => {
+                // Fallback to JSON
+                warn!(?err, "failed to decode payload using SSZ; falling back to JSON");
+                Ok(serde_json::from_slice(body_bytes)?)
+            }
+        }
+    } else {
+        Ok(serde_json::from_slice(body_bytes)?)
+    }
 }
 
 /// - Validates the expected block.timestamp.
@@ -762,6 +775,7 @@ mod tests {
         header::{CONTENT_ENCODING, CONTENT_TYPE},
         HeaderValue, Uri,
     };
+    use ssz::Decode;
 
     use super::*;
 
@@ -1048,7 +1062,7 @@ mod tests {
         let req = build_test_request(payload, false, false).await;
         let mut trace = create_test_submission_trace().await;
 
-        let result = decode_payload(req, &mut trace).await;
+        let result = decode_payload(req, &mut trace, false).await;
         match result {
             Ok(_) => panic!("Should have failed"),
             Err(err) => match err {

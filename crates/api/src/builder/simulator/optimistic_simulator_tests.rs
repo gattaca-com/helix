@@ -53,7 +53,6 @@ mod simulator_tests {
         let signed_bid_submission = SignedBidSubmissionElectra {
             message: bid_trace,
             execution_payload: electra_exec_payload.into(),
-            merging_data: Default::default(),
             signature: BlsSignature::test_random(),
             blobs_bundle: BlobsBundle::default().into(),
             execution_requests: Default::default(),

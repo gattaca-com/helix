@@ -8,7 +8,13 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use ssz_derive::{Decode, Encode};
 
-use crate::BlobsBundle;
+use crate::{BlobsBundle, SignedBidSubmission};
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+pub struct SignedBidSubmissionWithMergingData {
+    pub submission: SignedBidSubmission,
+    pub merging_data: BlockMergingData,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 #[ssz(enum_behaviour = "transparent")]

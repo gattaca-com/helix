@@ -4,13 +4,12 @@ use alloy_primitives::{Address, B256, U256};
 use lh_test_random::TestRandom;
 use lh_types::{test_utils::TestRandom, ExecutionPayloadElectra, MainnetEthSpec, SignedRoot, Slot};
 use serde::{Deserialize, Serialize};
-use ssz::{Decode, DecodeError};
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    error::SigError, BlobsBundle, BlockMergingData, BlsPublicKey, BlsSignature, ChainSpec,
-    ExecutionPayloadRef, ExecutionRequests, PayloadAndBlobsRef,
+    error::SigError, BlobsBundle, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayloadRef,
+    ExecutionRequests, PayloadAndBlobsRef,
 };
 
 #[derive(
@@ -49,130 +48,14 @@ impl BidTrace {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TestRandom)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
 #[serde(deny_unknown_fields)]
-/// SSZ Encode and Decode are implemented manually inside the [`ssz_encoding`] module.
-/// This enables us to accept submissions that don't specify a `merging_data` field.
 pub struct SignedBidSubmissionElectra {
     pub message: BidTrace,
     pub execution_payload: Arc<ExecutionPayloadElectra<MainnetEthSpec>>,
     pub blobs_bundle: Arc<BlobsBundle>,
     pub execution_requests: Arc<ExecutionRequests>,
     pub signature: BlsSignature,
-    #[serde(default)]
-    #[serde(skip_serializing_if = "BlockMergingData::is_default")]
-    pub merging_data: BlockMergingData,
-}
-
-mod ssz_encoding {
-    use ssz::Encode;
-
-    use super::*;
-
-    impl Encode for SignedBidSubmissionElectra {
-        fn is_ssz_fixed_len() -> bool {
-            false
-        }
-
-        fn ssz_append(&self, buf: &mut Vec<u8>) {
-            SignedBidSubmissionElectraDecoder::from(self.clone()).ssz_append(buf);
-        }
-
-        fn ssz_bytes_len(&self) -> usize {
-            SignedBidSubmissionElectraDecoder::from(self.clone()).ssz_bytes_len()
-        }
-    }
-
-    impl Decode for SignedBidSubmissionElectra {
-        fn is_ssz_fixed_len() -> bool {
-            false
-        }
-
-        fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
-            SignedBidSubmissionElectraDecoder::from_ssz_bytes(bytes).map(Into::into)
-        }
-    }
-
-    #[derive(Debug, Clone, Encode, Decode)]
-    #[ssz(enum_behaviour = "transparent")]
-    enum SignedBidSubmissionElectraDecoder {
-        WithMergingData(SignedBidSubmissionElectraWithMergingData),
-        WithoutMergingData(SignedBidSubmissionElectraWithoutMergingData),
-    }
-
-    impl From<SignedBidSubmissionElectraDecoder> for SignedBidSubmissionElectra {
-        fn from(value: SignedBidSubmissionElectraDecoder) -> Self {
-            let value = match value {
-                SignedBidSubmissionElectraDecoder::WithMergingData(v) => v,
-                SignedBidSubmissionElectraDecoder::WithoutMergingData(v) => v.into(),
-            };
-            Self {
-                message: value.message,
-                execution_payload: value.execution_payload,
-                blobs_bundle: value.blobs_bundle,
-                execution_requests: value.execution_requests,
-                signature: value.signature,
-                merging_data: value.merging_data,
-            }
-        }
-    }
-
-    impl From<SignedBidSubmissionElectra> for SignedBidSubmissionElectraDecoder {
-        fn from(value: SignedBidSubmissionElectra) -> Self {
-            if value.merging_data.is_default() {
-                Self::WithoutMergingData(SignedBidSubmissionElectraWithoutMergingData {
-                    message: value.message,
-                    execution_payload: value.execution_payload,
-                    blobs_bundle: value.blobs_bundle,
-                    execution_requests: value.execution_requests,
-                    signature: value.signature,
-                })
-            } else {
-                Self::WithMergingData(SignedBidSubmissionElectraWithMergingData {
-                    message: value.message,
-                    execution_payload: value.execution_payload,
-                    blobs_bundle: value.blobs_bundle,
-                    execution_requests: value.execution_requests,
-                    signature: value.signature,
-                    merging_data: value.merging_data,
-                })
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, Encode, Decode, TestRandom)]
-    struct SignedBidSubmissionElectraWithoutMergingData {
-        message: BidTrace,
-        execution_payload: Arc<ExecutionPayloadElectra<MainnetEthSpec>>,
-        blobs_bundle: Arc<BlobsBundle>,
-        execution_requests: Arc<ExecutionRequests>,
-        signature: BlsSignature,
-    }
-
-    #[derive(Debug, Clone, Encode, Decode, TestRandom)]
-    struct SignedBidSubmissionElectraWithMergingData {
-        message: BidTrace,
-        execution_payload: Arc<ExecutionPayloadElectra<MainnetEthSpec>>,
-        blobs_bundle: Arc<BlobsBundle>,
-        execution_requests: Arc<ExecutionRequests>,
-        signature: BlsSignature,
-        merging_data: BlockMergingData,
-    }
-
-    impl From<SignedBidSubmissionElectraWithoutMergingData>
-        for SignedBidSubmissionElectraWithMergingData
-    {
-        fn from(value: SignedBidSubmissionElectraWithoutMergingData) -> Self {
-            Self {
-                message: value.message,
-                execution_payload: value.execution_payload,
-                blobs_bundle: value.blobs_bundle,
-                execution_requests: value.execution_requests,
-                signature: value.signature,
-                merging_data: BlockMergingData::default(),
-            }
-        }
-    }
 }
 
 /// Request object of POST `/relay/v1/builder/blocks`
@@ -232,22 +115,6 @@ impl SignedBidSubmission {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 &mut signed_bid_submission.message
-            }
-        }
-    }
-
-    pub fn merging_data(&self) -> &BlockMergingData {
-        match self {
-            SignedBidSubmission::Electra(signed_bid_submission) => {
-                &signed_bid_submission.merging_data
-            }
-        }
-    }
-
-    pub fn merging_data_mut(&mut self) -> &mut BlockMergingData {
-        match self {
-            SignedBidSubmission::Electra(signed_bid_submission) => {
-                &mut signed_bid_submission.merging_data
             }
         }
     }
