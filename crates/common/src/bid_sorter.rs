@@ -288,29 +288,11 @@ impl BidEntry {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub struct Bid {
     value: U256,
     /// Timestamp in ns when the bid was received. Assume this is unique across all bids
     on_receive_ns: u64,
-}
-
-impl PartialOrd for Bid {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Bid {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // The bid with greater value wins
-        let value_cmp = self.value.cmp(&other.value);
-        if !value_cmp.is_eq() {
-            return value_cmp;
-        }
-        // If both values are equal, the earliest bid wins
-        self.on_receive_ns.cmp(&other.on_receive_ns).reverse()
-    }
 }
 
 #[derive(Default)]
@@ -501,7 +483,6 @@ impl BidSorter {
 
             _ => {}
         }
-        // TODO: remove orders related to builder's bids
     }
 
     fn traverse_update_top_bid(&mut self) {
@@ -633,29 +614,4 @@ pub fn start_bid_sorter(
 ) {
     let bid_sorter = BidSorter::new(sorter_rx, top_bid_tx, shared_best_header, shared_floor);
     std::thread::spawn(|| bid_sorter.run());
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_bid_order() {
-        let bid0 = Bid { value: U256::from(100), on_receive_ns: 1 };
-        let bid1 = bid0.clone();
-        let bid2 = Bid { value: U256::from(100), on_receive_ns: 2 };
-        let bid3 = Bid { value: U256::from(200), on_receive_ns: 3 };
-
-        assert_eq!(bid0, bid1);
-        assert_eq!(bid1, bid0);
-
-        assert!(bid1 > bid2);
-        assert!(bid2 < bid1);
-
-        assert!(bid2 < bid3);
-        assert!(bid3 > bid2);
-
-        assert!(bid1 < bid3);
-        assert!(bid3 > bid1);
-    }
 }
