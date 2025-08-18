@@ -2,13 +2,10 @@ use std::{collections::hash_map::Entry, sync::Arc, time::Duration};
 
 use alloy_primitives::{
     map::foldhash::{HashMap, HashMapExt, HashSet, HashSetExt},
-    Address, B256, U256,
+    B256, U256,
 };
 use bytes::Bytes;
-use helix_types::{
-    BlockMergingPreferences, BlsPublicKey, BuilderBid, MergeableOrder, MergeableOrderWithOrigin,
-    MergeableOrders, SignedBidSubmission,
-};
+use helix_types::{BlockMergingPreferences, BlsPublicKey, BuilderBid, SignedBidSubmission};
 use parking_lot::RwLock;
 use ssz::Encode;
 use tracing::info;
