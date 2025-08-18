@@ -186,15 +186,6 @@ pub enum BidSorterMessage {
         mergeable_orders: Option<MergeableOrders>,
         simulation_time_ns: u64,
     },
-    PayloadSubmission {
-        builder_pubkey: BlsPubkey,
-        slot: u64,
-        value: U256,
-        /// Preferences related to block merging.
-        merging_preferences: BlockMergingPreferences,
-        /// Transactions that can be appended to the building block.
-        mergeable_orders: MergeableOrders,
-    },
     /// Demotion of a builder pubkey, all its bids are invalidated for this slot
     Demotion(BlsPublicKey),
     /// New slot update
@@ -250,21 +241,6 @@ impl BidSorterMessage {
             merging_preferences: BlockMergingPreferences::default(),
             mergeable_orders: None,
             simulation_time_ns: 0,
-        }
-    }
-
-    pub fn new_from_payload_submission(
-        submission: &SignedBidSubmission,
-        merging_preferences: BlockMergingPreferences,
-        mergeable_orders: MergeableOrders,
-    ) -> Self {
-        let bid_trace = submission.bid_trace();
-        Self::PayloadSubmission {
-            builder_pubkey: bid_trace.builder_pubkey.serialize(),
-            value: bid_trace.value,
-            slot: bid_trace.slot,
-            merging_preferences,
-            mergeable_orders,
         }
     }
 }
@@ -470,29 +446,6 @@ impl BidSorter {
                     BID_SORTER_RECV_LATENCY_US.observe(recv_latency_ns as f64 / 1000.);
                     BID_SORTER_PROCESS_LATENCY_US.observe(process_latency_ns as f64 / 1000.);
                 }
-                BidSorterMessage::PayloadSubmission {
-                    builder_pubkey,
-                    value,
-                    slot,
-                    merging_preferences,
-                    mergeable_orders,
-                } => {
-                    if self.curr_bid_slot != slot {
-                        self.local_telemetry.past_subs += 1;
-                        continue;
-                    }
-
-                    if self.demotions.contains(&builder_pubkey) {
-                        self.local_telemetry.demoted_subs += 1;
-                        continue;
-                    }
-                    self.update_bid_with_block_merging_data(
-                        &builder_pubkey,
-                        value,
-                        merging_preferences,
-                        mergeable_orders,
-                    );
-                }
                 BidSorterMessage::Demotion(demoted) => {
                     let demoted = demoted.serialize();
                     if !self.demotions.insert(demoted) {
@@ -691,34 +644,6 @@ impl BidSorter {
             ?avg_demotion_process,
             "bid sorter telemetry"
         )
-    }
-
-    fn update_bid_with_block_merging_data(
-        &mut self,
-        builder_pubkey: &BlsPubkey,
-        value: U256,
-        merging_preferences: BlockMergingPreferences,
-        mergeable_orders: MergeableOrders,
-    ) {
-        let Some(entry) = self.bids.get(builder_pubkey) else {
-            return;
-        };
-        // Check the current bid of the builder and update it
-        if entry.bid_cancel.is_some() && entry.bid_cancel.as_ref().unwrap().value == value {
-            let bid = entry.bid_cancel.as_ref().unwrap();
-            // Update header with latest merging preferences
-            self.headers.entry(bid.on_receive_ns).and_modify(|e| e.1 = merging_preferences);
-            // Add mergeable orders
-            self.shared_best_orders.insert_orders(bid.value, mergeable_orders);
-        } else if entry.bid_non_cancel.is_some()
-            && entry.bid_non_cancel.as_ref().unwrap().value == value
-        {
-            let bid = entry.bid_non_cancel.as_ref().unwrap();
-            // Update header with latest merging preferences
-            self.headers.entry(bid.on_receive_ns).and_modify(|e| e.1 = merging_preferences);
-            // Add mergeable orders
-            self.shared_best_orders.insert_orders(bid.value, mergeable_orders);
-        }
     }
 }
 
