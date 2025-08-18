@@ -9,8 +9,9 @@ use helix_beacon::{
     beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
 };
 use helix_common::{
-    bid_sorter::{BestGetHeader, BestMergeableOrders, BidSorterMessage, FloorBid},
+    bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     chain_info::ChainInfo,
+    merging_pool::BestMergeableOrders,
     signing::RelaySigningContext,
     BroadcasterConfig, RelayConfig,
 };

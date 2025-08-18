@@ -5,8 +5,9 @@ use std::sync::{atomic::AtomicBool, Arc};
 use bytes::Bytes;
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
-    bid_sorter::{BestGetHeader, BestMergeableOrders, BidSorterMessage, FloorBid},
+    bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     chain_info::ChainInfo,
+    merging_pool::BestMergeableOrders,
     metadata_provider::MetadataProvider,
     signing::RelaySigningContext,
     RelayConfig,

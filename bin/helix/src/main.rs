@@ -10,8 +10,9 @@ use eyre::eyre;
 use helix_api::{start_api_service, Api};
 use helix_beacon::start_beacon_client;
 use helix_common::{
-    bid_sorter::{start_bid_sorter, BestGetHeader, BestMergeableOrders, FloorBid},
+    bid_sorter::{start_bid_sorter, BestGetHeader, FloorBid},
     load_config, load_keypair,
+    merging_pool::BestMergeableOrders,
     metadata_provider::DefaultMetadataProvider,
     metrics::start_metrics_server,
     signing::RelaySigningContext,
