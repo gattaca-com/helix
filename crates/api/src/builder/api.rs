@@ -609,7 +609,7 @@ fn order_to_mergeable(
                     tx.index,
                     txs.len()
                 );
-                return Err("invalid block merging index");
+                return Err("invalid block merging tx index");
             };
             let mut blobs_bundle = None;
             if is_blob_transaction(raw_tx) {
@@ -641,7 +641,7 @@ fn order_to_mergeable(
                             tx_index,
                             txs.len()
                         );
-                        return Err("invalid block merging index");
+                        return Err("invalid block merging bundle index");
                     };
 
                     if is_blob_transaction(raw_tx) {
@@ -664,8 +664,8 @@ fn order_to_mergeable(
                 })
                 .collect::<Result<_, &'static str>>()?;
 
-            let reverting_txs = update_flagged_indices(&bundle.txs, &bundle.reverting_txs);
-            let dropping_txs = update_flagged_indices(&bundle.txs, &bundle.dropping_txs);
+            let reverting_txs = update_flagged_indices(&bundle.txs, &bundle.reverting_txs)?;
+            let dropping_txs = update_flagged_indices(&bundle.txs, &bundle.dropping_txs)?;
 
             Ok(MergeableBundle { transactions, reverting_txs, dropping_txs, blobs_bundle }.into())
         }
@@ -695,13 +695,20 @@ fn extend_bundle(bundle: &mut BlobsBundle, other_bundle: BlobsBundle) -> Result<
     Ok(())
 }
 
-fn update_flagged_indices(old_indices: &[usize], flagged_indices: &[usize]) -> Vec<usize> {
-    old_indices
+fn update_flagged_indices(
+    tx_indices: &[usize],
+    flagged_indices: &[usize],
+) -> Result<Vec<usize>, &'static str> {
+    let new_indices: Vec<_> = tx_indices
         .iter()
         .enumerate()
         .filter(|(_, tx_index)| flagged_indices.contains(tx_index))
         .map(|(i, _)| i)
-        .collect()
+        .collect();
+    if new_indices.len() != flagged_indices.len() {
+        return Err("flagged indices reference tx outside of bundle");
+    }
+    Ok(new_indices)
 }
 
 fn is_blob_transaction(raw_tx: &[u8]) -> bool {
