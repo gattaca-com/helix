@@ -53,6 +53,7 @@ pub struct Bundle {
 #[serde(deny_unknown_fields)]
 pub struct BlockMergingData {
     pub allow_appending: bool,
+    pub builder_address: Address,
     pub merge_orders: Vec<Order>,
 }
 

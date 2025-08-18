@@ -593,7 +593,7 @@ pub fn get_mergeable_orders(
         .flatten()
         .collect();
 
-    MergeableOrders::new(execution_payload.fee_recipient(), mergeable_orders)
+    MergeableOrders::new(merging_data.builder_address, mergeable_orders)
 }
 
 fn order_to_mergeable(
