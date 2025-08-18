@@ -5,6 +5,7 @@ use lh_test_random::TestRandom;
 use lh_types::test_utils::TestRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use ssz_derive::{Decode, Encode};
 
 use crate::BlobsBundle;
@@ -42,11 +43,11 @@ pub struct Transaction {
 pub struct Bundle {
     /// Signals txs that are part of the bundle
     /// and ordering of txs.
-    pub txs: Vec<usize>,
+    pub txs: SmallVec<[usize; 2]>,
     /// Txs that may revert.
-    pub reverting_txs: Vec<usize>,
+    pub reverting_txs: SmallVec<[usize; 2]>,
     /// Txs that are allowed to be omitted, but not revert.
-    pub dropping_txs: Vec<usize>,
+    pub dropping_txs: SmallVec<[usize; 2]>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
@@ -123,9 +124,9 @@ pub struct MergeableBundle {
     /// List of transactions that can be merged into the block.
     pub transactions: Vec<Bytes>,
     /// Txs that may revert.
-    pub reverting_txs: Vec<usize>,
+    pub reverting_txs: SmallVec<[usize; 2]>,
     /// Txs that are allowed to be omitted, but not revert.
-    pub dropping_txs: Vec<usize>,
+    pub dropping_txs: SmallVec<[usize; 2]>,
     /// Blobs used by the bundle
     pub blobs_bundle: Option<BlobsBundle>,
 }
