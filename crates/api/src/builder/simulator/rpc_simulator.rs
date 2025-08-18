@@ -226,7 +226,6 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
     ) -> Result<Response, reqwest::Error> {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert("X-High-Priority", HeaderValue::from_static("true"));
 
         let rpc_payload = json!({
             "jsonrpc": "2.0",
