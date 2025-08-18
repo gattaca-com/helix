@@ -72,7 +72,6 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
         is_top_bid: bool,
     ) -> Result<Response, reqwest::Error> {
         let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         if is_top_bid {
             headers.insert("X-High-Priority", HeaderValue::from_static("true"));
         };
@@ -174,8 +173,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
     }
 
     pub async fn is_synced(&self) -> Result<bool, BlockSimError> {
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        let headers = HeaderMap::new();
 
         // The JSON RPC payload for checking if Geth is syncing
         let payload = json!({
@@ -224,8 +222,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
         &self,
         request: BlockMergeRequest,
     ) -> Result<Response, reqwest::Error> {
-        let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        let headers = HeaderMap::new();
 
         let rpc_payload = json!({
             "jsonrpc": "2.0",
