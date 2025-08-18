@@ -62,7 +62,7 @@ impl BlockSimRequest {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockMergeRequest {
     /// The original payload value
-    pub value: U256,
+    pub original_value: U256,
     pub proposer_fee_recipient: Address,
     pub execution_payload: ExecutionPayload,
     pub blobs_bundle: BlobsBundle,
@@ -71,12 +71,18 @@ pub struct BlockMergeRequest {
 
 impl BlockMergeRequest {
     pub fn new(
-        value: U256,
+        original_value: U256,
         proposer_fee_recipient: Address,
         execution_payload: ExecutionPayload,
         blobs_bundle: BlobsBundle,
         merging_data: Vec<MergeableOrderWithOrigin>,
     ) -> Self {
-        Self { value, proposer_fee_recipient, execution_payload, blobs_bundle, merging_data }
+        Self {
+            original_value,
+            proposer_fee_recipient,
+            execution_payload,
+            blobs_bundle,
+            merging_data,
+        }
     }
 }
