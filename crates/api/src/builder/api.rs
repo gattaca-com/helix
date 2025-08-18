@@ -442,8 +442,8 @@ pub async fn decode_payload(
     let is_gzip =
         req.headers().get("Content-Encoding").and_then(|val| val.to_str().ok()) == Some("gzip");
 
-    let is_ssz = req.headers().get("Content-Type").and_then(|val| val.to_str().ok())
-        == Some("application/octet-stream");
+    let is_ssz = req.headers().get("Content-Type").and_then(|val| val.to_str().ok()) ==
+        Some("application/octet-stream");
 
     // Read the body
     let body = req.into_body();

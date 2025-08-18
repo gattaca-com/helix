@@ -322,32 +322,28 @@ impl RouterConfig {
         }
 
         // Replace BuilderApi, ProposerApi, DataApi with their real routes
-        self.replace_condensed_with_real(
-            Route::BuilderApi,
-            &[
-                Route::GetValidators,
-                Route::SubmitBlock,
-                Route::SubmitBlockOptimistic,
-                Route::SubmitHeader,
-                Route::GetTopBid,
-                Route::GetInclusionList,
-                Route::SubmitHeaderV3,
-            ],
-        );
+        self.replace_condensed_with_real(Route::BuilderApi, &[
+            Route::GetValidators,
+            Route::SubmitBlock,
+            Route::SubmitBlockOptimistic,
+            Route::SubmitHeader,
+            Route::GetTopBid,
+            Route::GetInclusionList,
+            Route::SubmitHeaderV3,
+        ]);
 
-        self.replace_condensed_with_real(
-            Route::ProposerApi,
-            &[Route::Status, Route::RegisterValidators, Route::GetHeader, Route::GetPayload],
-        );
+        self.replace_condensed_with_real(Route::ProposerApi, &[
+            Route::Status,
+            Route::RegisterValidators,
+            Route::GetHeader,
+            Route::GetPayload,
+        ]);
 
-        self.replace_condensed_with_real(
-            Route::DataApi,
-            &[
-                Route::ProposerPayloadDelivered,
-                Route::BuilderBidsReceived,
-                Route::ValidatorRegistration,
-            ],
-        );
+        self.replace_condensed_with_real(Route::DataApi, &[
+            Route::ProposerPayloadDelivered,
+            Route::BuilderBidsReceived,
+            Route::ValidatorRegistration,
+        ]);
     }
 
     fn contains(&self, route: Route) -> bool {
@@ -394,10 +390,10 @@ impl RouterConfig {
 
         let is_get_header_instance =
             routes.contains(&Route::ProposerApi) || routes.contains(&Route::GetHeader);
-        let is_submission_instance = routes.contains(&Route::BuilderApi)
-            || routes.contains(&Route::SubmitBlock)
-            || routes.contains(&Route::SubmitHeader)
-            || routes.contains(&Route::SubmitHeaderV3);
+        let is_submission_instance = routes.contains(&Route::BuilderApi) ||
+            routes.contains(&Route::SubmitBlock) ||
+            routes.contains(&Route::SubmitHeader) ||
+            routes.contains(&Route::SubmitHeaderV3);
 
         if is_get_header_instance {
             ensure!(
