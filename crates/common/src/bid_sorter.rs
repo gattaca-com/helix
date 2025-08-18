@@ -199,7 +199,7 @@ impl BidSorterMessage {
         optimistic_version: OptimisticVersion,
         is_cancellable: bool,
         merging_preferences: BlockMergingPreferences,
-        mergeable_orders: MergeableOrders,
+        mergeable_orders: Option<MergeableOrders>,
     ) -> Self {
         let bid_trace = submission.bid_trace();
         let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
@@ -218,7 +218,7 @@ impl BidSorterMessage {
             header,
             is_cancellable,
             merging_preferences,
-            mergeable_orders: Some(mergeable_orders),
+            mergeable_orders,
             simulation_time_ns,
         }
     }

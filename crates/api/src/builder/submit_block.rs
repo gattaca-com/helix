@@ -204,7 +204,10 @@ impl<A: Api> BuilderApi<A> {
 
         let merging_data = payload.merging_data();
 
-        let mergeable_orders = get_mergeable_orders(&payload, merging_data);
+        // In case the merging data is malformed, we log any error and discard it
+        let mergeable_orders = get_mergeable_orders(&payload, merging_data)
+            .inspect_err(|e| warn!(%e, "failed to get mergeable orders"))
+            .ok();
 
         let merging_preferences =
             BlockMergingPreferences { allow_appending: merging_data.allow_appending };
