@@ -11,9 +11,8 @@ use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use tokio::time::sleep;
 
-use crate::builder::rpc_simulator::BlockMergeResponse;
-
 use super::{optimistic_simulator::OptimisticSimulator, BlockMergeRequest, BlockSimRequest};
+use crate::builder::rpc_simulator::BlockMergeResponse;
 
 #[derive(Clone)]
 pub struct MultiSimulator<A: Auctioneer + 'static, DB: DatabaseService + 'static> {

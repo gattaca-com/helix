@@ -32,12 +32,10 @@ mod simulator_tests {
         auctioneer.builder_demoted = builder_demoted;
         let db =
             MockDatabaseService::new(Arc::new(Default::default()), Arc::new(Default::default()));
-        OptimisticSimulator::new(
-            Arc::new(auctioneer),
-            Arc::new(db),
-            http,
-            SimulatorConfig { url: endpoint.to_string(), namespace: "test".to_string() },
-        )
+        OptimisticSimulator::new(Arc::new(auctioneer), Arc::new(db), http, SimulatorConfig {
+            url: endpoint.to_string(),
+            namespace: "test".to_string(),
+        })
     }
 
     fn get_sim_req() -> BlockSimRequest {

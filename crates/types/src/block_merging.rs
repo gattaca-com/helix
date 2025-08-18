@@ -1,13 +1,13 @@
 use std::hash::Hash;
 
-use crate::BlobsBundle;
-use alloy_primitives::bytes::Bytes;
-use alloy_primitives::Address;
+use alloy_primitives::{bytes::Bytes, Address};
 use lh_test_random::TestRandom;
 use lh_types::test_utils::TestRandom;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
+
+use crate::BlobsBundle;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 #[ssz(enum_behaviour = "transparent")]
@@ -134,9 +134,9 @@ impl Eq for MergeableBundle {}
 
 impl PartialEq for MergeableBundle {
     fn eq(&self, other: &Self) -> bool {
-        self.transactions == other.transactions
-            && self.reverting_txs == other.reverting_txs
-            && self.dropping_txs == other.dropping_txs
+        self.transactions == other.transactions &&
+            self.reverting_txs == other.reverting_txs &&
+            self.dropping_txs == other.dropping_txs
     }
 }
 

@@ -196,8 +196,8 @@ mod tests {
             let result = result
                 .iter()
                 .find(|r| {
-                    r.registration_info.registration.message.pubkey
-                        == registration.registration.message.pubkey
+                    r.registration_info.registration.message.pubkey ==
+                        registration.registration.message.pubkey
                 })
                 .unwrap();
             assert_eq!(
