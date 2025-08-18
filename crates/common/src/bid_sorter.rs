@@ -33,14 +33,6 @@ struct GetHeaderEntry {
     metadata: BlockMergingPreferences,
 }
 
-#[derive(Debug, Clone)]
-pub struct BidMetadata {
-    /// Preferences related to block merging.
-    pub merging_preferences: BlockMergingPreferences,
-    /// List of mergeable orders, ordered by bid value
-    pub mergeable_orders: HashMap<MergeableOrder, (U256, Address)>,
-}
-
 /// Shared container for get_header response, thread safe
 #[derive(Clone)]
 pub struct BestGetHeader(Arc<RwLock<Option<GetHeaderEntry>>>);
