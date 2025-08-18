@@ -11,7 +11,7 @@ use helix_beacon::{
 use helix_common::{
     bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     chain_info::ChainInfo,
-    merging_pool::BestMergeableOrders,
+    merging_pool::{BestMergeableOrders, MergingPoolMessage},
     signing::RelaySigningContext,
     BroadcasterConfig, RelayConfig,
 };
@@ -48,6 +48,7 @@ pub async fn run_api_service<A: Api>(
     metadata_provider: Arc<A::MetadataProvider>,
     terminating: Arc<AtomicBool>,
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
+    pool_tx: crossbeam_channel::Sender<MergingPoolMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
     shared_best_orders: BestMergeableOrders,
@@ -98,6 +99,7 @@ pub async fn run_api_service<A: Api>(
         validator_preferences.clone(),
         current_slot_info.clone(),
         sorter_tx,
+        pool_tx,
         top_bid_tx,
         v2_checks_tx,
         shared_floor,

@@ -18,6 +18,7 @@ use helix_common::{
     bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     bid_submission::BidSubmission,
     chain_info::ChainInfo,
+    merging_pool::MergingPoolMessage,
     simulator::BlockSimError,
     utils::{get_slot_coordinate, utcnow_ns},
     BuilderInfo, RelayConfig, SubmissionTrace, ValidatorPreferences,
@@ -56,6 +57,8 @@ pub struct BuilderApi<A: Api> {
     pub current_inclusion_list: Arc<RwLock<Option<InclusionListWithKey>>>,
     /// Send blocks to the bid sorter
     pub sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
+    /// Send mergeable orders to the merging pool
+    pub pool_tx: crossbeam_channel::Sender<MergingPoolMessage>,
     /// Subscriber for TopBid updates, SSZ encoded
     pub top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     /// Send headers/blocks to be checked for V2 submissions
@@ -80,6 +83,7 @@ impl<A: Api> BuilderApi<A> {
         validator_preferences: Arc<ValidatorPreferences>,
         curr_slot_info: CurrentSlotInfo,
         sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
+        pool_tx: crossbeam_channel::Sender<MergingPoolMessage>,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
         v2_checks_tx: tokio::sync::mpsc::Sender<V2SubMessage>,
         shared_floor: FloorBid,
@@ -118,6 +122,7 @@ impl<A: Api> BuilderApi<A> {
             current_inclusion_list: Default::default(),
 
             sorter_tx,
+            pool_tx,
             top_bid_tx,
             v2_checks_tx,
             shared_floor,
@@ -437,8 +442,8 @@ pub async fn decode_payload(
     let is_gzip =
         req.headers().get("Content-Encoding").and_then(|val| val.to_str().ok()) == Some("gzip");
 
-    let is_ssz = req.headers().get("Content-Type").and_then(|val| val.to_str().ok()) ==
-        Some("application/octet-stream");
+    let is_ssz = req.headers().get("Content-Type").and_then(|val| val.to_str().ok())
+        == Some("application/octet-stream");
 
     // Read the body
     let body = req.into_body();

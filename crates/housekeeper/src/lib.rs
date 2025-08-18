@@ -12,7 +12,10 @@ use std::sync::Arc;
 
 pub use chain_event_updater::{ChainEventUpdater, PayloadAttributesUpdate, SlotUpdate};
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
-use helix_common::{bid_sorter::BidSorterMessage, chain_info::ChainInfo, RelayConfig};
+use helix_common::{
+    bid_sorter::BidSorterMessage, chain_info::ChainInfo, merging_pool::MergingPoolMessage,
+    RelayConfig,
+};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::redis::redis_cache::RedisCache;
 pub use housekeeper::Housekeeper;
@@ -31,6 +34,7 @@ pub async fn start_housekeeper(
     beacon_client: Arc<MultiBeaconClient>,
     chain_info: Arc<ChainInfo>,
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
+    pool_tx: crossbeam_channel::Sender<MergingPoolMessage>,
 ) -> eyre::Result<CurrentSlotInfo> {
     let (head_event_sender, head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
     beacon_client.subscribe_to_head_events(head_event_sender).await;
@@ -45,7 +49,7 @@ pub async fn start_housekeeper(
 
     let curr_slot_info = CurrentSlotInfo::new();
     let chain_updater =
-        ChainEventUpdater::new(auctioneer, chain_info, curr_slot_info.clone(), sorter_tx);
+        ChainEventUpdater::new(auctioneer, chain_info, curr_slot_info.clone(), sorter_tx, pool_tx);
     tokio::spawn(chain_updater.start(head_event_receiver, payload_attribute_receiver));
 
     Ok(curr_slot_info)

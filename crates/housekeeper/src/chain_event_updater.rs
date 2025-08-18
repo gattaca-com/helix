@@ -5,7 +5,7 @@ use futures::{future, FutureExt};
 use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, bid_sorter::BidSorterMessage,
-    chain_info::ChainInfo, utils::utcnow_sec,
+    chain_info::ChainInfo, merging_pool::MergingPoolMessage, utils::utcnow_sec,
 };
 use helix_datastore::Auctioneer;
 use helix_types::{Slot, SlotClockTrait};
@@ -51,6 +51,7 @@ pub struct ChainEventUpdater<A: Auctioneer + 'static> {
     curr_slot_info: CurrentSlotInfo,
 
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
+    pool_tx: crossbeam_channel::Sender<MergingPoolMessage>,
 }
 
 impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
@@ -59,6 +60,7 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
         chain_info: Arc<ChainInfo>,
         curr_slot_info: CurrentSlotInfo,
         sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
+        pool_tx: crossbeam_channel::Sender<MergingPoolMessage>,
     ) -> Self {
         Self {
             head_slot: 0,
@@ -68,6 +70,7 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
             chain_info,
             curr_slot_info,
             sorter_tx,
+            pool_tx,
         }
     }
 
@@ -103,9 +106,9 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
         mut head_event_rx: broadcast::Receiver<HeadEventData>,
         mut payload_attributes_rx: broadcast::Receiver<PayloadAttributesEvent>,
     ) {
-        let start_instant = Instant::now() +
-            self.chain_info.clock.duration_to_next_slot().unwrap() +
-            Duration::from_secs(CUTOFF_TIME);
+        let start_instant = Instant::now()
+            + self.chain_info.clock.duration_to_next_slot().unwrap()
+            + Duration::from_secs(CUTOFF_TIME);
         let mut timer =
             interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot()));
 
@@ -316,6 +319,7 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
             curr_slot_info.handle_new_slot(update, &chain_info);
         });
         let _ = self.sorter_tx.try_send(BidSorterMessage::Slot(slot));
+        let _ = self.pool_tx.try_send(MergingPoolMessage::Slot(slot));
     }
 
     // Handles a new payload attributes event

@@ -9,6 +9,7 @@ use helix_common::{
     self,
     bid_sorter::BidSorterMessage,
     bid_submission::{BidSubmission, OptimisticVersion},
+    merging_pool::MergingPoolMessage,
     metadata_provider::MetadataProvider,
     metrics::ApiMetrics,
     task,
@@ -204,11 +205,6 @@ impl<A: Api> BuilderApi<A> {
 
         let merging_data = payload.merging_data();
 
-        // In case the merging data is malformed, we log any error and discard it
-        let mergeable_orders = get_mergeable_orders(&payload, merging_data)
-            .inspect_err(|e| warn!(%e, "failed to get mergeable orders"))
-            .ok();
-
         let merging_preferences =
             BlockMergingPreferences { allow_appending: merging_data.allow_appending };
 
@@ -223,6 +219,21 @@ impl<A: Api> BuilderApi<A> {
             return Err(BuilderApiError::InternalError);
         };
         trace!("sent bid to bid sorter");
+
+        // In case the merging data is malformed, we log any error and discard it
+        let mergeable_orders = get_mergeable_orders(&payload, merging_data)
+            .inspect_err(|e| warn!(%e, "failed to get mergeable orders"))
+            .ok();
+
+        if mergeable_orders.as_ref().is_some_and(|o| !o.orders.is_empty()) {
+            let orders = mergeable_orders.unwrap();
+            let message = MergingPoolMessage::new(&payload, orders);
+            // We only log the error if this fails
+            // TODO: check if we should handle this in another way
+            let _ = api.pool_tx.try_send(message).inspect_err(|err| {
+                error!(?err, "failed to send mergeable orders to merging pool");
+            });
+        }
 
         // Save the execution payload
         // TODO: if this and similar other calls fail we should stop serving headers and send an

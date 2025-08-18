@@ -116,6 +116,7 @@ pub fn app() -> Router {
 pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) {
     let current_slot_info = CurrentSlotInfo::new();
     let (sort_tx, _) = crossbeam_channel::bounded(1000);
+    let (pool_tx, _) = crossbeam_channel::bounded(1000);
     let (br_tx, _) = broadcast::channel(1);
     let (v2_tx, _) = mpsc::channel(100);
     let shared_floor = FloorBid::new();
@@ -131,6 +132,7 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
         Arc::new(ValidatorPreferences::default()),
         current_slot_info.clone(),
         sort_tx,
+        pool_tx,
         br_tx,
         v2_tx,
         shared_floor,

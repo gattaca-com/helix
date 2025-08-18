@@ -12,7 +12,7 @@ use helix_beacon::start_beacon_client;
 use helix_common::{
     bid_sorter::{start_bid_sorter, BestGetHeader, FloorBid},
     load_config, load_keypair,
-    merging_pool::BestMergeableOrders,
+    merging_pool::{start_merging_pool, BestMergeableOrders},
     metadata_provider::DefaultMetadataProvider,
     metrics::start_metrics_server,
     signing::RelaySigningContext,
@@ -85,6 +85,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         Arc::new(RelaySigningContext { keypair, context: chain_info.clone() });
 
     let (sorter_tx, sorter_rx) = crossbeam_channel::bounded(10_000);
+    let (pool_tx, pool_rx) = crossbeam_channel::bounded(10_000);
 
     let beacon_client = start_beacon_client(&config);
     let db = start_db_service(&config).await?;
@@ -104,6 +105,11 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         );
     }
 
+    // TODO: add option for disabling this
+    if true {
+        start_merging_pool(pool_rx, shared_best_orders.clone());
+    }
+
     let current_slot_info = start_housekeeper(
         db.clone(),
         auctioneer.clone(),
@@ -111,6 +117,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         beacon_client.clone(),
         chain_info.clone(),
         sorter_tx.clone(),
+        pool_tx.clone(),
     )
     .await
     .map_err(|e| eyre!("housekeeper init: {e}"))?;
@@ -128,6 +135,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         current_slot_info,
         terminating.clone(),
         sorter_tx,
+        pool_tx,
         top_bid_tx,
         shared_best_header,
         shared_best_orders,

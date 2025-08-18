@@ -4,10 +4,11 @@ use alloy_primitives::{
     map::foldhash::{HashMap, HashMapExt},
     Address, U256,
 };
-use helix_types::{MergeableOrder, MergeableOrderWithOrigin, MergeableOrders};
+use helix_types::{MergeableOrder, MergeableOrderWithOrigin, MergeableOrders, SignedBidSubmission};
 use parking_lot::RwLock;
+use tracing::info;
 
-pub struct MergingPool;
+use crate::bid_submission::BidSubmission;
 
 #[derive(Debug, Clone)]
 pub struct BestMergeableOrders(Arc<RwLock<HashMap<MergeableOrder, (U256, Address)>>>);
@@ -50,4 +51,60 @@ impl BestMergeableOrders {
     fn reset(&self) {
         self.0.write().clear();
     }
+}
+
+pub enum MergingPoolMessage {
+    /// New mergeable orders received
+    NewOrders { bid_value: U256, orders: MergeableOrders },
+    /// New slot update
+    Slot(u64),
+}
+
+impl MergingPoolMessage {
+    pub fn new(submission: &SignedBidSubmission, orders: MergeableOrders) -> Self {
+        Self::NewOrders { bid_value: submission.value(), orders }
+    }
+}
+
+pub struct MergingPool {
+    pool_rx: crossbeam_channel::Receiver<MergingPoolMessage>,
+    shared_best_orders: BestMergeableOrders,
+}
+
+impl MergingPool {
+    pub fn new(
+        pool_rx: crossbeam_channel::Receiver<MergingPoolMessage>,
+        shared_best_orders: BestMergeableOrders,
+    ) -> Self {
+        Self { pool_rx, shared_best_orders }
+    }
+
+    pub fn run(self) {
+        info!("starting merging pool");
+
+        loop {
+            let Ok(msg) = self.pool_rx.try_recv() else {
+                continue;
+            };
+
+            match msg {
+                MergingPoolMessage::NewOrders { bid_value, orders } => {
+                    info!(?bid_value, "received new mergeable orders");
+                    self.shared_best_orders.insert_orders(bid_value, orders);
+                }
+                MergingPoolMessage::Slot(slot) => {
+                    info!(?slot, "received slot update");
+                    self.shared_best_orders.reset();
+                }
+            }
+        }
+    }
+}
+
+pub fn start_merging_pool(
+    pool_rx: crossbeam_channel::Receiver<MergingPoolMessage>,
+    shared_best_orders: BestMergeableOrders,
+) {
+    let bid_sorter = MergingPool::new(pool_rx, shared_best_orders);
+    std::thread::spawn(|| bid_sorter.run());
 }
