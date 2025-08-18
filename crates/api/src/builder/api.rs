@@ -716,7 +716,7 @@ fn update_flagged_indices(old_indices: &[usize], flagged_indices: &[usize]) -> V
 }
 
 fn is_blob_transaction(raw_tx: &[u8]) -> bool {
-    raw_tx.get(0).copied().unwrap_or(0) == TxType::Eip4844
+    raw_tx.first().is_some_and(|&b| b == TxType::Eip4844)
 }
 
 fn get_tx_versioned_hashes(mut raw_tx: &[u8]) -> Vec<B256> {
