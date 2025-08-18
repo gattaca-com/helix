@@ -47,7 +47,7 @@ pub struct BlockMergeResponse {
     pub execution_requests: ExecutionRequests,
     pub blobs_bundle: BlobsBundle,
     /// Total value for the proposer
-    pub value: U256,
+    pub proposer_value: U256,
 }
 
 /// RpcSimulator is responsible for sending block requests to the RPC endpoint for validation.

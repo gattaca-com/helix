@@ -52,8 +52,8 @@ impl<A: Api> ProposerApi<A> {
         headers: HeaderMap,
         Path(GetHeaderParams { slot, parent_hash, pubkey }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
-        if terminating.load(Ordering::Relaxed) ||
-            proposer_api.auctioneer.kill_switch_enabled().await?
+        if terminating.load(Ordering::Relaxed)
+            || proposer_api.auctioneer.kill_switch_enabled().await?
         {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
@@ -340,10 +340,10 @@ impl<A: Api> ProposerApi<A> {
 
         // Sanity check: if the merged payload has a lower value than the original bid,
         // we return the original bid.
-        if bid.value() >= &response.value {
+        if bid.value() >= &response.proposer_value {
             warn!(
                 original_value = %bid.value(),
-                %response.value,
+                %response.proposer_value,
                 "merged payload has lower value than original bid"
             );
             return None;
@@ -359,7 +359,7 @@ impl<A: Api> ProposerApi<A> {
             header,
             blob_kzg_commitments,
             execution_requests: response.execution_requests,
-            value: response.value,
+            value: response.proposer_value,
             pubkey: *bid.pubkey(),
         };
 
@@ -429,8 +429,8 @@ fn validate_bid_request_time(
     bid_request: &BidRequest,
 ) -> Result<u64, ProposerApiError> {
     let curr_timestamp_ms = utcnow_ms() as i64;
-    let slot_start_timestamp = chain_info.genesis_time_in_secs +
-        (bid_request.slot.as_u64() * chain_info.seconds_per_slot());
+    let slot_start_timestamp = chain_info.genesis_time_in_secs
+        + (bid_request.slot.as_u64() * chain_info.seconds_per_slot());
     let ms_into_slot = curr_timestamp_ms.saturating_sub((slot_start_timestamp * 1000) as i64);
 
     if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {
