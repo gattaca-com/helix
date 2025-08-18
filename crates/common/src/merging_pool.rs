@@ -69,6 +69,7 @@ impl MergingPoolMessage {
 pub struct MergingPool {
     pool_rx: crossbeam_channel::Receiver<MergingPoolMessage>,
     shared_best_orders: BestMergeableOrders,
+    curr_bid_slot: u64,
 }
 
 impl MergingPool {
@@ -76,10 +77,10 @@ impl MergingPool {
         pool_rx: crossbeam_channel::Receiver<MergingPoolMessage>,
         shared_best_orders: BestMergeableOrders,
     ) -> Self {
-        Self { pool_rx, shared_best_orders }
+        Self { pool_rx, shared_best_orders, curr_bid_slot: 0 }
     }
 
-    pub fn run(self) {
+    pub fn run(mut self) {
         info!("starting merging pool");
 
         loop {
@@ -92,12 +93,15 @@ impl MergingPool {
                     info!(?bid_value, "received new mergeable orders");
                     self.shared_best_orders.insert_orders(bid_value, orders);
                 }
-                MergingPoolMessage::Slot(slot) => {
-                    info!(?slot, "received slot update");
-                    self.shared_best_orders.reset();
-                }
+                MergingPoolMessage::Slot(head_slot) => self.process_slot(head_slot),
             }
         }
+    }
+
+    fn process_slot(&mut self, head_slot: u64) {
+        self.curr_bid_slot = head_slot + 1;
+
+        self.shared_best_orders.reset();
     }
 }
 
