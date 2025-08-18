@@ -96,7 +96,8 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     let shared_best_orders = BestMergeableOrders::new();
     let shared_floor_bid = FloorBid::new();
 
-    if config.router_config.validate_bid_sorter()? {
+    let should_start_bid_sorter = config.router_config.validate_bid_sorter()?;
+    if should_start_bid_sorter {
         start_bid_sorter(
             sorter_rx,
             top_bid_tx.clone(),
@@ -105,8 +106,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         );
     }
 
-    // TODO: add option for disabling this
-    if true {
+    if should_start_bid_sorter && config.block_merging_config.is_enabled {
         start_merging_pool(pool_rx, shared_best_orders.clone());
     }
 
