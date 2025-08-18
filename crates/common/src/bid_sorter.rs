@@ -182,8 +182,6 @@ pub enum BidSorterMessage {
         is_cancellable: bool,
         /// Preferences related to block merging.
         merging_preferences: BlockMergingPreferences,
-        /// Transactions that can be appended to the building block.
-        mergeable_orders: Option<MergeableOrders>,
         simulation_time_ns: u64,
     },
     /// Demotion of a builder pubkey, all its bids are invalidated for this slot
@@ -199,7 +197,6 @@ impl BidSorterMessage {
         optimistic_version: OptimisticVersion,
         is_cancellable: bool,
         merging_preferences: BlockMergingPreferences,
-        mergeable_orders: Option<MergeableOrders>,
     ) -> Self {
         let bid_trace = submission.bid_trace();
         let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
@@ -218,7 +215,6 @@ impl BidSorterMessage {
             header,
             is_cancellable,
             merging_preferences,
-            mergeable_orders,
             simulation_time_ns,
         }
     }
@@ -239,7 +235,6 @@ impl BidSorterMessage {
             header,
             is_cancellable,
             merging_preferences: BlockMergingPreferences::default(),
-            mergeable_orders: None,
             simulation_time_ns: 0,
         }
     }
@@ -362,8 +357,6 @@ pub struct BidSorter {
     curr_floor: Option<U256>,
     /// Current response for get_header
     shared_best_header: BestGetHeader,
-    /// Current map of mergeable orders
-    shared_best_orders: BestMergeableOrders,
     /// Current floor bid value
     shared_floor: FloorBid,
     local_telemetry: BidSorterTelemetry,
@@ -374,7 +367,6 @@ impl BidSorter {
         sorter_rx: crossbeam_channel::Receiver<BidSorterMessage>,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
         shared_best_header: BestGetHeader,
-        shared_best_orders: BestMergeableOrders,
         shared_floor: FloorBid,
     ) -> Self {
         Self {
@@ -387,7 +379,6 @@ impl BidSorter {
             curr_bid: None,
             curr_floor: None,
             shared_best_header,
-            shared_best_orders,
             shared_floor,
             local_telemetry: BidSorterTelemetry::default(),
         }
@@ -411,7 +402,6 @@ impl BidSorter {
                     header,
                     is_cancellable,
                     merging_preferences,
-                    mergeable_orders,
                     simulation_time_ns,
                 } => {
                     if self.curr_bid_slot != slot {
@@ -425,9 +415,6 @@ impl BidSorter {
                     }
 
                     self.headers.insert(bid.on_receive_ns, (header, merging_preferences));
-                    if let Some(orders) = mergeable_orders {
-                        self.shared_best_orders.insert_orders(bid.value, orders);
-                    }
                     self.process_header(builder_pubkey, bid, is_cancellable);
 
                     // telemetry
@@ -586,7 +573,6 @@ impl BidSorter {
         self.curr_floor = None;
 
         self.shared_best_header.reset();
-        self.shared_best_orders.reset();
         self.shared_floor.reset();
     }
 
@@ -651,11 +637,9 @@ pub fn start_bid_sorter(
     sorter_rx: crossbeam_channel::Receiver<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
-    shared_best_orders: BestMergeableOrders,
     shared_floor: FloorBid,
 ) {
-    let bid_sorter =
-        BidSorter::new(sorter_rx, top_bid_tx, shared_best_header, shared_best_orders, shared_floor);
+    let bid_sorter = BidSorter::new(sorter_rx, top_bid_tx, shared_best_header, shared_floor);
     std::thread::spawn(|| bid_sorter.run());
 }
 

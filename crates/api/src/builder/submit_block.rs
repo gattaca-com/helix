@@ -218,7 +218,6 @@ impl<A: Api> BuilderApi<A> {
             optimistic_version,
             is_cancellations_enabled,
             merging_preferences,
-            mergeable_orders,
         )) {
             error!(?err, "failed to send submission to sorter");
             return Err(BuilderApiError::InternalError);

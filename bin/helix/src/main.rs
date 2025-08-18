@@ -99,7 +99,6 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
             sorter_rx,
             top_bid_tx.clone(),
             shared_best_header.clone(),
-            shared_best_orders.clone(),
             shared_floor_bid.clone(),
         );
     }
