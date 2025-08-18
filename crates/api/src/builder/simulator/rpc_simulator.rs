@@ -230,7 +230,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
         let rpc_payload = json!({
             "jsonrpc": "2.0",
             "id": "1",
-            "method": format!("{}_mergeBlockV1", self.simulator_config.namespace),
+            "method": "relay_mergeBlockV1",
             "params": [request]
         });
 
