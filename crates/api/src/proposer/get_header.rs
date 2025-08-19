@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{B256, U256};
 use axum::{extract::Path, http::HeaderMap, response::IntoResponse, Extension};
 use helix_common::{
     chain_info::ChainInfo,
@@ -18,16 +18,12 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::{
-    BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeader, MergeableOrderWithOrigin,
-    PayloadAndBlobs, PayloadAndBlobsRef,
-};
+use helix_types::BlsPublicKey;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
 
 use super::ProposerApi;
 use crate::{
-    builder::BlockMergeRequest,
     gossiper::types::RequestPayloadParams,
     proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
     Api, HEADER_TIMEOUT_MS,
@@ -126,8 +122,6 @@ impl<A: Api> ProposerApi<A> {
                 }
             });
 
-        let mut new_bid = None;
-
         // If timing games are enabled for the proposer then we sleep a fixed amount before
         // returning the header
         if duty.entry.preferences.header_delay || client_timeout_ms.is_some() {
@@ -162,41 +156,16 @@ impl<A: Api> ProposerApi<A> {
                 pubkey = ?bid_request.pubkey,
                 "timing game sleep");
 
-            // If time buffer is bigger than sleep time, wait for a bit before block merging
-            let block_merging_buffer = Duration::from_millis(
-                proposer_api.relay_config.block_merging_config.block_merging_buffer_ms,
-            );
-            let remaining_sleep_time = if sleep_time > block_merging_buffer {
-                sleep(sleep_time - block_merging_buffer).await;
-                block_merging_buffer
-            } else {
-                sleep_time
-            };
-
-            // Start block merging in the background
-            let block_merging = tokio::spawn({
-                let proposer_api = proposer_api.clone();
-                let bid_request = bid_request.clone();
-                async move {
-                    proposer_api
-                        .merge_block(&bid_request, duty.entry.registration.message.fee_recipient)
-                        .await
-                }
-            });
-
-            if remaining_sleep_time > Duration::ZERO {
-                sleep(remaining_sleep_time).await;
+            if sleep_time > Duration::ZERO {
+                sleep(sleep_time).await;
             }
 
             get_header_metric.record();
-
-            // If block merging didn't finish, we abort it
-            if block_merging.is_finished() {
-                new_bid = block_merging.await.ok().flatten();
-            } else {
-                block_merging.abort();
-            }
         }
+
+        // Try to fetch a merged block
+        let merged_block_bid =
+            proposer_api.shared_best_merged.load(bid_request.slot.into(), &bid_request.parent_hash);
 
         let get_best_bid_res = proposer_api.shared_best_header.load(
             bid_request.slot.into(),
@@ -207,7 +176,7 @@ impl<A: Api> ProposerApi<A> {
         trace.best_bid_fetched = utcnow_ns();
         debug!(trace = ?trace, "best bid fetched");
 
-        let bid = match (get_best_bid_res, new_bid) {
+        let bid = match (get_best_bid_res, merged_block_bid) {
             (Some((bid, _)), None) => bid,
             (None, Some(bid)) => bid,
             // If the merged payload has a higher value, we use that
@@ -273,116 +242,6 @@ impl<A: Api> ProposerApi<A> {
         info!(%signed_bid, "delivering bid");
 
         Ok(axum::Json(signed_bid))
-    }
-
-    async fn merge_block(
-        &self,
-        bid_request: &BidRequest,
-        proposer_fee_recipient: Address,
-    ) -> Option<BuilderBid> {
-        debug!("merging block");
-
-        let slot = bid_request.slot.into();
-
-        let (bid, metadata) =
-            self.shared_best_header.load(slot, &bid_request.parent_hash, &bid_request.pubkey)?;
-
-        let block_hash = bid.header().block_hash().0;
-
-        // If block does not allow merging, we stop
-        if !metadata.allow_appending {
-            return None;
-        }
-
-        let mergeable_orders = self.shared_best_orders.load();
-
-        // Get execution payload from auctioneer
-        let payload = self
-            .get_execution_payload(bid_request.slot.into(), &bid_request.pubkey, &block_hash, true)
-            .await
-            .ok()?;
-
-        let new_bid = self
-            .append_transactions_to_payload(
-                bid_request.slot.into(),
-                proposer_fee_recipient,
-                &bid_request.pubkey,
-                bid,
-                payload,
-                mergeable_orders,
-            )
-            .await?;
-
-        Some(new_bid)
-    }
-
-    /// Appends transactions to the payload and returns a new bid.
-    /// The payload referenced in the bid is stored in the DB.
-    /// This function might return the original bid if somehow the merged payload has a lower value.
-    async fn append_transactions_to_payload(
-        &self,
-        slot: u64,
-        proposer_fee_recipient: Address,
-        proposer_pubkey: &BlsPublicKey,
-        bid: BuilderBid,
-        payload: PayloadAndBlobs,
-        merging_data: Vec<MergeableOrderWithOrigin>,
-    ) -> Option<BuilderBid> {
-        let merge_request = BlockMergeRequest::new(
-            *bid.value(),
-            proposer_fee_recipient,
-            payload.execution_payload,
-            payload.blobs_bundle,
-            merging_data,
-        );
-
-        let response = self.simulator.process_merge_request(merge_request).await.ok()?;
-
-        // Sanity check: if the merged payload has a lower value than the original bid,
-        // we return the original bid.
-        if bid.value() >= &response.proposer_value {
-            warn!(
-                original_value = %bid.value(),
-                %response.proposer_value,
-                "merged payload has lower value than original bid"
-            );
-            return None;
-        }
-        let header = ExecutionPayloadHeader::from(response.execution_payload.to_ref())
-            .as_electra()
-            .ok()?
-            .clone();
-        let blob_kzg_commitments = response.blobs_bundle.commitments.clone();
-        let block_hash = response.execution_payload.block_hash().0;
-
-        let new_bid = BuilderBidElectra {
-            header,
-            blob_kzg_commitments,
-            execution_requests: response.execution_requests,
-            value: response.proposer_value,
-            pubkey: *bid.pubkey(),
-        };
-
-        // Store the payload in the background
-        tokio::task::spawn({
-            let auctioneer = self.auctioneer.clone();
-            let proposer_pubkey = proposer_pubkey.clone();
-            async move {
-                let payload_and_blobs = PayloadAndBlobsRef {
-                    execution_payload: (&response.execution_payload).into(),
-                    blobs_bundle: &response.blobs_bundle,
-                };
-                // We just log the errors as we can't really do anything about them
-                if let Err(err) = auctioneer
-                    .save_execution_payload(slot, &proposer_pubkey, &block_hash, payload_and_blobs)
-                    .await
-                {
-                    error!(%err, "failed to store merged payload in auctioneer");
-                }
-            }
-        });
-
-        Some(new_bid.into())
     }
 }
 

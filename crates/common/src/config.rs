@@ -151,10 +151,6 @@ pub struct BlockMergingConfig {
     /// Flag to enable this feature.
     #[serde(default = "default_bool::<true>")]
     pub is_enabled: bool,
-    /// Max time to reserve for block merging. e.g., if we were going to sleep for 1s due to
-    /// timing games, we instead wait until the last 250ms before we start block merging.
-    #[serde(default = "default_u64::<250>")]
-    pub block_merging_buffer_ms: u64,
 }
 
 fn default_port() -> u16 {

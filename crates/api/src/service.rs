@@ -150,6 +150,8 @@ pub async fn run_api_service<A: Api>(
         gossip_receiver,
     ));
 
+    tokio::spawn(proposer_api.clone().process_block_merging());
+
     let data_api = Arc::new(DataApi::<A>::new(validator_preferences.clone(), db.clone()));
 
     let bids_cache: BidsCache =

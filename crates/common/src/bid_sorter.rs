@@ -77,6 +77,16 @@ impl BestGetHeader {
         Some((entry.bid, entry.metadata))
     }
 
+    pub fn load_any(&self, slot: u64) -> Option<(BuilderBid, BlockMergingPreferences)> {
+        let entry = (*self.0.read()).clone()?;
+
+        if entry.slot != slot {
+            return None;
+        }
+
+        Some((entry.bid, entry.metadata))
+    }
+
     fn reset(&self) {
         *self.0.write() = None
     }
