@@ -293,7 +293,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
         match response.json::<RpcResult<BlockMergeResponse>>().await {
             Ok(rpc_response) => match rpc_response {
                 RpcResult::Err { error } => {
-                    return Err(BlockSimError::BlockValidationFailed(error.message));
+                    Err(BlockSimError::BlockValidationFailed(error.message))
                 }
                 RpcResult::Ok(response) => Ok(response),
             },

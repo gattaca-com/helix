@@ -607,7 +607,7 @@ pub fn get_mergeable_orders(
     let mergeable_orders = merging_data
         .merge_orders
         .iter()
-        .map(|order| order_to_mergeable(order, &txs, &blob_versioned_hashes, &block_blobs_bundles))
+        .map(|order| order_to_mergeable(order, txs, &blob_versioned_hashes, &block_blobs_bundles))
         .collect::<Result<_, &'static str>>()?;
 
     Ok(MergeableOrders::new(merging_data.builder_address, mergeable_orders))
@@ -634,8 +634,8 @@ fn order_to_mergeable(
                 // If the tx references bundles not in the block, we drop it
                 let bundle = get_blobs_bundle_from_blob_transaction(
                     raw_tx,
-                    &blob_versioned_hashes,
-                    &block_blobs_bundles,
+                    blob_versioned_hashes,
+                    block_blobs_bundles,
                 )?;
                 blobs_bundle = Some(bundle);
             }
@@ -666,8 +666,8 @@ fn order_to_mergeable(
                         // If the tx references bundles not in the block, we drop the bundle
                         let bundle = get_blobs_bundle_from_blob_transaction(
                             raw_tx,
-                            &blob_versioned_hashes,
-                            &block_blobs_bundles,
+                            blob_versioned_hashes,
+                            block_blobs_bundles,
                         )?;
                         // Add blobs to current bundle
                         if let Some(existing_bundle) = &mut blobs_bundle {
@@ -694,20 +694,17 @@ fn extend_bundle(bundle: &mut BlobsBundle, other_bundle: BlobsBundle) -> Result<
     other_bundle
         .commitments
         .into_iter()
-        .map(|c| bundle.commitments.push(c))
-        .collect::<Result<(), _>>()
+        .try_for_each(|c| bundle.commitments.push(c))
         .map_err(|_| "reached commitments limit")?;
     other_bundle
         .proofs
         .into_iter()
-        .map(|c| bundle.proofs.push(c))
-        .collect::<Result<(), _>>()
+        .try_for_each(|c| bundle.proofs.push(c))
         .map_err(|_| "reached proofs limit")?;
     other_bundle
         .blobs
         .into_iter()
-        .map(|c| bundle.blobs.push(c))
-        .collect::<Result<(), _>>()
+        .try_for_each(|c| bundle.blobs.push(c))
         .map_err(|_| "reached blobs limit")?;
 
     Ok(())
@@ -752,14 +749,13 @@ fn get_blobs_bundle_from_blob_transaction(
     }
     let (commitments, (proofs, blobs)): (Vec<_>, (Vec<_>, Vec<_>)) = versioned_hashes
         .into_iter()
-        .map(|h| {
+        .filter_map(|h| {
             let index = blob_versioned_hashes.iter().position(|vh| *vh == h)?;
-            let commitment = block_blobs_bundles.commitments[index].clone();
-            let proof = block_blobs_bundles.proofs[index].clone();
+            let commitment = block_blobs_bundles.commitments[index];
+            let proof = block_blobs_bundles.proofs[index];
             let blob = block_blobs_bundles.blobs[index].clone();
             Some((commitment, (proof, blob)))
         })
-        .flatten()
         .unzip();
     if commitments.len() != num_blobs {
         return Err("blob transaction references blobs not in the block");
