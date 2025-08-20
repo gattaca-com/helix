@@ -35,6 +35,7 @@ impl BestMergeableOrders {
 
     pub fn load(&self, slot: u64) -> Vec<MergeableOrderWithOrigin> {
         let entry = self.0.read();
+        // If the request is for another slot, return nothing
         if entry.current_slot != slot {
             return Vec::new();
         }
@@ -51,6 +52,7 @@ impl BestMergeableOrders {
     /// existing one, in which case they replace the old order.
     pub fn insert_orders(&self, slot: u64, bid_value: U256, mergeable_orders: MergeableOrders) {
         let mut entry = self.0.write();
+        // If the orders are for another slot, discard them
         if entry.current_slot != slot {
             return;
         }
