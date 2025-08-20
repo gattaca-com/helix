@@ -11,7 +11,13 @@ use tracing::info;
 use crate::bid_submission::BidSubmission;
 
 #[derive(Debug, Clone)]
-pub struct BestMergeableOrders(Arc<RwLock<HashMap<MergeableOrder, (U256, Address)>>>);
+struct BestMergeableOrdersEntry {
+    current_slot: u64,
+    order_map: HashMap<MergeableOrder, (U256, Address)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BestMergeableOrders(Arc<RwLock<BestMergeableOrdersEntry>>);
 
 impl Default for BestMergeableOrders {
     fn default() -> Self {
@@ -21,13 +27,20 @@ impl Default for BestMergeableOrders {
 
 impl BestMergeableOrders {
     pub fn new() -> Self {
-        Self(Arc::new(RwLock::new(HashMap::with_capacity(5000))))
+        Self(Arc::new(RwLock::new(BestMergeableOrdersEntry {
+            current_slot: 0,
+            order_map: HashMap::with_capacity(5000),
+        })))
     }
 
-    pub fn load(&self) -> Vec<MergeableOrderWithOrigin> {
-        let order_map = self.0.read();
+    pub fn load(&self, slot: u64) -> Vec<MergeableOrderWithOrigin> {
+        let entry = self.0.read();
+        if entry.current_slot != slot {
+            return Vec::new();
+        }
         // Clone the orders and return them
-        order_map
+        entry
+            .order_map
             .iter()
             .map(|(order, (_, origin))| MergeableOrderWithOrigin::new(*origin, order.clone()))
             .collect()
@@ -36,13 +49,17 @@ impl BestMergeableOrders {
     /// Inserts the orders into the merging pool.
     /// Any duplicates are discarded, unless the bid value is higher than the
     /// existing one, in which case they replace the old order.
-    pub fn insert_orders(&self, bid_value: U256, mergeable_orders: MergeableOrders) {
-        let mut order_map = self.0.write();
+    pub fn insert_orders(&self, slot: u64, bid_value: U256, mergeable_orders: MergeableOrders) {
+        let mut entry = self.0.write();
+        if entry.current_slot != slot {
+            return;
+        }
         let origin = mergeable_orders.origin;
 
         // Insert each order into the order map
         mergeable_orders.orders.into_iter().for_each(|o| {
-            order_map
+            entry
+                .order_map
                 .entry(o)
                 // If the order already exists, keep the one with the highest bid
                 .and_modify(|e| {
@@ -55,8 +72,10 @@ impl BestMergeableOrders {
         });
     }
 
-    fn reset(&self) {
-        self.0.write().clear();
+    fn reset(&self, slot: u64) {
+        let mut entry = self.0.write();
+        entry.current_slot = slot;
+        entry.order_map.clear();
     }
 }
 
@@ -98,7 +117,7 @@ impl MergingPool {
             match msg {
                 MergingPoolMessage::NewOrders { bid_value, orders } => {
                     info!(?bid_value, "received new mergeable orders");
-                    self.shared_best_orders.insert_orders(bid_value, orders);
+                    self.shared_best_orders.insert_orders(self.curr_bid_slot, bid_value, orders);
                 }
                 MergingPoolMessage::Slot(head_slot) => self.process_slot(head_slot),
             }
@@ -108,7 +127,7 @@ impl MergingPool {
     fn process_slot(&mut self, head_slot: u64) {
         self.curr_bid_slot = head_slot + 1;
 
-        self.shared_best_orders.reset();
+        self.shared_best_orders.reset(head_slot);
     }
 }
 

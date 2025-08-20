@@ -151,7 +151,7 @@ impl<A: Api> ProposerApi<A> {
 
         let block_hash = bid.header().block_hash().0;
 
-        let mergeable_orders = self.shared_best_orders.load();
+        let mergeable_orders = self.shared_best_orders.load(slot);
 
         // Get execution payload from auctioneer
         let payload =
