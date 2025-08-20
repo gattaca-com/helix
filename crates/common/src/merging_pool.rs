@@ -26,24 +26,31 @@ impl BestMergeableOrders {
 
     pub fn load(&self) -> Vec<MergeableOrderWithOrigin> {
         let order_map = self.0.read();
+        // Clone the orders and return them
         order_map
             .iter()
             .map(|(order, (_, origin))| MergeableOrderWithOrigin::new(*origin, order.clone()))
             .collect()
     }
 
+    /// Inserts the orders into the merging pool.
+    /// Any duplicates are discarded, unless the bid value is higher than the
+    /// existing one, in which case they replace the old order.
     pub fn insert_orders(&self, bid_value: U256, mergeable_orders: MergeableOrders) {
         let mut order_map = self.0.write();
         let origin = mergeable_orders.origin;
 
+        // Insert each order into the order map
         mergeable_orders.orders.into_iter().for_each(|o| {
             order_map
                 .entry(o)
+                // If the order already exists, keep the one with the highest bid
                 .and_modify(|e| {
                     if e.0 < bid_value {
                         *e = (bid_value, origin);
                     }
                 })
+                // Otherwise, insert the new order
                 .or_insert((bid_value, origin));
         });
     }
