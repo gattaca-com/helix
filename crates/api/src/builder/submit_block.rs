@@ -31,6 +31,8 @@ use crate::{
     Api,
 };
 
+pub const HEADER_IS_MERGEABLE: &str = "x-mergeable";
+
 impl<A: Api> BuilderApi<A> {
     /// Handles the submission of a new block by performing various checks and verifications
     /// before saving the submission to the auctioneer.
@@ -72,7 +74,7 @@ impl<A: Api> BuilderApi<A> {
 
         debug!(%head_slot, timestamp_request_start = trace.receive);
 
-        let has_mergeable_data = headers.get("x-mergeable").is_some();
+        let has_mergeable_data = headers.get(HEADER_IS_MERGEABLE).is_some();
 
         // Decode the incoming request body into a payload
         let (payload_with_merging_data, is_cancellations_enabled) =
