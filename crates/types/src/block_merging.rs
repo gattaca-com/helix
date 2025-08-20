@@ -62,6 +62,20 @@ pub struct Bundle {
     pub dropping_txs: TxIndices,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct InvalidTxIndex;
+
+impl Bundle {
+    pub fn validate(&self) -> Result<(), InvalidTxIndex> {
+        if self.reverting_txs.iter().any(|&i| i >= self.txs.len()) ||
+            self.dropping_txs.iter().any(|&i| i >= self.txs.len())
+        {
+            return Err(InvalidTxIndex);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
 #[serde(deny_unknown_fields)]
 pub struct BlockMergingData {

@@ -27,9 +27,9 @@ use helix_database::DatabaseService;
 use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{
-    BlobsBundle, BlockMergingData, BlsPublicKey, MergeableBundle, MergeableOrder, MergeableOrders,
-    MergeableTransaction, Order, SignedBidSubmission, SignedBidSubmissionWithMergingData, Slot,
-    Transactions, TxIndices,
+    BlobsBundle, BlockMergingData, BlsPublicKey, Bundle, MergeableBundle, MergeableOrder,
+    MergeableOrders, MergeableTransaction, Order, SignedBidSubmission,
+    SignedBidSubmissionWithMergingData, Slot, Transactions,
 };
 use parking_lot::RwLock;
 use tracing::{debug, error, trace, warn};
@@ -613,7 +613,7 @@ pub enum OrderValidationError {
 /// the payload, it will be silently ignored.
 pub fn get_mergeable_orders(
     payload: &SignedBidSubmission,
-    merging_data: &BlockMergingData,
+    merging_data: BlockMergingData,
 ) -> Result<MergeableOrders, OrderValidationError> {
     let execution_payload = payload.execution_payload_ref();
     if execution_payload.fee_recipient() != merging_data.builder_address {
@@ -625,7 +625,7 @@ pub fn get_mergeable_orders(
     let txs = execution_payload.transactions();
     let mergeable_orders = merging_data
         .merge_orders
-        .iter()
+        .into_iter()
         .map(|order| order_to_mergeable(order, txs, &blob_versioned_hashes, &block_blobs_bundles))
         .collect::<Result<_, OrderValidationError>>()?;
 
@@ -633,7 +633,7 @@ pub fn get_mergeable_orders(
 }
 
 fn order_to_mergeable(
-    order: &Order,
+    order: Order,
     txs: &Transactions,
     blob_versioned_hashes: &[B256],
     block_blobs_bundles: &BlobsBundle,
@@ -662,6 +662,8 @@ fn order_to_mergeable(
             .into())
         }
         Order::Bundle(bundle) => {
+            bundle.validate().map_err(|_| OrderValidationError::FlaggedIndicesOutOfBounds)?;
+
             let mut blobs_bundle: Option<BlobsBundle> = None;
             let transactions = bundle
                 .txs
@@ -694,8 +696,7 @@ fn order_to_mergeable(
                 })
                 .collect::<Result<_, OrderValidationError>>()?;
 
-            let reverting_txs = update_flagged_indices(&bundle.txs, &bundle.reverting_txs)?;
-            let dropping_txs = update_flagged_indices(&bundle.txs, &bundle.dropping_txs)?;
+            let Bundle { reverting_txs, dropping_txs, .. } = bundle;
 
             Ok(MergeableBundle { transactions, reverting_txs, dropping_txs, blobs_bundle }.into())
         }
@@ -723,22 +724,6 @@ fn extend_bundle(
         .map_err(|_| OrderValidationError::ReachedBlobLimit)?;
 
     Ok(())
-}
-
-fn update_flagged_indices(
-    tx_indices: &[usize],
-    flagged_indices: &[usize],
-) -> Result<TxIndices, OrderValidationError> {
-    let new_indices: TxIndices = tx_indices
-        .iter()
-        .enumerate()
-        .filter(|(_, tx_index)| flagged_indices.contains(tx_index))
-        .map(|(i, _)| i)
-        .collect();
-    if new_indices.len() != flagged_indices.len() {
-        return Err(OrderValidationError::FlaggedIndicesOutOfBounds);
-    }
-    Ok(new_indices)
 }
 
 fn is_blob_transaction(raw_tx: &[u8]) -> bool {

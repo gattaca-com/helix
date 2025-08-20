@@ -228,7 +228,7 @@ impl<A: Api> BuilderApi<A> {
         trace!("sent bid to bid sorter");
 
         // In case the merging data is malformed, we log any error and discard it
-        let mergeable_orders = get_mergeable_orders(&payload, &merging_data)
+        let mergeable_orders = get_mergeable_orders(&payload, merging_data)
             .inspect_err(|e| warn!(%e, "failed to get mergeable orders"))
             .ok();
 
