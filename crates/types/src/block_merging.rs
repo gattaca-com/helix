@@ -35,7 +35,7 @@ impl TestRandom for Order {
 }
 
 /// Vector of transaction indices. Aliased for easier use.
-pub type TxIndices = SmallVec<[usize; 2]>;
+pub type TxIndices = SmallVec<[usize; 8]>;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Encode, Decode, TestRandom)]
 #[serde(deny_unknown_fields)]
