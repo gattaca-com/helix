@@ -48,14 +48,17 @@ pub struct Transaction {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
 #[serde(deny_unknown_fields)]
-/// All indices are taken from block.transactions.
+/// References a bundle of transactions via their indices.
+/// All indices are for the block the transactions come from.
 pub struct Bundle {
-    /// Signals txs that are part of the bundle
-    /// and ordering of txs.
+    /// Signals txs that are part of the bundle and ordering of txs.
+    /// Indices are for the block body the transactions come from.
     pub txs: TxIndices,
     /// Txs that may revert.
+    /// Indices are for the [txs](Self::txs) array.
     pub reverting_txs: TxIndices,
     /// Txs that are allowed to be omitted, but not revert.
+    /// Indices are for the [txs](Self::txs) array.
     pub dropping_txs: TxIndices,
 }
 
@@ -105,7 +108,7 @@ impl From<MergeableBundle> for MergeableOrder {
 pub struct MergeableTransaction {
     /// Transaction that can be merged into the block.
     pub transaction: Bytes,
-    /// Txs that may revert.
+    /// If the transaction may revert.
     pub can_revert: bool,
     /// Blobs used by the transaction
     pub blobs_bundle: Option<BlobsBundle>,
@@ -133,8 +136,10 @@ pub struct MergeableBundle {
     /// List of transactions that can be merged into the block.
     pub transactions: Vec<Bytes>,
     /// Txs that may revert.
+    /// Indices are for the [transactions](Self::transactions) array.
     pub reverting_txs: TxIndices,
     /// Txs that are allowed to be omitted, but not revert.
+    /// Indices are for the [transactions](Self::transactions) array.
     pub dropping_txs: TxIndices,
     /// Blobs used by the bundle
     pub blobs_bundle: Option<BlobsBundle>,
