@@ -115,11 +115,15 @@ impl<A: Api> ProposerApi<A> {
             };
             let slot = next_duty.slot.into();
             let best_header_opt = self.shared_best_header.load_any(slot);
-            if best_header_opt.is_none() || !best_header_opt.as_ref().unwrap().1.allow_appending {
+            let Some((best_bid, merging_preferences)) = best_header_opt else {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 continue;
-            }
-            let (best_bid, _) = best_header_opt.unwrap();
+            };
+
+            if !merging_preferences.allow_appending {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                continue;
+            };
             let proposer_fee_recipient = next_duty.entry.registration.message.fee_recipient;
             let proposer_pubkey = next_duty.entry.registration.message.pubkey;
 
