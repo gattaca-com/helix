@@ -37,7 +37,7 @@ impl TestRandom for Order {
 /// Vector of transaction indices. Aliased for easier use.
 pub type TxIndices = SmallVec<[usize; 2]>;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Encode, Decode, TestRandom)]
 #[serde(deny_unknown_fields)]
 pub struct Transaction {
     /// Index into block.transactions
@@ -74,7 +74,7 @@ impl BlockMergingData {
 }
 
 #[derive(
-    Debug, Default, PartialEq, Eq, Clone, Serialize, Deserialize, Encode, Decode, TestRandom,
+    Debug, Default, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Encode, Decode, TestRandom,
 )]
 pub struct BlockMergingPreferences {
     pub allow_appending: bool,

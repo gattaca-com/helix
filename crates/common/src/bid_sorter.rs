@@ -534,7 +534,7 @@ impl BidSorter {
         let _ = self.top_bid_tx.send(top_bid_update);
 
         self.curr_bid = Some((builder_pubkey, bid));
-        self.shared_best_header.store(self.curr_bid_slot, h.clone(), merging_preferences.clone());
+        self.shared_best_header.store(self.curr_bid_slot, h.clone(), *merging_preferences);
 
         self.local_telemetry.top_bids += 1;
         TopBidMetrics::top_bid_update_count();
