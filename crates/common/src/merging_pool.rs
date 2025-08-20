@@ -129,7 +129,7 @@ impl MergingPool {
     fn process_slot(&mut self, head_slot: u64) {
         self.curr_bid_slot = head_slot + 1;
 
-        self.shared_best_orders.reset(head_slot);
+        self.shared_best_orders.reset(self.curr_bid_slot);
     }
 }
 
