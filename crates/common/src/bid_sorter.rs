@@ -67,14 +67,14 @@ impl BestGetHeader {
         slot: u64,
         parent_hash: &B256,
         _validator_pubkey: &BlsPublicKey,
-    ) -> Option<(BuilderBid, BlockMergingPreferences)> {
+    ) -> Option<BuilderBid> {
         let entry = (*self.0.read()).clone()?;
 
         if entry.slot != slot || entry.bid.header().parent_hash().0 != *parent_hash {
             return None;
         }
 
-        Some((entry.bid, entry.metadata))
+        Some(entry.bid)
     }
 
     pub fn load_any(&self, slot: u64) -> Option<(BuilderBid, BlockMergingPreferences)> {

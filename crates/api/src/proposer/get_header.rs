@@ -177,12 +177,12 @@ impl<A: Api> ProposerApi<A> {
         debug!(trace = ?trace, "best bid fetched");
 
         let bid = match (get_best_bid_res, merged_block_bid) {
-            (Some((bid, _)), None) => bid,
+            (Some(bid), None) => bid,
             (None, Some(bid)) => bid,
             // If the merged payload has a higher value, we use that
-            (Some((bid, _)), Some(new_bid)) if new_bid.value() > bid.value() => new_bid,
+            (Some(bid), Some(new_bid)) if new_bid.value() > bid.value() => new_bid,
             // Otherwise, we use the top bid
-            (Some((bid, _)), Some(_new_bid)) => bid,
+            (Some(bid), Some(_new_bid)) => bid,
             (None, None) => {
                 warn!("no bid found");
                 return Err(ProposerApiError::NoBidPrepared);
