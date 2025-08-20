@@ -592,16 +592,32 @@ pub(crate) fn sanity_check_block_submission(
     Ok(())
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum OrderValidationError {
+    #[error("payload fee recipient is not builder address")]
+    FeeRecipientMismatch,
+    #[error("invalid block merging tx index, got {got} with a tx count of {len}")]
+    InvalidTxIndex { got: usize, len: usize },
+    #[error("blob transaction does not reference any blobs")]
+    EmptyBlobTransaction,
+    #[error("blob transaction references blobs not in the block")]
+    MissingBlobs,
+    #[error("order reached block's max blob count")]
+    ReachedBlobLimit,
+    #[error("flagged indices reference tx outside of bundle")]
+    FlaggedIndicesOutOfBounds,
+}
+
 /// Expands the references in [`BlockMergingData`] from the transactions in the
 /// payload of the given submission. If any bundle references a transaction not in
 /// the payload, it will be silently ignored.
 pub fn get_mergeable_orders(
     payload: &SignedBidSubmission,
     merging_data: &BlockMergingData,
-) -> Result<MergeableOrders, &'static str> {
+) -> Result<MergeableOrders, OrderValidationError> {
     let execution_payload = payload.execution_payload_ref();
     if execution_payload.fee_recipient() != merging_data.builder_address {
-        return Err("payload fee recipient is not builder address");
+        return Err(OrderValidationError::FeeRecipientMismatch);
     }
     let block_blobs_bundles = payload.blobs_bundle();
     let blob_versioned_hashes: Vec<_> =
@@ -611,7 +627,7 @@ pub fn get_mergeable_orders(
         .merge_orders
         .iter()
         .map(|order| order_to_mergeable(order, txs, &blob_versioned_hashes, &block_blobs_bundles))
-        .collect::<Result<_, &'static str>>()?;
+        .collect::<Result<_, OrderValidationError>>()?;
 
     Ok(MergeableOrders::new(merging_data.builder_address, mergeable_orders))
 }
@@ -621,16 +637,11 @@ fn order_to_mergeable(
     txs: &Transactions,
     blob_versioned_hashes: &[B256],
     block_blobs_bundles: &BlobsBundle,
-) -> Result<MergeableOrder, &'static str> {
+) -> Result<MergeableOrder, OrderValidationError> {
     match order {
         Order::Tx(tx) => {
             let Some(raw_tx) = txs.get(tx.index) else {
-                debug!(
-                    "Got invalid block merging index {}, with a tx count of {}",
-                    tx.index,
-                    txs.len()
-                );
-                return Err("invalid block merging tx index");
+                return Err(OrderValidationError::InvalidTxIndex { got: tx.index, len: txs.len() });
             };
             let mut blobs_bundle = None;
             if is_blob_transaction(raw_tx) {
@@ -657,12 +668,10 @@ fn order_to_mergeable(
                 .iter()
                 .map(|tx_index| {
                     let Some(raw_tx) = txs.get(*tx_index) else {
-                        debug!(
-                            "Got invalid block merging index {} in bundle, with a tx count of {}",
-                            tx_index,
-                            txs.len()
-                        );
-                        return Err("invalid block merging bundle index");
+                        return Err(OrderValidationError::InvalidTxIndex {
+                            got: *tx_index,
+                            len: txs.len(),
+                        });
                     };
 
                     if is_blob_transaction(raw_tx) {
@@ -683,7 +692,7 @@ fn order_to_mergeable(
 
                     Ok(Bytes::from_owner(raw_tx.to_vec()))
                 })
-                .collect::<Result<_, &'static str>>()?;
+                .collect::<Result<_, OrderValidationError>>()?;
 
             let reverting_txs = update_flagged_indices(&bundle.txs, &bundle.reverting_txs)?;
             let dropping_txs = update_flagged_indices(&bundle.txs, &bundle.dropping_txs)?;
@@ -693,22 +702,25 @@ fn order_to_mergeable(
     }
 }
 
-fn extend_bundle(bundle: &mut BlobsBundle, other_bundle: BlobsBundle) -> Result<(), &'static str> {
+fn extend_bundle(
+    bundle: &mut BlobsBundle,
+    other_bundle: BlobsBundle,
+) -> Result<(), OrderValidationError> {
     other_bundle
         .commitments
         .into_iter()
         .try_for_each(|c| bundle.commitments.push(c))
-        .map_err(|_| "reached commitments limit")?;
+        .map_err(|_| OrderValidationError::ReachedBlobLimit)?;
     other_bundle
         .proofs
         .into_iter()
         .try_for_each(|c| bundle.proofs.push(c))
-        .map_err(|_| "reached proofs limit")?;
+        .map_err(|_| OrderValidationError::ReachedBlobLimit)?;
     other_bundle
         .blobs
         .into_iter()
         .try_for_each(|c| bundle.blobs.push(c))
-        .map_err(|_| "reached blobs limit")?;
+        .map_err(|_| OrderValidationError::ReachedBlobLimit)?;
 
     Ok(())
 }
@@ -716,7 +728,7 @@ fn extend_bundle(bundle: &mut BlobsBundle, other_bundle: BlobsBundle) -> Result<
 fn update_flagged_indices(
     tx_indices: &[usize],
     flagged_indices: &[usize],
-) -> Result<TxIndices, &'static str> {
+) -> Result<TxIndices, OrderValidationError> {
     let new_indices: TxIndices = tx_indices
         .iter()
         .enumerate()
@@ -724,7 +736,7 @@ fn update_flagged_indices(
         .map(|(i, _)| i)
         .collect();
     if new_indices.len() != flagged_indices.len() {
-        return Err("flagged indices reference tx outside of bundle");
+        return Err(OrderValidationError::FlaggedIndicesOutOfBounds);
     }
     Ok(new_indices)
 }
@@ -744,11 +756,11 @@ fn get_blobs_bundle_from_blob_transaction(
     raw_tx: &[u8],
     blob_versioned_hashes: &[B256],
     block_blobs_bundles: &BlobsBundle,
-) -> Result<BlobsBundle, &'static str> {
+) -> Result<BlobsBundle, OrderValidationError> {
     let versioned_hashes = get_tx_versioned_hashes(raw_tx);
     let num_blobs = versioned_hashes.len();
     if num_blobs == 0 {
-        return Err("blob transaction does not reference any blobs");
+        return Err(OrderValidationError::EmptyBlobTransaction);
     }
     let (commitments, (proofs, blobs)): (Vec<_>, (Vec<_>, Vec<_>)) = versioned_hashes
         .into_iter()
@@ -761,7 +773,7 @@ fn get_blobs_bundle_from_blob_transaction(
         })
         .unzip();
     if commitments.len() != num_blobs {
-        return Err("blob transaction references blobs not in the block");
+        return Err(OrderValidationError::MissingBlobs);
     }
     let bundle =
         BlobsBundle { commitments: commitments.into(), proofs: proofs.into(), blobs: blobs.into() };
