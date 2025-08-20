@@ -600,6 +600,9 @@ pub fn get_mergeable_orders(
     merging_data: &BlockMergingData,
 ) -> Result<MergeableOrders, &'static str> {
     let execution_payload = payload.execution_payload_ref();
+    if execution_payload.fee_recipient() != merging_data.builder_address {
+        return Err("payload fee recipient is not builder address");
+    }
     let block_blobs_bundles = payload.blobs_bundle();
     let blob_versioned_hashes: Vec<_> =
         block_blobs_bundles.commitments.iter().map(|c| c.calculate_versioned_hash()).collect();
