@@ -173,8 +173,6 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
     }
 
     pub async fn is_synced(&self) -> Result<bool, BlockSimError> {
-        let headers = HeaderMap::new();
-
         // The JSON RPC payload for checking if Geth is syncing
         let payload = json!({
             "jsonrpc": "2.0",
@@ -185,13 +183,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
 
         debug!(endpoint = %self.simulator_config.url, "sending eth_syncing");
 
-        let response = match self
-            .http
-            .post(&self.simulator_config.url)
-            .headers(headers)
-            .json(&payload)
-            .send()
-            .await
+        let response = match self.http.post(&self.simulator_config.url).json(&payload).send().await
         {
             Ok(response) => response,
             Err(err) => {
@@ -222,8 +214,6 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
         &self,
         request: BlockMergeRequest,
     ) -> Result<Response, reqwest::Error> {
-        let headers = HeaderMap::new();
-
         let rpc_payload = json!({
             "jsonrpc": "2.0",
             "id": "1",
@@ -237,13 +227,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
             "Sending RPC merge request",
         );
 
-        let res = self
-            .http
-            .post(&self.simulator_config.url)
-            .headers(headers)
-            .json(&rpc_payload)
-            .send()
-            .await;
+        let res = self.http.post(&self.simulator_config.url).json(&rpc_payload).send().await;
 
         debug!(
             block_hash = %request.execution_payload.block_hash(),
