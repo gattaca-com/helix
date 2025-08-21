@@ -99,6 +99,7 @@ pub struct BlockMergingPreferences {
 
 /// Represents one or more transactions to be appended into a block atomically.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
+#[expect(clippy::large_enum_variant)]
 pub enum MergeableOrder {
     Tx(MergeableTransaction),
     Bundle(MergeableBundle),
