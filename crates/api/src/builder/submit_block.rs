@@ -236,7 +236,6 @@ impl<A: Api> BuilderApi<A> {
             let orders = mergeable_orders.unwrap();
             let message = MergingPoolMessage::new(&payload, orders);
             // We only log the error if this fails
-            // TODO: check if we should handle this in another way
             let _ = api.pool_tx.try_send(message).inspect_err(|err| {
                 error!(?err, "failed to send mergeable orders to merging pool");
             });
