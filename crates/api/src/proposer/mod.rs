@@ -19,13 +19,14 @@ use axum::{response::IntoResponse, Extension};
 use helix_beacon::{multi_beacon_client::MultiBeaconClient, BlockBroadcaster};
 use helix_common::{
     bid_sorter::BestGetHeader, chain_info::ChainInfo, merging_pool::BestMergeableOrders,
-    signing::RelaySigningContext, utils::utcnow_ms, RelayConfig, ValidatorPreferences,
+    signing::RelaySigningContext, simulator::BlockSimError, utils::utcnow_ms, RelayConfig,
+    ValidatorPreferences,
 };
 use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
 use helix_types::{
-    BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeader, MergeableOrderWithOrigin,
-    PayloadAndBlobs, PayloadAndBlobsRef,
+    BlobsBundle, BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeader,
+    MergeableOrderWithOrigin, PayloadAndBlobs, PayloadAndBlobsRef,
 };
 use hyper::StatusCode;
 use tokio::sync::mpsc::Sender;
@@ -33,7 +34,9 @@ use tracing::{debug, error, warn};
 pub use types::*;
 
 use crate::{
-    builder::{multi_simulator::MultiSimulator, BlockMergeRequest},
+    builder::{
+        multi_simulator::MultiSimulator, rpc_simulator::BlockMergeResponse, BlockMergeRequest,
+    },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::block_merging::BestMergedBlock,
     Api,
@@ -157,7 +160,7 @@ impl<A: Api> ProposerApi<A> {
 
         let block_hash = bid.header().block_hash().0;
 
-        let mergeable_orders = self.shared_best_orders.load(slot);
+        let (mergeable_orders, blobs) = self.shared_best_orders.load(slot);
 
         // Get execution payload from auctioneer
         let payload =
@@ -171,8 +174,10 @@ impl<A: Api> ProposerApi<A> {
                 bid,
                 payload,
                 mergeable_orders,
+                blobs,
             )
-            .await?;
+            .await
+            .ok()?;
 
         Some(new_bid)
     }
@@ -188,16 +193,17 @@ impl<A: Api> ProposerApi<A> {
         bid: BuilderBid,
         payload: PayloadAndBlobs,
         merging_data: Vec<MergeableOrderWithOrigin>,
-    ) -> Option<BuilderBid> {
+        blobs: Vec<(usize, usize, BlobsBundle)>,
+    ) -> Result<BuilderBid, PayloadMergingError> {
         let merge_request = BlockMergeRequest::new(
             *bid.value(),
             proposer_fee_recipient,
             payload.execution_payload,
-            payload.blobs_bundle,
+            payload.blobs_bundle.clone(),
             merging_data,
         );
 
-        let response = self.simulator.process_merge_request(merge_request).await.ok()?;
+        let response = self.simulator.process_merge_request(merge_request).await?;
 
         // Sanity check: if the merged payload has a lower value than the original bid,
         // we return the original bid.
@@ -207,13 +213,16 @@ impl<A: Api> ProposerApi<A> {
                 %response.proposer_value,
                 "merged payload has lower value than original bid"
             );
-            return None;
+            return Err(PayloadMergingError::MergedPayloadHasLowerValue);
         }
         let header = ExecutionPayloadHeader::from(response.execution_payload.to_ref())
             .as_electra()
-            .ok()?
+            .map_err(|_| PayloadMergingError::PayloadNotElectra)?
             .clone();
-        let blob_kzg_commitments = response.blobs_bundle.commitments.clone();
+
+        let merged_blobs_bundle = append_merged_blobs(payload.blobs_bundle, blobs, &response)?;
+
+        let blob_kzg_commitments = merged_blobs_bundle.commitments.clone();
         let block_hash = response.execution_payload.block_hash().0;
 
         let new_bid = BuilderBidElectra {
@@ -231,7 +240,7 @@ impl<A: Api> ProposerApi<A> {
             async move {
                 let payload_and_blobs = PayloadAndBlobsRef {
                     execution_payload: (&response.execution_payload).into(),
-                    blobs_bundle: &response.blobs_bundle,
+                    blobs_bundle: &merged_blobs_bundle,
                 };
                 // We just log the errors as we can't really do anything about them
                 if let Err(err) = auctioneer
@@ -243,8 +252,65 @@ impl<A: Api> ProposerApi<A> {
             }
         });
 
-        Some(new_bid.into())
+        Ok(new_bid.into())
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum PayloadMergingError {
+    #[error("merged payload has lower value than original bid")]
+    MergedPayloadHasLowerValue,
+    #[error("blob not found")]
+    BlobNotFound,
+    #[error("maximum number of blobs reached")]
+    MaxBlobsReached,
+    #[error("simulator error: {0}")]
+    SimulatorError(#[from] BlockSimError),
+    #[error("payload not from electra fork")]
+    PayloadNotElectra,
+}
+
+/// Appends the merged blobs to the original blobs bundle.
+fn append_merged_blobs(
+    original_blobs_bundle: BlobsBundle,
+    mut blobs: Vec<(usize, usize, BlobsBundle)>,
+    response: &BlockMergeResponse,
+) -> Result<BlobsBundle, PayloadMergingError> {
+    let mut merged_blobs_bundle = original_blobs_bundle;
+
+    response.appended_blob_order_indices.iter().try_for_each(|(i, j)| {
+        let blob_bundle_index = blobs
+            .binary_search_by_key(&(i, j), |(k, l, _bundle)| (k, l))
+            .map_err(|_| PayloadMergingError::BlobNotFound)?;
+
+        let (_, _, blobs_bundle) = std::mem::take(&mut blobs[blob_bundle_index]);
+        extend_bundle(&mut merged_blobs_bundle, blobs_bundle)?;
+        Ok::<(), PayloadMergingError>(())
+    })?;
+    Ok(merged_blobs_bundle)
+}
+
+fn extend_bundle(
+    bundle: &mut BlobsBundle,
+    other_bundle: BlobsBundle,
+) -> Result<(), PayloadMergingError> {
+    other_bundle
+        .commitments
+        .into_iter()
+        .try_for_each(|c| bundle.commitments.push(c))
+        .map_err(|_| PayloadMergingError::MaxBlobsReached)?;
+    other_bundle
+        .proofs
+        .into_iter()
+        .try_for_each(|c| bundle.proofs.push(c))
+        .map_err(|_| PayloadMergingError::MaxBlobsReached)?;
+    other_bundle
+        .blobs
+        .into_iter()
+        .try_for_each(|c| bundle.blobs.push(c))
+        .map_err(|_| PayloadMergingError::MaxBlobsReached)?;
+
+    Ok(())
 }
 
 /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/status>

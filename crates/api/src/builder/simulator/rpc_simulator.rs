@@ -5,7 +5,7 @@ use helix_common::{
     metrics::SimulatorMetrics, simulator::BlockSimError, task, BuilderInfo, SimulatorConfig,
 };
 use helix_database::DatabaseService;
-use helix_types::{BlobsBundle, ExecutionPayload, ExecutionRequests};
+use helix_types::{ExecutionPayload, ExecutionRequests};
 use reqwest::{
     header::{HeaderMap, HeaderValue},
     Client, Response, StatusCode,
@@ -45,7 +45,9 @@ impl<T> RpcResult<T> {
 pub struct BlockMergeResponse {
     pub execution_payload: ExecutionPayload,
     pub execution_requests: ExecutionRequests,
-    pub blobs_bundle: BlobsBundle,
+    /// Indices for orders that contains blobs.
+    /// The second value is the index of the tx inside the bundle.
+    pub appended_blob_order_indices: Vec<(usize, usize)>,
     /// Total value for the proposer
     pub proposer_value: U256,
 }

@@ -99,7 +99,6 @@ pub struct BlockMergingPreferences {
 
 /// Represents one or more transactions to be appended into a block atomically.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
-#[expect(clippy::large_enum_variant)]
 #[serde(untagged)]
 pub enum MergeableOrder {
     Tx(MergeableTransaction),
@@ -119,35 +118,16 @@ impl From<MergeableBundle> for MergeableOrder {
 }
 
 /// Represents a single transaction to be appended into a block atomically.
-/// Note that [`PartialEq`] and [`Hash`] implementations ignore the blobs field.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct MergeableTransaction {
     /// Transaction that can be merged into the block.
     pub transaction: Bytes,
     /// If the transaction may revert.
     pub can_revert: bool,
-    /// Blobs used by the transaction
-    pub blobs_bundle: Option<BlobsBundle>,
-}
-
-impl Eq for MergeableTransaction {}
-
-impl PartialEq for MergeableTransaction {
-    fn eq(&self, other: &Self) -> bool {
-        self.transaction == other.transaction && self.can_revert == other.can_revert
-    }
-}
-
-impl Hash for MergeableTransaction {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.transaction.hash(state);
-        self.can_revert.hash(state);
-    }
 }
 
 /// Represents a bundle of transactions to be appended into a block atomically.
-/// Note that [`PartialEq`] and [`Hash`] implementations ignore the blobs field.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 pub struct MergeableBundle {
     /// List of transactions that can be merged into the block.
     pub transactions: Vec<Bytes>,
@@ -157,39 +137,26 @@ pub struct MergeableBundle {
     /// Txs that are allowed to be omitted, but not revert.
     /// Indices are for the [transactions](Self::transactions) array.
     pub dropping_txs: TxIndices,
-    /// Blobs used by the bundle
-    pub blobs_bundle: Option<BlobsBundle>,
 }
 
-impl Eq for MergeableBundle {}
-
-impl PartialEq for MergeableBundle {
-    fn eq(&self, other: &Self) -> bool {
-        self.transactions == other.transactions &&
-            self.reverting_txs == other.reverting_txs &&
-            self.dropping_txs == other.dropping_txs
-    }
-}
-
-impl Hash for MergeableBundle {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.transactions.hash(state);
-        self.reverting_txs.hash(state);
-        self.dropping_txs.hash(state);
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MergeableOrders {
     /// Address of the builder that submitted these orders.
     pub origin: Address,
     /// List of mergeable orders.
     pub orders: Vec<MergeableOrder>,
+    /// Blobs used by the orders, prefixed with the index
+    /// in [orders](Self::orders) and in the bundle.
+    pub blobs: Vec<(usize, usize, BlobsBundle)>,
 }
 
 impl MergeableOrders {
-    pub fn new(origin: Address, orders: Vec<MergeableOrder>) -> Self {
-        Self { origin, orders }
+    pub fn new(
+        origin: Address,
+        orders: Vec<MergeableOrder>,
+        blobs: Vec<(usize, usize, BlobsBundle)>,
+    ) -> Self {
+        Self { origin, orders, blobs }
     }
 }
 
