@@ -4,8 +4,6 @@ use alloy_primitives::B256;
 use helix_types::BuilderBid;
 use parking_lot::RwLock;
 
-const MS_TO_STALE: u64 = 250;
-
 struct BestMergedBlockEntry {
     /// Slot of the merged block
     slot: u64,
