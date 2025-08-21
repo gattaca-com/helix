@@ -18,7 +18,6 @@ use helix_common::{
     },
     bid_sorter::{BestGetHeader, FloorBid},
     chain_info::ChainInfo,
-    merging_pool::BestMergeableOrders,
     metadata_provider::DefaultMetadataProvider,
     signing::RelaySigningContext,
     RelayConfig, Route, ValidatorPreferences,
@@ -75,7 +74,6 @@ pub fn app() -> Router {
         v3_sender,
         Default::default(),
         BestGetHeader::new(),
-        BestMergeableOrders::new(),
     ));
 
     let data_api = Arc::new(DataApi::<MockApi>::new(
@@ -187,7 +185,6 @@ pub fn proposer_api_app(
         v3_sender,
         current_slot_info.clone(),
         BestGetHeader::new(),
-        BestMergeableOrders::new(),
     ));
 
     let router = Router::new()

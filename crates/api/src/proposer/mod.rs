@@ -16,11 +16,16 @@ use std::sync::{
 
 use alloy_primitives::{Address, B256};
 use axum::{response::IntoResponse, Extension};
+use crossbeam_channel::Receiver;
 use helix_beacon::{multi_beacon_client::MultiBeaconClient, BlockBroadcaster};
 use helix_common::{
-    bid_sorter::BestGetHeader, chain_info::ChainInfo, merging_pool::BestMergeableOrders,
-    signing::RelaySigningContext, simulator::BlockSimError, utils::utcnow_ms, RelayConfig,
-    ValidatorPreferences,
+    bid_sorter::BestGetHeader,
+    chain_info::ChainInfo,
+    merging_pool::{MergingPool, MergingPoolMessage},
+    signing::RelaySigningContext,
+    simulator::BlockSimError,
+    utils::utcnow_ms,
+    RelayConfig, ValidatorPreferences,
 };
 use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
@@ -63,8 +68,6 @@ pub struct ProposerApi<A: Api> {
 
     /// Set in the sorter loop
     pub shared_best_header: BestGetHeader,
-    /// Set in the merging pool loop
-    pub shared_best_orders: BestMergeableOrders,
 
     /// Set in the block merging process
     pub shared_best_merged: BestMergedBlock,
@@ -87,7 +90,6 @@ impl<A: Api> ProposerApi<A> {
         v3_payload_request: Sender<(u64, B256, BlsPublicKey, Vec<u8>)>,
         curr_slot_info: CurrentSlotInfo,
         shared_best_header: BestGetHeader,
-        shared_best_orders: BestMergeableOrders,
     ) -> Self {
         Self {
             auctioneer,
@@ -104,13 +106,28 @@ impl<A: Api> ProposerApi<A> {
             v3_payload_request,
             curr_slot_info,
             shared_best_header,
-            shared_best_orders,
             shared_best_merged: BestMergedBlock::new(),
         }
     }
 
-    pub async fn process_block_merging(self: Arc<Self>) {
+    pub async fn process_block_merging(self: Arc<Self>, pool_rx: Receiver<MergingPoolMessage>) {
+        let mut merging_pool = Some(MergingPool::new(pool_rx));
         loop {
+            // Option is due to borrow checker limitations
+            merging_pool = Some({
+                let mp = merging_pool.take();
+                let Ok(returned_mp) = tokio::task::spawn_blocking(move || {
+                    let mut mp = mp.unwrap();
+                    mp.run();
+                    mp
+                })
+                .await
+                else {
+                    error!("merging pool panicked");
+                    return;
+                };
+                returned_mp
+            });
             let (_head_slot, duty) = self.curr_slot_info.slot_info();
             let Some(next_duty) = duty else {
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
@@ -132,8 +149,15 @@ impl<A: Api> ProposerApi<A> {
             let proposer_pubkey = next_duty.entry.registration.message.pubkey;
 
             // Merge block
-            let Some(merged_block_bid) =
-                self.merge_block(slot, &proposer_pubkey, best_bid, proposer_fee_recipient).await
+            let Some(merged_block_bid) = self
+                .merge_block(
+                    slot,
+                    &proposer_pubkey,
+                    best_bid,
+                    proposer_fee_recipient,
+                    merging_pool.as_ref().unwrap(),
+                )
+                .await
             else {
                 continue;
             };
@@ -155,12 +179,13 @@ impl<A: Api> ProposerApi<A> {
         proposer_pubkey: &BlsPublicKey,
         bid: BuilderBid,
         proposer_fee_recipient: Address,
+        merging_pool: &MergingPool,
     ) -> Option<BuilderBid> {
         debug!("merging block");
 
         let block_hash = bid.header().block_hash().0;
 
-        let (mergeable_orders, blobs) = self.shared_best_orders.load(slot);
+        let (mergeable_orders, blobs) = merging_pool.get_best_orders(slot);
 
         // Get execution payload from auctioneer
         let payload =

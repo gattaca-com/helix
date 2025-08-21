@@ -11,7 +11,7 @@ use helix_beacon::{
 use helix_common::{
     bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     chain_info::ChainInfo,
-    merging_pool::{BestMergeableOrders, MergingPoolMessage},
+    merging_pool::MergingPoolMessage,
     signing::RelaySigningContext,
     BroadcasterConfig, RelayConfig,
 };
@@ -49,9 +49,9 @@ pub async fn run_api_service<A: Api>(
     terminating: Arc<AtomicBool>,
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     pool_tx: crossbeam_channel::Sender<MergingPoolMessage>,
+    pool_rx: crossbeam_channel::Receiver<MergingPoolMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
-    shared_best_orders: BestMergeableOrders,
     shared_floor: FloorBid,
 ) {
     let broadcasters = init_broadcasters(&config).await;
@@ -141,7 +141,6 @@ pub async fn run_api_service<A: Api>(
         v3_payload_request_send,
         current_slot_info,
         shared_best_header,
-        shared_best_orders,
     ));
 
     tokio::spawn(gossip::process_gossip_messages(
@@ -150,7 +149,9 @@ pub async fn run_api_service<A: Api>(
         gossip_receiver,
     ));
 
-    tokio::spawn(proposer_api.clone().process_block_merging());
+    if config.block_merging_config.is_enabled {
+        tokio::spawn(proposer_api.clone().process_block_merging(pool_rx));
+    }
 
     let data_api = Arc::new(DataApi::<A>::new(validator_preferences.clone(), db.clone()));
 

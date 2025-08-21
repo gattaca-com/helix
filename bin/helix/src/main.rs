@@ -12,7 +12,6 @@ use helix_beacon::start_beacon_client;
 use helix_common::{
     bid_sorter::{start_bid_sorter, BestGetHeader, FloorBid},
     load_config, load_keypair,
-    merging_pool::{start_merging_pool, BestMergeableOrders},
     metadata_provider::DefaultMetadataProvider,
     metrics::start_metrics_server,
     signing::RelaySigningContext,
@@ -93,7 +92,6 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
 
     let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
     let shared_best_header = BestGetHeader::new();
-    let shared_best_orders = BestMergeableOrders::new();
     let shared_floor_bid = FloorBid::new();
 
     let should_start_bid_sorter = config.router_config.validate_bid_sorter()?;
@@ -104,10 +102,6 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
             shared_best_header.clone(),
             shared_floor_bid.clone(),
         );
-    }
-
-    if should_start_bid_sorter && config.block_merging_config.is_enabled {
-        start_merging_pool(pool_rx, shared_best_orders.clone());
     }
 
     let current_slot_info = start_housekeeper(
@@ -136,9 +130,9 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         terminating.clone(),
         sorter_tx,
         pool_tx,
+        pool_rx,
         top_bid_tx,
         shared_best_header,
-        shared_best_orders,
         shared_floor_bid,
     );
 
