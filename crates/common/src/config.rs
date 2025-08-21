@@ -151,6 +151,9 @@ pub struct BlockMergingConfig {
     /// Flag to enable this feature.
     #[serde(default = "default_bool::<true>")]
     pub is_enabled: bool,
+    /// Maximum age of a merged bid before it is considered stale and discarded.
+    #[serde(default = "default_u64::<250>")]
+    pub max_merged_bid_age_ms: u64,
 }
 
 fn default_port() -> u16 {

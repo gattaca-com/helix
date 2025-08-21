@@ -19,7 +19,7 @@ use axum::{response::IntoResponse, Extension};
 use helix_beacon::{multi_beacon_client::MultiBeaconClient, BlockBroadcaster};
 use helix_common::{
     bid_sorter::BestGetHeader, chain_info::ChainInfo, merging_pool::BestMergeableOrders,
-    signing::RelaySigningContext, RelayConfig, ValidatorPreferences,
+    signing::RelaySigningContext, utils::utcnow_ms, RelayConfig, ValidatorPreferences,
 };
 use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
@@ -124,6 +124,7 @@ impl<A: Api> ProposerApi<A> {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                 continue;
             };
+            let base_block_fetched = utcnow_ms();
             let proposer_fee_recipient = next_duty.entry.registration.message.fee_recipient;
             let proposer_pubkey = next_duty.entry.registration.message.pubkey;
 
@@ -136,7 +137,12 @@ impl<A: Api> ProposerApi<A> {
 
             // Update best merged block
             let parent_block_hash = merged_block_bid.header().parent_hash().0;
-            self.shared_best_merged.store(slot, parent_block_hash, merged_block_bid);
+            self.shared_best_merged.store(
+                slot,
+                base_block_fetched,
+                parent_block_hash,
+                merged_block_bid,
+            );
         }
     }
 

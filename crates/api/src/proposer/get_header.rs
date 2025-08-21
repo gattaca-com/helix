@@ -176,13 +176,18 @@ impl<A: Api> ProposerApi<A> {
         trace.best_bid_fetched = utcnow_ns();
         debug!(trace = ?trace, "best bid fetched");
 
+        let max_merged_bid_age_ms =
+            proposer_api.relay_config.block_merging_config.max_merged_bid_age_ms;
+
         let bid = match (get_best_bid_res, merged_block_bid) {
             (Some(bid), None) => bid,
-            (None, Some(bid)) => bid,
-            // If the merged payload has a higher value, we use that
-            (Some(bid), Some(new_bid)) if new_bid.value() > bid.value() => new_bid,
-            // Otherwise, we use the top bid
-            (Some(bid), Some(_new_bid)) => bid,
+            (None, Some((_, bid))) => bid,
+            // If the current best bid has equal or higher value, we use that
+            (Some(bid), Some((_, merged_bid))) if merged_bid.value() <= bid.value() => bid,
+            // If the merged bid is stale, we use the current best bid
+            (Some(bid), Some((time, _))) if time < utcnow_ms() - max_merged_bid_age_ms => bid,
+            // Otherwise, we use the merged bid
+            (Some(_bid), Some((_, merged_bid))) => merged_bid,
             (None, None) => {
                 warn!("no bid found");
                 return Err(ProposerApiError::NoBidPrepared);
