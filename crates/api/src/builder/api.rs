@@ -58,7 +58,7 @@ pub struct BuilderApi<A: Api> {
     /// Send blocks to the bid sorter
     pub sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     /// Send mergeable orders to the merging pool
-    pub pool_tx: crossbeam_channel::Sender<MergingPoolMessage>,
+    pub pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
     /// Subscriber for TopBid updates, SSZ encoded
     pub top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     /// Send headers/blocks to be checked for V2 submissions
@@ -83,7 +83,7 @@ impl<A: Api> BuilderApi<A> {
         validator_preferences: Arc<ValidatorPreferences>,
         curr_slot_info: CurrentSlotInfo,
         sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
-        pool_tx: crossbeam_channel::Sender<MergingPoolMessage>,
+        pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
         v2_checks_tx: tokio::sync::mpsc::Sender<V2SubMessage>,
         shared_floor: FloorBid,

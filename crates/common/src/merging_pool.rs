@@ -1,4 +1,4 @@
-use std::collections::hash_map::Entry;
+use std::{collections::hash_map::Entry, sync::Arc};
 
 use alloy_primitives::{
     map::foldhash::{HashMap, HashMapExt},
@@ -7,6 +7,7 @@ use alloy_primitives::{
 use helix_types::{
     BlobsBundle, MergeableOrder, MergeableOrderWithOrigin, MergeableOrders, SignedBidSubmission,
 };
+use parking_lot::RwLock;
 use tracing::info;
 
 use crate::bid_submission::BidSubmission;
@@ -19,11 +20,14 @@ struct OrderMetadata {
 }
 
 #[derive(Debug, Clone)]
-pub struct BestMergeableOrders {
+pub struct BestMergeableOrdersEntry {
     current_slot: u64,
     // TODO: change structures to avoid copies
     order_map: HashMap<MergeableOrder, OrderMetadata>,
 }
+
+#[derive(Debug, Clone)]
+pub struct BestMergeableOrders(Arc<RwLock<BestMergeableOrdersEntry>>);
 
 impl Default for BestMergeableOrders {
     fn default() -> Self {
@@ -33,20 +37,24 @@ impl Default for BestMergeableOrders {
 
 impl BestMergeableOrders {
     pub fn new() -> Self {
-        Self { current_slot: 0, order_map: HashMap::with_capacity(5000) }
+        Self(Arc::new(RwLock::new(BestMergeableOrdersEntry {
+            current_slot: 0,
+            order_map: HashMap::with_capacity(5000),
+        })))
     }
 
     pub fn load(
         &self,
         slot: u64,
     ) -> (Vec<MergeableOrderWithOrigin>, Vec<(usize, usize, BlobsBundle)>) {
+        let entry = self.0.read();
         // If the request is for another slot, return nothing
-        if self.current_slot != slot {
+        if entry.current_slot != slot {
             return (Vec::new(), Vec::new());
         }
         let mut blobs = vec![];
         // Clone the orders and return them, collecting blobs in the process
-        let orders = self
+        let orders = entry
             .order_map
             .iter()
             .enumerate()
@@ -63,9 +71,10 @@ impl BestMergeableOrders {
     /// Inserts the orders into the merging pool.
     /// Any duplicates are discarded, unless the bid value is higher than the
     /// existing one, in which case they replace the old order.
-    pub fn insert_orders(&mut self, slot: u64, bid_value: U256, mergeable_orders: MergeableOrders) {
+    pub fn insert_orders(&self, slot: u64, bid_value: U256, mergeable_orders: MergeableOrders) {
+        let mut entry = self.0.write();
         // If the orders are for another slot, discard them
-        if self.current_slot != slot {
+        if entry.current_slot != slot {
             return;
         }
         let origin = mergeable_orders.origin;
@@ -79,7 +88,7 @@ impl BestMergeableOrders {
                 let (_i, j, blob) = blob_iter.next().unwrap();
                 blobs.push((j, blob));
             }
-            match self.order_map.entry(o) {
+            match entry.order_map.entry(o) {
                 // If the order already exists, keep the one with the highest bid
                 Entry::Occupied(mut e) if e.get().value < bid_value => {
                     *e.get_mut() = OrderMetadata { value: bid_value, origin, blobs };
@@ -93,9 +102,10 @@ impl BestMergeableOrders {
         });
     }
 
-    fn reset(&mut self, slot: u64) {
-        self.current_slot = slot;
-        self.order_map.clear();
+    fn reset(&self, slot: u64) {
+        let mut entry = self.0.write();
+        entry.current_slot = slot;
+        entry.order_map.clear();
     }
 }
 
@@ -113,24 +123,26 @@ impl MergingPoolMessage {
 }
 
 pub struct MergingPool {
-    pool_rx: crossbeam_channel::Receiver<MergingPoolMessage>,
+    pool_rx: tokio::sync::mpsc::Receiver<MergingPoolMessage>,
     best_orders: BestMergeableOrders,
     curr_bid_slot: u64,
 }
 
 impl MergingPool {
-    pub fn new(pool_rx: crossbeam_channel::Receiver<MergingPoolMessage>) -> Self {
-        let best_orders = BestMergeableOrders::new();
+    pub fn new(
+        pool_rx: tokio::sync::mpsc::Receiver<MergingPoolMessage>,
+        best_orders: BestMergeableOrders,
+    ) -> Self {
         Self { pool_rx, best_orders, curr_bid_slot: 0 }
     }
 
-    pub fn run(&mut self) {
+    pub async fn run(mut self) {
         info!("starting merging pool");
 
         loop {
-            // Receive all pending messages from channel
-            let Ok(msg) = self.pool_rx.try_recv() else {
-                return;
+            let Some(msg) = self.pool_rx.recv().await else {
+                // If channel was closed, exit the loop
+                break;
             };
 
             match msg {

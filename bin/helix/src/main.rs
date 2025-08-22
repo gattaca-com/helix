@@ -84,7 +84,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         Arc::new(RelaySigningContext { keypair, context: chain_info.clone() });
 
     let (sorter_tx, sorter_rx) = crossbeam_channel::bounded(10_000);
-    let (pool_tx, pool_rx) = crossbeam_channel::bounded(10_000);
+    let (pool_tx, pool_rx) = tokio::sync::mpsc::channel(10_000);
 
     let beacon_client = start_beacon_client(&config);
     let db = start_db_service(&config).await?;

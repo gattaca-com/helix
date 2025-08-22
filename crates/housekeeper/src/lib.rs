@@ -34,7 +34,7 @@ pub async fn start_housekeeper(
     beacon_client: Arc<MultiBeaconClient>,
     chain_info: Arc<ChainInfo>,
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
-    pool_tx: crossbeam_channel::Sender<MergingPoolMessage>,
+    pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
 ) -> eyre::Result<CurrentSlotInfo> {
     let (head_event_sender, head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
     beacon_client.subscribe_to_head_events(head_event_sender).await;

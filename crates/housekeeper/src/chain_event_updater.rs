@@ -51,7 +51,7 @@ pub struct ChainEventUpdater<A: Auctioneer + 'static> {
     curr_slot_info: CurrentSlotInfo,
 
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
-    pool_tx: crossbeam_channel::Sender<MergingPoolMessage>,
+    pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
 }
 
 impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
@@ -60,7 +60,7 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
         chain_info: Arc<ChainInfo>,
         curr_slot_info: CurrentSlotInfo,
         sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
-        pool_tx: crossbeam_channel::Sender<MergingPoolMessage>,
+        pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
     ) -> Self {
         Self {
             head_slot: 0,
