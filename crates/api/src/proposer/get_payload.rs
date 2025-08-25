@@ -451,15 +451,14 @@ impl<A: Api> ProposerApi<A> {
                     warn!("execution payload not found");
                     if first_try && request_missing_payload {
                         let proposer_pubkey_clone = pub_key.clone();
-                        let self_clone = self.clone();
+                        let gossiper = self.gossiper.clone();
                         let block_hash = *block_hash;
 
                         task::spawn(
                             file!(),
                             line!(),
                             async move {
-                                self_clone
-                                    .gossiper
+                                gossiper
                                     .request_payload(RequestPayloadParams {
                                         slot,
                                         proposer_pub_key: proposer_pubkey_clone,
