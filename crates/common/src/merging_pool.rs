@@ -160,11 +160,4 @@ impl MergingPool {
 
         self.best_orders.reset(self.curr_bid_slot);
     }
-
-    pub fn get_best_orders(
-        &self,
-        slot: u64,
-    ) -> (Vec<MergeableOrderWithOrigin>, Vec<(usize, usize, BlobsBundle)>) {
-        self.best_orders.load(slot)
-    }
 }
