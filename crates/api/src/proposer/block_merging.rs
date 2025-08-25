@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, U256};
 use helix_common::{
     merging_pool::{BestMergeableOrders, MergingPool, MergingPoolMessage},
     simulator::BlockSimError,
@@ -150,6 +150,7 @@ impl<A: Api> ProposerApi<A> {
                 blobs,
             )
             .await
+            .inspect_err(|err| warn!(%err, "failed when merging block"))
             .ok()?;
 
         Some(new_bid)
@@ -181,12 +182,10 @@ impl<A: Api> ProposerApi<A> {
         // Sanity check: if the merged payload has a lower value than the original bid,
         // we return the original bid.
         if bid.value() >= &response.proposer_value {
-            warn!(
-                original_value = %bid.value(),
-                %response.proposer_value,
-                "merged payload has lower value than original bid"
-            );
-            return Err(PayloadMergingError::MergedPayloadHasLowerValue);
+            return Err(PayloadMergingError::MergedPayloadNotValuable {
+                original: *bid.value(),
+                merged: response.proposer_value,
+            });
         }
         let header = ExecutionPayloadHeader::from(response.execution_payload.to_ref())
             .as_electra()
@@ -231,8 +230,8 @@ impl<A: Api> ProposerApi<A> {
 
 #[derive(Debug, thiserror::Error)]
 enum PayloadMergingError {
-    #[error("merged payload has lower value than original bid")]
-    MergedPayloadHasLowerValue,
+    #[error("merged payload value is lower or equal to original bid. original: {original}, merged: {merged}")]
+    MergedPayloadNotValuable { original: U256, merged: U256 },
     #[error("blob not found")]
     BlobNotFound,
     #[error("maximum number of blobs reached")]
