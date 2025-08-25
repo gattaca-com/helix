@@ -16,7 +16,7 @@ use tracing::{debug, error, warn};
 
 use crate::{
     builder::{rpc_simulator::BlockMergeResponse, BlockMergeRequest},
-    proposer::ProposerApi,
+    proposer::{error::ProposerApiError, ProposerApi},
     Api,
 };
 
@@ -103,9 +103,10 @@ impl<A: Api> ProposerApi<A> {
             let proposer_pubkey = next_duty.entry.registration.message.pubkey;
 
             // Merge block
-            let Some(merged_block_bid) = self
+            let Ok(merged_block_bid) = self
                 .merge_block(slot, &proposer_pubkey, best_bid, proposer_fee_recipient, &best_orders)
                 .await
+                .inspect_err(|err| warn!(%err, "failed when merging block"))
             else {
                 continue;
             };
@@ -128,7 +129,7 @@ impl<A: Api> ProposerApi<A> {
         bid: BuilderBid,
         proposer_fee_recipient: Address,
         best_orders: &BestMergeableOrders,
-    ) -> Option<BuilderBid> {
+    ) -> Result<BuilderBid, PayloadMergingError> {
         debug!("merging block");
 
         let block_hash = bid.header().block_hash().0;
@@ -136,8 +137,7 @@ impl<A: Api> ProposerApi<A> {
         let (mergeable_orders, blobs) = best_orders.load(slot);
 
         // Get execution payload from auctioneer
-        let payload =
-            self.get_execution_payload(slot, proposer_pubkey, &block_hash, true).await.ok()?;
+        let payload = self.get_execution_payload(slot, proposer_pubkey, &block_hash, true).await?;
 
         let new_bid = self
             .append_transactions_to_payload(
@@ -149,11 +149,9 @@ impl<A: Api> ProposerApi<A> {
                 mergeable_orders,
                 blobs,
             )
-            .await
-            .inspect_err(|err| warn!(%err, "failed when merging block"))
-            .ok()?;
+            .await?;
 
-        Some(new_bid)
+        Ok(new_bid)
     }
 
     /// Appends transactions to the payload and returns a new bid.
@@ -230,13 +228,15 @@ impl<A: Api> ProposerApi<A> {
 
 #[derive(Debug, thiserror::Error)]
 enum PayloadMergingError {
+    #[error("could not fetch original payload: {_0}")]
+    CouldNotFetchOriginalPayload(#[from] ProposerApiError),
     #[error("merged payload value is lower or equal to original bid. original: {original}, merged: {merged}")]
     MergedPayloadNotValuable { original: U256, merged: U256 },
     #[error("blob not found")]
     BlobNotFound,
     #[error("maximum number of blobs reached")]
     MaxBlobsReached,
-    #[error("simulator error: {0}")]
+    #[error("simulator error: {_0}")]
     SimulatorError(#[from] BlockSimError),
     #[error("payload not from electra fork")]
     PayloadNotElectra,
