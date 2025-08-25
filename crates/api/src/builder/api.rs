@@ -502,17 +502,16 @@ fn decode_submission<'a, T>(body_bytes: &'a Bytes, is_ssz: bool) -> Result<T, Bu
 where
     T: ssz::Decode + serde::Deserialize<'a>,
 {
-    if is_ssz {
-        match T::from_ssz_bytes(body_bytes) {
-            Ok(payload) => Ok(payload),
-            Err(err) => {
-                // Fallback to JSON
-                warn!(?err, "failed to decode payload using SSZ; falling back to JSON");
-                Ok(serde_json::from_slice(body_bytes)?)
-            }
+    if !is_ssz {
+        return Ok(serde_json::from_slice(body_bytes)?);
+    }
+    match T::from_ssz_bytes(body_bytes) {
+        Ok(payload) => Ok(payload),
+        Err(err) => {
+            // Fallback to JSON
+            warn!(?err, "failed to decode payload using SSZ; falling back to JSON");
+            Ok(serde_json::from_slice(body_bytes)?)
         }
-    } else {
-        Ok(serde_json::from_slice(body_bytes)?)
     }
 }
 
