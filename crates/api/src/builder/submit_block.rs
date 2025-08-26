@@ -104,6 +104,9 @@ impl<A: Api> BuilderApi<A> {
             });
         }
 
+        payload.blobs_bundle().validate()?;
+        trace!("validated blobs bundle");
+
         // Fetch the next payload attributes and validate basic information
         let payload_attributes =
             api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), &block_hash)?;
@@ -208,7 +211,7 @@ impl<A: Api> BuilderApi<A> {
             is_cancellations_enabled,
         )) {
             error!(?err, "failed to send submission to sorter");
-            return Err(BuilderApiError::InternalError)
+            return Err(BuilderApiError::InternalError);
         };
         trace!("sent bid to bid sorter");
 
