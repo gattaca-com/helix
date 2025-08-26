@@ -83,6 +83,7 @@ impl<A: Api> ProposerApi<A> {
                 Some(msg) = pool_rx.recv() => {
                     self.process_pool_message(msg, &mut best_orders);
                 },
+                // TODO: clean up this mess
                 Ok(Some(merging_task)) = &mut handle => {
                     if !merging {
                         let (mergeable_orders, blobs) = best_orders.load(merging_task.slot);
@@ -320,14 +321,11 @@ struct OrderMetadata {
 }
 
 #[derive(Debug, Clone)]
-pub struct BestMergeableOrdersEntry {
+pub struct BestMergeableOrders {
     current_slot: u64,
     // TODO: change structures to avoid copies
     order_map: HashMap<MergeableOrder, OrderMetadata>,
 }
-
-#[derive(Debug, Clone)]
-pub struct BestMergeableOrders(Arc<RwLock<BestMergeableOrdersEntry>>);
 
 impl Default for BestMergeableOrders {
     fn default() -> Self {
@@ -337,24 +335,20 @@ impl Default for BestMergeableOrders {
 
 impl BestMergeableOrders {
     pub fn new() -> Self {
-        Self(Arc::new(RwLock::new(BestMergeableOrdersEntry {
-            current_slot: 0,
-            order_map: HashMap::with_capacity(5000),
-        })))
+        Self { current_slot: 0, order_map: HashMap::with_capacity(5000) }
     }
 
     pub fn load(
         &self,
         slot: u64,
     ) -> (Vec<MergeableOrderWithOrigin>, Vec<(usize, usize, BlobsBundle)>) {
-        let entry = self.0.read();
         // If the request is for another slot, return nothing
-        if entry.current_slot != slot {
+        if self.current_slot != slot {
             return (Vec::new(), Vec::new());
         }
         let mut blobs = vec![];
         // Clone the orders and return them, collecting blobs in the process
-        let orders = entry
+        let orders = self
             .order_map
             .iter()
             .enumerate()
@@ -371,10 +365,9 @@ impl BestMergeableOrders {
     /// Inserts the orders into the merging pool.
     /// Any duplicates are discarded, unless the bid value is higher than the
     /// existing one, in which case they replace the old order.
-    pub fn insert_orders(&self, slot: u64, bid_value: U256, mergeable_orders: MergeableOrders) {
-        let mut entry = self.0.write();
+    pub fn insert_orders(&mut self, slot: u64, bid_value: U256, mergeable_orders: MergeableOrders) {
         // If the orders are for another slot, discard them
-        if entry.current_slot < slot {
+        if self.current_slot < slot {
             self.reset(slot);
         }
         let origin = mergeable_orders.origin;
@@ -388,7 +381,7 @@ impl BestMergeableOrders {
                 let (_i, j, blob) = blob_iter.next().unwrap();
                 blobs.push((j, blob));
             }
-            match entry.order_map.entry(o) {
+            match self.order_map.entry(o) {
                 // If the order already exists, keep the one with the highest bid
                 Entry::Occupied(mut e) if e.get().value < bid_value => {
                     *e.get_mut() = OrderMetadata { value: bid_value, origin, blobs };
@@ -402,10 +395,9 @@ impl BestMergeableOrders {
         });
     }
 
-    fn reset(&self, slot: u64) {
-        let mut entry = self.0.write();
-        entry.current_slot = slot;
-        entry.order_map.clear();
+    fn reset(&mut self, slot: u64) {
+        self.current_slot = slot;
+        self.order_map.clear();
     }
 }
 
