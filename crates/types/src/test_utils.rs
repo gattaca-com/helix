@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use alloy_consensus::Blob;
 use alloy_primitives::{b256, B256};
 use lh_types::{
     test_utils::{TestRandom, XorShiftRng},
@@ -7,7 +10,9 @@ use rand::SeedableRng;
 use serde_json::Value;
 use ssz::{Decode, Encode};
 
-use crate::{Blob, BlobsBundle, BlsPublicKey, BlsSecretKey, ExecutionPayloadElectra};
+use crate::{
+    blobs::KzgCommitment, BlobsBundle, BlsPublicKey, BlsSecretKey, ExecutionPayloadElectra,
+};
 
 /// Test that the encoding and decoding works, returns the decoded struct
 pub fn test_encode_decode_json<T: serde::Serialize + serde::de::DeserializeOwned>(d: &str) -> T {
@@ -73,9 +78,10 @@ pub fn get_payload_electra() -> (
     let blinded = full_payload.clone_as_blinded();
 
     let mut blobs_bundle = BlobsBundle::test_random();
-    blobs_bundle.commitments = blinded.body.blob_kzg_commitments.clone();
+    blobs_bundle.commitments =
+        blinded.body.blob_kzg_commitments.iter().map(|p| KzgCommitment::from(p.0)).collect();
     blobs_bundle.blobs =
-        blobs_bundle.commitments.iter().map(|_| Blob::test_random()).collect::<Vec<_>>().into();
+        blobs_bundle.commitments.iter().map(|_| Arc::new(Blob::random())).collect::<Vec<_>>();
 
     (execution_payload, blinded, blobs_bundle)
 }
