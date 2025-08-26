@@ -1,6 +1,6 @@
 use std::{io::Read, sync::Arc, time::Duration};
 
-use alloy_consensus::{TxEip4844, TxType};
+use alloy_consensus::{Bytes48, TxEip4844, TxType};
 use alloy_primitives::{B256, U256};
 use axum::{
     body::{to_bytes, Body},
@@ -27,8 +27,8 @@ use helix_database::DatabaseService;
 use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{
-    BlobsBundle, BlockMergingData, BlsPublicKey, Bundle, MergeableBundle, MergeableOrder,
-    MergeableOrders, MergeableTransaction, Order, SignedBidSubmission,
+    BlobsBundle, BlockMergingData, BlsPublicKey, Bundle, KzgCommitment, MergeableBundle,
+    MergeableOrder, MergeableOrders, MergeableTransaction, Order, SignedBidSubmission,
     SignedBidSubmissionWithMergingData, Slot, Transactions,
 };
 use parking_lot::RwLock;
@@ -618,7 +618,7 @@ pub fn get_mergeable_orders(
     }
     let block_blobs_bundles = payload.blobs_bundle();
     let blob_versioned_hashes: Vec<_> =
-        block_blobs_bundles.commitments.iter().map(|c| c.calculate_versioned_hash()).collect();
+        block_blobs_bundles.commitments.iter().map(|c| calculate_versioned_hash(*c)).collect();
     let txs = execution_payload.transactions();
 
     // Expand all orders to include the tx's bytes, collecting any blob bundles in the process.
@@ -742,9 +742,12 @@ fn get_blobs_bundle_from_blob_transaction(
     if commitments.len() != num_blobs {
         return Err(OrderValidationError::MissingBlobs);
     }
-    let bundle =
-        BlobsBundle { commitments: commitments.into(), proofs: proofs.into(), blobs: blobs.into() };
+    let bundle = BlobsBundle { commitments, proofs, blobs };
     Ok(bundle)
+}
+
+fn calculate_versioned_hash(commitment: Bytes48) -> B256 {
+    KzgCommitment(*commitment).calculate_versioned_hash()
 }
 
 #[cfg(test)]

@@ -5,8 +5,8 @@ use std::time::Instant;
 use alloy_primitives::B256;
 use helix_types::{
     mock_public_key_bytes, BlsPublicKey, BuilderBid, BuilderBidElectra,
-    ExecutionPayloadHeaderElectra, ForkName, SignedBidSubmission, SignedBuilderBid,
-    SignedBuilderBidInner, Slot,
+    ExecutionPayloadHeaderElectra, ForkName, KzgCommitment, KzgCommitments, SignedBidSubmission,
+    SignedBuilderBid, SignedBuilderBidInner, Slot,
 };
 use tracing::debug;
 
@@ -53,10 +53,13 @@ pub fn bid_submission_to_builder_bid_unsigned(submission: &SignedBidSubmission) 
 
             let message = BuilderBidElectra {
                 header,
-                blob_kzg_commitments: bid.blobs_bundle.commitments.clone(),
+                blob_kzg_commitments: KzgCommitments::new(
+                    bid.blobs_bundle.commitments.iter().map(|k| KzgCommitment(**k)).collect(),
+                )
+                .unwrap(),
                 value: bid.message.value,
                 execution_requests,
-                pubkey: mock_public_key_bytes(), // this will replaced when signing the header
+                pubkey: mock_public_key_bytes(), // this will be replaced when signing the header
             };
 
             BuilderBid::Electra(message)

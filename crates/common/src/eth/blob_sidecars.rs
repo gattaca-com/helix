@@ -1,19 +1,18 @@
 use std::sync::Arc;
 
-use helix_types::{BlobSidecar, BlobSidecarError, BlobSidecars, SszError, VersionedSignedProposal};
+use helix_types::{BlobSidecar, BlobSidecars, BlobsError, SszError, VersionedSignedProposal};
 use tracing::error;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuildBlobSidecarError {
     #[error("kzg proof mismatch: proofs: {proofs}, blobs: {blobs}")]
     KzgProofMismatch { proofs: usize, blobs: usize },
-    #[error("blob sidecar error: {0:?}")]
-    BlobSidecarError(BlobSidecarError),
+    #[error("blob sidecar error: {0}")]
+    BlobsError(#[from] BlobsError),
     #[error("Ssz error: {0:?}")]
     SszError(SszError),
 }
 
-// TODO: avoid cloning blobs
 pub fn blob_sidecars_from_unblinded_payload(
     unblinded_payload: &VersionedSignedProposal,
 ) -> Result<BlobSidecars, BuildBlobSidecarError> {
@@ -31,13 +30,9 @@ pub fn blob_sidecars_from_unblinded_payload(
         let kzg_proof = unblinded_payload.kzg_proofs[index];
         let sidecar =
             BlobSidecar::new(index, blob.clone(), &unblinded_payload.signed_block, kzg_proof)
-                .map_err(BuildBlobSidecarError::BlobSidecarError)?;
+                .map_err(BuildBlobSidecarError::BlobsError)?;
         blob_sidecars.push(Arc::new(sidecar));
     }
 
-    // TODO: check max
-    let sidecars =
-        BlobSidecars::new(blob_sidecars, 4096).map_err(BuildBlobSidecarError::SszError)?;
-
-    Ok(sidecars)
+    Ok(blob_sidecars)
 }

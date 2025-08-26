@@ -6,7 +6,7 @@ use axum::{
 use helix_common::{bid_submission::BidValidationError, simulator::BlockSimError};
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
-use helix_types::{BlsPublicKey, Slot};
+use helix_types::{BlobsError, BlsPublicKey, Slot};
 
 use super::v3::V3Error;
 
@@ -154,6 +154,9 @@ pub enum BuilderApiError {
 
     #[error("not {fork_name:?} payload")]
     InvalidPayloadType { fork_name: String },
+
+    #[error(transparent)]
+    BlobsError(#[from] BlobsError),
 }
 
 impl IntoResponse for BuilderApiError {
@@ -199,7 +202,8 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::BuilderNotInProposersTrustedList { .. } |
             BuilderApiError::PayloadError(_) |
             BuilderApiError::BidValidationError(_) |
-            BuilderApiError::InvalidPayloadType { .. } => StatusCode::BAD_REQUEST,
+            BuilderApiError::InvalidPayloadType { .. } |
+            BuilderApiError::BlobsError(_) => StatusCode::BAD_REQUEST,
 
             BuilderApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
 

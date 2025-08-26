@@ -1,4 +1,5 @@
 mod bid_submission;
+mod blobs;
 mod block_merging;
 mod clock;
 mod error;
@@ -10,15 +11,15 @@ use std::sync::Arc;
 
 use alloy_primitives::B256;
 pub use bid_submission::*;
+pub use blobs::*;
 pub use block_merging::*;
 pub use clock::*;
 pub use error::*;
-pub use lh_kzg::KzgProof;
+pub use lh_kzg::{KzgCommitment, KzgProof};
 pub use lh_test_random::TestRandom;
 pub use lh_types::{
-    blob_sidecar::BlobSidecarError, fork_name::ForkName,
-    fork_versioned_response::ForkVersionDecode, payload::ExecPayload, test_utils::TestRandom,
-    EthSpec, MainnetEthSpec, SignedRoot,
+    fork_name::ForkName, fork_versioned_response::ForkVersionDecode, payload::ExecPayload,
+    test_utils::TestRandom, EthSpec, MainnetEthSpec, SignedRoot,
 };
 use lh_types::{BlindedPayload, FixedVector, VariableList};
 use serde::{Deserialize, Serialize};
@@ -50,14 +51,12 @@ pub type ExtraData = VariableList<u8, <MainnetEthSpec as EthSpec>::MaxExtraDataB
 pub type ExecutionRequests = lh_types::execution_requests::ExecutionRequests<MainnetEthSpec>;
 
 // Blobs
-pub type Blob = lh_types::Blob<MainnetEthSpec>;
-pub type BlobSidecar = lh_types::blob_sidecar::BlobSidecar<MainnetEthSpec>;
-pub type BlobSidecars = lh_types::blob_sidecar::BlobSidecarList<MainnetEthSpec>;
-pub type BlobsBundle = lh_eth2::types::BlobsBundle<MainnetEthSpec>;
+// pub type BlobsBundle = lh_eth2::types::BlobsBundle<MainnetEthSpec>;
+pub type BlobsBundle = crate::blobs::BlobsBundleV1;
+pub type BlobSidecars = Vec<Arc<BlobSidecar>>;
 
 // Publish block
-pub type VersionedSignedProposal = lh_eth2::types::SignedBlockContents<MainnetEthSpec>;
-pub type SignedBlockContents = lh_eth2::types::SignedBlockContents<MainnetEthSpec>;
+pub type VersionedSignedProposal = SignedBlockContents;
 pub type SignedBeaconBlock = lh_types::signed_beacon_block::SignedBeaconBlock<MainnetEthSpec>;
 pub type SignedBeaconBlockElectra =
     lh_types::signed_beacon_block::SignedBeaconBlockElectra<MainnetEthSpec>;
@@ -97,7 +96,6 @@ pub type SignedBlindedBeaconBlockElectra = lh_types::signed_beacon_block::Signed
     BlindedPayload<MainnetEthSpec>,
 >;
 pub type BlindedPayloadElectra = lh_types::payload::BlindedPayloadElectra<MainnetEthSpec>;
-pub type PayloadAndBlobs = lh_eth2::types::ExecutionPayloadAndBlobs<MainnetEthSpec>;
 /// Response object of POST `/eth/v1/builder/blinded_blocks`
 pub type GetPayloadResponse = lh_types::ForkVersionedResponse<Arc<PayloadAndBlobs>>;
 
@@ -145,28 +143,6 @@ pub fn maybe_upgrade_execution_payload(
 
 pub fn mock_public_key_bytes() -> PublicKeyBytes {
     PublicKeyBytes::empty()
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Encode)]
-pub struct PayloadAndBlobsRef<'a> {
-    pub execution_payload: ExecutionPayloadRef<'a>,
-    pub blobs_bundle: &'a BlobsBundle,
-}
-
-impl<'a> From<&'a PayloadAndBlobs> for PayloadAndBlobsRef<'a> {
-    fn from(payload_and_blobs: &'a PayloadAndBlobs) -> Self {
-        let execution_payload = ExecutionPayloadRef::from(&payload_and_blobs.execution_payload);
-        PayloadAndBlobsRef { execution_payload, blobs_bundle: &payload_and_blobs.blobs_bundle }
-    }
-}
-
-impl PayloadAndBlobsRef<'_> {
-    /// Clone out an owned `PayloadAndBlobs`
-    pub fn to_owned(&self) -> PayloadAndBlobs {
-        let execution_payload = self.execution_payload.clone_from_ref();
-        let blobs_bundle = (*self.blobs_bundle).clone();
-        PayloadAndBlobs { execution_payload, blobs_bundle }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Encode)]

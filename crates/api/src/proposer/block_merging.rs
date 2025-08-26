@@ -9,7 +9,7 @@ use helix_common::{
 use helix_datastore::Auctioneer;
 use helix_types::{
     BlobsBundle, BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeader,
-    MergeableOrderWithOrigin, PayloadAndBlobs, PayloadAndBlobsRef,
+    KzgCommitment, KzgCommitments, MergeableOrderWithOrigin, PayloadAndBlobs, PayloadAndBlobsRef,
 };
 use parking_lot::RwLock;
 use tracing::{debug, error, warn};
@@ -192,7 +192,10 @@ impl<A: Api> ProposerApi<A> {
 
         let merged_blobs_bundle = append_merged_blobs(payload.blobs_bundle, blobs, &response)?;
 
-        let blob_kzg_commitments = merged_blobs_bundle.commitments.clone();
+        let blob_kzg_commitments = KzgCommitments::new(
+            merged_blobs_bundle.commitments.iter().map(|k| KzgCommitment(**k)).collect(),
+        )
+        .unwrap();
         let block_hash = response.execution_payload.block_hash().0;
 
         let new_bid = BuilderBidElectra {
@@ -234,8 +237,6 @@ enum PayloadMergingError {
     MergedPayloadNotValuable { original: U256, merged: U256 },
     #[error("blob not found")]
     BlobNotFound,
-    #[error("maximum number of blobs reached")]
-    MaxBlobsReached,
     #[error("simulator error: {_0}")]
     SimulatorError(#[from] BlockSimError),
     #[error("payload not from electra fork")]
@@ -256,31 +257,14 @@ fn append_merged_blobs(
             .map_err(|_| PayloadMergingError::BlobNotFound)?;
 
         let (_, _, blobs_bundle) = std::mem::take(&mut blobs[blob_bundle_index]);
-        extend_bundle(&mut merged_blobs_bundle, blobs_bundle)?;
+        extend_bundle(&mut merged_blobs_bundle, blobs_bundle);
         Ok::<(), PayloadMergingError>(())
     })?;
     Ok(merged_blobs_bundle)
 }
 
-fn extend_bundle(
-    bundle: &mut BlobsBundle,
-    other_bundle: BlobsBundle,
-) -> Result<(), PayloadMergingError> {
-    other_bundle
-        .commitments
-        .into_iter()
-        .try_for_each(|c| bundle.commitments.push(c))
-        .map_err(|_| PayloadMergingError::MaxBlobsReached)?;
-    other_bundle
-        .proofs
-        .into_iter()
-        .try_for_each(|c| bundle.proofs.push(c))
-        .map_err(|_| PayloadMergingError::MaxBlobsReached)?;
-    other_bundle
-        .blobs
-        .into_iter()
-        .try_for_each(|c| bundle.blobs.push(c))
-        .map_err(|_| PayloadMergingError::MaxBlobsReached)?;
-
-    Ok(())
+fn extend_bundle(bundle: &mut BlobsBundle, other_bundle: BlobsBundle) {
+    bundle.commitments.extend(other_bundle.commitments);
+    bundle.proofs.extend(other_bundle.proofs);
+    bundle.blobs.extend(other_bundle.blobs);
 }

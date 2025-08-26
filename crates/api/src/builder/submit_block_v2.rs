@@ -16,7 +16,7 @@ use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::SignedBidSubmission;
 use hyper::HeaderMap;
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{debug, error, info, trace, warn, Instrument};
 
 use super::api::BuilderApi;
 use crate::{
@@ -91,6 +91,9 @@ impl<A: Api> BuilderApi<A> {
                 got: payload.slot(),
             });
         }
+
+        payload.blobs_bundle().validate()?;
+        trace!("validated blobs bundle");
 
         // Verify that we have a validator connected for this slot
         // Note: in `submit_block_v2` we have to do this check after decoding

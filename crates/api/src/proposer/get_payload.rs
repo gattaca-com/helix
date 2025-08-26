@@ -652,7 +652,7 @@ fn validate_block_equality(
                 .blob_kzg_commitments()
                 .map_err(|_| ProposerApiError::BlobKzgCommitmentsMismatch)?;
 
-            if local_kzg_commitments != provided_kzg_commitments {
+            if !local_kzg_commitments.iter().eq(provided_kzg_commitments.iter().map(|p| p.0)) {
                 return Err(ProposerApiError::BlobKzgCommitmentsMismatch);
             }
         }
