@@ -15,7 +15,6 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::SignedBidSubmission;
-use hyper::HeaderMap;
 use tracing::{debug, error, info, trace, warn, Instrument};
 
 use super::api::BuilderApi;
@@ -40,15 +39,18 @@ impl<A: Api> BuilderApi<A> {
     /// 6. Saves the bid to auctioneer and db.
     ///
     /// Implements this API: https://docs.titanrelay.xyz/builders/builder-integration#optimistic-v2
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(req.headers())))]
     pub async fn submit_block_v2(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
         Extension(on_receive_ns): Extension<u64>,
-        headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = SubmissionTrace { receive: on_receive_ns, ..Default::default() };
-        trace.metadata = api.metadata_provider.get_metadata(&headers);
+        let mut trace = SubmissionTrace {
+            receive: on_receive_ns,
+            read_body: utcnow_ns(),
+            ..Default::default()
+        };
+        trace.metadata = api.metadata_provider.get_metadata(req.headers());
 
         // Decode the incoming request body into a payload
         let (payload, _) = decode_payload(req, &mut trace).await?;
@@ -118,8 +120,8 @@ impl<A: Api> BuilderApi<A> {
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional() &&
-            !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional()
+            && !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering enabled, discarding {optimistic_version:?} submission");
             return Err(BuilderApiError::BuilderNotOptimistic {

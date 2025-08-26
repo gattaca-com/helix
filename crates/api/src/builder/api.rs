@@ -1,4 +1,4 @@
-use std::{io::Read, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use alloy_primitives::{B256, U256};
 use axum::{
@@ -9,7 +9,6 @@ use axum::{
 };
 use bytes::Bytes;
 use dashmap::DashMap;
-use flate2::read::GzDecoder;
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
@@ -26,12 +25,13 @@ use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{BlsPublicKey, SignedBidSubmission, Slot};
 use parking_lot::RwLock;
-use ssz::Decode;
 use tracing::{debug, error, trace, warn};
 
 use super::multi_simulator::MultiSimulator;
 use crate::{
-    builder::{error::BuilderApiError, v2_check::V2SubMessage, BlockSimRequest},
+    builder::{
+        decoder::SubmissionDecoder, error::BuilderApiError, v2_check::V2SubMessage, BlockSimRequest,
+    },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     Api,
 };
@@ -429,54 +429,9 @@ pub async fn decode_payload(
         })
         .unwrap_or(false);
 
-    // Get content encoding and content type
-    let is_gzip =
-        req.headers().get("Content-Encoding").and_then(|val| val.to_str().ok()) == Some("gzip");
-
-    let is_ssz = req.headers().get("Content-Type").and_then(|val| val.to_str().ok()) ==
-        Some("application/octet-stream");
-
-    // Read the body
-    let body = req.into_body();
-    trace!("reading body");
-    let mut body_bytes = to_bytes(body, MAX_PAYLOAD_LENGTH).await?;
-    if body_bytes.len() > MAX_PAYLOAD_LENGTH {
-        return Err(BuilderApiError::PayloadTooLarge {
-            max_size: MAX_PAYLOAD_LENGTH,
-            size: body_bytes.len(),
-        });
-    }
-    trace!("read body");
-    trace.read_body = utcnow_ns();
-
-    let size_compressed = body_bytes.len();
-    // Decompress if necessary
-    if is_gzip {
-        let mut decoder = GzDecoder::new(&body_bytes[..]);
-
-        // TODO: profile this. 2 is a guess.
-        let estimated_size = body_bytes.len() * 2;
-        let mut buf = Vec::with_capacity(estimated_size);
-
-        decoder.read_to_end(&mut buf)?;
-        body_bytes = buf.into();
-    }
-
-    trace!(size_compressed, size_uncompressed = body_bytes.len(), is_gzip, "decompressed payload");
-
-    // Decode payload
-    let payload: SignedBidSubmission = if is_ssz {
-        match SignedBidSubmission::from_ssz_bytes(&body_bytes) {
-            Ok(payload) => payload,
-            Err(err) => {
-                // Fallback to JSON
-                warn!(?err, "failed to decode payload using SSZ; falling back to JSON");
-                serde_json::from_slice(&body_bytes)?
-            }
-        }
-    } else {
-        serde_json::from_slice(&body_bytes)?
-    };
+    let decoder = SubmissionDecoder::from_headers(req.headers());
+    let body_bytes = to_bytes(req.into_body(), MAX_PAYLOAD_LENGTH).await?;
+    let payload = decoder.decode(body_bytes)?;
 
     trace.decode = utcnow_ns();
     debug!(
@@ -576,6 +531,7 @@ mod tests {
         header::{CONTENT_ENCODING, CONTENT_TYPE},
         HeaderValue, Uri,
     };
+    use ssz::Decode;
 
     use super::*;
 

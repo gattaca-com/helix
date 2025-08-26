@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use alloy_eips::eip7691::MAX_BLOBS_PER_BLOCK_ELECTRA;
 use lh_types::{
     test_utils::TestRandom, EthSpec, FixedVector, ForkName, ForkVersionDecode, Hash256,
     MainnetEthSpec, SignedBeaconBlockHeader,
@@ -44,8 +45,7 @@ pub struct BlobsBundleV1 {
 
 impl TestRandom for BlobsBundleV1 {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
-        let max = MainnetEthSpec::max_blob_commitments_per_block();
-        let n = rng.gen_range(0..=max);
+        let n = rng.gen_range(0..=MAX_BLOBS_PER_BLOCK_ELECTRA);
 
         let commitments = (0..n).map(|_| KzgCommitment::random()).collect();
         let proofs = (0..n).map(|_| KzgProof::random()).collect();
@@ -65,10 +65,10 @@ impl BlobsBundleV1 {
             });
         }
 
-        if self.commitments.len() > MainnetEthSpec::max_blob_commitments_per_block() {
+        if self.commitments.len() > MAX_BLOBS_PER_BLOCK_ELECTRA as usize {
             return Err(BlobsError::BundleTooLarge {
                 got: self.commitments.len(),
-                max: MainnetEthSpec::max_blob_commitments_per_block(),
+                max: MAX_BLOBS_PER_BLOCK_ELECTRA as usize,
             });
         }
 
