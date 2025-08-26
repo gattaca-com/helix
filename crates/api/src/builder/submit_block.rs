@@ -9,7 +9,6 @@ use helix_common::{
     self,
     bid_sorter::BidSorterMessage,
     bid_submission::{BidSubmission, OptimisticVersion},
-    merging_pool::MergingPoolMessage,
     metadata_provider::MetadataProvider,
     metrics::ApiMetrics,
     task,
@@ -28,6 +27,7 @@ use crate::{
         api::{decode_payload, get_mergeable_orders, sanity_check_block_submission},
         error::BuilderApiError,
     },
+    proposer::MergingPoolMessage,
     Api,
 };
 

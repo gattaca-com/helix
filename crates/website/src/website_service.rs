@@ -73,13 +73,11 @@ impl WebsiteService {
         });
 
         let (sorter_tx, _) = crossbeam_channel::bounded(0);
-        let (pool_tx, _) = tokio::sync::mpsc::channel(0);
         let chain_updater = ChainEventUpdater::new(
             Arc::new(MockAuctioneer::new()),
             chain_info,
             current_slot_info,
             sorter_tx,
-            pool_tx,
         );
         info!("ChainEventUpdater initialized");
 

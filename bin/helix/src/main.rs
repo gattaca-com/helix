@@ -84,7 +84,6 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         Arc::new(RelaySigningContext { keypair, context: chain_info.clone() });
 
     let (sorter_tx, sorter_rx) = crossbeam_channel::bounded(10_000);
-    let (pool_tx, pool_rx) = tokio::sync::mpsc::channel(10_000);
 
     let beacon_client = start_beacon_client(&config);
     let db = start_db_service(&config).await?;
@@ -111,7 +110,6 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         beacon_client.clone(),
         chain_info.clone(),
         sorter_tx.clone(),
-        pool_tx.clone(),
     )
     .await
     .map_err(|e| eyre!("housekeeper init: {e}"))?;
@@ -129,8 +127,6 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         current_slot_info,
         terminating.clone(),
         sorter_tx,
-        pool_tx,
-        pool_rx,
         top_bid_tx,
         shared_best_header,
         shared_floor_bid,

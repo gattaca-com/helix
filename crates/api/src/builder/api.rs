@@ -18,7 +18,6 @@ use helix_common::{
     bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     bid_submission::BidSubmission,
     chain_info::ChainInfo,
-    merging_pool::MergingPoolMessage,
     simulator::BlockSimError,
     utils::{get_slot_coordinate, utcnow_ns},
     BuilderInfo, RelayConfig, SubmissionTrace, ValidatorPreferences,
@@ -38,6 +37,7 @@ use super::multi_simulator::MultiSimulator;
 use crate::{
     builder::{error::BuilderApiError, v2_check::V2SubMessage, BlockSimRequest},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
+    proposer::MergingPoolMessage,
     Api,
 };
 

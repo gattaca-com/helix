@@ -16,6 +16,7 @@ use std::sync::{
 
 use alloy_primitives::B256;
 use axum::{response::IntoResponse, Extension};
+pub use block_merging::MergingPoolMessage;
 use helix_beacon::{multi_beacon_client::MultiBeaconClient, BlockBroadcaster};
 use helix_common::{
     bid_sorter::BestGetHeader, chain_info::ChainInfo, signing::RelaySigningContext, RelayConfig,

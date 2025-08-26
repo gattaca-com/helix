@@ -1,18 +1,18 @@
-use std::sync::Arc;
+use std::{collections::hash_map::Entry, sync::Arc};
 
-use alloy_primitives::{Address, B256, U256};
-use helix_common::{
-    merging_pool::{BestMergeableOrders, MergingPool, MergingPoolMessage},
-    simulator::BlockSimError,
-    utils::utcnow_ms,
+use alloy_primitives::{
+    map::foldhash::{HashMap, HashMapExt},
+    Address, B256, U256,
 };
+use helix_common::{bid_submission::BidSubmission, simulator::BlockSimError, utils::utcnow_ms};
 use helix_datastore::Auctioneer;
 use helix_types::{
     BlobsBundle, BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeader,
-    KzgCommitment, KzgCommitments, MergeableOrderWithOrigin, PayloadAndBlobs, PayloadAndBlobsRef,
+    KzgCommitment, KzgCommitments, MergeableOrder, MergeableOrderWithOrigin, MergeableOrders,
+    PayloadAndBlobs, PayloadAndBlobsRef, SignedBidSubmission,
 };
 use parking_lot::RwLock;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     builder::{rpc_simulator::BlockMergeResponse, BlockMergeRequest},
@@ -70,17 +70,29 @@ impl BestMergedBlock {
 impl<A: Api> ProposerApi<A> {
     pub async fn process_block_merging(
         self: Arc<Self>,
-        pool_rx: tokio::sync::mpsc::Receiver<MergingPoolMessage>,
+        mut pool_rx: tokio::sync::mpsc::Receiver<MergingPoolMessage>,
     ) {
         let shared_best_orders = BestMergeableOrders::new();
-        let merging_pool = MergingPool::new(pool_rx, shared_best_orders.clone());
-        tokio::select! {
-            _ = self.block_merging_loop(shared_best_orders) => {},
-            _ = merging_pool.run() => {},
+        // let merging_pool = MergingPool::new(pool_rx, shared_best_orders.clone());
+        loop {
+            tokio::select! {
+                Some(msg) = pool_rx.recv() => {
+                    self.process_pool_message(msg, &shared_best_orders);
+                },
+                _ = self.block_merging_loop(&shared_best_orders) => {},
+            }
         }
     }
 
-    pub async fn block_merging_loop(&self, best_orders: BestMergeableOrders) {
+    fn process_pool_message(&self, msg: MergingPoolMessage, best_orders: &BestMergeableOrders) {
+        let MergingPoolMessage { bid_value, orders } = msg;
+        info!(?bid_value, "received new mergeable orders");
+        let (head_slot, _) = self.curr_slot_info.slot_info();
+        let current_slot = (head_slot + 1).into();
+        best_orders.insert_orders(current_slot, bid_value, orders);
+    }
+
+    pub async fn block_merging_loop(&self, best_orders: &BestMergeableOrders) {
         loop {
             let (_head_slot, duty) = self.curr_slot_info.slot_info();
             let Some(next_duty) = duty else {
@@ -104,7 +116,7 @@ impl<A: Api> ProposerApi<A> {
 
             // Merge block
             let Ok(merged_block_bid) = self
-                .merge_block(slot, &proposer_pubkey, best_bid, proposer_fee_recipient, &best_orders)
+                .merge_block(slot, &proposer_pubkey, best_bid, proposer_fee_recipient, best_orders)
                 .await
                 .inspect_err(|err| warn!(%err, "failed when merging block"))
             else {
@@ -267,4 +279,112 @@ fn extend_bundle(bundle: &mut BlobsBundle, other_bundle: BlobsBundle) {
     bundle.commitments.extend(other_bundle.commitments);
     bundle.proofs.extend(other_bundle.proofs);
     bundle.blobs.extend(other_bundle.blobs);
+}
+
+#[derive(Debug, Clone)]
+struct OrderMetadata {
+    value: U256,
+    origin: Address,
+    blobs: Vec<(usize, BlobsBundle)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BestMergeableOrdersEntry {
+    current_slot: u64,
+    // TODO: change structures to avoid copies
+    order_map: HashMap<MergeableOrder, OrderMetadata>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BestMergeableOrders(Arc<RwLock<BestMergeableOrdersEntry>>);
+
+impl Default for BestMergeableOrders {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl BestMergeableOrders {
+    pub fn new() -> Self {
+        Self(Arc::new(RwLock::new(BestMergeableOrdersEntry {
+            current_slot: 0,
+            order_map: HashMap::with_capacity(5000),
+        })))
+    }
+
+    pub fn load(
+        &self,
+        slot: u64,
+    ) -> (Vec<MergeableOrderWithOrigin>, Vec<(usize, usize, BlobsBundle)>) {
+        let entry = self.0.read();
+        // If the request is for another slot, return nothing
+        if entry.current_slot != slot {
+            return (Vec::new(), Vec::new());
+        }
+        let mut blobs = vec![];
+        // Clone the orders and return them, collecting blobs in the process
+        let orders = entry
+            .order_map
+            .iter()
+            .enumerate()
+            .map(|(i, (order, metadata))| {
+                let order_with_origin =
+                    MergeableOrderWithOrigin::new(metadata.origin, order.clone());
+                blobs.extend(metadata.blobs.iter().map(|(j, blob)| (i, *j, blob.clone())));
+                order_with_origin
+            })
+            .collect();
+        (orders, blobs)
+    }
+
+    /// Inserts the orders into the merging pool.
+    /// Any duplicates are discarded, unless the bid value is higher than the
+    /// existing one, in which case they replace the old order.
+    pub fn insert_orders(&self, slot: u64, bid_value: U256, mergeable_orders: MergeableOrders) {
+        let mut entry = self.0.write();
+        // If the orders are for another slot, discard them
+        if entry.current_slot < slot {
+            self.reset(slot);
+        }
+        let origin = mergeable_orders.origin;
+
+        let mut blob_iter = mergeable_orders.blobs.into_iter().fuse().peekable();
+        // Insert each order into the order map
+        mergeable_orders.orders.into_iter().enumerate().for_each(|(i, o)| {
+            // Collect all blobs for this order
+            let mut blobs = vec![];
+            while blob_iter.peek().is_some() && blob_iter.peek().unwrap().0 == i {
+                let (_i, j, blob) = blob_iter.next().unwrap();
+                blobs.push((j, blob));
+            }
+            match entry.order_map.entry(o) {
+                // If the order already exists, keep the one with the highest bid
+                Entry::Occupied(mut e) if e.get().value < bid_value => {
+                    *e.get_mut() = OrderMetadata { value: bid_value, origin, blobs };
+                }
+                Entry::Occupied(_) => {}
+                // Otherwise, insert the new order
+                Entry::Vacant(e) => {
+                    e.insert(OrderMetadata { value: bid_value, origin, blobs });
+                }
+            }
+        });
+    }
+
+    fn reset(&self, slot: u64) {
+        let mut entry = self.0.write();
+        entry.current_slot = slot;
+        entry.order_map.clear();
+    }
+}
+
+pub struct MergingPoolMessage {
+    bid_value: U256,
+    orders: MergeableOrders,
+}
+
+impl MergingPoolMessage {
+    pub fn new(submission: &SignedBidSubmission, orders: MergeableOrders) -> Self {
+        Self { bid_value: submission.value(), orders }
+    }
 }
