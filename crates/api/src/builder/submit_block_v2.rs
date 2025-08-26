@@ -120,8 +120,8 @@ impl<A: Api> BuilderApi<A> {
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
-        if next_duty.entry.preferences.filtering.is_regional()
-            && !builder_info.can_process_regional_slot_optimistically()
+        if next_duty.entry.preferences.filtering.is_regional() &&
+            !builder_info.can_process_regional_slot_optimistically()
         {
             warn!("proposer has regional filtering enabled, discarding {optimistic_version:?} submission");
             return Err(BuilderApiError::BuilderNotOptimistic {

@@ -201,11 +201,7 @@ pub enum BlobsError {
 
 #[cfg(test)]
 mod tests {
-    use crate::{test_encode_decode_json, SignedBidSubmission};
-
-    use super::*;
     use lh_eth2::types::BlobsBundle as LhBlobsBundle;
-
     use lh_types::{
         blob_sidecar::{BlobSidecar as LhBlobSidecar, BlobSidecarList as LhBlobSidecars},
         test_utils::{TestRandom, XorShiftRng},
@@ -214,6 +210,9 @@ mod tests {
     };
     use rand::SeedableRng;
     use ssz::Encode;
+
+    use super::*;
+    use crate::{test_encode_decode_json, SignedBidSubmission};
 
     #[test]
     fn test_blobs_bundle_() {
