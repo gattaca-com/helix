@@ -80,12 +80,8 @@ pub fn get_payload_electra() -> (
     let mut blobs_bundle = BlobsBundle::test_random();
     blobs_bundle.commitments =
         blinded.body.blob_kzg_commitments.iter().map(|p| KzgCommitment::from(p.0)).collect();
-    blobs_bundle.blobs = blobs_bundle
-        .commitments
-        .iter()
-        .map(|_| Arc::new(Blob::random()))
-        .collect::<Vec<_>>()
-        .into();
+    blobs_bundle.blobs =
+        blobs_bundle.commitments.iter().map(|_| Arc::new(Blob::random())).collect::<Vec<_>>();
 
     (execution_payload, blinded, blobs_bundle)
 }
