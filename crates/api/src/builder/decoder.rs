@@ -56,15 +56,15 @@ impl SubmissionDecoder {
         const ZSTD_HEADER: HeaderValue = HeaderValue::from_static("zstd");
 
         let compression = match header_map.get(CONTENT_ENCODING) {
-            Some(header) if header == &GZIP_HEADER => Compression::Gzip,
-            Some(header) if header == &ZSTD_HEADER => Compression::Zstd,
+            Some(header) if header == GZIP_HEADER => Compression::Gzip,
+            Some(header) if header == ZSTD_HEADER => Compression::Zstd,
             _ => Compression::None,
         };
 
         const SSZ_HEADER: HeaderValue = HeaderValue::from_static("application/octet-stream");
 
         let encoding = match header_map.get(CONTENT_TYPE) {
-            Some(header) if header == &SSZ_HEADER => Encoding::Ssz,
+            Some(header) if header == SSZ_HEADER => Encoding::Ssz,
             _ => Encoding::Json,
         };
 

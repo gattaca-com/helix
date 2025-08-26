@@ -68,7 +68,7 @@ impl<A: Api> BuilderApi<A> {
             return Err(BuilderApiError::ProposerDutyNotFound);
         };
 
-        trace.metadata = api.metadata_provider.get_metadata(&req.headers());
+        trace.metadata = api.metadata_provider.get_metadata(req.headers());
 
         debug!(%head_slot, timestamp_request_start = trace.receive);
 
