@@ -198,3 +198,108 @@ pub enum BlobsError {
     #[error("blobs bundle too large: bundle {got}, max: {max}")]
     BundleTooLarge { got: usize, max: usize },
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{test_encode_decode_json, SignedBidSubmission};
+
+    use super::*;
+    use lh_eth2::types::BlobsBundle as LhBlobsBundle;
+
+    use lh_types::{
+        blob_sidecar::{BlobSidecar as LhBlobSidecar, BlobSidecarList as LhBlobSidecars},
+        test_utils::{TestRandom, XorShiftRng},
+        BeaconBlock, BeaconBlockDeneb, KzgCommitment as LhKzgCommitment, KzgProof as LhKzgProof,
+        MainnetEthSpec, Signature, SignedBeaconBlock,
+    };
+    use rand::SeedableRng;
+    use ssz::Encode;
+
+    #[test]
+    fn test_blobs_bundle_() {
+        let mut rng = XorShiftRng::from_seed([42; 16]);
+
+        let our_bundle = BlobsBundleV1::random_for_test(&mut rng);
+
+        let mut lh_bundle = LhBlobsBundle::<MainnetEthSpec>::default();
+
+        for c in &our_bundle.commitments {
+            lh_bundle.commitments.push(LhKzgCommitment(c.0)).unwrap();
+        }
+
+        for p in &our_bundle.proofs {
+            lh_bundle.proofs.push(LhKzgProof(p.0)).unwrap();
+        }
+
+        for b in &our_bundle.blobs {
+            let blob_bytes: Vec<u8> = b.as_ref().to_vec();
+            lh_bundle.blobs.push(blob_bytes.into()).unwrap();
+        }
+
+        assert_eq!(our_bundle.as_ssz_bytes(), lh_bundle.as_ssz_bytes());
+    }
+
+    #[test]
+    fn test_payload_and_blobs_equivalence() {
+        let data_json = include_str!("testdata/signed-bid-submission-electra.json");
+        let signed_bid = test_encode_decode_json::<SignedBidSubmission>(&data_json);
+        let ex = signed_bid.payload_and_blobs_ref().to_owned();
+
+        let data_ssz = ex.as_ssz_bytes();
+
+        let ex_test =
+            PayloadAndBlobs::from_ssz_bytes_by_fork(&data_ssz, ForkName::Electra).unwrap();
+
+        assert_eq!(ex, ex_test)
+    }
+
+    #[test]
+    fn test_blob_sidecars_equivalence() {
+        let mut rng = XorShiftRng::from_seed([42; 16]);
+
+        // Create random block and sidecar data
+        let block = BeaconBlockDeneb::<MainnetEthSpec>::random_for_test(&mut rng);
+        let signed_block =
+            SignedBeaconBlock::from_block(BeaconBlock::Deneb(block.clone()), Signature::empty());
+
+        let blob = Arc::new(alloy_consensus::Blob::random());
+        let kzg_proof = KzgProof::random();
+
+        // Create our sidecar
+        let our_sidecar =
+            BlobSidecar::new(0, blob.clone(), &signed_block, kzg_proof.clone()).unwrap();
+        let our_sidecars = vec![our_sidecar.clone()];
+
+        // Create equivalent Lighthouse sidecar
+        let lh_sidecar: LhBlobSidecar<MainnetEthSpec> = LhBlobSidecar {
+            index: our_sidecar.index,
+            blob: our_sidecar.blob.as_ref().to_vec().into(),
+            kzg_commitment: our_sidecar.kzg_commitment.clone(),
+            kzg_proof: LhKzgProof(our_sidecar.kzg_proof.0),
+            signed_block_header: our_sidecar.signed_block_header.clone(),
+            kzg_commitment_inclusion_proof: our_sidecar.kzg_commitment_inclusion_proof.clone(),
+        };
+        let lh_sidecars = LhBlobSidecars::new(
+            vec![Arc::new(lh_sidecar)],
+            MainnetEthSpec::max_blob_commitments_per_block(),
+        )
+        .unwrap();
+
+        // Verify fields individually
+        assert_eq!(our_sidecars.len(), lh_sidecars.len());
+
+        for (our_sidecar, lh_sidecar) in our_sidecars.iter().zip(lh_sidecars.iter()) {
+            assert_eq!(our_sidecar.index, lh_sidecar.index);
+            let our_bytes = &*our_sidecar.blob;
+            let lh_bytes = &lh_sidecar.blob;
+            assert!(our_bytes.0 == lh_bytes.as_ref());
+            assert_eq!(our_sidecar.kzg_commitment, lh_sidecar.kzg_commitment);
+            assert_eq!(our_sidecar.kzg_proof.0, lh_sidecar.kzg_proof.0);
+            assert_eq!(our_sidecar.signed_block_header, lh_sidecar.signed_block_header);
+            assert_eq!(
+                our_sidecar.kzg_commitment_inclusion_proof,
+                lh_sidecar.kzg_commitment_inclusion_proof
+            );
+        }
+    }
+}
