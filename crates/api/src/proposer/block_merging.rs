@@ -9,7 +9,7 @@ use helix_datastore::Auctioneer;
 use helix_types::{
     BlobsBundle, BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeader,
     KzgCommitment, KzgCommitments, MergeableOrder, MergeableOrderWithOrigin, MergeableOrders,
-    PayloadAndBlobs, PayloadAndBlobsRef, SignedBidSubmission,
+    PayloadAndBlobs, PayloadAndBlobsRef, SignedBidSubmission, ValidatorRegistrationData,
 };
 use parking_lot::RwLock;
 use tracing::{debug, error, info, warn};
@@ -72,19 +72,39 @@ impl<A: Api> ProposerApi<A> {
         self: Arc<Self>,
         mut pool_rx: tokio::sync::mpsc::Receiver<MergingPoolMessage>,
     ) {
-        let shared_best_orders = BestMergeableOrders::new();
-        // let merging_pool = MergingPool::new(pool_rx, shared_best_orders.clone());
+        let mut best_orders = BestMergeableOrders::new();
+        let mut handle = tokio::spawn({
+            let this = self.clone();
+            async move { this.fetch_base_block().await }
+        });
+        let mut merging = false;
         loop {
             tokio::select! {
                 Some(msg) = pool_rx.recv() => {
-                    self.process_pool_message(msg, &shared_best_orders);
+                    self.process_pool_message(msg, &mut best_orders);
                 },
-                _ = self.block_merging_loop(&shared_best_orders) => {},
+                Ok(Some(merging_task)) = &mut handle => {
+                    if !merging {
+                        let (mergeable_orders, blobs) = best_orders.load(merging_task.slot);
+
+                        handle = tokio::spawn({
+                            let this = self.clone();
+                            async move { this.merge_block(merging_task, mergeable_orders, blobs).await }
+                        });
+                        merging = true;
+                    } else {
+                        merging = false;
+                        handle = tokio::spawn({
+                            let this = self.clone();
+                            async move { this.fetch_base_block().await }
+                        });
+                    }
+                },
             }
         }
     }
 
-    fn process_pool_message(&self, msg: MergingPoolMessage, best_orders: &BestMergeableOrders) {
+    fn process_pool_message(&self, msg: MergingPoolMessage, best_orders: &mut BestMergeableOrders) {
         let MergingPoolMessage { bid_value, orders } = msg;
         info!(?bid_value, "received new mergeable orders");
         let (head_slot, _) = self.curr_slot_info.slot_info();
@@ -92,78 +112,70 @@ impl<A: Api> ProposerApi<A> {
         best_orders.insert_orders(current_slot, bid_value, orders);
     }
 
-    pub async fn block_merging_loop(&self, best_orders: &BestMergeableOrders) {
-        loop {
-            let (_head_slot, duty) = self.curr_slot_info.slot_info();
-            let Some(next_duty) = duty else {
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                continue;
-            };
-            let slot = next_duty.slot.into();
-            let best_header_opt = self.shared_best_header.load_any(slot);
-            let Some((best_bid, merging_preferences)) = best_header_opt else {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                continue;
-            };
+    async fn fetch_base_block(&self) -> Option<MergingTask> {
+        let (_head_slot, duty) = self.curr_slot_info.slot_info();
+        let Some(next_duty) = duty else {
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            return None;
+        };
+        let slot = next_duty.slot.into();
+        let best_header_opt = self.shared_best_header.load_any(slot);
+        let Some((best_bid, merging_preferences)) = best_header_opt else {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            return None;
+        };
 
-            if !merging_preferences.allow_appending {
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                continue;
-            };
-            let base_block_fetched = utcnow_ms();
-            let proposer_fee_recipient = next_duty.entry.registration.message.fee_recipient;
-            let proposer_pubkey = next_duty.entry.registration.message.pubkey;
-
-            // Merge block
-            let Ok(merged_block_bid) = self
-                .merge_block(slot, &proposer_pubkey, best_bid, proposer_fee_recipient, best_orders)
-                .await
-                .inspect_err(|err| warn!(%err, "failed when merging block"))
-            else {
-                continue;
-            };
-
-            // Update best merged block
-            let parent_block_hash = merged_block_bid.header().parent_hash().0;
-            self.shared_best_merged.store(
-                slot,
-                base_block_fetched,
-                parent_block_hash,
-                merged_block_bid,
-            );
-        }
+        if !merging_preferences.allow_appending {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            return None;
+        };
+        let registration_data = next_duty.entry.registration.message;
+        let block_hash = best_bid.header().block_hash().0;
+        let payload = self
+            .get_execution_payload(slot, &registration_data.pubkey, &block_hash, true)
+            .await
+            .inspect_err(|err| warn!(%err, "failed to fetch base block"))
+            .ok()?;
+        return Some(MergingTask::new_base_block(slot, best_bid, registration_data, payload));
     }
 
     async fn merge_block(
         &self,
-        slot: u64,
-        proposer_pubkey: &BlsPublicKey,
-        bid: BuilderBid,
-        proposer_fee_recipient: Address,
-        best_orders: &BestMergeableOrders,
-    ) -> Result<BuilderBid, PayloadMergingError> {
+        merging_task: MergingTask,
+        mergeable_orders: Vec<MergeableOrderWithOrigin>,
+        blobs: Vec<(usize, usize, BlobsBundle)>,
+    ) -> Option<MergingTask> {
+        let base_block_fetched = utcnow_ms();
+        let proposer_fee_recipient = merging_task.registration_data.fee_recipient;
+        let proposer_pubkey = merging_task.registration_data.pubkey.clone();
+
         debug!("merging block");
 
-        let block_hash = bid.header().block_hash().0;
-
-        let (mergeable_orders, blobs) = best_orders.load(slot);
-
-        // Get execution payload from auctioneer
-        let payload = self.get_execution_payload(slot, proposer_pubkey, &block_hash, true).await?;
-
-        let new_bid = self
+        // Merge block
+        let merged_block_bid = self
             .append_transactions_to_payload(
-                slot,
+                merging_task.slot,
                 proposer_fee_recipient,
-                proposer_pubkey,
-                bid,
-                payload,
+                &proposer_pubkey,
+                merging_task.best_bid.clone(),
+                merging_task.payload.clone(),
                 mergeable_orders,
                 blobs,
             )
-            .await?;
+            .await
+            .inspect_err(|err| warn!(%err, "failed when merging block"))
+            .ok()?;
 
-        Ok(new_bid)
+        // Update best merged block
+        let parent_block_hash = merged_block_bid.header().parent_hash().0;
+        self.shared_best_merged.store(
+            merging_task.slot,
+            base_block_fetched,
+            parent_block_hash,
+            merged_block_bid,
+        );
+
+        Some(merging_task)
     }
 
     /// Appends transactions to the payload and returns a new bid.
@@ -279,6 +291,25 @@ fn extend_bundle(bundle: &mut BlobsBundle, other_bundle: BlobsBundle) {
     bundle.commitments.extend(other_bundle.commitments);
     bundle.proofs.extend(other_bundle.proofs);
     bundle.blobs.extend(other_bundle.blobs);
+}
+
+#[derive(Debug, Clone)]
+struct MergingTask {
+    slot: u64,
+    best_bid: BuilderBid,
+    registration_data: ValidatorRegistrationData,
+    payload: PayloadAndBlobs,
+}
+
+impl MergingTask {
+    fn new_base_block(
+        slot: u64,
+        best_bid: BuilderBid,
+        registration_data: ValidatorRegistrationData,
+        payload: PayloadAndBlobs,
+    ) -> MergingTask {
+        MergingTask { slot, best_bid, registration_data, payload }
+    }
 }
 
 #[derive(Debug, Clone)]
