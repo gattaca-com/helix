@@ -17,9 +17,10 @@ use helix_common::{
     ValidatorPreferences,
 };
 use helix_types::{
-    BidTrace, BlobsBundle, BlsSignature, ExecutionPayload, ExecutionRequests,
+    BidTrace, BlobsBundle, BlsSignature, ExecutionPayload, ExecutionPayloadRef, ExecutionRequests,
     MergeableOrderWithOrigin, SignedBidSubmission,
 };
+use serde_json::json;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockSimRequest {
@@ -59,30 +60,42 @@ impl BlockSimRequest {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct BlockMergeRequest {
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BlockMergeRequestRef<'a> {
     /// The original payload value
     pub original_value: U256,
     pub proposer_fee_recipient: Address,
-    pub execution_payload: ExecutionPayload,
+    pub execution_payload: ExecutionPayloadRef<'a>,
     pub blobs_bundle: BlobsBundle,
-    pub merging_data: Vec<MergeableOrderWithOrigin>,
+    pub merging_data: &'a [MergeableOrderWithOrigin],
+}
+
+pub struct BlockMergeRequest {
+    /// The serialized request
+    request: serde_json::Value,
+    /// The block hash of the execution payload
+    block_hash: B256,
 }
 
 impl BlockMergeRequest {
     pub fn new(
         original_value: U256,
         proposer_fee_recipient: Address,
-        execution_payload: ExecutionPayload,
+        execution_payload: ExecutionPayloadRef,
         blobs_bundle: BlobsBundle,
-        merging_data: Vec<MergeableOrderWithOrigin>,
+        merging_data: &[MergeableOrderWithOrigin],
     ) -> Self {
-        Self {
+        let block_hash = *execution_payload.block_hash();
+        // We serialize the request ahead of time, to avoid copying the original
+        // payload and merging data.
+        let request_ref = BlockMergeRequestRef {
             original_value,
             proposer_fee_recipient,
             execution_payload,
             blobs_bundle,
             merging_data,
-        }
+        };
+        let request = json!(request_ref);
+        Self { request, block_hash }
     }
 }

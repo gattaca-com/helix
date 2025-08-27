@@ -221,11 +221,11 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
             "jsonrpc": "2.0",
             "id": "1",
             "method": "relay_mergeBlockV1",
-            "params": [request]
+            "params": [request.request]
         });
 
         debug!(
-            block_hash = %request.execution_payload.block_hash(),
+            block_hash = %request.block_hash,
             size = rpc_payload.to_string().len(),
             "Sending RPC merge request",
         );
@@ -233,7 +233,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
         let res = self.http.post(&self.simulator_config.url).json(&rpc_payload).send().await;
 
         debug!(
-            block_hash = %request.execution_payload.block_hash(),
+            block_hash = %request.block_hash,
             size = rpc_payload.to_string().len(),
             "Sent RPC merge request",
         );
@@ -247,7 +247,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
     ) -> Result<BlockMergeResponse, BlockSimError> {
         let timer = SimulatorMetrics::block_merge_timer(&self.simulator_config.url);
 
-        let block_hash = request.execution_payload.block_hash().0;
+        let block_hash = request.block_hash;
         debug!(
             %block_hash,
             "RpcSimulator::process_merge_request",

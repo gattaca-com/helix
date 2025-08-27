@@ -8,8 +8,8 @@ use helix_common::{bid_submission::BidSubmission, simulator::BlockSimError, util
 use helix_datastore::Auctioneer;
 use helix_types::{
     BlobsBundle, BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeader,
-    KzgCommitment, KzgCommitments, MergeableOrder, MergeableOrderWithOrigin, MergeableOrders,
-    PayloadAndBlobs, PayloadAndBlobsRef, PublicKeyBytes, SignedBidSubmission,
+    ExecutionPayloadRef, KzgCommitment, KzgCommitments, MergeableOrder, MergeableOrderWithOrigin,
+    MergeableOrders, PayloadAndBlobs, PayloadAndBlobsRef, PublicKeyBytes, SignedBidSubmission,
     ValidatorRegistrationData,
 };
 use parking_lot::RwLock;
@@ -123,7 +123,7 @@ impl<A: Api> ProposerApi<A> {
                     best_bid,
                     registration_data,
                     payload,
-                    mergeable_orders,
+                    &mergeable_orders,
                 )
             }
             MergingTaskState::GotMergedBlock {
@@ -157,7 +157,7 @@ impl<A: Api> ProposerApi<A> {
         base_bid: BuilderBid,
         registration_data: ValidatorRegistrationData,
         payload: PayloadAndBlobs,
-        mergeable_orders: Vec<MergeableOrderWithOrigin>,
+        mergeable_orders: &[MergeableOrderWithOrigin],
     ) -> JoinHandle<MergingTaskResult> {
         let base_block_time_ms = utcnow_ms();
         let proposer_fee_recipient = registration_data.fee_recipient;
@@ -168,7 +168,7 @@ impl<A: Api> ProposerApi<A> {
         let merge_request = BlockMergeRequest::new(
             *base_bid.value(),
             proposer_fee_recipient,
-            payload.execution_payload.clone(),
+            ExecutionPayloadRef::from(&payload.execution_payload),
             payload.blobs_bundle.clone(),
             mergeable_orders,
         );
