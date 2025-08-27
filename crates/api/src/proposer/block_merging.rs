@@ -9,9 +9,11 @@ use helix_datastore::Auctioneer;
 use helix_types::{
     BlobsBundle, BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeader,
     KzgCommitment, KzgCommitments, MergeableOrder, MergeableOrderWithOrigin, MergeableOrders,
-    PayloadAndBlobs, PayloadAndBlobsRef, SignedBidSubmission, ValidatorRegistrationData,
+    PayloadAndBlobs, PayloadAndBlobsRef, PublicKeyBytes, SignedBidSubmission,
+    ValidatorRegistrationData,
 };
 use parking_lot::RwLock;
+use tokio::task::{JoinError, JoinHandle};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -24,7 +26,7 @@ struct BestMergedBlockEntry {
     /// Slot of the merged block
     slot: u64,
     /// Timestamp when the base block was fetched
-    base_block_time_ns: u64,
+    base_block_time_ms: u64,
     /// Hash of the parent of the merged block
     parent_block_hash: B256,
     /// The merged block bid
@@ -48,12 +50,12 @@ impl BestMergedBlock {
     pub fn store(
         &self,
         slot: u64,
-        base_block_time_ns: u64,
+        base_block_time_ms: u64,
         parent_block_hash: B256,
         bid: BuilderBid,
     ) {
         let mut guard = self.0.write();
-        *guard = Some(BestMergedBlockEntry { slot, base_block_time_ns, parent_block_hash, bid });
+        *guard = Some(BestMergedBlockEntry { slot, base_block_time_ms, parent_block_hash, bid });
     }
 
     /// Loads the best merged block for the given slot and parent block hash.
@@ -63,7 +65,7 @@ impl BestMergedBlock {
             .read()
             .as_ref()
             .filter(|entry| entry.slot == slot && entry.parent_block_hash == *parent_block_hash)
-            .map(|entry| (entry.base_block_time_ns, entry.bid.clone()))
+            .map(|entry| (entry.base_block_time_ms, entry.bid.clone()))
     }
 }
 
@@ -99,9 +101,9 @@ impl<A: Api> ProposerApi<A> {
 
     async fn handle_merging_task_result(
         self: &Arc<Self>,
-        result: Result<MergingTaskResult, tokio::task::JoinError>,
+        result: Result<MergingTaskResult, JoinError>,
         best_orders: &BestMergeableOrders,
-    ) -> tokio::task::JoinHandle<MergingTaskResult> {
+    ) -> JoinHandle<MergingTaskResult> {
         let this = self.clone();
         let Ok(result) = result.inspect_err(|err| warn!(%err, "merging task panicked")) else {
             return tokio::spawn(async move { this.fetch_base_block().await });
@@ -110,17 +112,87 @@ impl<A: Api> ProposerApi<A> {
         else {
             return tokio::spawn(async move { this.fetch_base_block().await });
         };
-        // Check if the task could fetch a base block, otherwise we try again
-        let MergingTaskState::FetchedBaseBlock { slot, best_bid, registration_data, payload } =
-            task_result
-        else {
-            return tokio::spawn(async move { this.fetch_base_block().await });
-        };
-        let (mergeable_orders, blobs) = best_orders.load(slot);
+        match task_result {
+            MergingTaskState::RetryFetch => {
+                tokio::spawn(async move { this.fetch_base_block().await })
+            }
+            MergingTaskState::FetchedBaseBlock { slot, best_bid, registration_data, payload } => {
+                let mergeable_orders = best_orders.load(slot);
+                this.spawn_merging_task(
+                    slot,
+                    best_bid,
+                    registration_data,
+                    payload,
+                    mergeable_orders,
+                )
+            }
+            MergingTaskState::GotMergedBlock {
+                slot,
+                base_block_time_ms,
+                builder_pubkey,
+                proposer_pubkey,
+                original_payload,
+                response,
+            } => {
+                let _ = self
+                    .store_merged_payload(
+                        slot,
+                        base_block_time_ms,
+                        builder_pubkey,
+                        proposer_pubkey,
+                        original_payload,
+                        response,
+                        &best_orders.mergeable_blob_bundles,
+                    )
+                    .inspect_err(|err| warn!(%err, "failed to store merged payload"));
+
+                tokio::spawn(async move { this.fetch_base_block().await })
+            }
+        }
+    }
+
+    fn spawn_merging_task(
+        self: Arc<Self>,
+        slot: u64,
+        base_bid: BuilderBid,
+        registration_data: ValidatorRegistrationData,
+        payload: PayloadAndBlobs,
+        mergeable_orders: Vec<MergeableOrderWithOrigin>,
+    ) -> JoinHandle<MergingTaskResult> {
+        let base_block_time_ms = utcnow_ms();
+        let proposer_fee_recipient = registration_data.fee_recipient;
+        let proposer_pubkey = registration_data.pubkey.clone();
+
+        debug!("merging block");
+
+        let merge_request = BlockMergeRequest::new(
+            *base_bid.value(),
+            proposer_fee_recipient,
+            payload.execution_payload.clone(),
+            payload.blobs_bundle.clone(),
+            mergeable_orders,
+        );
 
         tokio::spawn(async move {
-            this.merge_block(slot, best_bid, registration_data, payload, mergeable_orders, &blobs)
-                .await
+            let response = self.simulator.process_merge_request(merge_request).await?;
+
+            // Sanity check: if the merged payload has a lower value than the original bid,
+            // we return the original bid.
+            if base_bid.value() >= &response.proposer_value {
+                return Err(PayloadMergingError::MergedPayloadNotValuable {
+                    original: *base_bid.value(),
+                    merged: response.proposer_value,
+                });
+            }
+
+            Ok(MergingTaskState::new_merged_block(
+                slot,
+                base_block_time_ms,
+                *base_bid.pubkey(),
+                proposer_pubkey,
+                payload,
+                response,
+            ))
         })
     }
 
@@ -128,18 +200,18 @@ impl<A: Api> ProposerApi<A> {
         let (_head_slot, duty) = self.curr_slot_info.slot_info();
         let Some(next_duty) = duty else {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            return Ok(MergingTaskState::FetchBaseBlock);
+            return Ok(MergingTaskState::RetryFetch);
         };
         let slot = next_duty.slot.into();
         let best_header_opt = self.shared_best_header.load_any(slot);
         let Some((best_bid, merging_preferences)) = best_header_opt else {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            return Ok(MergingTaskState::FetchBaseBlock);
+            return Ok(MergingTaskState::RetryFetch);
         };
 
         if !merging_preferences.allow_appending {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            return Ok(MergingTaskState::FetchBaseBlock);
+            return Ok(MergingTaskState::RetryFetch);
         };
         let registration_data = next_duty.entry.registration.message;
         let block_hash = best_bid.header().block_hash().0;
@@ -150,84 +222,23 @@ impl<A: Api> ProposerApi<A> {
         Ok(MergingTaskState::new_base_block(slot, best_bid, registration_data, payload))
     }
 
-    async fn merge_block(
+    fn store_merged_payload(
         &self,
         slot: u64,
-        best_bid: BuilderBid,
-        registration_data: ValidatorRegistrationData,
-        payload: PayloadAndBlobs,
-        mergeable_orders: Vec<MergeableOrderWithOrigin>,
+        base_block_time_ms: u64,
+        builder_pubkey: PublicKeyBytes,
+        proposer_pubkey: BlsPublicKey,
+        original_payload: PayloadAndBlobs,
+        response: BlockMergeResponse,
         blobs: &HashMap<B256, BlobsBundle>,
-    ) -> MergingTaskResult {
-        let base_block_fetched = utcnow_ms();
-        let proposer_fee_recipient = registration_data.fee_recipient;
-        let proposer_pubkey = registration_data.pubkey.clone();
-
-        debug!("merging block");
-
-        // Merge block
-        let merged_block_bid = self
-            .append_transactions_to_payload(
-                slot,
-                proposer_fee_recipient,
-                &proposer_pubkey,
-                best_bid.clone(),
-                payload.clone(),
-                mergeable_orders,
-                blobs,
-            )
-            .await
-            .inspect_err(|err| warn!(%err, "failed when merging block"))?;
-
-        // Update best merged block
-        let parent_block_hash = merged_block_bid.header().parent_hash().0;
-        self.shared_best_merged.store(
-            slot,
-            base_block_fetched,
-            parent_block_hash,
-            merged_block_bid,
-        );
-
-        Ok(MergingTaskState::MergedBlock)
-    }
-
-    /// Appends transactions to the payload and returns a new bid.
-    /// The payload referenced in the bid is stored in the DB.
-    /// This function might return the original bid if somehow the merged payload has a lower value.
-    async fn append_transactions_to_payload(
-        &self,
-        slot: u64,
-        proposer_fee_recipient: Address,
-        proposer_pubkey: &BlsPublicKey,
-        bid: BuilderBid,
-        payload: PayloadAndBlobs,
-        merging_data: Vec<MergeableOrderWithOrigin>,
-        blobs: &HashMap<B256, BlobsBundle>,
-    ) -> Result<BuilderBid, PayloadMergingError> {
-        let merge_request = BlockMergeRequest::new(
-            *bid.value(),
-            proposer_fee_recipient,
-            payload.execution_payload,
-            payload.blobs_bundle.clone(),
-            merging_data,
-        );
-
-        let response = self.simulator.process_merge_request(merge_request).await?;
-
-        // Sanity check: if the merged payload has a lower value than the original bid,
-        // we return the original bid.
-        if bid.value() >= &response.proposer_value {
-            return Err(PayloadMergingError::MergedPayloadNotValuable {
-                original: *bid.value(),
-                merged: response.proposer_value,
-            });
-        }
+    ) -> Result<(), PayloadMergingError> {
         let header = ExecutionPayloadHeader::from(response.execution_payload.to_ref())
             .as_electra()
             .map_err(|_| PayloadMergingError::PayloadNotElectra)?
             .clone();
 
-        let merged_blobs_bundle = append_merged_blobs(payload.blobs_bundle, blobs, &response)?;
+        let merged_blobs_bundle =
+            append_merged_blobs(original_payload.blobs_bundle, blobs, &response)?;
 
         let blob_kzg_commitments = KzgCommitments::new(
             merged_blobs_bundle.commitments.iter().map(|k| KzgCommitment(**k)).collect(),
@@ -240,13 +251,12 @@ impl<A: Api> ProposerApi<A> {
             blob_kzg_commitments,
             execution_requests: response.execution_requests,
             value: response.proposer_value,
-            pubkey: *bid.pubkey(),
+            pubkey: builder_pubkey,
         };
 
         // Store the payload in the background
         tokio::task::spawn({
             let auctioneer = self.auctioneer.clone();
-            let proposer_pubkey = proposer_pubkey.clone();
             async move {
                 let payload_and_blobs = PayloadAndBlobsRef {
                     execution_payload: (&response.execution_payload).into(),
@@ -262,7 +272,11 @@ impl<A: Api> ProposerApi<A> {
             }
         });
 
-        Ok(new_bid.into())
+        // Update best merged block
+        let parent_block_hash = new_bid.header.parent_hash.0;
+        self.shared_best_merged.store(slot, base_block_time_ms, parent_block_hash, new_bid.into());
+
+        Ok(())
     }
 }
 
@@ -302,16 +316,23 @@ fn extend_bundle(bundle: &mut BlobsBundle, other_bundle: BlobsBundle) {
     bundle.blobs.extend(other_bundle.blobs);
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum MergingTaskState {
-    FetchBaseBlock,
+    RetryFetch,
     FetchedBaseBlock {
         slot: u64,
         best_bid: BuilderBid,
         registration_data: ValidatorRegistrationData,
         payload: PayloadAndBlobs,
     },
-    MergedBlock,
+    GotMergedBlock {
+        slot: u64,
+        base_block_time_ms: u64,
+        builder_pubkey: PublicKeyBytes,
+        proposer_pubkey: BlsPublicKey,
+        original_payload: PayloadAndBlobs,
+        response: BlockMergeResponse,
+    },
 }
 
 impl MergingTaskState {
@@ -322,6 +343,24 @@ impl MergingTaskState {
         payload: PayloadAndBlobs,
     ) -> MergingTaskState {
         MergingTaskState::FetchedBaseBlock { slot, best_bid, registration_data, payload }
+    }
+
+    fn new_merged_block(
+        slot: u64,
+        base_block_time_ms: u64,
+        builder_pubkey: PublicKeyBytes,
+        proposer_pubkey: BlsPublicKey,
+        original_payload: PayloadAndBlobs,
+        response: BlockMergeResponse,
+    ) -> MergingTaskState {
+        MergingTaskState::GotMergedBlock {
+            slot,
+            builder_pubkey,
+            proposer_pubkey,
+            base_block_time_ms,
+            original_payload,
+            response,
+        }
     }
 }
 
@@ -356,10 +395,10 @@ impl BestMergeableOrders {
         }
     }
 
-    pub fn load(&self, slot: u64) -> (Vec<MergeableOrderWithOrigin>, HashMap<B256, BlobsBundle>) {
+    pub fn load(&self, slot: u64) -> Vec<MergeableOrderWithOrigin> {
         // If the request is for another slot, return nothing
         if self.current_slot != slot {
-            return (Vec::new(), HashMap::new());
+            return Vec::new();
         }
         // Clone the orders and return them, collecting blobs in the process
         let orders = self
@@ -367,7 +406,7 @@ impl BestMergeableOrders {
             .iter()
             .map(|(order, metadata)| MergeableOrderWithOrigin::new(metadata.origin, order.clone()))
             .collect();
-        (orders, self.mergeable_blob_bundles.clone())
+        orders
     }
 
     /// Inserts the orders into the merging pool.
