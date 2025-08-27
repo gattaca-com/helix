@@ -30,11 +30,13 @@ pub struct RpcSimulator<DB: DatabaseService + 'static> {
     http: Client,
     pub simulator_config: SimulatorConfig,
     db: Arc<DB>,
+    sim_method: String,
 }
 
 impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
     pub fn new(http: Client, simulator_config: SimulatorConfig, db: Arc<DB>) -> Self {
-        Self { http, simulator_config, db }
+        let sim_method = format!("{}_validateBuilderSubmissionV4", simulator_config.namespace);
+        Self { http, simulator_config, db, sim_method }
     }
 
     /// Sends an RPC request for block validation.
@@ -53,7 +55,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
         let rpc_payload = json!({
             "jsonrpc": "2.0",
             "id": "1",
-            "method": format!("{}_validateBuilderSubmissionV4", self.simulator_config.namespace),
+            "method": &self.sim_method,
             "params": [request]
         });
 
