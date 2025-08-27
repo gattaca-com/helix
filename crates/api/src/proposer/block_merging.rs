@@ -99,64 +99,69 @@ impl<A: Api> ProposerApi<A> {
 
     async fn handle_merging_task_result(
         self: &Arc<Self>,
-        result: Result<Option<MergingTaskState>, tokio::task::JoinError>,
+        result: Result<MergingTaskResult, tokio::task::JoinError>,
         best_orders: &BestMergeableOrders,
-    ) -> tokio::task::JoinHandle<Option<MergingTaskState>> {
+    ) -> tokio::task::JoinHandle<MergingTaskResult> {
         let this = self.clone();
         if let Err(err) = result {
             warn!(%err, "merging task panicked");
             return tokio::spawn(async move { this.fetch_base_block().await });
         }
-        // TODO: turn this Option into Result
-        let Some(task_result) = result.unwrap() else {
+        if let Ok(Err(err)) = result {
+            warn!(%err, "failed when merging payload");
+            return tokio::spawn(async move { this.fetch_base_block().await });
+        }
+        let Ok(Ok(Some(task_result))) = result else {
             return tokio::spawn(async move { this.fetch_base_block().await });
         };
-        let MergingTaskState::FetchedBaseBlock { slot, .. } = task_result else {
+        let MergingTaskState::FetchedBaseBlock { slot, best_bid, registration_data, payload } =
+            task_result
+        else {
             return tokio::spawn(async move { this.fetch_base_block().await });
         };
         let (mergeable_orders, blobs) = best_orders.load(slot);
 
-        tokio::spawn(async move { this.merge_block(task_result, mergeable_orders, blobs).await })
+        tokio::spawn(async move {
+            this.merge_block(slot, best_bid, registration_data, payload, mergeable_orders, blobs)
+                .await
+        })
     }
 
-    async fn fetch_base_block(&self) -> Option<MergingTaskState> {
+    async fn fetch_base_block(&self) -> MergingTaskResult {
         let (_head_slot, duty) = self.curr_slot_info.slot_info();
         let Some(next_duty) = duty else {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-            return None;
+            return Ok(None);
         };
         let slot = next_duty.slot.into();
         let best_header_opt = self.shared_best_header.load_any(slot);
         let Some((best_bid, merging_preferences)) = best_header_opt else {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            return None;
+            return Ok(None);
         };
 
         if !merging_preferences.allow_appending {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            return None;
+            return Ok(None);
         };
         let registration_data = next_duty.entry.registration.message;
         let block_hash = best_bid.header().block_hash().0;
         let payload = self
             .get_execution_payload(slot, &registration_data.pubkey, &block_hash, true)
             .await
-            .inspect_err(|err| warn!(%err, "failed to fetch base block"))
-            .ok()?;
-        return Some(MergingTaskState::new_base_block(slot, best_bid, registration_data, payload));
+            .inspect_err(|err| warn!(%err, "failed to fetch base block"))?;
+        Ok(Some(MergingTaskState::new_base_block(slot, best_bid, registration_data, payload)))
     }
 
     async fn merge_block(
         &self,
-        merging_task: MergingTaskState,
+        slot: u64,
+        best_bid: BuilderBid,
+        registration_data: ValidatorRegistrationData,
+        payload: PayloadAndBlobs,
         mergeable_orders: Vec<MergeableOrderWithOrigin>,
         blobs: Vec<(usize, usize, BlobsBundle)>,
-    ) -> Option<MergingTaskState> {
-        let MergingTaskState::FetchedBaseBlock { slot, best_bid, registration_data, payload } =
-            merging_task
-        else {
-            return None;
-        };
+    ) -> MergingTaskResult {
         let base_block_fetched = utcnow_ms();
         let proposer_fee_recipient = registration_data.fee_recipient;
         let proposer_pubkey = registration_data.pubkey.clone();
@@ -175,8 +180,7 @@ impl<A: Api> ProposerApi<A> {
                 blobs,
             )
             .await
-            .inspect_err(|err| warn!(%err, "failed when merging block"))
-            .ok()?;
+            .inspect_err(|err| warn!(%err, "failed when merging block"))?;
 
         // Update best merged block
         let parent_block_hash = merged_block_bid.header().parent_hash().0;
@@ -187,7 +191,7 @@ impl<A: Api> ProposerApi<A> {
             merged_block_bid,
         );
 
-        Some(MergingTaskState::MergedBlock)
+        Ok(Some(MergingTaskState::MergedBlock))
     }
 
     /// Appends transactions to the payload and returns a new bid.
@@ -326,6 +330,8 @@ impl MergingTaskState {
         MergingTaskState::FetchedBaseBlock { slot, best_bid, registration_data, payload }
     }
 }
+
+type MergingTaskResult = Result<Option<MergingTaskState>, PayloadMergingError>;
 
 #[derive(Debug, Clone)]
 struct OrderMetadata {
