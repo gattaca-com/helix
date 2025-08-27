@@ -2,7 +2,7 @@ use std::{collections::hash_map::Entry, sync::Arc};
 
 use alloy_primitives::{
     map::foldhash::{HashMap, HashMapExt},
-    Address, B256, U256,
+    B256, U256,
 };
 use helix_common::{bid_submission::BidSubmission, simulator::BlockSimError, utils::utcnow_ms};
 use helix_datastore::Auctioneer;
@@ -117,13 +117,13 @@ impl<A: Api> ProposerApi<A> {
                 tokio::spawn(async move { this.fetch_base_block().await })
             }
             MergingTaskState::FetchedBaseBlock { slot, best_bid, registration_data, payload } => {
-                let mergeable_orders = best_orders.load(slot);
+                let mergeable_orders = best_orders.load_orders(slot);
                 this.spawn_merging_task(
                     slot,
                     best_bid,
                     registration_data,
                     payload,
-                    &mergeable_orders,
+                    mergeable_orders,
                 )
             }
             MergingTaskState::GotMergedBlock {
@@ -369,14 +369,14 @@ type MergingTaskResult = Result<MergingTaskState, PayloadMergingError>;
 #[derive(Debug, Clone)]
 struct OrderMetadata {
     value: U256,
-    origin: Address,
+    index: usize,
 }
 
 #[derive(Debug, Clone)]
 pub struct BestMergeableOrders {
     current_slot: u64,
-    // TODO: change structures to avoid copies
     order_map: HashMap<MergeableOrder, OrderMetadata>,
+    best_orders: Vec<MergeableOrderWithOrigin>,
     mergeable_blob_bundles: HashMap<B256, BlobsBundle>,
 }
 
@@ -392,21 +392,16 @@ impl BestMergeableOrders {
             current_slot: 0,
             order_map: HashMap::with_capacity(5000),
             mergeable_blob_bundles: HashMap::with_capacity(5000),
+            best_orders: Vec::with_capacity(5000),
         }
     }
 
-    pub fn load(&self, slot: u64) -> Vec<MergeableOrderWithOrigin> {
+    pub fn load_orders(&self, slot: u64) -> &[MergeableOrderWithOrigin] {
         // If the request is for another slot, return nothing
         if self.current_slot != slot {
-            return Vec::new();
+            return &[];
         }
-        // Clone the orders and return them, collecting blobs in the process
-        let orders = self
-            .order_map
-            .iter()
-            .map(|(order, metadata)| MergeableOrderWithOrigin::new(metadata.origin, order.clone()))
-            .collect();
-        orders
+        &self.best_orders
     }
 
     /// Inserts the orders into the merging pool.
@@ -424,12 +419,19 @@ impl BestMergeableOrders {
             match self.order_map.entry(o) {
                 // If the order already exists, keep the one with the highest bid
                 Entry::Occupied(mut e) if e.get().value < bid_value => {
-                    *e.get_mut() = OrderMetadata { value: bid_value, origin };
+                    // We update the value of the bid to the highest
+                    e.get_mut().value = bid_value;
+                    // and the origin for the order
+                    self.best_orders[e.get().index].origin = origin;
                 }
                 Entry::Occupied(_) => {}
                 // Otherwise, insert the new order
                 Entry::Vacant(e) => {
-                    e.insert(OrderMetadata { value: bid_value, origin });
+                    let index = self.best_orders.len();
+                    // We insert the order to our list of orders
+                    self.best_orders.push(MergeableOrderWithOrigin::new(origin, e.key().clone()));
+                    // and insert the metadata
+                    e.insert(OrderMetadata { value: bid_value, index });
                 }
             }
         });
