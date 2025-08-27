@@ -202,7 +202,6 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::BuilderNotInProposersTrustedList { .. } |
             BuilderApiError::PayloadError(_) |
             BuilderApiError::BidValidationError(_) |
-            BuilderApiError::InvalidPayloadType { .. } |
             BuilderApiError::BlobsError(_) => StatusCode::BAD_REQUEST,
 
             BuilderApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
@@ -216,6 +215,7 @@ impl IntoResponse for BuilderApiError {
 
                 _ => StatusCode::BAD_REQUEST,
             },
+            BuilderApiError::InvalidPayloadType { .. } => StatusCode::BAD_REQUEST,
         };
 
         (code, self.to_string()).into_response()
