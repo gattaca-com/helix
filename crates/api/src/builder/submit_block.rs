@@ -17,7 +17,6 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use hyper::HeaderMap;
 use tracing::{debug, error, info, trace, warn, Instrument, Level};
 
 use super::api::BuilderApi;
@@ -42,7 +41,7 @@ impl<A: Api> BuilderApi<A> {
     ///
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
     #[tracing::instrument(skip_all, fields(
-        id =% extract_request_id(&headers),
+        id =% extract_request_id(req.headers()),
         slot = tracing::field::Empty, // submission slot
         builder_pubkey = tracing::field::Empty,
         builder_id = tracing::field::Empty,
@@ -51,12 +50,15 @@ impl<A: Api> BuilderApi<A> {
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
         Extension(on_receive_ns): Extension<u64>,
-        headers: HeaderMap,
         req: Request<Body>,
     ) -> Result<StatusCode, BuilderApiError> {
         trace!("new block submission");
 
-        let mut trace = SubmissionTrace { receive: on_receive_ns, ..Default::default() };
+        let mut trace = SubmissionTrace {
+            receive: on_receive_ns,
+            read_body: utcnow_ns(),
+            ..Default::default()
+        };
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
         tracing::Span::current().record("slot", (head_slot.as_u64() + 1) as i64);
 
@@ -66,7 +68,7 @@ impl<A: Api> BuilderApi<A> {
             return Err(BuilderApiError::ProposerDutyNotFound);
         };
 
-        trace.metadata = api.metadata_provider.get_metadata(&headers);
+        trace.metadata = api.metadata_provider.get_metadata(req.headers());
 
         debug!(%head_slot, timestamp_request_start = trace.receive);
 

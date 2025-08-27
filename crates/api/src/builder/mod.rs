@@ -6,6 +6,7 @@ pub mod types;
 pub mod v2_check;
 pub mod v3;
 
+mod decoder;
 mod gossip;
 mod submit_block;
 mod submit_block_v2;
