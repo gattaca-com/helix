@@ -15,7 +15,6 @@ use http::{
     header::{CONTENT_ENCODING, CONTENT_TYPE},
     HeaderMap, HeaderValue,
 };
-use ssz::Decode;
 use tracing::{trace, warn};
 use zstd::{
     stream::read::Decoder as ZstdDecoder,
@@ -128,31 +127,9 @@ impl SubmissionDecoder {
         );
 
         let payload: SignedBidSubmissionWithMergingData = if self.has_mergeable_data {
-            match self.encoding {
-                Encoding::Ssz => {
-                    match SignedBidSubmissionWithMergingData::from_ssz_bytes(&decompressed) {
-                        Ok(payload) => payload,
-                        Err(err) => {
-                            warn!(?err, "failed to decode payload using SSZ; falling back to JSON");
-                            serde_json::from_slice(&decompressed)?
-                        }
-                    }
-                }
-
-                Encoding::Json => serde_json::from_slice(&decompressed)?,
-            }
+            decode_submission(self.encoding, &decompressed)?
         } else {
-            let submission: SignedBidSubmission = match self.encoding {
-                Encoding::Ssz => match SignedBidSubmission::from_ssz_bytes(&decompressed) {
-                    Ok(payload) => payload,
-                    Err(err) => {
-                        warn!(?err, "failed to decode payload using SSZ; falling back to JSON");
-                        serde_json::from_slice(&decompressed)?
-                    }
-                },
-
-                Encoding::Json => serde_json::from_slice(&decompressed)?,
-            };
+            let submission: SignedBidSubmission = decode_submission(self.encoding, &decompressed)?;
             SignedBidSubmissionWithMergingData { submission, merging_data: Default::default() }
         };
 
@@ -218,4 +195,22 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
     } else {
         None
     }
+}
+
+fn decode_submission<'a, T>(encoding: Encoding, bytes: &'a Bytes) -> Result<T, BuilderApiError>
+where
+    T: ssz::Decode + serde::Deserialize<'a>,
+{
+    let payload = match encoding {
+        Encoding::Ssz => match T::from_ssz_bytes(&bytes) {
+            Ok(payload) => payload,
+            Err(err) => {
+                warn!(?err, "failed to decode payload using SSZ; falling back to JSON");
+                serde_json::from_slice(&bytes)?
+            }
+        },
+
+        Encoding::Json => serde_json::from_slice(&bytes)?,
+    };
+    Ok(payload)
 }
