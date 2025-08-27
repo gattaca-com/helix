@@ -202,15 +202,15 @@ where
     T: ssz::Decode + serde::Deserialize<'a>,
 {
     let payload = match encoding {
-        Encoding::Ssz => match T::from_ssz_bytes(&bytes) {
+        Encoding::Ssz => match T::from_ssz_bytes(bytes) {
             Ok(payload) => payload,
             Err(err) => {
                 warn!(?err, "failed to decode payload using SSZ; falling back to JSON");
-                serde_json::from_slice(&bytes)?
+                serde_json::from_slice(bytes)?
             }
         },
 
-        Encoding::Json => serde_json::from_slice(&bytes)?,
+        Encoding::Json => serde_json::from_slice(bytes)?,
     };
     Ok(payload)
 }
