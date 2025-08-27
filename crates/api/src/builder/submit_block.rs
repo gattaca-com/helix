@@ -82,9 +82,7 @@ impl<A: Api> BuilderApi<A> {
             .record("block_hash", tracing::field::display(payload.message().block_hash));
 
         info!(
-            slot = %payload.slot(),
-            block_hash = %block_hash,
-            builder_pub_key = %payload.builder_public_key(),
+            decode_time = trace.decode.saturating_sub(trace.read_body),
             block_value = %payload.value(),
             "payload decoded",
         );
