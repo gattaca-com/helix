@@ -1,6 +1,6 @@
-use std::hash::Hash;
+use std::{collections::HashMap, hash::Hash};
 
-use alloy_primitives::{bytes::Bytes, Address};
+use alloy_primitives::{bytes::Bytes, Address, B256};
 use lh_test_random::TestRandom;
 use lh_types::test_utils::TestRandom;
 use rand::Rng;
@@ -147,14 +147,14 @@ pub struct MergeableOrders {
     pub orders: Vec<MergeableOrder>,
     /// Blobs used by the orders, prefixed with the index
     /// in [orders](Self::orders) and in the bundle.
-    pub blobs: Vec<(usize, usize, BlobsBundle)>,
+    pub blobs: HashMap<B256, BlobsBundle>,
 }
 
 impl MergeableOrders {
     pub fn new(
         origin: Address,
         orders: Vec<MergeableOrder>,
-        blobs: Vec<(usize, usize, BlobsBundle)>,
+        blobs: HashMap<B256, BlobsBundle>,
     ) -> Self {
         Self { origin, orders, blobs }
     }

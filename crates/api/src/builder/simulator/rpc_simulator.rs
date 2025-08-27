@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use alloy_primitives::U256;
+use alloy_primitives::{B256, U256};
 use helix_common::{
     metrics::SimulatorMetrics, simulator::BlockSimError, task, BuilderInfo, SimulatorConfig,
 };
@@ -45,9 +45,8 @@ impl<T> RpcResult<T> {
 pub struct BlockMergeResponse {
     pub execution_payload: ExecutionPayload,
     pub execution_requests: ExecutionRequests,
-    /// Indices for orders that contains blobs.
-    /// The second value is the index of the tx inside the bundle.
-    pub appended_blob_order_indices: Vec<(usize, usize)>,
+    /// Versioned hashes of the appended blob transactions.
+    pub appended_blobs: Vec<B256>,
     /// Total value for the proposer
     pub proposer_value: U256,
 }

@@ -119,7 +119,7 @@ impl<A: Api> ProposerApi<A> {
         let (mergeable_orders, blobs) = best_orders.load(slot);
 
         tokio::spawn(async move {
-            this.merge_block(slot, best_bid, registration_data, payload, mergeable_orders, blobs)
+            this.merge_block(slot, best_bid, registration_data, payload, mergeable_orders, &blobs)
                 .await
         })
     }
@@ -157,7 +157,7 @@ impl<A: Api> ProposerApi<A> {
         registration_data: ValidatorRegistrationData,
         payload: PayloadAndBlobs,
         mergeable_orders: Vec<MergeableOrderWithOrigin>,
-        blobs: Vec<(usize, usize, BlobsBundle)>,
+        blobs: &HashMap<B256, BlobsBundle>,
     ) -> MergingTaskResult {
         let base_block_fetched = utcnow_ms();
         let proposer_fee_recipient = registration_data.fee_recipient;
@@ -202,7 +202,7 @@ impl<A: Api> ProposerApi<A> {
         bid: BuilderBid,
         payload: PayloadAndBlobs,
         merging_data: Vec<MergeableOrderWithOrigin>,
-        blobs: Vec<(usize, usize, BlobsBundle)>,
+        blobs: &HashMap<B256, BlobsBundle>,
     ) -> Result<BuilderBid, PayloadMergingError> {
         let merge_request = BlockMergeRequest::new(
             *bid.value(),
@@ -283,18 +283,14 @@ enum PayloadMergingError {
 /// Appends the merged blobs to the original blobs bundle.
 fn append_merged_blobs(
     original_blobs_bundle: BlobsBundle,
-    mut blobs: Vec<(usize, usize, BlobsBundle)>,
+    blobs: &HashMap<B256, BlobsBundle>,
     response: &BlockMergeResponse,
 ) -> Result<BlobsBundle, PayloadMergingError> {
     let mut merged_blobs_bundle = original_blobs_bundle;
 
-    response.appended_blob_order_indices.iter().try_for_each(|(i, j)| {
-        let blob_bundle_index = blobs
-            .binary_search_by_key(&(i, j), |(k, l, _bundle)| (k, l))
-            .map_err(|_| PayloadMergingError::BlobNotFound)?;
-
-        let (_, _, blobs_bundle) = std::mem::take(&mut blobs[blob_bundle_index]);
-        extend_bundle(&mut merged_blobs_bundle, blobs_bundle);
+    response.appended_blobs.iter().try_for_each(|vh| {
+        let blob_bundle = blobs.get(vh).ok_or(PayloadMergingError::BlobNotFound)?;
+        extend_bundle(&mut merged_blobs_bundle, blob_bundle.clone());
         Ok::<(), PayloadMergingError>(())
     })?;
     Ok(merged_blobs_bundle)
@@ -335,7 +331,6 @@ type MergingTaskResult = Result<MergingTaskState, PayloadMergingError>;
 struct OrderMetadata {
     value: U256,
     origin: Address,
-    blobs: Vec<(usize, BlobsBundle)>,
 }
 
 #[derive(Debug, Clone)]
@@ -343,6 +338,7 @@ pub struct BestMergeableOrders {
     current_slot: u64,
     // TODO: change structures to avoid copies
     order_map: HashMap<MergeableOrder, OrderMetadata>,
+    mergeable_blob_bundles: HashMap<B256, BlobsBundle>,
 }
 
 impl Default for BestMergeableOrders {
@@ -353,31 +349,25 @@ impl Default for BestMergeableOrders {
 
 impl BestMergeableOrders {
     pub fn new() -> Self {
-        Self { current_slot: 0, order_map: HashMap::with_capacity(5000) }
+        Self {
+            current_slot: 0,
+            order_map: HashMap::with_capacity(5000),
+            mergeable_blob_bundles: HashMap::with_capacity(5000),
+        }
     }
 
-    pub fn load(
-        &self,
-        slot: u64,
-    ) -> (Vec<MergeableOrderWithOrigin>, Vec<(usize, usize, BlobsBundle)>) {
+    pub fn load(&self, slot: u64) -> (Vec<MergeableOrderWithOrigin>, HashMap<B256, BlobsBundle>) {
         // If the request is for another slot, return nothing
         if self.current_slot != slot {
-            return (Vec::new(), Vec::new());
+            return (Vec::new(), HashMap::new());
         }
-        let mut blobs = vec![];
         // Clone the orders and return them, collecting blobs in the process
         let orders = self
             .order_map
             .iter()
-            .enumerate()
-            .map(|(i, (order, metadata))| {
-                let order_with_origin =
-                    MergeableOrderWithOrigin::new(metadata.origin, order.clone());
-                blobs.extend(metadata.blobs.iter().map(|(j, blob)| (i, *j, blob.clone())));
-                order_with_origin
-            })
+            .map(|(order, metadata)| MergeableOrderWithOrigin::new(metadata.origin, order.clone()))
             .collect();
-        (orders, blobs)
+        (orders, self.mergeable_blob_bundles.clone())
     }
 
     /// Inserts the orders into the merging pool.
@@ -389,25 +379,18 @@ impl BestMergeableOrders {
             self.reset(slot);
         }
         let origin = mergeable_orders.origin;
-
-        let mut blob_iter = mergeable_orders.blobs.into_iter().fuse().peekable();
         // Insert each order into the order map
-        mergeable_orders.orders.into_iter().enumerate().for_each(|(i, o)| {
+        mergeable_orders.orders.into_iter().for_each(|o| {
             // Collect all blobs for this order
-            let mut blobs = vec![];
-            while blob_iter.peek().is_some() && blob_iter.peek().unwrap().0 == i {
-                let (_i, j, blob) = blob_iter.next().unwrap();
-                blobs.push((j, blob));
-            }
             match self.order_map.entry(o) {
                 // If the order already exists, keep the one with the highest bid
                 Entry::Occupied(mut e) if e.get().value < bid_value => {
-                    *e.get_mut() = OrderMetadata { value: bid_value, origin, blobs };
+                    *e.get_mut() = OrderMetadata { value: bid_value, origin };
                 }
                 Entry::Occupied(_) => {}
                 // Otherwise, insert the new order
                 Entry::Vacant(e) => {
-                    e.insert(OrderMetadata { value: bid_value, origin, blobs });
+                    e.insert(OrderMetadata { value: bid_value, origin });
                 }
             }
         });

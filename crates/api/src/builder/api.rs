@@ -1,4 +1,4 @@
-use std::{io::Read, sync::Arc, time::Duration};
+use std::{collections::HashMap, io::Read, sync::Arc, time::Duration};
 
 use alloy_consensus::{Bytes48, TxEip4844, TxType};
 use alloy_primitives::{B256, U256};
@@ -622,20 +622,12 @@ pub fn get_mergeable_orders(
     let txs = execution_payload.transactions();
 
     // Expand all orders to include the tx's bytes, collecting any blob bundles in the process.
-    let mut blobs = vec![];
+    let mut blobs = HashMap::new();
     let mergeable_orders = merging_data
         .merge_orders
         .into_iter()
-        .enumerate()
-        .map(|(i, order)| {
-            order_to_mergeable(
-                i,
-                order,
-                txs,
-                &blob_versioned_hashes,
-                &block_blobs_bundles,
-                &mut blobs,
-            )
+        .map(|order| {
+            order_to_mergeable(order, txs, &blob_versioned_hashes, &block_blobs_bundles, &mut blobs)
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -643,12 +635,11 @@ pub fn get_mergeable_orders(
 }
 
 fn order_to_mergeable(
-    order_index: usize,
     order: Order,
     txs: &Transactions,
     blob_versioned_hashes: &[B256],
     block_blobs_bundles: &BlobsBundle,
-    blobs_in_orders: &mut Vec<(usize, usize, BlobsBundle)>,
+    blobs_in_orders: &mut HashMap<B256, BlobsBundle>,
 ) -> Result<MergeableOrder, OrderValidationError> {
     match order {
         Order::Tx(tx) => {
@@ -657,12 +648,12 @@ fn order_to_mergeable(
             };
             if is_blob_transaction(raw_tx) {
                 // If the tx references bundles not in the block, we drop it
-                let bundle = get_blobs_bundle_from_blob_transaction(
+                extract_blobs_bundle_from_blob_transaction(
                     raw_tx,
                     blob_versioned_hashes,
                     block_blobs_bundles,
+                    blobs_in_orders,
                 )?;
-                blobs_in_orders.push((order_index, 0, bundle));
             }
 
             let transaction = Bytes::from(raw_tx.to_vec());
@@ -676,8 +667,7 @@ fn order_to_mergeable(
             let transactions = bundle
                 .txs
                 .iter()
-                .enumerate()
-                .map(|(i, tx_index)| {
+                .map(|tx_index| {
                     let Some(raw_tx) = txs.get(*tx_index) else {
                         return Err(OrderValidationError::InvalidTxIndex {
                             got: *tx_index,
@@ -687,12 +677,12 @@ fn order_to_mergeable(
 
                     if is_blob_transaction(raw_tx) {
                         // If the tx references bundles not in the block, we drop the bundle
-                        let bundle = get_blobs_bundle_from_blob_transaction(
+                        extract_blobs_bundle_from_blob_transaction(
                             raw_tx,
                             blob_versioned_hashes,
                             block_blobs_bundles,
+                            blobs_in_orders,
                         )?;
-                        blobs_in_orders.push((order_index, i, bundle));
                     }
 
                     Ok(Bytes::from_owner(raw_tx.to_vec()))
@@ -719,31 +709,31 @@ fn get_tx_versioned_hashes(mut raw_tx: &[u8]) -> Vec<B256> {
         .unwrap_or(vec![])
 }
 
-fn get_blobs_bundle_from_blob_transaction(
+fn extract_blobs_bundle_from_blob_transaction(
     raw_tx: &[u8],
     blob_versioned_hashes: &[B256],
     block_blobs_bundles: &BlobsBundle,
-) -> Result<BlobsBundle, OrderValidationError> {
+    blobs_in_orders: &mut HashMap<B256, BlobsBundle>,
+) -> Result<(), OrderValidationError> {
     let versioned_hashes = get_tx_versioned_hashes(raw_tx);
     let num_blobs = versioned_hashes.len();
     if num_blobs == 0 {
         return Err(OrderValidationError::EmptyBlobTransaction);
     }
-    let (commitments, (proofs, blobs)): (Vec<_>, (Vec<_>, Vec<_>)) = versioned_hashes
-        .into_iter()
-        .filter_map(|h| {
-            let index = blob_versioned_hashes.iter().position(|vh| *vh == h)?;
-            let commitment = block_blobs_bundles.commitments[index];
-            let proof = block_blobs_bundles.proofs[index];
-            let blob = block_blobs_bundles.blobs[index].clone();
-            Some((commitment, (proof, blob)))
-        })
-        .unzip();
-    if commitments.len() != num_blobs {
+    let mut failures = versioned_hashes.into_iter().map(|h| {
+        let Some(index) = blob_versioned_hashes.iter().position(|vh| *vh == h) else {
+            return true;
+        };
+        let commitments = vec![block_blobs_bundles.commitments[index]];
+        let proofs = vec![block_blobs_bundles.proofs[index]];
+        let blobs = vec![block_blobs_bundles.blobs[index].clone()];
+        blobs_in_orders.insert(h, BlobsBundle { commitments, proofs, blobs });
+        false
+    });
+    if failures.any(|f| f) {
         return Err(OrderValidationError::MissingBlobs);
     }
-    let bundle = BlobsBundle { commitments, proofs, blobs };
-    Ok(bundle)
+    Ok(())
 }
 
 fn calculate_versioned_hash(commitment: Bytes48) -> B256 {
