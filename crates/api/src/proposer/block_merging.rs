@@ -102,33 +102,21 @@ impl<A: Api> ProposerApi<A> {
         result: Result<Option<MergingTaskResult>, tokio::task::JoinError>,
         best_orders: &BestMergeableOrders,
     ) -> tokio::task::JoinHandle<Option<MergingTaskResult>> {
-        // TODO: simplify this
+        let this = self.clone();
         if let Err(err) = result {
             warn!(%err, "merging task panicked");
-            return tokio::spawn({
-                let this = self.clone();
-                async move { this.fetch_base_block().await }
-            });
+            return tokio::spawn(async move { this.fetch_base_block().await });
         }
         // TODO: turn this Option into Result
         let Some(task_result) = result.unwrap() else {
-            return tokio::spawn({
-                let this = self.clone();
-                async move { this.fetch_base_block().await }
-            });
+            return tokio::spawn(async move { this.fetch_base_block().await });
         };
         let MergingTaskResult::FetchedBaseBlock { slot, .. } = task_result else {
-            return tokio::spawn({
-                let this = self.clone();
-                async move { this.fetch_base_block().await }
-            });
+            return tokio::spawn(async move { this.fetch_base_block().await });
         };
         let (mergeable_orders, blobs) = best_orders.load(slot);
 
-        tokio::spawn({
-            let this = self.clone();
-            async move { this.merge_block(task_result, mergeable_orders, blobs).await }
-        })
+        tokio::spawn(async move { this.merge_block(task_result, mergeable_orders, blobs).await })
     }
 
     async fn fetch_base_block(&self) -> Option<MergingTaskResult> {
