@@ -434,8 +434,8 @@ impl<A: Api> ProposerApi<A> {
         }
 
         let mut last_error: Option<ProposerApiError> = None;
-        let mut first_try = true; // Try at least once to cover case where get_payload is called too late.
-        while first_try || utcnow_ms() < slot_cutoff_millis {
+        let mut retry = 0; // Try at least once to cover case where get_payload is called too late.
+        while retry == 0 || utcnow_ms() < slot_cutoff_millis {
             match self
                 .auctioneer
                 .get_execution_payload(
@@ -448,8 +448,11 @@ impl<A: Api> ProposerApi<A> {
             {
                 Ok(Some(versioned_payload)) => return Ok(versioned_payload),
                 Ok(None) => {
-                    warn!("execution payload not found");
-                    if first_try && request_missing_payload {
+                    if retry % 10 == 0 {
+                        // 10 * RETRY_DELAY = 200ms
+                        warn!("execution payload not found");
+                    }
+                    if retry == 0 && request_missing_payload {
                         let proposer_pubkey_clone = pub_key.clone();
                         let gossiper = self.gossiper.clone();
                         let block_hash = *block_hash;
@@ -476,7 +479,7 @@ impl<A: Api> ProposerApi<A> {
                 }
             }
 
-            first_try = false;
+            retry += 1;
             sleep(RETRY_DELAY).await;
         }
 

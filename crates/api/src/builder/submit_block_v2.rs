@@ -54,11 +54,15 @@ impl<A: Api> BuilderApi<A> {
         let (payload_with_merging_data, _) = decode_payload(req, &mut trace, false).await?;
         let payload = payload_with_merging_data.submission;
 
+        tracing::Span::current().record("slot", payload.slot().as_u64() as i64);
+        tracing::Span::current()
+            .record("builder_pubkey", tracing::field::display(payload.builder_public_key()));
+        tracing::Span::current()
+            .record("block_hash", tracing::field::display(payload.message().block_hash));
+
         info!(
-            slot = %payload.slot(),
-            builder_pub_key = ?payload.builder_public_key(),
+            decode_time = trace.decode.saturating_sub(trace.read_body),
             block_value = %payload.value(),
-            block_hash = ?payload.block_hash(),
             "payload decoded",
         );
 
@@ -72,7 +76,6 @@ impl<A: Api> BuilderApi<A> {
         optimistic_version: OptimisticVersion,
     ) -> Result<StatusCode, BuilderApiError> {
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
-        debug!(%head_slot, timestamp_request_start = trace.receive);
 
         let builder_pub_key = payload.builder_public_key().clone();
         let block_hash = payload.message().block_hash;

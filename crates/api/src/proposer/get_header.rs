@@ -200,10 +200,10 @@ impl<A: Api> ProposerApi<A> {
             warn!("best bid value is 0");
             return Err(ProposerApiError::BidValueZero);
         }
-
+        let bid_block_hash = bid.header().block_hash().0;
         debug!(
             value = ?bid.value(),
-            block_hash = ?bid.header().block_hash(),
+            block_hash =% bid_block_hash,
             "delivering bid",
         );
 
@@ -213,7 +213,7 @@ impl<A: Api> ProposerApi<A> {
             slot,
             bid_request.parent_hash,
             bid_request.pubkey.clone(),
-            bid.header().block_hash().0,
+            bid_block_hash,
             trace,
             mev_boost,
             user_agent.clone(),
@@ -221,7 +221,6 @@ impl<A: Api> ProposerApi<A> {
         .await;
 
         let proposer_pubkey = bid_request.pubkey.clone();
-        let block_hash = bid.header().block_hash().0;
 
         let fork = if bid.as_electra().is_ok() {
             helix_types::ForkName::Electra
@@ -240,14 +239,14 @@ impl<A: Api> ProposerApi<A> {
                     .request_payload(RequestPayloadParams {
                         slot,
                         proposer_pub_key: proposer_pubkey,
-                        block_hash,
+                        block_hash: bid_block_hash,
                     })
                     .await
             });
         }
 
         let signed_bid = serde_json::to_value(signed_bid)?;
-        info!(%signed_bid, "delivering bid");
+        info!(block_hash =% bid_block_hash, "delivering bid");
 
         Ok(axum::Json(signed_bid))
     }
