@@ -104,27 +104,27 @@ impl<A: Api> ProposerApi<A> {
         result: Result<MergingTaskResult, JoinError>,
         best_orders: &BestMergeableOrders,
     ) -> JoinHandle<MergingTaskResult> {
-        let this = self.clone();
         let Ok(result) = result.inspect_err(|err| warn!(%err, "merging task panicked")) else {
-            return tokio::spawn(async move { this.fetch_base_block().await });
+            return self.spawn_base_block_fetch_task();
         };
         let Ok(task_result) = result.inspect_err(|err| warn!(%err, "failed when merging payload"))
         else {
-            return tokio::spawn(async move { this.fetch_base_block().await });
+            return self.spawn_base_block_fetch_task();
         };
         match task_result {
-            MergingTaskState::RetryFetch => {
-                tokio::spawn(async move { this.fetch_base_block().await })
-            }
+            MergingTaskState::RetryFetch => self.spawn_base_block_fetch_task(),
             MergingTaskState::FetchedBaseBlock { slot, best_bid, registration_data, payload } => {
-                let mergeable_orders = best_orders.load_orders(slot);
-                this.spawn_merging_task(
-                    slot,
-                    best_bid,
-                    registration_data,
-                    payload,
-                    mergeable_orders,
-                )
+                if let Some((mergeable_orders, _)) = best_orders.load(slot) {
+                    self.spawn_merging_task(
+                        slot,
+                        best_bid,
+                        registration_data,
+                        payload,
+                        mergeable_orders,
+                    )
+                } else {
+                    self.spawn_base_block_fetch_task()
+                }
             }
             MergingTaskState::GotMergedBlock {
                 slot,
@@ -134,25 +134,35 @@ impl<A: Api> ProposerApi<A> {
                 original_payload,
                 response,
             } => {
-                let _ = self
-                    .store_merged_payload(
-                        slot,
-                        base_block_time_ms,
-                        builder_pubkey,
-                        proposer_pubkey,
-                        original_payload,
-                        response,
-                        &best_orders.mergeable_blob_bundles,
-                    )
-                    .inspect_err(|err| warn!(%err, "failed to store merged payload"));
+                // If we are past the slot for the block, skip storing it
+                if let Some((_, blobs)) = best_orders.load(slot) {
+                    let _ = self
+                        .store_merged_payload(
+                            slot,
+                            base_block_time_ms,
+                            builder_pubkey,
+                            proposer_pubkey,
+                            original_payload,
+                            response,
+                            blobs,
+                        )
+                        .inspect_err(|err| warn!(%err, "failed to store merged payload"));
+                }
 
-                tokio::spawn(async move { this.fetch_base_block().await })
+                self.spawn_base_block_fetch_task()
             }
         }
     }
 
+    fn spawn_base_block_fetch_task(self: &Arc<Self>) -> JoinHandle<MergingTaskResult> {
+        tokio::spawn({
+            let this = self.clone();
+            async move { this.fetch_base_block().await }
+        })
+    }
+
     fn spawn_merging_task(
-        self: Arc<Self>,
+        self: &Arc<Self>,
         slot: u64,
         base_bid: BuilderBid,
         registration_data: ValidatorRegistrationData,
@@ -173,8 +183,9 @@ impl<A: Api> ProposerApi<A> {
             mergeable_orders,
         );
 
+        let this = self.clone();
         tokio::spawn(async move {
-            let response = self.simulator.process_merge_request(merge_request).await?;
+            let response = this.simulator.process_merge_request(merge_request).await?;
 
             // Sanity check: if the merged payload has a lower value than the original bid,
             // we return the original bid.
@@ -396,12 +407,15 @@ impl BestMergeableOrders {
         }
     }
 
-    pub fn load_orders(&self, slot: u64) -> &[MergeableOrderWithOrigin] {
+    pub fn load(
+        &self,
+        slot: u64,
+    ) -> Option<(&[MergeableOrderWithOrigin], &HashMap<B256, BlobsBundle>)> {
         // If the request is for another slot, return nothing
         if self.current_slot != slot {
-            return &[];
+            return None;
         }
-        &self.best_orders
+        Some((&self.best_orders, &self.mergeable_blob_bundles))
     }
 
     /// Inserts the orders into the merging pool.
