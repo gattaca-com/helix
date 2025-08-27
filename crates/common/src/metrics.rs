@@ -395,6 +395,68 @@ lazy_static! {
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
+
+    //////////////// DECODING BLOCKS ////////////////
+
+    pub static ref SUBMISSION_BY_COMPRESSION: IntCounterVec = register_int_counter_vec_with_registry!(
+        "bid_submission_compression_count",
+        "Count of bids by compression",
+        &["compression"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref SUBMISSION_BY_ENCODING: IntCounterVec = register_int_counter_vec_with_registry!(
+        "bid_submission_encoding_count",
+        "Count of bids by encoding",
+        &["encoding"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref SUBMISSION_COMPRESSED_BYTES: IntCounterVec = register_int_counter_vec_with_registry!(
+        "bid_submission_compressed_bytes_total",
+        "Compressed bytes by compression",
+        &["compression"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref SUBMISSION_DECOMPRESSED_BYTES: IntCounterVec = register_int_counter_vec_with_registry!(
+        "bid_submission_decompressed_bytes_total",
+        "Decompressed bytes by compression",
+        &["compression"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref DECOMPRESSION_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
+        "bid_decompression_latency_us",
+        "Latency of decompressing bid submissions in us",
+        &["compression"],
+        vec![1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 25_000., 50_000., 100_000., 500_000., 1_000_000., 5_000_000., 10_000_000., 50_000_000., 100_000_000.,],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref BID_DECODING_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
+        "bid_decoding_latency_us",
+        "Latency of decoding block payloads in us",
+        &["encoding"],
+        vec![1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 25_000., 50_000., 100_000., 500_000., 1_000_000., 5_000_000., 10_000_000., 50_000_000., 100_000_000.,],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref BID_DECOMPRESS_SIZEHINT_REL_ERROR: HistogramVec = register_histogram_vec_with_registry!(
+        "bid_sizehint_rel_error",
+        "abs(actual-estimate)/max(1, actual)",
+        &["compression"],
+        vec![0.005, 0.01, 0.02, 0.05, 0.10, 0.20, 0.33, 0.50, 1.0, 2.0, 5.0],
+        &RELAY_METRICS_REGISTRY
+    ).unwrap();
+
+
 }
 
 pub struct ApiMetrics {

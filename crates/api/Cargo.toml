@@ -26,6 +26,7 @@ helix-database.workspace = true
 helix-datastore.workspace = true
 helix-housekeeper.workspace = true
 helix-types.workspace = true
+http.workspace = true
 hyper.workspace = true
 mockito.workspace = true
 moka.workspace = true
@@ -48,6 +49,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
 uuid.workspace = true
+zstd.workspace = true
 
 [dev-dependencies]
 tracing-subscriber.workspace = true

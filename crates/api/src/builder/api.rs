@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::Read, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_consensus::{Bytes48, TxEip4844, TxType};
 use alloy_primitives::{B256, U256};
@@ -10,7 +10,6 @@ use axum::{
 };
 use bytes::Bytes;
 use dashmap::DashMap;
-use flate2::read::GzDecoder;
 use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
@@ -35,7 +34,9 @@ use tracing::{debug, error, trace, warn};
 
 use super::multi_simulator::MultiSimulator;
 use crate::{
-    builder::{error::BuilderApiError, v2_check::V2SubMessage, BlockSimRequest},
+    builder::{
+        decoder::SubmissionDecoder, error::BuilderApiError, v2_check::V2SubMessage, BlockSimRequest,
+    },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::MergingPoolMessage,
     Api,
@@ -421,7 +422,6 @@ impl<A: Api> BuilderApi<A> {
 pub async fn decode_payload(
     req: Request<Body>,
     trace: &mut SubmissionTrace,
-    has_mergeable_data: bool,
 ) -> Result<(SignedBidSubmissionWithMergingData, bool), BuilderApiError> {
     // Extract the query parameters
     let is_cancellations_enabled = req
@@ -439,48 +439,9 @@ pub async fn decode_payload(
         })
         .unwrap_or(false);
 
-    // Get content encoding and content type
-    let is_gzip =
-        req.headers().get("Content-Encoding").and_then(|val| val.to_str().ok()) == Some("gzip");
-
-    let is_ssz = req.headers().get("Content-Type").and_then(|val| val.to_str().ok()) ==
-        Some("application/octet-stream");
-
-    // Read the body
-    let body = req.into_body();
-    trace!("reading body");
-    let mut body_bytes = to_bytes(body, MAX_PAYLOAD_LENGTH).await?;
-    if body_bytes.len() > MAX_PAYLOAD_LENGTH {
-        return Err(BuilderApiError::PayloadTooLarge {
-            max_size: MAX_PAYLOAD_LENGTH,
-            size: body_bytes.len(),
-        });
-    }
-    trace!("read body");
-    trace.read_body = utcnow_ns();
-
-    let size_compressed = body_bytes.len();
-    // Decompress if necessary
-    if is_gzip {
-        let mut decoder = GzDecoder::new(&body_bytes[..]);
-
-        // TODO: profile this. 2 is a guess.
-        let estimated_size = body_bytes.len() * 2;
-        let mut buf = Vec::with_capacity(estimated_size);
-
-        decoder.read_to_end(&mut buf)?;
-        body_bytes = buf.into();
-    }
-
-    trace!(size_compressed, size_uncompressed = body_bytes.len(), is_gzip, "decompressed payload");
-
-    // Decode payload
-    let payload: SignedBidSubmissionWithMergingData = if has_mergeable_data {
-        decode_submission(&body_bytes, is_ssz)?
-    } else {
-        let submission = decode_submission(&body_bytes, is_ssz)?;
-        SignedBidSubmissionWithMergingData { submission, merging_data: Default::default() }
-    };
+    let decoder = SubmissionDecoder::from_headers(req.headers());
+    let body_bytes = to_bytes(req.into_body(), MAX_PAYLOAD_LENGTH).await?;
+    let payload = decoder.decode(body_bytes)?;
 
     trace.decode = utcnow_ns();
     debug!(
@@ -496,23 +457,6 @@ pub async fn decode_payload(
     );
 
     Ok((payload, is_cancellations_enabled))
-}
-
-fn decode_submission<'a, T>(body_bytes: &'a Bytes, is_ssz: bool) -> Result<T, BuilderApiError>
-where
-    T: ssz::Decode + serde::Deserialize<'a>,
-{
-    if !is_ssz {
-        return Ok(serde_json::from_slice(body_bytes)?);
-    }
-    match T::from_ssz_bytes(body_bytes) {
-        Ok(payload) => Ok(payload),
-        Err(err) => {
-            // Fallback to JSON
-            warn!(?err, "failed to decode payload using SSZ; falling back to JSON");
-            Ok(serde_json::from_slice(body_bytes)?)
-        }
-    }
 }
 
 /// - Validates the expected block.timestamp.
@@ -1033,7 +977,7 @@ mod tests {
         let req = build_test_request(payload, false, false).await;
         let mut trace = create_test_submission_trace().await;
 
-        let result = decode_payload(req, &mut trace, false).await;
+        let result = decode_payload(req, &mut trace).await;
         match result {
             Ok(_) => panic!("Should have failed"),
             Err(err) => match err {

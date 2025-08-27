@@ -106,3 +106,4 @@ tree_hash = "0.9"
 tree_hash_derive = "0.9"
 url = { version = "2.4", features = ["serde"] }
 uuid = { version = "1.5", features = ["fast-rng", "v4"] }
+zstd = "0.13.3"
