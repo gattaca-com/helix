@@ -146,16 +146,10 @@ impl<A: Api> BuilderApi<A> {
         }
 
         // Verify payload has not already been delivered
-        match api.auctioneer.get_last_slot_delivered().await {
-            Ok(Some(slot)) => {
-                if payload.slot() <= slot {
-                    debug!("payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                error!(%err, "failed to get last slot delivered");
+        if let Some(slot) = api.auctioneer.get_last_slot_delivered() {
+            if payload.slot() <= slot {
+                debug!("payload already delivered");
+                return Err(BuilderApiError::PayloadAlreadyDelivered);
             }
         }
 
@@ -222,25 +216,15 @@ impl<A: Api> BuilderApi<A> {
         }
 
         // Save bid to auctioneer
-        if let Err(err) = api
-            .auctioneer
-            .save_execution_payload(
-                payload.slot().as_u64(),
-                &payload.message().proposer_pubkey,
-                payload.block_hash(),
-                payload.payload_and_blobs_ref(),
-            )
-            .await
-        {
-            error!(%err, "failed to save execution payload");
-            return Err(BuilderApiError::AuctioneerError(err));
-        }
+        api.auctioneer.save_execution_payload(
+            payload.slot().as_u64(),
+            &payload.message().proposer_pubkey,
+            payload.block_hash(),
+            payload.payload_and_blobs_ref(),
+        );
         trace.auctioneer_update = utcnow_ns();
 
-        if let Err(err) = api.auctioneer.save_bid_trace(payload.bid_trace()).await {
-            error!(%err, "failed to save bid trace");
-            return Err(BuilderApiError::AuctioneerError(err));
-        }
+        api.auctioneer.save_bid_trace(payload.bid_trace());
 
         // Gossip to other relays
         if api.relay_config.payload_gossip_enabled {

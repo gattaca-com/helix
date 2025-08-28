@@ -21,7 +21,7 @@ use helix_common::{
     BuilderInfo, RelayConfig, SubmissionTrace, ValidatorPreferences,
 };
 use helix_database::DatabaseService;
-use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
+use helix_datastore::{local::local_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{BlsPublicKey, SignedBidSubmission, Slot};
 use parking_lot::RwLock;
@@ -169,15 +169,11 @@ impl<A: Api> BuilderApi<A> {
         &self,
         block_hash: &B256,
     ) -> Result<(), BuilderApiError> {
-        match self.auctioneer.seen_or_insert_block_hash(block_hash).await {
-            Ok(false) => Ok(()),
-            Ok(true) => {
+        match self.auctioneer.seen_or_insert_block_hash(block_hash) {
+            false => Ok(()),
+            true => {
                 debug!(?block_hash, "duplicate block hash");
                 Err(BuilderApiError::DuplicateBlockHash { block_hash: *block_hash })
-            }
-            Err(err) => {
-                error!(%err, "failed to call seen_or_insert_block_hash");
-                Err(BuilderApiError::InternalError)
             }
         }
     }
@@ -351,7 +347,7 @@ impl<A: Api> BuilderApi<A> {
 
     /// Fetch the builder's information. Default info is returned if fetching fails.
     pub(crate) async fn fetch_builder_info(&self, builder_pub_key: &BlsPublicKey) -> BuilderInfo {
-        match self.auctioneer.get_builder_info(builder_pub_key).await {
+        match self.auctioneer.get_builder_info(builder_pub_key) {
             Ok(info) => info,
             Err(err) => {
                 warn!(
@@ -385,7 +381,7 @@ impl<A: Api> BuilderApi<A> {
 
         error!(%err, %builder, "verification failed for submit_block_v2. Demoting builder!");
 
-        if let Err(err) = self.auctioneer.demote_builder(builder).await {
+        if let Err(err) = self.auctioneer.demote_builder(builder) {
             error!(%err, %builder, "failed to demote builder in auctioneer");
         }
 

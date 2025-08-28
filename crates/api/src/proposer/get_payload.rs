@@ -188,14 +188,10 @@ impl<A: Api> ProposerApi<A> {
         trace.payload_fetched = utcnow_ns();
 
         // Check if get_payload has already been called
-        if let Err(err) = self
-            .auctioneer
-            .check_and_set_last_slot_and_hash_delivered(
-                signed_blinded_block.message().slot().into(),
-                &block_hash,
-            )
-            .await
-        {
+        if let Err(err) = self.auctioneer.check_and_set_last_slot_and_hash_delivered(
+            signed_blinded_block.message().slot().into(),
+            &block_hash,
+        ) {
             match err {
                 AuctioneerError::AnotherPayloadAlreadyDeliveredForSlot => {
                     warn!("validator called get_payload twice for different block hashes");
@@ -274,7 +270,7 @@ impl<A: Api> ProposerApi<A> {
             );
         }
 
-        let is_trusted_proposer = self.is_trusted_proposer(&proposer_public_key).await?;
+        let is_trusted_proposer = self.is_trusted_proposer(&proposer_public_key);
 
         // Publish and validate payload with multi-beacon-client
         let fork = unblinded_payload.signed_block.fork_name_unchecked();
@@ -391,12 +387,8 @@ impl<A: Api> ProposerApi<A> {
         Ok(())
     }
 
-    async fn is_trusted_proposer(
-        &self,
-        public_key: &BlsPublicKey,
-    ) -> Result<bool, ProposerApiError> {
-        let is_trusted_proposer = self.auctioneer.is_trusted_proposer(public_key).await?;
-        Ok(is_trusted_proposer)
+    fn is_trusted_proposer(&self, public_key: &BlsPublicKey) -> bool {
+        self.auctioneer.is_trusted_proposer(public_key)
     }
 
     /// Fetches the execution payload associated with a given slot, public key, and block hash.
@@ -415,8 +407,7 @@ impl<A: Api> ProposerApi<A> {
             self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot());
         let slot_cutoff_millis = (slot_time * 1000) + GET_PAYLOAD_REQUEST_CUTOFF_MS as u64;
 
-        if let Ok(Some((builder_pubkey, payload_address))) =
-            self.auctioneer.get_payload_url(block_hash).await
+        if let Some((builder_pubkey, payload_address)) = self.auctioneer.get_payload_url(block_hash)
         {
             // Fetch v3 optimistic payload from builder. This will complete asynchronously.
             info!(
@@ -433,21 +424,16 @@ impl<A: Api> ProposerApi<A> {
             }
         }
 
-        let mut last_error: Option<ProposerApiError> = None;
         let mut retry = 0; // Try at least once to cover case where get_payload is called too late.
         while retry == 0 || utcnow_ms() < slot_cutoff_millis {
-            match self
-                .auctioneer
-                .get_execution_payload(
-                    slot,
-                    pub_key,
-                    block_hash,
-                    self.chain_info.current_fork_name(),
-                )
-                .await
-            {
-                Ok(Some(versioned_payload)) => return Ok(versioned_payload),
-                Ok(None) => {
+            match self.auctioneer.get_execution_payload(
+                slot,
+                pub_key,
+                block_hash,
+                self.chain_info.current_fork_name(),
+            ) {
+                Some(versioned_payload) => return Ok(versioned_payload),
+                None => {
                     if retry % 10 == 0 {
                         // 10 * RETRY_DELAY = 200ms
                         warn!("execution payload not found");
@@ -474,10 +460,6 @@ impl<A: Api> ProposerApi<A> {
                         );
                     }
                 }
-                Err(err) => {
-                    error!(%err, "error fetching execution payload");
-                    last_error = Some(ProposerApiError::AuctioneerError(err));
-                }
             }
 
             retry += 1;
@@ -485,7 +467,7 @@ impl<A: Api> ProposerApi<A> {
         }
 
         error!("max retries reached trying to fetch execution payload");
-        Err(last_error.unwrap_or_else(|| ProposerApiError::NoExecutionPayloadFound))
+        Err(ProposerApiError::NoExecutionPayloadFound)
     }
 
     async fn save_delivered_payload_info(
@@ -496,22 +478,14 @@ impl<A: Api> ProposerApi<A> {
         trace: &GetPayloadTrace,
         user_agent: Option<String>,
     ) {
-        let bid_trace = match self
-            .auctioneer
-            .get_bid_trace(
-                signed_blinded_block.message().slot().into(),
-                proposer_public_key,
-                &payload.execution_payload.block_hash().0,
-            )
-            .await
-        {
-            Ok(Some(bt)) => bt,
-            Ok(None) => {
+        let bid_trace = match self.auctioneer.get_bid_trace(
+            signed_blinded_block.message().slot().into(),
+            proposer_public_key,
+            &payload.execution_payload.block_hash().0,
+        ) {
+            Some(bt) => bt,
+            None => {
                 error!("bid trace not found");
-                return;
-            }
-            Err(err) => {
-                error!(%err, "error fetching bid trace from auctioneer");
                 return;
             }
         };

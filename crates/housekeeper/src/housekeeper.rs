@@ -24,7 +24,6 @@ use helix_datastore::Auctioneer;
 use helix_types::{BlsPublicKey, Epoch, Slot, SlotClockTrait};
 use tokio::sync::{broadcast, Mutex};
 use tracing::{debug, error, info, warn, Instrument};
-use uuid::Uuid;
 
 use crate::{error::HousekeeperError, inclusion_list::InclusionListService, EthereumPrimevService};
 
@@ -90,7 +89,6 @@ pub struct Housekeeper<DB: DatabaseService + 'static, A: Auctioneer + 'static> {
     beacon_client: Arc<MultiBeaconClient>,
     auctioneer: Arc<A>,
     chain_info: Arc<ChainInfo>,
-    leader_id: Arc<String>,
     primev_service: Option<EthereumPrimevService>,
     slots: HousekeeperSlots,
     inclusion_list_service: Option<InclusionListService<DB, A>>,
@@ -116,7 +114,6 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             beacon_client,
             auctioneer,
             chain_info,
-            leader_id: Uuid::new_v4().to_string().into(),
             primev_service,
             slots: HousekeeperSlots::default(),
             inclusion_list_service,
@@ -162,11 +159,6 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     #[tracing::instrument(skip_all, name = "new_slot", fields(slot = %head_slot))]
     async fn process_new_slot(&self, head_slot: Slot, block_hash: Option<B256>) {
         if self.slots.head_already_seen(head_slot) {
-            return;
-        }
-
-        // only allow one housekeeper task to run at a time.
-        if !self.auctioneer.try_acquire_or_renew_leadership(&self.leader_id).await {
             return;
         }
 
@@ -353,7 +345,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     async fn sync_builder_info_changes(&self) -> Result<(), HousekeeperError> {
         let builder_infos = self.db.get_all_builder_infos().await?;
         debug!(builder_infos = builder_infos.len(), "updating builder infos");
-        self.auctioneer.update_builder_infos(&builder_infos).await?;
+        self.auctioneer.update_builder_infos(&builder_infos);
 
         Ok(())
     }
@@ -405,7 +397,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             "storing proposer duties"
         );
 
-        self.auctioneer.update_proposer_duties(formatted_proposer_duties.clone()).await?;
+        self.auctioneer.update_proposer_duties(formatted_proposer_duties.clone());
 
         self.db.set_proposer_duties(formatted_proposer_duties).await?;
 
@@ -427,14 +419,14 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         let primev_validators =
             primev_service.get_registered_primev_validators(proposer_duties).await;
         info!(primev_validators = primev_validators.len(), "updating primev proposers");
-        auctioneer.update_primev_proposers(&primev_validators).await?;
+        auctioneer.update_primev_proposers(&primev_validators);
 
         let primev_builders = primev_service.get_registered_primev_builders().await;
 
         let mut primev_builders_config: Vec<BuilderConfig> = Vec::new();
 
         for builder_pubkey in primev_builders {
-            match auctioneer.get_builder_info(&builder_pubkey).await.ok() {
+            match auctioneer.get_builder_info(&builder_pubkey).ok() {
                 Some(builder_info) => {
                     if builder_info.builder_id == Some("PrimevBuilder".to_string()) ||
                         builder_info
@@ -485,7 +477,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             }
         }
 
-        auctioneer.update_builder_infos(&primev_builders_config).await?;
+        auctioneer.update_builder_infos(&primev_builders_config);
 
         db.store_builders_info(primev_builders_config.as_slice()).await?;
 
@@ -506,7 +498,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         let start = Instant::now();
         let proposer_whitelist = self.db.get_trusted_proposers().await?;
         debug!(proposer_whitelist = proposer_whitelist.len(), duration = ?start.elapsed(), "fetched trusted proposers");
-        self.auctioneer.update_trusted_proposers(proposer_whitelist).await?;
+        self.auctioneer.update_trusted_proposers(proposer_whitelist);
 
         Ok(())
     }

@@ -62,10 +62,11 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
 
         let slot_coordinate = get_slot_coordinate(slot, &pub_key, &parent_hash);
 
-        let (postgres_result, redis_result) = tokio::join!(
-            self.db.save_inclusion_list(&inclusion_list, slot, &parent_hash, &pub_key),
-            self.auctioneer.update_current_inclusion_list(inclusion_list.clone(), slot_coordinate)
-        );
+        let redis_result =
+            self.auctioneer.update_current_inclusion_list(inclusion_list.clone(), slot_coordinate);
+
+        let postgres_result =
+            self.db.save_inclusion_list(&inclusion_list, slot, &parent_hash, &pub_key).await;
 
         if postgres_result.is_ok() {
             info!(head_slot = slot, "Saved inclusion list to postgres");

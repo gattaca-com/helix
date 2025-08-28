@@ -190,7 +190,7 @@ fn demote_builder<A: Api>(
 
     let builder_pubkey = pending_block.builder_pubkey.clone();
     task::spawn(file!(), line!(), async move {
-        if let Err(err) = auctioneer.demote_builder(&builder_pubkey).await {
+        if let Err(err) = auctioneer.demote_builder(&builder_pubkey) {
             error!(%err, "failed to demote builder")
         }
     });
