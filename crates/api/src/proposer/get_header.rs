@@ -163,10 +163,6 @@ impl<A: Api> ProposerApi<A> {
             get_header_metric.record();
         }
 
-        // Try to fetch a merged block
-        let merged_block_bid =
-            proposer_api.shared_best_merged.load(bid_request.slot.into(), &bid_request.parent_hash);
-
         let get_best_bid_res = proposer_api.shared_best_header.load(
             bid_request.slot.into(),
             &bid_request.parent_hash,
@@ -176,30 +172,36 @@ impl<A: Api> ProposerApi<A> {
         trace.best_bid_fetched = utcnow_ns();
         debug!(trace = ?trace, "best bid fetched");
 
-        let max_merged_bid_age_ms =
-            proposer_api.relay_config.block_merging_config.max_merged_bid_age_ms;
-
-        let bid = match (get_best_bid_res, merged_block_bid) {
-            (Some(bid), None) => bid,
-            // If the current best bid has equal or higher value, we use that
-            (Some(bid), Some((_, merged_bid))) if merged_bid.value() <= bid.value() => bid,
-            // If the merged bid is stale, we use the current best bid
-            (Some(bid), Some((time, _))) if time < utcnow_ms() - max_merged_bid_age_ms => bid,
-            // Otherwise, we use the merged bid
-            (Some(_bid), Some((_, merged_bid))) => merged_bid,
-            (None, Some(_)) => {
-                warn!("only merged bid available");
-                return Err(ProposerApiError::NoBidPrepared);
-            }
-            (None, None) => {
-                warn!("no bid found");
-                return Err(ProposerApiError::NoBidPrepared);
-            }
+        let Some(bid) = get_best_bid_res else {
+            warn!("no bid found");
+            return Err(ProposerApiError::NoBidPrepared);
         };
         if bid.value() == &U256::ZERO {
             warn!("best bid value is 0");
             return Err(ProposerApiError::BidValueZero);
         }
+
+        // Try to fetch a merged block if block merging is enabled
+        let bid = if proposer_api.relay_config.block_merging_config.is_enabled {
+            let merged_block_bid = proposer_api
+                .shared_best_merged
+                .load(bid_request.slot.into(), &bid_request.parent_hash);
+            let max_merged_bid_age_ms =
+                proposer_api.relay_config.block_merging_config.max_merged_bid_age_ms;
+
+            match merged_block_bid {
+                None => bid,
+                // If the current best bid has equal or higher value, we use that
+                Some((_, merged_bid)) if merged_bid.value() <= bid.value() => bid,
+                // If the merged bid is stale, we use the current best bid
+                Some((time, _)) if time < utcnow_ms() - max_merged_bid_age_ms => bid,
+                // Otherwise, we use the merged bid
+                Some((_, merged_bid)) => merged_bid,
+            }
+        } else {
+            bid
+        };
+
         let bid_block_hash = bid.header().block_hash().0;
         debug!(
             value = ?bid.value(),
