@@ -145,8 +145,7 @@ pub struct MergeableOrders {
     pub origin: Address,
     /// List of mergeable orders.
     pub orders: Vec<MergeableOrder>,
-    /// Blobs used by the orders, prefixed with the index
-    /// in [orders](Self::orders) and in the bundle.
+    /// Blobs used by the orders, keyed by their versioned hash.
     pub blobs: HashMap<B256, BlobsBundle>,
 }
 
@@ -165,6 +164,7 @@ pub struct MergeableOrderWithOrigin {
     /// Address of the builder that submitted this order.
     pub origin: Address,
     /// Mergeable order.
+    #[serde(flatten)]
     pub order: MergeableOrder,
 }
 
