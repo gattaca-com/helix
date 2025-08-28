@@ -222,7 +222,7 @@ impl<A: Api> ProposerApi<A> {
         )
         .await;
 
-        let proposer_pubkey = bid_request.pubkey.clone();
+        let proposer_pubkey_clone = bid_request.pubkey;
 
         let fork = if bid.as_electra().is_ok() {
             helix_types::ForkName::Electra
@@ -240,7 +240,7 @@ impl<A: Api> ProposerApi<A> {
                     .gossiper
                     .request_payload(RequestPayloadParams {
                         slot,
-                        proposer_pub_key: proposer_pubkey,
+                        proposer_pub_key: proposer_pubkey_clone,
                         block_hash: bid_block_hash,
                     })
                     .await
