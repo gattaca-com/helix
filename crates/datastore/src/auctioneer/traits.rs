@@ -1,6 +1,9 @@
 use alloy_primitives::B256;
 use helix_common::{
-    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
+    api::builder_api::{
+        BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
+        SlotCoordinate,
+    },
     builder_info::BuilderInfo,
     ProposerInfo,
 };
@@ -8,7 +11,7 @@ use helix_database::BuilderInfoDocument;
 use helix_types::{BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, PayloadAndBlobsRef};
 use tokio::sync::broadcast;
 
-use crate::{error::AuctioneerError, local::local_cache::InclusionListWithKey};
+use crate::error::AuctioneerError;
 
 #[auto_impl::auto_impl(Arc)]
 pub trait Auctioneer: Send + Sync + Clone {
@@ -78,7 +81,7 @@ pub trait Auctioneer: Send + Sync + Clone {
     fn update_current_inclusion_list(
         &self,
         inclusion_list: InclusionListWithMetadata,
-        slot_coordinate: String,
+        slot_coordinate: SlotCoordinate,
     ) -> Result<(), AuctioneerError>;
 
     fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey>;
@@ -86,4 +89,6 @@ pub trait Auctioneer: Send + Sync + Clone {
     fn update_proposer_duties(&self, duties: Vec<BuilderGetValidatorsResponseEntry>);
 
     fn get_proposer_duties(&self) -> Vec<BuilderGetValidatorsResponseEntry>;
+
+    fn process_slot(&self, head_slot: u64);
 }

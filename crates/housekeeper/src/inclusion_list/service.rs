@@ -4,7 +4,6 @@ use alloy_primitives::B256;
 use helix_common::{
     api::builder_api::{InclusionList, InclusionListWithMetadata},
     chain_info::ChainInfo,
-    utils::get_slot_coordinate,
     InclusionListConfig,
 };
 use helix_database::DatabaseService;
@@ -60,10 +59,10 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
             }
         };
 
-        let slot_coordinate = get_slot_coordinate(slot, &pub_key, &parent_hash);
-
-        let redis_result =
-            self.auctioneer.update_current_inclusion_list(inclusion_list.clone(), slot_coordinate);
+        let auctioneer_result = self.auctioneer.update_current_inclusion_list(
+            inclusion_list.clone(),
+            (slot, pub_key.clone(), parent_hash),
+        );
 
         let postgres_result =
             self.db.save_inclusion_list(&inclusion_list, slot, &parent_hash, &pub_key).await;
@@ -72,12 +71,15 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
             info!(head_slot = slot, "Saved inclusion list to postgres");
         }
 
-        match redis_result {
+        match auctioneer_result {
             Ok(_) => {
-                info!(head_slot = slot, "Saved inclusion list to redis")
+                info!(head_slot = slot, "Saved inclusion list to auctioneer")
             }
             Err(err) => {
-                warn!(head_slot = slot, "Could not include list for this slot in redis {}", err)
+                warn!(
+                    head_slot = slot,
+                    "Could not include list for this slot in auctioneer {}", err
+                )
             }
         };
     }

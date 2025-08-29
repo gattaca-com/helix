@@ -184,6 +184,7 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
         }
 
         self.head_slot = slot;
+        self.auctioneer.process_slot(slot);
 
         sleep(Duration::from_secs(1)).await;
 

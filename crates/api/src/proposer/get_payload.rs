@@ -270,7 +270,7 @@ impl<A: Api> ProposerApi<A> {
             );
         }
 
-        let is_trusted_proposer = self.is_trusted_proposer(&proposer_public_key);
+        let is_trusted_proposer = self.auctioneer.is_trusted_proposer(&proposer_public_key);
 
         // Publish and validate payload with multi-beacon-client
         let fork = unblinded_payload.signed_block.fork_name_unchecked();
@@ -385,10 +385,6 @@ impl<A: Api> ProposerApi<A> {
             }
         }
         Ok(())
-    }
-
-    fn is_trusted_proposer(&self, public_key: &BlsPublicKey) -> bool {
-        self.auctioneer.is_trusted_proposer(public_key)
     }
 
     /// Fetches the execution payload associated with a given slot, public key, and block hash.

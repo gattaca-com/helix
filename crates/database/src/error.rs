@@ -31,9 +31,6 @@ pub enum DatabaseError {
     #[error("Could not fetch all builder info")]
     AllBuilderInfoNotFound,
 
-    #[error("redis error: {0}")]
-    RedisError(String),
-
     #[error("serde_json error: {0}")]
     SerdeJsonError(#[from] serde_json::Error),
 

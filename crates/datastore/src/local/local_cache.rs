@@ -1,16 +1,15 @@
-use std::{
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
-    },
-    time::Duration,
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
 };
 
 use alloy_primitives::B256;
-use async_trait::async_trait;
 use dashmap::{DashMap, DashSet};
 use helix_common::{
-    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
+    api::builder_api::{
+        BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
+        SlotCoordinate,
+    },
     bid_sorter::BidSorterMessage,
     BuilderInfo, ProposerInfo,
 };
@@ -19,39 +18,29 @@ use helix_types::{
     maybe_upgrade_execution_payload, BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs,
     PayloadAndBlobsRef,
 };
-use moka::sync::Cache;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
-use tracing::{error, instrument, warn};
+use tracing::{error, info, instrument, warn};
 
-use crate::{
-    error::AuctioneerError,
-    local::utils::{get_cache_bid_trace_key, get_execution_payload_key},
-    types::keys::CURRENT_INCLUSION_LIST_KEY,
-    Auctioneer,
-};
+use crate::{error::AuctioneerError, Auctioneer};
 
-const BID_CACHE_EXPIRY_S: u64 = 45;
-const INCLUSION_LIST_EXPIRY_S: u64 = 45;
-const PAYLOAD_ADDRESS_EXPIRY_S: u64 = 24;
+type ExecutionPayloadKey = (u64, BlsPublicKey, B256);
+type BidTraceKey = (u64, BlsPublicKey, B256);
 
 #[derive(Clone)]
 pub struct LocalCache {
     inclusion_list: broadcast::Sender<InclusionListWithKey>,
 
-    seen_block_hashes: Cache<B256, ()>,
+    seen_block_hashes: Arc<DashSet<B256>>,
     last_delivered_slot: Arc<AtomicU64>,
     last_delivered_hash: Arc<RwLock<Option<B256>>>,
-    // TODO: remove dead code. Currently if it's removed the compiler complains
-    _builder_latest_payload_received_at: Cache<String, Arc<DashMap<String, u64>>>,
-    builder_info_cache: DashMap<BlsPublicKey, BuilderInfo>,
-    trusted_proposers: DashMap<BlsPublicKey, ProposerInfo>,
-    execution_payload_cache: Cache<String, PayloadAndBlobs>,
-    payload_address_cache: Cache<B256, (BlsPublicKey, Vec<u8>)>,
-    bid_trace_cache: Cache<String, BidTrace>,
-    primev_proposers: DashSet<BlsPublicKey>,
+    builder_info_cache: Arc<DashMap<BlsPublicKey, BuilderInfo>>,
+    trusted_proposers: Arc<DashMap<BlsPublicKey, ProposerInfo>>,
+    execution_payload_cache: Arc<DashMap<ExecutionPayloadKey, PayloadAndBlobs>>,
+    payload_address_cache: Arc<DashMap<B256, (BlsPublicKey, Vec<u8>)>>,
+    bid_trace_cache: Arc<DashMap<BidTraceKey, BidTrace>>,
+    primev_proposers: Arc<DashSet<BlsPublicKey>>,
     kill_switch: Arc<AtomicBool>,
-    inclusion_list_cache: Cache<String, InclusionListWithKey>,
     proposer_duties: Arc<RwLock<Vec<BuilderGetValidatorsResponseEntry>>>,
 
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
@@ -68,42 +57,21 @@ impl LocalCache {
         // ensure at least one subscriber is running
         tokio::spawn(async move { while let Ok(_message) = il_recv.recv().await {} });
 
-        let seen_block_hashes =
-            Cache::builder().time_to_idle(Duration::from_secs(45)).max_capacity(100_000).build();
-        let _builder_latest_payload_received_at =
-            Cache::builder().time_to_idle(Duration::from_secs(45)).max_capacity(100_000).build();
-        let builder_info_cache = DashMap::new();
+        let seen_block_hashes = Arc::new(DashSet::new());
+        let builder_info_cache = Arc::new(DashMap::new());
         let last_delivered_slot = Arc::new(AtomicU64::new(0));
         let last_delivered_hash = Arc::new(RwLock::new(None));
-        let execution_payload_cache =
-            Cache::builder().time_to_idle(Duration::from_secs(45)).max_capacity(100_000).build();
-
-        let trusted_proposers = DashMap::new();
-
-        let payload_address_cache = Cache::builder()
-            .time_to_idle(Duration::from_secs(PAYLOAD_ADDRESS_EXPIRY_S))
-            .max_capacity(100_000)
-            .build();
-
-        let bid_trace_cache = Cache::builder()
-            .time_to_idle(Duration::from_secs(BID_CACHE_EXPIRY_S))
-            .max_capacity(100_000)
-            .build();
-
-        let primev_proposers = DashSet::new();
+        let execution_payload_cache = Arc::new(DashMap::with_capacity(builder_infos.len()));
+        let trusted_proposers = Arc::new(DashMap::with_capacity(200_000));
+        let payload_address_cache = Arc::new(DashMap::new());
+        let bid_trace_cache = Arc::new(DashMap::new());
+        let primev_proposers = Arc::new(DashSet::new());
         let kill_switch = Arc::new(AtomicBool::new(false));
-
-        let inclusion_list_cache = Cache::builder()
-            .time_to_idle(Duration::from_secs(INCLUSION_LIST_EXPIRY_S))
-            .max_capacity(10)
-            .build();
-
         let proposer_duties = Arc::new(RwLock::new(Vec::new()));
 
         let cache = Self {
             inclusion_list,
             seen_block_hashes,
-            _builder_latest_payload_received_at,
             last_delivered_slot,
             last_delivered_hash,
             builder_info_cache,
@@ -113,7 +81,6 @@ impl LocalCache {
             bid_trace_cache,
             primev_proposers,
             kill_switch,
-            inclusion_list_cache,
             proposer_duties,
             sorter_tx,
         };
@@ -125,16 +92,10 @@ impl LocalCache {
     }
 
     fn get_last_hash_delivered(&self) -> Option<B256> {
-        let maybe = {
-            let guard = self.last_delivered_hash.read();
-            *guard
-        };
-
-        maybe
+        *self.last_delivered_hash.read()
     }
 }
 
-#[async_trait]
 impl Auctioneer for LocalCache {
     #[instrument(skip_all)]
     fn get_last_slot_delivered(&self) -> Option<u64> {
@@ -189,8 +150,8 @@ impl Auctioneer for LocalCache {
         block_hash: &B256,
         execution_payload: PayloadAndBlobsRef,
     ) {
-        let key = get_execution_payload_key(slot, proposer_pub_key, block_hash);
-        self.execution_payload_cache.insert(key, execution_payload.to_owned());
+        self.execution_payload_cache
+            .insert((slot, proposer_pub_key.clone(), *block_hash), execution_payload.to_owned());
     }
 
     #[instrument(skip_all)]
@@ -201,10 +162,14 @@ impl Auctioneer for LocalCache {
         block_hash: &B256,
         fork_name: ForkName,
     ) -> Option<PayloadAndBlobs> {
-        let key = get_execution_payload_key(slot, proposer_pub_key, block_hash);
-        self.execution_payload_cache.get(&key).map(|p| PayloadAndBlobs {
-            execution_payload: maybe_upgrade_execution_payload(p.execution_payload, fork_name),
-            blobs_bundle: p.blobs_bundle,
+        self.execution_payload_cache.get(&(slot, proposer_pub_key.clone(), *block_hash)).map(|p| {
+            PayloadAndBlobs {
+                execution_payload: maybe_upgrade_execution_payload(
+                    p.execution_payload.clone(),
+                    fork_name,
+                ),
+                blobs_bundle: p.blobs_bundle.clone(),
+            }
         })
     }
 
@@ -215,18 +180,17 @@ impl Auctioneer for LocalCache {
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
     ) -> Option<BidTrace> {
-        let key = get_cache_bid_trace_key(slot, proposer_pub_key, block_hash);
-        self.bid_trace_cache.get(&key)
+        self.bid_trace_cache
+            .get(&(slot, proposer_pub_key.clone(), *block_hash))
+            .map(|b| b.to_owned())
     }
 
     #[instrument(skip_all)]
     fn save_bid_trace(&self, bid_trace: &BidTrace) {
-        let key = get_cache_bid_trace_key(
-            bid_trace.slot,
-            &bid_trace.proposer_pubkey,
-            &bid_trace.block_hash,
+        self.bid_trace_cache.insert(
+            (bid_trace.slot, bid_trace.proposer_pubkey.clone(), bid_trace.block_hash),
+            bid_trace.to_owned(),
         );
-        self.bid_trace_cache.insert(key, bid_trace.to_owned());
     }
 
     #[instrument(skip_all)]
@@ -242,16 +206,22 @@ impl Auctioneer for LocalCache {
 
     #[instrument(skip_all)]
     fn demote_builder(&self, builder_pub_key: &BlsPublicKey) -> Result<(), AuctioneerError> {
-        let _ = self.sorter_tx.try_send(BidSorterMessage::Demotion(builder_pub_key.clone()));
+        if let Err(e) = self.sorter_tx.try_send(BidSorterMessage::Demotion(builder_pub_key.clone()))
+        {
+            error!(%e, builder_pub_key = %builder_pub_key, "failed to send demotion to sorter");
+        }
 
-        let mut builder_info = self.get_builder_info(builder_pub_key)?;
+        let mut builder_info = self
+            .builder_info_cache
+            .get_mut(builder_pub_key)
+            .ok_or(AuctioneerError::BuilderNotFound { pub_key: builder_pub_key.clone() })?;
+
         if !builder_info.is_optimistic {
             return Ok(());
         }
+
         builder_info.is_optimistic = false;
         builder_info.is_optimistic_for_regional_filtering = false;
-
-        self.builder_info_cache.insert(builder_pub_key.clone(), builder_info.clone());
         Ok(())
     }
 
@@ -265,12 +235,7 @@ impl Auctioneer for LocalCache {
 
     #[instrument(skip_all)]
     fn seen_or_insert_block_hash(&self, block_hash: &B256) -> bool {
-        if self.seen_block_hashes.contains_key(block_hash) {
-            return true;
-        }
-
-        self.seen_block_hashes.insert(*block_hash, ());
-        false
+        !self.seen_block_hashes.insert(*block_hash)
     }
 
     #[instrument(skip_all)]
@@ -300,7 +265,7 @@ impl Auctioneer for LocalCache {
 
     #[instrument(skip_all)]
     fn get_payload_url(&self, block_hash: &B256) -> Option<(BlsPublicKey, Vec<u8>)> {
-        self.payload_address_cache.get(block_hash)
+        self.payload_address_cache.get(block_hash).map(|r| r.value().clone())
     }
 
     #[instrument(skip_all)]
@@ -332,12 +297,9 @@ impl Auctioneer for LocalCache {
     fn update_current_inclusion_list(
         &self,
         inclusion_list: InclusionListWithMetadata,
-        slot_coordinate: String,
+        slot_coordinate: SlotCoordinate,
     ) -> Result<(), AuctioneerError> {
-        let new_inclusion_list_key = format!("{CURRENT_INCLUSION_LIST_KEY}_{slot_coordinate}");
-        let list_with_key =
-            InclusionListWithKey { key: new_inclusion_list_key.clone(), inclusion_list };
-        self.inclusion_list_cache.insert(new_inclusion_list_key, list_with_key.clone());
+        let list_with_key = InclusionListWithKey { key: slot_coordinate.clone(), inclusion_list };
         if let Err(err) = self.inclusion_list.send(list_with_key) {
             error!(%err, "Failed to send inclusion list update");
         }
@@ -359,17 +321,15 @@ impl Auctioneer for LocalCache {
     fn get_proposer_duties(&self) -> Vec<BuilderGetValidatorsResponseEntry> {
         self.proposer_duties.read().clone()
     }
-}
 
-#[derive(Clone, Debug)]
-pub struct InclusionListWithKey {
-    pub key: String,
-    pub inclusion_list: InclusionListWithMetadata,
-}
+    #[instrument(skip_all)]
+    fn process_slot(&self, head_slot: u64) {
+        info!(head_slot, "Processing new slot in local cache, clearing old data");
 
-impl<'a> From<&'a InclusionListWithKey> for (&'a InclusionListWithMetadata, &'a str) {
-    fn from(value: &'a InclusionListWithKey) -> Self {
-        (&value.inclusion_list, &value.key)
+        self.seen_block_hashes.clear();
+        self.execution_payload_cache.clear();
+        self.payload_address_cache.clear();
+        self.bid_trace_cache.clear();
     }
 }
 

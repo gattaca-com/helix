@@ -11,17 +11,18 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use helix_common::{
     api::{
-        builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
+        builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithKey},
+        proposer_api::ValidatorRegistrationInfo,
     },
     bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     bid_submission::BidSubmission,
     chain_info::ChainInfo,
     simulator::BlockSimError,
-    utils::{get_slot_coordinate, utcnow_ns},
+    utils::utcnow_ns,
     BuilderInfo, RelayConfig, SubmissionTrace, ValidatorPreferences,
 };
 use helix_database::DatabaseService;
-use helix_datastore::{local::local_cache::InclusionListWithKey, Auctioneer};
+use helix_datastore::Auctioneer;
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{BlsPublicKey, SignedBidSubmission, Slot};
 use parking_lot::RwLock;
@@ -263,10 +264,10 @@ impl<A: Api> BuilderApi<A> {
     ) -> Result<bool, BuilderApiError> {
         debug!("validating block");
 
-        let current_slot_coord = get_slot_coordinate(
+        let current_slot_coord = (
             payload.slot().as_u64(),
-            payload.proposer_public_key(),
-            payload.parent_hash(),
+            payload.proposer_public_key().clone(),
+            *payload.parent_hash(),
         );
 
         let inclusion_list = self

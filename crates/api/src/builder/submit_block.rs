@@ -210,8 +210,6 @@ impl<A: Api> BuilderApi<A> {
         trace!("sent bid to bid sorter");
 
         // Save the execution payload
-        // TODO: if this and similar other calls fail we should stop serving headers and send an
-        // alert, not much we can do
         api.auctioneer.save_execution_payload(
             payload.slot().as_u64(),
             payload.proposer_public_key(),
@@ -219,10 +217,10 @@ impl<A: Api> BuilderApi<A> {
             payload.payload_and_blobs_ref(),
         );
         trace.auctioneer_update = utcnow_ns();
-        trace!("saved payload to redis");
+        trace!("saved payload to auctioneer");
 
         api.auctioneer.save_bid_trace(payload.bid_trace());
-        trace!("saved bid trace to redis");
+        trace!("saved bid trace to auctioneer");
 
         // Log some final info
         trace.request_finish = utcnow_ns();

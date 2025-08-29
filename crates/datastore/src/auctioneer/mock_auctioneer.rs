@@ -2,16 +2,20 @@ use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use alloy_primitives::B256;
 use helix_common::{
-    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
+    api::builder_api::{
+        BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
+        SlotCoordinate,
+    },
     BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
 use helix_types::{
     BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, PayloadAndBlobsRef, SignedBuilderBid,
+    TestRandomSeed,
 };
 use tokio::sync::broadcast;
 
-use crate::{error::AuctioneerError, local::local_cache::InclusionListWithKey, Auctioneer};
+use crate::{error::AuctioneerError, Auctioneer};
 
 #[derive(Default, Clone)]
 pub struct MockAuctioneer {
@@ -125,7 +129,7 @@ impl Auctioneer for MockAuctioneer {
     fn update_current_inclusion_list(
         &self,
         _: InclusionListWithMetadata,
-        _: String,
+        _: SlotCoordinate,
     ) -> Result<(), AuctioneerError> {
         Ok(())
     }
@@ -133,7 +137,7 @@ impl Auctioneer for MockAuctioneer {
     fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey> {
         let (tx, rx) = broadcast::channel(1);
         tx.send(InclusionListWithKey {
-            key: "".into(),
+            key: (0, BlsPublicKey::test_random(), B256::default()),
             inclusion_list: InclusionListWithMetadata { txs: vec![] },
         })
         .unwrap();
@@ -145,4 +149,6 @@ impl Auctioneer for MockAuctioneer {
     fn get_proposer_duties(&self) -> Vec<BuilderGetValidatorsResponseEntry> {
         vec![]
     }
+
+    fn process_slot(&self, _head_slot: u64) {}
 }

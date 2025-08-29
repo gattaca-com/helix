@@ -47,6 +47,20 @@ pub struct TopBidUpdate {
     pub value: U256,
 }
 
+pub type SlotCoordinate = (u64, BlsPublicKey, B256);
+
+#[derive(Clone, Debug)]
+pub struct InclusionListWithKey {
+    pub key: SlotCoordinate,
+    pub inclusion_list: InclusionListWithMetadata,
+}
+
+impl<'a> From<&'a InclusionListWithKey> for (&'a InclusionListWithMetadata, &'a SlotCoordinate) {
+    fn from(value: &'a InclusionListWithKey) -> Self {
+        (&value.inclusion_list, &value.key)
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct InclusionListTxWithMetadata {
     pub hash: B256,

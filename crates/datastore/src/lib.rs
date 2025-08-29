@@ -1,7 +1,6 @@
 pub mod auctioneer;
 pub mod error;
 pub mod local;
-pub mod types;
 
 use std::sync::Arc;
 

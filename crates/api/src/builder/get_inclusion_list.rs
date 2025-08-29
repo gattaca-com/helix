@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use axum::{extract::Path, response::IntoResponse, Extension};
-use helix_common::{api::builder_api::InclusionList, utils::get_slot_coordinate};
-use helix_datastore::types::keys::inclusion_list_key;
+use helix_common::api::builder_api::InclusionList;
 use hyper::StatusCode;
 use tracing::debug;
 
@@ -29,16 +28,14 @@ impl<A: Api> BuilderApi<A> {
 
         let Some(list_with_key) = list_with_key.as_ref() else {
             debug!(inclusion_lists_enabled = %api.relay_config.inclusion_list.is_some(),
-                "Builder has requested an inclusion list but none have been found in redis."
+                "Builder has requested an inclusion list but none have been found in the cache."
             );
             return Ok(StatusCode::NOT_FOUND.into_response());
         };
 
         let (current_list, key) = list_with_key.into();
 
-        let requested_slot_coordinate = get_slot_coordinate(slot, &pub_key, &parent_hash);
-
-        if key == inclusion_list_key(&requested_slot_coordinate) {
+        if key == &(slot, pub_key, parent_hash) {
             let response_payload = InclusionList::from(current_list);
             Ok((StatusCode::OK, axum::Json(response_payload)).into_response())
         } else {

@@ -43,7 +43,6 @@ To efficiently manage transactions based on regional policies, our relay operati
 
 - Emphasising generic design, Helix allows for flexible integration with various databases and libraries.
 - Key Traits include: `Database`, `Auctioneer`, `Simulator` and `BeaconClient`.
-- The current `Auctioneer` implementation supports Redis due to the ease of implementation when synchronising multiple processes in the same cluster.
 - The `Simulator` is also purposely generic, allowing for implementations of all optimistic relaying implementations and different forms of simulation. For example, communicating with the execution client via RPC or gRPC.
 
 ### Optimised Block Propagation
@@ -66,7 +65,7 @@ Analysing the latency metrics presented, we observe significant latency spikes i
 - GZIP Decompression: For compressed payloads, the GZIP decompression process can introduce significant computational overhead, especially for larger payloads.
 - Deserialisation Overhead: This is the final deserialisation step, where the byte vector is converted into a `SignedBidSubmission` object using either SSZ or JSON.
 
-`Simulation -> Auctioneer`. In this section, we store all necessary information about the payload, preparing it to be returned by `get_header` and `get_payload`. This is handled using Redis in the current implementation, which can introduce significant latency, especially for larger payloads.
+`Simulation -> Auctioneer`. In this section, we store all necessary information about the payload, preparing it to be returned by `get_header` and `get_payload`.
 
 It is worth mentioning that all submissions during this period were simulated optimistically. If this weren’t the case, we would see most of the latency being taken up by `Bid checks -> Simulation`.
 
@@ -82,7 +81,7 @@ In addition to the improvements made in internal processing efficiency, using th
 
 ## How to run
 
-The relay can be run locally for development, or configured for staging and production environments. Depending on the setup, you may want to leverage Docker for building and running the service, along with a Postgres database, Redis instance.
+The relay can be run locally for development, or configured for staging and production environments. Depending on the setup, you may want to leverage Docker for building and running the service, along with a Postgres database.
 
 #### Local setup
 
@@ -117,8 +116,6 @@ $ docker run --name helix_mev_relayer helix_mev_relayer
 
 The relay relies on postgres database for persistent storage. Ensure you point the `config.postgres` settings to a database with `timescaledb` extension installed and enabled.
 
-For Redis set `config.redis.url` to a connection url to a running redis instance.
-
 ### The simulator service
 
 `config.simulators`: should be an RPC endpoint for the payload validator. This service is responsible for sending block requests to the relay for validation.
@@ -146,9 +143,7 @@ You can also add a webhook to log `panic!` messages to discord using the `config
 
 ### In-Memory Auctioneer
 
-In multi-relay cluster configurations, synchronising the best bid across all nodes is crucial to minimise redundant processing. Currently, this synchronisation relies on Redis. While the current `RedisCache` implementation could be optimised further, we plan on shifting to an in-memory model for our Auctioneer component, eliminating the reliance on Redis for critical-path functions.
-
-Our approach will separate `Auctioneer` functionalities based on whether they lie in the critical path. Non-critical path functions will continue to use Redis for synchronisation and redundancy. However, critical-path operations like `get_last_slot_delivered` and `check_if_bid_is_below_floor` will be moved in-memory. To ensure that we minimise redundant processing, each header update will gossip between local instances.
+Our `Auctioneer` runs entirely in memory. This approach minimizes latency and any network errors that may be encountered if connecting to an external datastore. It does however, mean that the auction must take place one machine.
 
 ### Optimised beacon client peering
 
