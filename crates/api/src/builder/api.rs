@@ -612,7 +612,7 @@ fn order_to_mergeable(
             };
             if is_blob_transaction(raw_tx) {
                 // If the tx references bundles not in the block, we drop it
-                extract_blobs_bundle_from_blob_transaction(raw_tx, blob_versioned_hashes)?;
+                validate_blobs(raw_tx, blob_versioned_hashes)?;
             }
 
             let transaction = Bytes::from(raw_tx.to_vec());
@@ -636,7 +636,7 @@ fn order_to_mergeable(
 
                     if is_blob_transaction(raw_tx) {
                         // If the tx references bundles not in the block, we drop the bundle
-                        extract_blobs_bundle_from_blob_transaction(raw_tx, blob_versioned_hashes)?;
+                        validate_blobs(raw_tx, blob_versioned_hashes)?;
                     }
 
                     Ok(Bytes::from_owner(raw_tx.to_vec()))
@@ -663,7 +663,7 @@ fn get_tx_versioned_hashes(mut raw_tx: &[u8]) -> Vec<B256> {
         .unwrap_or(vec![])
 }
 
-fn extract_blobs_bundle_from_blob_transaction(
+fn validate_blobs(
     raw_tx: &[u8],
     blob_versioned_hashes: &[B256],
 ) -> Result<(), OrderValidationError> {
