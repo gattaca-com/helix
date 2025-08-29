@@ -8,7 +8,10 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use ssz_derive::{Decode, Encode};
 
-use crate::{BlobsBundle, SignedBidSubmission};
+use crate::{
+    blobs::{KzgCommitment, KzgProof},
+    Blob, SignedBidSubmission,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct SignedBidSubmissionWithMergingData {
@@ -140,20 +143,33 @@ pub struct MergeableBundle {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BlobWithMetadata {
+    commitment: KzgCommitment,
+    proof: KzgProof,
+    blob: Blob,
+}
+
+impl BlobWithMetadata {
+    pub fn new(commitment: KzgCommitment, proof: KzgProof, blob: Blob) -> Self {
+        Self { commitment, proof, blob }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MergeableOrders {
     /// Address of the builder that submitted these orders.
     pub origin: Address,
     /// List of mergeable orders.
     pub orders: Vec<MergeableOrder>,
     /// Blobs used by the orders, keyed by their versioned hash.
-    pub blobs: HashMap<B256, BlobsBundle>,
+    pub blobs: HashMap<B256, BlobWithMetadata>,
 }
 
 impl MergeableOrders {
     pub fn new(
         origin: Address,
         orders: Vec<MergeableOrder>,
-        blobs: HashMap<B256, BlobsBundle>,
+        blobs: HashMap<B256, BlobWithMetadata>,
     ) -> Self {
         Self { origin, orders, blobs }
     }

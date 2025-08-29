@@ -25,9 +25,9 @@ use helix_database::DatabaseService;
 use helix_datastore::{redis::redis_cache::InclusionListWithKey, Auctioneer};
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{
-    BlobsBundle, BlockMergingData, BlsPublicKey, Bundle, KzgCommitment, MergeableBundle,
-    MergeableOrder, MergeableOrders, MergeableTransaction, Order, SignedBidSubmission,
-    SignedBidSubmissionWithMergingData, Slot, Transactions,
+    BlobWithMetadata, BlobsBundle, BlockMergingData, BlsPublicKey, Bundle, KzgCommitment,
+    MergeableBundle, MergeableOrder, MergeableOrders, MergeableTransaction, Order,
+    SignedBidSubmission, SignedBidSubmissionWithMergingData, Slot, Transactions,
 };
 use parking_lot::RwLock;
 use tracing::{debug, error, trace, warn};
@@ -583,7 +583,7 @@ fn order_to_mergeable(
     txs: &Transactions,
     blob_versioned_hashes: &[B256],
     block_blobs_bundles: &BlobsBundle,
-    blobs_in_orders: &mut HashMap<B256, BlobsBundle>,
+    blobs_in_orders: &mut HashMap<B256, BlobWithMetadata>,
 ) -> Result<MergeableOrder, OrderValidationError> {
     match order {
         Order::Tx(tx) => {
@@ -657,7 +657,7 @@ fn extract_blobs_bundle_from_blob_transaction(
     raw_tx: &[u8],
     blob_versioned_hashes: &[B256],
     block_blobs_bundles: &BlobsBundle,
-    blobs_in_orders: &mut HashMap<B256, BlobsBundle>,
+    blobs_in_orders: &mut HashMap<B256, BlobWithMetadata>,
 ) -> Result<(), OrderValidationError> {
     let versioned_hashes = get_tx_versioned_hashes(raw_tx);
     let num_blobs = versioned_hashes.len();
@@ -668,10 +668,10 @@ fn extract_blobs_bundle_from_blob_transaction(
         let Some(index) = blob_versioned_hashes.iter().position(|vh| *vh == h) else {
             return true;
         };
-        let commitments = vec![block_blobs_bundles.commitments[index]];
-        let proofs = vec![block_blobs_bundles.proofs[index]];
-        let blobs = vec![block_blobs_bundles.blobs[index].clone()];
-        blobs_in_orders.insert(h, BlobsBundle { commitments, proofs, blobs });
+        let commitment = block_blobs_bundles.commitments[index];
+        let proof = block_blobs_bundles.proofs[index];
+        let blob = block_blobs_bundles.blobs[index].clone();
+        blobs_in_orders.insert(h, BlobWithMetadata::new(commitment, proof, blob));
         false
     });
     if failures.any(|f| f) {
