@@ -43,7 +43,6 @@ pub trait Auctioneer: Send + Sync + Clone {
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
     ) -> Result<Option<BidTrace>, AuctioneerError>;
-
     async fn save_bid_trace(&self, bid_trace: &BidTrace) -> Result<(), AuctioneerError>;
 
     async fn get_builder_info(
