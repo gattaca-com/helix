@@ -149,12 +149,6 @@ pub struct BlobWithMetadata {
     pub blob: Blob,
 }
 
-impl BlobWithMetadata {
-    pub fn new(commitment: KzgCommitment, proof: KzgProof, blob: Blob) -> Self {
-        Self { commitment, proof, blob }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MergeableOrders {
     /// Address of the builder that submitted these orders.

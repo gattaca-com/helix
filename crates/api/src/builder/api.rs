@@ -566,24 +566,39 @@ pub fn get_mergeable_orders(
     let txs = execution_payload.transactions();
 
     // Expand all orders to include the tx's bytes, collecting any blob bundles in the process.
-    let mut blobs = HashMap::new();
     let mergeable_orders = merging_data
         .merge_orders
         .into_iter()
-        .map(|order| {
-            order_to_mergeable(order, txs, &blob_versioned_hashes, &block_blobs_bundles, &mut blobs)
-        })
+        .map(|order| order_to_mergeable(order, txs, &blob_versioned_hashes))
         .collect::<Result<Vec<_>, _>>()?;
 
+    let blobs = blobs_bundle_to_hashmap(blob_versioned_hashes, &block_blobs_bundles);
+
     Ok(MergeableOrders::new(merging_data.builder_address, mergeable_orders, blobs))
+}
+
+fn blobs_bundle_to_hashmap(
+    blob_versioned_hashes: Vec<B256>,
+    bundle: &BlobsBundle,
+) -> HashMap<B256, BlobWithMetadata> {
+    blob_versioned_hashes
+        .into_iter()
+        .zip(bundle.commitments.iter())
+        .zip(bundle.proofs.iter())
+        .zip(bundle.blobs.iter())
+        .map(|(((versioned_hash, commitment), proof), blob)| {
+            let commitment = *commitment;
+            let proof = *proof;
+            let blob = blob.clone();
+            (versioned_hash, BlobWithMetadata { commitment, proof, blob })
+        })
+        .collect()
 }
 
 fn order_to_mergeable(
     order: Order,
     txs: &Transactions,
     blob_versioned_hashes: &[B256],
-    block_blobs_bundles: &BlobsBundle,
-    blobs_in_orders: &mut HashMap<B256, BlobWithMetadata>,
 ) -> Result<MergeableOrder, OrderValidationError> {
     match order {
         Order::Tx(tx) => {
@@ -592,12 +607,7 @@ fn order_to_mergeable(
             };
             if is_blob_transaction(raw_tx) {
                 // If the tx references bundles not in the block, we drop it
-                extract_blobs_bundle_from_blob_transaction(
-                    raw_tx,
-                    blob_versioned_hashes,
-                    block_blobs_bundles,
-                    blobs_in_orders,
-                )?;
+                extract_blobs_bundle_from_blob_transaction(raw_tx, blob_versioned_hashes)?;
             }
 
             let transaction = Bytes::from(raw_tx.to_vec());
@@ -621,12 +631,7 @@ fn order_to_mergeable(
 
                     if is_blob_transaction(raw_tx) {
                         // If the tx references bundles not in the block, we drop the bundle
-                        extract_blobs_bundle_from_blob_transaction(
-                            raw_tx,
-                            blob_versioned_hashes,
-                            block_blobs_bundles,
-                            blobs_in_orders,
-                        )?;
+                        extract_blobs_bundle_from_blob_transaction(raw_tx, blob_versioned_hashes)?;
                     }
 
                     Ok(Bytes::from_owner(raw_tx.to_vec()))
@@ -656,25 +661,15 @@ fn get_tx_versioned_hashes(mut raw_tx: &[u8]) -> Vec<B256> {
 fn extract_blobs_bundle_from_blob_transaction(
     raw_tx: &[u8],
     blob_versioned_hashes: &[B256],
-    block_blobs_bundles: &BlobsBundle,
-    blobs_in_orders: &mut HashMap<B256, BlobWithMetadata>,
 ) -> Result<(), OrderValidationError> {
     let versioned_hashes = get_tx_versioned_hashes(raw_tx);
     let num_blobs = versioned_hashes.len();
     if num_blobs == 0 {
         return Err(OrderValidationError::EmptyBlobTransaction);
     }
-    let mut failures = versioned_hashes.into_iter().map(|h| {
-        let Some(index) = blob_versioned_hashes.iter().position(|vh| *vh == h) else {
-            return true;
-        };
-        let commitment = block_blobs_bundles.commitments[index];
-        let proof = block_blobs_bundles.proofs[index];
-        let blob = block_blobs_bundles.blobs[index].clone();
-        blobs_in_orders.insert(h, BlobWithMetadata::new(commitment, proof, blob));
-        false
-    });
-    if failures.any(|f| f) {
+    let mut missing_blobs =
+        versioned_hashes.iter().map(|h| !blob_versioned_hashes.iter().any(|vh| vh == h));
+    if missing_blobs.any(|f| f) {
         return Err(OrderValidationError::MissingBlobs);
     }
     Ok(())
