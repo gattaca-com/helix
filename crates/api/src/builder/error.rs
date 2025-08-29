@@ -30,8 +30,11 @@ pub enum BuilderApiError {
     #[error("ssz serialize error")]
     SszSerializeError,
 
-    #[error("failed to deserialize")]
-    DeserializeError,
+    #[error("failed to deserialize ssz: {0}")]
+    SszDeserializeError(String),
+
+    #[error("failed to deserialize cbor: {0}")]
+    CborDeserializeError(String),
 
     #[error("failed to decode header-submission")]
     FailedToDecodeHeaderSubmission,
@@ -167,7 +170,8 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::SerdeDecodeError(_) |
             BuilderApiError::IOError(_) |
             BuilderApiError::SszSerializeError |
-            BuilderApiError::DeserializeError |
+            BuilderApiError::SszDeserializeError(_) |
+            BuilderApiError::CborDeserializeError(_) |
             BuilderApiError::FailedToDecodeHeaderSubmission |
             BuilderApiError::HyperError(_) |
             BuilderApiError::AxumError(_) |

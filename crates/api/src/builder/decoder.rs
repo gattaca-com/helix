@@ -16,7 +16,7 @@ use http::{
     HeaderMap, HeaderValue,
 };
 use ssz::Decode;
-use tracing::{trace, warn};
+use tracing::trace;
 use zstd::{
     stream::read::Decoder as ZstdDecoder,
     zstd_safe::{get_frame_content_size, CONTENTSIZE_ERROR, CONTENTSIZE_UNKNOWN},
@@ -116,14 +116,8 @@ impl SubmissionDecoder {
         );
 
         let payload: SignedBidSubmission = match self.encoding {
-            Encoding::Ssz => match SignedBidSubmission::from_ssz_bytes(&decompressed) {
-                Ok(payload) => payload,
-                Err(err) => {
-                    warn!(?err, "failed to decode payload using SSZ; falling back to JSON");
-                    serde_json::from_slice(&decompressed)?
-                }
-            },
-
+            Encoding::Ssz => SignedBidSubmission::from_ssz_bytes(&decompressed)
+                .map_err(|err| BuilderApiError::SszDeserializeError(format!("{err:?}")))?,
             Encoding::Json => serde_json::from_slice(&decompressed)?,
         };
 

@@ -398,9 +398,9 @@ pub async fn decode_header_submission_v3(
 
     let submission_v3 = match content_type.as_ref().and_then(|val| val.to_str().ok()) {
         Some("application/octet-stream") => HeaderSubmissionV3::from_ssz_bytes(&body_bytes)
-            .map_err(|_| BuilderApiError::DeserializeError)?,
+            .map_err(|err| BuilderApiError::SszDeserializeError(format!("{err:?}")))?,
         Some("application/cbor") => cbor4ii::serde::from_slice(&body_bytes)
-            .map_err(|_| BuilderApiError::DeserializeError)?,
+            .map_err(|err| BuilderApiError::CborDeserializeError(err.to_string()))?,
         _ => serde_json::from_slice(&body_bytes)?,
     };
 
