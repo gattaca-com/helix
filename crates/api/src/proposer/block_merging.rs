@@ -75,10 +75,7 @@ impl<A: Api> ProposerApi<A> {
         mut pool_rx: tokio::sync::mpsc::Receiver<MergingPoolMessage>,
     ) {
         let mut best_orders = BestMergeableOrders::new();
-        let mut handle = tokio::spawn({
-            let this = self.clone();
-            async move { this.fetch_base_block().await }
-        });
+        let mut handle = self.spawn_base_block_fetch_task();
         loop {
             tokio::select! {
                 Some(msg) = pool_rx.recv() => {
