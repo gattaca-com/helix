@@ -452,6 +452,8 @@ impl BestMergeableOrders {
     fn reset(&mut self, slot: u64) {
         self.current_slot = slot;
         self.order_map.clear();
+        self.best_orders.clear();
+        self.mergeable_blob_bundles.clear();
     }
 }
 
