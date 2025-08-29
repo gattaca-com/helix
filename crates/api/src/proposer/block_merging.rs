@@ -437,7 +437,7 @@ impl BestMergeableOrders {
     /// Any duplicates are discarded, unless the bid value is higher than the
     /// existing one, in which case they replace the old order.
     pub fn insert_orders(&mut self, slot: u64, bid_value: U256, mergeable_orders: MergeableOrders) {
-        // If the orders are for another slot, discard them
+        // If the orders are for a newer slot, reset current state.
         if self.current_slot < slot {
             self.reset(slot);
         }
