@@ -569,13 +569,14 @@ pub fn get_mergeable_orders(
         block_blobs_bundles.commitments.iter().map(|c| calculate_versioned_hash(*c)).collect();
     let txs = execution_payload.transactions();
 
-    // Expand all orders to include the tx's bytes, collecting any blob bundles in the process.
+    // Expand all orders to include the tx's bytes, checking for missing blobs.
     let mergeable_orders = merging_data
         .merge_orders
         .into_iter()
         .map(|order| order_to_mergeable(order, txs, &blob_versioned_hashes))
         .collect::<Result<Vec<_>, _>>()?;
 
+    // Stores all block blobs inside a map keyed by versioned hash
     let blobs = blobs_bundle_to_hashmap(blob_versioned_hashes, &block_blobs_bundles);
 
     Ok(MergeableOrders::new(merging_data.builder_address, mergeable_orders, blobs))
