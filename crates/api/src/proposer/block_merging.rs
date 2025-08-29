@@ -179,7 +179,6 @@ impl<A: Api> ProposerApi<A> {
             *base_bid.value(),
             proposer_fee_recipient,
             ExecutionPayloadRef::from(&payload.execution_payload),
-            payload.blobs_bundle.clone(),
             mergeable_orders,
         );
 

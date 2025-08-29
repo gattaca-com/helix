@@ -66,7 +66,6 @@ pub struct BlockMergeRequestRef<'a> {
     pub original_value: U256,
     pub proposer_fee_recipient: Address,
     pub execution_payload: ExecutionPayloadRef<'a>,
-    pub blobs_bundle: BlobsBundle,
     pub merging_data: &'a [MergeableOrderWithOrigin],
 }
 
@@ -82,7 +81,6 @@ impl BlockMergeRequest {
         original_value: U256,
         proposer_fee_recipient: Address,
         execution_payload: ExecutionPayloadRef,
-        blobs_bundle: BlobsBundle,
         merging_data: &[MergeableOrderWithOrigin],
     ) -> Self {
         let block_hash = *execution_payload.block_hash();
@@ -92,7 +90,6 @@ impl BlockMergeRequest {
             original_value,
             proposer_fee_recipient,
             execution_payload,
-            blobs_bundle,
             merging_data,
         };
         let request = json!(request_ref);
