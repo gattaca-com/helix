@@ -15,7 +15,7 @@ use http::{
     header::{CONTENT_ENCODING, CONTENT_TYPE},
     HeaderMap, HeaderValue,
 };
-use tracing::{trace, warn};
+use tracing::trace;
 use zstd::{
     stream::read::Decoder as ZstdDecoder,
     zstd_safe::{get_frame_content_size, CONTENTSIZE_ERROR, CONTENTSIZE_UNKNOWN},
@@ -202,14 +202,8 @@ where
     T: ssz::Decode + serde::Deserialize<'a>,
 {
     let payload = match encoding {
-        Encoding::Ssz => match T::from_ssz_bytes(bytes) {
-            Ok(payload) => payload,
-            Err(err) => {
-                warn!(?err, "failed to decode payload using SSZ; falling back to JSON");
-                serde_json::from_slice(bytes)?
-            }
-        },
-
+        Encoding::Ssz => T::from_ssz_bytes(bytes)
+            .map_err(|err| BuilderApiError::SszDeserializeError(format!("{err:?}")))?,
         Encoding::Json => serde_json::from_slice(bytes)?,
     };
     Ok(payload)
