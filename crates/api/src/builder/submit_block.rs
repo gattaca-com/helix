@@ -226,18 +226,21 @@ impl<A: Api> BuilderApi<A> {
         };
         trace!("sent bid to bid sorter");
 
-        // In case the merging data is malformed, we log any error and discard it
-        let mergeable_orders = get_mergeable_orders(&payload, merging_data)
-            .inspect_err(|e| warn!(%e, "failed to get mergeable orders"))
-            .ok();
+        // Skip mergeable orders extraction if block merging is not enabled
+        if api.relay_config.block_merging_config.is_enabled {
+            // In case the merging data is malformed, we log any error and discard it
+            let mergeable_orders = get_mergeable_orders(&payload, merging_data)
+                .inspect_err(|e| warn!(%e, "failed to get mergeable orders"))
+                .ok();
 
-        if mergeable_orders.as_ref().is_some_and(|o| !o.orders.is_empty()) {
-            let orders = mergeable_orders.unwrap();
-            let message = MergingPoolMessage::new(&payload, orders);
-            // We only log the error if this fails
-            let _ = api.merge_pool_tx.try_send(message).inspect_err(|err| {
-                error!(?err, "failed to send mergeable orders to merging pool");
-            });
+            if mergeable_orders.as_ref().is_some_and(|o| !o.orders.is_empty()) {
+                let orders = mergeable_orders.unwrap();
+                let message = MergingPoolMessage::new(&payload, orders);
+                // We only log the error if this fails
+                let _ = api.merge_pool_tx.try_send(message).inspect_err(|err| {
+                    error!(?err, "failed to send mergeable orders to merging pool");
+                });
+            }
         }
 
         // Save the execution payload
