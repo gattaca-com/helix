@@ -144,9 +144,9 @@ pub struct MergeableBundle {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BlobWithMetadata {
-    commitment: KzgCommitment,
-    proof: KzgProof,
-    blob: Blob,
+    pub commitment: KzgCommitment,
+    pub proof: KzgProof,
+    pub blob: Blob,
 }
 
 impl BlobWithMetadata {

@@ -7,10 +7,10 @@ use alloy_primitives::{
 use helix_common::{bid_submission::BidSubmission, simulator::BlockSimError, utils::utcnow_ms};
 use helix_datastore::Auctioneer;
 use helix_types::{
-    BlobsBundle, BlsPublicKey, BuilderBid, BuilderBidElectra, ExecutionPayloadHeader,
-    ExecutionPayloadRef, KzgCommitment, KzgCommitments, MergeableOrder, MergeableOrderWithOrigin,
-    MergeableOrders, PayloadAndBlobs, PayloadAndBlobsRef, PublicKeyBytes, SignedBidSubmission,
-    ValidatorRegistrationData,
+    BlobWithMetadata, BlobsBundle, BlsPublicKey, BuilderBid, BuilderBidElectra,
+    ExecutionPayloadHeader, ExecutionPayloadRef, KzgCommitment, KzgCommitments, MergeableOrder,
+    MergeableOrderWithOrigin, MergeableOrders, PayloadAndBlobs, PayloadAndBlobsRef, PublicKeyBytes,
+    SignedBidSubmission, ValidatorRegistrationData,
 };
 use parking_lot::RwLock;
 use tokio::task::{JoinError, JoinHandle};
@@ -237,7 +237,7 @@ impl<A: Api> ProposerApi<A> {
         proposer_pubkey: BlsPublicKey,
         original_payload: PayloadAndBlobs,
         response: BlockMergeResponse,
-        blobs: &HashMap<B256, BlobsBundle>,
+        blobs: &HashMap<B256, BlobWithMetadata>,
     ) -> Result<(), PayloadMergingError> {
         let header = ExecutionPayloadHeader::from(response.execution_payload.to_ref())
             .as_electra()
@@ -304,7 +304,7 @@ enum PayloadMergingError {
 /// Appends the merged blobs to the original blobs bundle.
 fn append_merged_blobs(
     original_blobs_bundle: BlobsBundle,
-    blobs: &HashMap<B256, BlobsBundle>,
+    blobs: &HashMap<B256, BlobWithMetadata>,
     response: &BlockMergeResponse,
 ) -> Result<BlobsBundle, PayloadMergingError> {
     let mut merged_blobs_bundle = original_blobs_bundle;
@@ -317,10 +317,10 @@ fn append_merged_blobs(
     Ok(merged_blobs_bundle)
 }
 
-fn extend_bundle(bundle: &mut BlobsBundle, other_bundle: BlobsBundle) {
-    bundle.commitments.extend(other_bundle.commitments);
-    bundle.proofs.extend(other_bundle.proofs);
-    bundle.blobs.extend(other_bundle.blobs);
+fn extend_bundle(bundle: &mut BlobsBundle, other_bundle: BlobWithMetadata) {
+    bundle.commitments.push(other_bundle.commitment);
+    bundle.proofs.push(other_bundle.proof);
+    bundle.blobs.push(other_bundle.blob);
 }
 
 #[derive(Debug)]
@@ -384,7 +384,7 @@ pub struct BestMergeableOrders {
     current_slot: u64,
     order_map: HashMap<MergeableOrder, OrderMetadata>,
     best_orders: Vec<MergeableOrderWithOrigin>,
-    mergeable_blob_bundles: HashMap<B256, BlobsBundle>,
+    mergeable_blob_bundles: HashMap<B256, BlobWithMetadata>,
 }
 
 impl Default for BestMergeableOrders {
@@ -406,7 +406,7 @@ impl BestMergeableOrders {
     pub fn load(
         &self,
         slot: u64,
-    ) -> Option<(&[MergeableOrderWithOrigin], &HashMap<B256, BlobsBundle>)> {
+    ) -> Option<(&[MergeableOrderWithOrigin], &HashMap<B256, BlobWithMetadata>)> {
         // If the request is for another slot, return nothing
         if self.current_slot != slot {
             return None;
@@ -445,6 +445,8 @@ impl BestMergeableOrders {
                 }
             }
         });
+        // Insert new blobs
+        self.mergeable_blob_bundles.extend(mergeable_orders.blobs);
     }
 
     fn reset(&mut self, slot: u64) {
