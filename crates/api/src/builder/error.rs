@@ -1,3 +1,5 @@
+use core::convert::Infallible;
+
 use alloy_primitives::{Address, B256, U256};
 use axum::{
     http::StatusCode,
@@ -34,7 +36,7 @@ pub enum BuilderApiError {
     SszDeserializeError(String),
 
     #[error("failed to deserialize cbor: {0}")]
-    CborDeserializeError(String),
+    CborDeserializeError(#[from] cbor4ii::serde::DecodeError<Infallible>),
 
     #[error("failed to decode header-submission")]
     FailedToDecodeHeaderSubmission,
