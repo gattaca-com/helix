@@ -13,7 +13,10 @@ use helix_types::{
     SignedBidSubmission, ValidatorRegistrationData,
 };
 use parking_lot::RwLock;
-use tokio::task::{JoinError, JoinHandle};
+use tokio::{
+    sync::mpsc::Receiver,
+    task::{JoinError, JoinHandle},
+};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -70,11 +73,10 @@ impl BestMergedBlock {
 }
 
 impl<A: Api> ProposerApi<A> {
-    pub async fn process_block_merging(
-        self: Arc<Self>,
-        mut pool_rx: tokio::sync::mpsc::Receiver<MergingPoolMessage>,
-    ) {
+    pub async fn process_block_merging(self: Arc<Self>, mut pool_rx: Receiver<MergingPoolMessage>) {
         let mut best_orders = BestMergeableOrders::new();
+        // This handle is used to perform block merging in the background.
+        // See `MergingTaskState` for more details on the possible states of this task.
         let mut handle = self.spawn_base_block_fetch_task();
         loop {
             tokio::select! {
@@ -101,6 +103,7 @@ impl<A: Api> ProposerApi<A> {
         result: Result<MergingTaskResult, JoinError>,
         best_orders: &BestMergeableOrders,
     ) -> JoinHandle<MergingTaskResult> {
+        // Start again on any errors.
         let Ok(result) = result.inspect_err(|err| warn!(%err, "merging task panicked")) else {
             return self.spawn_base_block_fetch_task();
         };
@@ -109,8 +112,11 @@ impl<A: Api> ProposerApi<A> {
             return self.spawn_base_block_fetch_task();
         };
         match task_result {
+            // If we couldn't fetch a base block, try again.
             MergingTaskState::RetryFetch => self.spawn_base_block_fetch_task(),
+            // We fetched the base block, so we start a merging task.
             MergingTaskState::FetchedBaseBlock { slot, best_bid, registration_data, payload } => {
+                // If we have no mergeable orders, we go back to fetching the base block.
                 if let Some((mergeable_orders, _)) = best_orders.load(slot) {
                     self.spawn_merging_task(
                         slot,
@@ -123,6 +129,8 @@ impl<A: Api> ProposerApi<A> {
                     self.spawn_base_block_fetch_task()
                 }
             }
+            // We received a merged block from the simulator.
+            // Store it, and go back to fetching the base block again.
             MergingTaskState::GotMergedBlock {
                 slot,
                 base_block_time_ms,
@@ -205,27 +213,32 @@ impl<A: Api> ProposerApi<A> {
 
     async fn fetch_base_block(&self) -> MergingTaskResult {
         let (_head_slot, duty) = self.curr_slot_info.slot_info();
+        // If there's no proposer duty next, sleep for a while before continuing.
         let Some(next_duty) = duty else {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             return Ok(MergingTaskState::RetryFetch);
         };
         let slot = next_duty.slot.into();
         let best_header_opt = self.shared_best_header.load_any(slot);
+        // If there are no bids, wait for a moment to avoid busy waiting.
         let Some((best_bid, merging_preferences)) = best_header_opt else {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             return Ok(MergingTaskState::RetryFetch);
         };
-
+        // If the current best bid doesn't allow appending, wait a bit before checking again.
         if !merging_preferences.allow_appending {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             return Ok(MergingTaskState::RetryFetch);
         };
         let registration_data = next_duty.entry.registration.message;
         let block_hash = best_bid.header().block_hash().0;
+        // Try to fetch the best bid's block.
         let payload = self
             .get_execution_payload(slot, &registration_data.pubkey, &block_hash, true)
             .await
             .inspect_err(|err| warn!(%err, "failed to fetch base block"))?;
+
+        // Found the base block, we can now start with the merging process.
         Ok(MergingTaskState::new_base_block(slot, best_bid, registration_data, payload))
     }
 
@@ -323,15 +336,21 @@ fn extend_bundle(bundle: &mut BlobsBundle, other_bundle: BlobWithMetadata) {
     bundle.blobs.push(other_bundle.blob);
 }
 
+/// Represents the possible states of the block merging task
 #[derive(Debug)]
 enum MergingTaskState {
+    /// Base block fetching needs to be retried, not necessarily due to an error.
     RetryFetch,
+    /// Base block has been fetched successfully.
+    /// We can send a request to the simulator to start appending orders.
     FetchedBaseBlock {
         slot: u64,
         best_bid: BuilderBid,
         registration_data: ValidatorRegistrationData,
         payload: PayloadAndBlobs,
     },
+    /// A merged block has been received from the simulator.
+    /// We can now start the process again after updating the best merged block.
     GotMergedBlock {
         slot: u64,
         base_block_time_ms: u64,
