@@ -85,7 +85,7 @@ pub async fn run_api_service<A: Api>(
     let v2_checker = V2SubChecker::<A>::new(v2_checks_rx, auctioneer.clone(), db.clone());
     tokio::spawn(v2_checker.run());
 
-    let (pool_tx, pool_rx) = tokio::sync::mpsc::channel(10_000);
+    let (merge_pool_tx, pool_rx) = tokio::sync::mpsc::channel(10_000);
 
     let builder_api = BuilderApi::<A>::new(
         auctioneer.clone(),
@@ -98,7 +98,7 @@ pub async fn run_api_service<A: Api>(
         validator_preferences.clone(),
         current_slot_info.clone(),
         sorter_tx,
-        pool_tx,
+        merge_pool_tx,
         top_bid_tx,
         v2_checks_tx,
         shared_floor,
