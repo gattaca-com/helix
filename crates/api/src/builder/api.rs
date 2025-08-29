@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_consensus::{Bytes48, TxEip4844, TxType};
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{Address, B256, U256};
 use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
@@ -538,8 +538,8 @@ pub(crate) fn sanity_check_block_submission(
 
 #[derive(thiserror::Error, Debug)]
 pub enum OrderValidationError {
-    #[error("payload fee recipient is not builder address")]
-    FeeRecipientMismatch,
+    #[error("payload fee recipient ({got}) is not builder address ({expected})")]
+    FeeRecipientMismatch { got: Address, expected: Address },
     #[error("invalid block merging tx index, got {got} with a tx count of {len}")]
     InvalidTxIndex { got: usize, len: usize },
     #[error("blob transaction does not reference any blobs")]
@@ -559,7 +559,10 @@ pub fn get_mergeable_orders(
 ) -> Result<MergeableOrders, OrderValidationError> {
     let execution_payload = payload.execution_payload_ref();
     if execution_payload.fee_recipient() != merging_data.builder_address {
-        return Err(OrderValidationError::FeeRecipientMismatch);
+        return Err(OrderValidationError::FeeRecipientMismatch {
+            got: merging_data.builder_address,
+            expected: execution_payload.fee_recipient(),
+        });
     }
     let block_blobs_bundles = payload.blobs_bundle();
     let blob_versioned_hashes: Vec<_> =
