@@ -441,22 +441,23 @@ pub async fn decode_payload(
 
     let decoder = SubmissionDecoder::from_headers(req.headers());
     let body_bytes = to_bytes(req.into_body(), MAX_PAYLOAD_LENGTH).await?;
-    let payload = decoder.decode(body_bytes)?;
+    let payload_with_merging_data = decoder.decode(body_bytes)?;
+    let payload = &payload_with_merging_data.submission;
 
     trace.decode = utcnow_ns();
     debug!(
         timestamp_after_decoding = trace.decode,
         decode_latency_ns = trace.decode.saturating_sub(trace.receive),
-        builder_pub_key = ?payload.submission.builder_public_key(),
-        block_hash = ?payload.submission.block_hash(),
-        proposer_pubkey = ?payload.submission.proposer_public_key(),
-        parent_hash = ?payload.submission.parent_hash(),
-        value = ?payload.submission.value(),
-        num_tx = payload.submission.execution_payload_ref().transactions().len(),
+        builder_pub_key = ?payload.builder_public_key(),
+        block_hash = ?payload.block_hash(),
+        proposer_pubkey = ?payload.proposer_public_key(),
+        parent_hash = ?payload.parent_hash(),
+        value = ?payload.value(),
+        num_tx = payload.execution_payload_ref().transactions().len(),
         "payload info"
     );
 
-    Ok((payload, is_cancellations_enabled))
+    Ok((payload_with_merging_data, is_cancellations_enabled))
 }
 
 /// - Validates the expected block.timestamp.
