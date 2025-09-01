@@ -9,7 +9,7 @@ use helix_datastore::Auctioneer;
 use helix_types::{
     BlobWithMetadata, BlobsBundle, BlsPublicKey, BuilderBid, BuilderBidElectra,
     ExecutionPayloadHeader, ExecutionPayloadRef, KzgCommitment, KzgCommitments, MergeableOrder,
-    MergeableOrderWithOrigin, MergeableOrders, PayloadAndBlobs, PayloadAndBlobsRef, PublicKeyBytes,
+    MergeableOrderWithOrigin, MergeableOrders, PayloadAndBlobs, PublicKeyBytes,
     SignedBidSubmission, ValidatorRegistrationData,
 };
 use parking_lot::RwLock;
@@ -275,22 +275,17 @@ impl<A: Api> ProposerApi<A> {
         };
 
         // Store the payload in the background
-        tokio::task::spawn({
-            let auctioneer = self.auctioneer.clone();
-            async move {
-                let payload_and_blobs = PayloadAndBlobsRef {
-                    execution_payload: (&response.execution_payload).into(),
-                    blobs_bundle: &merged_blobs_bundle,
-                };
-                // We just log the errors as we can't really do anything about them
-                if let Err(err) = auctioneer
-                    .save_execution_payload(slot, &proposer_pubkey, &block_hash, payload_and_blobs)
-                    .await
-                {
-                    error!(%err, "failed to store merged payload in auctioneer");
-                }
-            }
-        });
+        let payload_and_blobs = PayloadAndBlobs {
+            execution_payload: response.execution_payload,
+            blobs_bundle: merged_blobs_bundle,
+        };
+        // We just log the errors as we can't really do anything about them
+        self.auctioneer.save_execution_payload(
+            slot,
+            &proposer_pubkey,
+            &block_hash,
+            payload_and_blobs,
+        );
 
         // Update best merged block
         let parent_block_hash = new_bid.header.parent_hash.0;
