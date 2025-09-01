@@ -25,7 +25,7 @@ use crate::{
         api::{decode_payload, sanity_check_block_submission},
         error::BuilderApiError,
     },
-    Api,
+    Api, HEADER_API_KEY,
 };
 
 impl<A: Api> BuilderApi<A> {
@@ -72,6 +72,8 @@ impl<A: Api> BuilderApi<A> {
 
         debug!(%head_slot, timestamp_request_start = trace.receive);
 
+        let skip_sigverify =
+            req.headers().get(HEADER_API_KEY).is_some_and(|key| api.auctioneer.check_api_key(key));
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) = decode_payload(req, &mut trace).await?;
         ApiMetrics::cancellable_bid(is_cancellations_enabled);
@@ -113,7 +115,7 @@ impl<A: Api> BuilderApi<A> {
         trace!("fetched payload attributes");
 
         // Handle duplicates.
-        if let Err(err) = api.check_for_duplicate_block_hash(&block_hash).await {
+        if let Err(err) = api.check_for_duplicate_block_hash(&block_hash) {
             match err {
                 BuilderApiError::DuplicateBlockHash { block_hash } => {
                     // We dont return the error here as we want to continue processing the request.
@@ -188,6 +190,7 @@ impl<A: Api> BuilderApi<A> {
                 &builder_info,
                 &mut trace,
                 &payload_attributes,
+                skip_sigverify,
             )
             .await?;
 

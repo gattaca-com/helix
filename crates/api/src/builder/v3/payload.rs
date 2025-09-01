@@ -39,6 +39,7 @@ pub async fn fetch_builder_blocks<A: Api>(
                 block,
                 trace,
                 OptimisticVersion::V3,
+                false,
             )
             .await
             {
