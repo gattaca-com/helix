@@ -1,5 +1,3 @@
-pub mod blob_sidecars;
-
 use std::time::Instant;
 
 use alloy_primitives::B256;

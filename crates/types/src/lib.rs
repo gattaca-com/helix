@@ -51,7 +51,6 @@ pub type ExecutionRequests = lh_types::execution_requests::ExecutionRequests<Mai
 // Blobs
 // pub type BlobsBundle = lh_eth2::types::BlobsBundle<MainnetEthSpec>;
 pub type BlobsBundle = crate::blobs::BlobsBundleV1;
-pub type BlobSidecars = Vec<Arc<BlobSidecar>>;
 
 // Publish block
 pub type VersionedSignedProposal = SignedBlockContents;
