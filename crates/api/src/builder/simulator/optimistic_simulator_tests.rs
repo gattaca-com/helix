@@ -79,6 +79,7 @@ mod simulator_tests {
             is_optimistic_for_regional_filtering: true,
             builder_id: None,
             builder_ids: None,
+            api_key: None,
         };
         let simulator = get_optimistic_simulator(
             &server.url(),
@@ -112,6 +113,7 @@ mod simulator_tests {
             is_optimistic_for_regional_filtering: true,
             builder_id: None,
             builder_ids: None,
+            api_key: None,
         };
         let simulator = get_optimistic_simulator(
             &server.url(),
@@ -145,6 +147,7 @@ mod simulator_tests {
             is_optimistic_for_regional_filtering: true,
             builder_id: None,
             builder_ids: None,
+            api_key: None,
         };
         let simulator = get_optimistic_simulator(
             &server.url(),
@@ -178,6 +181,7 @@ mod simulator_tests {
             is_optimistic_for_regional_filtering: true,
             builder_id: None,
             builder_ids: None,
+            api_key: None,
         };
         let simulator = get_optimistic_simulator(
             &server.url(),

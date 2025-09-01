@@ -112,7 +112,7 @@ impl<A: Api> BuilderApi<A> {
             api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), &block_hash)?;
 
         // Fetch builder info
-        let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
+        let builder_info = api.fetch_builder_info(payload.builder_public_key());
 
         // submit_block_v2 can only be processed optimistically.
         // Make sure that the builder has enough collateral to cover the submission.

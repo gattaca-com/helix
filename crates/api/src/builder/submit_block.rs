@@ -140,7 +140,7 @@ impl<A: Api> BuilderApi<A> {
         trace.floor_bid_checks = utcnow_ns();
 
         // Fetch builder info
-        let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
+        let builder_info = api.fetch_builder_info(payload.builder_public_key());
         trace!(?builder_info, "fetched builder info");
         tracing::Span::current()
             .record("builder_id", tracing::field::display(builder_info.builder_id()));
