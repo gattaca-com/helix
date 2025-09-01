@@ -16,7 +16,10 @@ use crate::{
         v2::header_submission::SignedHeaderSubmission, BidSubmission, OptimisticVersion,
     },
     bid_submission_to_builder_bid_unsigned, header_submission_to_builder_bid_unsigned,
-    metrics::{TopBidMetrics, BID_SORTER_PROCESS_LATENCY_US, BID_SORTER_RECV_LATENCY_US},
+    metrics::{
+        TopBidMetrics, BID_SORTER_PROCESS_LATENCY_US, BID_SORTER_QUEUE_LATENCY_US,
+        BID_SORTER_RECV_LATENCY_US,
+    },
     utils::{avg_duration, utcnow_ms, utcnow_ns},
     SubmissionTrace,
 };
@@ -126,6 +129,7 @@ pub enum BidSorterMessage {
         header: BuilderBid,
         is_cancellable: bool,
         simulation_time_ns: u64,
+        before_sorter_ns: u64,
     },
     /// Demotion of a builder pubkey, all its bids are invalidated for this slot
     Demotion(BlsPublicKey),
@@ -139,6 +143,7 @@ impl BidSorterMessage {
         trace: &SubmissionTrace,
         optimistic_version: OptimisticVersion,
         is_cancellable: bool,
+        before_sorter_ns: u64,
     ) -> Self {
         let bid_trace = submission.bid_trace();
         let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
@@ -157,6 +162,7 @@ impl BidSorterMessage {
             header,
             is_cancellable,
             simulation_time_ns,
+            before_sorter_ns,
         }
     }
 
@@ -164,6 +170,7 @@ impl BidSorterMessage {
         submission: &SignedHeaderSubmission,
         on_receive_ns: u64,
         is_cancellable: bool,
+        before_sorter_ns: u64,
     ) -> Self {
         let bid_trace = submission.bid_trace();
         let bid = Bid { value: bid_trace.value, on_receive_ns };
@@ -176,6 +183,7 @@ impl BidSorterMessage {
             header,
             is_cancellable,
             simulation_time_ns: 0,
+            before_sorter_ns,
         }
     }
 }
@@ -250,6 +258,8 @@ struct BidSorterTelemetry {
     demoted_subs: u32,
     /// Time when bid was first received to when it arrived in the sorter
     subs_recv_time: Duration,
+    /// Time when the bid spent in the queue awaiting processing
+    subs_queue_time: Duration,
     /// Internal bid processing time of the sorter
     subs_process_time: Duration,
     top_bids: u32,
@@ -324,6 +334,7 @@ impl BidSorter {
                     header,
                     is_cancellable,
                     simulation_time_ns,
+                    before_sorter_ns,
                 } => {
                     if self.curr_bid_slot != slot {
                         self.local_telemetry.past_subs += 1;
@@ -342,17 +353,20 @@ impl BidSorter {
                     let recv_latency_ns =
                         recv_ns.saturating_sub(bid.on_receive_ns + simulation_time_ns);
                     let process_latency_ns = utcnow_ns().saturating_sub(recv_ns);
+                    let queue_latency_ns = recv_ns.saturating_sub(before_sorter_ns);
 
                     self.local_telemetry.valid_subs += 1;
                     self.local_telemetry.subs_recv_time += Duration::from_nanos(recv_latency_ns);
                     self.local_telemetry.subs_process_time +=
                         Duration::from_nanos(process_latency_ns);
+                    self.local_telemetry.subs_queue_time += Duration::from_nanos(queue_latency_ns);
                     if !is_cancellable {
                         self.local_telemetry.non_cancel_bids += 1;
                     }
 
                     BID_SORTER_RECV_LATENCY_US.observe(recv_latency_ns as f64 / 1000.);
                     BID_SORTER_PROCESS_LATENCY_US.observe(process_latency_ns as f64 / 1000.);
+                    BID_SORTER_QUEUE_LATENCY_US.observe(queue_latency_ns as f64 / 1000.);
                 }
                 BidSorterMessage::Demotion(demoted) => {
                     let demoted = demoted.serialize();
@@ -534,6 +548,7 @@ impl BidSorter {
         let total_subs = tel.valid_subs + tel.past_subs + tel.demoted_subs;
         let avg_sub_recv = avg_duration(tel.subs_recv_time, total_subs);
         let avg_sub_process = avg_duration(tel.subs_process_time, tel.valid_subs);
+        let avg_sub_queue = avg_duration(tel.subs_queue_time, tel.valid_subs);
         let avg_demotion_process = avg_duration(tel.demotions_process_time, tel.new_demotions);
 
         info!(
@@ -543,6 +558,7 @@ impl BidSorter {
             demoted_subs = tel.demoted_subs,
             ?avg_sub_process,
             ?avg_sub_recv,
+            ?avg_sub_queue,
             top_bids = tel.top_bids,
             non_cancel_bids = tel.non_cancel_bids,
             new_demotions = tel.new_demotions,
