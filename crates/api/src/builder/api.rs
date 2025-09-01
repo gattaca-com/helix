@@ -347,7 +347,7 @@ impl<A: Api> BuilderApi<A> {
     }
 
     /// Fetch the builder's information. Default info is returned if fetching fails.
-    pub(crate) async fn fetch_builder_info(&self, builder_pub_key: &BlsPublicKey) -> BuilderInfo {
+    pub(crate) fn fetch_builder_info(&self, builder_pub_key: &BlsPublicKey) -> BuilderInfo {
         match self.auctioneer.get_builder_info(builder_pub_key) {
             Ok(info) => info,
             Err(err) => {
@@ -362,6 +362,7 @@ impl<A: Api> BuilderApi<A> {
                     is_optimistic_for_regional_filtering: false,
                     builder_id: None,
                     builder_ids: None,
+                    api_key: None,
                 }
             }
         }

@@ -17,6 +17,7 @@ use helix_database::types::BuilderInfoDocument;
 use helix_types::{
     maybe_upgrade_execution_payload, BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs,
 };
+use http::HeaderValue;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
 use tracing::{error, info, instrument, warn};
@@ -38,6 +39,7 @@ pub struct LocalCache {
     last_delivered_slot: Arc<AtomicU64>,
     last_delivered_hash: Arc<RwLock<Option<B256>>>,
     builder_info_cache: Arc<DashMap<BlsPublicKey, BuilderInfo>>,
+    api_key_cache: Arc<DashSet<HeaderValue>>,
     trusted_proposers: Arc<DashMap<BlsPublicKey, ProposerInfo>>,
     execution_payload_cache: Arc<DashMap<ExecutionPayloadKey, PayloadAndBlobs>>,
     payload_address_cache: Arc<DashMap<B256, (BlsPublicKey, Vec<u8>)>>,
@@ -62,6 +64,7 @@ impl LocalCache {
 
         let seen_block_hashes = Arc::new(DashSet::with_capacity(ESTIMATED_BID_UPPER_BOUND));
         let builder_info_cache = Arc::new(DashMap::with_capacity(builder_infos.len()));
+        let api_key_cache = Arc::new(DashSet::with_capacity(builder_infos.len()));
         let last_delivered_slot = Arc::new(AtomicU64::new(0));
         let last_delivered_hash = Arc::new(RwLock::new(None));
         let execution_payload_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BID_UPPER_BOUND));
@@ -78,6 +81,7 @@ impl LocalCache {
             last_delivered_slot,
             last_delivered_hash,
             builder_info_cache,
+            api_key_cache,
             trusted_proposers,
             execution_payload_cache,
             payload_address_cache,
@@ -208,6 +212,11 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
+    fn check_api_key(&self, api_key: &HeaderValue) -> bool {
+        self.api_key_cache.contains(api_key)
+    }
+
+    #[instrument(skip_all)]
     fn demote_builder(&self, builder_pub_key: &BlsPublicKey) -> Result<(), AuctioneerError> {
         if let Err(e) = self.sorter_tx.try_send(BidSorterMessage::Demotion(builder_pub_key.clone()))
         {
@@ -230,7 +239,13 @@ impl Auctioneer for LocalCache {
 
     #[instrument(skip_all)]
     fn update_builder_infos(&self, builder_infos: &[BuilderInfoDocument]) {
+        self.api_key_cache.clear();
+
         for builder_info in builder_infos {
+            if let Some(api_key) = builder_info.builder_info.api_key.as_ref() {
+                self.api_key_cache.insert(HeaderValue::from_str(api_key).unwrap());
+            }
+
             self.builder_info_cache
                 .insert(builder_info.pub_key.clone(), builder_info.builder_info.clone());
         }
@@ -446,6 +461,7 @@ mod tests {
             is_optimistic_for_regional_filtering: false,
             builder_id: None,
             builder_ids: None,
+            api_key: None,
         };
 
         // Test case 1: Builder exists
@@ -514,6 +530,7 @@ mod tests {
             is_optimistic_for_regional_filtering: false,
             builder_id: None,
             builder_ids: None,
+            api_key: None,
         };
 
         let builder_info_doc = BuilderConfig { pub_key: builder_pub_key.clone(), builder_info };
@@ -537,6 +554,7 @@ mod tests {
             is_optimistic_for_regional_filtering: false,
             builder_id: None,
             builder_ids: None,
+            api_key: None,
         };
         let builder_info_doc =
             BuilderConfig { pub_key: builder_pub_key_optimistic.clone(), builder_info };

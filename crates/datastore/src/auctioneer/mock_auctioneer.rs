@@ -12,6 +12,7 @@ use helix_database::types::BuilderInfoDocument;
 use helix_types::{
     BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, SignedBuilderBid, TestRandomSeed,
 };
+use http::HeaderValue;
 use tokio::sync::broadcast;
 
 use crate::{error::AuctioneerError, Auctioneer};
@@ -80,6 +81,10 @@ impl Auctioneer for MockAuctioneer {
         _builder_pub_key: &BlsPublicKey,
     ) -> Result<BuilderInfo, AuctioneerError> {
         Ok(self.builder_info.clone().unwrap_or_default())
+    }
+
+    fn check_api_key(&self, _api_key: &HeaderValue) -> bool {
+        self.builder_info.is_some()
     }
 
     fn demote_builder(&self, _builder_pub_key: &BlsPublicKey) -> Result<(), AuctioneerError> {

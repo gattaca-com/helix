@@ -20,6 +20,7 @@ helix-beacon.workspace = true
 helix-common.workspace = true
 helix-database.workspace = true
 helix-types.workspace = true
+http.workspace = true
 moka.workspace = true
 parking_lot.workspace = true
 serde.workspace = true

@@ -457,6 +457,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                                     None => Some(vec!["PrimevBuilder".to_string()]),
                                 }
                             },
+                            api_key: None,
                         },
                     };
                     primev_builders_config.push(builder_config);
@@ -470,6 +471,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
                             is_optimistic_for_regional_filtering: false,
                             builder_id: Some("PrimevBuilder".to_string()),
                             builder_ids: Some(vec!["PrimevBuilder".to_string()]),
+                            api_key: None,
                         },
                     };
                     primev_builders_config.push(builder_config)

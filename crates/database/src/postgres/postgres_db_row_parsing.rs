@@ -193,6 +193,7 @@ impl FromRow for BuilderInfo {
             builder_ids: row
                 .get::<&str, Option<Vec<&str>>>("builder_ids")
                 .map(|ids| ids.into_iter().map(|id| id.to_string()).collect()),
+            api_key: row.get::<&str, Option<&str>>("api_key").map(|s| s.to_string()),
         })
     }
 }

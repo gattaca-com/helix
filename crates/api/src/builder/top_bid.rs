@@ -8,7 +8,7 @@ use axum::{
 use bytes::Bytes;
 use futures::StreamExt;
 use helix_common::{self, metrics::TopBidMetrics};
-use helix_database::DatabaseService;
+use helix_datastore::Auctioneer;
 use hyper::HeaderMap;
 use tokio::time::{self};
 use tracing::{debug, error};
@@ -23,17 +23,12 @@ impl<A: Api> BuilderApi<A> {
         headers: HeaderMap,
         ws: WebSocketUpgrade,
     ) -> Result<impl IntoResponse, BuilderApiError> {
-        let api_key = headers.get("x-api-key").and_then(|key| key.to_str().ok());
-        match api_key {
-            Some(key) => match api.db.check_builder_api_key(key).await {
-                Ok(true) => {}
-                Ok(false) => return Err(BuilderApiError::InvalidApiKey),
-                Err(err) => {
-                    error!(%err, "failed to check api key");
-                    return Err(BuilderApiError::InternalError);
-                }
-            },
-            None => return Err(BuilderApiError::InvalidApiKey),
+        let Some(api_key) = headers.get("x-api-key") else {
+            return Err(BuilderApiError::InvalidApiKey);
+        };
+
+        if !api.auctioneer.check_api_key(api_key) {
+            return Err(BuilderApiError::InvalidApiKey);
         }
 
         let sub = api.top_bid_tx.subscribe();
