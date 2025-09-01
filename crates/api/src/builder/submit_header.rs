@@ -197,16 +197,10 @@ impl<A: Api> BuilderApi<A> {
         trace.signature = utcnow_ns();
 
         // Verify payload has not already been delivered
-        match api.auctioneer.get_last_slot_delivered().await {
-            Ok(Some(slot)) => {
-                if payload.slot() <= slot {
-                    debug!("payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                error!(%err, "failed to get last slot delivered");
+        if let Some(slot) = api.auctioneer.get_last_slot_delivered() {
+            if payload.slot() <= slot {
+                debug!("payload already delivered");
+                return Err(BuilderApiError::PayloadAlreadyDelivered);
             }
         }
 
@@ -227,7 +221,7 @@ impl<A: Api> BuilderApi<A> {
             is_cancellations_enabled,
         )) {
             error!(?err, "failed to send submission to sorter");
-            return Err(BuilderApiError::InternalError)
+            return Err(BuilderApiError::InternalError);
         };
 
         // Log some final info
@@ -248,17 +242,11 @@ impl<A: Api> BuilderApi<A> {
         }
 
         if let Some(payload_addr) = payload_address {
-            api.auctioneer
-                .save_payload_address(
-                    payload.block_hash(),
-                    payload.builder_public_key(),
-                    payload_addr,
-                )
-                .await
-                .map_err(|err| {
-                    error!(%err, "failed to save payload address");
-                    BuilderApiError::AuctioneerError(err)
-                })?;
+            api.auctioneer.save_payload_address(
+                payload.block_hash(),
+                payload.builder_public_key(),
+                payload_addr,
+            );
         };
 
         api.tx_root_cache

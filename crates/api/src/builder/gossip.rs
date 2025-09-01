@@ -26,35 +26,22 @@ impl<A: Api> BuilderApi<A> {
         }
 
         // Verify payload has not already been delivered
-        match self.auctioneer.get_last_slot_delivered().await {
-            Ok(Some(slot)) => {
-                if req.slot <= slot {
-                    debug!("payload already delivered");
-                    return;
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                error!(%err, "failed to get last slot delivered");
+        if let Some(slot) = self.auctioneer.get_last_slot_delivered() {
+            if req.slot <= slot {
+                debug!("payload already delivered");
+                return;
             }
         }
 
         trace.pre_checks = utcnow_ns();
 
         // Save payload to auctioneer
-        if let Err(err) = self
-            .auctioneer
-            .save_execution_payload(
-                req.slot,
-                &req.proposer_pub_key,
-                &req.execution_payload.execution_payload.block_hash().0,
-                PayloadAndBlobsRef::from(&req.execution_payload),
-            )
-            .await
-        {
-            error!(%err, "failed to save execution payload");
-            return;
-        }
+        self.auctioneer.save_execution_payload(
+            req.slot,
+            &req.proposer_pub_key,
+            &req.execution_payload.execution_payload.block_hash().0,
+            req.execution_payload,
+        );
 
         trace.auctioneer_update = utcnow_ns();
 

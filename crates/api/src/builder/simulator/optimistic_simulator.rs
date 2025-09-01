@@ -138,7 +138,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
     ) {
         SimulatorMetrics::demotion_count();
 
-        if let Err(err) = self.auctioneer.demote_builder(builder_public_key).await {
+        if let Err(err) = self.auctioneer.demote_builder(builder_public_key) {
             self.failsafe_triggered.store(true, Ordering::Relaxed);
             error!(
                 builder=%builder_public_key,

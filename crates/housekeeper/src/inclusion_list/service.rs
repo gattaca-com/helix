@@ -4,13 +4,12 @@ use alloy_primitives::B256;
 use helix_common::{
     api::builder_api::{InclusionList, InclusionListWithMetadata},
     chain_info::ChainInfo,
-    utils::get_slot_coordinate,
     InclusionListConfig,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::{BlsPublicKey, Slot};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::inclusion_list::http_fetcher::HttpInclusionListFetcher;
 
@@ -60,25 +59,22 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
             }
         };
 
-        let slot_coordinate = get_slot_coordinate(slot, &pub_key, &parent_hash);
-
-        let (postgres_result, redis_result) = tokio::join!(
-            self.db.save_inclusion_list(&inclusion_list, slot, &parent_hash, &pub_key),
-            self.auctioneer.update_current_inclusion_list(inclusion_list.clone(), slot_coordinate)
+        self.auctioneer.update_current_inclusion_list(
+            inclusion_list.clone(),
+            (slot, pub_key.clone(), parent_hash),
         );
 
-        if postgres_result.is_ok() {
-            info!(head_slot = slot, "Saved inclusion list to postgres");
-        }
-
-        match redis_result {
+        match self.db.save_inclusion_list(&inclusion_list, slot, &parent_hash, &pub_key).await {
             Ok(_) => {
-                info!(head_slot = slot, "Saved inclusion list to redis")
+                info!(head_slot = slot, "Saved inclusion list to postgres");
             }
             Err(err) => {
-                warn!(head_slot = slot, "Could not include list for this slot in redis {}", err)
+                error!(
+                    head_slot = slot,
+                    "Could not save inclusion list to postgres. Error: {:?}", err
+                );
             }
-        };
+        }
     }
 
     async fn fetch_inclusion_list_or_timeout(&self, slot: u64) -> Option<InclusionList> {

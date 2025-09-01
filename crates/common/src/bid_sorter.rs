@@ -70,7 +70,7 @@ impl BestGetHeader {
         let entry = (*self.0.read()).clone()?;
 
         if entry.slot != slot || entry.bid.header().parent_hash().0 != *parent_hash {
-            return None
+            return None;
         }
 
         Some(entry.bid)

@@ -7,8 +7,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use alloy_primitives::B256;
-use helix_types::BlsPublicKey;
 use http::HeaderMap;
 use opentelemetry::{trace::TracerProvider as _, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
@@ -194,15 +192,6 @@ pub fn utcnow_us() -> u64 {
 /// Nanos
 pub fn utcnow_ns() -> u64 {
     utcnow_dur().as_nanos() as u64
-}
-
-#[inline(always)]
-pub fn get_slot_coordinate(
-    slot: u64,
-    proposer_pub_key: &BlsPublicKey,
-    parent_hash: &B256,
-) -> String {
-    format!("{slot}_{proposer_pub_key}_{parent_hash}")
 }
 
 pub fn avg_duration(duration: Duration, count: u32) -> Option<Duration> {

@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
-use futures::{future, FutureExt};
+use futures::FutureExt;
 use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, bid_sorter::BidSorterMessage,
@@ -11,7 +11,7 @@ use helix_datastore::Auctioneer;
 use helix_types::{Slot, SlotClockTrait};
 use tokio::{
     sync::broadcast,
-    time::{interval, interval_at, sleep, timeout, Instant},
+    time::{interval, interval_at, sleep, Instant},
 };
 use tracing::{error, info, warn};
 use tree_hash::TreeHash;
@@ -109,9 +109,6 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
         let mut timer =
             interval_at(start_instant, Duration::from_secs(self.chain_info.seconds_per_slot()));
 
-        let mut head_event_redis_rx = self.auctioneer.get_head_event();
-        let mut payload_attributes_redis_rx = self.auctioneer.get_payload_attributes();
-
         // Watchdog to confirm the loop is alive
         let mut watchdog = interval(Duration::from_secs(60));
 
@@ -121,14 +118,6 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
                     match head_event_result {
                         Ok(head_event) => {
                             info!(head_slot =% head_event.slot, "Received head event from beacon node");
-                            let publish_event = head_event.clone();
-                            let this = self.auctioneer.clone();
-                            tokio::spawn(async move {
-                                if let Err(err) = this.publish_head_event(&publish_event).await {
-                                    error!(%err, "Failed to publish head event");
-                                }
-                            });
-
                             self.process_slot(head_event.slot.into()).await;
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -141,33 +130,9 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
                     }
                 }
 
-                head_event_redis_result = head_event_redis_rx.recv() => {
-                    match head_event_redis_result {
-                        Ok(head_event) => {
-                            info!(head_slot =% head_event.slot, "Received head event from Redis");
-                            self.process_slot(head_event.slot.into()).await;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            warn!("head redis events lagged by {n} events");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            error!("head redis channel closed, resubscribing...");
-                            head_event_redis_rx = self.auctioneer.get_head_event();
-                        }
-                    }
-                }
-
                 payload_attributes_result = payload_attributes_rx.recv() => {
                     match payload_attributes_result {
                         Ok(payload_attributes) => {
-                            let publish_event = payload_attributes.clone();
-                            let this = self.auctioneer.clone();
-                            tokio::spawn(async move {
-                                if let Err(err) = this.publish_payload_attributes(&publish_event).await {
-                                    error!(%err, "Failed to publish payload attributes");
-                                }
-                            });
-
                             self.process_payload_attributes(payload_attributes).await;
                         }
                         Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -176,21 +141,6 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
                         Err(broadcast::error::RecvError::Closed) => {
                             error!("payload attributes channel closed, resubscribing...");
                             payload_attributes_rx = payload_attributes_rx.resubscribe();
-                        }
-                    }
-                }
-
-                payload_attributes_redis_result = payload_attributes_redis_rx.recv() => {
-                    match payload_attributes_redis_result {
-                        Ok(payload_attributes) => {
-                            self.process_payload_attributes(payload_attributes).await;
-                        }
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            warn!("payload attributes redis events lagged by {n} events");
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            error!("payload attributes redis channel closed, resubscribing...");
-                            payload_attributes_redis_rx = self.auctioneer.get_payload_attributes();
                         }
                     }
                 }
@@ -237,84 +187,33 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
 
         sleep(Duration::from_secs(1)).await;
 
-        let new_duties =
-            match timeout(Duration::from_secs(1), self.auctioneer.get_proposer_duties()).await {
-                Ok(Ok(mut new_duties)) => {
-                    info!(
-                        head_slot = slot,
-                        new_duties = new_duties.len(),
-                        "Fetched proposer duties from auctioneer"
-                    );
+        let mut new_duties = self.auctioneer.get_proposer_duties();
+        info!(
+            head_slot = slot,
+            new_duties = new_duties.len(),
+            "Fetched proposer duties from auctioneer"
+        );
 
-                    let auctioneer = self.auctioneer.clone();
-                    let futures = new_duties.iter_mut().map(|duty| {
-                        let auctioneer = auctioneer.clone();
-                        let pubkey = duty.entry.registration.message.pubkey.clone();
-                        async move {
-                            match timeout(
-                                Duration::from_secs(1),
-                                auctioneer.is_primev_proposer(&pubkey),
-                            )
-                            .await
-                            {
-                                Ok(Ok(true)) => {
-                                    Some(duty.entry.registration.message.pubkey.clone())
-                                }
-                                Ok(Ok(false)) => None,
-                                Ok(Err(err)) => {
-                                    error!(%err, "Failed to check if proposer is primev");
-                                    None
-                                }
-                                Err(_) => {
-                                    error!("Timeout checking if proposer is primev");
-                                    None
-                                }
-                            }
-                        }
-                    });
-
-                    let results: Vec<_> = future::join_all(futures).await;
-
-                    // Update duties with Primev builder if needed
-                    for (duty, is_primev) in new_duties.iter_mut().zip(results.into_iter()) {
-                        if is_primev.is_some() {
-                            info!(head_slot = slot, "Primev proposer duty found");
-                            match &mut duty.entry.preferences.trusted_builders {
-                                Some(trusted_builders) => {
-                                    trusted_builders.push("PrimevBuilder".to_string());
-                                }
-                                None => {
-                                    duty.entry.preferences.trusted_builders =
-                                        Some(vec!["PrimevBuilder".to_string()]);
-                                }
-                            }
-                        }
-                    }
-
-                    self.proposer_duties.clone_from(&new_duties);
-                    Some(new_duties)
+        for duty in new_duties.iter_mut() {
+            let pubkey = &duty.entry.registration.message.pubkey;
+            if self.auctioneer.is_primev_proposer(pubkey) {
+                info!(head_slot = slot, pubkey = %pubkey, "Primev proposer duty found");
+                let tb = duty.entry.preferences.trusted_builders.get_or_insert_with(Vec::new);
+                if !tb.iter().any(|b| b == "PrimevBuilder") {
+                    tb.push("PrimevBuilder".to_string());
                 }
-                Ok(Err(err)) => {
-                    error!(%err, "Failed to get proposer duties from auctioneer");
-                    None
-                }
-                Err(_) => {
-                    error!("Timeout fetching proposer duties");
-                    None
-                }
-            };
+            }
+        }
+
+        self.proposer_duties.clone_from(&new_duties);
 
         // Get the next proposer duty for the new slot.
         let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
 
-        let update = SlotUpdate { slot: slot.into(), new_duties, next_duty };
+        let update = SlotUpdate { slot: slot.into(), new_duties: Some(new_duties), next_duty };
 
-        // Run handle_new_slot in a spawned task so it can't block the select loop.
-        let curr_slot_info = self.curr_slot_info.clone();
-        let chain_info = self.chain_info.clone();
-        tokio::spawn(async move {
-            curr_slot_info.handle_new_slot(update, &chain_info);
-        });
+        self.curr_slot_info.handle_new_slot(update, &self.chain_info);
+        self.auctioneer.process_slot(slot);
         let _ = self.sorter_tx.try_send(BidSorterMessage::Slot(slot));
     }
 
