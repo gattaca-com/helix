@@ -167,7 +167,8 @@ impl<A: Api> ProposerApi<A> {
             &bid_request.pubkey,
         );
 
-        trace.best_bid_fetched = utcnow_ns();
+        let now_ns = utcnow_ns();
+        trace.best_bid_fetched = now_ns;
         debug!(trace = ?trace, "best bid fetched");
 
         let Some(bid) = get_best_bid_res else {
@@ -187,12 +188,14 @@ impl<A: Api> ProposerApi<A> {
             let max_merged_bid_age_ms =
                 proposer_api.relay_config.block_merging_config.max_merged_bid_age_ms;
 
+            let now_ms = Duration::from_nanos(now_ns).as_millis() as u64;
+
             match merged_block_bid {
                 None => bid,
                 // If the current best bid has equal or higher value, we use that
                 Some((_, merged_bid)) if merged_bid.value() <= bid.value() => bid,
                 // If the merged bid is stale, we use the current best bid
-                Some((time, _)) if time < utcnow_ms() - max_merged_bid_age_ms => bid,
+                Some((time, _)) if time < now_ms - max_merged_bid_age_ms => bid,
                 // Otherwise, we use the merged bid
                 Some((_, merged_bid)) => merged_bid,
             }
