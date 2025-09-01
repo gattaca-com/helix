@@ -285,25 +285,6 @@ lazy_static! {
     )
     .unwrap();
 
-
-    //////////////// REDIS ////////////////
-    static ref REDIS_COUNTS: IntCounterVec = register_int_counter_vec_with_registry!(
-        "redis_count_total",
-        "Count of redis operations",
-        &["endpoint", "is_success"],
-        &RELAY_METRICS_REGISTRY
-    )
-    .unwrap();
-
-    static ref REDIS_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
-        "redis_latency_secs",
-        "Latency of redis operations",
-        &["endpoint"],
-        vec![0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 50.0],
-        &RELAY_METRICS_REGISTRY
-    )
-    .unwrap();
-
     pub static ref TASK_COUNT: GaugeVec = register_gauge_vec_with_registry!(
         "tokio_tasks",
         "Count of spawned tasks",
@@ -565,18 +546,6 @@ impl Drop for DbMetricRecord<'_> {
     }
 }
 
-pub struct RedisMetrics;
-
-impl RedisMetrics {
-    pub fn count(endpoint: &str, is_success: bool) {
-        REDIS_COUNTS.with_label_values(&[endpoint, is_success.to_string().as_str()]).inc();
-    }
-
-    pub fn latency(endpoint: &str) -> HistogramTimer {
-        REDIS_LATENCY.with_label_values(&[endpoint]).start_timer()
-    }
-}
-
 pub struct TopBidMetrics;
 
 impl TopBidMetrics {
@@ -593,37 +562,6 @@ impl TopBidMetrics {
 impl Drop for TopBidMetrics {
     fn drop(&mut self) {
         TOP_BID_CONNECTIONS.dec();
-    }
-}
-
-pub struct RedisMetricRecord<'a> {
-    endpoint: &'a str,
-    has_recorded: bool,
-    _timer: HistogramTimer,
-}
-
-impl<'a> RedisMetricRecord<'a> {
-    pub fn new(endpoint: &'a str) -> Self {
-        let timer = RedisMetrics::latency(endpoint);
-        RedisMetricRecord { has_recorded: false, _timer: timer, endpoint }
-    }
-
-    pub fn record_success(&mut self) {
-        self.has_recorded = true;
-        RedisMetrics::count(self.endpoint, true);
-    }
-
-    pub fn record_failure(&mut self) {
-        self.has_recorded = true;
-        RedisMetrics::count(self.endpoint, false);
-    }
-}
-
-impl Drop for RedisMetricRecord<'_> {
-    fn drop(&mut self) {
-        if !self.has_recorded {
-            self.record_failure();
-        }
     }
 }
 

@@ -4,8 +4,6 @@ use axum::{
 };
 use helix_types::{BlsPublicKey, CryptoError};
 
-use crate::redis::error::RedisCacheError;
-
 #[derive(Debug, thiserror::Error)]
 pub enum AuctioneerError {
     #[error("unexpected value type")]
@@ -13,9 +11,6 @@ pub enum AuctioneerError {
 
     #[error("crypto error: {0:?}")]
     CryptoError(CryptoError),
-
-    #[error("redis error: {0}")]
-    RedisError(#[from] RedisCacheError),
 
     #[error("from utf8 error: {0}")]
     FromUtf8Error(#[from] std::string::FromUtf8Error),
@@ -59,8 +54,6 @@ impl IntoResponse for AuctioneerError {
             AuctioneerError::SliceConversionError(_) |
             AuctioneerError::ExecutionPayloadNotFound |
             AuctioneerError::BuilderNotFound { .. } => StatusCode::BAD_REQUEST,
-
-            AuctioneerError::RedisError(_) => StatusCode::INTERNAL_SERVER_ERROR,
         };
 
         (code, self.to_string()).into_response()

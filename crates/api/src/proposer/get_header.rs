@@ -48,9 +48,7 @@ impl<A: Api> ProposerApi<A> {
         headers: HeaderMap,
         Path(GetHeaderParams { slot, parent_hash, pubkey }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
-        if terminating.load(Ordering::Relaxed) ||
-            proposer_api.auctioneer.kill_switch_enabled().await?
-        {
+        if terminating.load(Ordering::Relaxed) || proposer_api.auctioneer.kill_switch_enabled() {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
 

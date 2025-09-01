@@ -7,8 +7,6 @@ postgres:
   password: password
   region: 0
   region_name: "LOCAL"
-redis:
-  url: redis://localhost:6379
 broadcasters:
   - !BeaconClient
     url: http://localhost:5052

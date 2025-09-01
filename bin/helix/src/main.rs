@@ -19,7 +19,7 @@ use helix_common::{
     RelayConfig,
 };
 use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, start_db_service};
-use helix_datastore::{redis::redis_cache::RedisCache, start_auctioneer};
+use helix_datastore::{local::local_cache::LocalCache, start_auctioneer};
 use helix_housekeeper::start_housekeeper;
 use helix_types::BlsKeypair;
 use helix_website::website_service::WebsiteService;
@@ -34,7 +34,7 @@ static GLOBAL: Jemalloc = Jemalloc;
 struct ApiProd;
 
 impl Api for ApiProd {
-    type Auctioneer = RedisCache;
+    type Auctioneer = LocalCache;
     type DatabaseService = PostgresDatabaseService;
     type MetadataProvider = DefaultMetadataProvider;
 }
@@ -87,7 +87,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
 
     let beacon_client = start_beacon_client(&config);
     let db = start_db_service(&config).await?;
-    let auctioneer = start_auctioneer(&config, sorter_tx.clone(), &db).await?;
+    let auctioneer = start_auctioneer(sorter_tx.clone(), &db).await?;
 
     let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
     let shared_best_header = BestGetHeader::new();

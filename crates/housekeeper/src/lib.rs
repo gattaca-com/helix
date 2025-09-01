@@ -12,9 +12,9 @@ use std::sync::Arc;
 
 pub use chain_event_updater::{ChainEventUpdater, PayloadAttributesUpdate, SlotUpdate};
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
-use helix_common::{bid_sorter::BidSorterMessage, chain_info::ChainInfo, RelayConfig};
+use helix_common::{bid_sorter::BidSorterMessage, chain_info::ChainInfo, RelayConfig, Route};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_datastore::redis::redis_cache::RedisCache;
+use helix_datastore::local::local_cache::LocalCache;
 pub use housekeeper::Housekeeper;
 pub use primev_service::EthereumPrimevService;
 pub use slot_info::CurrentSlotInfo;
@@ -26,7 +26,7 @@ const PAYLOAD_ATTRIBUTE_CHANNEL_SIZE: usize = 300;
 /// Start housekeeper and chain updater
 pub async fn start_housekeeper(
     db: Arc<PostgresDatabaseService>,
-    auctioneer: Arc<RedisCache>,
+    auctioneer: Arc<LocalCache>,
     config: &RelayConfig,
     beacon_client: Arc<MultiBeaconClient>,
     chain_info: Arc<ChainInfo>,
@@ -39,9 +39,16 @@ pub async fn start_housekeeper(
         broadcast::channel(PAYLOAD_ATTRIBUTE_CHANNEL_SIZE);
     beacon_client.subscribe_to_payload_attributes_events(payload_attribute_sender).await;
 
-    let housekeeper =
-        Housekeeper::new(db.clone(), beacon_client, auctioneer.clone(), config, chain_info.clone());
-    housekeeper.start(head_event_receiver.resubscribe()).await?;
+    if config.router_config.enabled_routes.iter().any(|route| route.route == Route::GetHeader) {
+        let housekeeper = Housekeeper::new(
+            db.clone(),
+            beacon_client,
+            auctioneer.clone(),
+            config,
+            chain_info.clone(),
+        );
+        housekeeper.start(head_event_receiver.resubscribe()).await?;
+    }
 
     let curr_slot_info = CurrentSlotInfo::new();
     let chain_updater =

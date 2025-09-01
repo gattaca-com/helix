@@ -167,16 +167,10 @@ impl<A: Api> BuilderApi<A> {
         trace!("checked trusted builders");
 
         // Verify payload has not already been delivered
-        match api.auctioneer.get_last_slot_delivered().await {
-            Ok(Some(slot)) => {
-                if payload.slot() <= slot {
-                    debug!("payload already delivered");
-                    return Err(BuilderApiError::PayloadAlreadyDelivered);
-                }
-            }
-            Ok(None) => {}
-            Err(err) => {
-                error!(%err, "failed to get last slot delivered");
+        if let Some(slot) = api.auctioneer.get_last_slot_delivered() {
+            if payload.slot() <= slot {
+                debug!("payload already delivered");
+                return Err(BuilderApiError::PayloadAlreadyDelivered);
             }
         }
         trace!("checked payload not already delivered");
@@ -244,24 +238,17 @@ impl<A: Api> BuilderApi<A> {
         }
 
         // Save the execution payload
-        // TODO: if this and similar other calls fail we should stop serving headers and send an
-        // alert, not much we can do
-        api.auctioneer
-            .save_execution_payload(
-                payload.slot().as_u64(),
-                payload.proposer_public_key(),
-                payload.block_hash(),
-                payload.payload_and_blobs_ref(),
-            )
-            .await?;
+        api.auctioneer.save_execution_payload(
+            payload.slot().as_u64(),
+            payload.proposer_public_key(),
+            payload.block_hash(),
+            payload.payload_and_blobs_ref().to_owned(),
+        );
         trace.auctioneer_update = utcnow_ns();
-        trace!("saved payload to redis");
+        trace!("saved payload to auctioneer");
 
-        if let Err(err) = api.auctioneer.save_bid_trace(payload.bid_trace()).await {
-            error!(%err, "failed to save bid trace");
-            return Err(BuilderApiError::AuctioneerError(err));
-        }
-        trace!("saved bid trace to redis");
+        api.auctioneer.save_bid_trace(payload.bid_trace());
+        trace!("saved bid trace to auctioneer");
 
         // Log some final info
         trace.request_finish = utcnow_ns();

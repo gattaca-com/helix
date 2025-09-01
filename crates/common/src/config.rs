@@ -15,7 +15,6 @@ pub struct RelayConfig {
     #[serde(default)]
     pub website: WebsiteConfig,
     pub postgres: PostgresConfig,
-    pub redis: RedisConfig,
     #[serde(default)]
     pub broadcasters: Vec<BroadcasterConfig>,
     pub simulators: Vec<SimulatorConfig>,
@@ -166,11 +165,6 @@ pub const fn default_bool<const B: bool>() -> bool {
 
 pub const fn default_u64<const D: u64>() -> u64 {
     D
-}
-
-#[derive(Serialize, Deserialize, Clone, Default)]
-pub struct RedisConfig {
-    pub url: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -503,7 +497,6 @@ fn test_config() {
     use crate::{Filtering, ValidatorPreferences};
 
     let mut config = RelayConfig::default();
-    config.redis.url = "redis://localhost:6379".to_string();
     config.simulators = vec![SimulatorConfig {
         url: "http://localhost:8080".to_string(),
         namespace: "test".to_string(),
