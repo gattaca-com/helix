@@ -650,6 +650,8 @@ fn order_to_mergeable(
 }
 
 fn is_blob_transaction(raw_tx: &[u8]) -> bool {
+    // First byte is always the transaction type, or >= 0xc0 for legacy
+    // (source: https://eips.ethereum.org/EIPS/eip-2718)
     raw_tx.first().is_some_and(|&b| b == TxType::Eip4844)
 }
 
