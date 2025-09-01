@@ -1,7 +1,7 @@
 use alloy_consensus::TxEnvelope;
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_rlp::Decodable;
-use helix_types::{BlsPublicKey, SignedValidatorRegistration, Slot, TestRandom};
+use helix_types::{BlsPublicKey, BlsPublicKeyBytes, SignedValidatorRegistration, Slot};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 
@@ -35,14 +35,14 @@ impl From<BuilderGetValidatorsResponseEntry> for BuilderGetValidatorsResponse {
     }
 }
 
-#[derive(Clone, Debug, Encode, Decode, TestRandom)]
+#[derive(Clone, Debug, Encode, Decode)]
 pub struct TopBidUpdate {
     pub timestamp: u64,
     pub slot: u64,
     pub block_number: u64,
     pub block_hash: B256,
     pub parent_hash: B256,
-    pub builder_pubkey: BlsPublicKey,
+    pub builder_pubkey: BlsPublicKeyBytes,
     pub fee_recipient: Address,
     pub value: U256,
 }

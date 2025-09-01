@@ -5,7 +5,7 @@ use alloy_primitives::{
     B256, U256,
 };
 use bytes::Bytes;
-use helix_types::{BlsPublicKey, BuilderBid, SignedBidSubmission};
+use helix_types::{BlsPublicKey, BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
 use parking_lot::RwLock;
 use ssz::Encode;
 use tracing::info;
@@ -20,8 +20,6 @@ use crate::{
     utils::{avg_duration, utcnow_ms, utcnow_ns},
     SubmissionTrace,
 };
-
-type BlsPubkey = [u8; 48];
 
 #[derive(Clone)]
 struct GetHeaderEntry {
@@ -121,7 +119,7 @@ pub enum BidSorterMessage {
     /// - V2/V3 submissions
     Submission {
         bid: Bid,
-        builder_pubkey: BlsPubkey,
+        builder_pubkey: BlsPublicKeyBytes,
         slot: u64,
         header: BuilderBid,
         is_cancellable: bool,
@@ -152,7 +150,7 @@ impl BidSorterMessage {
         let header = bid_submission_to_builder_bid_unsigned(submission);
         Self::Submission {
             bid,
-            builder_pubkey: bid_trace.builder_pubkey.serialize(),
+            builder_pubkey: bid_trace.builder_pubkey.serialize().into(),
             slot: bid_trace.slot,
             header,
             is_cancellable,
@@ -171,7 +169,7 @@ impl BidSorterMessage {
         let header = header_submission_to_builder_bid_unsigned(submission);
         Self::Submission {
             bid,
-            builder_pubkey: bid_trace.builder_pubkey.serialize(),
+            builder_pubkey: bid_trace.builder_pubkey.serialize().into(),
             slot: bid_trace.slot,
             header,
             is_cancellable,
@@ -267,14 +265,14 @@ pub struct BidSorter {
     /// Head slot + 1
     curr_bid_slot: u64,
     /// All bid entries for the current slot, used for sorting
-    bids: HashMap<BlsPubkey, BidEntry>,
+    bids: HashMap<BlsPublicKeyBytes, BidEntry>,
     /// All headers received for this slot
     /// on_receive_ns -> header
     headers: HashMap<u64, BuilderBid>,
     /// Demoted builders in this slot for live demotions
-    demotions: HashSet<BlsPubkey>,
+    demotions: HashSet<BlsPublicKeyBytes>,
     /// Current best bid
-    curr_bid: Option<(BlsPubkey, Bid)>,
+    curr_bid: Option<(BlsPublicKeyBytes, Bid)>,
     /// Current floor bid value
     curr_floor: Option<U256>,
     /// Current response for get_header
@@ -355,7 +353,7 @@ impl BidSorter {
                     BID_SORTER_PROCESS_LATENCY_US.observe(process_latency_ns as f64 / 1000.);
                 }
                 BidSorterMessage::Demotion(demoted) => {
-                    let demoted = demoted.serialize();
+                    let demoted = demoted.serialize().into();
                     if !self.demotions.insert(demoted) {
                         // already demoted
                         self.local_telemetry.duplicate_demotions += 1;
@@ -374,7 +372,12 @@ impl BidSorter {
         }
     }
 
-    fn process_header(&mut self, new_pubkey: BlsPubkey, new_bid: Bid, is_cancellable: bool) {
+    fn process_header(
+        &mut self,
+        new_pubkey: BlsPublicKeyBytes,
+        new_bid: Bid,
+        is_cancellable: bool,
+    ) {
         match self.bids.entry(new_pubkey) {
             Entry::Occupied(mut entry) => {
                 let entry = entry.get_mut();
@@ -411,7 +414,7 @@ impl BidSorter {
 
     /// This is only for in-slot demotions. For builder that were demoted in a past slot we don't
     /// expect to receive optimistic bids here
-    fn process_demotion(&mut self, demoted: BlsPubkey) {
+    fn process_demotion(&mut self, demoted: BlsPublicKeyBytes) {
         // remove entire entry for this builder
         let Some(entry) = self.bids.remove(&demoted) else {
             return;
@@ -496,7 +499,7 @@ impl BidSorter {
         self.shared_floor.reset();
     }
 
-    fn update_top_bid(&mut self, builder_pubkey: BlsPubkey, bid: Bid) {
+    fn update_top_bid(&mut self, builder_pubkey: BlsPublicKeyBytes, bid: Bid) {
         let Some(h) = self.headers.get(&bid.on_receive_ns) else {
             // this should never happen
             return;
@@ -508,7 +511,7 @@ impl BidSorter {
             block_number: h.header().block_number(),
             block_hash: h.header().block_hash().0,
             parent_hash: h.header().parent_hash().0,
-            builder_pubkey: BlsPublicKey::deserialize(&builder_pubkey).unwrap(), // TODO!!: use PublicKeyBytes
+            builder_pubkey,
             fee_recipient: h.header().fee_recipient(),
             value: bid.value,
         }
