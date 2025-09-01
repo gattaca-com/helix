@@ -26,6 +26,10 @@ use crate::{error::AuctioneerError, Auctioneer};
 type ExecutionPayloadKey = (u64, BlsPublicKey, B256);
 type BidTraceKey = (u64, BlsPublicKey, B256);
 
+const ESTIMATED_TRUSTED_PROPOSERS: usize = 200_000;
+const ESTIMATED_BID_UPPER_BOUND: usize = 10_000;
+const MAX_PRIMEV_PROPOSERS: usize = 64;
+
 #[derive(Clone)]
 pub struct LocalCache {
     inclusion_list: broadcast::Sender<InclusionListWithKey>,
@@ -56,15 +60,15 @@ impl LocalCache {
         // ensure at least one subscriber is running
         tokio::spawn(async move { while let Ok(_message) = il_recv.recv().await {} });
 
-        let seen_block_hashes = Arc::new(DashSet::new());
+        let seen_block_hashes = Arc::new(DashSet::with_capacity(ESTIMATED_BID_UPPER_BOUND));
         let builder_info_cache = Arc::new(DashMap::with_capacity(builder_infos.len()));
         let last_delivered_slot = Arc::new(AtomicU64::new(0));
         let last_delivered_hash = Arc::new(RwLock::new(None));
-        let execution_payload_cache = Arc::new(DashMap::new());
-        let trusted_proposers = Arc::new(DashMap::with_capacity(200_000));
-        let payload_address_cache = Arc::new(DashMap::new());
-        let bid_trace_cache = Arc::new(DashMap::new());
-        let primev_proposers = Arc::new(DashSet::new());
+        let execution_payload_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BID_UPPER_BOUND));
+        let trusted_proposers = Arc::new(DashMap::with_capacity(ESTIMATED_TRUSTED_PROPOSERS));
+        let payload_address_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BID_UPPER_BOUND));
+        let bid_trace_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BID_UPPER_BOUND));
+        let primev_proposers = Arc::new(DashSet::with_capacity(MAX_PRIMEV_PROPOSERS));
         let kill_switch = Arc::new(AtomicBool::new(false));
         let proposer_duties = Arc::new(RwLock::new(Vec::new()));
 
