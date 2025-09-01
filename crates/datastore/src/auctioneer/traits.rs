@@ -8,7 +8,7 @@ use helix_common::{
     ProposerInfo,
 };
 use helix_database::BuilderInfoDocument;
-use helix_types::{BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, PayloadAndBlobsRef};
+use helix_types::{BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs};
 use tokio::sync::broadcast;
 
 use crate::error::AuctioneerError;
@@ -27,7 +27,7 @@ pub trait Auctioneer: Send + Sync + Clone {
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
-        versioned_execution_payload: PayloadAndBlobsRef,
+        versioned_execution_payload: PayloadAndBlobs,
     );
     fn get_execution_payload(
         &self,
@@ -82,7 +82,7 @@ pub trait Auctioneer: Send + Sync + Clone {
         &self,
         inclusion_list: InclusionListWithMetadata,
         slot_coordinate: SlotCoordinate,
-    ) -> Result<(), AuctioneerError>;
+    );
 
     fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey>;
 

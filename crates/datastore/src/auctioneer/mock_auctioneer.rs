@@ -10,8 +10,7 @@ use helix_common::{
 };
 use helix_database::types::BuilderInfoDocument;
 use helix_types::{
-    BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, PayloadAndBlobsRef, SignedBuilderBid,
-    TestRandomSeed,
+    BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, SignedBuilderBid, TestRandomSeed,
 };
 use tokio::sync::broadcast;
 
@@ -53,7 +52,7 @@ impl Auctioneer for MockAuctioneer {
         _slot: u64,
         _proposer_pub_key: &BlsPublicKey,
         _block_hash: &B256,
-        _execution_payload: PayloadAndBlobsRef,
+        _execution_payload: PayloadAndBlobs,
     ) {
     }
     fn get_execution_payload(
@@ -126,13 +125,7 @@ impl Auctioneer for MockAuctioneer {
         None
     }
 
-    fn update_current_inclusion_list(
-        &self,
-        _: InclusionListWithMetadata,
-        _: SlotCoordinate,
-    ) -> Result<(), AuctioneerError> {
-        Ok(())
-    }
+    fn update_current_inclusion_list(&self, _: InclusionListWithMetadata, _: SlotCoordinate) {}
 
     fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey> {
         let (tx, rx) = broadcast::channel(1);

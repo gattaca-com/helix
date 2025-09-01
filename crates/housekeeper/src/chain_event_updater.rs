@@ -184,7 +184,6 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
         }
 
         self.head_slot = slot;
-        self.auctioneer.process_slot(slot);
 
         sleep(Duration::from_secs(1)).await;
 
@@ -213,12 +212,8 @@ impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
 
         let update = SlotUpdate { slot: slot.into(), new_duties: Some(new_duties), next_duty };
 
-        // Run handle_new_slot in a spawned task so it can't block the select loop.
-        let curr_slot_info = self.curr_slot_info.clone();
-        let chain_info = self.chain_info.clone();
-        tokio::spawn(async move {
-            curr_slot_info.handle_new_slot(update, &chain_info);
-        });
+        self.curr_slot_info.handle_new_slot(update, &self.chain_info);
+        self.auctioneer.process_slot(slot);
         let _ = self.sorter_tx.try_send(BidSorterMessage::Slot(slot));
     }
 

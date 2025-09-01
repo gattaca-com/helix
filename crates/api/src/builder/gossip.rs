@@ -40,7 +40,7 @@ impl<A: Api> BuilderApi<A> {
             req.slot,
             &req.proposer_pub_key,
             &req.execution_payload.execution_payload.block_hash().0,
-            PayloadAndBlobsRef::from(&req.execution_payload),
+            req.execution_payload,
         );
 
         trace.auctioneer_update = utcnow_ns();

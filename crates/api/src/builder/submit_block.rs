@@ -214,7 +214,7 @@ impl<A: Api> BuilderApi<A> {
             payload.slot().as_u64(),
             payload.proposer_public_key(),
             payload.block_hash(),
-            payload.payload_and_blobs_ref(),
+            payload.payload_and_blobs_ref().to_owned(),
         );
         trace.auctioneer_update = utcnow_ns();
         trace!("saved payload to auctioneer");

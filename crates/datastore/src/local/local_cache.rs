@@ -16,7 +16,6 @@ use helix_common::{
 use helix_database::types::BuilderInfoDocument;
 use helix_types::{
     maybe_upgrade_execution_payload, BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs,
-    PayloadAndBlobsRef,
 };
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
@@ -58,10 +57,10 @@ impl LocalCache {
         tokio::spawn(async move { while let Ok(_message) = il_recv.recv().await {} });
 
         let seen_block_hashes = Arc::new(DashSet::new());
-        let builder_info_cache = Arc::new(DashMap::new());
+        let builder_info_cache = Arc::new(DashMap::with_capacity(builder_infos.len()));
         let last_delivered_slot = Arc::new(AtomicU64::new(0));
         let last_delivered_hash = Arc::new(RwLock::new(None));
-        let execution_payload_cache = Arc::new(DashMap::with_capacity(builder_infos.len()));
+        let execution_payload_cache = Arc::new(DashMap::new());
         let trusted_proposers = Arc::new(DashMap::with_capacity(200_000));
         let payload_address_cache = Arc::new(DashMap::new());
         let bid_trace_cache = Arc::new(DashMap::new());
@@ -148,10 +147,10 @@ impl Auctioneer for LocalCache {
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
-        execution_payload: PayloadAndBlobsRef,
+        execution_payload: PayloadAndBlobs,
     ) {
         self.execution_payload_cache
-            .insert((slot, proposer_pub_key.clone(), *block_hash), execution_payload.to_owned());
+            .insert((slot, proposer_pub_key.clone(), *block_hash), execution_payload);
     }
 
     #[instrument(skip_all)]
@@ -298,13 +297,11 @@ impl Auctioneer for LocalCache {
         &self,
         inclusion_list: InclusionListWithMetadata,
         slot_coordinate: SlotCoordinate,
-    ) -> Result<(), AuctioneerError> {
+    ) {
         let list_with_key = InclusionListWithKey { key: slot_coordinate.clone(), inclusion_list };
         if let Err(err) = self.inclusion_list.send(list_with_key) {
             error!(%err, "Failed to send inclusion list update");
         }
-
-        Ok(())
     }
 
     #[instrument(skip_all)]
@@ -340,7 +337,7 @@ mod tests {
     use helix_common::BuilderConfig;
     use helix_types::{
         get_fixed_pubkey, BlobsBundle, ExecutionPayloadElectra, ExecutionPayloadRef, ForkName,
-        TestRandomSeed,
+        PayloadAndBlobsRef, TestRandomSeed,
     };
 
     use super::*;
@@ -416,7 +413,7 @@ mod tests {
             slot,
             &proposer_pub_key,
             &block_hash,
-            versioned_execution_payload,
+            versioned_execution_payload.to_owned(),
         );
 
         // Test: Get the execution payload

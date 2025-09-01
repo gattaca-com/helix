@@ -9,7 +9,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::{BlsPublicKey, Slot};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::inclusion_list::http_fetcher::HttpInclusionListFetcher;
 
@@ -59,29 +59,22 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
             }
         };
 
-        let auctioneer_result = self.auctioneer.update_current_inclusion_list(
+        self.auctioneer.update_current_inclusion_list(
             inclusion_list.clone(),
             (slot, pub_key.clone(), parent_hash),
         );
 
-        let postgres_result =
-            self.db.save_inclusion_list(&inclusion_list, slot, &parent_hash, &pub_key).await;
-
-        if postgres_result.is_ok() {
-            info!(head_slot = slot, "Saved inclusion list to postgres");
-        }
-
-        match auctioneer_result {
+        match self.db.save_inclusion_list(&inclusion_list, slot, &parent_hash, &pub_key).await {
             Ok(_) => {
-                info!(head_slot = slot, "Saved inclusion list to auctioneer")
+                info!(head_slot = slot, "Saved inclusion list to postgres");
             }
             Err(err) => {
-                warn!(
+                error!(
                     head_slot = slot,
-                    "Could not include list for this slot in auctioneer {}", err
-                )
+                    "Could not save inclusion list to postgres. Error: {:?}", err
+                );
             }
-        };
+        }
     }
 
     async fn fetch_inclusion_list_or_timeout(&self, slot: u64) -> Option<InclusionList> {
