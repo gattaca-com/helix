@@ -184,20 +184,12 @@ impl<A: Api> BuilderApi<A> {
         }
     }
 
-    /// This function verifies:
-    /// 1. Verifies the payload signature.
-    /// 2. Simulates the submission
-    ///
-    /// Returns: the bid submission in an Arc.
-    pub(crate) async fn verify_submitted_block(
+    pub(crate) fn verify_signature(
         &self,
         payload: &SignedBidSubmission,
-        next_duty: BuilderGetValidatorsResponseEntry,
-        builder_info: &BuilderInfo,
-        trace: &mut SubmissionTrace,
-        payload_attributes: &PayloadAttributesUpdate,
         skip_sigverify: bool,
-    ) -> Result<bool, BuilderApiError> {
+        trace: &mut SubmissionTrace,
+    ) -> Result<(), BuilderApiError> {
         if skip_sigverify {
             trace!("skipping signature verification");
         } else {
@@ -211,22 +203,7 @@ impl<A: Api> BuilderApi<A> {
         trace.skip_sigverify = skip_sigverify;
         trace.signature = utcnow_ns();
 
-        let curr_best = self.shared_best_header.best_bid(payload.slot().as_u64());
-        let is_top_bid = payload.value() > curr_best;
-
-        // Simulate the submission
-        let was_simulated_optimistically = self
-            .simulate_submission(
-                payload,
-                builder_info,
-                trace,
-                next_duty.entry,
-                payload_attributes,
-                is_top_bid,
-            )
-            .await?;
-
-        Ok(was_simulated_optimistically)
+        Ok(())
     }
 
     /// If the proposer has specified a list of trusted builders ensure
@@ -264,15 +241,17 @@ impl<A: Api> BuilderApi<A> {
     ///
     /// 1. Checks the current top bid value from the auctioneer.
     /// 3. Invokes the block simulator for validation.
-    async fn simulate_submission(
+    pub(crate) async fn simulate_submission(
         &self,
         payload: &SignedBidSubmission,
         builder_info: &BuilderInfo,
         trace: &mut SubmissionTrace,
         registration_info: ValidatorRegistrationInfo,
         payload_attributes: &PayloadAttributesUpdate,
-        is_top_bid: bool,
     ) -> Result<bool, BuilderApiError> {
+        let curr_best = self.shared_best_header.best_bid(payload.slot().as_u64());
+        let is_top_bid = payload.value() > curr_best;
+
         debug!("validating block");
 
         let current_slot_coord = (

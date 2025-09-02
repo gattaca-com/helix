@@ -192,14 +192,15 @@ impl<A: Api> BuilderApi<A> {
         }
         trace.pre_checks = utcnow_ns();
 
+        api.verify_signature(&payload, skip_sigverify, &mut trace)?;
+
         match api
-            .verify_submitted_block(
+            .simulate_submission(
                 &payload,
-                next_duty,
                 &builder_info,
                 &mut trace,
+                next_duty.entry,
                 &payload_attributes,
-                skip_sigverify,
             )
             .await
         {

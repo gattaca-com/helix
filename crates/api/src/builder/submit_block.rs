@@ -108,12 +108,6 @@ impl<A: Api> BuilderApi<A> {
             });
         }
 
-        api.check_and_update_sequence_number(
-            payload.builder_public_key(),
-            head_slot + 1,
-            &parts.headers,
-        )?;
-
         payload.blobs_bundle().validate()?;
         trace!("validated blobs bundle");
 
@@ -191,14 +185,21 @@ impl<A: Api> BuilderApi<A> {
         trace!("sanity check passed");
         trace.pre_checks = utcnow_ns();
 
+        api.verify_signature(&payload, skip_sigverify, &mut trace)?;
+
+        api.check_and_update_sequence_number(
+            payload.builder_public_key(),
+            head_slot + 1,
+            &parts.headers,
+        )?;
+
         let was_simulated_optimistically = api
-            .verify_submitted_block(
+            .simulate_submission(
                 &payload,
-                next_duty,
                 &builder_info,
                 &mut trace,
+                next_duty.entry,
                 &payload_attributes,
-                skip_sigverify,
             )
             .await?;
 
