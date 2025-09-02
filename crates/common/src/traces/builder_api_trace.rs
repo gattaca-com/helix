@@ -15,6 +15,8 @@ pub struct SubmissionTrace {
     pub auctioneer_update: u64,
     pub request_finish: u64,
     pub metadata: Option<String>,
+
+    pub skip_sigverify: bool,
 }
 
 impl SubmissionTrace {
@@ -38,7 +40,9 @@ impl SubmissionTrace {
         SUB_TRACE_LATENCY.with_label_values(&["decode"]).observe(decode);
         SUB_TRACE_LATENCY.with_label_values(&["floor_bid_checks"]).observe(floor_bid_checks);
         SUB_TRACE_LATENCY.with_label_values(&["pre_checks"]).observe(pre_checks);
-        SUB_TRACE_LATENCY.with_label_values(&["signature"]).observe(signature);
+        if !self.skip_sigverify {
+            SUB_TRACE_LATENCY.with_label_values(&["signature"]).observe(signature);
+        }
         if optimistic_version.is_optimistic() {
             SUB_TRACE_LATENCY.with_label_values(&["sim_optimistic"]).observe(simulation);
         } else {

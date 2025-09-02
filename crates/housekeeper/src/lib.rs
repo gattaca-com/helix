@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 pub use chain_event_updater::{ChainEventUpdater, PayloadAttributesUpdate, SlotUpdate};
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
-use helix_common::{bid_sorter::BidSorterMessage, chain_info::ChainInfo, RelayConfig, Route};
+use helix_common::{bid_sorter::BidSorterMessage, chain_info::ChainInfo, RelayConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_datastore::local::local_cache::LocalCache;
 pub use housekeeper::Housekeeper;
@@ -39,7 +39,7 @@ pub async fn start_housekeeper(
         broadcast::channel(PAYLOAD_ATTRIBUTE_CHANNEL_SIZE);
     beacon_client.subscribe_to_payload_attributes_events(payload_attribute_sender).await;
 
-    if config.router_config.enabled_routes.iter().any(|route| route.route == Route::GetHeader) {
+    if config.housekeeper {
         let housekeeper = Housekeeper::new(
             db.clone(),
             beacon_client,

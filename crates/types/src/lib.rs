@@ -32,10 +32,10 @@ pub type Domain = lh_types::Domain;
 
 // Signing
 pub type BlsPublicKey = lh_types::PublicKey;
+pub type BlsPublicKeyBytes = alloy_rpc_types::beacon::BlsPublicKey;
 pub type BlsSignature = lh_types::Signature;
 pub type BlsSecretKey = lh_types::SecretKey;
 pub type BlsKeypair = lh_types::Keypair;
-pub type PublicKeyBytes = lh_types::PublicKeyBytes;
 
 // Fields
 pub type Withdrawal = lh_types::withdrawal::Withdrawal;
@@ -51,7 +51,6 @@ pub type ExecutionRequests = lh_types::execution_requests::ExecutionRequests<Mai
 // Blobs
 // pub type BlobsBundle = lh_eth2::types::BlobsBundle<MainnetEthSpec>;
 pub type BlobsBundle = crate::blobs::BlobsBundleV1;
-pub type BlobSidecars = Vec<Arc<BlobSidecar>>;
 
 // Publish block
 pub type VersionedSignedProposal = SignedBlockContents;
@@ -139,8 +138,8 @@ pub fn maybe_upgrade_execution_payload(
     payload
 }
 
-pub fn mock_public_key_bytes() -> PublicKeyBytes {
-    PublicKeyBytes::empty()
+pub fn mock_public_key_bytes() -> lh_types::PublicKeyBytes {
+    lh_types::PublicKeyBytes::empty()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Encode)]

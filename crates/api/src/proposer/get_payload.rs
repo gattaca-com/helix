@@ -10,7 +10,7 @@ use axum::{
 use helix_beacon::types::BroadcastValidation;
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry,
-    chain_info::{ChainInfo, Network},
+    chain_info::ChainInfo,
     metadata_provider::MetadataProvider,
     task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
@@ -252,23 +252,6 @@ impl<A: Api> ProposerApi<A> {
                 }
             };
         let payload = Arc::new(versioned_payload);
-
-        if self.validator_preferences.gossip_blobs ||
-            !matches!(self.chain_info.network, Network::Mainnet)
-        {
-            info!("gossip blobs: about to gossip blobs");
-            let self_clone = self.clone();
-            let unblinded_payload_clone = unblinded_payload.clone();
-
-            task::spawn(
-                file!(),
-                line!(),
-                async move {
-                    self_clone.gossip_blobs(unblinded_payload_clone).await;
-                }
-                .in_current_span(),
-            );
-        }
 
         let is_trusted_proposer = self.auctioneer.is_trusted_proposer(&proposer_public_key);
 

@@ -69,7 +69,6 @@ impl<A: Api> ProposerApi<A> {
             trusted_builders: proposer_api.validator_preferences.trusted_builders.clone(),
             header_delay: proposer_api.validator_preferences.header_delay,
             delay_ms: proposer_api.validator_preferences.delay_ms,
-            gossip_blobs: proposer_api.validator_preferences.gossip_blobs,
             disable_inclusion_lists: proposer_api.validator_preferences.disable_inclusion_lists,
         };
 
@@ -102,10 +101,6 @@ impl<A: Api> ProposerApi<A> {
 
             if let Some(header_delay) = preferences.header_delay {
                 validator_preferences.header_delay = header_delay;
-            }
-
-            if let Some(gossip_blobs) = preferences.gossip_blobs {
-                validator_preferences.gossip_blobs = gossip_blobs;
             }
         }
 

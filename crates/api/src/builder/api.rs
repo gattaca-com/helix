@@ -171,7 +171,7 @@ impl<A: Api> BuilderApi<A> {
     /// If this is the first time the hash has been seen it will insert the hash into the set.
     ///
     /// This function should not be called by functions that only process the payload.
-    pub(crate) async fn check_for_duplicate_block_hash(
+    pub(crate) fn check_for_duplicate_block_hash(
         &self,
         block_hash: &B256,
     ) -> Result<(), BuilderApiError> {
@@ -196,13 +196,19 @@ impl<A: Api> BuilderApi<A> {
         builder_info: &BuilderInfo,
         trace: &mut SubmissionTrace,
         payload_attributes: &PayloadAttributesUpdate,
+        skip_sigverify: bool,
     ) -> Result<bool, BuilderApiError> {
-        // Verify the payload signature
-        if let Err(err) = payload.verify_signature(&self.chain_info.context) {
-            warn!(%err, "failed to verify signature");
-            return Err(BuilderApiError::SignatureVerificationFailed);
+        if skip_sigverify {
+            trace!("skipping signature verification");
+        } else {
+            // Verify the payload signature
+            if let Err(err) = payload.verify_signature(&self.chain_info.context) {
+                warn!(%err, "failed to verify signature");
+                return Err(BuilderApiError::SignatureVerificationFailed);
+            }
+            trace!("verified signature");
         }
-        trace!("verified signature");
+        trace.skip_sigverify = skip_sigverify;
         trace.signature = utcnow_ns();
 
         let curr_best = self.shared_best_header.best_bid(payload.slot().as_u64());

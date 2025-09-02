@@ -124,7 +124,6 @@ mod tests {
                 trusted_builders: Some(vec!["test".to_string(), "test2".to_string()]),
                 header_delay: true,
                 delay_ms: Some(1000),
-                gossip_blobs: true,
                 disable_inclusion_lists: true,
             },
         }

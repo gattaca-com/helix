@@ -139,7 +139,7 @@ impl<A: Api> BuilderApi<A> {
         }
 
         // Handle duplicates.
-        if let Err(err) = api.check_for_duplicate_block_hash(block_hash).await {
+        if let Err(err) = api.check_for_duplicate_block_hash(block_hash) {
             match err {
                 BuilderApiError::DuplicateBlockHash { block_hash } => {
                     // We dont return the error here as we want to continue processing the request.
@@ -219,6 +219,7 @@ impl<A: Api> BuilderApi<A> {
             &payload,
             trace.receive,
             is_cancellations_enabled,
+            utcnow_ns(),
         )) {
             error!(?err, "failed to send submission to sorter");
             return Err(BuilderApiError::InternalError);

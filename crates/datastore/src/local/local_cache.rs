@@ -301,12 +301,10 @@ impl Auctioneer for LocalCache {
         self.kill_switch.load(Ordering::Relaxed)
     }
 
-    //TODO: Implement kill switch functionality. Need to add an internal api to call this.
     fn enable_kill_switch(&self) {
         self.kill_switch.store(true, Ordering::Relaxed);
     }
 
-    //TODO: Implement kill switch functionality. Need to add an internal api to call this.
     fn disable_kill_switch(&self) {
         self.kill_switch.store(false, Ordering::Relaxed);
     }

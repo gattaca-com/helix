@@ -24,7 +24,7 @@ use crate::{
         error::BuilderApiError,
         v2_check::V2SubMessage,
     },
-    Api,
+    Api, HEADER_API_KEY,
 };
 
 impl<A: Api> BuilderApi<A> {
@@ -52,6 +52,8 @@ impl<A: Api> BuilderApi<A> {
         };
         trace.metadata = api.metadata_provider.get_metadata(req.headers());
 
+        let skip_sigverify =
+            req.headers().get(HEADER_API_KEY).is_some_and(|key| api.auctioneer.check_api_key(key));
         // Decode the incoming request body into a payload
         let (parts, body) = req.into_parts();
         let (payload, _) = decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
@@ -68,7 +70,8 @@ impl<A: Api> BuilderApi<A> {
             "payload decoded",
         );
 
-        Self::handle_optimistic_payload(api, payload, trace, OptimisticVersion::V2).await
+        Self::handle_optimistic_payload(api, payload, trace, OptimisticVersion::V2, skip_sigverify)
+            .await
     }
 
     pub(crate) async fn handle_optimistic_payload(
@@ -76,6 +79,7 @@ impl<A: Api> BuilderApi<A> {
         payload: SignedBidSubmission,
         mut trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,
+        skip_sigverify: bool,
     ) -> Result<StatusCode, BuilderApiError> {
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
 
@@ -195,6 +199,7 @@ impl<A: Api> BuilderApi<A> {
                 &builder_info,
                 &mut trace,
                 &payload_attributes,
+                skip_sigverify,
             )
             .await
         {

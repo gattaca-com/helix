@@ -221,7 +221,6 @@ mod test {
         let config = RelayConfig {
             broadcasters: vec![BroadcasterConfig::BeaconClient(BeaconClientConfig {
                 url: Url::parse("http://localhost:4040").unwrap(),
-                gossip_blobs_enabled: false,
             })],
             ..Default::default()
         };
