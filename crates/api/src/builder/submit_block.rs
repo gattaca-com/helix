@@ -72,13 +72,16 @@ impl<A: Api> BuilderApi<A> {
 
         debug!(%head_slot, timestamp_request_start = trace.receive);
 
-        let skip_sigverify =
-            req.headers().get(HEADER_API_KEY).is_some_and(|key| api.auctioneer.check_api_key(key));
         // Decode the incoming request body into a payload
         let (parts, body) = req.into_parts();
         let (payload, is_cancellations_enabled) =
             decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
         ApiMetrics::cancellable_bid(is_cancellations_enabled);
+
+        let skip_sigverify = parts
+            .headers
+            .get(HEADER_API_KEY)
+            .is_some_and(|key| api.auctioneer.validate_api_key(key, payload.builder_public_key()));
 
         let block_hash = payload.message().block_hash;
 

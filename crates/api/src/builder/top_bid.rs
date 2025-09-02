@@ -27,7 +27,7 @@ impl<A: Api> BuilderApi<A> {
             return Err(BuilderApiError::InvalidApiKey);
         };
 
-        if !api.auctioneer.check_api_key(api_key) {
+        if !api.auctioneer.contains_api_key(api_key) {
             return Err(BuilderApiError::InvalidApiKey);
         }
 

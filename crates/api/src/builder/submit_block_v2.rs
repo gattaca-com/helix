@@ -52,11 +52,14 @@ impl<A: Api> BuilderApi<A> {
         };
         trace.metadata = api.metadata_provider.get_metadata(req.headers());
 
-        let skip_sigverify =
-            req.headers().get(HEADER_API_KEY).is_some_and(|key| api.auctioneer.check_api_key(key));
         // Decode the incoming request body into a payload
         let (parts, body) = req.into_parts();
         let (payload, _) = decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
+
+        let skip_sigverify = parts
+            .headers
+            .get(HEADER_API_KEY)
+            .is_some_and(|key| api.auctioneer.validate_api_key(key, payload.builder_public_key()));
 
         tracing::Span::current().record("slot", payload.slot().as_u64() as i64);
         tracing::Span::current()

@@ -85,7 +85,11 @@ impl Auctioneer for MockAuctioneer {
         Ok(self.builder_info.clone().unwrap_or_default())
     }
 
-    fn check_api_key(&self, _api_key: &HeaderValue) -> bool {
+    fn contains_api_key(&self, _api_key: &HeaderValue) -> bool {
+        self.builder_info.is_some()
+    }
+
+    fn validate_api_key(&self, _api_key: &HeaderValue, _pubkey: &BlsPublicKey) -> bool {
         self.builder_info.is_some()
     }
 
