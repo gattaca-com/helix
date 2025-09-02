@@ -20,9 +20,6 @@ pub struct ValidatorPreferences {
     pub delay_ms: Option<u64>,
 
     #[serde(default)]
-    pub gossip_blobs: bool,
-
-    #[serde(default)]
     pub disable_inclusion_lists: bool,
 }
 
@@ -82,7 +79,6 @@ fn test_validator_preferences_serde() {
         trusted_builders: Some(vec!["builder1".to_string(), "builder2".to_string()]),
         header_delay: false,
         delay_ms: Some(1000),
-        gossip_blobs: true,
         disable_inclusion_lists: true,
     };
 

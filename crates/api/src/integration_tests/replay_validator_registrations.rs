@@ -126,7 +126,6 @@ async fn run() {
 
     let beacon_client = BeaconClient::from_config(BeaconClientConfig {
         url: Url::parse("http://localhost:5052").unwrap(),
-        gossip_blobs_enabled: false,
     });
 
     let (head_event_sender, mut head_event_receiver) =

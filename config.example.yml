@@ -10,19 +10,16 @@ postgres:
 broadcasters:
   - !BeaconClient
     url: http://localhost:5052
-    gossip_blobs_enabled: false
 simulators:
   - url: http://localhost:8545
 beacon_clients:
   - url: http://localhost:5052
-    gossip_blobs_enabled: false
 relays: []
 builders: []
 validator_preferences:
   filtering: regional
   trusted_builders: null
   header_delay: true
-  gossip_blobs: false
 router_config:
   enabled_routes:
     - route: GetValidators
