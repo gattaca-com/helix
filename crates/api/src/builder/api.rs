@@ -8,7 +8,7 @@ use axum::{
     Extension,
 };
 use bytes::Bytes;
-use dashmap::{mapref::entry::Entry, DashMap};
+use dashmap::DashMap;
 use helix_common::{
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithKey},
@@ -86,7 +86,7 @@ impl<A: Api> BuilderApi<A> {
         shared_best_header: BestGetHeader,
     ) -> Self {
         let tx_root_cache = DashMap::with_capacity(1000);
-        let sequence_numbers = DashMap::with_capacity(100);
+        let sequence_numbers = DashMap::with_capacity(1000);
 
         let cache = tx_root_cache.clone();
         let info = chain_info.clone();
@@ -415,7 +415,7 @@ impl<A: Api> BuilderApi<A> {
     /// Assume the slot is already validated
     pub(crate) fn check_and_update_sequence_number(
         &self,
-        builder_pubkey: BlsPublicKey,
+        builder_pubkey: &BlsPublicKey,
         bid_slot: Slot,
         headers: &HeaderMap,
     ) -> Result<(), BuilderApiError> {
@@ -427,30 +427,28 @@ impl<A: Api> BuilderApi<A> {
             return Ok(())
         };
 
-        match self.sequence_numbers.entry(builder_pubkey) {
-            Entry::Occupied(mut occupied_entry) => {
-                let (old_slot, old_seq) = occupied_entry.get();
+        if let Some(mut entry) = self.sequence_numbers.get_mut(builder_pubkey) {
+            let (old_slot, old_seq) = entry.value_mut();
 
-                if bid_slot < *old_slot {
-                    // this shouldn't really happen, ignore
-                } else if bid_slot > *old_slot {
-                    // first seq for slot, reset
-                    occupied_entry.insert((bid_slot, new_seq));
-                } else if new_seq > *old_seq {
-                    // higher sequence number, update
-                    occupied_entry.insert((bid_slot, new_seq));
-                } else {
-                    // stale or duplicated sequence number
-                    return Err(BuilderApiError::OutOfSequence {
-                        seen: *old_seq,
-                        this: new_seq,
-                        bid_slot: bid_slot.as_u64(),
-                    })
-                }
+            if bid_slot < *old_slot {
+                // this shouldn't really happen, ignore
+            } else if bid_slot > *old_slot {
+                // first seq for slot, reset
+                *old_slot = bid_slot;
+                *old_seq = new_seq;
+            } else if new_seq > *old_seq {
+                // higher sequence number, update
+                *old_seq = new_seq;
+            } else {
+                // stale or duplicated sequence number
+                return Err(BuilderApiError::OutOfSequence {
+                    seen: *old_seq,
+                    this: new_seq,
+                    bid_slot: bid_slot.as_u64(),
+                })
             }
-            Entry::Vacant(vacant_entry) => {
-                vacant_entry.insert((bid_slot, new_seq));
-            }
+        } else {
+            self.sequence_numbers.insert(builder_pubkey.clone(), (bid_slot, new_seq));
         }
 
         Ok(())

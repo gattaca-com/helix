@@ -109,7 +109,7 @@ impl<A: Api> BuilderApi<A> {
         }
 
         api.check_and_update_sequence_number(
-            payload.builder_public_key().clone(),
+            payload.builder_public_key(),
             head_slot + 1,
             &parts.headers,
         )?;
