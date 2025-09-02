@@ -203,6 +203,7 @@ impl<A: Api> BuilderApi<A> {
             &trace,
             optimistic_version,
             is_cancellations_enabled,
+            utcnow_ns(),
         )) {
             error!(?err, "failed to send submission to sorter");
             return Err(BuilderApiError::InternalError);

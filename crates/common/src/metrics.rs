@@ -306,6 +306,14 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref BID_SORTER_QUEUE_LATENCY_US: Histogram = register_histogram_with_registry!(
+        "bid_sorter_queue_latency_us",
+        "Latency of bid sorter queue in us",
+        vec![1., 5., 10., 25., 50., 100., 500., 1_000., 5_000., 10_000., 50_000., 100_000., 1_000_000.],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     //////////////// TIMING GAMES ////////////////
 
     static ref GET_HEADER_TIMEOUT: HistogramVec = register_histogram_vec_with_registry!(
