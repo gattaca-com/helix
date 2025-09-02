@@ -26,6 +26,7 @@ async fn enable_kill_switch<A: Auctioneer>(
     Extension(auctioneer): Extension<Arc<A>>,
 ) -> Result<impl IntoResponse, StatusCode> {
     auctioneer.enable_kill_switch();
+    info!("Kill switch enabled");
     Ok((StatusCode::NO_CONTENT, ()))
 }
 
@@ -33,6 +34,7 @@ async fn disable_kill_switch<A: Auctioneer>(
     Extension(auctioneer): Extension<Arc<A>>,
 ) -> Result<impl IntoResponse, StatusCode> {
     auctioneer.disable_kill_switch();
+    info!("Kill switch disabled");
     Ok((StatusCode::NO_CONTENT, ()))
 }
 
