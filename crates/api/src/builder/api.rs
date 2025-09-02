@@ -64,7 +64,7 @@ pub struct BuilderApi<A: Api> {
     pub tx_root_cache: DashMap<B256, (u64, B256)>,
     /// Best get header to check the current top bid on simulations
     pub shared_best_header: BestGetHeader,
-    /// Builder pubkey -> (bid_slot, sequence)
+    /// Builder pubkey -> (bid_slot, largest sequence number)
     pub sequence_numbers: DashMap<BlsPublicKey, (Slot, u64)>,
 }
 
