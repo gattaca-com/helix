@@ -7,7 +7,7 @@ use std::{
 };
 
 use eyre::eyre;
-use helix_api::{start_api_service, Api};
+use helix_api::{start_admin_service, start_api_service, Api};
 use helix_beacon::start_beacon_client;
 use helix_common::{
     bid_sorter::{start_bid_sorter, BestGetHeader, FloorBid},
@@ -114,6 +114,8 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     .map_err(|e| eyre!("housekeeper init: {e}"))?;
 
     let terminating = Arc::new(AtomicBool::default());
+
+    start_admin_service(auctioneer.clone(), &config);
 
     start_api_service::<ApiProd>(
         config.clone(),

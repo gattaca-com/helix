@@ -16,6 +16,7 @@ use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
 use service::run_api_service;
 
+pub mod admin_service;
 pub mod builder;
 pub mod constants;
 pub mod gossip;
@@ -64,6 +65,10 @@ pub fn start_api_service<A: Api>(
         shared_best_header,
         shared_floor,
     ));
+}
+
+pub fn start_admin_service<A: Auctioneer + 'static>(auctioneer: Arc<A>, config: &RelayConfig) {
+    tokio::spawn(admin_service::run_admin_service(auctioneer, config.clone()));
 }
 
 pub trait Api: Clone + Send + Sync + 'static {
