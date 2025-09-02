@@ -447,7 +447,7 @@ impl<A: Api> BuilderApi<A> {
             }
         }
 
-        return Ok(())
+        Ok(())
     }
 }
 
