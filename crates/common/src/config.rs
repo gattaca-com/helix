@@ -48,6 +48,8 @@ pub struct RelayConfig {
     #[serde(default)]
     pub v3_port: Option<u16>,
     pub inclusion_list: Option<InclusionListConfig>,
+    pub housekeeper: bool,
+    pub admin_token: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
