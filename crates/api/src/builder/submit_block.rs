@@ -73,7 +73,9 @@ impl<A: Api> BuilderApi<A> {
         debug!(%head_slot, timestamp_request_start = trace.receive);
 
         // Decode the incoming request body into a payload
-        let (payload, is_cancellations_enabled) = decode_payload(req, &mut trace).await?;
+        let (parts, body) = req.into_parts();
+        let (payload, is_cancellations_enabled) =
+            decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
         ApiMetrics::cancellable_bid(is_cancellations_enabled);
 
         let block_hash = payload.message().block_hash;
@@ -103,6 +105,12 @@ impl<A: Api> BuilderApi<A> {
                 got: payload.slot(),
             });
         }
+
+        api.check_and_update_sequence_number(
+            payload.builder_public_key().clone(),
+            head_slot + 1,
+            &parts.headers,
+        )?;
 
         payload.blobs_bundle().validate()?;
         trace!("validated blobs bundle");

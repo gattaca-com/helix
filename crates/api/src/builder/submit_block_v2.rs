@@ -53,7 +53,8 @@ impl<A: Api> BuilderApi<A> {
         trace.metadata = api.metadata_provider.get_metadata(req.headers());
 
         // Decode the incoming request body into a payload
-        let (payload, _) = decode_payload(req, &mut trace).await?;
+        let (parts, body) = req.into_parts();
+        let (payload, _) = decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
 
         tracing::Span::current().record("slot", payload.slot().as_u64() as i64);
         tracing::Span::current()
