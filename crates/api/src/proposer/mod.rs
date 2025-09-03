@@ -92,6 +92,9 @@ pub async fn status(Extension(terminating): Extension<Arc<AtomicBool>>) -> impl 
                "status=503 (terminating)");
         StatusCode::SERVICE_UNAVAILABLE
     } else {
+        tracing::info!(term=%terminating.load(Ordering::Relaxed),
+               ptr=?Arc::as_ptr(&terminating),
+               "status=200 (running)");
         StatusCode::OK
     }
 }
