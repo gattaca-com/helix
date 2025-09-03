@@ -45,6 +45,7 @@ pub async fn run_api_service<A: Api>(
     relay_signing_context: Arc<RelaySigningContext>,
     multi_beacon_client: Arc<MultiBeaconClient>,
     metadata_provider: Arc<A::MetadataProvider>,
+    known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
@@ -162,6 +163,7 @@ pub async fn run_api_service<A: Api>(
         data_api,
         bids_cache,
         delivered_payloads_cache,
+        known_validators_loaded,
         terminating,
     );
 
