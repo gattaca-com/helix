@@ -4,14 +4,20 @@ pub mod postgres;
 pub mod traits;
 pub mod types;
 
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use helix_common::RelayConfig;
 use postgres::postgres_db_service::PostgresDatabaseService;
 pub use traits::*;
 pub use types::*;
 
-pub async fn start_db_service(config: &RelayConfig) -> eyre::Result<Arc<PostgresDatabaseService>> {
+pub async fn start_db_service(
+    config: &RelayConfig,
+    known_validators_loaded: Arc<AtomicBool>,
+) -> eyre::Result<Arc<PostgresDatabaseService>> {
     let mut postgres_db = PostgresDatabaseService::from_relay_config(config).await;
     postgres_db.init_forever().await;
 
@@ -21,7 +27,15 @@ pub async fn start_db_service(config: &RelayConfig) -> eyre::Result<Arc<Postgres
         .await
         .expect("failed to store builders info from config");
 
-    postgres_db.load_known_validators().await;
+    tokio::spawn({
+        let known_validators_loaded = known_validators_loaded.clone();
+        let postgres_db = postgres_db.clone();
+        async move {
+            postgres_db.load_known_validators().await;
+            known_validators_loaded.store(true, Ordering::Relaxed);
+        }
+    });
+
     //postgres_db.load_validator_registrations().await;
     postgres_db.start_processors().await;
 

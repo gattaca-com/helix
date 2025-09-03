@@ -11,11 +11,14 @@ use local::local_cache::LocalCache;
 
 pub async fn start_auctioneer(
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
-    db: &PostgresDatabaseService,
+    db: Arc<PostgresDatabaseService>,
 ) -> eyre::Result<Arc<LocalCache>> {
-    let builder_infos = db.get_all_builder_infos().await.expect("failed to load builder infos");
-
-    let auctioneer = Arc::new(LocalCache::new(builder_infos, sorter_tx).await);
+    let auctioneer = Arc::new(LocalCache::new(sorter_tx).await);
+    let auctioneer_clone = auctioneer.clone();
+    tokio::spawn(async move {
+        let builder_infos = db.get_all_builder_infos().await.expect("failed to load builder infos");
+        auctioneer_clone.update_builder_infos(&builder_infos);
+    });
 
     Ok(auctioneer)
 }

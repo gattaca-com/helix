@@ -124,7 +124,6 @@ mod tests {
                 trusted_builders: Some(vec!["test".to_string(), "test2".to_string()]),
                 header_delay: true,
                 delay_ms: Some(1000),
-                gossip_blobs: true,
                 disable_inclusion_lists: true,
             },
         }
@@ -349,6 +348,7 @@ mod tests {
             is_optimistic_for_regional_filtering: false,
             builder_id: None,
             builder_ids: Some(vec!["test3".to_string()]),
+            api_key: None,
         };
 
         let result = db_service.store_builder_info(&public_key, &builder_info).await;
@@ -374,6 +374,7 @@ mod tests {
             is_optimistic_for_regional_filtering: false,
             builder_id: None,
             builder_ids: None,
+            api_key: None,
         };
 
         let result = db_service.store_builder_info(&public_key, &builder_info).await;

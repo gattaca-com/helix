@@ -8,12 +8,10 @@ use std::{
 
 use alloy_primitives::B256;
 use futures::future::join_all;
-use helix_common::{
-    beacon_api::PublishBlobsRequest, metrics::BeaconMetrics, task, ProposerDuty, ValidatorSummary,
-};
+use helix_common::{metrics::BeaconMetrics, task, ProposerDuty, ValidatorSummary};
 use helix_types::{ForkName, VersionedSignedProposal};
 use tokio::{sync::broadcast::Sender, time::sleep};
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     beacon_client::BeaconClient,
@@ -231,27 +229,6 @@ impl MultiBeaconClient {
         }
 
         Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
-    }
-
-    pub async fn publish_blobs(
-        &self,
-        blob_sidecars: PublishBlobsRequest,
-    ) -> Result<u16, BeaconClientError> {
-        for client in self.beacon_clients_by_last_response() {
-            let sidecars = blob_sidecars.clone();
-
-            task::spawn(file!(), line!(), async move {
-                let res = client.publish_blobs(sidecars).await;
-                if let Err(err) = res {
-                    match err {
-                        BeaconClientError::RequestNotSupported => {}
-                        error => warn!(?error, "failed to publish blobs"),
-                    }
-                }
-            });
-        }
-
-        Ok(200)
     }
 }
 

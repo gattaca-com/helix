@@ -12,6 +12,7 @@ use helix_database::types::BuilderInfoDocument;
 use helix_types::{
     BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, SignedBuilderBid, TestRandomSeed,
 };
+use http::HeaderValue;
 use tokio::sync::broadcast;
 
 use crate::{error::AuctioneerError, Auctioneer};
@@ -20,6 +21,7 @@ use crate::{error::AuctioneerError, Auctioneer};
 pub struct MockAuctioneer {
     pub builder_info: Option<BuilderInfo>,
     pub builder_demoted: Arc<AtomicBool>,
+    pub kill_switch_enabled: Arc<AtomicBool>,
     pub best_bid: Arc<Mutex<Option<SignedBuilderBid>>>,
     pub versioned_execution_payload: Arc<Mutex<Option<PayloadAndBlobs>>>,
 }
@@ -29,6 +31,7 @@ impl MockAuctioneer {
         Self {
             builder_info: None,
             builder_demoted: Arc::new(AtomicBool::new(false)),
+            kill_switch_enabled: Arc::new(AtomicBool::new(false)),
             best_bid: Arc::new(Mutex::new(None)),
             versioned_execution_payload: Arc::new(Mutex::new(None)),
         }
@@ -82,6 +85,14 @@ impl Auctioneer for MockAuctioneer {
         Ok(self.builder_info.clone().unwrap_or_default())
     }
 
+    fn contains_api_key(&self, _api_key: &HeaderValue) -> bool {
+        self.builder_info.is_some()
+    }
+
+    fn validate_api_key(&self, _api_key: &HeaderValue, _pubkey: &BlsPublicKey) -> bool {
+        self.builder_info.is_some()
+    }
+
     fn demote_builder(&self, _builder_pub_key: &BlsPublicKey) -> Result<(), AuctioneerError> {
         self.builder_demoted.store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
@@ -106,12 +117,16 @@ impl Auctioneer for MockAuctioneer {
     }
 
     fn kill_switch_enabled(&self) -> bool {
-        false
+        self.kill_switch_enabled.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    fn enable_kill_switch(&self) {}
+    fn enable_kill_switch(&self) {
+        self.kill_switch_enabled.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 
-    fn disable_kill_switch(&self) {}
+    fn disable_kill_switch(&self) {
+        self.kill_switch_enabled.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
 
     fn save_payload_address(
         &self,

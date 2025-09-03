@@ -1,15 +1,11 @@
 use std::sync::Arc;
 
 use alloy_eips::eip7691::MAX_BLOBS_PER_BLOCK_ELECTRA;
-use lh_types::{
-    test_utils::TestRandom, EthSpec, FixedVector, ForkName, ForkVersionDecode, Hash256,
-    MainnetEthSpec, SignedBeaconBlockHeader,
-};
+use lh_types::{test_utils::TestRandom, ForkName, ForkVersionDecode};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use ssz::DecodeError;
-use ssz_derive::{Decode, Encode};
-use tree_hash_derive::TreeHash;
+use ssz_derive::Encode;
 
 use crate::{ExecutionPayload, ExecutionPayloadRef, SignedBeaconBlock};
 
@@ -135,50 +131,6 @@ pub struct SignedBlockContents {
     pub blobs: Blobs,
 }
 
-// From lighthouse, replacing the blobs and kzg proofs
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
-pub struct BlobSidecar {
-    #[serde(with = "serde_utils::quoted_u64")]
-    pub index: u64,
-    pub blob: Blob,
-    pub kzg_commitment: LhKzgCommitment,
-    pub kzg_proof: KzgProof,
-    pub signed_block_header: SignedBeaconBlockHeader,
-    pub kzg_commitment_inclusion_proof:
-        FixedVector<Hash256, <MainnetEthSpec as EthSpec>::KzgCommitmentInclusionProofDepth>,
-}
-
-impl BlobSidecar {
-    pub fn new(
-        index: usize,
-        blob: Blob,
-        signed_block: &SignedBeaconBlock,
-        kzg_proof: KzgProof,
-    ) -> Result<Self, BlobsError> {
-        let expected_kzg_commitments = signed_block
-            .message()
-            .body()
-            .blob_kzg_commitments()
-            .map_err(|_e| BlobsError::PreDeneb)?;
-        let kzg_commitment =
-            *expected_kzg_commitments.get(index).ok_or(BlobsError::MissingKzgCommitment(index))?;
-        let kzg_commitment_inclusion_proof = signed_block
-            .message()
-            .body()
-            .kzg_commitment_merkle_proof(index)
-            .map_err(|_| BlobsError::FailedInclusionProof)?;
-
-        Ok(Self {
-            index: index as u64,
-            blob,
-            kzg_commitment,
-            kzg_proof,
-            signed_block_header: signed_block.signed_block_header(),
-            kzg_commitment_inclusion_proof,
-        })
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum BlobsError {
     #[error("block is pre deneb")]
@@ -203,10 +155,8 @@ pub enum BlobsError {
 mod tests {
     use lh_eth2::types::BlobsBundle as LhBlobsBundle;
     use lh_types::{
-        blob_sidecar::{BlobSidecar as LhBlobSidecar, BlobSidecarList as LhBlobSidecars},
         test_utils::{TestRandom, XorShiftRng},
-        BeaconBlock, BeaconBlockDeneb, KzgCommitment as LhKzgCommitment, KzgProof as LhKzgProof,
-        MainnetEthSpec, Signature, SignedBeaconBlock,
+        KzgCommitment as LhKzgCommitment, KzgProof as LhKzgProof, MainnetEthSpec,
     };
     use rand::SeedableRng;
     use ssz::Encode;
@@ -250,55 +200,5 @@ mod tests {
             PayloadAndBlobs::from_ssz_bytes_by_fork(&data_ssz, ForkName::Electra).unwrap();
 
         assert_eq!(ex, ex_test)
-    }
-
-    #[test]
-    fn test_blob_sidecars_equivalence() {
-        let mut rng = XorShiftRng::from_seed([42; 16]);
-
-        // Create random block and sidecar data
-        let block = BeaconBlockDeneb::<MainnetEthSpec>::random_for_test(&mut rng);
-        let signed_block =
-            SignedBeaconBlock::from_block(BeaconBlock::Deneb(block.clone()), Signature::empty());
-
-        let blob = Arc::new(alloy_consensus::Blob::random());
-        let kzg_proof = KzgProof::random();
-
-        // Create our sidecar
-        let our_sidecar =
-            BlobSidecar::new(0, blob.clone(), &signed_block, kzg_proof.clone()).unwrap();
-        let our_sidecars = vec![our_sidecar.clone()];
-
-        // Create equivalent Lighthouse sidecar
-        let lh_sidecar: LhBlobSidecar<MainnetEthSpec> = LhBlobSidecar {
-            index: our_sidecar.index,
-            blob: our_sidecar.blob.as_ref().to_vec().into(),
-            kzg_commitment: our_sidecar.kzg_commitment.clone(),
-            kzg_proof: LhKzgProof(our_sidecar.kzg_proof.0),
-            signed_block_header: our_sidecar.signed_block_header.clone(),
-            kzg_commitment_inclusion_proof: our_sidecar.kzg_commitment_inclusion_proof.clone(),
-        };
-        let lh_sidecars = LhBlobSidecars::new(
-            vec![Arc::new(lh_sidecar)],
-            MainnetEthSpec::max_blob_commitments_per_block(),
-        )
-        .unwrap();
-
-        // Verify fields individually
-        assert_eq!(our_sidecars.len(), lh_sidecars.len());
-
-        for (our_sidecar, lh_sidecar) in our_sidecars.iter().zip(lh_sidecars.iter()) {
-            assert_eq!(our_sidecar.index, lh_sidecar.index);
-            let our_bytes = &*our_sidecar.blob;
-            let lh_bytes = &lh_sidecar.blob;
-            assert!(our_bytes.0 == lh_bytes.as_ref());
-            assert_eq!(our_sidecar.kzg_commitment, lh_sidecar.kzg_commitment);
-            assert_eq!(our_sidecar.kzg_proof.0, lh_sidecar.kzg_proof.0);
-            assert_eq!(our_sidecar.signed_block_header, lh_sidecar.signed_block_header);
-            assert_eq!(
-                our_sidecar.kzg_commitment_inclusion_proof,
-                lh_sidecar.kzg_commitment_inclusion_proof
-            );
-        }
     }
 }

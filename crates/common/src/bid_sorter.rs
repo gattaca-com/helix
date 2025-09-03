@@ -5,7 +5,9 @@ use alloy_primitives::{
     B256, U256,
 };
 use bytes::Bytes;
-use helix_types::{BlockMergingPreferences, BlsPublicKey, BuilderBid, SignedBidSubmission};
+use helix_types::{
+    BlockMergingPreferences, BlsPublicKey, BlsPublicKeyBytes, BuilderBid, SignedBidSubmission,
+};
 use parking_lot::RwLock;
 use ssz::Encode;
 use tracing::info;
@@ -16,12 +18,13 @@ use crate::{
         v2::header_submission::SignedHeaderSubmission, BidSubmission, OptimisticVersion,
     },
     bid_submission_to_builder_bid_unsigned, header_submission_to_builder_bid_unsigned,
-    metrics::{TopBidMetrics, BID_SORTER_PROCESS_LATENCY_US, BID_SORTER_RECV_LATENCY_US},
+    metrics::{
+        TopBidMetrics, BID_SORTER_PROCESS_LATENCY_US, BID_SORTER_QUEUE_LATENCY_US,
+        BID_SORTER_RECV_LATENCY_US,
+    },
     utils::{avg_duration, utcnow_ms, utcnow_ns},
     SubmissionTrace,
 };
-
-type BlsPubkey = [u8; 48];
 
 #[derive(Clone)]
 struct GetHeaderEntry {
@@ -132,13 +135,14 @@ pub enum BidSorterMessage {
     /// - V2/V3 submissions
     Submission {
         bid: Bid,
-        builder_pubkey: BlsPubkey,
+        builder_pubkey: BlsPublicKeyBytes,
         slot: u64,
         header: BuilderBid,
         is_cancellable: bool,
         /// Preferences related to block merging.
         merging_preferences: BlockMergingPreferences,
         simulation_time_ns: u64,
+        before_sorter_ns: u64,
     },
     /// Demotion of a builder pubkey, all its bids are invalidated for this slot
     Demotion(BlsPublicKey),
@@ -153,6 +157,7 @@ impl BidSorterMessage {
         optimistic_version: OptimisticVersion,
         is_cancellable: bool,
         merging_preferences: BlockMergingPreferences,
+        before_sorter_ns: u64,
     ) -> Self {
         let bid_trace = submission.bid_trace();
         let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
@@ -166,12 +171,13 @@ impl BidSorterMessage {
         let header = bid_submission_to_builder_bid_unsigned(submission);
         Self::Submission {
             bid,
-            builder_pubkey: bid_trace.builder_pubkey.serialize(),
+            builder_pubkey: bid_trace.builder_pubkey.serialize().into(),
             slot: bid_trace.slot,
             header,
             is_cancellable,
             merging_preferences,
             simulation_time_ns,
+            before_sorter_ns,
         }
     }
 
@@ -179,6 +185,7 @@ impl BidSorterMessage {
         submission: &SignedHeaderSubmission,
         on_receive_ns: u64,
         is_cancellable: bool,
+        before_sorter_ns: u64,
     ) -> Self {
         let bid_trace = submission.bid_trace();
         let bid = Bid { value: bid_trace.value, on_receive_ns };
@@ -186,12 +193,13 @@ impl BidSorterMessage {
         let header = header_submission_to_builder_bid_unsigned(submission);
         Self::Submission {
             bid,
-            builder_pubkey: bid_trace.builder_pubkey.serialize(),
+            builder_pubkey: bid_trace.builder_pubkey.serialize().into(),
             slot: bid_trace.slot,
             header,
             is_cancellable,
             merging_preferences: BlockMergingPreferences::default(),
             simulation_time_ns: 0,
+            before_sorter_ns,
         }
     }
 }
@@ -266,6 +274,8 @@ struct BidSorterTelemetry {
     demoted_subs: u32,
     /// Time when bid was first received to when it arrived in the sorter
     subs_recv_time: Duration,
+    /// Time when the bid spent in the queue awaiting processing
+    subs_queue_time: Duration,
     /// Internal bid processing time of the sorter
     subs_process_time: Duration,
     top_bids: u32,
@@ -283,14 +293,14 @@ pub struct BidSorter {
     /// Head slot + 1
     curr_bid_slot: u64,
     /// All bid entries for the current slot, used for sorting
-    bids: HashMap<BlsPubkey, BidEntry>,
+    bids: HashMap<BlsPublicKeyBytes, BidEntry>,
     /// All headers received for this slot
     /// on_receive_ns -> (header, merging_preferences)
     headers: HashMap<u64, (BuilderBid, BlockMergingPreferences)>,
     /// Demoted builders in this slot for live demotions
-    demotions: HashSet<BlsPubkey>,
+    demotions: HashSet<BlsPublicKeyBytes>,
     /// Current best bid
-    curr_bid: Option<(BlsPubkey, Bid)>,
+    curr_bid: Option<(BlsPublicKeyBytes, Bid)>,
     /// Current floor bid value
     curr_floor: Option<U256>,
     /// Current response for get_header
@@ -341,6 +351,7 @@ impl BidSorter {
                     is_cancellable,
                     merging_preferences,
                     simulation_time_ns,
+                    before_sorter_ns,
                 } => {
                     if self.curr_bid_slot != slot {
                         self.local_telemetry.past_subs += 1;
@@ -359,20 +370,23 @@ impl BidSorter {
                     let recv_latency_ns =
                         recv_ns.saturating_sub(bid.on_receive_ns + simulation_time_ns);
                     let process_latency_ns = utcnow_ns().saturating_sub(recv_ns);
+                    let queue_latency_ns = recv_ns.saturating_sub(before_sorter_ns);
 
                     self.local_telemetry.valid_subs += 1;
                     self.local_telemetry.subs_recv_time += Duration::from_nanos(recv_latency_ns);
                     self.local_telemetry.subs_process_time +=
                         Duration::from_nanos(process_latency_ns);
+                    self.local_telemetry.subs_queue_time += Duration::from_nanos(queue_latency_ns);
                     if !is_cancellable {
                         self.local_telemetry.non_cancel_bids += 1;
                     }
 
                     BID_SORTER_RECV_LATENCY_US.observe(recv_latency_ns as f64 / 1000.);
                     BID_SORTER_PROCESS_LATENCY_US.observe(process_latency_ns as f64 / 1000.);
+                    BID_SORTER_QUEUE_LATENCY_US.observe(queue_latency_ns as f64 / 1000.);
                 }
                 BidSorterMessage::Demotion(demoted) => {
-                    let demoted = demoted.serialize();
+                    let demoted = demoted.serialize().into();
                     if !self.demotions.insert(demoted) {
                         // already demoted
                         self.local_telemetry.duplicate_demotions += 1;
@@ -391,7 +405,12 @@ impl BidSorter {
         }
     }
 
-    fn process_header(&mut self, new_pubkey: BlsPubkey, new_bid: Bid, is_cancellable: bool) {
+    fn process_header(
+        &mut self,
+        new_pubkey: BlsPublicKeyBytes,
+        new_bid: Bid,
+        is_cancellable: bool,
+    ) {
         match self.bids.entry(new_pubkey) {
             Entry::Occupied(mut entry) => {
                 let entry = entry.get_mut();
@@ -428,7 +447,7 @@ impl BidSorter {
 
     /// This is only for in-slot demotions. For builder that were demoted in a past slot we don't
     /// expect to receive optimistic bids here
-    fn process_demotion(&mut self, demoted: BlsPubkey) {
+    fn process_demotion(&mut self, demoted: BlsPublicKeyBytes) {
         // remove entire entry for this builder
         let Some(entry) = self.bids.remove(&demoted) else {
             return;
@@ -513,7 +532,7 @@ impl BidSorter {
         self.shared_floor.reset();
     }
 
-    fn update_top_bid(&mut self, builder_pubkey: BlsPubkey, bid: Bid) {
+    fn update_top_bid(&mut self, builder_pubkey: BlsPublicKeyBytes, bid: Bid) {
         let Some((h, merging_preferences)) = self.headers.get(&bid.on_receive_ns) else {
             // this should never happen
             return;
@@ -525,7 +544,7 @@ impl BidSorter {
             block_number: h.header().block_number(),
             block_hash: h.header().block_hash().0,
             parent_hash: h.header().parent_hash().0,
-            builder_pubkey: BlsPublicKey::deserialize(&builder_pubkey).unwrap(), // TODO!!: use PublicKeyBytes
+            builder_pubkey,
             fee_recipient: h.header().fee_recipient(),
             value: bid.value,
         }
@@ -551,6 +570,7 @@ impl BidSorter {
         let total_subs = tel.valid_subs + tel.past_subs + tel.demoted_subs;
         let avg_sub_recv = avg_duration(tel.subs_recv_time, total_subs);
         let avg_sub_process = avg_duration(tel.subs_process_time, tel.valid_subs);
+        let avg_sub_queue = avg_duration(tel.subs_queue_time, tel.valid_subs);
         let avg_demotion_process = avg_duration(tel.demotions_process_time, tel.new_demotions);
 
         info!(
@@ -560,6 +580,7 @@ impl BidSorter {
             demoted_subs = tel.demoted_subs,
             ?avg_sub_process,
             ?avg_sub_recv,
+            ?avg_sub_queue,
             top_bids = tel.top_bids,
             non_cancel_bids = tel.non_cancel_bids,
             new_demotions = tel.new_demotions,

@@ -17,6 +17,7 @@ use helix_database::types::BuilderInfoDocument;
 use helix_types::{
     maybe_upgrade_execution_payload, BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs,
 };
+use http::HeaderValue;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
 use tracing::{error, info, instrument, warn};
@@ -28,6 +29,7 @@ type BidTraceKey = (u64, BlsPublicKey, B256);
 
 const ESTIMATED_TRUSTED_PROPOSERS: usize = 200_000;
 const ESTIMATED_BID_UPPER_BOUND: usize = 10_000;
+const ESTIMATED_BUILDER_INFOS_UPPER_BOUND: usize = 1000;
 const MAX_PRIMEV_PROPOSERS: usize = 64;
 
 #[derive(Clone)]
@@ -38,6 +40,8 @@ pub struct LocalCache {
     last_delivered_slot: Arc<AtomicU64>,
     last_delivered_hash: Arc<RwLock<Option<B256>>>,
     builder_info_cache: Arc<DashMap<BlsPublicKey, BuilderInfo>>,
+    /// Api key -> builder pubkey
+    api_key_cache: Arc<DashMap<HeaderValue, Vec<BlsPublicKey>>>,
     trusted_proposers: Arc<DashMap<BlsPublicKey, ProposerInfo>>,
     execution_payload_cache: Arc<DashMap<ExecutionPayloadKey, PayloadAndBlobs>>,
     payload_address_cache: Arc<DashMap<B256, (BlsPublicKey, Vec<u8>)>>,
@@ -51,17 +55,16 @@ pub struct LocalCache {
 
 #[allow(dead_code)]
 impl LocalCache {
-    pub async fn new(
-        builder_infos: Vec<BuilderInfoDocument>,
-        sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
-    ) -> Self {
+    pub async fn new(sorter_tx: crossbeam_channel::Sender<BidSorterMessage>) -> Self {
         let (inclusion_list, mut il_recv) = broadcast::channel(1);
 
         // ensure at least one subscriber is running
         tokio::spawn(async move { while let Ok(_message) = il_recv.recv().await {} });
 
         let seen_block_hashes = Arc::new(DashSet::with_capacity(ESTIMATED_BID_UPPER_BOUND));
-        let builder_info_cache = Arc::new(DashMap::with_capacity(builder_infos.len()));
+        let builder_info_cache =
+            Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
+        let api_key_cache = Arc::new(DashMap::with_capacity(ESTIMATED_TRUSTED_PROPOSERS));
         let last_delivered_slot = Arc::new(AtomicU64::new(0));
         let last_delivered_hash = Arc::new(RwLock::new(None));
         let execution_payload_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BID_UPPER_BOUND));
@@ -78,6 +81,7 @@ impl LocalCache {
             last_delivered_slot,
             last_delivered_hash,
             builder_info_cache,
+            api_key_cache,
             trusted_proposers,
             execution_payload_cache,
             payload_address_cache,
@@ -87,9 +91,6 @@ impl LocalCache {
             proposer_duties,
             sorter_tx,
         };
-
-        // Load in builder info
-        cache.update_builder_infos(&builder_infos);
 
         cache
     }
@@ -208,6 +209,16 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
+    fn contains_api_key(&self, api_key: &HeaderValue) -> bool {
+        self.api_key_cache.contains_key(api_key)
+    }
+
+    #[instrument(skip_all)]
+    fn validate_api_key(&self, api_key: &HeaderValue, pubkey: &BlsPublicKey) -> bool {
+        self.api_key_cache.get(api_key).is_some_and(|p| p.value().contains(pubkey))
+    }
+
+    #[instrument(skip_all)]
     fn demote_builder(&self, builder_pub_key: &BlsPublicKey) -> Result<(), AuctioneerError> {
         if let Err(e) = self.sorter_tx.try_send(BidSorterMessage::Demotion(builder_pub_key.clone()))
         {
@@ -230,7 +241,16 @@ impl Auctioneer for LocalCache {
 
     #[instrument(skip_all)]
     fn update_builder_infos(&self, builder_infos: &[BuilderInfoDocument]) {
+        self.api_key_cache.clear();
+
         for builder_info in builder_infos {
+            if let Some(api_key) = builder_info.builder_info.api_key.as_ref() {
+                self.api_key_cache
+                    .entry(HeaderValue::from_str(api_key).unwrap())
+                    .or_default()
+                    .push(builder_info.pub_key.clone());
+            }
+
             self.builder_info_cache
                 .insert(builder_info.pub_key.clone(), builder_info.builder_info.clone());
         }
@@ -286,12 +306,10 @@ impl Auctioneer for LocalCache {
         self.kill_switch.load(Ordering::Relaxed)
     }
 
-    //TODO: Implement kill switch functionality. Need to add an internal api to call this.
     fn enable_kill_switch(&self) {
         self.kill_switch.store(true, Ordering::Relaxed);
     }
 
-    //TODO: Implement kill switch functionality. Need to add an internal api to call this.
     fn disable_kill_switch(&self) {
         self.kill_switch.store(false, Ordering::Relaxed);
     }
@@ -352,7 +370,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_and_check_last_slot_and_hash_delivered() {
-        let cache = LocalCache::new(Vec::new(), crossbeam_channel::bounded(1).0).await;
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
 
         let slot = 42;
         let block_hash = B256::try_from([4u8; 32].as_ref()).unwrap();
@@ -368,7 +386,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_past_slot() {
-        let cache = LocalCache::new(Vec::new(), crossbeam_channel::bounded(1).0).await;
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
 
         let slot = 42;
         let block_hash = B256::try_from([4u8; 32].as_ref()).unwrap();
@@ -383,7 +401,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_same_slot_different_hash() {
-        let cache = LocalCache::new(Vec::new(), crossbeam_channel::bounded(1).0).await;
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
 
         let slot = 42;
         let block_hash1 = B256::try_from([4u8; 32].as_ref()).unwrap();
@@ -399,7 +417,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_and_save_execution_payload() {
-        let cache = LocalCache::new(Vec::new(), crossbeam_channel::bounded(1).0).await;
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
 
         let slot = 42;
         let proposer_pub_key = BlsPublicKey::test_random();
@@ -435,7 +453,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_builder_info() {
-        let cache = LocalCache::new(Vec::new(), crossbeam_channel::bounded(1).0).await;
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
 
         let builder_pub_key = BlsPublicKey::test_random();
         let unknown_builder_pub_key = BlsPublicKey::test_random();
@@ -446,6 +464,7 @@ mod tests {
             is_optimistic_for_regional_filtering: false,
             builder_id: None,
             builder_ids: None,
+            api_key: None,
         };
 
         // Test case 1: Builder exists
@@ -472,7 +491,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_trusted_proposers_and_update_trusted_proposers() {
-        let cache = LocalCache::new(Vec::new(), crossbeam_channel::bounded(1).0).await;
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
 
         let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random());
         assert!(!is_trusted, "Failed to check trusted proposer");
@@ -505,7 +524,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_demote_non_optimistic_builder() {
-        let cache = LocalCache::new(Vec::new(), crossbeam_channel::bounded(1).0).await;
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
 
         let builder_pub_key = BlsPublicKey::test_random();
         let builder_info = BuilderInfo {
@@ -514,6 +533,7 @@ mod tests {
             is_optimistic_for_regional_filtering: false,
             builder_id: None,
             builder_ids: None,
+            api_key: None,
         };
 
         let builder_info_doc = BuilderConfig { pub_key: builder_pub_key.clone(), builder_info };
@@ -528,7 +548,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_demote_optimistic_builder() {
-        let cache = LocalCache::new(Vec::new(), crossbeam_channel::bounded(1).0).await;
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
 
         let builder_pub_key_optimistic = BlsPublicKey::test_random();
         let builder_info = BuilderInfo {
@@ -537,6 +557,7 @@ mod tests {
             is_optimistic_for_regional_filtering: false,
             builder_id: None,
             builder_ids: None,
+            api_key: None,
         };
         let builder_info_doc =
             BuilderConfig { pub_key: builder_pub_key_optimistic.clone(), builder_info };
@@ -559,7 +580,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_seen_or_insert_block_hash() {
-        let cache = LocalCache::new(Vec::new(), crossbeam_channel::bounded(1).0).await;
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
 
         let _slot = 42;
         let block_hash = B256::random();
@@ -586,7 +607,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_kill_switch() {
-        let cache = LocalCache::new(Vec::new(), crossbeam_channel::bounded(1).0).await;
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
 
         let result = cache.kill_switch_enabled();
         assert!(!result, "Kill switch should be disabled by default");

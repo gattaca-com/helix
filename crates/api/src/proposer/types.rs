@@ -96,6 +96,4 @@ pub struct PreferencesHeader {
     /// Allows validators to express a preference for whether a delay should be applied to get
     /// headers or not.
     pub header_delay: Option<bool>,
-
-    pub gossip_blobs: Option<bool>,
 }

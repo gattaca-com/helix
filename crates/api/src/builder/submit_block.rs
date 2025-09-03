@@ -27,7 +27,7 @@ use crate::{
         error::BuilderApiError,
     },
     proposer::MergingPoolMessage,
-    Api,
+    Api, HEADER_API_KEY,
 };
 
 impl<A: Api> BuilderApi<A> {
@@ -75,13 +75,19 @@ impl<A: Api> BuilderApi<A> {
         debug!(%head_slot, timestamp_request_start = trace.receive);
 
         // Decode the incoming request body into a payload
+        let (parts, body) = req.into_parts();
         let (payload_with_merging_data, is_cancellations_enabled) =
-            decode_payload(req, &mut trace).await?;
+            decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
 
         let payload = payload_with_merging_data.submission;
         let merging_data = payload_with_merging_data.merging_data;
 
         ApiMetrics::cancellable_bid(is_cancellations_enabled);
+
+        let skip_sigverify = parts
+            .headers
+            .get(HEADER_API_KEY)
+            .is_some_and(|key| api.auctioneer.validate_api_key(key, payload.builder_public_key()));
 
         let block_hash = payload.message().block_hash;
 
@@ -120,7 +126,7 @@ impl<A: Api> BuilderApi<A> {
         trace!("fetched payload attributes");
 
         // Handle duplicates.
-        if let Err(err) = api.check_for_duplicate_block_hash(&block_hash).await {
+        if let Err(err) = api.check_for_duplicate_block_hash(&block_hash) {
             match err {
                 BuilderApiError::DuplicateBlockHash { block_hash } => {
                     // We dont return the error here as we want to continue processing the request.
@@ -147,7 +153,7 @@ impl<A: Api> BuilderApi<A> {
         trace.floor_bid_checks = utcnow_ns();
 
         // Fetch builder info
-        let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
+        let builder_info = api.fetch_builder_info(payload.builder_public_key());
         trace!(?builder_info, "fetched builder info");
         tracing::Span::current()
             .record("builder_id", tracing::field::display(builder_info.builder_id()));
@@ -188,12 +194,20 @@ impl<A: Api> BuilderApi<A> {
         trace!("sanity check passed");
         trace.pre_checks = utcnow_ns();
 
+        api.verify_signature(&payload, skip_sigverify, &mut trace)?;
+
+        api.check_and_update_sequence_number(
+            payload.builder_public_key(),
+            head_slot + 1,
+            &parts.headers,
+        )?;
+
         let was_simulated_optimistically = api
-            .verify_submitted_block(
+            .simulate_submission(
                 &payload,
-                next_duty,
                 &builder_info,
                 &mut trace,
+                next_duty.entry,
                 &payload_attributes,
             )
             .await?;
@@ -214,6 +228,7 @@ impl<A: Api> BuilderApi<A> {
             optimistic_version,
             is_cancellations_enabled,
             merging_preferences,
+            utcnow_ns(),
         )) {
             error!(?err, "failed to send submission to sorter");
             return Err(BuilderApiError::InternalError);

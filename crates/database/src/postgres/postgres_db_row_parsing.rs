@@ -158,7 +158,6 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                     ),
                     header_delay: row.get::<&str, bool>("header_delay"),
                     delay_ms: parse_i64_to_u64(row.get::<&str, i64>("delay_ms")).ok(),
-                    gossip_blobs: row.get::<&str, bool>("gossip_blobs"),
                     disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
                 },
             },
@@ -193,6 +192,7 @@ impl FromRow for BuilderInfo {
             builder_ids: row
                 .get::<&str, Option<Vec<&str>>>("builder_ids")
                 .map(|ids| ids.into_iter().map(|id| id.to_string()).collect()),
+            api_key: row.get::<&str, Option<&str>>("api_key").map(|s| s.to_string()),
         })
     }
 }
@@ -235,7 +235,6 @@ impl FromRow for SignedValidatorRegistrationEntry {
                     ),
                     header_delay: row.get::<&str, bool>("header_delay"),
                     delay_ms: parse_i64_to_u64(row.get::<&str, i64>("delay_ms")).ok(),
-                    gossip_blobs: row.get::<&str, bool>("gossip_blobs"),
                     disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
                 },
             },

@@ -51,6 +51,8 @@ pub struct RelayConfig {
     #[serde(default)]
     pub v3_port: Option<u16>,
     pub inclusion_list: Option<InclusionListConfig>,
+    pub housekeeper: bool,
+    pub admin_token: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -186,10 +188,6 @@ fn default_namespace() -> String {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BeaconClientConfig {
     pub url: Url,
-    /// Bool representing if this beacon client is configured to
-    /// handle async blob gossiping.
-    #[serde(default = "default_bool::<false>")]
-    pub gossip_blobs_enabled: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -501,13 +499,11 @@ fn test_config() {
         url: "http://localhost:8080".to_string(),
         namespace: "test".to_string(),
     }];
-    config.beacon_clients.push(BeaconClientConfig {
-        url: Url::parse("http://localhost:8080").unwrap(),
-        gossip_blobs_enabled: false,
-    });
+    config
+        .beacon_clients
+        .push(BeaconClientConfig { url: Url::parse("http://localhost:8080").unwrap() });
     config.broadcasters.push(BroadcasterConfig::BeaconClient(BeaconClientConfig {
         url: Url::parse("http://localhost:8080").unwrap(),
-        gossip_blobs_enabled: false,
     }));
     config.network_config = NetworkConfig::Custom {
         dir_path: "test".to_string(),
@@ -524,7 +520,6 @@ fn test_config() {
         trusted_builders: None,
         header_delay: true,
         delay_ms: Some(1000),
-        gossip_blobs: false,
         disable_inclusion_lists: false,
     };
     config.router_config = RouterConfig {

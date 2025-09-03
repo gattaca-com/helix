@@ -16,6 +16,7 @@ use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
 use service::run_api_service;
 
+pub mod admin_service;
 pub mod builder;
 pub mod constants;
 pub mod gossip;
@@ -43,6 +44,7 @@ pub fn start_api_service<A: Api>(
     multi_beacon_client: Arc<MultiBeaconClient>,
     metadata_provider: Arc<A::MetadataProvider>,
     current_slot_info: CurrentSlotInfo,
+    known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
@@ -58,12 +60,17 @@ pub fn start_api_service<A: Api>(
         relay_signing_context,
         multi_beacon_client,
         metadata_provider,
+        known_validators_loaded,
         terminating,
         sorter_tx,
         top_bid_tx,
         shared_best_header,
         shared_floor,
     ));
+}
+
+pub fn start_admin_service<A: Auctioneer + 'static>(auctioneer: Arc<A>, config: &RelayConfig) {
+    tokio::spawn(admin_service::run_admin_service(auctioneer, config.clone()));
 }
 
 pub trait Api: Clone + Send + Sync + 'static {
@@ -74,3 +81,5 @@ pub trait Api: Clone + Send + Sync + 'static {
 
 /// Timeout in milliseconds from when the call started
 pub const HEADER_TIMEOUT_MS: &str = "x-timeout-ms";
+pub const HEADER_API_KEY: &str = "x-api-key";
+pub const HEADER_SEQUENCE: &str = "x-sequence";

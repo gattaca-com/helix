@@ -129,7 +129,7 @@ impl<A: Api> BuilderApi<A> {
             api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), block_hash)?;
 
         // Fetch builder info
-        let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
+        let builder_info = api.fetch_builder_info(payload.builder_public_key());
 
         // Submit header can only be processed optimistically.
         // Make sure that the builder has enough collateral to cover the submission.
@@ -139,7 +139,7 @@ impl<A: Api> BuilderApi<A> {
         }
 
         // Handle duplicates.
-        if let Err(err) = api.check_for_duplicate_block_hash(block_hash).await {
+        if let Err(err) = api.check_for_duplicate_block_hash(block_hash) {
             match err {
                 BuilderApiError::DuplicateBlockHash { block_hash } => {
                     // We dont return the error here as we want to continue processing the request.
@@ -219,6 +219,7 @@ impl<A: Api> BuilderApi<A> {
             &payload,
             trace.receive,
             is_cancellations_enabled,
+            utcnow_ns(),
         )) {
             error!(?err, "failed to send submission to sorter");
             return Err(BuilderApiError::InternalError);

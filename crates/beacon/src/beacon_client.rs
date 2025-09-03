@@ -3,9 +3,7 @@ use std::{sync::Arc, time::Duration};
 use ::ssz::Encode;
 use alloy_primitives::B256;
 use futures::StreamExt;
-use helix_common::{
-    beacon_api::PublishBlobsRequest, BeaconClientConfig, ProposerDuty, ValidatorSummary,
-};
+use helix_common::{BeaconClientConfig, ProposerDuty, ValidatorSummary};
 use helix_types::{ForkName, Slot, VersionedSignedProposal};
 use reqwest::header::CONTENT_TYPE;
 use reqwest_eventsource::EventSource;
@@ -228,31 +226,6 @@ impl BeaconClient {
             }
         }
     }
-
-    pub async fn publish_blobs(
-        &self,
-        blob_sidecars: PublishBlobsRequest,
-    ) -> Result<u16, BeaconClientError> {
-        if !self.config.gossip_blobs_enabled {
-            return Err(BeaconClientError::RequestNotSupported);
-        }
-
-        let target = self.config.url.join("prysm/v1/beacon/blobs")?;
-        let body_bytes = serde_json::to_vec(&blob_sidecars)?;
-        let request =
-            self.http.post(target).header(CONTENT_TYPE, "application/json").body(body_bytes);
-        let response = request.send().await?;
-
-        match response.status() {
-            reqwest::StatusCode::OK | reqwest::StatusCode::ACCEPTED => {
-                Ok(response.status().as_u16())
-            }
-            _ => {
-                let api_err = response.json::<ApiError>().await?;
-                Err(BeaconClientError::Api(api_err))
-            }
-        }
-    }
 }
 
 pub mod mock_beacon_node {
@@ -281,7 +254,6 @@ pub mod mock_beacon_node {
         pub fn beacon_client(&self) -> BeaconClient {
             BeaconClient::from_config(BeaconClientConfig {
                 url: self.server.base_url().parse().unwrap(),
-                gossip_blobs_enabled: false,
             })
         }
 
@@ -318,7 +290,6 @@ pub mod mock_beacon_node {
 #[cfg(test)]
 mod beacon_client_tests {
     use mockito::Matcher;
-    use tokio::sync::broadcast::channel;
     use url::Url;
 
     use super::*;
@@ -334,7 +305,6 @@ mod beacon_client_tests {
 
         let client = BeaconClient::from_config(BeaconClientConfig {
             url: Url::parse(&server.url()).unwrap(),
-            gossip_blobs_enabled: false,
         });
         let result = client.sync_status().await;
 
@@ -358,7 +328,6 @@ mod beacon_client_tests {
 
         let client = BeaconClient::from_config(BeaconClientConfig {
             url: Url::parse(&server.url()).unwrap(),
-            gossip_blobs_enabled: false,
         });
         let result = client.get_state_validators(StateId::Genesis).await;
 
@@ -380,7 +349,6 @@ mod beacon_client_tests {
 
         let client = BeaconClient::from_config(BeaconClientConfig {
             url: Url::parse(&server.url()).unwrap(),
-            gossip_blobs_enabled: false,
         });
         let result = client.get_proposer_duties(225740).await;
 
@@ -406,7 +374,7 @@ mod beacon_client_tests {
 
     //     let client = BeaconClient::from_config(BeaconClientConfig {
     //         url: Url::parse(&server.url()).unwrap(),
-    //         gossip_blobs_enabled: false,
+    //
     //     });
 
     //     let test_block = VersionedSignedProposal::default();
@@ -422,78 +390,4 @@ mod beacon_client_tests {
     //     let code = result.unwrap();
     //     assert_eq!(code, 200);
     // }
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_subscribe_to_head_events_live() {
-        let client = get_test_client();
-        let (tx, mut rx) = channel::<HeadEventData>(1);
-
-        tokio::spawn(async move {
-            match client.subscribe_to_head_events(tx).await {
-                Ok(_) => println!("Subscription completed"),
-                Err(err) => panic!("Failed to subscribe to head events: {:?}", err),
-            }
-        });
-
-        loop {
-            match rx.recv().await {
-                Ok(head_event) => {
-                    println!("Passed: {:?}", head_event);
-                    return;
-                }
-                Err(err) => {
-                    println!("Error: {:?}", err);
-                }
-            }
-        }
-    }
-
-    #[tokio::test]
-    #[ignore]
-    async fn test_subscribe_to_payload_events_live() {
-        let client = get_test_client();
-        let (tx, mut rx) = channel::<PayloadAttributesEvent>(1);
-
-        tokio::spawn(async move {
-            match client.subscribe_to_payload_attributes_events(tx).await {
-                Ok(_) => println!("Subscription completed"),
-                Err(err) => panic!("Failed to subscribe to head events: {:?}", err),
-            }
-        });
-
-        loop {
-            match rx.recv().await {
-                Ok(head_event) => {
-                    println!("Passed: {:?}", head_event);
-                    return;
-                }
-                Err(err) => {
-                    println!("Error: {:?}", err);
-                }
-            }
-        }
-    }
-
-    #[tokio::test]
-    #[ignore]
-    pub async fn test_get_live_response() {
-        let client = get_test_client();
-        match client.sync_status().await {
-            Ok(status) => {
-                println!("Passed: {:?}", status);
-            }
-            Err(err) => {
-                println!("Failed: {:?}", err);
-            }
-        }
-    }
-
-    fn get_test_client() -> BeaconClient {
-        let config = BeaconClientConfig {
-            url: Url::parse("http://localhost:5052").unwrap(),
-            gossip_blobs_enabled: true,
-        };
-        BeaconClient::from_config(config)
-    }
 }

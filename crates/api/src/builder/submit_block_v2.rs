@@ -24,7 +24,7 @@ use crate::{
         error::BuilderApiError,
         v2_check::V2SubMessage,
     },
-    Api,
+    Api, HEADER_API_KEY,
 };
 
 impl<A: Api> BuilderApi<A> {
@@ -53,8 +53,15 @@ impl<A: Api> BuilderApi<A> {
         trace.metadata = api.metadata_provider.get_metadata(req.headers());
 
         // Decode the incoming request body into a payload
-        let (payload_with_merging_data, _) = decode_payload(req, &mut trace).await?;
+        let (parts, body) = req.into_parts();
+        let (payload_with_merging_data, _) =
+            decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
         let payload = payload_with_merging_data.submission;
+
+        let skip_sigverify = parts
+            .headers
+            .get(HEADER_API_KEY)
+            .is_some_and(|key| api.auctioneer.validate_api_key(key, payload.builder_public_key()));
 
         tracing::Span::current().record("slot", payload.slot().as_u64() as i64);
         tracing::Span::current()
@@ -68,7 +75,8 @@ impl<A: Api> BuilderApi<A> {
             "payload decoded",
         );
 
-        Self::handle_optimistic_payload(api, payload, trace, OptimisticVersion::V2).await
+        Self::handle_optimistic_payload(api, payload, trace, OptimisticVersion::V2, skip_sigverify)
+            .await
     }
 
     pub(crate) async fn handle_optimistic_payload(
@@ -76,6 +84,7 @@ impl<A: Api> BuilderApi<A> {
         payload: SignedBidSubmission,
         mut trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,
+        skip_sigverify: bool,
     ) -> Result<StatusCode, BuilderApiError> {
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
 
@@ -113,7 +122,7 @@ impl<A: Api> BuilderApi<A> {
             api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), &block_hash)?;
 
         // Fetch builder info
-        let builder_info = api.fetch_builder_info(payload.builder_public_key()).await;
+        let builder_info = api.fetch_builder_info(payload.builder_public_key());
 
         // submit_block_v2 can only be processed optimistically.
         // Make sure that the builder has enough collateral to cover the submission.
@@ -188,12 +197,14 @@ impl<A: Api> BuilderApi<A> {
         }
         trace.pre_checks = utcnow_ns();
 
+        api.verify_signature(&payload, skip_sigverify, &mut trace)?;
+
         match api
-            .verify_submitted_block(
+            .simulate_submission(
                 &payload,
-                next_duty,
                 &builder_info,
                 &mut trace,
+                next_duty.entry,
                 &payload_attributes,
             )
             .await

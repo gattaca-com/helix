@@ -5,7 +5,6 @@ mod block_merging;
 mod error;
 mod get_header;
 mod get_payload;
-mod gossip;
 mod register;
 mod types;
 
