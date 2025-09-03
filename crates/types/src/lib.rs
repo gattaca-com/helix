@@ -2,6 +2,7 @@ mod bid_submission;
 mod blobs;
 mod clock;
 mod error;
+mod hydration;
 mod spec;
 mod test_utils;
 mod validator;
@@ -13,6 +14,7 @@ pub use bid_submission::*;
 pub use blobs::*;
 pub use clock::*;
 pub use error::*;
+pub use hydration::*;
 pub use lh_kzg::{KzgCommitment, KzgProof};
 pub use lh_test_random::TestRandom;
 pub use lh_types::{

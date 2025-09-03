@@ -74,8 +74,15 @@ impl<A: Api> BuilderApi<A> {
 
         // Decode the incoming request body into a payload
         let (parts, body) = req.into_parts();
-        let (payload, is_cancellations_enabled) =
-            decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
+        let (payload, is_cancellations_enabled) = decode_payload(
+            head_slot.as_u64() + 1,
+            &api,
+            &parts.uri,
+            &parts.headers,
+            body,
+            &mut trace,
+        )
+        .await?;
         ApiMetrics::cancellable_bid(is_cancellations_enabled);
 
         let skip_sigverify = parts

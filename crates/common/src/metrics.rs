@@ -428,6 +428,22 @@ lazy_static! {
         &RELAY_METRICS_REGISTRY
     ).unwrap();
 
+    //////////////// HYDRATION ////////////////
+    pub static ref HYDRATION_LATENCY: Histogram = register_histogram_with_registry!(
+        "hydration_latency_us",
+        "Latency of hydration in us",
+        vec![1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 25_000., 50_000., 100_000., 500_000., 1_000_000., 5_000_000., 10_000_000., 50_000_000., 100_000_000.,],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref HYDRATION_CACHE_HITS: IntCounterVec = register_int_counter_vec_with_registry!(
+        "hydration_cache_hits",
+        "Count of hydration cache hits",
+        &["order_type"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 
 }
 

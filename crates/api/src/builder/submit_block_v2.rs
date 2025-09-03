@@ -54,7 +54,9 @@ impl<A: Api> BuilderApi<A> {
 
         // Decode the incoming request body into a payload
         let (parts, body) = req.into_parts();
-        let (payload, _) = decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
+        // v2 submissions are never hydrated
+        let (payload, _) =
+            decode_payload(0, &api, &parts.uri, &parts.headers, body, &mut trace).await?;
 
         let skip_sigverify = parts
             .headers

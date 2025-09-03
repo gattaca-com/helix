@@ -79,6 +79,7 @@ rand = "0.8"
 refinery = { version = "0.8", features = ["tokio-postgres"] }
 reqwest = { version = "0.11.23", features = ["blocking", "json", "native-tls-vendored", "stream"] }
 reqwest-eventsource = "0.5"
+rustc-hash = "2.1.1"
 serde = { version = "1.0.191", features = ["derive"] }
 serde_json = "1.0.106"
 serde_yaml = "0.9.25"

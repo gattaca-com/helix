@@ -10,11 +10,11 @@ use helix_common::metrics::{
     SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
     SUBMISSION_DECOMPRESSED_BYTES,
 };
-use helix_types::SignedBidSubmission;
 use http::{
     header::{CONTENT_ENCODING, CONTENT_TYPE},
     HeaderMap, HeaderValue,
 };
+use serde::de::DeserializeOwned;
 use ssz::Decode;
 use tracing::trace;
 use zstd::{
@@ -80,7 +80,10 @@ impl SubmissionDecoder {
     }
 
     // TODO: pass a buffer pool to avoid allocations
-    pub fn decode(mut self, body: Bytes) -> Result<SignedBidSubmission, BuilderApiError> {
+    pub fn decode<T: Decode + DeserializeOwned>(
+        mut self,
+        body: Bytes,
+    ) -> Result<T, BuilderApiError> {
         let start = Instant::now();
         self.bytes_before_decompress = body.len();
         let decompressed = match self.compression {
@@ -115,8 +118,8 @@ impl SubmissionDecoder {
             "decompressed payload"
         );
 
-        let payload: SignedBidSubmission = match self.encoding {
-            Encoding::Ssz => SignedBidSubmission::from_ssz_bytes(&decompressed)
+        let payload: T = match self.encoding {
+            Encoding::Ssz => T::from_ssz_bytes(&decompressed)
                 .map_err(|err| BuilderApiError::SszDeserializeError(format!("{err:?}")))?,
             Encoding::Json => serde_json::from_slice(&decompressed)?,
         };

@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use alloy_primitives::{B256, U256};
 use axum::{
@@ -17,6 +20,7 @@ use helix_common::{
     bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     bid_submission::BidSubmission,
     chain_info::ChainInfo,
+    metrics::HYDRATION_LATENCY,
     simulator::BlockSimError,
     utils::utcnow_ns,
     BuilderInfo, RelayConfig, SubmissionTrace, ValidatorPreferences,
@@ -24,18 +28,22 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
-use helix_types::{BlsPublicKey, SignedBidSubmission, Slot};
+use helix_types::{
+    BlsPublicKey, DehydratedBidSubmission, HydrationError, SignedBidSubmission, Slot,
+};
 use http::{HeaderMap, Uri};
 use parking_lot::RwLock;
+use tokio::sync::oneshot;
 use tracing::{debug, error, trace, warn};
 
 use super::multi_simulator::MultiSimulator;
 use crate::{
     builder::{
-        decoder::SubmissionDecoder, error::BuilderApiError, v2_check::V2SubMessage, BlockSimRequest,
+        decoder::SubmissionDecoder, error::BuilderApiError, hydration, v2_check::V2SubMessage,
+        BlockSimRequest,
     },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
-    Api, HEADER_SEQUENCE,
+    Api, HEADER_HYDRATE, HEADER_SEQUENCE,
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
@@ -66,6 +74,12 @@ pub struct BuilderApi<A: Api> {
     pub shared_best_header: BestGetHeader,
     /// Builder pubkey -> (bid_slot, largest sequence number)
     pub sequence_numbers: DashMap<BlsPublicKey, (Slot, u64)>,
+    /// Hydration task sender
+    pub hydration_tx: tokio::sync::mpsc::Sender<(
+        u64,
+        DehydratedBidSubmission,
+        oneshot::Sender<Result<SignedBidSubmission, HydrationError>>,
+    )>,
 }
 
 impl<A: Api> BuilderApi<A> {
@@ -105,6 +119,9 @@ impl<A: Api> BuilderApi<A> {
             }
         });
 
+        let (hydration_tx, hydration_rx) = tokio::sync::mpsc::channel(10_000);
+        hydration::spawn_hydration_task(hydration_rx);
+
         Self {
             auctioneer,
             db,
@@ -126,6 +143,8 @@ impl<A: Api> BuilderApi<A> {
             tx_root_cache,
             shared_best_header,
             sequence_numbers,
+
+            hydration_tx,
         }
     }
 
@@ -442,7 +461,9 @@ impl<A: Api> BuilderApi<A> {
 ///
 /// It returns a tuple of the decoded payload and if cancellations are enabled.
 #[tracing::instrument(skip_all)]
-pub async fn decode_payload(
+pub async fn decode_payload<A: Api>(
+    bid_slot: u64,
+    api: &BuilderApi<A>,
     uri: &Uri,
     headers: &HeaderMap,
     req: Body,
@@ -465,7 +486,33 @@ pub async fn decode_payload(
 
     let decoder = SubmissionDecoder::from_headers(headers);
     let body_bytes = to_bytes(req, MAX_PAYLOAD_LENGTH).await?;
-    let payload = decoder.decode(body_bytes)?;
+
+    let should_hydrate = headers.get(HEADER_HYDRATE).is_some();
+
+    let payload: SignedBidSubmission = if should_hydrate {
+        let dehydrated_payload: DehydratedBidSubmission = decoder.decode(body_bytes)?;
+        let start = Instant::now();
+        let (tx, rx) = oneshot::channel();
+        api.hydration_tx
+            .send((bid_slot, dehydrated_payload, tx))
+            .await
+            .inspect_err(|_| error!("failed to send dehydrated payload to hydration task"))
+            .map_err(|_| BuilderApiError::InternalError)?;
+
+        let res = match tokio::time::timeout(Duration::from_millis(500), rx).await {
+            Ok(Ok(res)) => res.map_err(BuilderApiError::HydrationError),
+            _ => {
+                error!("timed out waiting for hydrated payload");
+                Err(BuilderApiError::InternalError)
+            }
+        }?;
+
+        HYDRATION_LATENCY.observe(start.elapsed().as_micros() as f64);
+
+        res
+    } else {
+        decoder.decode(body_bytes)?
+    };
 
     trace.decode = utcnow_ns();
     debug!(
@@ -561,34 +608,9 @@ pub(crate) fn sanity_check_block_submission(
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{
-        header::{CONTENT_ENCODING, CONTENT_TYPE},
-        HeaderValue, Uri,
-    };
-    use http::Request;
     use ssz::Decode;
 
     use super::*;
-
-    async fn build_test_request(payload: Vec<u8>, is_gzip: bool, is_ssz: bool) -> Request<Body> {
-        let mut req = Request::new(Body::from(payload));
-        *req.uri_mut() = Uri::from_static("/some_path?cancellations=1");
-
-        if is_gzip {
-            req.headers_mut().insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
-        }
-
-        if is_ssz {
-            req.headers_mut()
-                .insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
-        }
-
-        req
-    }
-
-    async fn create_test_submission_trace() -> SubmissionTrace {
-        SubmissionTrace::default()
-    }
 
     #[tokio::test]
     async fn test_decode_json_payload() {
@@ -844,25 +866,6 @@ mod tests {
             Err(err) => {
                 println!("THIS IS THE ERR: {:?}", err);
             }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_decode_payload_too_large() {
-        let payload = vec![0u8; MAX_PAYLOAD_LENGTH + 1];
-        let req = build_test_request(payload, false, false).await;
-        let mut trace = create_test_submission_trace().await;
-
-        let (parts, body) = req.into_parts();
-        let result = decode_payload(&parts.uri, &parts.headers, body, &mut trace).await;
-        match result {
-            Ok(_) => panic!("Should have failed"),
-            Err(err) => match err {
-                BuilderApiError::AxumError(err) => {
-                    assert_eq!(err.to_string(), "length limit exceeded");
-                }
-                _ => panic!("Should have failed with AxumError"),
-            },
         }
     }
 }

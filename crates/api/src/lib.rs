@@ -81,3 +81,4 @@ pub trait Api: Clone + Send + Sync + 'static {
 pub const HEADER_TIMEOUT_MS: &str = "x-timeout-ms";
 pub const HEADER_API_KEY: &str = "x-api-key";
 pub const HEADER_SEQUENCE: &str = "x-sequence";
+pub const HEADER_HYDRATE: &str = "x-hydrate";
