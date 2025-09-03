@@ -51,12 +51,12 @@ pub struct DehydratedBidSubmissionElectra {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 struct DehydratedBlobs {
-    blobs: Vec<KzgProof>,
+    proofs: Vec<KzgProof>,
     new_items: Vec<BlobItem>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-pub struct BlobItem {
+struct BlobItem {
     proof: KzgProof,
     commitment: KzgCommitment,
     blob: Blob,
@@ -118,8 +118,8 @@ impl DehydratedBidSubmissionElectra {
             return Err(err);
         }
 
-        let mut sidecar = BlobsBundle::with_capacity(self.blobs_bundle.blobs.len());
-        for (index, proof) in self.blobs_bundle.blobs.into_iter().enumerate() {
+        let mut sidecar = BlobsBundle::with_capacity(self.blobs_bundle.proofs.len());
+        for (index, proof) in self.blobs_bundle.proofs.into_iter().enumerate() {
             let Some(item) = order_cache.blobs.get(&proof) else {
                 return Err(HydrationError::UnknownBlobHash { proof, index });
             };
@@ -157,8 +157,8 @@ pub struct HydrationCache {
 impl HydrationCache {
     pub fn new() -> Self {
         Self {
-            transactions: FxHashMap::with_capacity_and_hasher(1000, Default::default()),
-            blobs: FxHashMap::with_capacity_and_hasher(1000, Default::default()),
+            transactions: FxHashMap::with_capacity_and_hasher(10_000, Default::default()),
+            blobs: FxHashMap::with_capacity_and_hasher(1_000, Default::default()),
         }
     }
 
