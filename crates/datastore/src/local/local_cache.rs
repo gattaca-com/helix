@@ -40,7 +40,7 @@ pub struct LocalCache {
     last_delivered_hash: Arc<RwLock<Option<B256>>>,
     builder_info_cache: Arc<DashMap<BlsPublicKey, BuilderInfo>>,
     /// Api key -> builder pubkey
-    api_key_cache: Arc<DashMap<HeaderValue, BlsPublicKey>>,
+    api_key_cache: Arc<DashMap<HeaderValue, Vec<BlsPublicKey>>>,
     trusted_proposers: Arc<DashMap<BlsPublicKey, ProposerInfo>>,
     execution_payload_cache: Arc<DashMap<ExecutionPayloadKey, PayloadAndBlobs>>,
     payload_address_cache: Arc<DashMap<B256, (BlsPublicKey, Vec<u8>)>>,
@@ -219,7 +219,7 @@ impl Auctioneer for LocalCache {
 
     #[instrument(skip_all)]
     fn validate_api_key(&self, api_key: &HeaderValue, pubkey: &BlsPublicKey) -> bool {
-        self.api_key_cache.get(api_key).is_some_and(|p| p.value() == pubkey)
+        self.api_key_cache.get(api_key).is_some_and(|p| p.value().contains(pubkey))
     }
 
     #[instrument(skip_all)]
@@ -250,7 +250,9 @@ impl Auctioneer for LocalCache {
         for builder_info in builder_infos {
             if let Some(api_key) = builder_info.builder_info.api_key.as_ref() {
                 self.api_key_cache
-                    .insert(HeaderValue::from_str(api_key).unwrap(), builder_info.pub_key.clone());
+                    .entry(HeaderValue::from_str(api_key).unwrap())
+                    .or_default()
+                    .push(builder_info.pub_key.clone());
             }
 
             self.builder_info_cache
