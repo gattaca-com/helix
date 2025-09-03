@@ -55,16 +55,15 @@ pub struct LocalCache {
 
 #[allow(dead_code)]
 impl LocalCache {
-    pub async fn new(
-        sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
-    ) -> Self {
+    pub async fn new(sorter_tx: crossbeam_channel::Sender<BidSorterMessage>) -> Self {
         let (inclusion_list, mut il_recv) = broadcast::channel(1);
 
         // ensure at least one subscriber is running
         tokio::spawn(async move { while let Ok(_message) = il_recv.recv().await {} });
 
         let seen_block_hashes = Arc::new(DashSet::with_capacity(ESTIMATED_BID_UPPER_BOUND));
-        let builder_info_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
+        let builder_info_cache =
+            Arc::new(DashMap::with_capacity(ESTIMATED_BUILDER_INFOS_UPPER_BOUND));
         let api_key_cache = Arc::new(DashMap::with_capacity(ESTIMATED_TRUSTED_PROPOSERS));
         let last_delivered_slot = Arc::new(AtomicU64::new(0));
         let last_delivered_hash = Arc::new(RwLock::new(None));
@@ -76,7 +75,7 @@ impl LocalCache {
         let kill_switch = Arc::new(AtomicBool::new(false));
         let proposer_duties = Arc::new(RwLock::new(Vec::new()));
 
-        let cache = Self {
+        Self {
             inclusion_list,
             seen_block_hashes,
             last_delivered_slot,
@@ -91,9 +90,7 @@ impl LocalCache {
             kill_switch,
             proposer_duties,
             sorter_tx,
-        };
-
-        cache
+        }
     }
 
     fn get_last_hash_delivered(&self) -> Option<B256> {

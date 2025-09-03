@@ -4,14 +4,20 @@ pub mod postgres;
 pub mod traits;
 pub mod types;
 
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use helix_common::RelayConfig;
 use postgres::postgres_db_service::PostgresDatabaseService;
 pub use traits::*;
 pub use types::*;
 
-pub async fn start_db_service(config: &RelayConfig, known_validators_loaded: Arc<AtomicBool>) -> eyre::Result<Arc<PostgresDatabaseService>> {
+pub async fn start_db_service(
+    config: &RelayConfig,
+    known_validators_loaded: Arc<AtomicBool>,
+) -> eyre::Result<Arc<PostgresDatabaseService>> {
     let mut postgres_db = PostgresDatabaseService::from_relay_config(config).await;
     postgres_db.init_forever().await;
 
