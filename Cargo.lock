@@ -3878,6 +3878,16 @@ dependencies = [
 [[package]]
 name = "helix-p2p"
 version = "0.0.1"
+dependencies = [
+ "axum 0.8.4",
+ "futures 0.3.31",
+ "helix-common",
+ "helix-types",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-tungstenite 0.27.0",
+ "tracing",
+]
 
 [[package]]
 name = "helix-types"

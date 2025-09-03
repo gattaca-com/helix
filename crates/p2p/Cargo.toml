@@ -7,3 +7,15 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+axum.workspace = true
+futures.workspace = true
+helix-common.workspace = true
+helix-types.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+
+[[bin]]
+name = "helix-p2p-client"
+path = "src/client-main.rs"
