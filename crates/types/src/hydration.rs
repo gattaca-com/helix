@@ -1,6 +1,5 @@
 use std::{hash::Hasher, sync::Arc};
 
-use lh_types::VariableList;
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
@@ -70,38 +69,41 @@ impl DehydratedBidSubmissionElectra {
         mut self,
         order_cache: &mut HydrationCache,
     ) -> Result<(bid_submission::SignedBidSubmissionElectra, usize, usize), HydrationError> {
+        // avoid short-circuiting the loop to maximize cache population
+        let mut last_err = None;
+
         // hydrate transactions
 
         let mut tx_cache_hits = 0;
-        let mut transactions = Vec::with_capacity(self.execution_payload.transactions.len());
-        for (index, tx) in self.execution_payload.transactions.into_iter().enumerate() {
-            let tx = if tx.len() == std::mem::size_of::<u64>() {
+
+        for (index, tx) in self.execution_payload.transactions.iter_mut().enumerate() {
+            if tx.len() == std::mem::size_of::<u64>() {
                 // hashed transaction, hydrate it
                 let bytes = tx.as_ref().try_into().unwrap();
                 let hash = u64::from_le_bytes(bytes);
-                let Some(tx) = order_cache.transactions.get(&hash) else {
-                    return Err(HydrationError::UnknownTxHash { hash, index });
+                let Some(cached_tx) = order_cache.transactions.get(&hash) else {
+                    last_err = Some(HydrationError::UnknownTxHash { hash, index });
+                    continue;
                 };
 
                 tx_cache_hits += 1;
-                tx.clone()
+                *tx = cached_tx.clone();
             } else {
                 /// Max size of the rlp encoded tx sig (v 1 byte, s,r 32 bytes each with a leading
                 /// rlp length prefix)
                 const TX_KEY_SIZE: usize = 67;
 
                 if tx.len() < TX_KEY_SIZE {
-                    return Err(HydrationError::InvalidTxLength { length: tx.len(), index });
+                    last_err = Some(HydrationError::InvalidTxLength { length: tx.len(), index });
+                    continue;
                 }
+
                 let mut hasher = FxHasher::default();
                 let last_slice = &tx[tx.len() - TX_KEY_SIZE..];
                 hasher.write(last_slice);
                 let hash = hasher.finish();
                 order_cache.transactions.insert(hash, tx.clone());
-                tx
             };
-
-            transactions.push(tx);
         }
 
         // hydrate blobs
@@ -110,6 +112,10 @@ impl DehydratedBidSubmissionElectra {
         let new_blobs = self.blobs_bundle.new_items.len();
         for blob in self.blobs_bundle.new_items {
             order_cache.blobs.insert(blob.proof, blob);
+        }
+
+        if let Some(err) = last_err {
+            return Err(err);
         }
 
         let mut sidecar = BlobsBundle::with_capacity(self.blobs_bundle.blobs.len());
@@ -125,8 +131,6 @@ impl DehydratedBidSubmissionElectra {
         }
 
         blob_cache_hits = blob_cache_hits.saturating_sub(new_blobs);
-
-        self.execution_payload.transactions = VariableList::new(transactions).unwrap();
 
         Ok((
             bid_submission::SignedBidSubmissionElectra {
