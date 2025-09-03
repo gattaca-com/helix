@@ -75,7 +75,7 @@ impl LocalCache {
         let kill_switch = Arc::new(AtomicBool::new(false));
         let proposer_duties = Arc::new(RwLock::new(Vec::new()));
 
-        let cache = Self {
+        Self {
             inclusion_list,
             seen_block_hashes,
             last_delivered_slot,
@@ -90,9 +90,7 @@ impl LocalCache {
             kill_switch,
             proposer_duties,
             sorter_tx,
-        };
-
-        cache
+        }
     }
 
     fn get_last_hash_delivered(&self) -> Option<B256> {
