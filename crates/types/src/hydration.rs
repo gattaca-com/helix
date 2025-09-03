@@ -168,6 +168,12 @@ impl HydrationCache {
     }
 }
 
+impl Default for HydrationCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum HydrationError {
     #[error("unkown tx hash {hash}, index {index}")]

@@ -28,9 +28,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
-use helix_types::{
-    BlsPublicKey, DehydratedBidSubmission, HydrationError, SignedBidSubmission, Slot,
-};
+use helix_types::{BlsPublicKey, DehydratedBidSubmission, SignedBidSubmission, Slot};
 use http::{HeaderMap, Uri};
 use parking_lot::RwLock;
 use tokio::sync::oneshot;
@@ -39,7 +37,10 @@ use tracing::{debug, error, trace, warn};
 use super::multi_simulator::MultiSimulator;
 use crate::{
     builder::{
-        decoder::SubmissionDecoder, error::BuilderApiError, hydration, v2_check::V2SubMessage,
+        decoder::SubmissionDecoder,
+        error::BuilderApiError,
+        hydration::{self, HydrationMessage},
+        v2_check::V2SubMessage,
         BlockSimRequest,
     },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
@@ -75,11 +76,7 @@ pub struct BuilderApi<A: Api> {
     /// Builder pubkey -> (bid_slot, largest sequence number)
     pub sequence_numbers: DashMap<BlsPublicKey, (Slot, u64)>,
     /// Hydration task sender
-    pub hydration_tx: tokio::sync::mpsc::Sender<(
-        u64,
-        DehydratedBidSubmission,
-        oneshot::Sender<Result<SignedBidSubmission, HydrationError>>,
-    )>,
+    pub hydration_tx: tokio::sync::mpsc::Sender<HydrationMessage>,
 }
 
 impl<A: Api> BuilderApi<A> {
