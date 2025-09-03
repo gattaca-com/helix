@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
 
 use axum::{
     extract::Json,
@@ -40,11 +40,16 @@ impl<A: Api> ProposerApi<A> {
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn register_validators(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
+        Extension(known_validators_loaded): Extension<Arc<AtomicBool>>,
         headers: HeaderMap,
         Json(registrations): Json<Vec<SignedValidatorRegistration>>,
     ) -> Result<StatusCode, ProposerApiError> {
         if registrations.is_empty() {
             return Err(ProposerApiError::EmptyRequest);
+        }
+
+        if !known_validators_loaded.load(Ordering::Relaxed) {
+            return Err(ProposerApiError::ServiceUnavailableError);
         }
 
         let start = Instant::now();

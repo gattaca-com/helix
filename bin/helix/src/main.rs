@@ -85,9 +85,11 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
 
     let (sorter_tx, sorter_rx) = crossbeam_channel::bounded(10_000);
 
+    let known_validators_loaded = Arc::new(AtomicBool::default());
+
     let beacon_client = start_beacon_client(&config);
-    let db = start_db_service(&config).await?;
-    let auctioneer = start_auctioneer(sorter_tx.clone(), &db).await?;
+    let db = start_db_service(&config, known_validators_loaded.clone()).await?;
+    let auctioneer = start_auctioneer(sorter_tx.clone(), db.clone()).await?;
 
     let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
     let shared_best_header = BestGetHeader::new();
@@ -126,6 +128,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         beacon_client,
         Arc::new(DefaultMetadataProvider {}),
         current_slot_info,
+        known_validators_loaded,
         terminating.clone(),
         sorter_tx,
         top_bid_tx,

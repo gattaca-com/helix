@@ -38,6 +38,7 @@ pub fn build_router<A: Api>(
     data_api: Arc<DataApi<A>>,
     bids_cache: BidsCache,
     delivered_payloads_cache: DeliveredPayloadsCache,
+    known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
 ) -> Router {
     router_config.resolve_condensed_routes();
@@ -128,6 +129,7 @@ pub fn build_router<A: Api>(
         .layer(Extension(data_api))
         .layer(Extension(bids_cache))
         .layer(Extension(delivered_payloads_cache))
+        .layer(Extension(known_validators_loaded))
         .layer(Extension(terminating));
 
     router
