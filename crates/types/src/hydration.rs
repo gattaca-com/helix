@@ -86,11 +86,15 @@ impl DehydratedBidSubmissionElectra {
                 tx_cache_hits += 1;
                 tx.clone()
             } else {
-                if tx.len() < 65 {
+                /// Max size of the rlp encoded tx sig (v 1 byte, s,r 32 bytes each with a leading
+                /// rlp length prefix)
+                const TX_KEY_SIZE: usize = 67;
+
+                if tx.len() < TX_KEY_SIZE {
                     return Err(HydrationError::InvalidTxLength { length: tx.len(), index });
                 }
                 let mut hasher = FxHasher::default();
-                let last_slice = &tx[tx.len() - 65..];
+                let last_slice = &tx[tx.len() - TX_KEY_SIZE..];
                 hasher.write(last_slice);
                 let hash = hasher.finish();
                 order_cache.transactions.insert(hash, tx.clone());
