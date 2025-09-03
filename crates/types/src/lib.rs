@@ -38,8 +38,6 @@ pub type BlsPublicKeyBytes = alloy_rpc_types::beacon::BlsPublicKey;
 pub type BlsSignature = lh_types::Signature;
 pub type BlsSecretKey = lh_types::SecretKey;
 pub type BlsKeypair = lh_types::Keypair;
-// TODO: removed
-pub type PublicKeyBytes = lh_types::PublicKeyBytes;
 
 // Fields
 pub type Withdrawal = lh_types::withdrawal::Withdrawal;

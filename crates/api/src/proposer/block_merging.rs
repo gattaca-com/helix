@@ -7,9 +7,9 @@ use alloy_primitives::{
 use helix_common::{bid_submission::BidSubmission, simulator::BlockSimError, utils::utcnow_ms};
 use helix_datastore::Auctioneer;
 use helix_types::{
-    BlobWithMetadata, BlobsBundle, BlsPublicKey, BuilderBid, BuilderBidElectra,
-    ExecutionPayloadHeader, ExecutionPayloadRef, KzgCommitment, KzgCommitments, MergeableOrder,
-    MergeableOrderWithOrigin, MergeableOrders, PayloadAndBlobs, PublicKeyBytes,
+    mock_public_key_bytes, BlobWithMetadata, BlobsBundle, BlsPublicKey, BuilderBid,
+    BuilderBidElectra, ExecutionPayloadHeader, ExecutionPayloadRef, KzgCommitment, KzgCommitments,
+    MergeableOrder, MergeableOrderWithOrigin, MergeableOrders, PayloadAndBlobs,
     SignedBidSubmission, ValidatorRegistrationData,
 };
 use parking_lot::RwLock;
@@ -134,7 +134,6 @@ impl<A: Api> ProposerApi<A> {
             MergingTaskState::GotMergedBlock {
                 slot,
                 base_block_time_ms,
-                builder_pubkey,
                 proposer_pubkey,
                 original_payload,
                 response,
@@ -145,7 +144,6 @@ impl<A: Api> ProposerApi<A> {
                         .store_merged_payload(
                             slot,
                             base_block_time_ms,
-                            builder_pubkey,
                             proposer_pubkey,
                             original_payload,
                             response,
@@ -203,7 +201,6 @@ impl<A: Api> ProposerApi<A> {
             Ok(MergingTaskState::new_merged_block(
                 slot,
                 base_block_time_ms,
-                *base_bid.pubkey(),
                 proposer_pubkey,
                 payload,
                 response,
@@ -246,7 +243,6 @@ impl<A: Api> ProposerApi<A> {
         &self,
         slot: u64,
         base_block_time_ms: u64,
-        builder_pubkey: PublicKeyBytes,
         proposer_pubkey: BlsPublicKey,
         original_payload: PayloadAndBlobs,
         response: BlockMergeResponse,
@@ -271,7 +267,7 @@ impl<A: Api> ProposerApi<A> {
             blob_kzg_commitments,
             execution_requests: response.execution_requests,
             value: response.proposer_value,
-            pubkey: builder_pubkey,
+            pubkey: mock_public_key_bytes(), // this will be replaced when signing the header
         };
 
         // Store the payload in the background
@@ -349,7 +345,6 @@ enum MergingTaskState {
     GotMergedBlock {
         slot: u64,
         base_block_time_ms: u64,
-        builder_pubkey: PublicKeyBytes,
         proposer_pubkey: BlsPublicKey,
         original_payload: PayloadAndBlobs,
         response: BlockMergeResponse,
@@ -369,14 +364,12 @@ impl MergingTaskState {
     fn new_merged_block(
         slot: u64,
         base_block_time_ms: u64,
-        builder_pubkey: PublicKeyBytes,
         proposer_pubkey: BlsPublicKey,
         original_payload: PayloadAndBlobs,
         response: BlockMergeResponse,
     ) -> MergingTaskState {
         MergingTaskState::GotMergedBlock {
             slot,
-            builder_pubkey,
             proposer_pubkey,
             base_block_time_ms,
             original_payload,
