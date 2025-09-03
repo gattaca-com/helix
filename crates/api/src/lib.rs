@@ -80,3 +80,4 @@ pub trait Api: Clone + Send + Sync + 'static {
 /// Timeout in milliseconds from when the call started
 pub const HEADER_TIMEOUT_MS: &str = "x-timeout-ms";
 pub const HEADER_API_KEY: &str = "x-api-key";
+pub const HEADER_SEQUENCE: &str = "x-sequence";

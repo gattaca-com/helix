@@ -72,11 +72,16 @@ impl<A: Api> BuilderApi<A> {
 
         debug!(%head_slot, timestamp_request_start = trace.receive);
 
-        let skip_sigverify =
-            req.headers().get(HEADER_API_KEY).is_some_and(|key| api.auctioneer.check_api_key(key));
         // Decode the incoming request body into a payload
-        let (payload, is_cancellations_enabled) = decode_payload(req, &mut trace).await?;
+        let (parts, body) = req.into_parts();
+        let (payload, is_cancellations_enabled) =
+            decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
         ApiMetrics::cancellable_bid(is_cancellations_enabled);
+
+        let skip_sigverify = parts
+            .headers
+            .get(HEADER_API_KEY)
+            .is_some_and(|key| api.auctioneer.validate_api_key(key, payload.builder_public_key()));
 
         let block_hash = payload.message().block_hash;
 
@@ -183,14 +188,21 @@ impl<A: Api> BuilderApi<A> {
         trace!("sanity check passed");
         trace.pre_checks = utcnow_ns();
 
+        api.verify_signature(&payload, skip_sigverify, &mut trace)?;
+
+        api.check_and_update_sequence_number(
+            payload.builder_public_key(),
+            head_slot + 1,
+            &parts.headers,
+        )?;
+
         let was_simulated_optimistically = api
-            .verify_submitted_block(
+            .simulate_submission(
                 &payload,
-                next_duty,
                 &builder_info,
                 &mut trace,
+                next_duty.entry,
                 &payload_attributes,
-                skip_sigverify,
             )
             .await?;
 

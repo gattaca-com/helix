@@ -162,6 +162,9 @@ pub enum BuilderApiError {
 
     #[error(transparent)]
     BlobsError(#[from] BlobsError),
+
+    #[error("out of sequence submission for slot: {bid_slot}. seen: {seen}, this request: {this}")]
+    OutOfSequence { seen: u64, this: u64, bid_slot: u64 },
 }
 
 impl IntoResponse for BuilderApiError {
@@ -208,7 +211,8 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::BuilderNotInProposersTrustedList { .. } |
             BuilderApiError::PayloadError(_) |
             BuilderApiError::BidValidationError(_) |
-            BuilderApiError::BlobsError(_) => StatusCode::BAD_REQUEST,
+            BuilderApiError::BlobsError(_) |
+            BuilderApiError::OutOfSequence { .. } => StatusCode::BAD_REQUEST,
 
             BuilderApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
 

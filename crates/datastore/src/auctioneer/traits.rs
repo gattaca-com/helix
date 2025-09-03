@@ -50,7 +50,9 @@ pub trait Auctioneer: Send + Sync + Clone {
         &self,
         builder_pub_key: &BlsPublicKey,
     ) -> Result<BuilderInfo, AuctioneerError>;
-    fn check_api_key(&self, api_key: &HeaderValue) -> bool;
+    fn contains_api_key(&self, api_key: &HeaderValue) -> bool;
+    fn validate_api_key(&self, api_key: &HeaderValue, pubkey: &BlsPublicKey) -> bool;
+
     fn demote_builder(&self, builder_pub_key: &BlsPublicKey) -> Result<(), AuctioneerError>;
 
     fn update_builder_infos(&self, builder_infos: &[BuilderInfoDocument]);

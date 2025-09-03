@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Duration};
 use alloy_primitives::{B256, U256};
 use axum::{
     body::{to_bytes, Body},
-    http::{Request, StatusCode},
+    http::StatusCode,
     response::IntoResponse,
     Extension,
 };
@@ -25,6 +25,7 @@ use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{BlsPublicKey, SignedBidSubmission, Slot};
+use http::{HeaderMap, Uri};
 use parking_lot::RwLock;
 use tracing::{debug, error, trace, warn};
 
@@ -34,7 +35,7 @@ use crate::{
         decoder::SubmissionDecoder, error::BuilderApiError, v2_check::V2SubMessage, BlockSimRequest,
     },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
-    Api,
+    Api, HEADER_SEQUENCE,
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
@@ -63,6 +64,8 @@ pub struct BuilderApi<A: Api> {
     pub tx_root_cache: DashMap<B256, (u64, B256)>,
     /// Best get header to check the current top bid on simulations
     pub shared_best_header: BestGetHeader,
+    /// Builder pubkey -> (bid_slot, largest sequence number)
+    pub sequence_numbers: DashMap<BlsPublicKey, (Slot, u64)>,
 }
 
 impl<A: Api> BuilderApi<A> {
@@ -83,6 +86,7 @@ impl<A: Api> BuilderApi<A> {
         shared_best_header: BestGetHeader,
     ) -> Self {
         let tx_root_cache = DashMap::with_capacity(1000);
+        let sequence_numbers = DashMap::with_capacity(1000);
 
         let cache = tx_root_cache.clone();
         let info = chain_info.clone();
@@ -121,6 +125,7 @@ impl<A: Api> BuilderApi<A> {
 
             tx_root_cache,
             shared_best_header,
+            sequence_numbers,
         }
     }
 
@@ -179,20 +184,12 @@ impl<A: Api> BuilderApi<A> {
         }
     }
 
-    /// This function verifies:
-    /// 1. Verifies the payload signature.
-    /// 2. Simulates the submission
-    ///
-    /// Returns: the bid submission in an Arc.
-    pub(crate) async fn verify_submitted_block(
+    pub(crate) fn verify_signature(
         &self,
         payload: &SignedBidSubmission,
-        next_duty: BuilderGetValidatorsResponseEntry,
-        builder_info: &BuilderInfo,
-        trace: &mut SubmissionTrace,
-        payload_attributes: &PayloadAttributesUpdate,
         skip_sigverify: bool,
-    ) -> Result<bool, BuilderApiError> {
+        trace: &mut SubmissionTrace,
+    ) -> Result<(), BuilderApiError> {
         if skip_sigverify {
             trace!("skipping signature verification");
         } else {
@@ -206,22 +203,7 @@ impl<A: Api> BuilderApi<A> {
         trace.skip_sigverify = skip_sigverify;
         trace.signature = utcnow_ns();
 
-        let curr_best = self.shared_best_header.best_bid(payload.slot().as_u64());
-        let is_top_bid = payload.value() > curr_best;
-
-        // Simulate the submission
-        let was_simulated_optimistically = self
-            .simulate_submission(
-                payload,
-                builder_info,
-                trace,
-                next_duty.entry,
-                payload_attributes,
-                is_top_bid,
-            )
-            .await?;
-
-        Ok(was_simulated_optimistically)
+        Ok(())
     }
 
     /// If the proposer has specified a list of trusted builders ensure
@@ -259,15 +241,17 @@ impl<A: Api> BuilderApi<A> {
     ///
     /// 1. Checks the current top bid value from the auctioneer.
     /// 3. Invokes the block simulator for validation.
-    async fn simulate_submission(
+    pub(crate) async fn simulate_submission(
         &self,
         payload: &SignedBidSubmission,
         builder_info: &BuilderInfo,
         trace: &mut SubmissionTrace,
         registration_info: ValidatorRegistrationInfo,
         payload_attributes: &PayloadAttributesUpdate,
-        is_top_bid: bool,
     ) -> Result<bool, BuilderApiError> {
+        let curr_best = self.shared_best_header.best_bid(payload.slot().as_u64());
+        let is_top_bid = payload.value() > curr_best;
+
         debug!("validating block");
 
         let current_slot_coord = (
@@ -403,6 +387,51 @@ impl<A: Api> BuilderApi<A> {
     pub(crate) fn get_current_floor(&self, bid_slot: Slot) -> U256 {
         self.shared_floor.get(bid_slot.as_u64())
     }
+
+    /// Validates the sequence number and updates the local cache, returns error if we've seen a
+    /// higher sequence number for the same builder and bid slot.
+    ///
+    /// Assume the slot is already validated
+    pub(crate) fn check_and_update_sequence_number(
+        &self,
+        builder_pubkey: &BlsPublicKey,
+        bid_slot: Slot,
+        headers: &HeaderMap,
+    ) -> Result<(), BuilderApiError> {
+        let Some(new_seq) = headers
+            .get(HEADER_SEQUENCE)
+            .and_then(|seq| seq.to_str().ok())
+            .and_then(|seq| seq.parse::<u64>().ok())
+        else {
+            return Ok(())
+        };
+
+        if let Some(mut entry) = self.sequence_numbers.get_mut(builder_pubkey) {
+            let (old_slot, old_seq) = entry.value_mut();
+
+            if bid_slot < *old_slot {
+                // this shouldn't really happen, ignore
+            } else if bid_slot > *old_slot {
+                // first seq for slot, reset
+                *old_slot = bid_slot;
+                *old_seq = new_seq;
+            } else if new_seq > *old_seq {
+                // higher sequence number, update
+                *old_seq = new_seq;
+            } else {
+                // stale or duplicated sequence number
+                return Err(BuilderApiError::OutOfSequence {
+                    seen: *old_seq,
+                    this: new_seq,
+                    bid_slot: bid_slot.as_u64(),
+                })
+            }
+        } else {
+            self.sequence_numbers.insert(builder_pubkey.clone(), (bid_slot, new_seq));
+        }
+
+        Ok(())
+    }
 }
 
 /// `decode_payload` decodes the payload into a `SignedBidSubmission` object.
@@ -414,12 +443,13 @@ impl<A: Api> BuilderApi<A> {
 /// It returns a tuple of the decoded payload and if cancellations are enabled.
 #[tracing::instrument(skip_all)]
 pub async fn decode_payload(
-    req: Request<Body>,
+    uri: &Uri,
+    headers: &HeaderMap,
+    req: Body,
     trace: &mut SubmissionTrace,
 ) -> Result<(SignedBidSubmission, bool), BuilderApiError> {
     // Extract the query parameters
-    let is_cancellations_enabled = req
-        .uri()
+    let is_cancellations_enabled = uri
         .query()
         .unwrap_or("")
         .split('&')
@@ -433,8 +463,8 @@ pub async fn decode_payload(
         })
         .unwrap_or(false);
 
-    let decoder = SubmissionDecoder::from_headers(req.headers());
-    let body_bytes = to_bytes(req.into_body(), MAX_PAYLOAD_LENGTH).await?;
+    let decoder = SubmissionDecoder::from_headers(headers);
+    let body_bytes = to_bytes(req, MAX_PAYLOAD_LENGTH).await?;
     let payload = decoder.decode(body_bytes)?;
 
     trace.decode = utcnow_ns();
@@ -535,6 +565,7 @@ mod tests {
         header::{CONTENT_ENCODING, CONTENT_TYPE},
         HeaderValue, Uri,
     };
+    use http::Request;
     use ssz::Decode;
 
     use super::*;
@@ -822,7 +853,8 @@ mod tests {
         let req = build_test_request(payload, false, false).await;
         let mut trace = create_test_submission_trace().await;
 
-        let result = decode_payload(req, &mut trace).await;
+        let (parts, body) = req.into_parts();
+        let result = decode_payload(&parts.uri, &parts.headers, body, &mut trace).await;
         match result {
             Ok(_) => panic!("Should have failed"),
             Err(err) => match err {

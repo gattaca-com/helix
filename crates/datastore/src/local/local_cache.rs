@@ -39,7 +39,8 @@ pub struct LocalCache {
     last_delivered_slot: Arc<AtomicU64>,
     last_delivered_hash: Arc<RwLock<Option<B256>>>,
     builder_info_cache: Arc<DashMap<BlsPublicKey, BuilderInfo>>,
-    api_key_cache: Arc<DashSet<HeaderValue>>,
+    /// Api key -> builder pubkey
+    api_key_cache: Arc<DashMap<HeaderValue, BlsPublicKey>>,
     trusted_proposers: Arc<DashMap<BlsPublicKey, ProposerInfo>>,
     execution_payload_cache: Arc<DashMap<ExecutionPayloadKey, PayloadAndBlobs>>,
     payload_address_cache: Arc<DashMap<B256, (BlsPublicKey, Vec<u8>)>>,
@@ -64,7 +65,7 @@ impl LocalCache {
 
         let seen_block_hashes = Arc::new(DashSet::with_capacity(ESTIMATED_BID_UPPER_BOUND));
         let builder_info_cache = Arc::new(DashMap::with_capacity(builder_infos.len()));
-        let api_key_cache = Arc::new(DashSet::with_capacity(builder_infos.len()));
+        let api_key_cache = Arc::new(DashMap::with_capacity(builder_infos.len()));
         let last_delivered_slot = Arc::new(AtomicU64::new(0));
         let last_delivered_hash = Arc::new(RwLock::new(None));
         let execution_payload_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BID_UPPER_BOUND));
@@ -212,8 +213,13 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
-    fn check_api_key(&self, api_key: &HeaderValue) -> bool {
-        self.api_key_cache.contains(api_key)
+    fn contains_api_key(&self, api_key: &HeaderValue) -> bool {
+        self.api_key_cache.contains_key(api_key)
+    }
+
+    #[instrument(skip_all)]
+    fn validate_api_key(&self, api_key: &HeaderValue, pubkey: &BlsPublicKey) -> bool {
+        self.api_key_cache.get(api_key).is_some_and(|p| p.value() == pubkey)
     }
 
     #[instrument(skip_all)]
@@ -243,7 +249,8 @@ impl Auctioneer for LocalCache {
 
         for builder_info in builder_infos {
             if let Some(api_key) = builder_info.builder_info.api_key.as_ref() {
-                self.api_key_cache.insert(HeaderValue::from_str(api_key).unwrap());
+                self.api_key_cache
+                    .insert(HeaderValue::from_str(api_key).unwrap(), builder_info.pub_key.clone());
             }
 
             self.builder_info_cache
