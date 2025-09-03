@@ -87,6 +87,9 @@ impl<A: Api> ProposerApi<A> {
 /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/status>
 pub async fn status(Extension(terminating): Extension<Arc<AtomicBool>>) -> impl IntoResponse {
     if terminating.load(Ordering::Relaxed) {
+        tracing::warn!(term=%terminating.load(Ordering::Relaxed),
+               ptr=?Arc::as_ptr(&terminating),
+               "status=503 (terminating)");
         StatusCode::SERVICE_UNAVAILABLE
     } else {
         StatusCode::OK
