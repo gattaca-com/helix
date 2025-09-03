@@ -1,0 +1,9 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "helix-p2p"
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]

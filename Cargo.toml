@@ -7,7 +7,7 @@ members = [
   "crates/common",
   "crates/database",
   "crates/datastore",
-  "crates/housekeeper",
+  "crates/housekeeper", "crates/p2p",
   "crates/types",
   "crates/website",
 ]

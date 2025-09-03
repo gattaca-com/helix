@@ -3876,6 +3876,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "helix-p2p"
+version = "0.0.1"
+
+[[package]]
 name = "helix-types"
 version = "0.0.1"
 dependencies = [
