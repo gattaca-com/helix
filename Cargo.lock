@@ -3881,6 +3881,7 @@ name = "helix-p2p"
 version = "0.0.1"
 dependencies = [
  "axum 0.8.4",
+ "ethereum_ssz",
  "futures 0.3.31",
  "helix-common",
  "helix-types",

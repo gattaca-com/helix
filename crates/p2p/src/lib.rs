@@ -1,10 +1,7 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
-    extract::{
-        ws::{Message, WebSocket},
-        WebSocketUpgrade,
-    },
+    extract::WebSocketUpgrade,
     http::{StatusCode, Uri},
     response::{IntoResponse, Response},
     Extension,
@@ -22,7 +19,6 @@ pub mod messages;
 pub struct P2PApi {
     broadcast_tx: Sender<SignedP2PMessage>,
     peer_messages_tx: mpsc::Sender<P2PMessage>,
-    peer_messages_rx: mpsc::Receiver<P2PMessage>,
     signing_context: Arc<RelaySigningContext>,
     peer_configs: Vec<P2PPeerConfig>,
 }
@@ -34,13 +30,7 @@ impl P2PApi {
     ) -> Arc<Self> {
         let (broadcast_tx, _) = tokio::sync::broadcast::channel(100);
         let (peer_messages_tx, peer_messages_rx) = mpsc::channel(2000);
-        let this = Arc::new(Self {
-            peer_configs,
-            broadcast_tx,
-            peer_messages_tx,
-            peer_messages_rx,
-            signing_context,
-        });
+        let this = Arc::new(Self { peer_configs, broadcast_tx, peer_messages_tx, signing_context });
         for peer_config in &this.peer_configs {
             let uri: Uri = peer_config
                 .url
@@ -54,6 +44,7 @@ impl P2PApi {
                 this_clone.handle_ws_connection(ws, Some(peer_config)).await;
             });
         }
+        tokio::spawn(this.clone().handle_incoming_messages(peer_messages_rx));
         this
     }
 
@@ -103,10 +94,22 @@ impl P2PApi {
                         break;
                     };
                     let msg: SignedP2PMessage = msg.try_into().unwrap();
-                    msg.verify_signature().unwrap();
+                    if let Some(config) = &peer_config {
+                        msg.verify_signature(&config.verifying_key).unwrap();
+                    }
                     self.peer_messages_tx.send(msg.message).await.unwrap();
                 }
             };
+        }
+    }
+
+    async fn handle_incoming_messages(
+        self: Arc<Self>,
+        mut peer_messages_rx: mpsc::Receiver<P2PMessage>,
+    ) -> ! {
+        loop {
+            let P2PMessage::LocalInclusionList(msg) = peer_messages_rx.recv().await.unwrap();
+            msg.slot;
         }
     }
 }

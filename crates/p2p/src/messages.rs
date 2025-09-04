@@ -1,5 +1,5 @@
-use helix_common::{api::builder_api::InclusionList, signing::RelaySigningContext};
-use helix_types::{BlsSignature, SignedRoot};
+use helix_common::signing::{RelaySigningContext, RELAY_DOMAIN};
+use helix_types::{BlsPublicKey, BlsSignature, SignedRoot};
 use serde::{Deserialize, Serialize};
 use tree_hash_derive::TreeHash;
 
@@ -10,10 +10,18 @@ pub struct SignedP2PMessage {
     signature: BlsSignature,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("message verification failed")]
+pub struct MessageVerificationError;
+
 impl SignedP2PMessage {
-    pub fn verify_signature(&self) -> Result<(), String> {
-        // TODO
-        Ok(())
+    pub fn verify_signature(&self, pubkey: &BlsPublicKey) -> Result<(), MessageVerificationError> {
+        let signing_root = self.message.signing_root(RELAY_DOMAIN.into());
+        if self.signature.verify(pubkey, signing_root) {
+            Ok(())
+        } else {
+            Err(MessageVerificationError)
+        }
     }
 }
 
@@ -76,7 +84,7 @@ impl P2PMessage {
 #[derive(Debug, Clone, Serialize, Deserialize, TreeHash)]
 pub struct InclusionListMessage {
     pub slot: u64,
-    // pub inclusion_list: InclusionList,
+    // pub inclusion_list: Vec<Vec<u8>>,
 }
 
 impl From<InclusionListMessage> for P2PMessage {
