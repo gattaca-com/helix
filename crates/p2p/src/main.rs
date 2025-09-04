@@ -33,7 +33,7 @@ async fn main() {
 
     tokio::spawn(async move {
         loop {
-            let message = InclusionListMessage { slot: 42 }.into();
+            let message = InclusionListMessage { slot: 42, inclusion_list: vec![].into() }.into();
             p2p_api.broadcast(message);
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         }

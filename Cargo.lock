@@ -3882,11 +3882,13 @@ version = "0.0.1"
 dependencies = [
  "axum 0.8.4",
  "ethereum_ssz",
+ "ethereum_ssz_derive",
  "futures 0.3.31",
  "helix-common",
  "helix-types",
  "serde",
  "serde_json",
+ "ssz_types",
  "thiserror 1.0.69",
  "tokio",
  "tokio-tungstenite 0.27.0",

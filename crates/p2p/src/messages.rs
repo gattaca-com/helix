@@ -1,6 +1,8 @@
 use helix_common::signing::{RelaySigningContext, RELAY_DOMAIN};
-use helix_types::{BlsPublicKey, BlsSignature, SignedRoot};
+use helix_types::{BlsPublicKey, BlsSignature, EthSpec, MainnetEthSpec, SignedRoot, Transaction};
 use serde::{Deserialize, Serialize};
+use ssz_derive::{Decode, Encode};
+use ssz_types::VariableList;
 use tree_hash_derive::TreeHash;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,7 +68,8 @@ impl TryFrom<SignedP2PMessage> for tokio_tungstenite::tungstenite::Message {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TreeHash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
+#[ssz(enum_behaviour = "union")]
 #[tree_hash(enum_behaviour = "transparent")]
 pub enum P2PMessage {
     LocalInclusionList(InclusionListMessage),
@@ -81,10 +84,10 @@ impl P2PMessage {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TreeHash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
 pub struct InclusionListMessage {
     pub slot: u64,
-    // pub inclusion_list: Vec<Vec<u8>>,
+    pub inclusion_list: InclusionList,
 }
 
 impl From<InclusionListMessage> for P2PMessage {
@@ -92,3 +95,6 @@ impl From<InclusionListMessage> for P2PMessage {
         P2PMessage::LocalInclusionList(msg)
     }
 }
+
+pub type InclusionList =
+    VariableList<Transaction, <MainnetEthSpec as EthSpec>::MaxTransactionsPerPayload>;
