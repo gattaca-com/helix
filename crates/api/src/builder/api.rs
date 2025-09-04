@@ -1,6 +1,7 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use alloy_primitives::{B256, U256};
+use alloy_consensus::{Bytes48, TxEip4844, TxType};
+use alloy_primitives::{Address, B256, U256};
 use axum::{
     body::{to_bytes, Body},
     http::StatusCode,
@@ -24,7 +25,11 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
-use helix_types::{BlsPublicKey, SignedBidSubmission, Slot};
+use helix_types::{
+    BlobWithMetadata, BlobsBundle, BlockMergingData, BlsPublicKey, Bundle, KzgCommitment,
+    MergeableBundle, MergeableOrder, MergeableOrders, MergeableTransaction, Order,
+    SignedBidSubmission, SignedBidSubmissionWithMergingData, Slot, Transactions,
+};
 use http::{HeaderMap, Uri};
 use parking_lot::RwLock;
 use tracing::{debug, error, trace, warn};
@@ -35,6 +40,7 @@ use crate::{
         decoder::SubmissionDecoder, error::BuilderApiError, v2_check::V2SubMessage, BlockSimRequest,
     },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
+    proposer::MergingPoolMessage,
     Api, HEADER_SEQUENCE,
 };
 
@@ -54,6 +60,8 @@ pub struct BuilderApi<A: Api> {
     pub current_inclusion_list: Arc<RwLock<Option<InclusionListWithKey>>>,
     /// Send blocks to the bid sorter
     pub sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
+    /// Send mergeable orders to the merging pool
+    pub merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
     /// Subscriber for TopBid updates, SSZ encoded
     pub top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     /// Send headers/blocks to be checked for V2 submissions
@@ -80,6 +88,7 @@ impl<A: Api> BuilderApi<A> {
         validator_preferences: Arc<ValidatorPreferences>,
         curr_slot_info: CurrentSlotInfo,
         sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
+        merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
         v2_checks_tx: tokio::sync::mpsc::Sender<V2SubMessage>,
         shared_floor: FloorBid,
@@ -119,6 +128,7 @@ impl<A: Api> BuilderApi<A> {
             current_inclusion_list: Default::default(),
 
             sorter_tx,
+            merge_pool_tx,
             top_bid_tx,
             v2_checks_tx,
             shared_floor,
@@ -403,7 +413,7 @@ impl<A: Api> BuilderApi<A> {
             .and_then(|seq| seq.to_str().ok())
             .and_then(|seq| seq.parse::<u64>().ok())
         else {
-            return Ok(())
+            return Ok(());
         };
 
         if let Some(mut entry) = self.sequence_numbers.get_mut(builder_pubkey) {
@@ -424,7 +434,7 @@ impl<A: Api> BuilderApi<A> {
                     seen: *old_seq,
                     this: new_seq,
                     bid_slot: bid_slot.as_u64(),
-                })
+                });
             }
         } else {
             self.sequence_numbers.insert(builder_pubkey.clone(), (bid_slot, new_seq));
@@ -447,7 +457,7 @@ pub async fn decode_payload(
     headers: &HeaderMap,
     req: Body,
     trace: &mut SubmissionTrace,
-) -> Result<(SignedBidSubmission, bool), BuilderApiError> {
+) -> Result<(SignedBidSubmissionWithMergingData, bool), BuilderApiError> {
     // Extract the query parameters
     let is_cancellations_enabled = uri
         .query()
@@ -465,7 +475,8 @@ pub async fn decode_payload(
 
     let decoder = SubmissionDecoder::from_headers(headers);
     let body_bytes = to_bytes(req, MAX_PAYLOAD_LENGTH).await?;
-    let payload = decoder.decode(body_bytes)?;
+    let payload_with_merging_data = decoder.decode(body_bytes)?;
+    let payload = &payload_with_merging_data.submission;
 
     trace.decode = utcnow_ns();
     debug!(
@@ -480,7 +491,7 @@ pub async fn decode_payload(
         "payload info"
     );
 
-    Ok((payload, is_cancellations_enabled))
+    Ok((payload_with_merging_data, is_cancellations_enabled))
 }
 
 /// - Validates the expected block.timestamp.
@@ -557,6 +568,156 @@ pub(crate) fn sanity_check_block_submission(
     }
 
     Ok(())
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum OrderValidationError {
+    #[error("payload fee recipient ({got}) is not builder address ({expected})")]
+    FeeRecipientMismatch { got: Address, expected: Address },
+    #[error("invalid block merging tx index, got {got} with a tx count of {len}")]
+    InvalidTxIndex { got: usize, len: usize },
+    #[error("blob transaction does not reference any blobs")]
+    EmptyBlobTransaction,
+    #[error("blob transaction references blobs not in the block")]
+    MissingBlobs,
+    #[error("flagged indices reference tx outside of bundle")]
+    FlaggedIndicesOutOfBounds,
+}
+
+/// Expands the references in [`BlockMergingData`] from the transactions in the
+/// payload of the given submission. If any bundle references a transaction not in
+/// the payload, it will be silently ignored.
+pub fn get_mergeable_orders(
+    payload: &SignedBidSubmission,
+    merging_data: BlockMergingData,
+) -> Result<MergeableOrders, OrderValidationError> {
+    let execution_payload = payload.execution_payload_ref();
+    if execution_payload.fee_recipient() != merging_data.builder_address {
+        return Err(OrderValidationError::FeeRecipientMismatch {
+            got: merging_data.builder_address,
+            expected: execution_payload.fee_recipient(),
+        });
+    }
+    let block_blobs_bundles = payload.blobs_bundle();
+    let blob_versioned_hashes: Vec<_> =
+        block_blobs_bundles.commitments.iter().map(|c| calculate_versioned_hash(*c)).collect();
+    let txs = execution_payload.transactions();
+
+    // Expand all orders to include the tx's bytes, checking for missing blobs.
+    let mergeable_orders = merging_data
+        .merge_orders
+        .into_iter()
+        .map(|order| order_to_mergeable(order, txs, &blob_versioned_hashes))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Stores all block blobs inside a map keyed by versioned hash
+    let blobs = blobs_bundle_to_hashmap(blob_versioned_hashes, &block_blobs_bundles);
+
+    Ok(MergeableOrders::new(merging_data.builder_address, mergeable_orders, blobs))
+}
+
+fn blobs_bundle_to_hashmap(
+    blob_versioned_hashes: Vec<B256>,
+    bundle: &BlobsBundle,
+) -> HashMap<B256, BlobWithMetadata> {
+    blob_versioned_hashes
+        .into_iter()
+        .zip(bundle.commitments.iter())
+        .zip(bundle.proofs.iter())
+        .zip(bundle.blobs.iter())
+        .map(|(((versioned_hash, commitment), proof), blob)| {
+            let commitment = *commitment;
+            let proof = *proof;
+            let blob = blob.clone();
+            (versioned_hash, BlobWithMetadata { commitment, proof, blob })
+        })
+        .collect()
+}
+
+fn order_to_mergeable(
+    order: Order,
+    txs: &Transactions,
+    blob_versioned_hashes: &[B256],
+) -> Result<MergeableOrder, OrderValidationError> {
+    match order {
+        Order::Tx(tx) => {
+            let Some(raw_tx) = txs.get(tx.index) else {
+                return Err(OrderValidationError::InvalidTxIndex { got: tx.index, len: txs.len() });
+            };
+            if is_blob_transaction(raw_tx) {
+                // If the tx references bundles not in the block, we drop it
+                validate_blobs(raw_tx, blob_versioned_hashes)?;
+            }
+
+            let transaction = Bytes::from(raw_tx.to_vec());
+            let mergeable_tx =
+                MergeableTransaction { transaction, can_revert: tx.can_revert }.into();
+            Ok(mergeable_tx)
+        }
+        Order::Bundle(bundle) => {
+            bundle.validate().map_err(|_| OrderValidationError::FlaggedIndicesOutOfBounds)?;
+
+            let transactions = bundle
+                .txs
+                .iter()
+                .map(|tx_index| {
+                    let Some(raw_tx) = txs.get(*tx_index) else {
+                        return Err(OrderValidationError::InvalidTxIndex {
+                            got: *tx_index,
+                            len: txs.len(),
+                        });
+                    };
+
+                    if is_blob_transaction(raw_tx) {
+                        // If the tx references bundles not in the block, we drop the bundle
+                        validate_blobs(raw_tx, blob_versioned_hashes)?;
+                    }
+
+                    Ok(Bytes::from_owner(raw_tx.to_vec()))
+                })
+                .collect::<Result<_, OrderValidationError>>()?;
+
+            let Bundle { reverting_txs, dropping_txs, .. } = bundle;
+
+            let mergeable_bundle =
+                MergeableBundle { transactions, reverting_txs, dropping_txs }.into();
+            Ok(mergeable_bundle)
+        }
+    }
+}
+
+fn is_blob_transaction(raw_tx: &[u8]) -> bool {
+    // First byte is always the transaction type, or >= 0xc0 for legacy
+    // (source: https://eips.ethereum.org/EIPS/eip-2718)
+    raw_tx.first().is_some_and(|&b| b == TxType::Eip4844)
+}
+
+fn get_tx_versioned_hashes(mut raw_tx: &[u8]) -> Vec<B256> {
+    use alloy_consensus::transaction::RlpEcdsaDecodableTx;
+    TxEip4844::rlp_decode_with_signature(&mut raw_tx)
+        .map(|(b, _)| b.blob_versioned_hashes)
+        .unwrap_or(vec![])
+}
+
+fn validate_blobs(
+    raw_tx: &[u8],
+    blob_versioned_hashes: &[B256],
+) -> Result<(), OrderValidationError> {
+    let versioned_hashes = get_tx_versioned_hashes(raw_tx);
+    let num_blobs = versioned_hashes.len();
+    if num_blobs == 0 {
+        return Err(OrderValidationError::EmptyBlobTransaction);
+    }
+    let mut missing_blobs =
+        versioned_hashes.iter().map(|h| !blob_versioned_hashes.iter().any(|vh| vh == h));
+    if missing_blobs.any(|f| f) {
+        return Err(OrderValidationError::MissingBlobs);
+    }
+    Ok(())
+}
+
+fn calculate_versioned_hash(commitment: Bytes48) -> B256 {
+    KzgCommitment(*commitment).calculate_versioned_hash()
 }
 
 #[cfg(test)]

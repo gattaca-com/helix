@@ -10,12 +10,11 @@ use helix_common::metrics::{
     SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
     SUBMISSION_DECOMPRESSED_BYTES,
 };
-use helix_types::SignedBidSubmission;
+use helix_types::{SignedBidSubmission, SignedBidSubmissionWithMergingData};
 use http::{
     header::{CONTENT_ENCODING, CONTENT_TYPE},
     HeaderMap, HeaderValue,
 };
-use ssz::Decode;
 use tracing::trace;
 use zstd::{
     stream::read::Decoder as ZstdDecoder,
@@ -23,6 +22,8 @@ use zstd::{
 };
 
 use crate::builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError};
+
+const HEADER_IS_MERGEABLE: &str = "x-mergeable";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Compression {
@@ -41,6 +42,7 @@ enum Encoding {
 pub struct SubmissionDecoder {
     compression: Compression,
     encoding: Encoding,
+    has_mergeable_data: bool,
 
     bytes_before_decompress: usize,
     bytes_after_decompress: usize,
@@ -68,9 +70,15 @@ impl SubmissionDecoder {
             _ => Encoding::Json,
         };
 
+        const TRUE_HEADER: HeaderValue = HeaderValue::from_static("true");
+
+        let has_mergeable_data =
+            matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == TRUE_HEADER);
+
         Self {
             compression,
             encoding,
+            has_mergeable_data,
             bytes_before_decompress: 0,
             bytes_after_decompress: 0,
             estimated_decompress: 0,
@@ -80,7 +88,10 @@ impl SubmissionDecoder {
     }
 
     // TODO: pass a buffer pool to avoid allocations
-    pub fn decode(mut self, body: Bytes) -> Result<SignedBidSubmission, BuilderApiError> {
+    pub fn decode(
+        mut self,
+        body: Bytes,
+    ) -> Result<SignedBidSubmissionWithMergingData, BuilderApiError> {
         let start = Instant::now();
         self.bytes_before_decompress = body.len();
         let decompressed = match self.compression {
@@ -115,10 +126,11 @@ impl SubmissionDecoder {
             "decompressed payload"
         );
 
-        let payload: SignedBidSubmission = match self.encoding {
-            Encoding::Ssz => SignedBidSubmission::from_ssz_bytes(&decompressed)
-                .map_err(|err| BuilderApiError::SszDeserializeError(format!("{err:?}")))?,
-            Encoding::Json => serde_json::from_slice(&decompressed)?,
+        let payload: SignedBidSubmissionWithMergingData = if self.has_mergeable_data {
+            decode_submission(self.encoding, &decompressed)?
+        } else {
+            let submission: SignedBidSubmission = decode_submission(self.encoding, &decompressed)?;
+            SignedBidSubmissionWithMergingData { submission, merging_data: Default::default() }
         };
 
         self.decode_latency = start.elapsed().saturating_sub(self.decompress_latency);
@@ -183,4 +195,16 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
     } else {
         None
     }
+}
+
+fn decode_submission<'a, T>(encoding: Encoding, bytes: &'a Bytes) -> Result<T, BuilderApiError>
+where
+    T: ssz::Decode + serde::Deserialize<'a>,
+{
+    let payload = match encoding {
+        Encoding::Ssz => T::from_ssz_bytes(bytes)
+            .map_err(|err| BuilderApiError::SszDeserializeError(format!("{err:?}")))?,
+        Encoding::Json => serde_json::from_slice(bytes)?,
+    };
+    Ok(payload)
 }

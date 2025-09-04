@@ -54,7 +54,9 @@ impl<A: Api> BuilderApi<A> {
 
         // Decode the incoming request body into a payload
         let (parts, body) = req.into_parts();
-        let (payload, _) = decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
+        let (payload_with_merging_data, _) =
+            decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
+        let payload = payload_with_merging_data.submission;
 
         let skip_sigverify = parts
             .headers
