@@ -62,6 +62,9 @@ pub enum BuilderApiError {
     #[error("invalid api key")]
     InvalidApiKey,
 
+    #[error("untrusted builder on dehydrated payload")]
+    UntrustedBuilderOnDehydratedPayload,
+
     #[error("payload attributes not yet known")]
     PayloadAttributesNotYetKnown,
 
@@ -218,7 +221,8 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::OutOfSequence { .. } |
             BuilderApiError::HydrationError(_) => StatusCode::BAD_REQUEST,
 
-            BuilderApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
+            BuilderApiError::InvalidApiKey |
+            BuilderApiError::UntrustedBuilderOnDehydratedPayload => StatusCode::UNAUTHORIZED,
 
             BuilderApiError::InternalError |
             BuilderApiError::AuctioneerError(_) |

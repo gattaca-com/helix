@@ -7,8 +7,8 @@ use ssz_derive::{Decode, Encode};
 use crate::{
     bid_submission,
     blobs::{KzgCommitment, KzgProof},
-    BidTrace, Blob, BlobsBundle, BlsSignature, ExecutionPayloadElectra, ExecutionRequests,
-    Transaction,
+    BidTrace, Blob, BlobsBundle, BlsPublicKey, BlsSignature, ExecutionPayloadElectra,
+    ExecutionRequests, Transaction,
 };
 
 /// A bid submission where transactions and blobs may be replaced by hashes instead of payload
@@ -19,13 +19,21 @@ pub enum DehydratedBidSubmission {
     Electra(DehydratedBidSubmissionElectra),
 }
 impl DehydratedBidSubmission {
+    pub fn builder_pubkey(&self) -> &BlsPublicKey {
+        match self {
+            DehydratedBidSubmission::Electra(dehydrated_bid_submission_electra) => {
+                &dehydrated_bid_submission_electra.message.builder_pubkey
+            }
+        }
+    }
+
     pub fn hydrate(
         self,
-        order_cache: &mut HydrationCache,
+        hydration_cache: &mut HydrationCache,
     ) -> Result<(bid_submission::SignedBidSubmission, usize, usize), HydrationError> {
         match self {
             DehydratedBidSubmission::Electra(dehydrated_bid_submission_electra) => {
-                dehydrated_bid_submission_electra.hydrate(order_cache).map(
+                dehydrated_bid_submission_electra.hydrate(hydration_cache).map(
                     |(signed_bid_submission, tx_cache_hits, blob_cache_hits)| {
                         (
                             bid_submission::SignedBidSubmission::Electra(signed_bid_submission),
@@ -67,10 +75,13 @@ impl DehydratedBidSubmissionElectra {
     /// submission and the number of tx cache hits and blob cache hits.
     pub fn hydrate(
         mut self,
-        order_cache: &mut HydrationCache,
+        hydration_cache: &mut HydrationCache,
     ) -> Result<(bid_submission::SignedBidSubmissionElectra, usize, usize), HydrationError> {
+        let order_cache =
+            hydration_cache.caches.entry(self.message.builder_pubkey.clone()).or_default();
+
         // avoid short-circuiting the loop to maximize cache population
-        let mut last_err = None;
+        let mut last_err = Ok(());
 
         // hydrate transactions
 
@@ -82,7 +93,7 @@ impl DehydratedBidSubmissionElectra {
                 let bytes = tx.as_ref().try_into().unwrap();
                 let hash = u64::from_le_bytes(bytes);
                 let Some(cached_tx) = order_cache.transactions.get(&hash) else {
-                    last_err = Some(HydrationError::UnknownTxHash { hash, index });
+                    last_err = Err(HydrationError::UnknownTxHash { hash, index });
                     continue;
                 };
 
@@ -94,7 +105,7 @@ impl DehydratedBidSubmissionElectra {
                 const TX_KEY_SIZE: usize = 67;
 
                 if tx.len() < TX_KEY_SIZE {
-                    last_err = Some(HydrationError::InvalidTxLength { length: tx.len(), index });
+                    last_err = Err(HydrationError::InvalidTxLength { length: tx.len(), index });
                     continue;
                 }
 
@@ -114,9 +125,7 @@ impl DehydratedBidSubmissionElectra {
             order_cache.blobs.insert(blob.proof, blob);
         }
 
-        if let Some(err) = last_err {
-            return Err(err);
-        }
+        last_err?;
 
         let mut sidecar = BlobsBundle::with_capacity(self.blobs_bundle.proofs.len());
         for (index, proof) in self.blobs_bundle.proofs.into_iter().enumerate() {
@@ -146,7 +155,7 @@ impl DehydratedBidSubmissionElectra {
     }
 }
 
-pub struct HydrationCache {
+struct Cache {
     // TODO: replace lighthouse types to use Bytes so we avoid the extra clone
     // hash -> transaction bytes
     transactions: FxHashMap<u64, Transaction>,
@@ -154,7 +163,7 @@ pub struct HydrationCache {
     blobs: FxHashMap<KzgProof, BlobItem>,
 }
 
-impl HydrationCache {
+impl Cache {
     pub fn new() -> Self {
         Self {
             transactions: FxHashMap::with_capacity_and_hasher(10_000, Default::default()),
@@ -168,7 +177,24 @@ impl HydrationCache {
     }
 }
 
-impl Default for HydrationCache {
+/// One cache per builder pubkey
+pub struct HydrationCache {
+    caches: FxHashMap<BlsPublicKey, Cache>,
+}
+
+impl HydrationCache {
+    pub fn new() -> Self {
+        Self { caches: FxHashMap::with_capacity_and_hasher(200, Default::default()) }
+    }
+
+    pub fn clear(&mut self) {
+        for c in self.caches.values_mut() {
+            c.clear();
+        }
+    }
+}
+
+impl Default for Cache {
     fn default() -> Self {
         Self::new()
     }

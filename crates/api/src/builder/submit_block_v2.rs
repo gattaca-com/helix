@@ -24,7 +24,7 @@ use crate::{
         error::BuilderApiError,
         v2_check::V2SubMessage,
     },
-    Api, HEADER_API_KEY,
+    Api,
 };
 
 impl<A: Api> BuilderApi<A> {
@@ -55,13 +55,8 @@ impl<A: Api> BuilderApi<A> {
         // Decode the incoming request body into a payload
         let (parts, body) = req.into_parts();
         // v2 submissions are never hydrated
-        let (payload, _) =
+        let (skip_sigverify, payload, _) =
             decode_payload(0, &api, &parts.uri, &parts.headers, body, &mut trace).await?;
-
-        let skip_sigverify = parts
-            .headers
-            .get(HEADER_API_KEY)
-            .is_some_and(|key| api.auctioneer.validate_api_key(key, payload.builder_public_key()));
 
         tracing::Span::current().record("slot", payload.slot().as_u64() as i64);
         tracing::Span::current()

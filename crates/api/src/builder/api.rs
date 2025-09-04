@@ -44,7 +44,7 @@ use crate::{
         BlockSimRequest,
     },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
-    Api, HEADER_HYDRATE, HEADER_SEQUENCE,
+    Api, HEADER_API_KEY, HEADER_HYDRATE, HEADER_SEQUENCE,
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
@@ -456,7 +456,7 @@ impl<A: Api> BuilderApi<A> {
 /// - Automatically falls back to JSON if SSZ deserialization fails.
 /// - Handles GZIP-compressed payloads.
 ///
-/// It returns a tuple of the decoded payload and if cancellations are enabled.
+/// Returns (skip_sigverify, payload, is_cancellations_enabled)
 #[tracing::instrument(skip_all)]
 pub async fn decode_payload<A: Api>(
     bid_slot: u64,
@@ -465,7 +465,7 @@ pub async fn decode_payload<A: Api>(
     headers: &HeaderMap,
     req: Body,
     trace: &mut SubmissionTrace,
-) -> Result<(SignedBidSubmission, bool), BuilderApiError> {
+) -> Result<(bool, SignedBidSubmission, bool), BuilderApiError> {
     // Extract the query parameters
     let is_cancellations_enabled = uri
         .query()
@@ -485,9 +485,19 @@ pub async fn decode_payload<A: Api>(
     let body_bytes = to_bytes(req, MAX_PAYLOAD_LENGTH).await?;
 
     let should_hydrate = headers.get(HEADER_HYDRATE).is_some();
-
-    let payload: SignedBidSubmission = if should_hydrate {
+    let (skip_sigverify, payload): (bool, SignedBidSubmission) = if should_hydrate {
         let dehydrated_payload: DehydratedBidSubmission = decoder.decode(body_bytes)?;
+
+        // caches are per builder and the builder pubkey is still unvalidated so we rely on the api
+        // key pubkey for safety
+        let skip_sigverify = headers.get(HEADER_API_KEY).is_some_and(|key| {
+            api.auctioneer.validate_api_key(key, dehydrated_payload.builder_pubkey())
+        });
+
+        if !skip_sigverify {
+            return Err(BuilderApiError::UntrustedBuilderOnDehydratedPayload);
+        }
+
         let start = Instant::now();
         let (tx, rx) = oneshot::channel();
         api.hydration_tx
@@ -506,13 +516,20 @@ pub async fn decode_payload<A: Api>(
 
         HYDRATION_LATENCY.observe(start.elapsed().as_micros() as f64);
 
-        res
+        (skip_sigverify, res)
     } else {
-        decoder.decode(body_bytes)?
+        let payload: SignedBidSubmission = decoder.decode(body_bytes)?;
+        let skip_sigverify = headers
+            .get(HEADER_API_KEY)
+            .is_some_and(|key| api.auctioneer.validate_api_key(key, payload.builder_public_key()));
+
+        (skip_sigverify, payload)
     };
 
     trace.decode = utcnow_ns();
     debug!(
+        skip_sigverify,
+        is_cancellations_enabled,
         timestamp_after_decoding = trace.decode,
         decode_latency_ns = trace.decode.saturating_sub(trace.receive),
         builder_pub_key = ?payload.builder_public_key(),
@@ -524,7 +541,7 @@ pub async fn decode_payload<A: Api>(
         "payload info"
     );
 
-    Ok((payload, is_cancellations_enabled))
+    Ok((skip_sigverify, payload, is_cancellations_enabled))
 }
 
 /// - Validates the expected block.timestamp.
