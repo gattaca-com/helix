@@ -52,7 +52,7 @@ async fn get_block(slot_number: u64) -> BlockSimRequest {
     let signed_bid_submission = SignedBidSubmissionElectra {
         message: bid_trace,
         signature: block_response.data.signature().clone(),
-        execution_payload: ExecutionPayload::from_lighthouse_electra_paylaod_unsafe(
+        execution_payload: ExecutionPayload::from_lighthouse_electra_payload_unsafe(
             electra_exec_payload,
         )
         .into(),

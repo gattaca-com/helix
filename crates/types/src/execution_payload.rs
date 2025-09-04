@@ -149,7 +149,7 @@ impl ExecutionPayload {
     }
 
     // only used for testing
-    pub fn from_lighthouse_electra_paylaod_unsafe(
+    pub fn from_lighthouse_electra_payload_unsafe(
         value: lh_types::ExecutionPayloadElectra<MainnetEthSpec>,
     ) -> Self {
         let bloom: [u8; 256] = value.logs_bloom.to_vec().try_into().unwrap();
