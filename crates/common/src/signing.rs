@@ -27,6 +27,13 @@ impl RelaySigningContext {
         self.sign(root)
     }
 
+    pub fn sign_relay_message(&self, msg: &impl SignedRoot) -> BlsSignature {
+        // TODO: choose a domain
+        let domain: &[u8; 32] = b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0relay";
+        let root = msg.signing_root(domain.into());
+        self.sign(root)
+    }
+
     pub fn sign(&self, message: B256) -> BlsSignature {
         self.keypair.sk.sign(message)
     }

@@ -11,10 +11,14 @@ axum.workspace = true
 futures.workspace = true
 helix-common.workspace = true
 helix-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
 tracing.workspace = true
+tree_hash.workspace = true
+tree_hash_derive.workspace = true
 
 [[bin]]
 name = "helix-p2p-client"

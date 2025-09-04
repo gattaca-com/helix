@@ -3883,10 +3883,14 @@ dependencies = [
  "futures 0.3.31",
  "helix-common",
  "helix-types",
+ "serde",
+ "serde_json",
  "thiserror 1.0.69",
  "tokio",
  "tokio-tungstenite 0.27.0",
  "tracing",
+ "tree_hash",
+ "tree_hash_derive",
 ]
 
 [[package]]
