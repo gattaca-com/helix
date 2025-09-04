@@ -177,6 +177,12 @@ impl Cache {
     }
 }
 
+impl Default for Cache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// One cache per builder pubkey
 pub struct HydrationCache {
     caches: FxHashMap<BlsPublicKey, Cache>,
@@ -194,7 +200,7 @@ impl HydrationCache {
     }
 }
 
-impl Default for Cache {
+impl Default for HydrationCache {
     fn default() -> Self {
         Self::new()
     }
