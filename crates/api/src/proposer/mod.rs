@@ -8,7 +8,7 @@ mod register;
 mod types;
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::Ordering,
     Arc,
 };
 
@@ -25,7 +25,7 @@ use hyper::StatusCode;
 use tokio::sync::mpsc::Sender;
 pub use types::*;
 
-use crate::{gossiper::grpc_gossiper::GrpcGossiperClientManager, Api};
+use crate::{gossiper::grpc_gossiper::GrpcGossiperClientManager, router::Terminating, Api};
 
 #[derive(Clone)]
 pub struct ProposerApi<A: Api> {
@@ -85,16 +85,10 @@ impl<A: Api> ProposerApi<A> {
 }
 
 /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/status>
-pub async fn status(Extension(terminating): Extension<Arc<AtomicBool>>) -> impl IntoResponse {
+pub async fn status(Extension(Terminating(terminating)): Extension<Terminating>) -> impl IntoResponse {
     if terminating.load(Ordering::Relaxed) {
-        tracing::warn!(term=%terminating.load(Ordering::Relaxed),
-               ptr=?Arc::as_ptr(&terminating),
-               "status=503 (terminating)");
         StatusCode::SERVICE_UNAVAILABLE
     } else {
-        tracing::info!(term=%terminating.load(Ordering::Relaxed),
-               ptr=?Arc::as_ptr(&terminating),
-               "status=200 (running)");
         StatusCode::OK
     }
 }

@@ -117,11 +117,6 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
 
     let terminating = Arc::new(AtomicBool::default());
 
-    tracing::info!(pid=%std::process::id(),
-               term=%terminating.load(Ordering::Relaxed),
-               ptr=?Arc::as_ptr(&terminating),
-               "startup: terminating state");
-
     start_admin_service(auctioneer.clone(), &config);
 
     start_api_service::<ApiProd>(
@@ -157,11 +152,8 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     }
 
     // Set terminating flag.
-    if !terminating.swap(true, Ordering::Relaxed) {
-        let bt = std::backtrace::Backtrace::force_capture();
-        tracing::error!(?bt, "terminating flipped to true");
-    }
-    
+    terminating.store(true, Ordering::Relaxed);
+
     if termination_grace_period != 0 {
         // Wait for the grace period to expire before exiting.
         tracing::info!("Pausing for {termination_grace_period}ms before exit");
