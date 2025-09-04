@@ -1,8 +1,5 @@
 use std::{
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
+    sync::{atomic::Ordering, Arc},
     time::Duration,
 };
 
@@ -26,6 +23,7 @@ use super::ProposerApi;
 use crate::{
     gossiper::types::RequestPayloadParams,
     proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
+    router::Terminating,
     Api, HEADER_TIMEOUT_MS,
 };
 
@@ -44,7 +42,7 @@ impl<A: Api> ProposerApi<A> {
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
         Extension(on_receive_ns): Extension<u64>,
-        Extension(terminating): Extension<Arc<AtomicBool>>,
+        Extension(Terminating(terminating)): Extension<Terminating>,
         headers: HeaderMap,
         Path(GetHeaderParams { slot, parent_hash, pubkey }): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {

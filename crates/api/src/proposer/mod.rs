@@ -8,10 +8,7 @@ mod get_payload;
 mod register;
 mod types;
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::{atomic::Ordering, Arc};
 
 use alloy_primitives::B256;
 use axum::{response::IntoResponse, Extension};
@@ -29,7 +26,7 @@ pub use types::*;
 
 use crate::{
     builder::multi_simulator::MultiSimulator, gossiper::grpc_gossiper::GrpcGossiperClientManager,
-    proposer::block_merging::BestMergedBlock, Api,
+    proposer::block_merging::BestMergedBlock, router::Terminating, Api,
 };
 
 #[derive(Clone)]
@@ -97,7 +94,9 @@ impl<A: Api> ProposerApi<A> {
 }
 
 /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/status>
-pub async fn status(Extension(terminating): Extension<Arc<AtomicBool>>) -> impl IntoResponse {
+pub async fn status(
+    Extension(Terminating(terminating)): Extension<Terminating>,
+) -> impl IntoResponse {
     if terminating.load(Ordering::Relaxed) {
         StatusCode::SERVICE_UNAVAILABLE
     } else {

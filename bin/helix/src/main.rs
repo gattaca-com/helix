@@ -153,6 +153,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
 
     // Set terminating flag.
     terminating.store(true, Ordering::Relaxed);
+
     if termination_grace_period != 0 {
         // Wait for the grace period to expire before exiting.
         tracing::info!("Pausing for {termination_grace_period}ms before exit");

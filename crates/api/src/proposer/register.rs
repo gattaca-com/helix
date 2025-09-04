@@ -1,7 +1,4 @@
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::sync::{atomic::Ordering, Arc};
 
 use axum::{
     extract::Json,
@@ -24,6 +21,7 @@ use tracing::{debug, error, trace, warn};
 use super::ProposerApi;
 use crate::{
     proposer::{error::ProposerApiError, PreferencesHeader},
+    router::KnownValidatorsLoaded,
     Api,
 };
 
@@ -43,7 +41,7 @@ impl<A: Api> ProposerApi<A> {
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn register_validators(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
-        Extension(known_validators_loaded): Extension<Arc<AtomicBool>>,
+        Extension(KnownValidatorsLoaded(known_validators_loaded)): Extension<KnownValidatorsLoaded>,
         headers: HeaderMap,
         Json(registrations): Json<Vec<SignedValidatorRegistration>>,
     ) -> Result<StatusCode, ProposerApiError> {

@@ -31,6 +31,11 @@ use crate::{
     Api,
 };
 
+#[derive(Clone)]
+pub struct Terminating(pub Arc<AtomicBool>);
+#[derive(Clone)]
+pub struct KnownValidatorsLoaded(pub Arc<AtomicBool>);
+
 pub fn build_router<A: Api>(
     router_config: &mut RouterConfig,
     builder_api: Arc<BuilderApi<A>>,
@@ -129,8 +134,8 @@ pub fn build_router<A: Api>(
         .layer(Extension(data_api))
         .layer(Extension(bids_cache))
         .layer(Extension(delivered_payloads_cache))
-        .layer(Extension(known_validators_loaded))
-        .layer(Extension(terminating));
+        .layer(Extension(KnownValidatorsLoaded(known_validators_loaded)))
+        .layer(Extension(Terminating(terminating)));
 
     router
 }
