@@ -80,8 +80,7 @@ async fn main() {
 
 async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     let chain_info = Arc::new(config.network_config.to_chain_info());
-    let relay_signing_context =
-        Arc::new(RelaySigningContext { keypair, context: chain_info.clone() });
+    let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info.clone()));
 
     let (sorter_tx, sorter_rx) = crossbeam_channel::bounded(10_000);
 

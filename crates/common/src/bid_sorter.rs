@@ -59,7 +59,7 @@ impl BestGetHeader {
             return U256::ZERO;
         }
 
-        *entry.bid.value()
+        entry.bid.value
     }
 
     pub fn load(
@@ -70,7 +70,7 @@ impl BestGetHeader {
     ) -> Option<BuilderBid> {
         let entry = (*self.0.read()).clone()?;
 
-        if entry.slot != slot || entry.bid.header().parent_hash().0 != *parent_hash {
+        if entry.slot != slot || entry.bid.header.parent_hash != *parent_hash {
             return None;
         }
 
@@ -522,11 +522,11 @@ impl BidSorter {
         let top_bid_update = TopBidUpdate {
             timestamp: utcnow_ms(),
             slot: self.curr_bid_slot,
-            block_number: h.header().block_number(),
-            block_hash: h.header().block_hash().0,
-            parent_hash: h.header().parent_hash().0,
+            block_number: h.header.block_number,
+            block_hash: h.header.block_hash,
+            parent_hash: h.header.parent_hash,
             builder_pubkey,
-            fee_recipient: h.header().fee_recipient(),
+            fee_recipient: h.header.fee_recipient,
             value: bid.value,
         }
         .as_ssz_bytes()

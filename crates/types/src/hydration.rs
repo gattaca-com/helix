@@ -6,9 +6,8 @@ use ssz_derive::{Decode, Encode};
 
 use crate::{
     bid_submission,
-    blobs::{KzgCommitment, KzgProof},
-    BidTrace, Blob, BlobsBundle, BlsPublicKey, BlsSignature, ExecutionPayloadElectra,
-    ExecutionRequests, Transaction,
+    fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
+    BidTrace, Blob, BlobsBundle, BlsPublicKey, BlsSignature, ExecutionPayload,
 };
 
 /// A bid submission where transactions and blobs may be replaced by hashes instead of payload
@@ -51,7 +50,7 @@ impl DehydratedBidSubmission {
 #[serde(deny_unknown_fields)]
 pub struct DehydratedBidSubmissionElectra {
     message: BidTrace,
-    execution_payload: ExecutionPayloadElectra,
+    execution_payload: ExecutionPayload,
     blobs_bundle: DehydratedBlobs,
     execution_requests: ExecutionRequests,
     signature: BlsSignature,
@@ -155,8 +154,7 @@ impl DehydratedBidSubmissionElectra {
     }
 }
 
-struct Cache {
-    // TODO: replace lighthouse types to use Bytes so we avoid the extra clone
+pub struct Cache {
     // hash -> transaction bytes
     transactions: FxHashMap<u64, Transaction>,
     // hash -> blob item

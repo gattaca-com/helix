@@ -19,9 +19,8 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
 use helix_types::{
-    BlsPublicKey, ChainSpec, ExecPayload, ExecutionPayloadHeader, GetPayloadResponse,
-    PayloadAndBlobs, SigError, SignedBlindedBeaconBlock, Slot, SlotClockTrait,
-    VersionedSignedProposal,
+    BlindedPayloadRef, BlsPublicKey, ChainSpec, ExecPayload, GetPayloadResponse, PayloadAndBlobs,
+    SigError, SignedBlindedBeaconBlock, Slot, SlotClockTrait, VersionedSignedProposal,
 };
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
@@ -232,7 +231,11 @@ impl<A: Api> ProposerApi<A> {
             return Err(err);
         }
 
-        if let Err(err) = validate_block_equality(&versioned_payload, &signed_blinded_block) {
+        if let Err(err) = validate_block_equality(
+            &versioned_payload,
+            &signed_blinded_block,
+            &self.chain_info.context,
+        ) {
             error!(
                 %err,
                 "execution payload invalid, does not match known ExecutionPayload",
@@ -460,7 +463,7 @@ impl<A: Api> ProposerApi<A> {
         let bid_trace = match self.auctioneer.get_bid_trace(
             signed_blinded_block.message().slot().into(),
             proposer_public_key,
-            &payload.execution_payload.block_hash().0,
+            &payload.execution_payload.block_hash,
         ) {
             Some(bt) => bt,
             None => {
@@ -572,32 +575,37 @@ fn validate_proposal_coordinate(
 fn validate_block_equality(
     local_versioned_payload: &PayloadAndBlobs,
     provided_signed_blinded_block: &SignedBlindedBeaconBlock,
+    spec: &ChainSpec,
 ) -> Result<(), ProposerApiError> {
-    let message = provided_signed_blinded_block.message();
-    let body = message.body();
+    if provided_signed_blinded_block.fork_name(spec).is_err() {
+        return Err(ProposerApiError::UnsupportedBeaconChainVersion);
+    }
 
-    let local_header = local_versioned_payload.execution_payload.to_ref().into();
+    let body = provided_signed_blinded_block.message().body();
+    let provided_ex_payload =
+        body.execution_payload().map_err(|_| ProposerApiError::PayloadTypeMismatch)?;
 
-    match local_header {
-        ExecutionPayloadHeader::Bellatrix(_) |
-        ExecutionPayloadHeader::Capella(_) |
-        ExecutionPayloadHeader::Deneb(_) |
-        ExecutionPayloadHeader::Fulu(_) => {
-            return Err(ProposerApiError::UnsupportedBeaconChainVersion)
-        }
+    let local_payload = &local_versioned_payload.execution_payload;
 
-        ExecutionPayloadHeader::Electra(local_header) => {
-            let provided_header = &body
-                .execution_payload_electra()
-                .map_err(|_| ProposerApiError::PayloadTypeMismatch)?
-                .execution_payload_header;
-
+    match provided_ex_payload {
+        BlindedPayloadRef::Bellatrix(_) |
+        BlindedPayloadRef::Capella(_) |
+        BlindedPayloadRef::Deneb(_) |
+        BlindedPayloadRef::Fulu(_) => return Err(ProposerApiError::UnsupportedBeaconChainVersion),
+        BlindedPayloadRef::Electra(blinded_payload) => {
             info!(
-                local_header = ?local_header,
-                provided_header = ?provided_header,
+                local_header = ?local_payload,
+                provided_header = ?blinded_payload,
                 provided_version = %provided_signed_blinded_block.fork_name_unchecked(),
                 "validating block equality",
             );
+
+            let local_header = local_payload
+                .to_header()
+                .to_lighthouse_electra_header()
+                .map_err(ProposerApiError::SszError)?;
+
+            let provided_header = &blinded_payload.execution_payload_header;
 
             if &local_header != provided_header {
                 return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);

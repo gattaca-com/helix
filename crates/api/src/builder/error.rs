@@ -8,7 +8,7 @@ use axum::{
 use helix_common::{bid_submission::BidValidationError, simulator::BlockSimError};
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
-use helix_types::{BlobsError, BlsPublicKey, HydrationError, Slot};
+use helix_types::{BlsPublicKey, HydrationError, Slot, ValidationError};
 
 use super::v3::V3Error;
 
@@ -164,7 +164,7 @@ pub enum BuilderApiError {
     InvalidPayloadType { fork_name: String },
 
     #[error(transparent)]
-    BlobsError(#[from] BlobsError),
+    ValidationError(#[from] ValidationError),
 
     #[error("out of sequence submission for slot: {bid_slot}. seen: {seen}, this request: {this}")]
     OutOfSequence { seen: u64, this: u64, bid_slot: u64 },
@@ -217,7 +217,7 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::BuilderNotInProposersTrustedList { .. } |
             BuilderApiError::PayloadError(_) |
             BuilderApiError::BidValidationError(_) |
-            BuilderApiError::BlobsError(_) |
+            BuilderApiError::ValidationError(_) |
             BuilderApiError::OutOfSequence { .. } |
             BuilderApiError::HydrationError(_) => StatusCode::BAD_REQUEST,
 

@@ -20,7 +20,7 @@ mod tests {
     };
     use helix_types::{
         BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsSecretKey, BlsSignature,
-        ExecutionPayloadElectra, PayloadAndBlobs, SignedBidSubmissionElectra, SignedMessage,
+        ExecutionPayload, PayloadAndBlobs, SignedBidSubmissionElectra, SignedMessage,
         SignedValidatorRegistration, TestRandomSeed, Validator, ValidatorRegistration, Withdrawal,
     };
     use rand::{seq::SliceRandom, thread_rng, Rng};
@@ -409,7 +409,7 @@ mod tests {
 
         let signed_bid_submission = SignedBidSubmissionElectra {
             message: bid_trace.clone(),
-            execution_payload: ExecutionPayloadElectra::default().into(),
+            execution_payload: ExecutionPayload::test_random().into(),
             blobs_bundle: BlobsBundle::default().into(),
             signature: BlsSignature::test_random(),
             execution_requests: Default::default(),
@@ -454,7 +454,7 @@ mod tests {
 
         let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
 
-        let mut execution_payload = ExecutionPayloadElectra::test_random();
+        let mut execution_payload = ExecutionPayload::test_random();
 
         // execution_payload
         //     .transactions_mut()

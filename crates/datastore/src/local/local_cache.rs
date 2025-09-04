@@ -14,9 +14,7 @@ use helix_common::{
     BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
-use helix_types::{
-    maybe_upgrade_execution_payload, BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs,
-};
+use helix_types::{BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs};
 use http::HeaderValue;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
@@ -162,14 +160,11 @@ impl Auctioneer for LocalCache {
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
         block_hash: &B256,
-        fork_name: ForkName,
+        _fork_name: ForkName,
     ) -> Option<PayloadAndBlobs> {
         self.execution_payload_cache.get(&(slot, proposer_pub_key.clone(), *block_hash)).map(|p| {
             PayloadAndBlobs {
-                execution_payload: maybe_upgrade_execution_payload(
-                    p.execution_payload.clone(),
-                    fork_name,
-                ),
+                execution_payload: p.execution_payload.clone(),
                 blobs_bundle: p.blobs_bundle.clone(),
             }
         })
@@ -356,8 +351,8 @@ mod tests {
     use alloy_primitives::U256;
     use helix_common::BuilderConfig;
     use helix_types::{
-        get_fixed_pubkey, BlobsBundle, ExecutionPayloadElectra, ExecutionPayloadRef, ForkName,
-        PayloadAndBlobsRef, TestRandomSeed,
+        get_fixed_pubkey, BlobsBundle, ExecutionPayload, ForkName, PayloadAndBlobsRef,
+        TestRandomSeed,
     };
 
     use super::*;
@@ -421,12 +416,10 @@ mod tests {
         let proposer_pub_key = BlsPublicKey::test_random();
         let block_hash = B256::test_random();
 
-        let payload = ExecutionPayloadElectra { gas_limit: 999, ..Default::default() };
+        let payload = ExecutionPayload { gas_limit: 999, ..ExecutionPayload::test_random() };
         let blobs_bundle = BlobsBundle::default();
-        let versioned_execution_payload = PayloadAndBlobsRef {
-            execution_payload: ExecutionPayloadRef::Electra(&payload),
-            blobs_bundle: &blobs_bundle,
-        };
+        let versioned_execution_payload =
+            PayloadAndBlobsRef { execution_payload: &payload, blobs_bundle: &blobs_bundle };
 
         // Save the execution payload
         cache.save_execution_payload(
@@ -443,8 +436,7 @@ mod tests {
 
         let fetched_execution_payload = get_result.unwrap();
         assert_eq!(
-            fetched_execution_payload.execution_payload.gas_limit(),
-            999,
+            fetched_execution_payload.execution_payload.gas_limit, 999,
             "Execution payload mismatch"
         );
     }

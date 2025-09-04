@@ -72,7 +72,7 @@ async fn fetch_block(
     let message = GetPayloadV3 {
         block_hash,
         request_ts_millis: utcnow_ms(),
-        relay_pubkey: signing_ctx.pubkey().clone(),
+        relay_pubkey: *signing_ctx.pubkey(),
     };
     let signature = signing_ctx.sign_builder_message(&message);
     let signed_request = SignedGetPayloadV3 { message, signature };

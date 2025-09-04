@@ -30,12 +30,13 @@ impl BroadcastPayloadParams {
         execution_payload: PayloadAndBlobsRef,
         slot: u64,
         proposer_pub_key: &BlsPublicKey,
+        current_fork: ForkName,
     ) -> grpc::BroadcastPayloadParams {
         grpc::BroadcastPayloadParams {
             execution_payload: execution_payload.as_ssz_bytes(),
             slot,
             proposer_pub_key: proposer_pub_key.serialize().to_vec(),
-            fork_name: Some(execution_payload.execution_payload.fork_name().to_string()),
+            fork_name: Some(current_fork.to_string()),
         }
     }
 }

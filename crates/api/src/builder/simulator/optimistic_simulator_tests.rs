@@ -9,8 +9,8 @@ mod simulator_tests {
     use helix_database::mock_database_service::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_types::{
-        BidTrace, BlobsBundle, BlsPublicKey, BlsSignature, ExecutionPayloadElectra,
-        SignedBidSubmission, SignedBidSubmissionElectra, TestRandomSeed,
+        BidTrace, BlobsBundle, BlsPublicKey, BlsSignature, ExecutionPayload, SignedBidSubmission,
+        SignedBidSubmissionElectra, TestRandomSeed,
     };
     use reqwest::Client;
     use serde_json::json;
@@ -39,10 +39,10 @@ mod simulator_tests {
     }
 
     fn get_sim_req() -> BlockSimRequest {
-        let electra_exec_payload = ExecutionPayloadElectra {
+        let electra_exec_payload = ExecutionPayload {
             block_hash: b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5")
                 .into(),
-            ..Default::default()
+            ..ExecutionPayload::test_random()
         };
 
         let bid_trace = BidTrace {

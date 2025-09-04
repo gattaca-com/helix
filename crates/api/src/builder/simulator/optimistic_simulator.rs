@@ -75,7 +75,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         builder_info: BuilderInfo,
     ) -> Result<(), BlockSimError> {
         let builder = request.message.builder_pubkey.clone();
-        let block_hash = request.execution_payload.block_hash();
+        let block_hash = request.execution_payload.block_hash;
         let slot = request.message.slot;
 
         if let Err(err) = self.simulator.process_request(request, &builder_info, is_top_bid).await {
@@ -117,7 +117,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
                     %err,
                     "Block simulation resulted in an error. Demoting builder...",
                 );
-                self.demote_builder_due_to_error(slot, &builder, &block_hash.0, err.to_string())
+                self.demote_builder_due_to_error(slot, &builder, &block_hash, err.to_string())
                     .await;
             }
             return Err(err);
@@ -180,7 +180,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             if self.failsafe_triggered.load(Ordering::Relaxed) {
                 warn!(
                     builder=%request.message.builder_pubkey,
-                    block_hash=%request.execution_payload.block_hash(),
+                    block_hash=%request.execution_payload.block_hash,
                     "Failsafe triggered. Skipping optimistic simulation"
                 );
                 return false;
@@ -189,7 +189,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             if self.optimistic_state.is_paused() {
                 warn!(
                     builder=%request.message.builder_pubkey,
-                    block_hash=%request.execution_payload.block_hash(),
+                    block_hash=%request.execution_payload.block_hash,
                     "Optimistic simulation paused. Skipping simulation"
                 );
                 return false;
@@ -211,7 +211,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             SimulatorMetrics::sim_count(true);
 
             debug!(
-                block_hash=%request.execution_payload.block_hash(),
+                block_hash=%request.execution_payload.block_hash,
                 "optimistically processing request"
             );
 
@@ -236,9 +236,9 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
             SimulatorMetrics::sim_count(false);
 
             debug!(
-                block_hash=?request.execution_payload.block_hash(),
-                block_parent_hash=?request.execution_payload.parent_hash(),
-                block_number=%request.execution_payload.block_number(),
+                block_hash=?request.execution_payload.block_hash,
+                block_parent_hash=?request.execution_payload.parent_hash,
+                block_number=%request.execution_payload.block_number,
                 request=?request.message,
                 "processing simulation synchronously"
             );

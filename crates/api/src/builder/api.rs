@@ -526,6 +526,8 @@ pub async fn decode_payload<A: Api>(
         (skip_sigverify, payload)
     };
 
+    payload.validate_payload_ssz_lengths()?;
+
     trace.decode = utcnow_ns();
     debug!(
         skip_sigverify,
@@ -537,7 +539,7 @@ pub async fn decode_payload<A: Api>(
         proposer_pubkey = ?payload.proposer_public_key(),
         parent_hash = ?payload.parent_hash(),
         value = ?payload.value(),
-        num_tx = payload.execution_payload_ref().transactions().len(),
+        num_tx = payload.execution_payload_ref().transactions.len(),
         "payload info"
     );
 
