@@ -10,7 +10,7 @@ use axum::{
     Extension,
 };
 use futures::{Sink, SinkExt, Stream, StreamExt};
-use helix_common::signing::RelaySigningContext;
+use helix_common::{signing::RelaySigningContext, P2PPeerConfig};
 use tokio::sync::{broadcast::Sender, mpsc};
 use tokio_tungstenite::connect_async;
 use tracing::error;
@@ -24,23 +24,34 @@ pub struct P2PApi {
     peer_messages_tx: mpsc::Sender<P2PMessage>,
     peer_messages_rx: mpsc::Receiver<P2PMessage>,
     signing_context: Arc<RelaySigningContext>,
+    peer_configs: Vec<P2PPeerConfig>,
 }
 
 impl P2PApi {
     pub async fn new(
-        peers: Vec<SocketAddr>,
+        peer_configs: Vec<P2PPeerConfig>,
         signing_context: Arc<RelaySigningContext>,
     ) -> Arc<Self> {
         let (broadcast_tx, _) = tokio::sync::broadcast::channel(100);
         let (peer_messages_tx, peer_messages_rx) = mpsc::channel(2000);
-        let this =
-            Arc::new(Self { broadcast_tx, peer_messages_tx, peer_messages_rx, signing_context });
-        for peer_socket in peers {
-            let uri: Uri = format!("ws://{peer_socket}/relay/v1/p2p").parse().unwrap();
+        let this = Arc::new(Self {
+            peer_configs,
+            broadcast_tx,
+            peer_messages_tx,
+            peer_messages_rx,
+            signing_context,
+        });
+        for peer_config in &this.peer_configs {
+            let uri: Uri = peer_config
+                .url
+                .parse()
+                .inspect_err(|e| error!(err=?e, "invalid peer URL"))
+                .unwrap();
             let this_clone = this.clone();
+            let peer_config = peer_config.clone();
             tokio::spawn(async move {
                 let (ws, _response) = connect_async(uri).await.unwrap();
-                this_clone.handle_ws_connection(ws).await;
+                this_clone.handle_ws_connection(ws, Some(peer_config)).await;
             });
         }
         this
@@ -58,10 +69,10 @@ impl P2PApi {
         ws: WebSocketUpgrade,
     ) -> Result<impl IntoResponse, P2PApiError> {
         println!("got request");
-        Ok(ws.on_upgrade(|socket| async move { api.handle_ws_connection(socket).await }))
+        Ok(ws.on_upgrade(|socket| async move { api.handle_ws_connection(socket, None).await }))
     }
 
-    async fn handle_ws_connection<M, S, E>(&self, mut socket: S)
+    async fn handle_ws_connection<M, S, E>(&self, mut socket: S, peer_config: Option<P2PPeerConfig>)
     where
         S: Stream<Item = Result<M, E>> + Sink<M> + Unpin,
         M: TryFrom<SignedP2PMessage> + std::fmt::Debug,
@@ -92,7 +103,8 @@ impl P2PApi {
                         break;
                     };
                     let msg: SignedP2PMessage = msg.try_into().unwrap();
-                    println!("{msg:?}");
+                    msg.verify_signature().unwrap();
+                    self.peer_messages_tx.send(msg.message).await.unwrap();
                 }
             };
         }

@@ -8,10 +8,11 @@ use axum::{
     extract::DefaultBodyLimit,
     http::StatusCode,
     middleware,
-    routing::{get, post},
+    routing::{any, get, post},
     Extension, Router,
 };
 use helix_common::{utils::extract_request_id, Route, RouterConfig};
+use helix_p2p::P2PApi;
 use hyper::{HeaderMap, Uri};
 use tower::{timeout::TimeoutLayer, BoxError, ServiceBuilder};
 use tower_governor::{
@@ -39,6 +40,7 @@ pub fn build_router<A: Api>(
     builder_api: Arc<BuilderApi<A>>,
     proposer_api: Arc<ProposerApi<A>>,
     data_api: Arc<DataApi<A>>,
+    p2p_api: Arc<P2PApi>,
     bids_cache: BidsCache,
     delivered_payloads_cache: DeliveredPayloadsCache,
     known_validators_loaded: Arc<AtomicBool>,
@@ -63,6 +65,7 @@ pub fn build_router<A: Api>(
             Route::ValidatorRegistration => get(DataApi::<A>::validator_registration),
             Route::SubmitHeaderV3 => post(BuilderApi::<A>::submit_header_v3),
             Route::GetInclusionList => get(BuilderApi::<A>::get_inclusion_list),
+            Route::P2P => any(P2PApi::p2p_connect),
             Route::All | Route::BuilderApi | Route::ProposerApi | Route::DataApi => {
                 panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route_info.route);
             }
@@ -121,6 +124,7 @@ pub fn build_router<A: Api>(
         .layer(Extension(builder_api))
         .layer(Extension(proposer_api))
         .layer(Extension(data_api))
+        .layer(Extension(p2p_api))
         .layer(Extension(bids_cache))
         .layer(Extension(delivered_payloads_cache))
         .layer(Extension(KnownValidatorsLoaded(known_validators_loaded)))

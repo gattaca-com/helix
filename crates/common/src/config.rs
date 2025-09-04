@@ -23,6 +23,8 @@ pub struct RelayConfig {
     #[serde(default)]
     pub relays: Vec<RelayGossipConfig>,
     #[serde(default)]
+    pub p2p: Vec<P2PPeerConfig>,
+    #[serde(default)]
     pub builders: Vec<BuilderConfig>,
     #[serde(default)]
     pub network_config: NetworkConfig,
@@ -195,6 +197,15 @@ pub struct BeaconClientConfig {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RelayGossipConfig {
     pub url: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct P2PPeerConfig {
+    /// The URL of the peer.
+    /// A valid URL is of the form 'ws://<peer-url>/relay/v1/p2p'
+    pub url: String,
+    /// The BLS public key of the peer, to verify its identity.
+    pub verifying_key: BlsPublicKey,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -435,6 +446,7 @@ pub enum Route {
     ValidatorRegistration,
     SubmitHeaderV3,
     GetInclusionList,
+    P2P,
 }
 
 impl Route {
@@ -458,6 +470,7 @@ impl Route {
             Route::ProposerApi => panic!("ProposerApi is not a real route"),
             Route::DataApi => panic!("DataApi is not a real route"),
             Route::SubmitHeaderV3 => format!("{PATH_BUILDER_API_V3}{PATH_SUBMIT_HEADER}"),
+            Route::P2P => PATH_P2P.to_string(),
         }
     }
 }

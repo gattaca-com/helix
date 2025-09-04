@@ -16,6 +16,7 @@ use helix_common::{
 };
 use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
+use helix_p2p::P2PApi;
 use moka::sync::Cache;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -55,6 +56,8 @@ pub async fn run_api_service<A: Api>(
     let broadcasters = init_broadcasters(&config).await;
 
     let client = reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
+
+    let p2p_api = P2PApi::new(config.p2p.clone(), relay_signing_context.clone()).await;
 
     let mut simulators = vec![];
 
@@ -164,6 +167,7 @@ pub async fn run_api_service<A: Api>(
         builder_api,
         proposer_api,
         data_api,
+        p2p_api,
         bids_cache,
         delivered_payloads_cache,
         known_validators_loaded,
