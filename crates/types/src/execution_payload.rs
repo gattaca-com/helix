@@ -244,6 +244,7 @@ impl ExecutionPayloadHeader {
 
         Ok(())
     }
+
     pub fn to_lighthouse_electra_header(
         &self,
     ) -> Result<lh_types::ExecutionPayloadHeaderElectra<MainnetEthSpec>, SszError> {
