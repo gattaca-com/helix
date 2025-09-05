@@ -22,3 +22,5 @@ tokio-tungstenite.workspace = true
 tracing.workspace = true
 tree_hash.workspace = true
 tree_hash_derive.workspace = true
+
+hex = "0.4"

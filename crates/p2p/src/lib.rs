@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     extract::WebSocketUpgrade,
@@ -8,7 +8,8 @@ use axum::{
 };
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use helix_common::{signing::RelaySigningContext, P2PPeerConfig};
-use tokio::sync::{broadcast::Sender, mpsc};
+use helix_types::{BlsPublicKey, BlsPublicKeyBytes};
+use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::connect_async;
 use tracing::error;
 
@@ -16,8 +17,13 @@ use crate::messages::{P2PMessage, SignedP2PMessage};
 
 pub mod messages;
 
+struct P2PPeer {
+    uri: Uri,
+    pubkey: BlsPublicKey,
+}
+
 pub struct P2PApi {
-    broadcast_tx: Sender<SignedP2PMessage>,
+    broadcast_tx: broadcast::Sender<SignedP2PMessage>,
     peer_messages_tx: mpsc::Sender<P2PMessage>,
     signing_context: Arc<RelaySigningContext>,
     peer_configs: Vec<P2PPeerConfig>,
@@ -28,7 +34,7 @@ impl P2PApi {
         peer_configs: Vec<P2PPeerConfig>,
         signing_context: Arc<RelaySigningContext>,
     ) -> Arc<Self> {
-        let (broadcast_tx, _) = tokio::sync::broadcast::channel(100);
+        let (broadcast_tx, _) = broadcast::channel(100);
         let (peer_messages_tx, peer_messages_rx) = mpsc::channel(2000);
         let this = Arc::new(Self { peer_configs, broadcast_tx, peer_messages_tx, signing_context });
         for peer_config in &this.peer_configs {
@@ -109,7 +115,7 @@ impl P2PApi {
     ) -> ! {
         loop {
             let P2PMessage::LocalInclusionList(msg) = peer_messages_rx.recv().await.unwrap();
-            msg.slot;
+            println!("{}", msg.slot);
         }
     }
 }

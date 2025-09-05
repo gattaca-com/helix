@@ -3886,6 +3886,7 @@ dependencies = [
  "futures 0.3.31",
  "helix-common",
  "helix-types",
+ "hex",
  "serde",
  "serde_json",
  "ssz_types",

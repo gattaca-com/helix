@@ -3,27 +3,34 @@ use std::{net::SocketAddr, sync::Arc};
 use axum::{routing::any, Extension, Router};
 use helix_common::{chain_info::ChainInfo, signing::RelaySigningContext, P2PPeerConfig};
 use helix_p2p::{messages::InclusionListMessage, P2PApi};
-use helix_types::BlsKeypair;
+use helix_types::{BlsKeypair, BlsSecretKey};
+use serde::{Deserialize, Serialize};
 use tracing::{error, info};
+
+#[derive(Serialize, Deserialize)]
+struct Config {
+    port: u16,
+    peer_configs: Vec<P2PPeerConfig>,
+    private_key: String,
+}
 
 #[tokio::main]
 async fn main() {
     let mut args = std::env::args().skip(1);
-    let port: u16 = args.next().and_then(|arg| arg.parse().ok()).unwrap_or(4040);
-    let peer_ports: Vec<u16> = args.map(|s| s.parse().unwrap()).collect();
+    let config_path = args.next().unwrap();
 
-    let keypair = BlsKeypair::random();
+    let file_str = std::fs::read_to_string(config_path).unwrap();
+    let config: Config = serde_json::from_str(&file_str).unwrap();
+    let port = config.port;
+    let peer_configs = config.peer_configs;
+
+    let private_key_bytes = hex::decode(&config.private_key).unwrap();
+    let private_key = BlsSecretKey::deserialize(&private_key_bytes).unwrap();
+
+    let keypair = BlsKeypair::from_components(private_key.public_key(), private_key);
+    let pubkey = keypair.pk.clone();
     let chain_info = Arc::new(ChainInfo::for_hoodi());
     let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info));
-
-    let peer_configs = peer_ports
-        .into_iter()
-        .map(|port| P2PPeerConfig {
-            url: format!("ws://127.0.0.1:{port}/relay/v1/p2p"),
-            // TODO: Set the correct verifying key for each peer
-            verifying_key: BlsKeypair::random().pk.clone(),
-        })
-        .collect();
 
     let p2p_api = P2PApi::new(peer_configs, relay_signing_context).await;
 
@@ -39,7 +46,7 @@ async fn main() {
         }
     });
 
-    println!("Listening on ws://127.0.0.1:{port}/relay/v1/p2p");
+    println!("Listening on ws://127.0.0.1:{port}/relay/v1/p2p with pubkey: {pubkey}");
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{port}")).await.unwrap();
     match axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await {
