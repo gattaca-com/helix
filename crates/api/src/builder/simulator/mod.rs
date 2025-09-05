@@ -17,7 +17,8 @@ use helix_common::{
     ValidatorPreferences,
 };
 use helix_types::{
-    BidTrace, BlobsBundle, BlsSignature, ExecutionPayload, ExecutionRequests, SignedBidSubmission,
+    BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests,
+    SignedBidSubmission,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -26,7 +27,7 @@ pub struct BlockSimRequest {
     pub registered_gas_limit: u64,
     pub message: BidTrace,
     pub execution_payload: ExecutionPayload,
-    pub signature: BlsSignature,
+    pub signature: BlsSignatureBytes,
     pub proposer_preferences: ValidatorPreferences,
     pub blobs_bundle: Option<Arc<BlobsBundle>>,
     pub execution_requests: Option<Arc<ExecutionRequests>>,
@@ -47,7 +48,7 @@ impl BlockSimRequest {
             registered_gas_limit,
             message: block.bid_trace().clone(),
             execution_payload: block.execution_payload_ref().clone(),
-            signature: block.signature().clone(),
+            signature: *block.signature(),
             apply_blacklist: proposer_preferences.filtering.is_regional(),
             proposer_preferences,
             blobs_bundle: Some(block.blobs_bundle().clone()),

@@ -9,7 +9,7 @@ use helix_common::{
     BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
-use helix_types::{BlsPublicKey, ForkName, PayloadAndBlobs, SignedBuilderBid, TestRandomSeed};
+use helix_types::{BlsPublicKeyBytes, ForkName, PayloadAndBlobs, SignedBuilderBid};
 use http::HeaderValue;
 use tokio::sync::broadcast;
 
@@ -51,7 +51,7 @@ impl Auctioneer for MockAuctioneer {
     fn save_execution_payload(
         &self,
         _slot: u64,
-        _proposer_pub_key: &BlsPublicKey,
+        _proposer_pub_key: &BlsPublicKeyBytes,
         _block_hash: &B256,
         _execution_payload: PayloadAndBlobs,
     ) {
@@ -59,7 +59,7 @@ impl Auctioneer for MockAuctioneer {
     fn get_execution_payload(
         &self,
         _slot: u64,
-        _proposer_pub_key: &BlsPublicKey,
+        _proposer_pub_key: &BlsPublicKeyBytes,
         _block_hash: &B256,
         _fork_name: ForkName,
     ) -> Option<PayloadAndBlobs> {
@@ -68,7 +68,7 @@ impl Auctioneer for MockAuctioneer {
 
     fn get_builder_info(
         &self,
-        _builder_pub_key: &BlsPublicKey,
+        _builder_pub_key: &BlsPublicKeyBytes,
     ) -> Result<BuilderInfo, AuctioneerError> {
         Ok(self.builder_info.clone().unwrap_or_default())
     }
@@ -77,11 +77,11 @@ impl Auctioneer for MockAuctioneer {
         self.builder_info.is_some()
     }
 
-    fn validate_api_key(&self, _api_key: &HeaderValue, _pubkey: &BlsPublicKey) -> bool {
+    fn validate_api_key(&self, _api_key: &HeaderValue, _pubkey: &BlsPublicKeyBytes) -> bool {
         self.builder_info.is_some()
     }
 
-    fn demote_builder(&self, _builder_pub_key: &BlsPublicKey) -> Result<(), AuctioneerError> {
+    fn demote_builder(&self, _builder_pub_key: &BlsPublicKeyBytes) -> Result<(), AuctioneerError> {
         self.builder_demoted.store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
@@ -94,13 +94,13 @@ impl Auctioneer for MockAuctioneer {
 
     fn update_trusted_proposers(&self, _proposer_whitelist: Vec<ProposerInfo>) {}
 
-    fn is_trusted_proposer(&self, _proposer_pub_key: &BlsPublicKey) -> bool {
+    fn is_trusted_proposer(&self, _proposer_pub_key: &BlsPublicKeyBytes) -> bool {
         true
     }
 
-    fn update_primev_proposers(&self, _proposer_whitelist: &[BlsPublicKey]) {}
+    fn update_primev_proposers(&self, _proposer_whitelist: &[BlsPublicKeyBytes]) {}
 
-    fn is_primev_proposer(&self, _proposer_pub_key: &BlsPublicKey) -> bool {
+    fn is_primev_proposer(&self, _proposer_pub_key: &BlsPublicKeyBytes) -> bool {
         true
     }
 
@@ -119,12 +119,12 @@ impl Auctioneer for MockAuctioneer {
     fn save_payload_address(
         &self,
         _block_hash: &B256,
-        _builder_pubkey: &BlsPublicKey,
+        _builder_pubkey: &BlsPublicKeyBytes,
         _payload_socket_address: Vec<u8>,
     ) {
     }
 
-    fn get_payload_url(&self, _block_hash: &B256) -> Option<(BlsPublicKey, Vec<u8>)> {
+    fn get_payload_url(&self, _block_hash: &B256) -> Option<(BlsPublicKeyBytes, Vec<u8>)> {
         None
     }
 
@@ -133,7 +133,7 @@ impl Auctioneer for MockAuctioneer {
     fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey> {
         let (tx, rx) = broadcast::channel(1);
         tx.send(InclusionListWithKey {
-            key: (0, BlsPublicKey::test_random(), B256::default()),
+            key: (0, BlsPublicKeyBytes::random(), B256::default()),
             inclusion_list: InclusionListWithMetadata { txs: vec![] },
         })
         .unwrap();

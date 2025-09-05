@@ -5,7 +5,7 @@ use alloy_primitives::{
     B256, U256,
 };
 use bytes::Bytes;
-use helix_types::{BlsPublicKey, BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
+use helix_types::{BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
 use parking_lot::RwLock;
 use ssz::Encode;
 use tracing::info;
@@ -66,7 +66,7 @@ impl BestGetHeader {
         &self,
         slot: u64,
         parent_hash: &B256,
-        _validator_pubkey: &BlsPublicKey,
+        _validator_pubkey: &BlsPublicKeyBytes,
     ) -> Option<BuilderBid> {
         let entry = (*self.0.read()).clone()?;
 
@@ -130,7 +130,7 @@ pub enum BidSorterMessage {
         before_sorter_ns: u64,
     },
     /// Demotion of a builder pubkey, all its bids are invalidated for this slot
-    Demotion(BlsPublicKey),
+    Demotion(BlsPublicKeyBytes),
     /// New slot update
     Slot(u64),
 }
@@ -155,7 +155,7 @@ impl BidSorterMessage {
         let header = bid_submission_to_builder_bid_unsigned(submission);
         Self::Submission {
             bid,
-            builder_pubkey: bid_trace.builder_pubkey.serialize().into(),
+            builder_pubkey: bid_trace.builder_pubkey,
             slot: bid_trace.slot,
             header,
             is_cancellable,
@@ -176,7 +176,7 @@ impl BidSorterMessage {
         let header = header_submission_to_builder_bid_unsigned(submission);
         Self::Submission {
             bid,
-            builder_pubkey: bid_trace.builder_pubkey.serialize().into(),
+            builder_pubkey: bid_trace.builder_pubkey,
             slot: bid_trace.slot,
             header,
             is_cancellable,
@@ -367,7 +367,6 @@ impl BidSorter {
                     BID_SORTER_QUEUE_LATENCY_US.observe(queue_latency_ns as f64 / 1000.);
                 }
                 BidSorterMessage::Demotion(demoted) => {
-                    let demoted = demoted.serialize().into();
                     if !self.demotions.insert(demoted) {
                         // already demoted
                         self.local_telemetry.duplicate_demotions += 1;

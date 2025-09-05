@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use alloy_primitives::B256;
 use helix_types::{
-    mock_public_key_bytes, BlsPublicKey, BuilderBid, ForkName, SignedBidSubmission,
+    mock_public_key_bytes, BlsPublicKeyBytes, BuilderBid, ForkName, SignedBidSubmission,
     SignedBuilderBid, SignedBuilderBidInner, Slot,
 };
 use tracing::debug;
@@ -16,7 +16,7 @@ use crate::{
 pub struct BidRequest {
     pub slot: Slot,
     pub parent_hash: B256,
-    pub pubkey: BlsPublicKey,
+    pub pubkey: BlsPublicKeyBytes,
 }
 
 /// Signs the builder bid with the relay key. This is necessary because the relay is the "builder"
@@ -29,7 +29,7 @@ pub fn resign_builder_bid(
     let start = Instant::now();
 
     message.pubkey = *signing_ctx.pubkey();
-    let sig = signing_ctx.sign_builder_message(&message);
+    let sig = signing_ctx.sign_builder_message(&message).serialize().into();
     let bid = SignedBuilderBid::new_no_metadata(Some(fork), SignedBuilderBidInner {
         message,
         signature: sig,

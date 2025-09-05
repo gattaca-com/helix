@@ -8,7 +8,7 @@ use tree_hash_derive::TreeHash;
 
 use crate::{
     fields::{ExecutionRequests, KzgCommitments},
-    BlsPublicKeyBytes, BlsSignature, ExecutionPayloadHeader,
+    BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayloadHeader,
 };
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
@@ -38,7 +38,7 @@ impl SignedRoot for BuilderBid {}
 #[derive(PartialEq, Debug, Encode, Serialize, Deserialize, Clone)]
 pub struct SignedBuilderBid {
     pub message: BuilderBid,
-    pub signature: BlsSignature,
+    pub signature: BlsSignatureBytes,
 }
 
 #[cfg(test)]

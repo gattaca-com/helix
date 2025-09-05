@@ -7,7 +7,7 @@ use ssz_derive::{Decode, Encode};
 use crate::{
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
-    BidTrace, Blob, BlobsBundle, BlsPublicKey, BlsSignature, ExecutionPayload,
+    BidTrace, Blob, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload,
 };
 
 /// A bid submission where transactions and blobs may be replaced by hashes instead of payload
@@ -18,7 +18,7 @@ pub enum DehydratedBidSubmission {
     Electra(DehydratedBidSubmissionElectra),
 }
 impl DehydratedBidSubmission {
-    pub fn builder_pubkey(&self) -> &BlsPublicKey {
+    pub fn builder_pubkey(&self) -> &BlsPublicKeyBytes {
         match self {
             DehydratedBidSubmission::Electra(dehydrated_bid_submission_electra) => {
                 &dehydrated_bid_submission_electra.message.builder_pubkey
@@ -52,8 +52,8 @@ pub struct DehydratedBidSubmissionElectra {
     message: BidTrace,
     execution_payload: ExecutionPayload,
     blobs_bundle: DehydratedBlobs,
-    execution_requests: ExecutionRequests,
-    signature: BlsSignature,
+    execution_requests: Arc<ExecutionRequests>,
+    signature: BlsSignatureBytes,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
@@ -76,8 +76,7 @@ impl DehydratedBidSubmissionElectra {
         mut self,
         hydration_cache: &mut HydrationCache,
     ) -> Result<(bid_submission::SignedBidSubmissionElectra, usize, usize), HydrationError> {
-        let order_cache =
-            hydration_cache.caches.entry(self.message.builder_pubkey.clone()).or_default();
+        let order_cache = hydration_cache.caches.entry(self.message.builder_pubkey).or_default();
 
         // avoid short-circuiting the loop to maximize cache population
         let mut last_err = Ok(());
@@ -145,7 +144,7 @@ impl DehydratedBidSubmissionElectra {
                 message: self.message,
                 execution_payload: Arc::new(self.execution_payload),
                 blobs_bundle: Arc::new(sidecar),
-                execution_requests: Arc::new(self.execution_requests),
+                execution_requests: self.execution_requests,
                 signature: self.signature,
             },
             tx_cache_hits,
@@ -183,7 +182,7 @@ impl Default for Cache {
 
 /// One cache per builder pubkey
 pub struct HydrationCache {
-    caches: FxHashMap<BlsPublicKey, Cache>,
+    caches: FxHashMap<BlsPublicKeyBytes, Cache>,
 }
 
 impl HydrationCache {

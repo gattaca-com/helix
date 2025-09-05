@@ -159,7 +159,7 @@ impl<A: Api> BuilderApi<A> {
         {
             warn!("proposer has regional filtering and builder is not optimistic for regional filtering, discarding optimistic v2 submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
-                builder_pub_key: payload.builder_public_key().clone(),
+                builder_pub_key: *payload.builder_public_key(),
             });
         }
 

@@ -2,7 +2,7 @@
 mod tests {
     use std::{default::Default, ops::DerefMut, sync::Arc, time::Duration};
 
-    use alloy_primitives::{b256, B256, U256};
+    use alloy_primitives::{B256, U256};
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
     use helix_common::{
         api::{
@@ -19,9 +19,10 @@ mod tests {
         ValidatorSummary,
     };
     use helix_types::{
-        BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsSecretKey, BlsSignature,
-        ExecutionPayload, PayloadAndBlobs, SignedBidSubmissionElectra, SignedMessage,
-        SignedValidatorRegistration, TestRandomSeed, Validator, ValidatorRegistration, Withdrawal,
+        BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey,
+        BlsSignatureBytes, ExecutionPayload, PayloadAndBlobs, SignedBidSubmissionElectra,
+        SignedMessage, SignedValidatorRegistration, TestRandomSeed, Validator,
+        ValidatorRegistration, Withdrawal,
     };
     use rand::{seq::SliceRandom, thread_rng, Rng};
     use tokio::{sync::OnceCell, time::sleep};
@@ -107,8 +108,8 @@ mod tests {
         let timestamp = utcnow_sec();
         let gas_limit = 0;
         let key = BlsKeypair::random();
-        let signature = key.sk.sign(B256::ZERO);
-        let pubkey = key.pk;
+        let signature = key.sk.sign(B256::ZERO).serialize();
+        let pubkey = key.pk.serialize();
         ValidatorRegistrationInfo {
             registration: SignedValidatorRegistration {
                 message: ValidatorRegistration {
@@ -117,7 +118,7 @@ mod tests {
                     gas_limit,
                     pubkey: pubkey.into(),
                 },
-                signature,
+                signature: signature.into(),
             },
             preferences: ValidatorPreferences {
                 filtering: Filtering::Global,
@@ -253,7 +254,10 @@ mod tests {
                 index: i,
                 balance: 0,
                 status: helix_common::ValidatorStatus::Active,
-                validator: Validator { pubkey: public_key.clone(), ..Validator::test_random() },
+                validator: Validator {
+                    pubkey: public_key.serialize().into(),
+                    ..Validator::test_random()
+                },
             };
 
             validator_summaries.push(validator_summary);
@@ -274,7 +278,10 @@ mod tests {
                 index: i,
                 balance: 0,
                 status: helix_common::ValidatorStatus::Active,
-                validator: Validator { pubkey, ..Validator::test_random() },
+                validator: Validator {
+                    pubkey: pubkey.serialize().into(),
+                    ..Validator::test_random()
+                },
             };
 
             new_validator_summaries.push(validator_summary);
@@ -325,7 +332,10 @@ mod tests {
                 index: i,
                 balance: 0,
                 status: helix_common::ValidatorStatus::Active,
-                validator: Validator { pubkey, ..Validator::test_random() },
+                validator: Validator {
+                    pubkey: pubkey.serialize().into(),
+                    ..Validator::test_random()
+                },
             };
 
             validator_summaries.push(validator_summary);
@@ -341,7 +351,7 @@ mod tests {
 
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
-        let public_key = BlsPublicKey::deserialize(&alloy_primitives::hex!("8C266FD5CB50B5D9431DAA69C4BE17BC9A79A85D172112DA09E0AC3E2D0DCF785021D49B6DF57827D6BC61EBA086A507")).unwrap();
+        let public_key = BlsPublicKey::deserialize(&alloy_primitives::hex!("8C266FD5CB50B5D9431DAA69C4BE17BC9A79A85D172112DA09E0AC3E2D0DCF785021D49B6DF57827D6BC61EBA086A507")).unwrap().serialize().into();
         let builder_info = helix_common::BuilderInfo {
             collateral: U256::from(10000000000000000000u64),
             is_optimistic: false,
@@ -366,7 +376,7 @@ mod tests {
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
 
         let key = BlsSecretKey::random();
-        let public_key = key.public_key();
+        let public_key = key.public_key().serialize().into();
 
         let builder_info = helix_common::BuilderInfo {
             collateral: Default::default(),
@@ -405,13 +415,14 @@ mod tests {
 
         let pubkey = BlsPublicKey::deserialize(alloy_primitives::hex!("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").as_ref()).unwrap();
 
-        let bid_trace = BidTrace { proposer_pubkey: pubkey, ..BidTrace::test_random() };
+        let bid_trace =
+            BidTrace { proposer_pubkey: pubkey.serialize().into(), ..BidTrace::test_random() };
 
         let signed_bid_submission = SignedBidSubmissionElectra {
             message: bid_trace.clone(),
             execution_payload: ExecutionPayload::test_random().into(),
             blobs_bundle: BlobsBundle::default().into(),
-            signature: BlsSignature::test_random(),
+            signature: BlsSignatureBytes::random(),
             execution_requests: Default::default(),
         };
 
@@ -482,7 +493,7 @@ mod tests {
 
         db_service
             .save_delivered_payload(
-                BlsPublicKey::test_random(),
+                BlsPublicKeyBytes::random(),
                 Arc::new(payload_and_blobs),
                 &latency_trace,
                 None,
@@ -576,7 +587,7 @@ mod tests {
 
         let bid_submission = HeaderSubmissionElectra::test_random();
         let signed =
-            SignedMessage { message: bid_submission, signature: BlsSignature::test_random() };
+            SignedMessage { message: bid_submission, signature: BlsSignatureBytes::random() };
         let signed_bid_submission = SignedHeaderSubmission::Electra(signed);
 
         db_service

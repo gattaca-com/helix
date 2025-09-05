@@ -18,8 +18,8 @@ use helix_common::{
     ValidatorSummary,
 };
 use helix_types::{
-    BlsPublicKey, BlsSignature, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
-    TestRandomSeed, ValidatorRegistrationData,
+    BlsPublicKeyBytes, BlsSignatureBytes, PayloadAndBlobs, SignedBidSubmission,
+    SignedValidatorRegistration, TestRandomSeed, ValidatorRegistrationData,
 };
 
 use crate::{
@@ -60,16 +60,16 @@ impl DatabaseService for MockDatabaseService {
     }
     async fn get_validator_registration(
         &self,
-        pubkey: &BlsPublicKey,
+        pubkey: &BlsPublicKeyBytes,
     ) -> Result<SignedValidatorRegistrationEntry, DatabaseError> {
         let registration = SignedValidatorRegistration {
             message: ValidatorRegistrationData {
                 fee_recipient: Address::test_random(),
                 gas_limit: 1000000,
                 timestamp: 1000000,
-                pubkey: pubkey.clone(),
+                pubkey: *pubkey,
             },
-            signature: BlsSignature::test_random(),
+            signature: BlsSignatureBytes::random(),
         };
 
         Ok(SignedValidatorRegistrationEntry {
@@ -84,7 +84,7 @@ impl DatabaseService for MockDatabaseService {
     }
     async fn get_validator_registrations_for_pub_keys(
         &self,
-        pubkeys: &[&BlsPublicKey],
+        pubkeys: &[&BlsPublicKeyBytes],
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError> {
         let mut entries = vec![];
         for &pubkey in pubkeys {
@@ -122,15 +122,15 @@ impl DatabaseService for MockDatabaseService {
 
     async fn check_known_validators(
         &self,
-        public_keys: Vec<BlsPublicKey>,
-    ) -> Result<HashSet<BlsPublicKey>, DatabaseError> {
+        public_keys: Vec<BlsPublicKeyBytes>,
+    ) -> Result<HashSet<BlsPublicKeyBytes>, DatabaseError> {
         Ok(public_keys.into_iter().collect())
     }
 
     async fn save_too_late_get_payload(
         &self,
         _slot: u64,
-        _proposer_pub_key: &BlsPublicKey,
+        _proposer_pub_key: &BlsPublicKeyBytes,
         _payload_hash: &B256,
         _message_received: u64,
         _payload_fetched: u64,
@@ -140,7 +140,7 @@ impl DatabaseService for MockDatabaseService {
 
     async fn save_delivered_payload(
         &self,
-        _proposer_pub_key: BlsPublicKey,
+        _proposer_pub_key: BlsPublicKeyBytes,
         _payload: Arc<PayloadAndBlobs>,
         _latency_trace: &GetPayloadTrace,
         _user_agent: Option<String>,
@@ -159,7 +159,7 @@ impl DatabaseService for MockDatabaseService {
 
     async fn store_builder_info(
         &self,
-        _builder_pub_key: &BlsPublicKey,
+        _builder_pub_key: &BlsPublicKeyBytes,
         _builder_info: &BuilderInfo,
     ) -> Result<(), DatabaseError> {
         Ok(())
@@ -187,7 +187,7 @@ impl DatabaseService for MockDatabaseService {
     async fn db_demote_builder(
         &self,
         _slot: u64,
-        _builder_pub_key: &BlsPublicKey,
+        _builder_pub_key: &BlsPublicKeyBytes,
         _block_hash: &B256,
         _reason: String,
     ) -> Result<(), DatabaseError> {
@@ -231,7 +231,7 @@ impl DatabaseService for MockDatabaseService {
         &self,
         _slot: u64,
         _parent_hash: B256,
-        _public_key: BlsPublicKey,
+        _public_key: BlsPublicKeyBytes,
         _best_block_hash: B256,
         _trace: GetHeaderTrace,
 
@@ -293,7 +293,7 @@ impl DatabaseService for MockDatabaseService {
         _: &InclusionListWithMetadata,
         _: u64,
         _: &B256,
-        _: &BlsPublicKey,
+        _: &BlsPublicKeyBytes,
     ) -> Result<(), Vec<DatabaseError>> {
         Ok(())
     }

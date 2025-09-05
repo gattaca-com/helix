@@ -1,20 +1,18 @@
 use std::sync::Arc;
 
 use alloy_primitives::{Address, B256, U256};
-use lh_test_random::TestRandom;
 use lh_types::{test_utils::TestRandom, SignedRoot, Slot};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    error::SigError, fields::ExecutionRequests, BlobsBundle, BlsPublicKey, BlsSignature, ChainSpec,
-    ExecutionPayload, PayloadAndBlobsRef, ValidationError,
+    error::SigError, fields::ExecutionRequests, BlobsBundle, BlsPublicKey, BlsPublicKeyBytes,
+    BlsSignature, BlsSignatureBytes, ChainSpec, ExecutionPayload, PayloadAndBlobsRef,
+    ValidationError,
 };
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash, TestRandom,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
 #[serde(deny_unknown_fields)]
 pub struct BidTrace {
     /// The slot associated with the block.
@@ -25,9 +23,9 @@ pub struct BidTrace {
     /// The hash of the block.
     pub block_hash: B256,
     /// The public key of the builder.
-    pub builder_pubkey: BlsPublicKey,
-    /// The public key of the proposer. // TODO: use bytes
-    pub proposer_pubkey: BlsPublicKey,
+    pub builder_pubkey: BlsPublicKeyBytes,
+    /// The public key of the proposer.
+    pub proposer_pubkey: BlsPublicKeyBytes,
     /// The recipient of the proposer's fee.
     pub proposer_fee_recipient: Address,
     /// The gas limit associated with the block.
@@ -39,6 +37,22 @@ pub struct BidTrace {
     /// The value associated with the block.
     #[serde(with = "serde_utils::quoted_u256")]
     pub value: U256,
+}
+
+impl TestRandom for BidTrace {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self {
+            slot: u64::random_for_test(rng),
+            parent_hash: B256::random_for_test(rng),
+            block_hash: B256::random_for_test(rng),
+            builder_pubkey: BlsPublicKeyBytes::random(),
+            proposer_pubkey: BlsPublicKeyBytes::random(),
+            proposer_fee_recipient: Address::random_for_test(rng),
+            gas_limit: u64::random_for_test(rng),
+            gas_used: u64::random_for_test(rng),
+            value: U256::random_for_test(rng),
+        }
+    }
 }
 
 impl SignedRoot for BidTrace {}
@@ -56,7 +70,7 @@ pub struct SignedBidSubmissionElectra {
     pub execution_payload: Arc<ExecutionPayload>,
     pub blobs_bundle: Arc<BlobsBundle>,
     pub execution_requests: Arc<ExecutionRequests>,
-    pub signature: BlsSignature,
+    pub signature: BlsSignatureBytes,
 }
 
 /// Request object of POST `/relay/v1/builder/blocks`
@@ -89,8 +103,14 @@ impl SignedBidSubmission {
         let domain = spec.get_builder_domain();
         let valid = match self {
             SignedBidSubmission::Electra(bid) => {
+                let uncompressed_builder_pubkey =
+                    BlsPublicKey::deserialize(bid.message.builder_pubkey.as_slice())
+                        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
+                let uncompressed_signature = BlsSignature::deserialize(bid.signature.as_slice())
+                    .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
+
                 let message = bid.message.signing_root(domain);
-                bid.signature.verify(&bid.message.builder_pubkey, message)
+                uncompressed_signature.verify(&uncompressed_builder_pubkey, message)
             }
         };
 

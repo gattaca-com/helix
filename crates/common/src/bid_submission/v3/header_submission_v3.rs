@@ -5,7 +5,7 @@ use std::{
 
 use alloy_primitives::B256;
 use bitflags::bitflags;
-use helix_types::{BlsPublicKey, BlsPublicKeyBytes, BlsSignature};
+use helix_types::{BlsPublicKey, BlsPublicKeyBytes, BlsSignatureBytes};
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
@@ -131,7 +131,7 @@ pub struct SignedGetPayloadV3 {
     pub message: GetPayloadV3,
     /// Signature from the relay's key that it uses to sign the `get_header`
     /// responses.
-    pub signature: BlsSignature,
+    pub signature: BlsSignatureBytes,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode)]

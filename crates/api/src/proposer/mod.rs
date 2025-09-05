@@ -17,7 +17,7 @@ use helix_common::{
     ValidatorPreferences,
 };
 use helix_housekeeper::CurrentSlotInfo;
-use helix_types::BlsPublicKey;
+use helix_types::BlsPublicKeyBytes;
 use hyper::StatusCode;
 use tokio::sync::mpsc::Sender;
 pub use types::*;
@@ -40,7 +40,7 @@ pub struct ProposerApi<A: Api> {
     pub validator_preferences: Arc<ValidatorPreferences>,
     pub relay_config: RelayConfig,
     /// Channel on which to send v3 payload fetch requests.
-    pub v3_payload_request: Sender<(u64, B256, BlsPublicKey, Vec<u8>)>,
+    pub v3_payload_request: Sender<(u64, B256, BlsPublicKeyBytes, Vec<u8>)>,
 
     /// Set in the sorter loop
     pub shared_best_header: BestGetHeader,
@@ -59,7 +59,7 @@ impl<A: Api> ProposerApi<A> {
         chain_info: Arc<ChainInfo>,
         validator_preferences: Arc<ValidatorPreferences>,
         relay_config: RelayConfig,
-        v3_payload_request: Sender<(u64, B256, BlsPublicKey, Vec<u8>)>,
+        v3_payload_request: Sender<(u64, B256, BlsPublicKeyBytes, Vec<u8>)>,
         curr_slot_info: CurrentSlotInfo,
         shared_best_header: BestGetHeader,
     ) -> Self {

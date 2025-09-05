@@ -28,7 +28,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
-use helix_types::{BlsPublicKey, DehydratedBidSubmission, SignedBidSubmission, Slot};
+use helix_types::{BlsPublicKeyBytes, DehydratedBidSubmission, SignedBidSubmission, Slot};
 use http::{HeaderMap, Uri};
 use parking_lot::RwLock;
 use tokio::sync::oneshot;
@@ -74,7 +74,7 @@ pub struct BuilderApi<A: Api> {
     /// Best get header to check the current top bid on simulations
     pub shared_best_header: BestGetHeader,
     /// Builder pubkey -> (bid_slot, largest sequence number)
-    pub sequence_numbers: DashMap<BlsPublicKey, (Slot, u64)>,
+    pub sequence_numbers: DashMap<BlsPublicKeyBytes, (Slot, u64)>,
     /// Hydration task sender
     pub hydration_tx: tokio::sync::mpsc::Sender<HydrationMessage>,
 }
@@ -270,11 +270,8 @@ impl<A: Api> BuilderApi<A> {
 
         debug!("validating block");
 
-        let current_slot_coord = (
-            payload.slot().as_u64(),
-            payload.proposer_public_key().clone(),
-            *payload.parent_hash(),
-        );
+        let current_slot_coord =
+            (payload.slot().as_u64(), *payload.proposer_public_key(), *payload.parent_hash());
 
         let inclusion_list = self
             .current_inclusion_list
@@ -331,7 +328,7 @@ impl<A: Api> BuilderApi<A> {
                 "builder is not optimistic"
             );
             return Err(BuilderApiError::BuilderNotOptimistic {
-                builder_pub_key: payload.builder_public_key().clone(),
+                builder_pub_key: *payload.builder_public_key(),
             });
         } else if builder_info.collateral < payload.value() {
             warn!(
@@ -341,7 +338,7 @@ impl<A: Api> BuilderApi<A> {
                 "builder does not have enough collateral"
             );
             return Err(BuilderApiError::NotEnoughOptimisticCollateral {
-                builder_pub_key: payload.builder_public_key().clone().into(),
+                builder_pub_key: *payload.builder_public_key(),
                 collateral: builder_info.collateral,
                 collateral_required: payload.value(),
                 is_optimistic: builder_info.is_optimistic,
@@ -353,7 +350,7 @@ impl<A: Api> BuilderApi<A> {
     }
 
     /// Fetch the builder's information. Default info is returned if fetching fails.
-    pub(crate) fn fetch_builder_info(&self, builder_pub_key: &BlsPublicKey) -> BuilderInfo {
+    pub(crate) fn fetch_builder_info(&self, builder_pub_key: &BlsPublicKeyBytes) -> BuilderInfo {
         match self.auctioneer.get_builder_info(builder_pub_key) {
             Ok(info) => info,
             Err(err) => {
@@ -377,7 +374,7 @@ impl<A: Api> BuilderApi<A> {
     pub(crate) async fn demote_builder(
         &self,
         slot: u64,
-        builder: &BlsPublicKey,
+        builder: &BlsPublicKeyBytes,
         block_hash: &B256,
         err: &BuilderApiError,
     ) {
@@ -410,7 +407,7 @@ impl<A: Api> BuilderApi<A> {
     /// Assume the slot is already validated
     pub(crate) fn check_and_update_sequence_number(
         &self,
-        builder_pubkey: &BlsPublicKey,
+        builder_pubkey: &BlsPublicKeyBytes,
         bid_slot: Slot,
         headers: &HeaderMap,
     ) -> Result<(), BuilderApiError> {
@@ -443,7 +440,7 @@ impl<A: Api> BuilderApi<A> {
                 })
             }
         } else {
-            self.sequence_numbers.insert(builder_pubkey.clone(), (bid_slot, new_seq));
+            self.sequence_numbers.insert(*builder_pubkey, (bid_slot, new_seq));
         }
 
         Ok(())
@@ -595,8 +592,8 @@ pub(crate) fn sanity_check_block_submission(
 
     if next_duty.entry.registration.message.pubkey != bid_trace.proposer_pubkey {
         return Err(BuilderApiError::ProposerPublicKeyMismatch {
-            got: bid_trace.proposer_pubkey.clone().into(),
-            expected: next_duty.entry.registration.message.pubkey.clone().into(),
+            got: bid_trace.proposer_pubkey,
+            expected: next_duty.entry.registration.message.pubkey,
         });
     }
 

@@ -2,7 +2,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use helix_types::{BlsPublicKey, CryptoError};
+use helix_types::{BlsPublicKeyBytes, CryptoError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuctioneerError {
@@ -37,7 +37,7 @@ pub enum AuctioneerError {
     ExecutionPayloadNotFound,
 
     #[error("builder not found for pubkey {pub_key:?}")]
-    BuilderNotFound { pub_key: BlsPublicKey },
+    BuilderNotFound { pub_key: BlsPublicKeyBytes },
 }
 
 impl IntoResponse for AuctioneerError {

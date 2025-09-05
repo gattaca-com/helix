@@ -10,7 +10,7 @@ use helix_common::{
     utils::{utcnow_ms, utcnow_ns},
     SubmissionTrace,
 };
-use helix_types::{BlsPublicKey, SignedBidSubmission};
+use helix_types::{BlsPublicKeyBytes, SignedBidSubmission};
 use reqwest::Url;
 use ssz::{Decode, Encode};
 use tokio::sync::mpsc::Receiver;
@@ -25,7 +25,7 @@ use crate::{
 /// A task that fetches builder blocks for optimistic v3 submissions.
 pub async fn fetch_builder_blocks<A: Api>(
     api: Arc<BuilderApi<A>>,
-    mut receiver: Receiver<(u64, B256, BlsPublicKey, Vec<u8>)>,
+    mut receiver: Receiver<(u64, B256, BlsPublicKeyBytes, Vec<u8>)>,
     signing_ctx: Arc<RelaySigningContext>,
 ) {
     while let Some((slot, block_hash, builder_pubkey, builder_address)) = receiver.recv().await {
@@ -74,7 +74,7 @@ async fn fetch_block(
         request_ts_millis: utcnow_ms(),
         relay_pubkey: *signing_ctx.pubkey(),
     };
-    let signature = signing_ctx.sign_builder_message(&message);
+    let signature = signing_ctx.sign_builder_message(&message).serialize().into();
     let signed_request = SignedGetPayloadV3 { message, signature };
     let request_bytes = signed_request.as_ssz_bytes();
 

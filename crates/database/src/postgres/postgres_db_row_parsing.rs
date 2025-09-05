@@ -7,7 +7,8 @@ use helix_common::{
     ValidatorPreferences,
 };
 use helix_types::{
-    BidTrace, BlsPublicKey, BlsSignature, SignedValidatorRegistration, ValidatorRegistration,
+    BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, SignedValidatorRegistration,
+    ValidatorRegistration,
 };
 use thiserror::Error;
 
@@ -44,8 +45,12 @@ impl FromRow for BidTrace {
             slot: parse_i32_to_u64(row.get::<&str, i32>("slot_number"))?,
             parent_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("parent_hash"))?,
             block_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("block_hash"))?,
-            builder_pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("builder_public_key"))?,
-            proposer_pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("proposer_public_key"))?,
+            builder_pubkey: parse_bytes_to_pubkey_bytes(
+                row.get::<&str, &[u8]>("builder_public_key"),
+            )?,
+            proposer_pubkey: parse_bytes_to_pubkey_bytes(
+                row.get::<&str, &[u8]>("proposer_public_key"),
+            )?,
             proposer_fee_recipient: parse_bytes_to_address(
                 row.get::<&str, &[u8]>("proposer_fee_recipient"),
             )?,
@@ -85,10 +90,10 @@ impl FromRow for BidSubmissionDocument {
                 slot: parse_i32_to_u64(row.get::<&str, i32>("slot_number"))?,
                 parent_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("parent_hash"))?,
                 block_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("block_hash"))?,
-                builder_pubkey: parse_bytes_to_pubkey(
+                builder_pubkey: parse_bytes_to_pubkey_bytes(
                     row.get::<&str, &[u8]>("builder_public_key"),
                 )?,
-                proposer_pubkey: parse_bytes_to_pubkey(
+                proposer_pubkey: parse_bytes_to_pubkey_bytes(
                     row.get::<&str, &[u8]>("proposer_public_key"),
                 )?,
                 proposer_fee_recipient: parse_bytes_to_address(
@@ -117,9 +122,9 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                         )?,
                         gas_limit: parse_i32_to_u64(row.get::<&str, i32>("gas_limit"))?,
                         timestamp: parse_i64_to_u64(row.get::<&str, i64>("timestamp"))?,
-                        pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?,
+                        pubkey: parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("public_key"))?,
                     },
-                    signature: parse_bytes_to_signature(row.get::<&str, &[u8]>("signature"))?,
+                    signature: parse_bytes_to_signature_bytes(row.get::<&str, &[u8]>("signature"))?,
                 },
                 preferences: ValidatorPreferences {
                     //TODO: change to filtering after migration
@@ -147,7 +152,7 @@ impl FromRow for BuilderInfoDocument {
         Self: Sized,
     {
         Ok(BuilderInfoDocument {
-            pub_key: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?,
+            pub_key: parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("public_key"))?,
             builder_info: BuilderInfo::from_row(row)?,
         })
     }
@@ -183,9 +188,9 @@ impl FromRow for SignedValidatorRegistration {
                 fee_recipient: parse_bytes_to_address(row.get::<&str, &[u8]>("fee_recipient"))?,
                 gas_limit: parse_i32_to_u64(row.get::<&str, i32>("gas_limit"))?,
                 timestamp: parse_i64_to_u64(row.get::<&str, i64>("timestamp"))?,
-                pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?,
+                pubkey: parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("public_key"))?,
             },
-            signature: parse_bytes_to_signature(row.get::<&str, &[u8]>("signature"))?,
+            signature: parse_bytes_to_signature_bytes(row.get::<&str, &[u8]>("signature"))?,
         })
     }
 }
@@ -230,7 +235,7 @@ impl FromRow for ProposerInfo {
     {
         Ok(ProposerInfo {
             name: row.get::<&str, &str>("name").to_string(),
-            pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("pub_key"))?,
+            pubkey: parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("pub_key"))?,
         })
     }
 }
@@ -274,12 +279,14 @@ pub fn parse_bytes_to_address(hash: &[u8]) -> Result<Address, DatabaseError> {
     Address::try_from(hash).map_err(|e| DatabaseError::RowParsingError(Box::new(e)))
 }
 
-pub fn parse_bytes_to_pubkey(pubkey: &[u8]) -> Result<BlsPublicKey, DatabaseError> {
-    BlsPublicKey::deserialize(pubkey).map_err(DatabaseError::CryptoError)
+pub fn parse_bytes_to_pubkey_bytes(pubkey: &[u8]) -> Result<BlsPublicKeyBytes, DatabaseError> {
+    BlsPublicKeyBytes::try_from(pubkey).map_err(|_| DatabaseError::InvalidBlsBytes)
 }
 
-pub fn parse_bytes_to_signature(signature: &[u8]) -> Result<BlsSignature, DatabaseError> {
-    BlsSignature::deserialize(signature).map_err(DatabaseError::CryptoError)
+pub fn parse_bytes_to_signature_bytes(
+    signature: &[u8],
+) -> Result<BlsSignatureBytes, DatabaseError> {
+    BlsSignatureBytes::try_from(signature).map_err(|_| DatabaseError::InvalidBlsBytes)
 }
 
 pub fn parse_numeric_to_u256(value: PostgresNumeric) -> U256 {

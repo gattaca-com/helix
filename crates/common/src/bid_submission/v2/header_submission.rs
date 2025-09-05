@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use alloy_primitives::{Address, B256, U256};
 use helix_types::{
-    Bloom, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayloadHeader, ExecutionRequests,
-    ExtraData, KzgCommitments, SigError, SignedMessage, SignedRoot, Slot, TestRandom,
-    ValidationError,
+    Bloom, BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, ChainSpec,
+    ExecutionPayloadHeader, ExecutionRequests, ExtraData, KzgCommitments, SigError, SignedMessage,
+    SignedRoot, Slot, TestRandom, ValidationError,
 };
 use ssz_derive::{Decode, Encode};
 
@@ -45,7 +45,7 @@ impl BidSubmission for SignedHeaderSubmission {
         }
     }
 
-    fn signature(&self) -> &BlsSignature {
+    fn signature(&self) -> &BlsSignatureBytes {
         match self {
             Self::Electra(signed_header_submission) => &signed_header_submission.signature,
         }
@@ -63,11 +63,11 @@ impl BidSubmission for SignedHeaderSubmission {
         &self.bid_trace().block_hash
     }
 
-    fn builder_public_key(&self) -> &BlsPublicKey {
+    fn builder_public_key(&self) -> &BlsPublicKeyBytes {
         &self.bid_trace().builder_pubkey
     }
 
-    fn proposer_public_key(&self) -> &BlsPublicKey {
+    fn proposer_public_key(&self) -> &BlsPublicKeyBytes {
         &self.bid_trace().proposer_pubkey
     }
 
@@ -232,7 +232,12 @@ impl SignedHeaderSubmission {
         let valid = match self {
             SignedHeaderSubmission::Electra(bid) => {
                 let message = bid.message.bid_trace.signing_root(domain);
-                bid.signature.verify(&bid.message.bid_trace.builder_pubkey, message)
+                let uncompressed_builder_pubkey =
+                    BlsPublicKey::deserialize(bid.message.bid_trace.builder_pubkey.as_slice())
+                        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
+                let uncompressed_signature = BlsSignature::deserialize(bid.signature.as_slice())
+                    .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
+                uncompressed_signature.verify(&uncompressed_builder_pubkey, message)
             }
         };
 
