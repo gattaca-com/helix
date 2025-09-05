@@ -19,7 +19,7 @@ mod tests {
         ValidatorSummary,
     };
     use helix_types::{
-        BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsSecretKey, BlsSignature,
+        BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsSecretKey, BlsSignatureBytes,
         ExecutionPayload, PayloadAndBlobs, SignedBidSubmissionElectra, SignedMessage,
         SignedValidatorRegistration, TestRandomSeed, Validator, ValidatorRegistration, Withdrawal,
     };
@@ -421,7 +421,7 @@ mod tests {
             message: bid_trace.clone(),
             execution_payload: ExecutionPayload::test_random().into(),
             blobs_bundle: BlobsBundle::default().into(),
-            signature: BlsSignature::test_random(),
+            signature: BlsSignatureBytes::random(),
             execution_requests: Default::default(),
         };
 
@@ -586,7 +586,7 @@ mod tests {
 
         let bid_submission = HeaderSubmissionElectra::test_random();
         let signed =
-            SignedMessage { message: bid_submission, signature: BlsSignature::test_random() };
+            SignedMessage { message: bid_submission, signature: BlsSignatureBytes::random() };
         let signed_bid_submission = SignedHeaderSubmission::Electra(signed);
 
         db_service

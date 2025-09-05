@@ -1,6 +1,6 @@
 use alloy_primitives::{Address, B256, U256};
 use helix_types::{
-    BidTrace, Bloom, BlsPublicKeyBytes, BlsSignature, ExtraData, SignedBidSubmission, Slot,
+    BidTrace, Bloom, BlsPublicKeyBytes, BlsSignatureBytes, ExtraData, SignedBidSubmission, Slot,
 };
 use tree_hash::TreeHash;
 
@@ -14,7 +14,7 @@ impl BidSubmission for SignedBidSubmission {
         }
     }
 
-    fn signature(&self) -> &BlsSignature {
+    fn signature(&self) -> &BlsSignatureBytes {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => &signed_bid_submission.signature,
         }

@@ -74,7 +74,7 @@ async fn fetch_block(
         request_ts_millis: utcnow_ms(),
         relay_pubkey: *signing_ctx.pubkey(),
     };
-    let signature = signing_ctx.sign_builder_message(&message);
+    let signature = signing_ctx.sign_builder_message(&message).serialize().into();
     let signed_request = SignedGetPayloadV3 { message, signature };
     let request_bytes = signed_request.as_ssz_bytes();
 

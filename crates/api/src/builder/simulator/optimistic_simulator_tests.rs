@@ -9,7 +9,7 @@ mod simulator_tests {
     use helix_database::mock_database_service::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_types::{
-        BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignature, ExecutionPayload,
+        BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload,
         SignedBidSubmission, SignedBidSubmissionElectra, TestRandomSeed,
     };
     use reqwest::Client;
@@ -53,7 +53,7 @@ mod simulator_tests {
         let signed_bid_submission = SignedBidSubmissionElectra {
             message: bid_trace,
             execution_payload: electra_exec_payload.into(),
-            signature: BlsSignature::test_random(),
+            signature: BlsSignatureBytes::random(),
             blobs_bundle: BlobsBundle::default().into(),
             execution_requests: Default::default(),
         };

@@ -87,7 +87,7 @@ pub type SignedValidatorRegistration = validator::SignedValidatorRegistrationDat
 #[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Encode, Decode)]
 pub struct SignedMessage<T: ssz::Encode + ssz::Decode> {
     pub message: T,
-    pub signature: BlsSignature,
+    pub signature: BlsSignatureBytes,
 }
 
 pub fn mock_public_key_bytes() -> BlsPublicKeyBytes {

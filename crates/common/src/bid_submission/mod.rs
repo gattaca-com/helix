@@ -3,13 +3,15 @@ pub mod v2;
 pub mod v3;
 
 use alloy_primitives::{Address, B256, U256};
-use helix_types::{BidTrace, Bloom, BlsPublicKeyBytes, BlsSignature, ExtraData, ForkName, Slot};
+use helix_types::{
+    BidTrace, Bloom, BlsPublicKeyBytes, BlsSignatureBytes, ExtraData, ForkName, Slot,
+};
 
 #[auto_impl::auto_impl(Arc)]
 pub trait BidSubmission {
     fn bid_trace(&self) -> &BidTrace;
 
-    fn signature(&self) -> &BlsSignature;
+    fn signature(&self) -> &BlsSignatureBytes;
 
     fn slot(&self) -> Slot;
 

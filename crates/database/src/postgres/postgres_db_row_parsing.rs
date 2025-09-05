@@ -7,8 +7,8 @@ use helix_common::{
     ValidatorPreferences,
 };
 use helix_types::{
-    BidTrace, BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes,
-    SignedValidatorRegistration, ValidatorRegistration,
+    BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, SignedValidatorRegistration,
+    ValidatorRegistration,
 };
 use thiserror::Error;
 
@@ -279,16 +279,8 @@ pub fn parse_bytes_to_address(hash: &[u8]) -> Result<Address, DatabaseError> {
     Address::try_from(hash).map_err(|e| DatabaseError::RowParsingError(Box::new(e)))
 }
 
-pub fn parse_bytes_to_pubkey(pubkey: &[u8]) -> Result<BlsPublicKey, DatabaseError> {
-    BlsPublicKey::deserialize(pubkey).map_err(DatabaseError::CryptoError)
-}
-
 pub fn parse_bytes_to_pubkey_bytes(pubkey: &[u8]) -> Result<BlsPublicKeyBytes, DatabaseError> {
     BlsPublicKeyBytes::try_from(pubkey).map_err(|_| DatabaseError::InvalidBytes)
-}
-
-pub fn parse_bytes_to_signature(signature: &[u8]) -> Result<BlsSignature, DatabaseError> {
-    BlsSignature::deserialize(signature).map_err(DatabaseError::CryptoError)
 }
 
 pub fn parse_bytes_to_signature_bytes(

@@ -7,7 +7,7 @@ use ssz_derive::{Decode, Encode};
 use crate::{
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
-    BidTrace, Blob, BlobsBundle, BlsPublicKeyBytes, BlsSignature, ExecutionPayload,
+    BidTrace, Blob, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload,
 };
 
 /// A bid submission where transactions and blobs may be replaced by hashes instead of payload
@@ -52,8 +52,8 @@ pub struct DehydratedBidSubmissionElectra {
     message: BidTrace,
     execution_payload: ExecutionPayload,
     blobs_bundle: DehydratedBlobs,
-    execution_requests: ExecutionRequests,
-    signature: BlsSignature,
+    execution_requests: Arc<ExecutionRequests>,
+    signature: BlsSignatureBytes,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
@@ -144,7 +144,7 @@ impl DehydratedBidSubmissionElectra {
                 message: self.message,
                 execution_payload: Arc::new(self.execution_payload),
                 blobs_bundle: Arc::new(sidecar),
-                execution_requests: Arc::new(self.execution_requests),
+                execution_requests: self.execution_requests,
                 signature: self.signature,
             },
             tx_cache_hits,

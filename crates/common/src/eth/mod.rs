@@ -29,7 +29,7 @@ pub fn resign_builder_bid(
     let start = Instant::now();
 
     message.pubkey = *signing_ctx.pubkey();
-    let sig = signing_ctx.sign_builder_message(&message);
+    let sig = signing_ctx.sign_builder_message(&message).serialize().into();
     let bid = SignedBuilderBid::new_no_metadata(Some(fork), SignedBuilderBidInner {
         message,
         signature: sig,

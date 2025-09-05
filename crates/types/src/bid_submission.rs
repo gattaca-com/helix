@@ -8,7 +8,8 @@ use tree_hash_derive::TreeHash;
 
 use crate::{
     error::SigError, fields::ExecutionRequests, BlobsBundle, BlsPublicKey, BlsPublicKeyBytes,
-    BlsSignature, ChainSpec, ExecutionPayload, PayloadAndBlobsRef, ValidationError,
+    BlsSignature, BlsSignatureBytes, ChainSpec, ExecutionPayload, PayloadAndBlobsRef,
+    ValidationError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
@@ -69,7 +70,7 @@ pub struct SignedBidSubmissionElectra {
     pub execution_payload: Arc<ExecutionPayload>,
     pub blobs_bundle: Arc<BlobsBundle>,
     pub execution_requests: Arc<ExecutionRequests>,
-    pub signature: BlsSignature,
+    pub signature: BlsSignatureBytes,
 }
 
 /// Request object of POST `/relay/v1/builder/blocks`
@@ -105,8 +106,11 @@ impl SignedBidSubmission {
                 let uncompressed_builder_pubkey =
                     BlsPublicKey::deserialize(bid.message.builder_pubkey.as_slice())
                         .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
+                let uncompressed_signature = BlsSignature::deserialize(bid.signature.as_slice())
+                    .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
+
                 let message = bid.message.signing_root(domain);
-                bid.signature.verify(&uncompressed_builder_pubkey, message)
+                uncompressed_signature.verify(&uncompressed_builder_pubkey, message)
             }
         };
 
