@@ -14,7 +14,7 @@ use helix_common::{
     BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
-use helix_types::{BlsPublicKey, ForkName, PayloadAndBlobs};
+use helix_types::{BlsPublicKeyBytes, ForkName, PayloadAndBlobs};
 use http::HeaderValue;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;

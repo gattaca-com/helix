@@ -18,8 +18,8 @@ use helix_common::{
     ValidatorSummary,
 };
 use helix_types::{
-    BlsPublicKey, BlsSignature, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
-    TestRandomSeed, ValidatorRegistrationData,
+    BlsPublicKeyBytes, BlsSignatureBytes, PayloadAndBlobs, SignedBidSubmission,
+    SignedValidatorRegistration, TestRandomSeed, ValidatorRegistrationData,
 };
 
 use crate::{
@@ -140,7 +140,7 @@ impl DatabaseService for MockDatabaseService {
 
     async fn save_delivered_payload(
         &self,
-        _proposer_pub_key: BlsPublicKey,
+        _proposer_pub_key: BlsPublicKeyBytes,
         _payload: Arc<PayloadAndBlobs>,
         _latency_trace: &GetPayloadTrace,
         _user_agent: Option<String>,

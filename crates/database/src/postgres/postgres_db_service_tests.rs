@@ -2,7 +2,7 @@
 mod tests {
     use std::{default::Default, ops::DerefMut, sync::Arc, time::Duration};
 
-    use alloy_primitives::{b256, B256, U256};
+    use alloy_primitives::{B256, U256};
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
     use helix_common::{
         api::{
@@ -19,9 +19,10 @@ mod tests {
         ValidatorSummary,
     };
     use helix_types::{
-        BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsSecretKey, BlsSignatureBytes,
-        ExecutionPayload, PayloadAndBlobs, SignedBidSubmissionElectra, SignedMessage,
-        SignedValidatorRegistration, TestRandomSeed, Validator, ValidatorRegistration, Withdrawal,
+        BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey,
+        BlsSignatureBytes, ExecutionPayload, PayloadAndBlobs, SignedBidSubmissionElectra,
+        SignedMessage, SignedValidatorRegistration, TestRandomSeed, Validator,
+        ValidatorRegistration, Withdrawal,
     };
     use rand::{seq::SliceRandom, thread_rng, Rng};
     use tokio::{sync::OnceCell, time::sleep};
@@ -492,7 +493,7 @@ mod tests {
 
         db_service
             .save_delivered_payload(
-                BlsPublicKey::test_random(),
+                BlsPublicKeyBytes::random(),
                 Arc::new(payload_and_blobs),
                 &latency_trace,
                 None,

@@ -8,7 +8,7 @@ use helix_common::{
     ProposerInfo,
 };
 use helix_database::BuilderInfoDocument;
-use helix_types::{BlsPublicKey, ForkName, PayloadAndBlobs};
+use helix_types::{BlsPublicKeyBytes, ForkName, PayloadAndBlobs};
 use http::HeaderValue;
 use tokio::sync::broadcast;
 

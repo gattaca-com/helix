@@ -15,7 +15,7 @@ use helix_common::{
     SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
 };
 use helix_types::{
-    BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
+    BlsPublicKeyBytes, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
 };
 
 use crate::{
@@ -79,7 +79,7 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn save_delivered_payload(
         &self,
-        proposer_pub_key: BlsPublicKey,
+        proposer_pub_key: BlsPublicKeyBytes,
         payload: Arc<PayloadAndBlobs>,
         latency_trace: &GetPayloadTrace,
         user_agent: Option<String>,

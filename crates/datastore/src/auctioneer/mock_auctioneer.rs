@@ -9,7 +9,7 @@ use helix_common::{
     BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
-use helix_types::{BlsPublicKey, ForkName, PayloadAndBlobs, SignedBuilderBid, TestRandomSeed};
+use helix_types::{BlsPublicKeyBytes, ForkName, PayloadAndBlobs, SignedBuilderBid};
 use http::HeaderValue;
 use tokio::sync::broadcast;
 

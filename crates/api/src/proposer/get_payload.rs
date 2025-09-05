@@ -455,7 +455,7 @@ impl<A: Api> ProposerApi<A> {
     async fn save_delivered_payload_info(
         &self,
         payload: Arc<PayloadAndBlobs>,
-        proposer_public_key: &BlsPublicKeyBytes,
+        proposer_public_key: BlsPublicKeyBytes,
         trace: &GetPayloadTrace,
         user_agent: Option<String>,
     ) {
