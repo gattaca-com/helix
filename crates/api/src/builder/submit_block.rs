@@ -234,9 +234,6 @@ impl<A: Api> BuilderApi<A> {
         trace.auctioneer_update = utcnow_ns();
         trace!("saved payload to auctioneer");
 
-        api.auctioneer.save_bid_trace(payload.bid_trace());
-        trace!("saved bid trace to auctioneer");
-
         // Log some final info
         trace.request_finish = utcnow_ns();
         debug!(

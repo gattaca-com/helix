@@ -228,8 +228,6 @@ impl<A: Api> BuilderApi<A> {
         );
         trace.auctioneer_update = utcnow_ns();
 
-        api.auctioneer.save_bid_trace(payload.bid_trace());
-
         // Gossip to other relays
         if api.relay_config.payload_gossip_enabled {
             api.gossip_payload(

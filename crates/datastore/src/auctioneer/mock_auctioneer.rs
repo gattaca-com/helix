@@ -9,9 +9,7 @@ use helix_common::{
     BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
-use helix_types::{
-    BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs, SignedBuilderBid, TestRandomSeed,
-};
+use helix_types::{BlsPublicKey, ForkName, PayloadAndBlobs, SignedBuilderBid, TestRandomSeed};
 use http::HeaderValue;
 use tokio::sync::broadcast;
 
@@ -67,16 +65,6 @@ impl Auctioneer for MockAuctioneer {
     ) -> Option<PayloadAndBlobs> {
         self.versioned_execution_payload.lock().unwrap().clone()
     }
-
-    fn get_bid_trace(
-        &self,
-        _slot: u64,
-        _proposer_pub_key: &BlsPublicKey,
-        _block_hash: &B256,
-    ) -> Option<BidTrace> {
-        None
-    }
-    fn save_bid_trace(&self, _bid_trace: &BidTrace) {}
 
     fn get_builder_info(
         &self,

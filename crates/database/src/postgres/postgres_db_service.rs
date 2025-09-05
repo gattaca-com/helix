@@ -26,7 +26,7 @@ use helix_common::{
     SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
 };
 use helix_types::{
-    BidTrace, BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
+    BlsPublicKey, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
 };
 use tokio::sync::mpsc::Sender;
 use tokio_postgres::{types::ToSql, NoTls};
@@ -1356,7 +1356,7 @@ impl DatabaseService for PostgresDatabaseService {
     #[instrument(skip_all)]
     async fn save_delivered_payload(
         &self,
-        bid_trace: &BidTrace,
+        proposer_pub_key: BlsPublicKey,
         payload: Arc<PayloadAndBlobs>,
         latency_trace: &GetPayloadTrace,
         user_agent: Option<String>,
@@ -1364,6 +1364,7 @@ impl DatabaseService for PostgresDatabaseService {
         let mut record = DbMetricRecord::new("save_delivered_payload");
 
         let region_id = self.region;
+        let block_hash = payload.execution_payload.block_hash;
         let mut client = self.pool.get().await?;
         let transaction = client.transaction().await?;
         transaction.execute(
@@ -1376,7 +1377,7 @@ impl DatabaseService for PostgresDatabaseService {
                 DO NOTHING
             ",
             &[
-                &(bid_trace.block_hash.as_slice()),
+                &(block_hash.as_slice()),
                 &(payload.execution_payload.parent_hash.as_slice()),
                 &(payload.execution_payload.fee_recipient.as_slice()),
                 &(payload.execution_payload.state_root.as_slice()),
@@ -1402,8 +1403,8 @@ impl DatabaseService for PostgresDatabaseService {
                     ON CONFLICT (block_hash) DO NOTHING;                
                 ",
                 &[
-                    &(bid_trace.block_hash.as_slice()),
-                    &(bid_trace.proposer_pubkey.serialize().as_slice()),
+                    &(block_hash.as_slice()),
+                    &(proposer_pub_key.serialize().as_slice()),
                 ],
                 ).await?;
 
@@ -1415,7 +1416,7 @@ impl DatabaseService for PostgresDatabaseService {
                     ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ",
             &[
-                &(bid_trace.block_hash.as_slice()),
+                &(block_hash.as_slice()),
                 &(region_id),
                 &(latency_trace.receive as i64),
                 &(latency_trace.proposer_index_validated as i64),

@@ -473,11 +473,6 @@ mod tests {
             })
             .unwrap();
 
-        let bid_trace = BidTrace {
-            slot: 1235,
-            block_hash: b256!("6AD0CC0183284A1F2CEBB5188DC68F49EC6D522D9E99706DA097EF2BD8148D88"),
-            ..BidTrace::test_random()
-        };
         let latency_trace = GetPayloadTrace::default();
 
         let payload_and_blobs = PayloadAndBlobs {
@@ -486,7 +481,12 @@ mod tests {
         };
 
         db_service
-            .save_delivered_payload(&bid_trace, Arc::new(payload_and_blobs), &latency_trace, None)
+            .save_delivered_payload(
+                BlsPublicKey::test_random(),
+                Arc::new(payload_and_blobs),
+                &latency_trace,
+                None,
+            )
             .await?;
         Ok(())
     }
