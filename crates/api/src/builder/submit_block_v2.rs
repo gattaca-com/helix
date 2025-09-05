@@ -15,7 +15,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::SignedBidSubmission;
-use tracing::{debug, error, info, trace, warn, Instrument};
+use tracing::{debug, error, info, warn, Instrument};
 
 use super::api::BuilderApi;
 use crate::{
@@ -100,9 +100,6 @@ impl<A: Api> BuilderApi<A> {
                 got: payload.slot(),
             });
         }
-
-        payload.blobs_bundle().validate()?;
-        trace!("validated blobs bundle");
 
         // Verify that we have a validator connected for this slot
         // Note: in `submit_block_v2` we have to do this check after decoding
@@ -233,7 +230,12 @@ impl<A: Api> BuilderApi<A> {
 
         // Gossip to other relays
         if api.relay_config.payload_gossip_enabled {
-            api.gossip_payload(&payload, payload.payload_and_blobs_ref()).await;
+            api.gossip_payload(
+                &payload,
+                payload.payload_and_blobs_ref(),
+                api.chain_info.current_fork_name(),
+            )
+            .await;
         }
 
         // Log some final info

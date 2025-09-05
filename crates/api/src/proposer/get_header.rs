@@ -169,14 +169,14 @@ impl<A: Api> ProposerApi<A> {
         debug!(trace = ?trace, "best bid fetched");
 
         if let Some(bid) = get_best_bid_res {
-            if bid.value() == &U256::ZERO {
+            if bid.value == U256::ZERO {
                 warn!("best bid value is 0");
                 return Err(ProposerApiError::BidValueZero);
             }
 
-            let bid_block_hash = bid.header().block_hash().0;
+            let bid_block_hash = bid.header.block_hash;
             debug!(
-                value = ?bid.value(),
+                value = ?bid.value,
                 block_hash =% bid_block_hash,
                 "delivering bid",
             );
@@ -196,12 +196,7 @@ impl<A: Api> ProposerApi<A> {
 
             let proposer_pubkey_clone = bid_request.pubkey;
 
-            let fork = if bid.as_electra().is_ok() {
-                helix_types::ForkName::Electra
-            } else {
-                error!("builder bid is not on Electra fork!! This should not happen");
-                return Err(ProposerApiError::InternalServerError);
-            };
+            let fork = proposer_api.chain_info.current_fork_name();
 
             let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
 

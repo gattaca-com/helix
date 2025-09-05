@@ -7,8 +7,7 @@ use helix_common::{
     ValidatorPreferences,
 };
 use helix_types::{
-    BidTrace, Bloom, BlsPublicKey, BlsSignature, ExecutionPayloadBellatrix, ExtraData,
-    SignedValidatorRegistration, Transaction, Transactions, ValidatorRegistration,
+    BidTrace, BlsPublicKey, BlsSignature, SignedValidatorRegistration, ValidatorRegistration,
 };
 use thiserror::Error;
 
@@ -74,29 +73,6 @@ impl FromRow for GetPayloadTrace {
                 row.get::<&str, i64>("broadcaster_block_broadcast"),
             )?,
             on_deliver_payload: parse_i64_to_u64(row.get::<&str, i64>("on_deliver_payload"))?,
-        })
-    }
-}
-
-impl FromRow for ExecutionPayloadBellatrix {
-    fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError> {
-        Ok(ExecutionPayloadBellatrix {
-            parent_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("payload_parent_hash"))?.into(),
-            fee_recipient: parse_bytes_to_address(row.get::<&str, &[u8]>("payload_fee_recipient"))?,
-            state_root: parse_bytes_to_hash(row.get::<&str, &[u8]>("payload_state_root"))?,
-            receipts_root: parse_bytes_to_hash(row.get::<&str, &[u8]>("payload_receipts_root"))?,
-            logs_bloom: parse_logs_bloom(row.get::<&str, &[u8]>("payload_logs_bloom"))?,
-            prev_randao: parse_bytes_to_hash(row.get::<&str, &[u8]>("payload_prev_randao"))?,
-            block_number: parse_i32_to_u64(row.get::<&str, i32>("payload_block_number"))?,
-            gas_limit: parse_i32_to_u64(row.get::<&str, i32>("payload_gas_limit"))?,
-            gas_used: parse_i32_to_u64(row.get::<&str, i32>("payload_gas_used"))?,
-            timestamp: parse_i64_to_u64(row.get::<&str, i64>("payload_timestamp"))?,
-            extra_data: parse_extra_data(row.get::<&str, &[u8]>("payload_extra_data"))?,
-            base_fee_per_gas: parse_numeric_to_u256(
-                row.get::<&str, PostgresNumeric>("payload_base_fee_per_gas"),
-            ),
-            block_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("payload_block_hash"))?.into(),
-            transactions: parse_transactions(row.get::<&str, Vec<Vec<u8>>>("txs"))?,
         })
     }
 }
@@ -316,21 +292,4 @@ pub fn parse_rows<T: FromRow>(rows: Vec<tokio_postgres::Row>) -> Result<Vec<T>, 
 
 pub fn parse_row<T: FromRow>(row: &tokio_postgres::Row) -> Result<T, DatabaseError> {
     T::from_row(row)
-}
-
-pub fn parse_logs_bloom(bytes: &[u8]) -> Result<Bloom, DatabaseError> {
-    Bloom::new(bytes.to_vec()).map_err(DatabaseError::SszError)
-}
-
-pub fn parse_extra_data(bytes: &[u8]) -> Result<ExtraData, DatabaseError> {
-    ExtraData::new(bytes.to_vec()).map_err(DatabaseError::SszError)
-}
-
-pub fn parse_transactions(bytes_vec: Vec<Vec<u8>>) -> Result<Transactions, DatabaseError> {
-    let transactions: Vec<Transaction> = bytes_vec
-        .into_iter()
-        .map(|tx| Transaction::new(tx).map_err(DatabaseError::SszError))
-        .collect::<Result<Vec<Transaction>, DatabaseError>>()?;
-
-    Transactions::new(transactions).map_err(DatabaseError::SszError)
 }

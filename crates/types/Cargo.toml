@@ -38,3 +38,11 @@ criterion.workspace = true
 [[bench]]
 harness = false
 name = "blob_bundle"
+
+[[bench]]
+harness = false
+name = "execution_payload"
+
+[[bench]]
+harness = false
+name = "signed_bid_submission"

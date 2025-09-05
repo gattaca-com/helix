@@ -61,7 +61,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
 
         debug!(
             request.message.slot,
-            block_hash = %request.execution_payload.block_hash(),
+            block_hash = %request.execution_payload.block_hash,
             size = rpc_payload.to_string().len(),
             "Sending RPC request",
         );
@@ -76,7 +76,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
 
         debug!(
             request.message.slot,
-            block_hash = %request.execution_payload.block_hash(),
+            block_hash = %request.execution_payload.block_hash,
             size = rpc_payload.to_string().len(),
             "Sent RPC request",
         );
@@ -109,7 +109,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
     ) -> Result<(), BlockSimError> {
         let timer = SimulatorMetrics::timer(&self.simulator_config.url);
 
-        let block_hash = request.execution_payload.block_hash().0;
+        let block_hash = request.execution_payload.block_hash;
         debug!(
             %block_hash,
             builder_pub_key = %request.message.builder_pubkey,

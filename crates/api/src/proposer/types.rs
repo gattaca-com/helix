@@ -34,9 +34,9 @@ pub fn unblind_beacon_block(
             let body = &block.body;
             let execution_payload = versioned_execution_payload
                 .execution_payload
-                .as_electra()
-                .map_err(|_| ProposerApiError::PayloadTypeMismatch)?
-                .clone();
+                .clone()
+                .to_lighthouse_electra_paylaod()
+                .map_err(ProposerApiError::SszError)?;
 
             let blobs_bundle = &versioned_execution_payload.blobs_bundle;
 

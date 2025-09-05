@@ -113,9 +113,6 @@ impl<A: Api> BuilderApi<A> {
             });
         }
 
-        payload.blobs_bundle().validate()?;
-        trace!("validated blobs bundle");
-
         // Fetch the next payload attributes and validate basic information
         let payload_attributes =
             api.fetch_payload_attributes(payload.slot(), *payload.parent_hash(), &block_hash)?;

@@ -327,6 +327,8 @@ pub async fn decode_header_submission(
         serde_json::from_slice(&body_bytes)?
     };
 
+    header.validate_payload_ssz_lengths()?;
+
     trace.decode = utcnow_ns();
     debug!(
         timestamp_after_decoding = trace.decode,

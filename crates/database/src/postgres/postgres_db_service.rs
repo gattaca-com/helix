@@ -749,7 +749,7 @@ impl PostgresDatabaseService {
         for item in batch {
             let hdr = item.submission.execution_payload_header();
             structured_headers.push(HeaderParams {
-                block_number: hdr.block_number() as i32,
+                block_number: hdr.block_number as i32,
                 slot_number: item.submission.slot().as_u64() as i32,
                 parent_hash: item.submission.parent_hash().as_slice().to_vec(),
                 block_hash: item.submission.block_hash().as_slice().to_vec(),
@@ -1364,7 +1364,7 @@ impl DatabaseService for PostgresDatabaseService {
         let mut record = DbMetricRecord::new("save_delivered_payload");
 
         let region_id = self.region;
-        let block_hash = payload.execution_payload.block_hash().0;
+        let block_hash = payload.execution_payload.block_hash;
         let mut client = self.pool.get().await?;
         let transaction = client.transaction().await?;
         transaction.execute(
@@ -1378,18 +1378,18 @@ impl DatabaseService for PostgresDatabaseService {
             ",
             &[
                 &(block_hash.as_slice()),
-                &(payload.execution_payload.parent_hash().0.as_slice()),
-                &(payload.execution_payload.fee_recipient().as_slice()),
-                &(payload.execution_payload.state_root().as_slice()),
-                &(payload.execution_payload.receipts_root().as_slice()),
-                &(payload.execution_payload.logs_bloom().to_vec()),
-                &(payload.execution_payload.prev_randao().as_slice()),
-                &(payload.execution_payload.timestamp() as i64),
-                &(payload.execution_payload.block_number() as i32),
-                &(payload.execution_payload.gas_limit() as i32),
-                &(payload.execution_payload.gas_used() as i32),
-                &(payload.execution_payload.extra_data().to_vec()),
-                &(PostgresNumeric::from(payload.execution_payload.base_fee_per_gas())),
+                &(payload.execution_payload.parent_hash.as_slice()),
+                &(payload.execution_payload.fee_recipient.as_slice()),
+                &(payload.execution_payload.state_root.as_slice()),
+                &(payload.execution_payload.receipts_root.as_slice()),
+                &(payload.execution_payload.logs_bloom.to_vec()),
+                &(payload.execution_payload.prev_randao.as_slice()),
+                &(payload.execution_payload.timestamp as i64),
+                &(payload.execution_payload.block_number as i32),
+                &(payload.execution_payload.gas_limit as i32),
+                &(payload.execution_payload.gas_used as i32),
+                &(payload.execution_payload.extra_data.to_vec()),
+                &(PostgresNumeric::from(payload.execution_payload.base_fee_per_gas)),
                 &(user_agent),
             ],
             ).await?;
@@ -1429,12 +1429,12 @@ impl DatabaseService for PostgresDatabaseService {
             ],
         ).await?;
 
-        if !payload.execution_payload.transactions().is_empty() {
+        if !payload.execution_payload.transactions.is_empty() {
             // Save the transactions
             let mut structured_params: Vec<(Vec<u8>, &[u8])> = Vec::new();
-            for entry in payload.execution_payload.transactions().iter() {
+            for entry in payload.execution_payload.transactions.iter() {
                 structured_params
-                    .push((payload.execution_payload.block_hash().0.to_vec(), entry.as_ref()));
+                    .push((payload.execution_payload.block_hash.to_vec(), entry.as_ref()));
             }
 
             // Prepare the params vector from the structured parameters
@@ -1464,15 +1464,13 @@ impl DatabaseService for PostgresDatabaseService {
             transaction.execute(&sql, &params[..]).await?;
         }
 
-        if payload.execution_payload.withdrawals().is_ok() &&
-            !payload.execution_payload.withdrawals().unwrap().is_empty()
-        {
+        if !payload.execution_payload.withdrawals.is_empty() {
             // Save the withdrawals
             let mut structured_params: Vec<(i32, Vec<u8>, i32, &[u8], i64)> = Vec::new();
-            for entry in payload.execution_payload.withdrawals().unwrap().iter() {
+            for entry in payload.execution_payload.withdrawals.iter() {
                 structured_params.push((
                     entry.index as i32,
-                    payload.execution_payload.block_hash().0.to_vec(),
+                    payload.execution_payload.block_hash.to_vec(),
                     entry.validator_index as i32,
                     entry.address.as_ref(),
                     entry.amount as i64,
