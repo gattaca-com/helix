@@ -50,7 +50,7 @@ pub enum DatabaseError {
     CryptoError(CryptoError),
 
     #[error("Invalid bytes")]
-    InvalidBytes,
+    InvalidBlsBytes,
 
     #[error("General error")]
     GeneralError,

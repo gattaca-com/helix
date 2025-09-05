@@ -280,13 +280,13 @@ pub fn parse_bytes_to_address(hash: &[u8]) -> Result<Address, DatabaseError> {
 }
 
 pub fn parse_bytes_to_pubkey_bytes(pubkey: &[u8]) -> Result<BlsPublicKeyBytes, DatabaseError> {
-    BlsPublicKeyBytes::try_from(pubkey).map_err(|_| DatabaseError::InvalidBytes)
+    BlsPublicKeyBytes::try_from(pubkey).map_err(|_| DatabaseError::InvalidBlsBytes)
 }
 
 pub fn parse_bytes_to_signature_bytes(
     signature: &[u8],
 ) -> Result<BlsSignatureBytes, DatabaseError> {
-    BlsSignatureBytes::try_from(signature).map_err(|_| DatabaseError::InvalidBytes)
+    BlsSignatureBytes::try_from(signature).map_err(|_| DatabaseError::InvalidBlsBytes)
 }
 
 pub fn parse_numeric_to_u256(value: PostgresNumeric) -> U256 {
