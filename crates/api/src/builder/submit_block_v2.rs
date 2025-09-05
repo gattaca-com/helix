@@ -83,7 +83,7 @@ impl<A: Api> BuilderApi<A> {
     ) -> Result<StatusCode, BuilderApiError> {
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
 
-        let builder_pub_key = payload.builder_public_key().clone();
+        let builder_pub_key = payload.builder_public_key();
         let block_hash = payload.message().block_hash;
 
         // Verify the payload is for the current slot
@@ -130,7 +130,7 @@ impl<A: Api> BuilderApi<A> {
         {
             warn!("proposer has regional filtering enabled, discarding {optimistic_version:?} submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
-                builder_pub_key: payload.builder_public_key().clone(),
+                builder_pub_key: *payload.builder_public_key(),
             });
         }
 
@@ -165,13 +165,8 @@ impl<A: Api> BuilderApi<A> {
                     return Err(BuilderApiError::AuctioneerError(err))
                 }
                 _ => {
-                    api.demote_builder(
-                        payload.slot().as_u64(),
-                        &builder_pub_key,
-                        &block_hash,
-                        &err,
-                    )
-                    .await;
+                    api.demote_builder(payload.slot().as_u64(), builder_pub_key, &block_hash, &err)
+                        .await;
                     return Err(err);
                 }
             }
@@ -204,7 +199,7 @@ impl<A: Api> BuilderApi<A> {
             Ok(val) => val,
             Err(err) => {
                 // Any invalid submission for optimistic v2/v3 results in a demotion.
-                api.demote_builder(payload.slot().as_u64(), &builder_pub_key, &block_hash, &err)
+                api.demote_builder(payload.slot().as_u64(), builder_pub_key, &block_hash, &err)
                     .await;
                 return Err(err);
             }

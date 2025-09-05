@@ -227,7 +227,7 @@ impl PostgresDatabaseService {
                 let num_entries = entries.len();
                 entries.into_iter().for_each(|entry| {
                     self.validator_registration_cache
-                        .insert(entry.registration_info.registration.message.pubkey.clone(), entry);
+                        .insert(entry.registration_info.registration.message.pubkey, entry);
                 });
                 info!("Loaded {} validator registrations", num_entries);
                 record.record_success();
@@ -907,9 +907,9 @@ impl DatabaseService for PostgresDatabaseService {
         });
 
         for entry in entries.iter() {
-            self.pending_validator_registrations.insert(entry.registration.message.pubkey.clone());
+            self.pending_validator_registrations.insert(entry.registration.message.pubkey);
             self.validator_registration_cache.insert(
-                entry.registration.message.pubkey.clone(),
+                entry.registration.message.pubkey,
                 SignedValidatorRegistrationEntry::new(
                     entry.clone(),
                     pool_name.clone(),
@@ -1152,12 +1152,12 @@ impl DatabaseService for PostgresDatabaseService {
         let mut client = self.pool.get().await?;
 
         let new_keys_set: HashSet<BlsPublicKeyBytes> =
-            known_validators.iter().map(|validator| validator.validator.pubkey.clone()).collect();
+            known_validators.iter().map(|validator| validator.validator.pubkey).collect();
 
         let old_keys_hash_set: HashSet<BlsPublicKeyBytes> = self
             .known_validators_cache
             .iter()
-            .map(|ref_multi| ref_multi.key().clone()) // Access and clone the key from RefMulti
+            .map(|ref_multi| *ref_multi.key()) // Access and clone the key from RefMulti
             .collect();
 
         let keys_to_add: Vec<BlsPublicKeyBytes> =
@@ -1166,7 +1166,7 @@ impl DatabaseService for PostgresDatabaseService {
             old_keys_hash_set.difference(&new_keys_set).cloned().collect();
 
         for key in &keys_to_add {
-            self.known_validators_cache.insert(key.clone());
+            self.known_validators_cache.insert(*key);
         }
         for key in &keys_to_remove {
             self.known_validators_cache.remove(key);

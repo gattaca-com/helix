@@ -74,7 +74,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         is_top_bid: bool,
         builder_info: BuilderInfo,
     ) -> Result<(), BlockSimError> {
-        let builder = request.message.builder_pubkey.clone();
+        let builder = request.message.builder_pubkey;
         let block_hash = request.execution_payload.block_hash;
         let slot = request.message.slot;
 

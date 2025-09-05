@@ -421,7 +421,7 @@ impl<A: Api> ProposerApi<A> {
                         warn!("execution payload not found");
                     }
                     if retry == 0 && request_missing_payload {
-                        let proposer_pubkey_clone = pub_key.clone();
+                        let proposer_pubkey_clone = *pub_key;
                         let self_clone = self.clone();
                         let block_hash = *block_hash;
 

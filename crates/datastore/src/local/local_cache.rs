@@ -158,7 +158,7 @@ impl Auctioneer for LocalCache {
         block_hash: &B256,
         _fork_name: ForkName,
     ) -> Option<PayloadAndBlobs> {
-        self.execution_payload_cache.get(&(slot, proposer_pub_key.clone(), *block_hash)).map(|p| {
+        self.execution_payload_cache.get(&(slot, *proposer_pub_key, *block_hash)).map(|p| {
             PayloadAndBlobs {
                 execution_payload: p.execution_payload.clone(),
                 blobs_bundle: p.blobs_bundle.clone(),
@@ -173,7 +173,7 @@ impl Auctioneer for LocalCache {
     ) -> Result<BuilderInfo, AuctioneerError> {
         match self.builder_info_cache.get(builder_pub_key) {
             Some(cached) => Ok(cached.clone()),
-            None => Err(AuctioneerError::BuilderNotFound { pub_key: builder_pub_key.clone() }),
+            None => Err(AuctioneerError::BuilderNotFound { pub_key: *builder_pub_key }),
         }
     }
 
@@ -189,15 +189,14 @@ impl Auctioneer for LocalCache {
 
     #[instrument(skip_all)]
     fn demote_builder(&self, builder_pub_key: &BlsPublicKeyBytes) -> Result<(), AuctioneerError> {
-        if let Err(e) = self.sorter_tx.try_send(BidSorterMessage::Demotion(builder_pub_key.clone()))
-        {
+        if let Err(e) = self.sorter_tx.try_send(BidSorterMessage::Demotion(*builder_pub_key)) {
             error!(%e, builder_pub_key = %builder_pub_key, "failed to send demotion to sorter");
         }
 
         let mut builder_info = self
             .builder_info_cache
             .get_mut(builder_pub_key)
-            .ok_or(AuctioneerError::BuilderNotFound { pub_key: builder_pub_key.clone() })?;
+            .ok_or(AuctioneerError::BuilderNotFound { pub_key: *builder_pub_key })?;
 
         if !builder_info.is_optimistic {
             return Ok(());
@@ -217,11 +216,10 @@ impl Auctioneer for LocalCache {
                 self.api_key_cache
                     .entry(HeaderValue::from_str(api_key).unwrap())
                     .or_default()
-                    .push(builder_info.pub_key.clone());
+                    .push(builder_info.pub_key);
             }
 
-            self.builder_info_cache
-                .insert(builder_info.pub_key.clone(), builder_info.builder_info.clone());
+            self.builder_info_cache.insert(builder_info.pub_key, builder_info.builder_info.clone());
         }
     }
 
@@ -233,7 +231,7 @@ impl Auctioneer for LocalCache {
     #[instrument(skip_all)]
     fn update_trusted_proposers(&self, proposer_whitelist: Vec<ProposerInfo>) {
         for proposer in &proposer_whitelist {
-            self.trusted_proposers.insert(proposer.pubkey.clone(), proposer.clone());
+            self.trusted_proposers.insert(proposer.pubkey, proposer.clone());
         }
     }
 
@@ -246,7 +244,7 @@ impl Auctioneer for LocalCache {
     fn update_primev_proposers(&self, primev_proposers: &[BlsPublicKeyBytes]) {
         self.primev_proposers.clear();
         for proposer in primev_proposers {
-            self.primev_proposers.insert(proposer.clone());
+            self.primev_proposers.insert(*proposer);
         }
     }
 
@@ -267,8 +265,7 @@ impl Auctioneer for LocalCache {
         builder_pub_key: &BlsPublicKeyBytes,
         payload_socket_address: Vec<u8>,
     ) {
-        self.payload_address_cache
-            .insert(*block_hash, (builder_pub_key.clone(), payload_socket_address));
+        self.payload_address_cache.insert(*block_hash, (*builder_pub_key, payload_socket_address));
     }
 
     fn kill_switch_enabled(&self) -> bool {
@@ -289,7 +286,7 @@ impl Auctioneer for LocalCache {
         inclusion_list: InclusionListWithMetadata,
         slot_coordinate: SlotCoordinate,
     ) {
-        let list_with_key = InclusionListWithKey { key: slot_coordinate.clone(), inclusion_list };
+        let list_with_key = InclusionListWithKey { key: slot_coordinate, inclusion_list };
         if let Err(err) = self.inclusion_list.send(list_with_key) {
             error!(%err, "Failed to send inclusion list update");
         }
@@ -438,7 +435,7 @@ mod tests {
 
         // Test case 1: Builder exists
         let builder_info_doc =
-            BuilderConfig { pub_key: builder_pub_key.clone(), builder_info: builder_info.clone() };
+            BuilderConfig { pub_key: builder_pub_key, builder_info: builder_info.clone() };
         cache.update_builder_infos(&[builder_info_doc]);
 
         let get_result = cache.get_builder_info(&builder_pub_key);
@@ -505,7 +502,7 @@ mod tests {
             api_key: None,
         };
 
-        let builder_info_doc = BuilderConfig { pub_key: builder_pub_key.clone(), builder_info };
+        let builder_info_doc = BuilderConfig { pub_key: builder_pub_key, builder_info };
 
         // Set builder info in the cache
         cache.update_builder_infos(&[builder_info_doc]);

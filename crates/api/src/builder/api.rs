@@ -270,11 +270,8 @@ impl<A: Api> BuilderApi<A> {
 
         debug!("validating block");
 
-        let current_slot_coord = (
-            payload.slot().as_u64(),
-            payload.proposer_public_key().clone(),
-            *payload.parent_hash(),
-        );
+        let current_slot_coord =
+            (payload.slot().as_u64(), *payload.proposer_public_key(), *payload.parent_hash());
 
         let inclusion_list = self
             .current_inclusion_list
@@ -331,7 +328,7 @@ impl<A: Api> BuilderApi<A> {
                 "builder is not optimistic"
             );
             return Err(BuilderApiError::BuilderNotOptimistic {
-                builder_pub_key: payload.builder_public_key().clone(),
+                builder_pub_key: *payload.builder_public_key(),
             });
         } else if builder_info.collateral < payload.value() {
             warn!(
@@ -341,7 +338,7 @@ impl<A: Api> BuilderApi<A> {
                 "builder does not have enough collateral"
             );
             return Err(BuilderApiError::NotEnoughOptimisticCollateral {
-                builder_pub_key: payload.builder_public_key().clone().into(),
+                builder_pub_key: *payload.builder_public_key(),
                 collateral: builder_info.collateral,
                 collateral_required: payload.value(),
                 is_optimistic: builder_info.is_optimistic,
@@ -443,7 +440,7 @@ impl<A: Api> BuilderApi<A> {
                 })
             }
         } else {
-            self.sequence_numbers.insert(builder_pubkey.clone(), (bid_slot, new_seq));
+            self.sequence_numbers.insert(*builder_pubkey, (bid_slot, new_seq));
         }
 
         Ok(())
@@ -595,8 +592,8 @@ pub(crate) fn sanity_check_block_submission(
 
     if next_duty.entry.registration.message.pubkey != bid_trace.proposer_pubkey {
         return Err(BuilderApiError::ProposerPublicKeyMismatch {
-            got: bid_trace.proposer_pubkey.clone().into(),
-            expected: next_duty.entry.registration.message.pubkey.clone().into(),
+            got: bid_trace.proposer_pubkey,
+            expected: next_duty.entry.registration.message.pubkey,
         });
     }
 

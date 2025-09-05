@@ -186,7 +186,7 @@ impl<A: Api> ProposerApi<A> {
                 proposer_api.db.clone(),
                 slot,
                 bid_request.parent_hash,
-                bid_request.pubkey.clone(),
+                bid_request.pubkey,
                 bid_block_hash,
                 trace,
                 mev_boost,

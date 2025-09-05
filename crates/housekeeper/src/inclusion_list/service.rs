@@ -59,10 +59,8 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
             }
         };
 
-        self.auctioneer.update_current_inclusion_list(
-            inclusion_list.clone(),
-            (slot, pub_key.clone(), parent_hash),
-        );
+        self.auctioneer
+            .update_current_inclusion_list(inclusion_list.clone(), (slot, pub_key, parent_hash));
 
         match self.db.save_inclusion_list(&inclusion_list, slot, &parent_hash, &pub_key).await {
             Ok(_) => {

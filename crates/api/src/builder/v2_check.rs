@@ -33,7 +33,7 @@ impl V2SubMessage {
         on_receive_ns: u64,
     ) -> Self {
         Self {
-            builder_pubkey: submission.bid_trace().builder_pubkey.clone(),
+            builder_pubkey: submission.bid_trace().builder_pubkey,
             slot: submission.slot().as_u64(),
             on_receive_ns,
             block_hash: *submission.block_hash(),
@@ -43,7 +43,7 @@ impl V2SubMessage {
 
     pub fn new_from_block_submission(submission: &SignedBidSubmission, on_receive_ns: u64) -> Self {
         Self {
-            builder_pubkey: submission.message().builder_pubkey.clone(),
+            builder_pubkey: submission.message().builder_pubkey,
             slot: submission.slot().as_u64(),
             on_receive_ns,
             block_hash: *submission.block_hash(),
@@ -132,7 +132,7 @@ impl<A: Api> V2SubChecker<A> {
                 (Some(header), Some(payload)) => {
                     let delta = header.saturating_sub(payload);
                     if delta > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_NS &&
-                        demoted.insert(pending.builder_pubkey.clone())
+                        demoted.insert(pending.builder_pubkey)
                     {
                         demote_builder::<A>(
                             *block_hash,
@@ -147,7 +147,7 @@ impl<A: Api> V2SubChecker<A> {
 
                 (Some(t), None) => {
                     if now_ns.saturating_sub(t) > MAX_DELAY_BETWEEN_V2_SUBMISSIONS_NS {
-                        if demoted.insert(pending.builder_pubkey.clone()) {
+                        if demoted.insert(pending.builder_pubkey) {
                             demote_builder::<A>(
                                 *block_hash,
                                 pending.clone(),
@@ -188,7 +188,7 @@ fn demote_builder<A: Api>(
 
     let reason = format!("builder demoted due to missing payload submission. {pending_block:?}");
 
-    let builder_pubkey = pending_block.builder_pubkey.clone();
+    let builder_pubkey = pending_block.builder_pubkey;
     task::spawn(file!(), line!(), async move {
         if let Err(err) = auctioneer.demote_builder(&builder_pubkey) {
             error!(%err, "failed to demote builder")

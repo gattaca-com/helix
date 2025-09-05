@@ -312,7 +312,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         if let Some(inclusion_list_service) = self.inclusion_list_service.as_ref() {
             if let Some(next_duty) = proposer_duties.iter().find(|duty| duty.slot == head_slot) {
-                let pub_key = next_duty.pubkey.clone();
+                let pub_key = next_duty.pubkey;
                 let inclusion_list_service = inclusion_list_service.clone();
                 task::spawn(
                     file!(),

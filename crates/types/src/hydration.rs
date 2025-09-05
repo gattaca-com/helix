@@ -76,8 +76,7 @@ impl DehydratedBidSubmissionElectra {
         mut self,
         hydration_cache: &mut HydrationCache,
     ) -> Result<(bid_submission::SignedBidSubmissionElectra, usize, usize), HydrationError> {
-        let order_cache =
-            hydration_cache.caches.entry(self.message.builder_pubkey.clone()).or_default();
+        let order_cache = hydration_cache.caches.entry(self.message.builder_pubkey).or_default();
 
         // avoid short-circuiting the loop to maximize cache population
         let mut last_err = Ok(());
