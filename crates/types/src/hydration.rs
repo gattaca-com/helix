@@ -154,7 +154,7 @@ impl DehydratedBidSubmissionElectra {
     }
 }
 
-pub struct Cache {
+struct Cache {
     // hash -> transaction bytes
     transactions: FxHashMap<u64, Transaction>,
     // hash -> blob item
