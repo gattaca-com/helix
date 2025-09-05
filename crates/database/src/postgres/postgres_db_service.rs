@@ -1463,7 +1463,7 @@ impl DatabaseService for PostgresDatabaseService {
             transaction.execute(&sql, &params[..]).await?;
         }
 
-        if payload.execution_payload.withdrawals.is_empty() {
+        if !payload.execution_payload.withdrawals.is_empty() {
             // Save the withdrawals
             let mut structured_params: Vec<(i32, Vec<u8>, i32, &[u8], i64)> = Vec::new();
             for entry in payload.execution_payload.withdrawals.iter() {
