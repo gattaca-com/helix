@@ -7,10 +7,7 @@ mod get_payload;
 mod register;
 mod types;
 
-use std::sync::{
-    atomic::Ordering,
-    Arc,
-};
+use std::sync::{atomic::Ordering, Arc};
 
 use alloy_primitives::B256;
 use axum::{response::IntoResponse, Extension};
@@ -85,7 +82,9 @@ impl<A: Api> ProposerApi<A> {
 }
 
 /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/status>
-pub async fn status(Extension(Terminating(terminating)): Extension<Terminating>) -> impl IntoResponse {
+pub async fn status(
+    Extension(Terminating(terminating)): Extension<Terminating>,
+) -> impl IntoResponse {
     if terminating.load(Ordering::Relaxed) {
         StatusCode::SERVICE_UNAVAILABLE
     } else {

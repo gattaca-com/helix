@@ -14,9 +14,7 @@ use helix_common::{
     BuilderInfo, ProposerInfo,
 };
 use helix_database::types::BuilderInfoDocument;
-use helix_types::{
-    maybe_upgrade_execution_payload, BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs,
-};
+use helix_types::{maybe_upgrade_execution_payload, BlsPublicKey, ForkName, PayloadAndBlobs};
 use http::HeaderValue;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
@@ -25,7 +23,6 @@ use tracing::{error, info, instrument, warn};
 use crate::{error::AuctioneerError, Auctioneer};
 
 type ExecutionPayloadKey = (u64, BlsPublicKey, B256);
-type BidTraceKey = (u64, BlsPublicKey, B256);
 
 const ESTIMATED_TRUSTED_PROPOSERS: usize = 200_000;
 const ESTIMATED_BID_UPPER_BOUND: usize = 10_000;
@@ -45,7 +42,6 @@ pub struct LocalCache {
     trusted_proposers: Arc<DashMap<BlsPublicKey, ProposerInfo>>,
     execution_payload_cache: Arc<DashMap<ExecutionPayloadKey, PayloadAndBlobs>>,
     payload_address_cache: Arc<DashMap<B256, (BlsPublicKey, Vec<u8>)>>,
-    bid_trace_cache: Arc<DashMap<BidTraceKey, BidTrace>>,
     primev_proposers: Arc<DashSet<BlsPublicKey>>,
     kill_switch: Arc<AtomicBool>,
     proposer_duties: Arc<RwLock<Vec<BuilderGetValidatorsResponseEntry>>>,
@@ -70,7 +66,6 @@ impl LocalCache {
         let execution_payload_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BID_UPPER_BOUND));
         let trusted_proposers = Arc::new(DashMap::with_capacity(ESTIMATED_TRUSTED_PROPOSERS));
         let payload_address_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BID_UPPER_BOUND));
-        let bid_trace_cache = Arc::new(DashMap::with_capacity(ESTIMATED_BID_UPPER_BOUND));
         let primev_proposers = Arc::new(DashSet::with_capacity(MAX_PRIMEV_PROPOSERS));
         let kill_switch = Arc::new(AtomicBool::new(false));
         let proposer_duties = Arc::new(RwLock::new(Vec::new()));
@@ -85,7 +80,6 @@ impl LocalCache {
             trusted_proposers,
             execution_payload_cache,
             payload_address_cache,
-            bid_trace_cache,
             primev_proposers,
             kill_switch,
             proposer_duties,
@@ -173,26 +167,6 @@ impl Auctioneer for LocalCache {
                 blobs_bundle: p.blobs_bundle.clone(),
             }
         })
-    }
-
-    #[instrument(skip_all)]
-    fn get_bid_trace(
-        &self,
-        slot: u64,
-        proposer_pub_key: &BlsPublicKey,
-        block_hash: &B256,
-    ) -> Option<BidTrace> {
-        self.bid_trace_cache
-            .get(&(slot, proposer_pub_key.clone(), *block_hash))
-            .map(|b| b.to_owned())
-    }
-
-    #[instrument(skip_all)]
-    fn save_bid_trace(&self, bid_trace: &BidTrace) {
-        self.bid_trace_cache.insert(
-            (bid_trace.slot, bid_trace.proposer_pubkey.clone(), bid_trace.block_hash),
-            bid_trace.to_owned(),
-        );
     }
 
     #[instrument(skip_all)]
@@ -346,7 +320,6 @@ impl Auctioneer for LocalCache {
         self.seen_block_hashes.clear();
         self.execution_payload_cache.clear();
         self.payload_address_cache.clear();
-        self.bid_trace_cache.clear();
     }
 }
 

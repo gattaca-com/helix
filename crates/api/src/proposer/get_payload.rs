@@ -293,8 +293,7 @@ impl<A: Api> ProposerApi<A> {
             self_clone
                 .save_delivered_payload_info(
                     payload_clone,
-                    &signed_blinded_block,
-                    &proposer_public_key,
+                    proposer_public_key,
                     &trace_clone,
                     user_agent,
                 )
@@ -452,28 +451,15 @@ impl<A: Api> ProposerApi<A> {
     async fn save_delivered_payload_info(
         &self,
         payload: Arc<PayloadAndBlobs>,
-        signed_blinded_block: &SignedBlindedBeaconBlock,
-        proposer_public_key: &BlsPublicKey,
+        proposer_public_key: BlsPublicKey,
         trace: &GetPayloadTrace,
         user_agent: Option<String>,
     ) {
-        let bid_trace = match self.auctioneer.get_bid_trace(
-            signed_blinded_block.message().slot().into(),
-            proposer_public_key,
-            &payload.execution_payload.block_hash().0,
-        ) {
-            Some(bt) => bt,
-            None => {
-                error!("bid trace not found");
-                return;
-            }
-        };
-
         let db = self.db.clone();
         let trace = *trace;
         task::spawn(file!(), line!(), async move {
             if let Err(err) =
-                db.save_delivered_payload(&bid_trace, payload, &trace, user_agent).await
+                db.save_delivered_payload(proposer_public_key, payload, &trace, user_agent).await
             {
                 error!(%err, "error saving payload to database");
             }

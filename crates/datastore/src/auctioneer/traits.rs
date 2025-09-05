@@ -8,7 +8,7 @@ use helix_common::{
     ProposerInfo,
 };
 use helix_database::BuilderInfoDocument;
-use helix_types::{BidTrace, BlsPublicKey, ForkName, PayloadAndBlobs};
+use helix_types::{BlsPublicKey, ForkName, PayloadAndBlobs};
 use http::HeaderValue;
 use tokio::sync::broadcast;
 
@@ -37,14 +37,6 @@ pub trait Auctioneer: Send + Sync + Clone {
         block_hash: &B256,
         fork_name: ForkName,
     ) -> Option<PayloadAndBlobs>;
-
-    fn get_bid_trace(
-        &self,
-        slot: u64,
-        proposer_pub_key: &BlsPublicKey,
-        block_hash: &B256,
-    ) -> Option<BidTrace>;
-    fn save_bid_trace(&self, bid_trace: &BidTrace);
 
     fn get_builder_info(
         &self,
