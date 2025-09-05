@@ -1,7 +1,4 @@
-use std::sync::{
-    atomic::Ordering,
-    Arc,
-};
+use std::sync::{atomic::Ordering, Arc};
 
 use axum::{
     extract::Json,
@@ -23,7 +20,9 @@ use tracing::{debug, error, trace, warn};
 
 use super::ProposerApi;
 use crate::{
-    proposer::{error::ProposerApiError, PreferencesHeader}, router::KnownValidatorsLoaded, Api
+    proposer::{error::ProposerApiError, PreferencesHeader},
+    router::KnownValidatorsLoaded,
+    Api,
 };
 
 impl<A: Api> ProposerApi<A> {
