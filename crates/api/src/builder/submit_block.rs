@@ -25,7 +25,7 @@ use crate::{
         api::{decode_payload, sanity_check_block_submission},
         error::BuilderApiError,
     },
-    Api, HEADER_API_KEY,
+    Api,
 };
 
 impl<A: Api> BuilderApi<A> {
@@ -74,14 +74,16 @@ impl<A: Api> BuilderApi<A> {
 
         // Decode the incoming request body into a payload
         let (parts, body) = req.into_parts();
-        let (payload, is_cancellations_enabled) =
-            decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
+        let (skip_sigverify, payload, is_cancellations_enabled) = decode_payload(
+            head_slot.as_u64() + 1,
+            &api,
+            &parts.uri,
+            &parts.headers,
+            body,
+            &mut trace,
+        )
+        .await?;
         ApiMetrics::cancellable_bid(is_cancellations_enabled);
-
-        let skip_sigverify = parts
-            .headers
-            .get(HEADER_API_KEY)
-            .is_some_and(|key| api.auctioneer.validate_api_key(key, payload.builder_public_key()));
 
         let block_hash = payload.message().block_hash;
 

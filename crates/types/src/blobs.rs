@@ -52,6 +52,14 @@ impl TestRandom for BlobsBundleV1 {
 }
 
 impl BlobsBundleV1 {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            commitments: Vec::with_capacity(capacity),
+            proofs: Vec::with_capacity(capacity),
+            blobs: Vec::with_capacity(capacity),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), BlobsError> {
         if self.commitments.len() != self.proofs.len() || self.proofs.len() != self.blobs.len() {
             return Err(BlobsError::BundleMismatch {

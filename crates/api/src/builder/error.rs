@@ -8,7 +8,7 @@ use axum::{
 use helix_common::{bid_submission::BidValidationError, simulator::BlockSimError};
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
-use helix_types::{BlobsError, BlsPublicKey, Slot};
+use helix_types::{BlobsError, BlsPublicKey, HydrationError, Slot};
 
 use super::v3::V3Error;
 
@@ -61,6 +61,9 @@ pub enum BuilderApiError {
 
     #[error("invalid api key")]
     InvalidApiKey,
+
+    #[error("untrusted builder on dehydrated payload")]
+    UntrustedBuilderOnDehydratedPayload,
 
     #[error("payload attributes not yet known")]
     PayloadAttributesNotYetKnown,
@@ -165,6 +168,9 @@ pub enum BuilderApiError {
 
     #[error("out of sequence submission for slot: {bid_slot}. seen: {seen}, this request: {this}")]
     OutOfSequence { seen: u64, this: u64, bid_slot: u64 },
+
+    #[error(transparent)]
+    HydrationError(#[from] HydrationError),
 }
 
 impl IntoResponse for BuilderApiError {
@@ -212,9 +218,11 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::PayloadError(_) |
             BuilderApiError::BidValidationError(_) |
             BuilderApiError::BlobsError(_) |
-            BuilderApiError::OutOfSequence { .. } => StatusCode::BAD_REQUEST,
+            BuilderApiError::OutOfSequence { .. } |
+            BuilderApiError::HydrationError(_) => StatusCode::BAD_REQUEST,
 
-            BuilderApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
+            BuilderApiError::InvalidApiKey |
+            BuilderApiError::UntrustedBuilderOnDehydratedPayload => StatusCode::UNAUTHORIZED,
 
             BuilderApiError::InternalError |
             BuilderApiError::AuctioneerError(_) |

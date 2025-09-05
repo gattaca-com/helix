@@ -21,6 +21,7 @@ lh-slot-clock.workspace = true
 lh-test-random.workspace = true
 lh-types.workspace = true
 rand.workspace = true
+rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 ssz_types.workspace = true
