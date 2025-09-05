@@ -212,13 +212,8 @@ pub fn validate_registration(
     chain_info: &ChainInfo,
     registration: &SignedValidatorRegistration,
 ) -> Result<(), ProposerApiError> {
-    // Validate registration time
     validate_registration_time(chain_info, registration)?;
-
-    // Verify the signature
-    if !registration.verify_signature(&chain_info.context) {
-        return Err(ProposerApiError::InvalidSignature);
-    }
+    registration.verify_signature(&chain_info.context)?;
 
     Ok(())
 }

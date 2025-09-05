@@ -22,7 +22,7 @@ use tracing::{error, info, instrument, warn};
 
 use crate::{error::AuctioneerError, Auctioneer};
 
-type ExecutionPayloadKey = (u64, BlsPublicKey, B256);
+type ExecutionPayloadKey = (u64, BlsPublicKeyBytes, B256);
 
 const ESTIMATED_TRUSTED_PROPOSERS: usize = 200_000;
 const ESTIMATED_BID_UPPER_BOUND: usize = 10_000;
@@ -36,13 +36,13 @@ pub struct LocalCache {
     seen_block_hashes: Arc<DashSet<B256>>,
     last_delivered_slot: Arc<AtomicU64>,
     last_delivered_hash: Arc<RwLock<Option<B256>>>,
-    builder_info_cache: Arc<DashMap<BlsPublicKey, BuilderInfo>>,
+    builder_info_cache: Arc<DashMap<BlsPublicKeyBytes, BuilderInfo>>,
     /// Api key -> builder pubkey
-    api_key_cache: Arc<DashMap<HeaderValue, Vec<BlsPublicKey>>>,
-    trusted_proposers: Arc<DashMap<BlsPublicKey, ProposerInfo>>,
+    api_key_cache: Arc<DashMap<HeaderValue, Vec<BlsPublicKeyBytes>>>,
+    trusted_proposers: Arc<DashMap<BlsPublicKeyBytes, ProposerInfo>>,
     execution_payload_cache: Arc<DashMap<ExecutionPayloadKey, PayloadAndBlobs>>,
-    payload_address_cache: Arc<DashMap<B256, (BlsPublicKey, Vec<u8>)>>,
-    primev_proposers: Arc<DashSet<BlsPublicKey>>,
+    payload_address_cache: Arc<DashMap<B256, (BlsPublicKeyBytes, Vec<u8>)>>,
+    primev_proposers: Arc<DashSet<BlsPublicKeyBytes>>,
     kill_switch: Arc<AtomicBool>,
     proposer_duties: Arc<RwLock<Vec<BuilderGetValidatorsResponseEntry>>>,
 
@@ -142,19 +142,19 @@ impl Auctioneer for LocalCache {
     fn save_execution_payload(
         &self,
         slot: u64,
-        proposer_pub_key: &BlsPublicKey,
+        proposer_pub_key: &BlsPublicKeyBytes,
         block_hash: &B256,
         execution_payload: PayloadAndBlobs,
     ) {
         self.execution_payload_cache
-            .insert((slot, proposer_pub_key.clone(), *block_hash), execution_payload);
+            .insert((slot, *proposer_pub_key, *block_hash), execution_payload);
     }
 
     #[instrument(skip_all)]
     fn get_execution_payload(
         &self,
         slot: u64,
-        proposer_pub_key: &BlsPublicKey,
+        proposer_pub_key: &BlsPublicKeyBytes,
         block_hash: &B256,
         _fork_name: ForkName,
     ) -> Option<PayloadAndBlobs> {
@@ -169,7 +169,7 @@ impl Auctioneer for LocalCache {
     #[instrument(skip_all)]
     fn get_builder_info(
         &self,
-        builder_pub_key: &BlsPublicKey,
+        builder_pub_key: &BlsPublicKeyBytes,
     ) -> Result<BuilderInfo, AuctioneerError> {
         match self.builder_info_cache.get(builder_pub_key) {
             Some(cached) => Ok(cached.clone()),
@@ -183,12 +183,12 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
-    fn validate_api_key(&self, api_key: &HeaderValue, pubkey: &BlsPublicKey) -> bool {
+    fn validate_api_key(&self, api_key: &HeaderValue, pubkey: &BlsPublicKeyBytes) -> bool {
         self.api_key_cache.get(api_key).is_some_and(|p| p.value().contains(pubkey))
     }
 
     #[instrument(skip_all)]
-    fn demote_builder(&self, builder_pub_key: &BlsPublicKey) -> Result<(), AuctioneerError> {
+    fn demote_builder(&self, builder_pub_key: &BlsPublicKeyBytes) -> Result<(), AuctioneerError> {
         if let Err(e) = self.sorter_tx.try_send(BidSorterMessage::Demotion(builder_pub_key.clone()))
         {
             error!(%e, builder_pub_key = %builder_pub_key, "failed to send demotion to sorter");
@@ -238,12 +238,12 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
-    fn is_trusted_proposer(&self, proposer_pub_key: &BlsPublicKey) -> bool {
+    fn is_trusted_proposer(&self, proposer_pub_key: &BlsPublicKeyBytes) -> bool {
         self.trusted_proposers.contains_key(proposer_pub_key)
     }
 
     #[instrument(skip_all)]
-    fn update_primev_proposers(&self, primev_proposers: &[BlsPublicKey]) {
+    fn update_primev_proposers(&self, primev_proposers: &[BlsPublicKeyBytes]) {
         self.primev_proposers.clear();
         for proposer in primev_proposers {
             self.primev_proposers.insert(proposer.clone());
@@ -251,12 +251,12 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
-    fn is_primev_proposer(&self, proposer_pub_key: &BlsPublicKey) -> bool {
+    fn is_primev_proposer(&self, proposer_pub_key: &BlsPublicKeyBytes) -> bool {
         self.primev_proposers.contains(proposer_pub_key)
     }
 
     #[instrument(skip_all)]
-    fn get_payload_url(&self, block_hash: &B256) -> Option<(BlsPublicKey, Vec<u8>)> {
+    fn get_payload_url(&self, block_hash: &B256) -> Option<(BlsPublicKeyBytes, Vec<u8>)> {
         self.payload_address_cache.get(block_hash).map(|r| r.value().clone())
     }
 
@@ -264,7 +264,7 @@ impl Auctioneer for LocalCache {
     fn save_payload_address(
         &self,
         block_hash: &B256,
-        builder_pub_key: &BlsPublicKey,
+        builder_pub_key: &BlsPublicKeyBytes,
         payload_socket_address: Vec<u8>,
     ) {
         self.payload_address_cache
@@ -326,8 +326,8 @@ mod tests {
     use alloy_primitives::U256;
     use helix_common::BuilderConfig;
     use helix_types::{
-        get_fixed_pubkey, BlobsBundle, ExecutionPayload, ForkName, PayloadAndBlobsRef,
-        TestRandomSeed,
+        get_fixed_pubkey, get_fixed_pubkey_bytes, BlobsBundle, BlsPublicKey, ExecutionPayload,
+        ForkName, PayloadAndBlobsRef, TestRandomSeed,
     };
 
     use super::*;
@@ -399,14 +399,18 @@ mod tests {
         // Save the execution payload
         cache.save_execution_payload(
             slot,
-            &proposer_pub_key,
+            &proposer_pub_key.serialize().into(),
             &block_hash,
             versioned_execution_payload.to_owned(),
         );
 
         // Test: Get the execution payload
-        let get_result: Option<PayloadAndBlobs> =
-            cache.get_execution_payload(slot, &proposer_pub_key, &block_hash, ForkName::Electra);
+        let get_result: Option<PayloadAndBlobs> = cache.get_execution_payload(
+            slot,
+            &proposer_pub_key.serialize().into(),
+            &block_hash,
+            ForkName::Electra,
+        );
         assert!(get_result.as_ref().is_some(), "Execution payload is None");
 
         let fetched_execution_payload = get_result.unwrap();
@@ -420,8 +424,8 @@ mod tests {
     async fn test_get_builder_info() {
         let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
 
-        let builder_pub_key = BlsPublicKey::test_random();
-        let unknown_builder_pub_key = BlsPublicKey::test_random();
+        let builder_pub_key = BlsPublicKeyBytes::random();
+        let unknown_builder_pub_key = BlsPublicKeyBytes::random();
 
         let builder_info = BuilderInfo {
             collateral: U256::from(12),
@@ -458,32 +462,32 @@ mod tests {
     async fn test_get_trusted_proposers_and_update_trusted_proposers() {
         let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
 
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random());
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random().serialize().into());
         assert!(!is_trusted, "Failed to check trusted proposer");
 
         cache.update_trusted_proposers(vec![
-            ProposerInfo { name: "test".to_string(), pubkey: get_fixed_pubkey(0) },
-            ProposerInfo { name: "test2".to_string(), pubkey: get_fixed_pubkey(1) },
+            ProposerInfo { name: "test".to_string(), pubkey: get_fixed_pubkey_bytes(0) },
+            ProposerInfo { name: "test2".to_string(), pubkey: get_fixed_pubkey_bytes(1) },
         ]);
 
-        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(0));
+        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey_bytes(0));
         assert!(is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(1));
+        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey_bytes(1));
         assert!(is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(2));
+        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey_bytes(2));
         assert!(!is_trusted, "Failed to check trusted proposer");
 
         cache.update_trusted_proposers(vec![ProposerInfo {
             name: "test2".to_string(),
-            pubkey: get_fixed_pubkey(3),
+            pubkey: get_fixed_pubkey_bytes(3),
         }]);
 
-        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random());
+        let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random().serialize().into());
         assert!(!is_trusted, "Failed to check trusted proposer");
 
-        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey(3));
+        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey_bytes(3));
         assert!(is_trusted, "Failed to check trusted proposer");
     }
 
@@ -491,7 +495,7 @@ mod tests {
     async fn test_demote_non_optimistic_builder() {
         let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
 
-        let builder_pub_key = BlsPublicKey::test_random();
+        let builder_pub_key = BlsPublicKeyBytes::random();
         let builder_info = BuilderInfo {
             collateral: U256::from(12),
             is_optimistic: false,
@@ -515,7 +519,7 @@ mod tests {
     async fn test_demote_optimistic_builder() {
         let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
 
-        let builder_pub_key_optimistic = BlsPublicKey::test_random();
+        let builder_pub_key_optimistic = BlsPublicKeyBytes::random();
         let builder_info = BuilderInfo {
             collateral: U256::from(12),
             is_optimistic: true,

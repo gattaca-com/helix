@@ -19,8 +19,9 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
 use helix_types::{
-    BlindedPayloadRef, BlsPublicKey, ChainSpec, ExecPayload, GetPayloadResponse, PayloadAndBlobs,
-    SigError, SignedBlindedBeaconBlock, Slot, SlotClockTrait, VersionedSignedProposal,
+    BlindedPayloadRef, BlsPublicKey, BlsPublicKeyBytes, ChainSpec, ExecPayload, GetPayloadResponse,
+    PayloadAndBlobs, SigError, SignedBlindedBeaconBlock, Slot, SlotClockTrait,
+    VersionedSignedProposal,
 };
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
@@ -378,7 +379,7 @@ impl<A: Api> ProposerApi<A> {
     pub(crate) async fn get_execution_payload(
         &self,
         slot: u64,
-        pub_key: &BlsPublicKey,
+        pub_key: &BlsPublicKeyBytes,
         block_hash: &B256,
         request_missing_payload: bool,
     ) -> Result<PayloadAndBlobs, ProposerApiError> {
@@ -454,7 +455,7 @@ impl<A: Api> ProposerApi<A> {
     async fn save_delivered_payload_info(
         &self,
         payload: Arc<PayloadAndBlobs>,
-        proposer_public_key: BlsPublicKey,
+        proposer_public_key: &BlsPublicKeyBytes,
         trace: &GetPayloadTrace,
         user_agent: Option<String>,
     ) {
@@ -615,10 +616,12 @@ fn validate_block_equality(
 fn verify_signed_blinded_block_signature(
     chain_info: &ChainInfo,
     signed_blinded_beacon_block: &mut SignedBlindedBeaconBlock,
-    public_key: &BlsPublicKey,
+    public_key: &BlsPublicKeyBytes,
     genesis_validators_root: B256,
     context: &ChainSpec,
 ) -> Result<(), SigError> {
+    let uncompressed_public_key = BlsPublicKey::deserialize(public_key.as_slice())
+        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
     let slot = signed_blinded_beacon_block.message().slot();
     let epoch = slot.epoch(chain_info.slots_per_epoch());
     let fork = context.fork_at_epoch(epoch);
@@ -627,7 +630,7 @@ fn verify_signed_blinded_block_signature(
 
     let valid = signed_blinded_beacon_block.verify_signature(
         None,
-        public_key,
+        &uncompressed_public_key,
         &fork,
         genesis_validators_root,
         context,

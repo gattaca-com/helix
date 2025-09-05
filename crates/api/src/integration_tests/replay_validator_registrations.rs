@@ -7,7 +7,7 @@ use helix_common::{
     },
     BeaconClientConfig,
 };
-use helix_types::{BlsPublicKey, SignedValidatorRegistration, Slot};
+use helix_types::{BlsPublicKeyBytes, SignedValidatorRegistration, Slot};
 use reqwest::{Error, Response};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::mpsc::channel, time::sleep};
@@ -35,7 +35,7 @@ async fn fetch_validators_from_endpoint(
 async fn fetch_and_aggregate_validators(
     endpoints: &[&str],
 ) -> Result<Vec<ValidatorRegistrationInfo>, Error> {
-    let mut all_validators: HashMap<BlsPublicKey, ValidatorRegistrationInfo> = HashMap::new();
+    let mut all_validators: HashMap<BlsPublicKeyBytes, ValidatorRegistrationInfo> = HashMap::new();
     let (tx, mut rx) =
         channel::<Result<Vec<BuilderGetValidatorsResponseEntry>, Error>>(endpoints.len());
 
@@ -150,7 +150,7 @@ async fn run() {
 
         match fetch_and_aggregate_validators(&endpoints).await {
             Ok(validators) => {
-                let pubkeys: Vec<BlsPublicKey> =
+                let pubkeys: Vec<BlsPublicKeyBytes> =
                     validators.iter().map(|v| v.registration.message.pubkey.clone()).collect();
                 info!(?pubkeys, "{} validators fetched", validators.len());
 

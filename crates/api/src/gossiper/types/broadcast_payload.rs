@@ -1,4 +1,6 @@
-use helix_types::{BlsPublicKey, ForkName, ForkVersionDecode, PayloadAndBlobs, PayloadAndBlobsRef};
+use helix_types::{
+    BlsPublicKeyBytes, ForkName, ForkVersionDecode, PayloadAndBlobs, PayloadAndBlobsRef,
+};
 use ssz::Encode;
 
 use crate::{gossiper::error::GossipError, grpc};
@@ -7,7 +9,7 @@ use crate::{gossiper::error::GossipError, grpc};
 pub struct BroadcastPayloadParams {
     pub execution_payload: PayloadAndBlobs,
     pub slot: u64,
-    pub proposer_pub_key: BlsPublicKey,
+    pub proposer_pub_key: BlsPublicKeyBytes,
 }
 
 impl BroadcastPayloadParams {
@@ -21,21 +23,21 @@ impl BroadcastPayloadParams {
             )
             .map_err(GossipError::SszDecodeError)?,
             slot: proto_params.slot,
-            proposer_pub_key: BlsPublicKey::deserialize(proto_params.proposer_pub_key.as_slice())
-                .map_err(GossipError::BlsDecodeError)?,
+            proposer_pub_key: BlsPublicKeyBytes::try_from(proto_params.proposer_pub_key.as_slice())
+                .map_err(|_| GossipError::BlsDecodeError)?,
         })
     }
 
     pub fn to_proto(
         execution_payload: PayloadAndBlobsRef,
         slot: u64,
-        proposer_pub_key: &BlsPublicKey,
+        proposer_pub_key: &BlsPublicKeyBytes,
         current_fork: ForkName,
     ) -> grpc::BroadcastPayloadParams {
         grpc::BroadcastPayloadParams {
             execution_payload: execution_payload.as_ssz_bytes(),
             slot,
-            proposer_pub_key: proposer_pub_key.serialize().to_vec(),
+            proposer_pub_key: proposer_pub_key.to_vec(),
             fork_name: Some(current_fork.to_string()),
         }
     }

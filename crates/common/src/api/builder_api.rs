@@ -1,7 +1,7 @@
 use alloy_consensus::TxEnvelope;
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_rlp::Decodable;
-use helix_types::{BlsPublicKey, BlsPublicKeyBytes, SignedValidatorRegistration, Slot};
+use helix_types::{BlsPublicKeyBytes, SignedValidatorRegistration, Slot};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 
@@ -47,7 +47,7 @@ pub struct TopBidUpdate {
     pub value: U256,
 }
 
-pub type SlotCoordinate = (u64, BlsPublicKey, B256);
+pub type SlotCoordinate = (u64, BlsPublicKeyBytes, B256);
 
 #[derive(Clone, Debug)]
 pub struct InclusionListWithKey {

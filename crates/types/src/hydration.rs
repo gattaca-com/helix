@@ -7,7 +7,7 @@ use ssz_derive::{Decode, Encode};
 use crate::{
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
-    BidTrace, Blob, BlobsBundle, BlsPublicKey, BlsSignature, ExecutionPayload,
+    BidTrace, Blob, BlobsBundle, BlsPublicKeyBytes, BlsSignature, ExecutionPayload,
 };
 
 /// A bid submission where transactions and blobs may be replaced by hashes instead of payload
@@ -18,7 +18,7 @@ pub enum DehydratedBidSubmission {
     Electra(DehydratedBidSubmissionElectra),
 }
 impl DehydratedBidSubmission {
-    pub fn builder_pubkey(&self) -> &BlsPublicKey {
+    pub fn builder_pubkey(&self) -> &BlsPublicKeyBytes {
         match self {
             DehydratedBidSubmission::Electra(dehydrated_bid_submission_electra) => {
                 &dehydrated_bid_submission_electra.message.builder_pubkey
@@ -183,7 +183,7 @@ impl Default for Cache {
 
 /// One cache per builder pubkey
 pub struct HydrationCache {
-    caches: FxHashMap<BlsPublicKey, Cache>,
+    caches: FxHashMap<BlsPublicKeyBytes, Cache>,
 }
 
 impl HydrationCache {

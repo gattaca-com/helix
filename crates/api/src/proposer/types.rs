@@ -1,8 +1,8 @@
 use alloy_primitives::B256;
 use helix_common::Filtering;
 use helix_types::{
-    BeaconBlockBodyElectra, BeaconBlockElectra, BlsPublicKey, PayloadAndBlobs, SignedBeaconBlock,
-    SignedBeaconBlockElectra, SignedBlindedBeaconBlock, VersionedSignedProposal,
+    BeaconBlockBodyElectra, BeaconBlockElectra, BlsPublicKeyBytes, PayloadAndBlobs,
+    SignedBeaconBlock, SignedBeaconBlockElectra, SignedBlindedBeaconBlock, VersionedSignedProposal,
 };
 use serde::Deserialize;
 
@@ -14,7 +14,7 @@ pub const GET_HEADER_REQUEST_CUTOFF_MS: i64 = 3000;
 pub struct GetHeaderParams {
     pub slot: u64,
     pub parent_hash: B256,
-    pub pubkey: BlsPublicKey,
+    pub pubkey: BlsPublicKeyBytes,
 }
 
 pub fn unblind_beacon_block(

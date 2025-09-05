@@ -1,5 +1,11 @@
 #[derive(Debug, thiserror::Error)]
 pub enum SigError {
+    #[error("Invalid signature bytes")]
+    InvalidBlsSignatureBytes,
+
+    #[error("Invalid pubkey bytes")]
+    InvalidBlsPubkeyBytes,
+
     #[error("Invalid signature")]
     InvalidBlsSignature,
 }

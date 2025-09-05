@@ -49,6 +49,9 @@ pub enum DatabaseError {
     #[error("Crypto error: {0:?}")]
     CryptoError(CryptoError),
 
+    #[error("Invalid bytes")]
+    InvalidBytes,
+
     #[error("General error")]
     GeneralError,
 }

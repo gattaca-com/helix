@@ -1,4 +1,4 @@
-use helix_types::{BlsPublicKey, Validator};
+use helix_types::{BlsPublicKeyBytes, Validator};
 use serde::{Deserialize, Serialize};
 
 use crate::{api::proposer_api::ValidatorRegistrationInfo, utils::utcnow_ms};
@@ -48,7 +48,7 @@ impl SignedValidatorRegistrationEntry {
         Self { registration_info, inserted_at: utcnow_ms(), pool_name, user_agent }
     }
 
-    pub fn public_key(&self) -> &BlsPublicKey {
+    pub fn public_key(&self) -> &BlsPublicKeyBytes {
         &self.registration_info.registration.message.pubkey
     }
 }

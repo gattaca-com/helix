@@ -4,7 +4,7 @@ use rand::SeedableRng;
 use serde_json::Value;
 use ssz::{Decode, Encode};
 
-use crate::{BlsPublicKey, BlsSecretKey};
+use crate::{BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey};
 
 /// Test that the encoding and decoding works, returns the decoded struct
 pub fn test_encode_decode_json<T: serde::Serialize + serde::de::DeserializeOwned>(d: &str) -> T {
@@ -40,6 +40,10 @@ pub fn random_bls_pubkey() -> BlsPublicKey {
 pub fn get_fixed_pubkey(i: usize) -> BlsPublicKey {
     let key = get_fixed_secret(i);
     key.public_key()
+}
+
+pub fn get_fixed_pubkey_bytes(i: usize) -> BlsPublicKeyBytes {
+    get_fixed_pubkey(i).serialize().into()
 }
 
 pub fn get_fixed_secret(i: usize) -> BlsSecretKey {

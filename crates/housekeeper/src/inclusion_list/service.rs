@@ -8,7 +8,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::{BlsPublicKey, Slot};
+use helix_types::{BlsPublicKeyBytes, Slot};
 use tracing::{error, info, warn};
 
 use crate::inclusion_list::http_fetcher::HttpInclusionListFetcher;
@@ -39,7 +39,7 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
     pub async fn handle_inclusion_list_for_slot(
         &self,
         parent_hash: Option<B256>,
-        pub_key: BlsPublicKey,
+        pub_key: BlsPublicKeyBytes,
         slot: u64,
     ) {
         let Some(parent_hash) = parent_hash else {

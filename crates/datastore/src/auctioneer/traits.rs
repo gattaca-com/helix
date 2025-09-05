@@ -26,26 +26,26 @@ pub trait Auctioneer: Send + Sync + Clone {
     fn save_execution_payload(
         &self,
         slot: u64,
-        proposer_pub_key: &BlsPublicKey,
+        proposer_pub_key: &BlsPublicKeyBytes,
         block_hash: &B256,
         versioned_execution_payload: PayloadAndBlobs,
     );
     fn get_execution_payload(
         &self,
         slot: u64,
-        proposer_pub_key: &BlsPublicKey,
+        proposer_pub_key: &BlsPublicKeyBytes,
         block_hash: &B256,
         fork_name: ForkName,
     ) -> Option<PayloadAndBlobs>;
 
     fn get_builder_info(
         &self,
-        builder_pub_key: &BlsPublicKey,
+        builder_pub_key: &BlsPublicKeyBytes,
     ) -> Result<BuilderInfo, AuctioneerError>;
     fn contains_api_key(&self, api_key: &HeaderValue) -> bool;
-    fn validate_api_key(&self, api_key: &HeaderValue, pubkey: &BlsPublicKey) -> bool;
+    fn validate_api_key(&self, api_key: &HeaderValue, pubkey: &BlsPublicKeyBytes) -> bool;
 
-    fn demote_builder(&self, builder_pub_key: &BlsPublicKey) -> Result<(), AuctioneerError>;
+    fn demote_builder(&self, builder_pub_key: &BlsPublicKeyBytes) -> Result<(), AuctioneerError>;
 
     fn update_builder_infos(&self, builder_infos: &[BuilderInfoDocument]);
 
@@ -53,20 +53,20 @@ pub trait Auctioneer: Send + Sync + Clone {
 
     fn update_trusted_proposers(&self, proposer_whitelist: Vec<ProposerInfo>);
 
-    fn is_trusted_proposer(&self, proposer_pub_key: &BlsPublicKey) -> bool;
+    fn is_trusted_proposer(&self, proposer_pub_key: &BlsPublicKeyBytes) -> bool;
 
     fn save_payload_address(
         &self,
         block_hash: &B256,
-        builder_pub_key: &BlsPublicKey,
+        builder_pub_key: &BlsPublicKeyBytes,
         payload_url: Vec<u8>,
     );
 
-    fn get_payload_url(&self, block_hash: &B256) -> Option<(BlsPublicKey, Vec<u8>)>;
+    fn get_payload_url(&self, block_hash: &B256) -> Option<(BlsPublicKeyBytes, Vec<u8>)>;
 
-    fn update_primev_proposers(&self, proposer_whitelist: &[BlsPublicKey]);
+    fn update_primev_proposers(&self, proposer_whitelist: &[BlsPublicKeyBytes]);
 
-    fn is_primev_proposer(&self, proposer_pub_key: &BlsPublicKey) -> bool;
+    fn is_primev_proposer(&self, proposer_pub_key: &BlsPublicKeyBytes) -> bool;
 
     fn kill_switch_enabled(&self) -> bool;
 

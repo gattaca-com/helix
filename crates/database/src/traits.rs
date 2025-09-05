@@ -39,12 +39,12 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn get_validator_registration(
         &self,
-        pub_key: &BlsPublicKey,
+        pub_key: &BlsPublicKeyBytes,
     ) -> Result<SignedValidatorRegistrationEntry, DatabaseError>;
 
     async fn get_validator_registrations_for_pub_keys(
         &self,
-        pub_keys: &[&BlsPublicKey],
+        pub_keys: &[&BlsPublicKeyBytes],
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError>;
 
     async fn set_proposer_duties(
@@ -65,13 +65,13 @@ pub trait DatabaseService: Send + Sync + Clone {
     /// Return a list of all pub keys from the list that are known.
     async fn check_known_validators(
         &self,
-        public_keys: Vec<BlsPublicKey>,
-    ) -> Result<HashSet<BlsPublicKey>, DatabaseError>;
+        public_keys: Vec<BlsPublicKeyBytes>,
+    ) -> Result<HashSet<BlsPublicKeyBytes>, DatabaseError>;
 
     async fn save_too_late_get_payload(
         &self,
         slot: u64,
-        proposer_pub_key: &BlsPublicKey,
+        proposer_pub_key: &BlsPublicKeyBytes,
         payload_hash: &B256,
         message_received: u64,
         payload_fetched: u64,
@@ -94,7 +94,7 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn store_builder_info(
         &self,
-        builder_pub_key: &BlsPublicKey,
+        builder_pub_key: &BlsPublicKeyBytes,
         builder_info: &BuilderInfo,
     ) -> Result<(), DatabaseError>;
 
@@ -110,7 +110,7 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn db_demote_builder(
         &self,
         slot: u64,
-        builder_pub_key: &BlsPublicKey,
+        builder_pub_key: &BlsPublicKeyBytes,
         block_hash: &B256,
         reason: String,
     ) -> Result<(), DatabaseError>;
@@ -138,7 +138,7 @@ pub trait DatabaseService: Send + Sync + Clone {
         &self,
         slot: u64,
         parent_hash: B256,
-        public_key: BlsPublicKey,
+        public_key: BlsPublicKeyBytes,
         best_block_hash: B256,
         trace: GetHeaderTrace,
         mev_boost: bool,
@@ -180,6 +180,6 @@ pub trait DatabaseService: Send + Sync + Clone {
         inclusion_list: &InclusionListWithMetadata,
         slot: u64,
         block_parent_hash: &B256,
-        proposer_pubkey: &BlsPublicKey,
+        proposer_pubkey: &BlsPublicKeyBytes,
     ) -> Result<(), Vec<DatabaseError>>;
 }

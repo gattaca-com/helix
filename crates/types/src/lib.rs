@@ -41,6 +41,7 @@ pub type Domain = lh_types::Domain;
 pub type BlsPublicKey = lh_types::PublicKey;
 pub type BlsPublicKeyBytes = alloy_rpc_types::beacon::BlsPublicKey;
 pub type BlsSignature = lh_types::Signature;
+pub type BlsSignatureBytes = alloy_rpc_types::beacon::BlsSignature;
 pub type BlsSecretKey = lh_types::SecretKey;
 pub type BlsKeypair = lh_types::Keypair;
 

@@ -3,7 +3,7 @@ use std::{collections::HashSet, fs::File, path::PathBuf};
 use alloy_primitives::B256;
 use clap::Parser;
 use eyre::ensure;
-use helix_types::{BlsKeypair, BlsPublicKey, BlsSecretKey};
+use helix_types::{BlsKeypair, BlsPublicKeyBytes, BlsSecretKey};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
@@ -184,7 +184,7 @@ pub struct RelayGossipConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BuilderConfig {
-    pub pub_key: BlsPublicKey,
+    pub pub_key: BlsPublicKeyBytes,
     pub builder_info: BuilderInfo,
 }
 

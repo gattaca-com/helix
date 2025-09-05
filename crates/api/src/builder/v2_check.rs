@@ -11,7 +11,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::{BlsPublicKey, SignedBidSubmission};
+use helix_types::{BlsPublicKeyBytes, SignedBidSubmission};
 use tracing::{error, info, warn};
 
 use crate::Api;
@@ -20,7 +20,7 @@ use crate::Api;
 const MAX_DELAY_BETWEEN_V2_SUBMISSIONS_NS: u64 = 2_000_000_000; // 2s
 
 pub struct V2SubMessage {
-    pub builder_pubkey: BlsPublicKey,
+    pub builder_pubkey: BlsPublicKeyBytes,
     pub slot: u64,
     pub on_receive_ns: u64,
     pub block_hash: B256,
@@ -54,7 +54,7 @@ impl V2SubMessage {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct PendingBlock {
-    pub builder_pubkey: BlsPublicKey,
+    pub builder_pubkey: BlsPublicKeyBytes,
     pub slot: u64,
     pub header_receive_ns: Option<u64>,
     pub payload_receive_ns: Option<u64>,
@@ -122,7 +122,7 @@ impl<A: Api> V2SubChecker<A> {
     /// - for blocks with only header, demote if time is older than
     ///   MAX_DELAY_BETWEEN_V2_SUBMISSIONS_NS
     /// - otherwise leave
-    fn check_demotions(&mut self, demoted: &mut HashSet<BlsPublicKey>) {
+    fn check_demotions(&mut self, demoted: &mut HashSet<BlsPublicKeyBytes>) {
         demoted.clear();
 
         let now_ns = utcnow_ns();

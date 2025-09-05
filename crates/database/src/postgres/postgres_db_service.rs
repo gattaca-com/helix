@@ -37,7 +37,7 @@ use crate::{
     postgres::{
         postgres_db_filters::PgBidFilters,
         postgres_db_init::run_migrations_async,
-        postgres_db_row_parsing::{parse_bytes_to_pubkey, parse_row, parse_rows},
+        postgres_db_row_parsing::{parse_bytes_to_pubkey_bytes, parse_row, parse_rows},
         postgres_db_u256_parsing::PostgresNumeric,
     },
     types::{BidSubmissionDocument, BuilderInfoDocument, DeliveredPayloadDocument},
@@ -83,11 +83,11 @@ struct TrustedProposerParams {
 
 #[derive(Clone)]
 pub struct PostgresDatabaseService {
-    validator_registration_cache: Arc<DashMap<BlsPublicKey, SignedValidatorRegistrationEntry>>,
-    pending_validator_registrations: Arc<DashSet<BlsPublicKey>>,
+    validator_registration_cache: Arc<DashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>>,
+    pending_validator_registrations: Arc<DashSet<BlsPublicKeyBytes>>,
     block_submissions_sender: Option<Sender<PendingBlockSubmissionValue>>,
     header_submissions_sender: Option<Sender<PendingHeaderSubmissionValue>>,
-    known_validators_cache: Arc<DashSet<BlsPublicKey>>,
+    known_validators_cache: Arc<DashSet<BlsPublicKeyBytes>>,
     validator_pool_cache: Arc<DashMap<String, String>>,
     region: i16,
     pub pool: Arc<Pool>,
@@ -210,8 +210,8 @@ impl PostgresDatabaseService {
         let client = self.pool.get().await.unwrap();
         let rows = client.query("SELECT * FROM known_validators", &[]).await.unwrap();
         for row in rows {
-            let public_key: BlsPublicKey =
-                parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key")).unwrap();
+            let public_key: BlsPublicKeyBytes =
+                parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("public_key")).unwrap();
             self.known_validators_cache.insert(public_key);
         }
 
@@ -346,8 +346,7 @@ impl PostgresDatabaseService {
                 .registration
                 .message
                 .pubkey
-                .serialize()
-                .cmp(&b.registration_info.registration.message.pubkey.serialize())
+                .cmp(&b.registration_info.registration.message.pubkey)
         });
 
         let batch_size = 10;
@@ -366,9 +365,8 @@ impl PostgresDatabaseService {
             for entry in chunk.iter() {
                 let registration = &entry.registration_info.registration.message;
                 let fee_recipient = &registration.fee_recipient;
-                let public_key = &registration.pubkey.serialize().to_vec();
-                let signature =
-                    &entry.registration_info.registration.signature.serialize().to_vec();
+                let public_key = &registration.pubkey.to_vec();
+                let signature = &entry.registration_info.registration.signature.to_vec();
                 let name = &entry.pool_name;
 
                 let inserted_at = SystemTime::now();
@@ -546,18 +544,8 @@ impl PostgresDatabaseService {
                 slot_number: item.submission.slot().as_u64() as i32,
                 parent_hash: item.submission.parent_hash().as_slice().to_vec(),
                 block_hash: item.submission.block_hash().as_slice().to_vec(),
-                builder_pubkey: item
-                    .submission
-                    .builder_public_key()
-                    .serialize()
-                    .as_slice()
-                    .to_vec(),
-                proposer_pubkey: item
-                    .submission
-                    .proposer_public_key()
-                    .serialize()
-                    .as_slice()
-                    .to_vec(),
+                builder_pubkey: item.submission.builder_public_key().as_slice().to_vec(),
+                proposer_pubkey: item.submission.proposer_public_key().as_slice().to_vec(),
                 proposer_fee_recipient: item
                     .submission
                     .proposer_fee_recipient()
@@ -683,10 +671,7 @@ impl PostgresDatabaseService {
             let slot = item.submission.slot().as_u64() as i32;
             if slot > tmp_last_processed_slot {
                 tmp_last_processed_slot = slot;
-                new_rows.push((
-                    slot,
-                    item.submission.proposer_public_key().serialize().as_slice().to_vec(),
-                ));
+                new_rows.push((slot, item.submission.proposer_public_key().as_slice().to_vec()));
             }
         }
         if !new_rows.is_empty() {
@@ -753,18 +738,8 @@ impl PostgresDatabaseService {
                 slot_number: item.submission.slot().as_u64() as i32,
                 parent_hash: item.submission.parent_hash().as_slice().to_vec(),
                 block_hash: item.submission.block_hash().as_slice().to_vec(),
-                builder_pubkey: item
-                    .submission
-                    .builder_public_key()
-                    .serialize()
-                    .as_slice()
-                    .to_vec(),
-                proposer_pubkey: item
-                    .submission
-                    .proposer_public_key()
-                    .serialize()
-                    .as_slice()
-                    .to_vec(),
+                builder_pubkey: item.submission.builder_public_key().as_slice().to_vec(),
+                proposer_pubkey: item.submission.proposer_public_key().as_slice().to_vec(),
                 proposer_fee_recipient: item
                     .submission
                     .proposer_fee_recipient()
@@ -967,7 +942,7 @@ impl DatabaseService for PostgresDatabaseService {
     #[instrument(skip_all)]
     async fn get_validator_registration(
         &self,
-        pub_key: &BlsPublicKey,
+        pub_key: &BlsPublicKeyBytes,
     ) -> Result<SignedValidatorRegistrationEntry, DatabaseError> {
         let mut record = DbMetricRecord::new("get_validator_registration");
 
@@ -994,7 +969,7 @@ impl DatabaseService for PostgresDatabaseService {
                 INNER JOIN validator_preferences ON validator_registrations.public_key = validator_preferences.public_key
                 WHERE validator_registrations.public_key = $1 AND validator_registrations.active = true
             ",
-                &[&(pub_key.serialize().as_slice())],
+                &[&(pub_key.as_slice())],
             )
             .await?
         {
@@ -1034,7 +1009,7 @@ impl DatabaseService for PostgresDatabaseService {
     #[instrument(skip_all)]
     async fn get_validator_registrations_for_pub_keys(
         &self,
-        pub_keys: &[&BlsPublicKey],
+        pub_keys: &[&BlsPublicKeyBytes],
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_validator_registrations_for_pub_keys");
 
@@ -1053,8 +1028,7 @@ impl DatabaseService for PostgresDatabaseService {
         // Preparing the query
         let stmt = client.prepare(&query).await.map_err(DatabaseError::from)?;
 
-        let pubkeys: Vec<_> = pub_keys.iter().map(|k| k.serialize()).collect();
-        let params: Vec<Box<dyn ToSql + Sync + Send>> = pubkeys
+        let params: Vec<Box<dyn ToSql + Sync + Send>> = pub_keys
             .iter()
             .map(|key| Box::new(key.as_slice()) as Box<dyn ToSql + Sync + Send>)
             .collect();
@@ -1102,7 +1076,7 @@ impl DatabaseService for PostgresDatabaseService {
             structured_params.push((
                 entry.slot.as_u64() as i32,
                 entry.validator_index as i32,
-                entry.entry.registration.message.pubkey.serialize().to_vec(),
+                entry.entry.registration.message.pubkey.to_vec(),
             ));
         }
 
@@ -1177,18 +1151,18 @@ impl DatabaseService for PostgresDatabaseService {
 
         let mut client = self.pool.get().await?;
 
-        let new_keys_set: HashSet<BlsPublicKey> =
+        let new_keys_set: HashSet<BlsPublicKeyBytes> =
             known_validators.iter().map(|validator| validator.validator.pubkey.clone()).collect();
 
-        let old_keys_hash_set: HashSet<BlsPublicKey> = self
+        let old_keys_hash_set: HashSet<BlsPublicKeyBytes> = self
             .known_validators_cache
             .iter()
             .map(|ref_multi| ref_multi.key().clone()) // Access and clone the key from RefMulti
             .collect();
 
-        let keys_to_add: Vec<BlsPublicKey> =
+        let keys_to_add: Vec<BlsPublicKeyBytes> =
             new_keys_set.difference(&old_keys_hash_set).cloned().collect();
-        let keys_to_remove: Vec<BlsPublicKey> =
+        let keys_to_remove: Vec<BlsPublicKeyBytes> =
             old_keys_hash_set.difference(&new_keys_set).cloned().collect();
 
         for key in &keys_to_add {
@@ -1208,7 +1182,7 @@ impl DatabaseService for PostgresDatabaseService {
         // Perform batch deletion
         for chunk in keys_to_remove.chunks(10000) {
             let sql = "DELETE FROM known_validators WHERE public_key = ANY($1::bytea[])";
-            let byte_keys: Vec<Vec<u8>> = chunk.iter().map(|k| k.serialize().to_vec()).collect();
+            let byte_keys: Vec<Vec<u8>> = chunk.iter().map(|k| k.to_vec()).collect();
             transaction.execute(sql, &[&byte_keys]).await?;
         }
 
@@ -1223,7 +1197,7 @@ impl DatabaseService for PostgresDatabaseService {
 
             let mut structured_params: Vec<Vec<u8>> = Vec::new();
             for validator in chunk.iter() {
-                structured_params.push(validator.serialize().to_vec());
+                structured_params.push(validator.to_vec());
             }
 
             let params: Vec<&(dyn ToSql + Sync)> =
@@ -1241,8 +1215,8 @@ impl DatabaseService for PostgresDatabaseService {
     #[instrument(skip_all)]
     async fn check_known_validators(
         &self,
-        public_keys: Vec<BlsPublicKey>,
-    ) -> Result<HashSet<BlsPublicKey>, DatabaseError> {
+        public_keys: Vec<BlsPublicKeyBytes>,
+    ) -> Result<HashSet<BlsPublicKeyBytes>, DatabaseError> {
         let mut record = DbMetricRecord::new("check_known_validators");
 
         let client = self.high_priority_pool.get().await?;
@@ -1250,17 +1224,17 @@ impl DatabaseService for PostgresDatabaseService {
 
         for public_key in public_keys.iter() {
             if self.known_validators_cache.contains(public_key) {
-                pub_keys.insert(public_key.clone());
+                pub_keys.insert(*public_key);
             } else {
                 let rows = client
-                    .query("SELECT * FROM known_validators WHERE public_key = $1", &[&(public_key
-                        .serialize()
-                        .to_vec())])
+                    .query("SELECT * FROM known_validators WHERE public_key = $1", &[
+                        &(public_key.to_vec())
+                    ])
                     .await?;
                 for row in rows {
-                    let public_key: BlsPublicKey =
-                        parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?;
-                    self.known_validators_cache.insert(public_key.clone());
+                    let public_key: BlsPublicKeyBytes =
+                        parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("public_key"))?;
+                    self.known_validators_cache.insert(public_key);
                     pub_keys.insert(public_key);
                 }
             }
@@ -1320,7 +1294,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn save_too_late_get_payload(
         &self,
         slot: u64,
-        proposer_pub_key: &BlsPublicKey,
+        proposer_pub_key: &BlsPublicKeyBytes,
         payload_hash: &B256,
         message_received: u64,
         payload_fetched: u64,
@@ -1342,7 +1316,7 @@ impl DatabaseService for PostgresDatabaseService {
                     &(payload_hash.as_slice()),
                     &(slot as i32),
                     &(region_id),
-                    &(proposer_pub_key.serialize().to_vec()),
+                    &(proposer_pub_key.to_vec()),
                     &(message_received as i64),
                     &(payload_fetched as i64),
                 ],
@@ -1542,7 +1516,7 @@ impl DatabaseService for PostgresDatabaseService {
     #[instrument(skip_all)]
     async fn store_builder_info(
         &self,
-        builder_pub_key: &BlsPublicKey,
+        builder_pub_key: &BlsPublicKeyBytes,
         builder_info: &BuilderInfo,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_builder_info");
@@ -1561,7 +1535,7 @@ impl DatabaseService for PostgresDatabaseService {
                         builder_ids = array_concat_uniq(COALESCE(builder_info.builder_ids, '{}'::character varying[]), EXCLUDED.builder_ids)
                 ",
                 &[
-                    &(builder_pub_key.serialize().as_slice()),
+                    &(builder_pub_key.as_slice()),
                     &(PostgresNumeric::from(builder_info.collateral)),
                     &(builder_info.is_optimistic),
                     &(builder_info.is_optimistic_for_regional_filtering),
@@ -1603,7 +1577,7 @@ impl DatabaseService for PostgresDatabaseService {
         let mut structured_builders = Vec::with_capacity(builders.len());
         for builder in builders {
             structured_builders.push(BuilderParams {
-                pubkey: builder.pub_key.serialize().as_slice().to_vec(),
+                pubkey: builder.pub_key.as_slice().to_vec(),
                 collateral: PostgresNumeric::from(builder.builder_info.collateral),
                 is_optimistic: builder.builder_info.is_optimistic,
                 is_optimistic_for_regional_filtering: builder
@@ -1690,7 +1664,7 @@ impl DatabaseService for PostgresDatabaseService {
     async fn db_demote_builder(
         &self,
         slot: u64,
-        builder_pub_key: &BlsPublicKey,
+        builder_pub_key: &BlsPublicKeyBytes,
         block_hash: &B256,
         reason: String,
     ) -> Result<(), DatabaseError> {
@@ -1698,7 +1672,6 @@ impl DatabaseService for PostgresDatabaseService {
 
         let mut client = self.high_priority_pool.get().await?;
         let transaction = client.transaction().await?;
-        let builder_pub_key_bytes = builder_pub_key.serialize();
 
         transaction
             .execute(
@@ -1707,7 +1680,7 @@ impl DatabaseService for PostgresDatabaseService {
                     SET is_optimistic = FALSE 
                     WHERE public_key = $1
                 ",
-                &[&(builder_pub_key_bytes.as_slice())],
+                &[&(builder_pub_key.as_slice())],
             )
             .await?;
 
@@ -1719,7 +1692,7 @@ impl DatabaseService for PostgresDatabaseService {
                     VALUES ($1, $2, $3, $4, $5)
                 ",
                 &[
-                    &(builder_pub_key_bytes.as_slice()),
+                    &(builder_pub_key.as_slice()),
                     &(block_hash.as_slice()),
                     &(timestamp as i64),
                     &(reason),
@@ -2039,7 +2012,7 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         slot: u64,
         parent_hash: B256,
-        public_key: BlsPublicKey,
+        public_key: BlsPublicKeyBytes,
         best_block_hash: B256,
         trace: GetHeaderTrace,
         mev_boost: bool,
@@ -2051,8 +2024,6 @@ impl DatabaseService for PostgresDatabaseService {
 
         let mut client = self.pool.get().await?;
         let transaction = client.transaction().await?;
-
-        let public_key = public_key.serialize();
 
         transaction
             .execute(
@@ -2066,7 +2037,7 @@ impl DatabaseService for PostgresDatabaseService {
                     &(slot as i32),
                     &(region_id),
                     &(parent_hash.as_slice()),
-                    &(public_key.as_ref()),
+                    &(public_key.as_slice()),
                     &(best_block_hash.as_slice()),
                     &(mev_boost),
                     &(user_agent),
@@ -2233,7 +2204,7 @@ impl DatabaseService for PostgresDatabaseService {
         inclusion_list: &InclusionListWithMetadata,
         slot: u64,
         block_parent_hash: &B256,
-        proposer_pubkey: &BlsPublicKey,
+        proposer_pubkey: &BlsPublicKeyBytes,
     ) -> Result<(), Vec<DatabaseError>> {
         let mut record = DbMetricRecord::new("save_inclusion_list");
         let client = self.high_priority_pool.get().await.map_err(|err| vec![err.into()])?;
@@ -2257,7 +2228,7 @@ impl DatabaseService for PostgresDatabaseService {
                     &(tx.bytes.as_ref()),
                     &(slot as i64),
                     &(block_parent_hash.as_slice()),
-                    &(proposer_pubkey.as_hex_string().as_bytes()),
+                    &(alloy_primitives::hex::encode_prefixed(proposer_pubkey).as_bytes()),
                 ],
             ).await;
 

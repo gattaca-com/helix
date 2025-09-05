@@ -3,7 +3,7 @@ pub mod v2;
 pub mod v3;
 
 use alloy_primitives::{Address, B256, U256};
-use helix_types::{BidTrace, Bloom, BlsPublicKey, BlsSignature, ExtraData, ForkName, Slot};
+use helix_types::{BidTrace, Bloom, BlsPublicKeyBytes, BlsSignature, ExtraData, ForkName, Slot};
 
 #[auto_impl::auto_impl(Arc)]
 pub trait BidSubmission {
@@ -17,9 +17,9 @@ pub trait BidSubmission {
 
     fn block_hash(&self) -> &B256;
 
-    fn builder_public_key(&self) -> &BlsPublicKey;
+    fn builder_public_key(&self) -> &BlsPublicKeyBytes;
 
-    fn proposer_public_key(&self) -> &BlsPublicKey;
+    fn proposer_public_key(&self) -> &BlsPublicKeyBytes;
 
     fn proposer_fee_recipient(&self) -> &Address;
 

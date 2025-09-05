@@ -12,7 +12,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::BlsPublicKey;
+use helix_types::BlsPublicKeyBytes;
 use reqwest::Client;
 use tokio::time::sleep;
 use tracing::{debug, error, warn, Instrument};
@@ -132,7 +132,7 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
     async fn demote_builder_due_to_error(
         &self,
         slot: u64,
-        builder_public_key: &BlsPublicKey,
+        builder_public_key: &BlsPublicKeyBytes,
         block_hash: &B256,
         reason: String,
     ) {

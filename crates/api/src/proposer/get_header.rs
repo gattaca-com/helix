@@ -15,7 +15,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::BlsPublicKey;
+use helix_types::BlsPublicKeyBytes;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
 
@@ -229,7 +229,7 @@ async fn save_get_header_call<DB: DatabaseService + 'static>(
     db: Arc<DB>,
     slot: u64,
     parent_hash: B256,
-    public_key: BlsPublicKey,
+    public_key: BlsPublicKeyBytes,
     best_block_hash: B256,
     trace: GetHeaderTrace,
     mev_boost: bool,

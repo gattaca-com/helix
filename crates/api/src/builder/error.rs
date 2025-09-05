@@ -8,7 +8,7 @@ use axum::{
 use helix_common::{bid_submission::BidValidationError, simulator::BlockSimError};
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
-use helix_types::{BlsPublicKey, HydrationError, Slot, ValidationError};
+use helix_types::{BlsPublicKey, BlsPublicKeyBytes, HydrationError, Slot, ValidationError};
 
 use super::v3::V3Error;
 
@@ -84,7 +84,7 @@ pub enum BuilderApiError {
     FeeRecipientMismatch { got: Address, expected: Address },
 
     #[error("proposer public key mismatch. got: {got:?}, expected: {expected:?}")]
-    ProposerPublicKeyMismatch { got: Box<BlsPublicKey>, expected: Box<BlsPublicKey> },
+    ProposerPublicKeyMismatch { got: BlsPublicKeyBytes, expected: BlsPublicKeyBytes },
 
     #[error("slot mismatch. got: {got}, expected: {expected}")]
     SlotMismatch { got: u64, expected: u64 },
@@ -148,14 +148,14 @@ pub enum BuilderApiError {
         collateral: {collateral:?}, collateral required: {collateral_required:?}"
     )]
     NotEnoughOptimisticCollateral {
-        builder_pub_key: Box<BlsPublicKey>,
+        builder_pub_key: BlsPublicKeyBytes,
         collateral: U256,
         collateral_required: U256,
         is_optimistic: bool,
     },
 
     #[error("builder is not optimistic. builder_pub_key: {builder_pub_key:?}")]
-    BuilderNotOptimistic { builder_pub_key: BlsPublicKey },
+    BuilderNotOptimistic { builder_pub_key: BlsPublicKeyBytes },
 
     #[error("builder not in proposer's trusted list: {proposer_trusted_builders:?}")]
     BuilderNotInProposersTrustedList { proposer_trusted_builders: Vec<String> },

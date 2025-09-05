@@ -2,7 +2,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use helix_types::BlsPublicKey;
+use helix_types::BlsPublicKeyBytes;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DataApiError {
@@ -13,7 +13,7 @@ pub enum DataApiError {
     #[error("maximum limit is {limit}")]
     LimitReached { limit: u64 },
     #[error("no registration found for validator {pubkey}")]
-    ValidatorRegistrationNotFound { pubkey: BlsPublicKey },
+    ValidatorRegistrationNotFound { pubkey: BlsPublicKeyBytes },
     #[error("internal server error")]
     InternalServerError,
 }
