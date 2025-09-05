@@ -24,7 +24,10 @@ use tracing::{debug, error, info, warn, Instrument};
 
 use super::ProposerApi;
 use crate::{
-    gossiper::types::RequestPayloadParams, proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS}, router::Terminating, Api, HEADER_TIMEOUT_MS
+    gossiper::types::RequestPayloadParams,
+    proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
+    router::Terminating,
+    Api, HEADER_TIMEOUT_MS,
 };
 
 impl<A: Api> ProposerApi<A> {
