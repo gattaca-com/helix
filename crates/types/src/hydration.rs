@@ -119,21 +119,21 @@ impl DehydratedBidSubmissionElectra {
 
         let mut blob_cache_hits: usize = 0;
         let new_blobs = self.blobs_bundle.new_items.len();
-        for blob in self.blobs_bundle.new_items {
-            order_cache.blobs.insert(blob.proof, blob);
+        for blob_item in self.blobs_bundle.new_items {
+            order_cache.blobs.insert(blob_item.proof, (blob_item.commitment, blob_item.blob));
         }
 
         last_err?;
 
         let mut sidecar = BlobsBundle::with_capacity(self.blobs_bundle.proofs.len());
         for (index, proof) in self.blobs_bundle.proofs.into_iter().enumerate() {
-            let Some(item) = order_cache.blobs.get(&proof) else {
+            let Some((commitment, blob)) = order_cache.blobs.get(&proof) else {
                 return Err(HydrationError::UnknownBlobHash { proof, index });
             };
 
-            sidecar.commitments.push(item.commitment);
+            sidecar.commitments.push(*commitment);
             sidecar.proofs.push(proof);
-            sidecar.blobs.push(item.blob.clone());
+            sidecar.blobs.push(blob.clone());
             blob_cache_hits += 1;
         }
 
@@ -156,8 +156,8 @@ impl DehydratedBidSubmissionElectra {
 struct Cache {
     // hash -> transaction bytes
     transactions: FxHashMap<u64, Transaction>,
-    // hash -> blob item
-    blobs: FxHashMap<KzgProof, BlobItem>,
+    // proof -> commtiment / blob
+    blobs: FxHashMap<KzgProof, (KzgCommitment, Blob)>,
 }
 
 impl Cache {
