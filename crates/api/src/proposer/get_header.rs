@@ -11,7 +11,7 @@ use helix_common::{
     metrics::GetHeaderMetric,
     resign_builder_bid, task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
-    BidRequest, GetHeaderTrace,
+    BidRequest, GetHeaderTrace, MiddlewareTimings,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
@@ -41,7 +41,7 @@ impl<A: Api> ProposerApi<A> {
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
-        Extension(on_receive_ns): Extension<u64>,
+        Extension(timings): Extension<MiddlewareTimings>,
         Extension(Terminating(terminating)): Extension<Terminating>,
         headers: HeaderMap,
         Path(GetHeaderParams { slot, parent_hash, pubkey }): Path<GetHeaderParams>,
@@ -50,7 +50,7 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
 
-        let mut trace = GetHeaderTrace { receive: on_receive_ns, ..Default::default() };
+        let mut trace = GetHeaderTrace { receive: timings.on_receive_ns, ..Default::default() };
 
         let (head_slot, duty) = proposer_api.curr_slot_info.slot_info();
         debug!(

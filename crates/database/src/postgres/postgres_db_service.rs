@@ -1335,6 +1335,7 @@ impl DatabaseService for PostgresDatabaseService {
         latency_trace: &GetPayloadTrace,
         user_agent: Option<String>,
     ) -> Result<(), DatabaseError> {
+        latency_trace.record_metrics();
         let mut record = DbMetricRecord::new("save_delivered_payload");
 
         let region_id = self.region;
@@ -2070,6 +2071,7 @@ impl DatabaseService for PostgresDatabaseService {
         error: String,
         trace: GetPayloadTrace,
     ) -> Result<(), DatabaseError> {
+        trace.record_metrics();
         let mut record = DbMetricRecord::new("save_failed_get_payload");
 
         let region_id = self.region;

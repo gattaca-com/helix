@@ -37,7 +37,6 @@ use crate::{
         api::{BuilderApi, MAX_PAYLOAD_LENGTH},
         multi_simulator::MultiSimulator,
     },
-    constants::{MAX_BLINDED_BLOCK_LENGTH, _MAX_VAL_REGISTRATIONS_LENGTH},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::{self, ProposerApi},
     relay_data::DataApi,
@@ -192,12 +191,12 @@ pub fn proposer_api_app(
             &format!("{PATH_PROPOSER_API}{PATH_GET_PAYLOAD}"),
             post(ProposerApi::<MockApi>::get_payload),
         )
-        .layer(RequestBodyLimitLayer::new(MAX_BLINDED_BLOCK_LENGTH))
+        .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH))
         .route(
             &format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
             post(ProposerApi::<MockApi>::register_validators),
         )
-        .layer(RequestBodyLimitLayer::new(_MAX_VAL_REGISTRATIONS_LENGTH))
+        .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH))
         .layer(Extension(proposer_api_service.clone()));
 
     (router, proposer_api_service, current_slot_info, auctioneer)

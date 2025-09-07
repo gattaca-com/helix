@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use axum::{
-    body::{to_bytes, Body},
-    http::{Request, StatusCode},
-    Extension,
-};
+use axum::{http::StatusCode, Extension};
 use helix_common::{
     self,
     bid_sorter::BidSorterMessage,
@@ -16,61 +12,58 @@ use helix_common::{
     metrics::ApiMetrics,
     task,
     utils::{extract_request_id, utcnow_ns},
-    HeaderSubmissionTrace,
+    HeaderSubmissionTrace, MiddlewareTimings,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use hyper::HeaderMap;
+use http::request::Parts;
 use ssz::Decode;
 use tracing::{debug, error, info, trace, warn, Instrument};
 
 use super::api::BuilderApi;
 use crate::{
-    builder::{
-        api::{sanity_check_block_submission, MAX_PAYLOAD_LENGTH},
-        error::BuilderApiError,
-        v2_check::V2SubMessage,
-    },
+    builder::{api::sanity_check_block_submission, error::BuilderApiError, v2_check::V2SubMessage},
     Api,
 };
 
 impl<A: Api> BuilderApi<A> {
     /// Handles the submission of a new payload header by performing various checks and
     /// verifications before saving the header to the auctioneer.
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&parts.headers)))]
     pub async fn submit_header(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
-        Extension(on_receive_ns): Extension<u64>,
-        headers: HeaderMap,
-        req: Request<Body>,
+        Extension(timings): Extension<MiddlewareTimings>,
+        parts: Parts,
+        body: bytes::Bytes,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = HeaderSubmissionTrace { receive: on_receive_ns, ..Default::default() };
-        trace.metadata = api.metadata_provider.get_metadata(&headers);
-
-        debug!(timestamp_request_start = trace.receive,);
-
-        // Decode the incoming request body into a payload
-        let (payload, is_cancellations_enabled) = decode_header_submission(req, &mut trace).await?;
-        ApiMetrics::cancellable_bid(is_cancellations_enabled);
-
-        Self::handle_submit_header(&api, payload, None, None, is_cancellations_enabled, trace).await
-    }
-
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
-    pub async fn submit_header_v3(
-        Extension(api): Extension<Arc<BuilderApi<A>>>,
-        Extension(on_receive_ns): Extension<u64>,
-        headers: HeaderMap,
-        req: Request<Body>,
-    ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = HeaderSubmissionTrace { receive: on_receive_ns, ..Default::default() };
-        trace.metadata = api.metadata_provider.get_metadata(&headers);
+        let mut trace = HeaderSubmissionTrace::init_from_timings(timings);
+        trace.metadata = api.metadata_provider.get_metadata(&parts.headers);
 
         debug!(timestamp_request_start = trace.receive,);
 
         // Decode the incoming request body into a payload
         let (payload, is_cancellations_enabled) =
-            decode_header_submission_v3(req, &mut trace).await?;
+            decode_header_submission(parts, body, &mut trace).await?;
+        ApiMetrics::cancellable_bid(is_cancellations_enabled);
+
+        Self::handle_submit_header(&api, payload, None, None, is_cancellations_enabled, trace).await
+    }
+
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&parts.headers)))]
+    pub async fn submit_header_v3(
+        Extension(api): Extension<Arc<BuilderApi<A>>>,
+        Extension(timings): Extension<MiddlewareTimings>,
+        parts: Parts,
+        body: bytes::Bytes,
+    ) -> Result<StatusCode, BuilderApiError> {
+        let mut trace = HeaderSubmissionTrace::init_from_timings(timings);
+        trace.metadata = api.metadata_provider.get_metadata(&parts.headers);
+
+        debug!(timestamp_request_start = trace.receive,);
+
+        // Decode the incoming request body into a payload
+        let (payload, is_cancellations_enabled) =
+            decode_header_submission_v3(parts, body, &mut trace).await?;
 
         Self::handle_submit_header(
             &api,
@@ -282,12 +275,13 @@ impl<A: Api> BuilderApi<A> {
 ///
 /// It returns a tuple of the decoded header and if cancellations are enabled.
 pub async fn decode_header_submission(
-    req: Request<Body>,
+    parts: Parts,
+    body_bytes: bytes::Bytes,
     trace: &mut HeaderSubmissionTrace,
 ) -> Result<(SignedHeaderSubmission, bool), BuilderApiError> {
     // Extract the query parameters
-    let is_cancellations_enabled = req
-        .uri()
+    let is_cancellations_enabled = parts
+        .uri
         .query()
         .unwrap_or("")
         .split('&')
@@ -302,22 +296,12 @@ pub async fn decode_header_submission(
         .unwrap_or(false);
 
     info!(
-        headers = ?req.headers(),
+        headers = ?parts.headers,
         "received header",
     );
 
-    let is_ssz = req.headers().get("Content-Type").and_then(|val| val.to_str().ok()) ==
+    let is_ssz = parts.headers.get("Content-Type").and_then(|val| val.to_str().ok()) ==
         Some("application/octet-stream");
-
-    // Read the body
-    let body = req.into_body();
-    let body_bytes = to_bytes(body, MAX_PAYLOAD_LENGTH).await?;
-    if body_bytes.len() > MAX_PAYLOAD_LENGTH {
-        return Err(BuilderApiError::PayloadTooLarge {
-            max_size: MAX_PAYLOAD_LENGTH,
-            size: body_bytes.len(),
-        });
-    }
 
     // Decode header
     let header: SignedHeaderSubmission = if is_ssz {
@@ -344,12 +328,13 @@ pub async fn decode_header_submission(
 }
 
 pub async fn decode_header_submission_v3(
-    req: Request<Body>,
+    parts: Parts,
+    body_bytes: bytes::Bytes,
     trace: &mut HeaderSubmissionTrace,
 ) -> Result<(HeaderSubmissionV3, bool), BuilderApiError> {
     // Extract the query parameters
-    let is_cancellations_enabled = req
-        .uri()
+    let is_cancellations_enabled = parts
+        .uri
         .query()
         .unwrap_or("")
         .split('&')
@@ -364,22 +349,12 @@ pub async fn decode_header_submission_v3(
         .unwrap_or(false);
 
     info!(
-        headers = ?req.headers(),
+        headers = ?parts.headers,
         "received header",
     );
 
     // Get content-type header
-    let content_type = req.headers().get("Content-Type").cloned();
-
-    // Read the body
-    let body = req.into_body();
-    let body_bytes = to_bytes(body, MAX_PAYLOAD_LENGTH).await?;
-    if body_bytes.len() > MAX_PAYLOAD_LENGTH {
-        return Err(BuilderApiError::PayloadTooLarge {
-            max_size: MAX_PAYLOAD_LENGTH,
-            size: body_bytes.len(),
-        });
-    }
+    let content_type = parts.headers.get("Content-Type").cloned();
 
     let submission_v3 = match content_type.as_ref().and_then(|val| val.to_str().ok()) {
         Some("application/octet-stream") => HeaderSubmissionV3::from_ssz_bytes(&body_bytes)

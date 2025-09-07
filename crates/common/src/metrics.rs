@@ -129,6 +129,37 @@ lazy_static! {
     )
     .unwrap();
 
+
+     /// Time spent while reading body in seconds
+     static ref REQUEST_READ_BODY_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
+        "request_read_body_latency_secs",
+        "Time spent reading body in seconds",
+        &["endpoint"],
+        vec![0.00005, 0.0001, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 50.0],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    /// Time spent waiting to read body in seconds
+    static ref REQUEST_WAIT_READ_BODY_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
+        "request_wait_read_body_latency_secs",
+        "Time spent waiting to read body in seconds",
+        &["endpoint"],
+        vec![0.00005, 0.0001, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 50.0],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    /// Total time to fully read the body in seconds
+     static ref REQUEST_TOTAL_READ_BODY_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
+        "request_total_read_body_latency_secs",
+        "Time spent to fully read the body in seconds",
+        &["endpoint"],
+        vec![0.00005, 0.0001, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 50.0],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     /// Pending requests
     static ref REQUEST_PENDING: GaugeVec = register_gauge_vec_with_registry!(
         "request_pending",
@@ -368,6 +399,17 @@ lazy_static! {
     )
     .unwrap();
 
+
+    /// Submission trace metrics
+    pub static ref GET_PAYLOAD_TRACE_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
+        "get_payload_trace_latency_us",
+        "Latency of get payload trace for each step",
+        &["step"],
+        vec![1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 25_000., 50_000., 100_000., 500_000., 1_000_000., 5_000_000., 10_000_000., 50_000_000., 100_000_000.,],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     //////////////// DECODING BLOCKS ////////////////
 
     pub static ref SUBMISSION_BY_COMPRESSION: IntCounterVec = register_int_counter_vec_with_registry!(
@@ -461,13 +503,27 @@ impl ApiMetrics {
         Self { endpoint, _timer, has_completed: false }
     }
 
-    pub fn status(&mut self, status_code: &str) {
+    pub fn record(
+        &mut self,
+        status_code: &str,
+        size: usize,
+        read_latency: Duration,
+        wait_latency: Duration,
+        total_latency: Duration,
+    ) {
         REQUEST_STATUS.with_label_values(&[self.endpoint.as_str(), status_code]).inc();
-        self.has_completed = true;
-    }
+        REQUEST_SIZE.with_label_values(&[self.endpoint.as_str()]).observe(size as f64);
+        REQUEST_READ_BODY_LATENCY
+            .with_label_values(&[self.endpoint.as_str()])
+            .observe(read_latency.as_secs_f64());
+        REQUEST_WAIT_READ_BODY_LATENCY
+            .with_label_values(&[self.endpoint.as_str()])
+            .observe(wait_latency.as_secs_f64());
+        REQUEST_TOTAL_READ_BODY_LATENCY
+            .with_label_values(&[self.endpoint.as_str()])
+            .observe(total_latency.as_secs_f64());
 
-    pub fn size(endpoint: &str, size: usize) {
-        REQUEST_SIZE.with_label_values(&[endpoint]).observe(size as f64);
+        self.has_completed = true;
     }
 
     pub fn cancellable_bid(is_cancellable: bool) {

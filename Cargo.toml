@@ -56,7 +56,9 @@ helix-datastore = { path = "./crates/datastore" }
 helix-housekeeper = { path = "./crates/housekeeper" }
 helix-types = { path = "./crates/types" }
 helix-website = { path = "./crates/website" }
-http = "1.0.0"
+http = "1.0"
+http-body = "1.0"
+http-body-util = "0.1.3"
 httpmock = "0.7.0"
 hyper = "1.1.0"
 lazy_static = "1.5.0"
@@ -73,6 +75,7 @@ opentelemetry = { version = "0.29", features = ["trace"] }
 opentelemetry-otlp = { version = "0.29", features = ["grpc-tonic", "trace"] }
 opentelemetry_sdk = { version = "0.29", features = ["rt-tokio", "trace"] }
 parking_lot = "0.12"
+pin-project-lite = "0.2.16"
 prometheus = "0.13.4"
 prost = "0.12"
 rand = "0.9"
