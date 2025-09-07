@@ -199,7 +199,7 @@ mod tests {
     // from the relay API spec, adding the blob and the proposer_pubkey field
     fn electra_bid_submission() {
         let data_json = include_str!("testdata/signed-bid-submission-electra.json");
-        let s = test_encode_decode_json::<SignedBidSubmission>(&data_json);
+        let s = test_encode_decode_json::<SignedBidSubmission>(data_json);
         assert!(matches!(s, SignedBidSubmission::Electra(_)));
     }
 
@@ -207,7 +207,7 @@ mod tests {
     // from alloy
     fn electra_bid_submission_2() {
         let data_json = include_str!("testdata/signed-bid-submission-electra-2.json");
-        let s = test_encode_decode_json::<SignedBidSubmission>(&data_json);
+        let s = test_encode_decode_json::<SignedBidSubmission>(data_json);
         assert!(matches!(s, SignedBidSubmission::Electra(_)));
 
         let data_ssz = include_bytes!("testdata/signed-bid-submission-electra-2.bin");

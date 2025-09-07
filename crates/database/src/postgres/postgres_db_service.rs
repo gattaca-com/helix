@@ -1016,7 +1016,7 @@ impl DatabaseService for PostgresDatabaseService {
         let client = self.high_priority_pool.get().await.map_err(DatabaseError::from)?;
 
         // Constructing the query
-        let placeholders: Vec<String> = (1..=pub_keys.len()).map(|i| format!("${}", i)).collect();
+        let placeholders: Vec<String> = (1..=pub_keys.len()).map(|i| format!("${i}")).collect();
         let query = format!(
             "SELECT *
             FROM validator_registrations
@@ -1190,7 +1190,7 @@ impl DatabaseService for PostgresDatabaseService {
         for chunk in keys_to_add.chunks(10000) {
             let mut sql = String::from("INSERT INTO known_validators (public_key) VALUES ");
             let values_clauses: Vec<String> =
-                (1..=chunk.len()).map(|i| format!("(${})", i)).collect();
+                (1..=chunk.len()).map(|i| format!("(${i})")).collect();
 
             sql.push_str(&values_clauses.join(", "));
             sql.push_str(" ON CONFLICT (public_key) DO NOTHING");
@@ -1726,7 +1726,7 @@ impl DatabaseService for PostgresDatabaseService {
                         ON CONFLICT (block_hash)
                         DO NOTHING
                     ",
-                    &[&(block_hash.as_slice()), &(&format!("{:?}", e))],
+                    &[&(block_hash.as_slice()), &(&format!("{e:?}"))],
                 )
                 .await?;
         }
@@ -1819,54 +1819,49 @@ impl DatabaseService for PostgresDatabaseService {
         let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
 
         if let Some(slot) = filters.slot() {
-            block_query.push_str(&format!(" AND block_submission.slot_number = ${}", param_index));
-            header_query
-                .push_str(&format!(" AND header_submission.slot_number = ${}", param_index));
+            block_query.push_str(&format!(" AND block_submission.slot_number = ${param_index}"));
+            header_query.push_str(&format!(" AND header_submission.slot_number = ${param_index}"));
             params.push(Box::new(slot));
             param_index += 1;
         }
 
         if let Some(block_number) = filters.block_number() {
-            block_query.push_str(&format!(" AND block_submission.block_number = ${}", param_index));
-            header_query
-                .push_str(&format!(" AND header_submission.block_number = ${}", param_index));
+            block_query.push_str(&format!(" AND block_submission.block_number = ${param_index}"));
+            header_query.push_str(&format!(" AND header_submission.block_number = ${param_index}"));
             params.push(Box::new(block_number));
             param_index += 1;
         }
 
         if let Some(proposer_pubkey) = filters.proposer_pubkey() {
             block_query
-                .push_str(&format!(" AND block_submission.proposer_pubkey = ${}", param_index));
+                .push_str(&format!(" AND block_submission.proposer_pubkey = ${param_index}"));
             header_query
-                .push_str(&format!(" AND header_submission.proposer_pubkey = ${}", param_index));
+                .push_str(&format!(" AND header_submission.proposer_pubkey = ${param_index}"));
             params.push(Box::new(proposer_pubkey.to_vec()));
             param_index += 1;
         }
 
         if let Some(builder_pubkey) = filters.builder_pubkey() {
-            block_query
-                .push_str(&format!(" AND block_submission.builder_pubkey = ${}", param_index));
+            block_query.push_str(&format!(" AND block_submission.builder_pubkey = ${param_index}"));
             header_query
-                .push_str(&format!(" AND header_submission.builder_pubkey = ${}", param_index));
+                .push_str(&format!(" AND header_submission.builder_pubkey = ${param_index}"));
             params.push(Box::new(builder_pubkey.to_vec()));
             param_index += 1;
         }
 
         if let Some(block_hash) = filters.block_hash() {
-            block_query.push_str(&format!(" AND block_submission.block_hash = ${}", param_index));
-            header_query.push_str(&format!(" AND header_submission.block_hash = ${}", param_index));
+            block_query.push_str(&format!(" AND block_submission.block_hash = ${param_index}"));
+            header_query.push_str(&format!(" AND header_submission.block_hash = ${param_index}"));
             params.push(Box::new(block_hash));
             param_index += 1;
         }
 
         if let Some(filtering) = filtering {
             block_query.push_str(&format!(
-                " AND (slot_preferences.filtering = ${} OR slot_preferences.filtering IS NULL)",
-                param_index
+                " AND (slot_preferences.filtering = ${param_index} OR slot_preferences.filtering IS NULL)"
             ));
             header_query.push_str(&format!(
-                " AND (slot_preferences.filtering = ${} OR slot_preferences.filtering IS NULL)",
-                param_index
+                " AND (slot_preferences.filtering = ${param_index} OR slot_preferences.filtering IS NULL)"
             ));
             params.push(Box::new(filtering));
         }
@@ -1934,45 +1929,44 @@ impl DatabaseService for PostgresDatabaseService {
         let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
 
         if let Some(slot) = filters.slot() {
-            query.push_str(&format!(" AND block_submission.slot_number = ${}", param_index));
+            query.push_str(&format!(" AND block_submission.slot_number = ${param_index}"));
             params.push(Box::new(slot));
             param_index += 1;
         }
 
         if let Some(cursor) = filters.cursor() {
-            query.push_str(&format!(" AND block_submission.slot_number <= ${}", param_index));
+            query.push_str(&format!(" AND block_submission.slot_number <= ${param_index}"));
             params.push(Box::new(cursor));
             param_index += 1;
         }
 
         if let Some(block_number) = filters.block_number() {
-            query.push_str(&format!(" AND block_submission.block_number = ${}", param_index));
+            query.push_str(&format!(" AND block_submission.block_number = ${param_index}"));
             params.push(Box::new(block_number));
             param_index += 1;
         }
 
         if let Some(proposer_pubkey) = filters.proposer_pubkey() {
-            query.push_str(&format!(" AND block_submission.proposer_pubkey = ${}", param_index));
+            query.push_str(&format!(" AND block_submission.proposer_pubkey = ${param_index}"));
             params.push(Box::new(proposer_pubkey.to_vec()));
             param_index += 1;
         }
 
         if let Some(builder_pubkey) = filters.builder_pubkey() {
-            query.push_str(&format!(" AND block_submission.builder_pubkey = ${}", param_index));
+            query.push_str(&format!(" AND block_submission.builder_pubkey = ${param_index}"));
             params.push(Box::new(builder_pubkey.to_vec()));
             param_index += 1;
         }
 
         if let Some(block_hash) = filters.block_hash() {
-            query.push_str(&format!(" AND block_submission.block_hash = ${}", param_index));
+            query.push_str(&format!(" AND block_submission.block_hash = ${param_index}"));
             params.push(Box::new(block_hash));
             param_index += 1;
         }
 
         if let Some(filtering) = filtering {
             query.push_str(&format!(
-                " AND delivered_payload_preferences.filtering = ${}",
-                param_index
+                " AND delivered_payload_preferences.filtering = ${param_index}"
             ));
             params.push(Box::new(filtering));
             param_index += 1;
@@ -1980,8 +1974,7 @@ impl DatabaseService for PostgresDatabaseService {
 
         if let Some(trusted_builders) = &validator_preferences.trusted_builders {
             query.push_str(&format!(
-                " AND delivered_payload_preferences.trusted_builders @> ${}",
-                param_index
+                " AND delivered_payload_preferences.trusted_builders @> ${param_index}"
             ));
             params.push(Box::new(trusted_builders));
             param_index += 1;
@@ -1995,7 +1988,7 @@ impl DatabaseService for PostgresDatabaseService {
         }
 
         if let Some(limit) = filters.limit() {
-            query.push_str(&format!(" LIMIT ${}", param_index));
+            query.push_str(&format!(" LIMIT ${param_index}"));
             params.push(Box::new(limit));
         }
 

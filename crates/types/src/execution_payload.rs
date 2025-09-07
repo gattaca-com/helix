@@ -190,7 +190,8 @@ impl ForkVersionDecode for ExecutionPayload {
             ForkName::Base |
             ForkName::Bellatrix |
             ForkName::Capella |
-            ForkName::Deneb => {
+            ForkName::Deneb |
+            ForkName::Gloas => {
                 return Err(ssz::DecodeError::BytesInvalid(format!(
                     "unsupported fork for ExecutionPayloadHeader: {fork_name}",
                 )))
@@ -298,7 +299,6 @@ impl TestRandom for ExecutionPayloadHeader {
 #[cfg(test)]
 mod tests {
     use lh_types::{ForkName, MainnetEthSpec};
-    use serde_json;
     use ssz::Encode;
     use tree_hash::TreeHash;
 

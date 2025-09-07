@@ -63,7 +63,7 @@ pub fn app() -> Router {
         Arc::new(MockAuctioneer::default()),
         Arc::new(MockDatabaseService::default()),
         GrpcGossiperClientManager::mock().into(),
-        Arc::new(DefaultMetadataProvider::default()),
+        Arc::new(DefaultMetadataProvider),
         Arc::new(RelaySigningContext::default()),
         vec![Arc::new(BlockBroadcaster::BeaconClient(client))],
         Arc::new(MultiBeaconClient::new(vec![])),
@@ -123,7 +123,7 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
         Arc::new(ChainInfo::for_mainnet()),
         MultiSimulator::new(vec![]),
         GrpcGossiperClientManager::mock().into(),
-        Arc::new(DefaultMetadataProvider::default()),
+        Arc::new(DefaultMetadataProvider),
         RelayConfig::default(),
         Arc::new(ValidatorPreferences::default()),
         current_slot_info.clone(),
@@ -150,7 +150,7 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
             .layer(HandleErrorLayer::new(|_: BoxError| async { StatusCode::REQUEST_TIMEOUT }))
             .layer(TimeoutLayer::new(Duration::from_secs(5)))
             .layer(HandleErrorLayer::new(|err: BoxError| async move {
-                (StatusCode::INTERNAL_SERVER_ERROR, format!("Unhandled error: {}", err))
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Unhandled error: {err}"))
             }))
             .layer(BufferLayer::new(4096))
             .layer(RateLimitLayer::new(100, Duration::from_secs(1))),
@@ -171,7 +171,7 @@ pub fn proposer_api_app(
         auctioneer.clone(),
         Arc::new(MockDatabaseService::default()),
         GrpcGossiperClientManager::mock().into(),
-        Arc::new(DefaultMetadataProvider::default()),
+        Arc::new(DefaultMetadataProvider),
         Arc::new(RelaySigningContext::default()),
         vec![Arc::new(BlockBroadcaster::BeaconClient(client))],
         Arc::new(MultiBeaconClient::new(vec![])),

@@ -97,7 +97,7 @@ impl DatabaseService for MockDatabaseService {
         &self,
         proposer_duties: Vec<BuilderGetValidatorsResponseEntry>,
     ) -> Result<(), DatabaseError> {
-        println!("received proposer duties: {:?}", proposer_duties);
+        println!("received proposer duties: {proposer_duties:?}");
         self.proposer_duties.lock().unwrap().clear();
         self.proposer_duties.lock().unwrap().extend(proposer_duties);
 
@@ -113,7 +113,7 @@ impl DatabaseService for MockDatabaseService {
         &self,
         known_validators: Vec<ValidatorSummary>,
     ) -> Result<(), DatabaseError> {
-        println!("received known validators: {:?}", known_validators);
+        println!("received known validators: {known_validators:?}");
         self.known_validators.lock().unwrap().clear();
         self.known_validators.lock().unwrap().extend(known_validators);
 

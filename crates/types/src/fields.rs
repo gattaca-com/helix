@@ -49,7 +49,7 @@ ssz_bytes_wrapper! {
 
 impl TestRandom for Transaction {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
-        let n = rng.gen_range(0..=1000) as usize;
+        let n = rng.random_range(0..=1000) as usize;
         let mut bytes = vec![0u8; n];
         rng.fill_bytes(&mut bytes);
         Self(bytes.into())
@@ -60,7 +60,6 @@ impl TestRandom for Transaction {
 mod tests {
     use alloy_primitives::Bytes;
     use lh_types::{EthSpec, MainnetEthSpec};
-    use serde_json;
     use ssz::{Decode, Encode};
     use ssz_types::VariableList;
     use tree_hash::TreeHash;

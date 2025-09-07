@@ -24,7 +24,7 @@ mod tests {
         SignedMessage, SignedValidatorRegistration, TestRandomSeed, Validator,
         ValidatorRegistration, Withdrawal,
     };
-    use rand::{seq::SliceRandom, thread_rng, Rng};
+    use rand::{rng, seq::SliceRandom, Rng};
     use tokio::{sync::OnceCell, time::sleep};
     use tokio_postgres::NoTls;
 
@@ -42,7 +42,6 @@ mod tests {
     /// e.g. to start a local postgres instance in docker:
     /// docker run -d --name postgres -e POSTGRES_PASSWORD=password -p 5432:5432
     /// timescale/timescaledb-ha:pg16 https://docs.timescale.com/self-hosted/latest/install/installation-docker/
-
     fn test_config() -> Config {
         let mut cfg = Config::new();
         cfg.host = Some("localhost".to_string());
@@ -89,10 +88,10 @@ mod tests {
         match run_migrations_async(client).await {
             Ok(report) => {
                 println!("Applied migrations: {}", report.applied_migrations().len());
-                println!("Migrations: {:?}", report);
+                println!("Migrations: {report:?}");
             }
             Err(e) => {
-                println!("Error applying migrations: {}", e);
+                println!("Error applying migrations: {e}");
                 return Err(e);
             }
         }
@@ -455,7 +454,7 @@ mod tests {
         };
         let validator_preferences = ValidatorPreferences::default();
         let bids = db_service.get_bids(&filter, Arc::new(validator_preferences)).await?;
-        println!("Bids: {:?}", bids);
+        println!("Bids: {bids:?}");
         Ok(())
     }
 
@@ -486,10 +485,8 @@ mod tests {
 
         let latency_trace = GetPayloadTrace::default();
 
-        let payload_and_blobs = PayloadAndBlobs {
-            execution_payload: execution_payload.into(),
-            blobs_bundle: Default::default(),
-        };
+        let payload_and_blobs =
+            PayloadAndBlobs { execution_payload, blobs_bundle: Default::default() };
 
         db_service
             .save_delivered_payload(
@@ -522,7 +519,7 @@ mod tests {
 
         let delivered_payloads =
             db_service.get_delivered_payloads(&filter, Arc::new(validator_preferences)).await?;
-        println!("delivered payloads {:?}", delivered_payloads);
+        println!("delivered payloads {delivered_payloads:?}");
         Ok(())
     }
 
@@ -613,7 +610,7 @@ mod tests {
     }
 
     fn remove_random_items<T>(vec: &mut Vec<T>, count: usize) -> Vec<T> {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         // Ensure we don't try to remove more items than the Vec contains
         let count = std::cmp::min(count, vec.len());
@@ -630,10 +627,10 @@ mod tests {
     }
 
     fn randomly_insert_values<T>(existing_vec: &mut Vec<T>, new_values: Vec<T>) {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         for value in new_values {
-            let insert_index = rng.gen_range(0..=existing_vec.len()); // Generate a random index
+            let insert_index = rng.random_range(0..=existing_vec.len()); // Generate a random index
             existing_vec.insert(insert_index, value); // Insert the new value at the random index
         }
     }

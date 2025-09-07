@@ -85,5 +85,5 @@ fn test_validator_preferences_serde() {
     let json = serde_json::to_string(&preferences).unwrap();
     let _deserialized: ValidatorPreferences = serde_json::from_str(&json).unwrap();
 
-    println!("{}", json);
+    println!("{json}");
 }

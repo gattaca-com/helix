@@ -38,7 +38,7 @@ pub struct BlobsBundleV1 {
 
 impl TestRandom for BlobsBundleV1 {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
-        let n = rng.gen_range(0..=MAX_BLOBS_PER_BLOCK_ELECTRA) as usize;
+        let n = rng.random_range(0..=MAX_BLOBS_PER_BLOCK_ELECTRA) as usize;
 
         let mut bundle = Self::with_capacity(n);
 
@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn test_payload_and_blobs_equivalence() {
         let data_json = include_str!("testdata/signed-bid-submission-electra.json");
-        let signed_bid = test_encode_decode_json::<SignedBidSubmission>(&data_json);
+        let signed_bid = test_encode_decode_json::<SignedBidSubmission>(data_json);
         let ex = signed_bid.payload_and_blobs_ref().to_owned();
 
         let data_ssz = ex.as_ssz_bytes();

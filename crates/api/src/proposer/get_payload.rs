@@ -579,7 +579,8 @@ fn validate_block_equality(
         BlindedPayloadRef::Bellatrix(_) |
         BlindedPayloadRef::Capella(_) |
         BlindedPayloadRef::Deneb(_) |
-        BlindedPayloadRef::Fulu(_) => return Err(ProposerApiError::UnsupportedBeaconChainVersion),
+        BlindedPayloadRef::Fulu(_) |
+        BlindedPayloadRef::Gloas(_) => return Err(ProposerApiError::UnsupportedBeaconChainVersion),
         BlindedPayloadRef::Electra(blinded_payload) => {
             info!(
                 local_header = ?local_payload,

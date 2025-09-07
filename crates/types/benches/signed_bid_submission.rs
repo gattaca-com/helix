@@ -5,8 +5,8 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use helix_types::SignedBidSubmission;
 use ssz::{Decode, Encode};
 
-fn benchmark_signed_bid_submission(c: &mut Criterion) {
-    let mut group = c.benchmark_group("signed_bid_submission");
+fn benchmark_signed_bid_submission_ssz(c: &mut Criterion) {
+    let mut group = c.benchmark_group("signed_bid_submission ssz");
 
     let data_json = include_bytes!("../src/testdata/signed-bid-submission-electra-3.json");
     let custom_submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
@@ -41,6 +41,17 @@ fn benchmark_signed_bid_submission(c: &mut Criterion) {
         });
     });
 
+    group.finish();
+}
+
+fn benchmark_signed_bid_submission_serde(c: &mut Criterion) {
+    let mut group = c.benchmark_group("signed_bid_submission");
+
+    let data_json = include_bytes!("../src/testdata/signed-bid-submission-electra-3.json");
+    let custom_submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
+    let ssz_bytes = custom_submission.as_ssz_bytes();
+    let alloy_submission = AlloySignedBidSubmission::from_ssz_bytes(&ssz_bytes).unwrap();
+
     let json = serde_json::to_vec(&custom_submission).unwrap();
     group.bench_function("custom serde serialize", |b| {
         b.iter(|| {
@@ -74,5 +85,9 @@ fn benchmark_signed_bid_submission(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmark_signed_bid_submission);
+criterion_group!(
+    benches,
+    benchmark_signed_bid_submission_ssz,
+    benchmark_signed_bid_submission_serde
+);
 criterion_main!(benches);

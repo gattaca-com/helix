@@ -525,8 +525,7 @@ mod tests {
             builder_ids: None,
             api_key: None,
         };
-        let builder_info_doc =
-            BuilderConfig { pub_key: builder_pub_key_optimistic.clone(), builder_info };
+        let builder_info_doc = BuilderConfig { pub_key: builder_pub_key_optimistic, builder_info };
 
         // Set builder info in the cache
         cache.update_builder_infos(&[builder_info_doc]);
