@@ -38,7 +38,7 @@ pub struct BlobsBundleV1 {
 
 impl TestRandom for BlobsBundleV1 {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
-        let n = rng.gen_range(0..=MAX_BLOBS_PER_BLOCK_ELECTRA) as usize;
+        let n = rng.random_range(0..=MAX_BLOBS_PER_BLOCK_ELECTRA) as usize;
 
         let mut bundle = Self::with_capacity(n);
 

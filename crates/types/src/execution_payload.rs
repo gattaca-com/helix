@@ -190,7 +190,8 @@ impl ForkVersionDecode for ExecutionPayload {
             ForkName::Base |
             ForkName::Bellatrix |
             ForkName::Capella |
-            ForkName::Deneb => {
+            ForkName::Deneb |
+            ForkName::Gloas => {
                 return Err(ssz::DecodeError::BytesInvalid(format!(
                     "unsupported fork for ExecutionPayloadHeader: {fork_name}",
                 )))

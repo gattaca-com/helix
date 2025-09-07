@@ -27,7 +27,8 @@ pub fn unblind_beacon_block(
         SignedBlindedBeaconBlock::Bellatrix(_) |
         SignedBlindedBeaconBlock::Capella(_) |
         SignedBlindedBeaconBlock::Deneb(_) |
-        SignedBlindedBeaconBlock::Fulu(_) => Err(ProposerApiError::UnsupportedBeaconChainVersion),
+        SignedBlindedBeaconBlock::Fulu(_) |
+        SignedBlindedBeaconBlock::Gloas(_) => Err(ProposerApiError::UnsupportedBeaconChainVersion),
         SignedBlindedBeaconBlock::Electra(blinded_block) => {
             let signature = blinded_block.signature.clone();
             let block = &blinded_block.message;

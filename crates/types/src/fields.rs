@@ -49,7 +49,7 @@ ssz_bytes_wrapper! {
 
 impl TestRandom for Transaction {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
-        let n = rng.gen_range(0..=1000) as usize;
+        let n = rng.random_range(0..=1000) as usize;
         let mut bytes = vec![0u8; n];
         rng.fill_bytes(&mut bytes);
         Self(bytes.into())
