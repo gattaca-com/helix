@@ -22,21 +22,22 @@ use pin_project_lite::pin_project;
 use crate::builder::api::MAX_PAYLOAD_LENGTH;
 
 pin_project! {
-    /// Streaming body wrapper that tracks:
-    /// - Bytes read
-    /// - Time spent waiting to read the body
-    /// - Time spent reading the body
+    /// Timing wrapper that tracks latencies
+    /// - Time spent waiting for sender (pending)
+    /// - Time spent between polls (gap)
+    /// - Time spent reading the body (read)
     struct TimedLimited<B> {
         #[pin] inner: B,
         stats: Arc<BodyTimingStats>,
         start_reading_at: Option<Instant>,
-        last_pending_at: Option<Instant>,
+        last_poll_at: Option<Instant>,
+        last_was_pending: bool,
     }
 }
 
 impl<B> TimedLimited<B> {
     fn new(inner: B, stats: Arc<BodyTimingStats>) -> Self {
-        Self { inner, stats, start_reading_at: None, last_pending_at: None }
+        Self { inner, stats, start_reading_at: None, last_poll_at: None, last_was_pending: false }
     }
 }
 
@@ -55,23 +56,29 @@ where
         let this = self.project();
 
         if this.start_reading_at.is_none() {
-            this.stats.set_start();
             *this.start_reading_at = Some(Instant::now());
         }
 
-        if let Some(t) = this.last_pending_at.take() {
-            this.stats.add_wait(t.elapsed());
-        }
+        if let Some(since_last_poll) = this.last_poll_at.take().map(|t| t.elapsed()) {
+            if *this.last_was_pending {
+                // gap + wait
+                this.stats.add_wait(since_last_poll);
+            } else {
+                // gap only
+                this.stats.add_gap(since_last_poll);
+            };
+        };
 
         let read_start = Instant::now();
-        match this.inner.poll_frame(cx) {
+        let res = match this.inner.poll_frame(cx) {
             Poll::Pending => {
-                *this.last_pending_at = Some(Instant::now());
+                *this.last_was_pending = true;
 
                 Poll::Pending
             }
 
             Poll::Ready(Some(Ok(frame))) => {
+                *this.last_was_pending = false;
                 this.stats.add_read(read_start.elapsed());
 
                 if let Some(data) = frame.data_ref() {
@@ -82,18 +89,26 @@ where
             }
 
             Poll::Ready(Some(Err(e))) => {
+                *this.last_was_pending = false;
                 this.stats.add_read(read_start.elapsed());
+
                 Poll::Ready(Some(Err(e.into())))
             }
 
             Poll::Ready(None) => {
+                *this.last_was_pending = false;
                 this.stats.add_read(read_start.elapsed());
+
                 if let Some(start) = this.start_reading_at.take() {
                     this.stats.set_finish(start.elapsed());
                 }
+
                 Poll::Ready(None)
             }
-        }
+        };
+
+        *this.last_poll_at = Some(Instant::now());
+        res
     }
 
     fn is_end_stream(&self) -> bool {
@@ -122,6 +137,7 @@ pub async fn body_limit_middleware(mut req: Request<Body>, next: Next) -> Respon
         stats.size() as usize,
         stats.read_latency(),
         stats.wait_latency(),
+        stats.gap_latency(),
         stats.total_latency(),
     );
 

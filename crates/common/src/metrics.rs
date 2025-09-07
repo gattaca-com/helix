@@ -132,29 +132,9 @@ lazy_static! {
 
      /// Time spent while reading body in seconds
      static ref REQUEST_READ_BODY_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
-        "request_read_body_latency_secs",
+        "request_body_latency_secs",
         "Time spent reading body in seconds",
-        &["endpoint"],
-        vec![0.00005, 0.0001, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 50.0],
-        &RELAY_METRICS_REGISTRY
-    )
-    .unwrap();
-
-    /// Time spent waiting to read body in seconds
-    static ref REQUEST_WAIT_READ_BODY_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
-        "request_wait_read_body_latency_secs",
-        "Time spent waiting to read body in seconds",
-        &["endpoint"],
-        vec![0.00005, 0.0001, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 50.0],
-        &RELAY_METRICS_REGISTRY
-    )
-    .unwrap();
-
-    /// Total time to fully read the body in seconds
-     static ref REQUEST_TOTAL_READ_BODY_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
-        "request_total_read_body_latency_secs",
-        "Time spent to fully read the body in seconds",
-        &["endpoint"],
+        &["endpoint", "step"],
         vec![0.00005, 0.0001, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 50.0],
         &RELAY_METRICS_REGISTRY
     )
@@ -509,18 +489,22 @@ impl ApiMetrics {
         size: usize,
         read_latency: Duration,
         wait_latency: Duration,
+        gap_latency: Duration,
         total_latency: Duration,
     ) {
         REQUEST_STATUS.with_label_values(&[self.endpoint.as_str(), status_code]).inc();
         REQUEST_SIZE.with_label_values(&[self.endpoint.as_str()]).observe(size as f64);
         REQUEST_READ_BODY_LATENCY
-            .with_label_values(&[self.endpoint.as_str()])
+            .with_label_values(&[self.endpoint.as_str(), "read"])
             .observe(read_latency.as_secs_f64());
-        REQUEST_WAIT_READ_BODY_LATENCY
-            .with_label_values(&[self.endpoint.as_str()])
+        REQUEST_READ_BODY_LATENCY
+            .with_label_values(&[self.endpoint.as_str(), "wait"])
             .observe(wait_latency.as_secs_f64());
-        REQUEST_TOTAL_READ_BODY_LATENCY
-            .with_label_values(&[self.endpoint.as_str()])
+        REQUEST_READ_BODY_LATENCY
+            .with_label_values(&[self.endpoint.as_str(), "gap"])
+            .observe(gap_latency.as_secs_f64());
+        REQUEST_READ_BODY_LATENCY
+            .with_label_values(&[self.endpoint.as_str(), "total"])
             .observe(total_latency.as_secs_f64());
 
         self.has_completed = true;

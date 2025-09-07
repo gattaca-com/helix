@@ -28,6 +28,8 @@ pub struct BodyTimingStats {
     pub wait_ns: AtomicU64,
     // time in ns spent reading the body
     pub read_ns: AtomicU64,
+    // time in ns spent between polls (unless waiting for sender)
+    pub gap_ns: AtomicU64,
     // total time spent processing the body
     pub total_read_ns: AtomicU64,
     // timestamp in ns when the body was started reading
@@ -49,6 +51,10 @@ impl BodyTimingStats {
         self.read_ns.fetch_add(d.as_nanos() as u64, Ordering::Relaxed);
     }
 
+    pub fn add_gap(&self, d: Duration) {
+        self.gap_ns.fetch_add(d.as_nanos() as u64, Ordering::Relaxed);
+    }
+
     pub fn set_start(&self) {
         self.start_ns.store(utcnow_ns(), Ordering::Relaxed);
     }
@@ -64,6 +70,10 @@ impl BodyTimingStats {
 
     pub fn wait_latency(&self) -> Duration {
         Duration::from_nanos(self.wait_ns.load(Ordering::Relaxed))
+    }
+
+    pub fn gap_latency(&self) -> Duration {
+        Duration::from_nanos(self.gap_ns.load(Ordering::Relaxed))
     }
 
     pub fn read_latency(&self) -> Duration {
