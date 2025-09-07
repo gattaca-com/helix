@@ -631,10 +631,10 @@ mod tests {
 
         match serde_json::from_slice::<SignedBidSubmission>(&json_payload) {
             Ok(res) => {
-                println!("THIS IS THE RESULT: {:?}", res);
+                println!("THIS IS THE RESULT: {res:?}");
             }
             Err(err) => {
-                println!("THIS IS THE ERR: {:?}", err);
+                println!("THIS IS THE ERR: {err:?}");
             }
         }
     }
@@ -770,10 +770,10 @@ mod tests {
         ];
         match serde_json::from_slice::<SignedBidSubmission>(&json_payload) {
             Ok(res) => {
-                println!("THIS IS THE RESULT: {:?}", res);
+                println!("THIS IS THE RESULT: {res:?}");
             }
             Err(err) => {
-                println!("THIS IS THE ERR: {:?}", err);
+                println!("THIS IS THE ERR: {err:?}");
             }
         }
     }
@@ -783,10 +783,10 @@ mod tests {
         let ssz_payload: Vec<u8> = vec![];
         match SignedBidSubmission::from_ssz_bytes(&ssz_payload) {
             Ok(res) => {
-                println!("THIS IS THE RESULT: {:?}", res);
+                println!("THIS IS THE RESULT: {res:?}");
             }
             Err(err) => {
-                println!("THIS IS THE ERR: {:?}", err);
+                println!("THIS IS THE ERR: {err:?}");
             }
         }
     }
@@ -874,10 +874,10 @@ mod tests {
 
         match SignedBidSubmission::from_ssz_bytes(&ssz_payload) {
             Ok(res) => {
-                println!("THIS IS THE RESULT: {:?}", res);
+                println!("THIS IS THE RESULT: {res:?}");
             }
             Err(err) => {
-                println!("THIS IS THE ERR: {:?}", err);
+                println!("THIS IS THE ERR: {err:?}");
             }
         }
     }

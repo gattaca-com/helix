@@ -4,7 +4,7 @@ pub enum GossipError {
     ClientNotConnected,
 
     #[error("Failed to broadcast block: {0}")]
-    BroadcastError(#[from] tonic::Status),
+    BroadcastError(Box<tonic::Status>),
 
     #[error("Failed to reconnect")]
     ReconnectFailed,

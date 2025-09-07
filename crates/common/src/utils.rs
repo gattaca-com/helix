@@ -112,11 +112,7 @@ pub fn init_panic_hook(
 ) {
     panic::set_hook(Box::new(move |info| {
         let backtrace = backtrace::Backtrace::new();
-        let crash_log = format!(
-            "Panic: {info}\nFull backtrace:\n{backtrace:?}\n",
-            info = info,
-            backtrace = backtrace
-        );
+        let crash_log = format!("Panic: {info}\nFull backtrace:\n{backtrace:?}\n");
 
         error!("{crash_log}");
         eprintln!("{crash_log}");
@@ -127,7 +123,7 @@ pub fn init_panic_hook(
         if let Some(discord_web_hook) = discord_web_hook.clone() {
             alert_discord(
                 discord_web_hook,
-                &format!("Relay: {} crashed! Please see the console log for details!", instance_id),
+                &format!("Relay: {instance_id} crashed! Please see the console log for details!"),
                 &instance_id,
             );
         }

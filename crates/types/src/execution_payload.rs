@@ -299,7 +299,6 @@ impl TestRandom for ExecutionPayloadHeader {
 #[cfg(test)]
 mod tests {
     use lh_types::{ForkName, MainnetEthSpec};
-    use serde_json;
     use ssz::Encode;
     use tree_hash::TreeHash;
 

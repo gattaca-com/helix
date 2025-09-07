@@ -40,8 +40,7 @@ mod simulator_tests {
 
     fn get_sim_req() -> BlockSimRequest {
         let electra_exec_payload = ExecutionPayload {
-            block_hash: b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5")
-                .into(),
+            block_hash: b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5"),
             ..ExecutionPayload::test_random()
         };
 

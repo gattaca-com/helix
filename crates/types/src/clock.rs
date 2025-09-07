@@ -70,7 +70,7 @@ mod tests {
             let dur_1 = clock.millis_from_current_slot_start().unwrap().as_nanos() as i128;
             let dur_2 = duration_into_slot(&clock, slot).unwrap().as_nanos() as i128;
             let delta = dur_1 - dur_2;
-            assert!(delta.abs() < 1_000_000, "clock delta above 1ms: {}", delta);
+            assert!(delta.abs() < 1_000_000, "clock delta above 1ms: {delta}");
 
             sleep(Duration::from_millis(10));
         }

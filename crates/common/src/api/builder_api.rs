@@ -80,7 +80,7 @@ impl TryFrom<InclusionList> for InclusionListWithMetadata {
 
         for encoded_tx in inclusion_list.txs {
             let decoded_tx = TxEnvelope::decode(&mut encoded_tx.as_ref())
-                .map_err(|err| format!("Failed to decode transaction: {}", err))?;
+                .map_err(|err| format!("Failed to decode transaction: {err}"))?;
             let tx_with_md =
                 InclusionListTxWithMetadata { hash: *decoded_tx.hash(), bytes: encoded_tx };
 

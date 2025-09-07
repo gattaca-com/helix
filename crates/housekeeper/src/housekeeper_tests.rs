@@ -300,12 +300,12 @@ async fn test_primev_real_contract_integration() {
             // Process the decoded output to extract the tuple values
             let mut statuses = Vec::new();
 
-            if let Some(Token::Array(tuples)) = decoded.get(0) {
+            if let Some(Token::Array(tuples)) = decoded.first() {
                 for token in tuples {
                     if let Token::Tuple(values) = token {
                         if values.len() >= 3 {
                             if let (Token::Bool(a), Token::Bool(b), Token::Bool(c)) = (
-                                values.get(0).unwrap_or(&Token::Bool(false)),
+                                values.first().unwrap_or(&Token::Bool(false)),
                                 values.get(1).unwrap_or(&Token::Bool(false)),
                                 values.get(2).unwrap_or(&Token::Bool(false)),
                             ) {
@@ -341,12 +341,10 @@ async fn test_primev_real_contract_integration() {
                     i, status.0, status.1, status.2
                 );
             }
-            // Test passed if we got here without errors
-            assert!(true);
         }
         Err(e) => {
-            eprintln!("Contract call failed: {:?}", e);
-            assert!(false, "Contract call failed: {:?}", e);
+            eprintln!("Contract call failed: {e:?}");
+            panic!("Contract call failed: {e:?}");
         }
     }
 }

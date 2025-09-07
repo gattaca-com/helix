@@ -4,7 +4,6 @@ use alloy_rpc_types::engine::ExecutionPayloadV3 as AlloyExecutionPayload;
 use criterion::{criterion_group, criterion_main, Criterion};
 use helix_types::{ExecutionPayload, SignedBidSubmission};
 use lh_types::MainnetEthSpec;
-use serde_json;
 use ssz::{Decode, Encode};
 use tree_hash::TreeHash;
 

@@ -60,7 +60,6 @@ impl TestRandom for Transaction {
 mod tests {
     use alloy_primitives::Bytes;
     use lh_types::{EthSpec, MainnetEthSpec};
-    use serde_json;
     use ssz::{Decode, Encode};
     use ssz_types::VariableList;
     use tree_hash::TreeHash;

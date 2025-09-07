@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn test_payload_and_blobs_equivalence() {
         let data_json = include_str!("testdata/signed-bid-submission-electra.json");
-        let signed_bid = test_encode_decode_json::<SignedBidSubmission>(&data_json);
+        let signed_bid = test_encode_decode_json::<SignedBidSubmission>(data_json);
         let ex = signed_bid.payload_and_blobs_ref().to_owned();
 
         let data_ssz = ex.as_ssz_bytes();

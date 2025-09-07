@@ -234,7 +234,7 @@ impl std::fmt::Display for NetworkConfig {
             NetworkConfig::Holesky => write!(f, "holesky"),
             NetworkConfig::Hoodi => write!(f, "hoodi"),
             NetworkConfig::Custom { dir_path, genesis_validator_root, genesis_time } => {
-                write!(f, "custom ({}, {}, {})", dir_path, genesis_validator_root, genesis_time)
+                write!(f, "custom ({dir_path}, {genesis_validator_root}, {genesis_time})")
             }
         }
     }
@@ -478,6 +478,7 @@ pub struct InclusionListConfig {
 
 #[cfg(test)]
 #[test]
+#[allow(clippy::field_reassign_with_default)]
 fn test_config() {
     use crate::{Filtering, ValidatorPreferences};
 
@@ -550,7 +551,7 @@ mod tests {
 
         let result = config.validate_bid_sorter();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), false);
+        assert!(!result.unwrap());
     }
 
     #[test]
@@ -559,7 +560,7 @@ mod tests {
 
         let result = config.validate_bid_sorter();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 
     #[test]
@@ -587,7 +588,7 @@ mod tests {
 
         let result = config.validate_bid_sorter();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 
     #[test]
@@ -596,7 +597,7 @@ mod tests {
 
         let result = config.validate_bid_sorter();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 
     #[test]
@@ -652,7 +653,7 @@ mod tests {
 
         let result = config.validate_bid_sorter();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 
     #[test]
@@ -662,7 +663,7 @@ mod tests {
 
         let result = config.validate_bid_sorter();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
     }
 
     #[test]
@@ -671,6 +672,6 @@ mod tests {
 
         let result = config.validate_bid_sorter();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), false);
+        assert!(!result.unwrap());
     }
 }
