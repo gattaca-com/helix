@@ -210,7 +210,7 @@ impl<A: Api> BuilderApi<A> {
             trace!("skipping signature verification");
         } else {
             // Verify the payload signature
-            if let Err(err) = payload.verify_signature(&self.chain_info.context) {
+            if let Err(err) = payload.verify_signature(self.chain_info.builder_domain) {
                 warn!(%err, "failed to verify signature");
                 return Err(BuilderApiError::SignatureVerificationFailed);
             }

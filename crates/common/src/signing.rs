@@ -22,7 +22,7 @@ impl RelaySigningContext {
     }
 
     pub fn sign_builder_message(&self, msg: &impl SignedRoot) -> BlsSignature {
-        let domain = self.context.context.get_builder_domain();
+        let domain = self.context.builder_domain;
         let root = msg.signing_root(domain);
         self.sign(root)
     }

@@ -190,7 +190,7 @@ impl<A: Api> BuilderApi<A> {
         trace.pre_checks = utcnow_ns();
 
         // Verify the payload signature
-        if let Err(err) = payload.verify_signature(&api.chain_info.context) {
+        if let Err(err) = payload.verify_signature(api.chain_info.builder_domain) {
             warn!(%err, "failed to verify signature");
             return Err(BuilderApiError::SignatureVerificationFailed);
         }
