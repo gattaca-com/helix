@@ -43,7 +43,7 @@ impl TestRandom for BlobsBundleV1 {
         let mut bundle = Self::with_capacity(n);
 
         for _ in 0..n {
-            bundle.commitments.push(KzgCommitment::random());
+            bundle.commitments.push(KzgCommitment::random()).unwrap();
             bundle.proofs.push(KzgProof::random());
             bundle.blobs.push(Arc::new(alloy_consensus::Blob::random()));
         }
@@ -55,7 +55,7 @@ impl TestRandom for BlobsBundleV1 {
 impl BlobsBundleV1 {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            commitments: KzgCommitments::with_capacity(capacity),
+            commitments: KzgCommitments::new(Vec::with_capacity(capacity)).unwrap(),
             proofs: Vec::with_capacity(capacity),
             blobs: Vec::with_capacity(capacity),
         }

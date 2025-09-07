@@ -25,7 +25,7 @@ impl TestRandom for BuilderBid {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
         Self {
             header: ExecutionPayloadHeader::random_for_test(rng),
-            blob_kzg_commitments: KzgCommitments::random_for_test(rng),
+            blob_kzg_commitments: KzgCommitments::default(),
             execution_requests: ExecutionRequests::random_for_test(rng).into(),
             value: U256::random_for_test(rng),
             pubkey: BlsPublicKeyBytes::random(),
