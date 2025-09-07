@@ -57,6 +57,7 @@ where
 
         if !*this.has_set_start {
             this.stats.set_start();
+            *this.has_set_start = true;
         }
 
         if let Some(since_last_poll) = this.last_poll_at.take().map(|t| t.elapsed()) {
