@@ -7,7 +7,7 @@ use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    convert_bloom_to_lighthouse,
+    convert_bloom_to_lighthouse, convert_transactions_to_lighthouse,
     fields::{Bloom, ExtraData, Transactions, Withdrawals},
     SszError, ValidationError,
 };
@@ -60,7 +60,7 @@ impl TestRandom for ExecutionPayload {
             extra_data: ExtraData::default(),
             base_fee_per_gas: U256::random_for_test(rng),
             block_hash: B256::random_for_test(rng),
-            transactions: Transactions::default(),
+            transactions: Transactions::random_for_test(rng),
             withdrawals: Withdrawals::random_for_test(rng),
             blob_gas_used: u64::random_for_test(rng),
             excess_blob_gas: u64::random_for_test(rng),
@@ -141,7 +141,7 @@ impl ExecutionPayload {
             extra_data: self.extra_data.to_ssz_type()?,
             base_fee_per_gas: self.base_fee_per_gas,
             block_hash: self.block_hash.into(),
-            transactions: self.transactions.to_ssz_type()?,
+            transactions: convert_transactions_to_lighthouse(&self.transactions)?,
             withdrawals: self.withdrawals.clone(),
             blob_gas_used: self.blob_gas_used,
             excess_blob_gas: self.excess_blob_gas,
@@ -167,13 +167,14 @@ impl ExecutionPayload {
             extra_data: ExtraData(value.extra_data.to_vec().into()),
             base_fee_per_gas: value.base_fee_per_gas,
             block_hash: value.block_hash.0,
-            transactions: Transactions(
+            transactions: Transactions::new(
                 value
                     .transactions
                     .into_iter()
                     .map(|t| crate::Transaction(t.to_vec().into()))
                     .collect(),
-            ),
+            )
+            .unwrap(),
             withdrawals: value.withdrawals,
             blob_gas_used: value.blob_gas_used,
             excess_blob_gas: value.excess_blob_gas,

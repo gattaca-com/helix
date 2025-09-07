@@ -1,5 +1,6 @@
 use std::{hash::Hasher, sync::Arc};
 
+use alloy_eips::eip7691::MAX_BLOBS_PER_BLOCK_ELECTRA;
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
@@ -123,6 +124,13 @@ impl DehydratedBidSubmissionElectra {
             order_cache.blobs.insert(blob_item.proof, (blob_item.commitment, blob_item.blob));
         }
 
+        if self.blobs_bundle.proofs.len() > MAX_BLOBS_PER_BLOCK_ELECTRA as usize {
+            last_err = Err(HydrationError::TooManyBlobs {
+                blobs: self.blobs_bundle.proofs.len(),
+                max: MAX_BLOBS_PER_BLOCK_ELECTRA as usize,
+            });
+        }
+
         last_err?;
 
         let mut sidecar = BlobsBundle::with_capacity(self.blobs_bundle.proofs.len());
@@ -131,7 +139,8 @@ impl DehydratedBidSubmissionElectra {
                 return Err(HydrationError::UnknownBlobHash { proof, index });
             };
 
-            sidecar.commitments.push(*commitment);
+            // safe because we checked the length above
+            sidecar.commitments.push(*commitment).unwrap();
             sidecar.proofs.push(proof);
             sidecar.blobs.push(blob.clone());
             blob_cache_hits += 1;
@@ -205,12 +214,15 @@ impl Default for HydrationCache {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HydrationError {
-    #[error("unkown tx hash {hash}, index {index}")]
+    #[error("unkown tx: hash {hash}, index {index}")]
     UnknownTxHash { hash: u64, index: usize },
 
-    #[error("invalid tx length {length}, index {index}")]
+    #[error("invalid tx bytes: length {length}, index {index}")]
     InvalidTxLength { length: usize, index: usize },
 
-    #[error("unknown blob hash {proof}, index {index}")]
+    #[error("unknown blob: proof {proof}, index {index}")]
     UnknownBlobHash { proof: KzgProof, index: usize },
+
+    #[error("too many blobs: blobs {blobs}, max {max}")]
+    TooManyBlobs { blobs: usize, max: usize },
 }

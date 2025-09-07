@@ -8,7 +8,7 @@ use ssz::{Decode, Encode};
 fn benchmark_signed_bid_submission(c: &mut Criterion) {
     let mut group = c.benchmark_group("signed_bid_submission");
 
-    let data_json = include_bytes!("../src/testdata/signed-bid-submission-electra.json");
+    let data_json = include_bytes!("../src/testdata/signed-bid-submission-electra-3.json");
     let custom_submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
     let ssz_bytes = custom_submission.as_ssz_bytes();
 
