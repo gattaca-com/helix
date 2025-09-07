@@ -132,7 +132,7 @@ pub async fn body_limit_middleware(mut req: Request<Body>, next: Next) -> Respon
 
     metric.record(
         res.status().as_str(),
-        stats.size() as usize,
+        stats.size(),
         stats.read_latency(),
         stats.wait_latency(),
         stats.gap_latency(),

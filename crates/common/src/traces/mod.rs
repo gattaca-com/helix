@@ -3,7 +3,7 @@ pub mod proposer_api;
 
 use std::{
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
@@ -16,7 +16,7 @@ use crate::utils::utcnow_ns;
 
 #[derive(Clone)]
 pub struct RequestTimings {
-    /// When the first handler started
+    /// When the first handler started, ~ time of first packet
     pub on_receive_ns: u64,
     /// Body processing stats
     pub stats: Arc<BodyTimings>,
@@ -25,12 +25,12 @@ pub struct RequestTimings {
 #[derive(Default)]
 pub struct BodyTimings {
     // bytes read
-    pub size: AtomicU64,
-    // time in ns spent waiting to read the body
+    pub size: AtomicUsize,
+    // duration in ns spent waiting to read the body
     pub wait_ns: AtomicU64,
-    // time in ns spent reading the body
+    // duration in ns spent reading / parsing the body
     pub read_ns: AtomicU64,
-    // time in ns spent between polls (unless waiting for sender)
+    // duration in ns spent between polls
     pub gap_ns: AtomicU64,
     // timestamp in ns when the body was started reading
     pub start_ns: AtomicU64,
@@ -40,7 +40,7 @@ pub struct BodyTimings {
 
 impl BodyTimings {
     pub fn add_bytes(&self, n: usize) {
-        self.size.fetch_add(n as u64, Ordering::Relaxed);
+        self.size.fetch_add(n, Ordering::Relaxed);
     }
 
     pub fn add_wait(&self, d: Duration) {
@@ -63,7 +63,7 @@ impl BodyTimings {
         self.finish_ns.store(utcnow_ns(), Ordering::Relaxed);
     }
 
-    pub fn size(&self) -> u64 {
+    pub fn size(&self) -> usize {
         self.size.load(Ordering::Relaxed)
     }
 
