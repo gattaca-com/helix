@@ -59,9 +59,12 @@ impl BodyTimingStats {
         self.start_ns.store(utcnow_ns(), Ordering::Relaxed);
     }
 
-    pub fn set_finish(&self, d: Duration) {
-        self.finish_ns.store(utcnow_ns(), Ordering::Relaxed);
-        self.total_read_ns.store(d.as_nanos() as u64, Ordering::Relaxed);
+    pub fn set_finish(&self) {
+        let start = self.start_ns.load(Ordering::Relaxed);
+        let finish = utcnow_ns();
+
+        self.finish_ns.store(finish, Ordering::Relaxed);
+        self.total_read_ns.store(finish.saturating_sub(start), Ordering::Relaxed);
     }
 
     pub fn size(&self) -> u64 {

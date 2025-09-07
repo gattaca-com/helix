@@ -29,7 +29,7 @@ pin_project! {
     struct TimedLimited<B> {
         #[pin] inner: B,
         stats: Arc<BodyTimingStats>,
-        start_reading_at: Option<Instant>,
+        has_set_start: bool,
         last_poll_at: Option<Instant>,
         last_was_pending: bool,
     }
@@ -37,7 +37,7 @@ pin_project! {
 
 impl<B> TimedLimited<B> {
     fn new(inner: B, stats: Arc<BodyTimingStats>) -> Self {
-        Self { inner, stats, start_reading_at: None, last_poll_at: None, last_was_pending: false }
+        Self { inner, stats, has_set_start: false, last_poll_at: None, last_was_pending: false }
     }
 }
 
@@ -55,8 +55,8 @@ where
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         let this = self.project();
 
-        if this.start_reading_at.is_none() {
-            *this.start_reading_at = Some(Instant::now());
+        if !*this.has_set_start {
+            this.stats.set_start();
         }
 
         if let Some(since_last_poll) = this.last_poll_at.take().map(|t| t.elapsed()) {
@@ -98,10 +98,7 @@ where
             Poll::Ready(None) => {
                 *this.last_was_pending = false;
                 this.stats.add_read(read_start.elapsed());
-
-                if let Some(start) = this.start_reading_at.take() {
-                    this.stats.set_finish(start.elapsed());
-                }
+                this.stats.set_finish();
 
                 Poll::Ready(None)
             }
