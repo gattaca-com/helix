@@ -24,8 +24,8 @@ pub use hydration::*;
 pub use lh_kzg::{KzgCommitment, KzgProof};
 pub use lh_test_random::TestRandom;
 pub use lh_types::{
-    fork_name::ForkName, fork_versioned_response::ForkVersionDecode, payload::ExecPayload,
-    test_utils::TestRandom, EthSpec, MainnetEthSpec, SignedRoot,
+    fork_name::ForkName, payload::ExecPayload, test_utils::TestRandom, EthSpec, ForkVersionDecode,
+    MainnetEthSpec, SignedRoot,
 };
 use serde::{Deserialize, Serialize};
 pub use spec::*;

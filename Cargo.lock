@@ -1257,7 +1257,7 @@ dependencies = [
 [[package]]
 name = "bls"
 version = "0.2.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "alloy-primitives",
  "arbitrary",
@@ -1628,7 +1628,7 @@ dependencies = [
 [[package]]
 name = "compare_fields"
 version = "0.2.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "itertools 0.10.5",
 ]
@@ -1636,7 +1636,7 @@ dependencies = [
 [[package]]
 name = "compare_fields_derive"
 version = "0.2.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -1717,6 +1717,25 @@ name = "constant_time_eq"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "245097e9a4535ee1e3e3931fcfcd55a796a44c643e8596ff6566d68f09b87bbc"
+
+[[package]]
+name = "context_deserialize"
+version = "0.1.0"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
+dependencies = [
+ "milhouse",
+ "serde",
+ "ssz_types",
+]
+
+[[package]]
+name = "context_deserialize_derive"
+version = "0.1.0"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
+dependencies = [
+ "quote",
+ "syn 1.0.109",
+]
 
 [[package]]
 name = "core-foundation"
@@ -2500,7 +2519,7 @@ dependencies = [
 [[package]]
 name = "eth2"
 version = "0.1.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "derivative",
  "either",
@@ -2532,7 +2551,7 @@ dependencies = [
 [[package]]
 name = "eth2_interop_keypairs"
 version = "0.2.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "bls",
  "ethereum_hashing",
@@ -2545,7 +2564,7 @@ dependencies = [
 [[package]]
 name = "eth2_key_derivation"
 version = "0.1.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "bls",
  "num-bigint-dig",
@@ -2557,7 +2576,7 @@ dependencies = [
 [[package]]
 name = "eth2_keystore"
 version = "0.1.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "aes 0.7.5",
  "bls",
@@ -3042,7 +3061,7 @@ dependencies = [
 [[package]]
 name = "filesystem"
 version = "0.1.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "winapi",
  "windows-acl",
@@ -3063,7 +3082,7 @@ dependencies = [
 [[package]]
 name = "fixed_bytes"
 version = "0.1.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "alloy-primitives",
  "safe_arith",
@@ -4299,7 +4318,7 @@ dependencies = [
 [[package]]
 name = "int_to_bytes"
 version = "0.2.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "bytes",
 ]
@@ -4483,7 +4502,7 @@ dependencies = [
 [[package]]
 name = "kzg"
 version = "0.1.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "arbitrary",
  "c-kzg",
@@ -4710,7 +4729,7 @@ dependencies = [
 [[package]]
 name = "merkle_proof"
 version = "0.2.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "alloy-primitives",
  "ethereum_hashing",
@@ -4744,7 +4763,7 @@ dependencies = [
 [[package]]
 name = "metrics"
 version = "0.2.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "prometheus",
 ]
@@ -5680,7 +5699,7 @@ checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 [[package]]
 name = "pretty_reqwest_error"
 version = "0.1.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "reqwest 0.11.27",
  "sensitive_url",
@@ -5875,7 +5894,7 @@ dependencies = [
 [[package]]
 name = "proto_array"
 version = "0.2.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "ethereum_ssz",
  "ethereum_ssz_derive",
@@ -6544,7 +6563,7 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 [[package]]
 name = "safe_arith"
 version = "0.1.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 
 [[package]]
 name = "salsa20"
@@ -6765,7 +6784,7 @@ checksum = "cd0b0ec5f1c1ca621c432a25813d8d60c88abe6d3e08a3eb9cf37d97a0fe3d73"
 [[package]]
 name = "sensitive_url"
 version = "0.1.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "serde",
  "url",
@@ -7057,7 +7076,7 @@ checksum = "7a2ae44ef20feb57a68b23d846850f861394c2e02dc425a50098ae8c90267589"
 [[package]]
 name = "slashing_protection"
 version = "0.1.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "arbitrary",
  "ethereum_serde_utils",
@@ -7075,7 +7094,7 @@ dependencies = [
 [[package]]
 name = "slot_clock"
 version = "0.2.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "metrics",
  "parking_lot",
@@ -7307,7 +7326,7 @@ dependencies = [
 [[package]]
 name = "swap_or_not_shuffle"
 version = "0.2.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "alloy-primitives",
  "ethereum_hashing",
@@ -7434,7 +7453,7 @@ dependencies = [
 [[package]]
 name = "test_random_derive"
 version = "0.2.0"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "quote",
  "syn 1.0.109",
@@ -8171,7 +8190,7 @@ checksum = "1dccffe3ce07af9386bfd29e80c0ab1a8205a2fc34e4bcd40364df902cfa8f3f"
 [[package]]
 name = "types"
 version = "0.2.1"
-source = "git+https://github.com/ltitanb/lighthouse?rev=304b026ea0b5da12507e1410e8dae2b28f9db812#304b026ea0b5da12507e1410e8dae2b28f9db812"
+source = "git+https://github.com/ltitanb/lighthouse?rev=fd10b632740e441354c4547a12727c29dd288239#fd10b632740e441354c4547a12727c29dd288239"
 dependencies = [
  "alloy-primitives",
  "alloy-rlp",
@@ -8179,6 +8198,8 @@ dependencies = [
  "bls",
  "compare_fields",
  "compare_fields_derive",
+ "context_deserialize",
+ "context_deserialize_derive",
  "derivative",
  "eth2_interop_keypairs",
  "ethereum_hashing",

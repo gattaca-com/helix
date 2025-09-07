@@ -30,10 +30,12 @@ pub fn resign_builder_bid(
 
     message.pubkey = *signing_ctx.pubkey();
     let sig = signing_ctx.sign_builder_message(&message).serialize().into();
-    let bid = SignedBuilderBid::new_no_metadata(Some(fork), SignedBuilderBidInner {
-        message,
-        signature: sig,
-    });
+
+    let bid = SignedBuilderBid {
+        version: fork,
+        metadata: Default::default(),
+        data: SignedBuilderBidInner { message, signature: sig },
+    };
 
     BID_SIGNING_LATENCY.observe(start.elapsed().as_micros() as f64);
     debug!("re-signing builder bid took {:?}", start.elapsed());

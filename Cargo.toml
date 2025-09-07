@@ -60,12 +60,12 @@ http = "1.0.0"
 httpmock = "0.7.0"
 hyper = "1.1.0"
 lazy_static = "1.5.0"
-lh-bls = { package = "bls", git = "https://github.com/ltitanb/lighthouse", rev = "304b026ea0b5da12507e1410e8dae2b28f9db812" }
-lh-eth2 = { package = "eth2", git = "https://github.com/ltitanb/lighthouse", rev = "304b026ea0b5da12507e1410e8dae2b28f9db812" }
-lh-kzg = { package = "kzg", git = "https://github.com/ltitanb/lighthouse", rev = "304b026ea0b5da12507e1410e8dae2b28f9db812" }
-lh-slot-clock = { package = "slot_clock", git = "https://github.com/ltitanb/lighthouse", rev = "304b026ea0b5da12507e1410e8dae2b28f9db812" }
-lh-test-random = { package = "test_random_derive", git = "https://github.com/ltitanb/lighthouse", rev = "304b026ea0b5da12507e1410e8dae2b28f9db812" }
-lh-types = { package = "types", git = "https://github.com/ltitanb/lighthouse", rev = "304b026ea0b5da12507e1410e8dae2b28f9db812" }
+lh-bls = { package = "bls", git = "https://github.com/ltitanb/lighthouse", rev = "fd10b632740e441354c4547a12727c29dd288239" }
+lh-eth2 = { package = "eth2", git = "https://github.com/ltitanb/lighthouse", rev = "fd10b632740e441354c4547a12727c29dd288239" }
+lh-kzg = { package = "kzg", git = "https://github.com/ltitanb/lighthouse", rev = "fd10b632740e441354c4547a12727c29dd288239" }
+lh-slot-clock = { package = "slot_clock", git = "https://github.com/ltitanb/lighthouse", rev = "fd10b632740e441354c4547a12727c29dd288239" }
+lh-test-random = { package = "test_random_derive", git = "https://github.com/ltitanb/lighthouse", rev = "fd10b632740e441354c4547a12727c29dd288239" }
+lh-types = { package = "types", git = "https://github.com/ltitanb/lighthouse", rev = "fd10b632740e441354c4547a12727c29dd288239" }
 mockito = "1.1.1"
 moka = { version = "0.12.10", features = ["sync"] }
 num-format = "0.4.4"

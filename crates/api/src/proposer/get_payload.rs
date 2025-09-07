@@ -334,7 +334,8 @@ impl<A: Api> ProposerApi<A> {
             }
         }
 
-        let get_payload_response = GetPayloadResponse::new_no_metadata(Some(fork), payload);
+        let get_payload_response =
+            GetPayloadResponse { version: fork, metadata: Default::default(), data: payload };
 
         // Return response
         info!(?trace, timestamp = utcnow_ns(), "delivering payload");
