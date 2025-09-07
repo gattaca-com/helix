@@ -105,3 +105,7 @@ tree_hash_derive = "0.10"
 url = { version = "2.4", features = ["serde"] }
 uuid = { version = "1.5", features = ["fast-rng", "v4"] }
 zstd = "0.13.3"
+
+[patch.crates-io]
+ethereum_ssz = { git = "https://github.com/sigp/ethereum_ssz", rev = "7aec9c0cdf886f08f15fe9296646c2451356084f" }
+ethereum_ssz_derive = { git = "https://github.com/sigp/ethereum_ssz", rev = "7aec9c0cdf886f08f15fe9296646c2451356084f", package = "ethereum_ssz_derive" }

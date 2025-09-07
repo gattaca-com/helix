@@ -2790,8 +2790,7 @@ dependencies = [
 [[package]]
 name = "ethereum_ssz"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ca8ba45b63c389c6e115b095ca16381534fdcc03cf58176a3f8554db2dbe19b"
+source = "git+https://github.com/sigp/ethereum_ssz?rev=7aec9c0cdf886f08f15fe9296646c2451356084f#7aec9c0cdf886f08f15fe9296646c2451356084f"
 dependencies = [
  "alloy-primitives",
  "ethereum_serde_utils",
@@ -2805,8 +2804,7 @@ dependencies = [
 [[package]]
 name = "ethereum_ssz_derive"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0dd55d08012b4e0dfcc92b8d6081234df65f2986ad34cc76eeed69c5e2ce7506"
+source = "git+https://github.com/sigp/ethereum_ssz?rev=7aec9c0cdf886f08f15fe9296646c2451356084f#7aec9c0cdf886f08f15fe9296646c2451356084f"
 dependencies = [
  "darling 0.20.11",
  "proc-macro2",
