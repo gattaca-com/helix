@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use alloy_primitives::{Address, B256, U256};
 use helix_types::{
-    Bloom, BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, ChainSpec,
+    Bloom, BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes,
     ExecutionPayloadHeader, ExecutionRequests, ExtraData, KzgCommitments, SigError, SignedMessage,
     SignedRoot, Slot, TestRandom, ValidationError,
 };
@@ -227,11 +227,10 @@ impl BidSubmission for SignedHeaderSubmission {
 }
 
 impl SignedHeaderSubmission {
-    pub fn verify_signature(&self, spec: &ChainSpec) -> Result<(), SigError> {
-        let domain = spec.get_builder_domain();
+    pub fn verify_signature(&self, builder_domain: B256) -> Result<(), SigError> {
         let valid = match self {
             SignedHeaderSubmission::Electra(bid) => {
-                let message = bid.message.bid_trace.signing_root(domain);
+                let message = bid.message.bid_trace.signing_root(builder_domain);
                 let uncompressed_builder_pubkey =
                     BlsPublicKey::deserialize(bid.message.bid_trace.builder_pubkey.as_slice())
                         .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;

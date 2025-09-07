@@ -1,5 +1,5 @@
 use alloy_primitives::{Address, B256};
-use lh_types::{test_utils::TestRandom, ChainSpec, Epoch, SignedRoot};
+use lh_types::{test_utils::TestRandom, Epoch, SignedRoot};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
@@ -29,14 +29,13 @@ pub struct ValidatorRegistrationData {
 impl SignedRoot for ValidatorRegistrationData {}
 
 impl SignedValidatorRegistrationData {
-    pub fn verify_signature(&self, spec: &ChainSpec) -> Result<(), SigError> {
+    pub fn verify_signature(&self, builder_domain: B256) -> Result<(), SigError> {
         let signature = BlsSignature::deserialize(self.signature.as_slice())
             .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
         let pubkey = BlsPublicKey::deserialize(self.message.pubkey.as_slice())
             .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
 
-        let domain = spec.get_builder_domain();
-        let message = self.message.signing_root(domain);
+        let message = self.message.signing_root(builder_domain);
         if !signature.verify(&pubkey, message) {
             return Err(SigError::InvalidBlsSignature);
         }

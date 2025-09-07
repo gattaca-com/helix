@@ -22,7 +22,7 @@ use super::ProposerApi;
 use crate::{
     proposer::{error::ProposerApiError, PreferencesHeader},
     router::KnownValidatorsLoaded,
-    Api,
+    Api, HEADER_API_KEY,
 };
 
 impl<A: Api> ProposerApi<A> {
@@ -56,7 +56,7 @@ impl<A: Api> ProposerApi<A> {
         let start = Instant::now();
 
         // Get optional api key from headers
-        let api_key = headers.get("x-api-key").and_then(|key| key.to_str().ok());
+        let api_key = headers.get(HEADER_API_KEY).and_then(|key| key.to_str().ok());
 
         let pool_name = match api_key {
             Some(api_key) => match proposer_api.db.get_validator_pool_name(api_key).await? {
@@ -212,7 +212,7 @@ pub fn validate_registration(
     registration: &SignedValidatorRegistration,
 ) -> Result<(), ProposerApiError> {
     validate_registration_time(chain_info, registration)?;
-    registration.verify_signature(&chain_info.context)?;
+    registration.verify_signature(chain_info.builder_domain)?;
 
     Ok(())
 }

@@ -8,8 +8,7 @@ use tree_hash_derive::TreeHash;
 
 use crate::{
     error::SigError, fields::ExecutionRequests, BlobsBundle, BlsPublicKey, BlsPublicKeyBytes,
-    BlsSignature, BlsSignatureBytes, ChainSpec, ExecutionPayload, PayloadAndBlobsRef,
-    ValidationError,
+    BlsSignature, BlsSignatureBytes, ExecutionPayload, PayloadAndBlobsRef, ValidationError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
@@ -73,6 +72,18 @@ pub struct SignedBidSubmissionElectra {
     pub signature: BlsSignatureBytes,
 }
 
+impl TestRandom for SignedBidSubmissionElectra {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self {
+            message: BidTrace::random_for_test(rng),
+            execution_payload: ExecutionPayload::random_for_test(rng).into(),
+            blobs_bundle: BlobsBundle::random_for_test(rng).into(),
+            execution_requests: ExecutionRequests::random_for_test(rng).into(),
+            signature: BlsSignatureBytes::random(),
+        }
+    }
+}
+
 /// Request object of POST `/relay/v1/builder/blocks`
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 #[ssz(enum_behaviour = "transparent")]
@@ -99,8 +110,7 @@ impl SignedBidSubmission {
         Ok(())
     }
 
-    pub fn verify_signature(&self, spec: &ChainSpec) -> Result<(), SigError> {
-        let domain = spec.get_builder_domain();
+    pub fn verify_signature(&self, builder_domain: B256) -> Result<(), SigError> {
         let valid = match self {
             SignedBidSubmission::Electra(bid) => {
                 let uncompressed_builder_pubkey =
@@ -109,7 +119,7 @@ impl SignedBidSubmission {
                 let uncompressed_signature = BlsSignature::deserialize(bid.signature.as_slice())
                     .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
 
-                let message = bid.message.signing_root(domain);
+                let message = bid.message.signing_root(builder_domain);
                 uncompressed_signature.verify(&uncompressed_builder_pubkey, message)
             }
         };
