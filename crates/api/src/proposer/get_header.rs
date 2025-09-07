@@ -11,7 +11,7 @@ use helix_common::{
     metrics::GetHeaderMetric,
     resign_builder_bid, task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
-    BidRequest, GetHeaderTrace, MiddlewareTimings,
+    BidRequest, GetHeaderTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
@@ -41,7 +41,7 @@ impl<A: Api> ProposerApi<A> {
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
-        Extension(timings): Extension<MiddlewareTimings>,
+        Extension(timings): Extension<RequestTimings>,
         Extension(Terminating(terminating)): Extension<Terminating>,
         headers: HeaderMap,
         Path(GetHeaderParams { slot, parent_hash, pubkey }): Path<GetHeaderParams>,

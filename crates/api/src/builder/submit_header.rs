@@ -12,7 +12,7 @@ use helix_common::{
     metrics::ApiMetrics,
     task,
     utils::{extract_request_id, utcnow_ns},
-    HeaderSubmissionTrace, MiddlewareTimings,
+    HeaderSubmissionTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
@@ -32,7 +32,7 @@ impl<A: Api> BuilderApi<A> {
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&parts.headers)))]
     pub async fn submit_header(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
-        Extension(timings): Extension<MiddlewareTimings>,
+        Extension(timings): Extension<RequestTimings>,
         parts: Parts,
         body: bytes::Bytes,
     ) -> Result<StatusCode, BuilderApiError> {
@@ -52,7 +52,7 @@ impl<A: Api> BuilderApi<A> {
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&parts.headers)))]
     pub async fn submit_header_v3(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
-        Extension(timings): Extension<MiddlewareTimings>,
+        Extension(timings): Extension<RequestTimings>,
         parts: Parts,
         body: bytes::Bytes,
     ) -> Result<StatusCode, BuilderApiError> {

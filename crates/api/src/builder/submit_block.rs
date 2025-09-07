@@ -9,7 +9,7 @@ use helix_common::{
     metrics::ApiMetrics,
     task,
     utils::{extract_request_id, utcnow_ns},
-    MiddlewareTimings, SubmissionTrace,
+    RequestTimings, SubmissionTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
@@ -46,7 +46,7 @@ impl<A: Api> BuilderApi<A> {
     ), err, ret(level = Level::DEBUG))]
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
-        Extension(timings): Extension<MiddlewareTimings>,
+        Extension(timings): Extension<RequestTimings>,
         parts: Parts,
         body: bytes::Bytes,
     ) -> Result<StatusCode, BuilderApiError> {

@@ -13,7 +13,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use bytes::Bytes;
-use helix_common::{metrics::ApiMetrics, utils::utcnow_ns, BodyTimingStats, MiddlewareTimings};
+use helix_common::{metrics::ApiMetrics, utils::utcnow_ns, BodyTimings, RequestTimings};
 use http::header::CONTENT_LENGTH;
 use http_body::{Body as HttpBody, Frame};
 use http_body_util::Limited;
@@ -26,22 +26,22 @@ pin_project! {
     /// - Time spent waiting for sender (pending)
     /// - Time spent between polls (gap)
     /// - Time spent reading the body (read)
-    struct TimedLimited<B> {
+    struct Timed<B> {
         #[pin] inner: B,
-        stats: Arc<BodyTimingStats>,
+        stats: Arc<BodyTimings>,
         has_set_start: bool,
-        last_poll_at: Option<Instant>,
         last_was_pending: bool,
+        last_poll_at: Option<Instant>,
     }
 }
 
-impl<B> TimedLimited<B> {
-    fn new(inner: B, stats: Arc<BodyTimingStats>) -> Self {
+impl<B> Timed<B> {
+    fn new(inner: B, stats: Arc<BodyTimings>) -> Self {
         Self { inner, stats, has_set_start: false, last_poll_at: None, last_was_pending: false }
     }
 }
 
-impl<B> HttpBody for TimedLimited<B>
+impl<B> HttpBody for Timed<B>
 where
     B: HttpBody<Data = Bytes>,
     B::Error: Into<axum::BoxError>,
@@ -125,9 +125,9 @@ pub async fn body_limit_middleware(mut req: Request<Body>, next: Next) -> Respon
     };
 
     let mut metric = ApiMetrics::new(endpoint.as_str().to_string());
-    let stats = Arc::new(BodyTimingStats::default());
+    let stats = Arc::new(BodyTimings::default());
 
-    req.extensions_mut().insert(MiddlewareTimings { on_receive_ns, stats: stats.clone() });
+    req.extensions_mut().insert(RequestTimings { on_receive_ns, stats: stats.clone() });
     let res = do_request(req, next, stats.clone()).await;
 
     metric.record(
@@ -136,20 +136,19 @@ pub async fn body_limit_middleware(mut req: Request<Body>, next: Next) -> Respon
         stats.read_latency(),
         stats.wait_latency(),
         stats.gap_latency(),
-        stats.total_latency(),
     );
 
     res
 }
 
-async fn do_request(mut req: Request<Body>, next: Next, stats: Arc<BodyTimingStats>) -> Response {
+async fn do_request(mut req: Request<Body>, next: Next, stats: Arc<BodyTimings>) -> Response {
     if let Some(len) = req
         .headers()
         .get(CONTENT_LENGTH)
         .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.parse::<u64>().ok())
+        .and_then(|s| s.parse::<usize>().ok())
     {
-        if len as usize > MAX_PAYLOAD_LENGTH {
+        if len > MAX_PAYLOAD_LENGTH {
             return StatusCode::PAYLOAD_TOO_LARGE.into_response();
         }
     }
@@ -160,7 +159,7 @@ async fn do_request(mut req: Request<Body>, next: Next, stats: Arc<BodyTimingSta
 
     let orig = std::mem::replace(req.body_mut(), Body::empty());
     let limited = Limited::new(orig, MAX_PAYLOAD_LENGTH);
-    *req.body_mut() = Body::new(TimedLimited::new(limited, stats));
+    *req.body_mut() = Body::new(Timed::new(limited, stats));
 
     next.run(req).await
 }

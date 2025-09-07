@@ -15,13 +15,15 @@ pub use proposer_api::*;
 use crate::utils::utcnow_ns;
 
 #[derive(Clone)]
-pub struct MiddlewareTimings {
+pub struct RequestTimings {
+    /// When the first handler started
     pub on_receive_ns: u64,
-    pub stats: Arc<BodyTimingStats>,
+    /// Body processing stats
+    pub stats: Arc<BodyTimings>,
 }
 
 #[derive(Default)]
-pub struct BodyTimingStats {
+pub struct BodyTimings {
     // bytes read
     pub size: AtomicU64,
     // time in ns spent waiting to read the body
@@ -30,15 +32,13 @@ pub struct BodyTimingStats {
     pub read_ns: AtomicU64,
     // time in ns spent between polls (unless waiting for sender)
     pub gap_ns: AtomicU64,
-    // total time spent processing the body
-    pub total_read_ns: AtomicU64,
     // timestamp in ns when the body was started reading
     pub start_ns: AtomicU64,
     // timestamp in ns when the body was finished reading
     pub finish_ns: AtomicU64,
 }
 
-impl BodyTimingStats {
+impl BodyTimings {
     pub fn add_bytes(&self, n: usize) {
         self.size.fetch_add(n as u64, Ordering::Relaxed);
     }
@@ -60,11 +60,7 @@ impl BodyTimingStats {
     }
 
     pub fn set_finish(&self) {
-        let start = self.start_ns.load(Ordering::Relaxed);
-        let finish = utcnow_ns();
-
-        self.finish_ns.store(finish, Ordering::Relaxed);
-        self.total_read_ns.store(finish.saturating_sub(start), Ordering::Relaxed);
+        self.finish_ns.store(utcnow_ns(), Ordering::Relaxed);
     }
 
     pub fn size(&self) -> u64 {
@@ -81,9 +77,5 @@ impl BodyTimingStats {
 
     pub fn read_latency(&self) -> Duration {
         Duration::from_nanos(self.read_ns.load(Ordering::Relaxed))
-    }
-
-    pub fn total_latency(&self) -> Duration {
-        Duration::from_nanos(self.total_read_ns.load(Ordering::Relaxed))
     }
 }

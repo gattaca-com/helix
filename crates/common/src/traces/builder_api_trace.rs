@@ -3,8 +3,7 @@ use std::sync::atomic::Ordering;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    bid_submission::OptimisticVersion, metrics::SUB_TRACE_LATENCY, utils::utcnow_ns,
-    MiddlewareTimings,
+    bid_submission::OptimisticVersion, metrics::SUB_TRACE_LATENCY, utils::utcnow_ns, RequestTimings,
 };
 
 // all timestamps are in nanoseconds
@@ -31,7 +30,7 @@ pub struct SubmissionTrace {
 }
 
 impl SubmissionTrace {
-    pub fn init_from_timings(timings: MiddlewareTimings) -> Self {
+    pub fn init_from_timings(timings: RequestTimings) -> Self {
         let scheduled_at = timings.stats.start_ns.load(Ordering::Relaxed);
         let read_body = timings.stats.finish_ns.load(Ordering::Relaxed);
 
@@ -92,7 +91,7 @@ pub struct HeaderSubmissionTrace {
 }
 
 impl HeaderSubmissionTrace {
-    pub fn init_from_timings(timings: MiddlewareTimings) -> Self {
+    pub fn init_from_timings(timings: RequestTimings) -> Self {
         Self { receive: timings.on_receive_ns, ..Default::default() }
     }
 }

@@ -490,7 +490,6 @@ impl ApiMetrics {
         read_latency: Duration,
         wait_latency: Duration,
         gap_latency: Duration,
-        total_latency: Duration,
     ) {
         REQUEST_STATUS.with_label_values(&[self.endpoint.as_str(), status_code]).inc();
         REQUEST_SIZE.with_label_values(&[self.endpoint.as_str()]).observe(size as f64);
@@ -503,9 +502,6 @@ impl ApiMetrics {
         REQUEST_READ_BODY_LATENCY
             .with_label_values(&[self.endpoint.as_str(), "gap"])
             .observe(gap_latency.as_secs_f64());
-        REQUEST_READ_BODY_LATENCY
-            .with_label_values(&[self.endpoint.as_str(), "total"])
-            .observe(total_latency.as_secs_f64());
 
         self.has_completed = true;
     }

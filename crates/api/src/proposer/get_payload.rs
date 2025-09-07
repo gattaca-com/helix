@@ -9,7 +9,7 @@ use helix_common::{
     metadata_provider::MetadataProvider,
     task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
-    GetPayloadTrace, MiddlewareTimings,
+    GetPayloadTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
@@ -44,7 +44,7 @@ impl<A: Api> ProposerApi<A> {
     #[tracing::instrument(skip_all, fields(id), err)]
     pub async fn get_payload(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
-        Extension(timings): Extension<MiddlewareTimings>,
+        Extension(timings): Extension<RequestTimings>,
         headers: HeaderMap,
         body: bytes::Bytes,
     ) -> Result<impl IntoResponse, ProposerApiError> {

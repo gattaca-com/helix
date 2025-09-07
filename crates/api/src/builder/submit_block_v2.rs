@@ -6,7 +6,7 @@ use helix_common::{
     metadata_provider::MetadataProvider,
     task,
     utils::{extract_request_id, utcnow_ns},
-    MiddlewareTimings, SubmissionTrace,
+    RequestTimings, SubmissionTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
@@ -39,7 +39,7 @@ impl<A: Api> BuilderApi<A> {
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&parts.headers)))]
     pub async fn submit_block_v2(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
-        Extension(timings): Extension<MiddlewareTimings>,
+        Extension(timings): Extension<RequestTimings>,
         parts: Parts,
         body: bytes::Bytes,
     ) -> Result<StatusCode, BuilderApiError> {

@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{metrics::GET_PAYLOAD_TRACE_LATENCY, utils::utcnow_ns, MiddlewareTimings};
+use crate::{metrics::GET_PAYLOAD_TRACE_LATENCY, utils::utcnow_ns, RequestTimings};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RegisterValidatorsTrace {
@@ -39,7 +39,7 @@ pub struct GetPayloadTrace {
 }
 
 impl GetPayloadTrace {
-    pub fn init_from_timings(timings: MiddlewareTimings) -> Self {
+    pub fn init_from_timings(timings: RequestTimings) -> Self {
         let scheduled_at = timings.stats.start_ns.load(Ordering::Relaxed);
         let read_body = timings.stats.finish_ns.load(Ordering::Relaxed);
 

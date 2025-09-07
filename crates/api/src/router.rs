@@ -103,8 +103,7 @@ pub fn build_router<A: Api>(
         }
     });
 
-    // add layers, split in two to make the traits happy, layers are applied bottom to top across
-    // router.layer, but in order for each of the two
+    // middleware
     router = router.layer(
         ServiceBuilder::new()
             .layer(DefaultBodyLimit::disable())
@@ -119,7 +118,7 @@ pub fn build_router<A: Api>(
             .layer(TimeoutLayer::new(API_REQUEST_TIMEOUT)),
     );
 
-    // Add Extension layers
+    // extensions
     router = router
         .layer(Extension(builder_api))
         .layer(Extension(proposer_api))
