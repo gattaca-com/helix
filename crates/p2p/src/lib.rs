@@ -1,8 +1,5 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use alloy_consensus::TxEnvelope;
-use alloy_primitives::Bytes;
-use alloy_rlp::Decodable;
 use axum::{
     extract::WebSocketUpgrade,
     http::{StatusCode, Uri},
@@ -14,12 +11,16 @@ use helix_common::{api::builder_api::InclusionList, signing::RelaySigningContext
 use helix_types::{BlsPublicKey, BlsPublicKeyBytes, Transaction, Transactions};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_tungstenite::connect_async;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tree_hash::TreeHash;
 
-use crate::messages::{HelloMessage, InclusionListMessage, P2PMessage, SignedP2PMessage};
+use crate::{
+    messages::{HelloMessage, InclusionListMessage, P2PMessage, SignedP2PMessage},
+    tx_ordering::compute_shared_inclusion_list,
+};
 
 pub mod messages;
+pub(crate) mod tx_ordering;
 
 enum P2PApiRequest {
     PeerMessage((BlsPublicKeyBytes, InclusionListMessage)),
@@ -97,7 +98,12 @@ impl P2PApi {
         ws: WebSocketUpgrade,
     ) -> Result<impl IntoResponse, P2PApiError> {
         info!("got new peer connection");
-        Ok(ws.on_upgrade(|socket| async move { api.handle_ws_connection(socket, None).await }))
+        // Upgrade connection to WebSocket, spawning a new task to handle the connection
+        let ws = ws
+            .on_failed_upgrade(|error| warn!(%error, "websocket upgrade failed"))
+            .on_upgrade(|socket| async move { api.handle_ws_connection(socket, None).await });
+
+        Ok(ws)
     }
 
     async fn handle_ws_connection<M, S, E>(
@@ -194,52 +200,12 @@ impl P2PApi {
                     });
                 }
                 P2PApiRequest::SharedInclusionList { slot, inclusion_list, result_tx } => {
-                    let mut tx_frequency = HashMap::new();
-                    vote_map.retain(|_, (il_slot, _)| *il_slot >= slot);
-                    for (_peer, (_il_slot, il)) in &vote_map {
-                        for tx in il.iter() {
-                            let Ok(decoded_tx) = TxEnvelope::decode(&mut &tx[..]) else {
-                                continue;
-                            };
+                    let il: Vec<_> = inclusion_list.txs.into_iter().map(Transaction).collect();
+                    let shared_il = compute_shared_inclusion_list(&mut vote_map, slot, il.into());
 
-                            tx_frequency
-                                .entry(*decoded_tx.tx_hash())
-                                .and_modify(|(_, c)| *c += 1)
-                                .or_insert((tx.clone(), 1));
-                        }
-                    }
-                    inclusion_list.txs.iter().for_each(|tx| {
-                        let Ok(decoded_tx) = TxEnvelope::decode(&mut &tx[..]) else {
-                            return;
-                        };
+                    let txs = shared_il.into_iter().map(|tx| tx.to_vec().into()).collect();
+                    let inclusion_list = InclusionList { txs };
 
-                        tx_frequency
-                            .entry(*decoded_tx.tx_hash())
-                            .and_modify(|(_, c)| *c += 1)
-                            .or_insert((Transaction(tx.clone()), 1));
-                    });
-                    let mut tx_frequency_ordered: Vec<_> = tx_frequency.into_iter().collect();
-                    // Order descending by (frequency, tx_hash)
-                    tx_frequency_ordered.sort_unstable_by(
-                        |(tx_hash1, (_, freq1)), (tx_hash2, (_, freq2))| {
-                            freq2.cmp(freq1).then(tx_hash2.cmp(tx_hash1))
-                        },
-                    );
-
-                    let mut bytes_available = 8000;
-                    let final_il: Vec<_> = tx_frequency_ordered
-                        .into_iter()
-                        .map(|(_, (tx, _))| Bytes::from(tx.to_vec()))
-                        .filter(|tx| {
-                            if tx.len() > bytes_available {
-                                false
-                            } else {
-                                bytes_available -= tx.len();
-                                true
-                            }
-                        })
-                        .collect();
-                    let inclusion_list = InclusionList { txs: final_il };
                     self.broadcast(InclusionListMessage::new(slot, inclusion_list.clone()).into());
                     let api_requests_tx = self.api_requests_tx.clone();
                     let shared_il_msg =
