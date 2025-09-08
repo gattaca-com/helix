@@ -4,12 +4,7 @@ use std::{
 };
 
 use alloy_primitives::{B256, U256};
-use axum::{
-    body::{to_bytes, Body},
-    http::StatusCode,
-    response::IntoResponse,
-    Extension,
-};
+use axum::{http::StatusCode, response::IntoResponse, Extension};
 use bytes::Bytes;
 use dashmap::DashMap;
 use helix_common::{
@@ -47,7 +42,7 @@ use crate::{
     Api, HEADER_API_KEY, HEADER_HYDRATE, HEADER_SEQUENCE,
 };
 
-pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
+pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB
 
 #[derive(Clone)]
 pub struct BuilderApi<A: Api> {
@@ -460,7 +455,7 @@ pub async fn decode_payload<A: Api>(
     api: &BuilderApi<A>,
     uri: &Uri,
     headers: &HeaderMap,
-    req: Body,
+    body_bytes: bytes::Bytes,
     trace: &mut SubmissionTrace,
 ) -> Result<(bool, SignedBidSubmission, bool), BuilderApiError> {
     // Extract the query parameters
@@ -479,7 +474,6 @@ pub async fn decode_payload<A: Api>(
         .unwrap_or(false);
 
     let decoder = SubmissionDecoder::from_headers(headers);
-    let body_bytes = to_bytes(req, MAX_PAYLOAD_LENGTH).await?;
 
     let should_hydrate = headers.get(HEADER_HYDRATE).is_some();
     let (skip_sigverify, payload): (bool, SignedBidSubmission) = if should_hydrate {

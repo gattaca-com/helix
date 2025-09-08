@@ -1,12 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
-use axum::{
-    body::{to_bytes, Body},
-    http::{HeaderMap, Request},
-    response::IntoResponse,
-    Extension,
-};
+use axum::{http::HeaderMap, response::IntoResponse, Extension};
 use helix_beacon::types::BroadcastValidation;
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry,
@@ -14,7 +9,7 @@ use helix_common::{
     metadata_provider::MetadataProvider,
     task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
-    GetPayloadTrace,
+    GetPayloadTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
@@ -28,7 +23,7 @@ use tracing::{debug, error, info, warn, Instrument};
 
 use super::ProposerApi;
 use crate::{
-    constants::{GET_PAYLOAD_REQUEST_CUTOFF_MS, MAX_BLINDED_BLOCK_LENGTH},
+    constants::GET_PAYLOAD_REQUEST_CUTOFF_MS,
     gossiper::types::{BroadcastGetPayloadParams, RequestPayloadParams},
     proposer::{error::ProposerApiError, unblind_beacon_block},
     Api,
@@ -46,31 +41,24 @@ impl<A: Api> ProposerApi<A> {
     /// 6. Returns the unblinded payload to proposer.
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlock>
-    #[tracing::instrument(skip_all, fields(id))]
+    #[tracing::instrument(skip_all, fields(id), err)]
     pub async fn get_payload(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
-        Extension(on_receive_ns): Extension<u64>,
+        Extension(timings): Extension<RequestTimings>,
         headers: HeaderMap,
-        req: Request<Body>,
+        body: bytes::Bytes,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         let request_id = extract_request_id(&headers);
         tracing::Span::current().record("id", request_id.to_string());
 
-        let mut trace = GetPayloadTrace { receive: on_receive_ns, ..Default::default() };
+        let mut trace = GetPayloadTrace::init_from_timings(timings);
 
         let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
 
-        let signed_blinded_block: SignedBlindedBeaconBlock =
-            match deserialize_get_payload_bytes(req).await {
-                Ok(signed_block) => signed_block,
-                Err(err) => {
-                    warn!(
-                        error = %err,
-                        "failed to deserialize signed block",
-                    );
-                    return Err(err);
-                }
-            };
+        let signed_blinded_block: SignedBlindedBeaconBlock = serde_json::from_slice(&body)
+            .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
+
+        trace.decode = utcnow_ns();
 
         let block_hash = signed_blinded_block
             .message()
@@ -506,14 +494,6 @@ impl<A: Api> ProposerApi<A> {
             });
         }
     }
-}
-
-async fn deserialize_get_payload_bytes(
-    req: Request<Body>,
-) -> Result<SignedBlindedBeaconBlock, ProposerApiError> {
-    let body = req.into_body();
-    let body_bytes = to_bytes(body, MAX_BLINDED_BLOCK_LENGTH).await?;
-    Ok(serde_json::from_slice(&body_bytes)?)
 }
 
 /// Validates the proposal coordinate of a given `SignedBlindedBeaconBlock`.

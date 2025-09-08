@@ -1,20 +1,17 @@
 use std::sync::Arc;
 
-use axum::{
-    body::Body,
-    http::{Request, StatusCode},
-    Extension,
-};
+use axum::{http::StatusCode, Extension};
 use helix_common::{
     bid_submission::{BidSubmission, OptimisticVersion},
     metadata_provider::MetadataProvider,
     task,
     utils::{extract_request_id, utcnow_ns},
-    SubmissionTrace,
+    RequestTimings, SubmissionTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::SignedBidSubmission;
+use http::request::Parts;
 use tracing::{debug, error, info, warn, Instrument};
 
 use super::api::BuilderApi;
@@ -39,21 +36,17 @@ impl<A: Api> BuilderApi<A> {
     /// 6. Saves the bid to auctioneer and db.
     ///
     /// Implements this API: https://docs.titanrelay.xyz/builders/builder-integration#optimistic-v2
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(req.headers())))]
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&parts.headers)))]
     pub async fn submit_block_v2(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
-        Extension(on_receive_ns): Extension<u64>,
-        req: Request<Body>,
+        Extension(timings): Extension<RequestTimings>,
+        parts: Parts,
+        body: bytes::Bytes,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = SubmissionTrace {
-            receive: on_receive_ns,
-            read_body: utcnow_ns(),
-            ..Default::default()
-        };
-        trace.metadata = api.metadata_provider.get_metadata(req.headers());
+        let mut trace = SubmissionTrace::init_from_timings(timings);
+        trace.metadata = api.metadata_provider.get_metadata(&parts.headers);
 
         // Decode the incoming request body into a payload
-        let (parts, body) = req.into_parts();
         // v2 submissions are never hydrated
         let (skip_sigverify, payload, _) =
             decode_payload(0, &api, &parts.uri, &parts.headers, body, &mut trace).await?;

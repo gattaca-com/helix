@@ -3,8 +3,7 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
     },
-    BuilderInfo, Filtering, GetPayloadTrace, ProposerInfo, SignedValidatorRegistrationEntry,
-    ValidatorPreferences,
+    BuilderInfo, Filtering, ProposerInfo, SignedValidatorRegistrationEntry, ValidatorPreferences,
 };
 use helix_types::{
     BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, SignedValidatorRegistration,
@@ -57,27 +56,6 @@ impl FromRow for BidTrace {
             gas_limit: parse_i32_to_u64(row.get::<&str, i32>("gas_limit"))?,
             gas_used: parse_i32_to_u64(row.get::<&str, i32>("gas_used"))?,
             value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("submission_value")),
-        })
-    }
-}
-
-impl FromRow for GetPayloadTrace {
-    fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError> {
-        Ok(GetPayloadTrace {
-            receive: parse_i64_to_u64(row.get::<&str, i64>("receive"))?,
-            proposer_index_validated: parse_i64_to_u64(
-                row.get::<&str, i64>("proposer_index_validated"),
-            )?,
-            signature_validated: parse_i64_to_u64(row.get::<&str, i64>("signature_validated"))?,
-            payload_fetched: parse_i64_to_u64(row.get::<&str, i64>("payload_fetched"))?,
-            validation_complete: parse_i64_to_u64(row.get::<&str, i64>("validation_complete"))?,
-            beacon_client_broadcast: parse_i64_to_u64(
-                row.get::<&str, i64>("beacon_client_broadcast"),
-            )?,
-            broadcaster_block_broadcast: parse_i64_to_u64(
-                row.get::<&str, i64>("broadcaster_block_broadcast"),
-            )?,
-            on_deliver_payload: parse_i64_to_u64(row.get::<&str, i64>("on_deliver_payload"))?,
         })
     }
 }
