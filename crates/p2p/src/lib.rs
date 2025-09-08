@@ -8,15 +8,14 @@ use axum::{
 };
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use helix_common::{api::builder_api::InclusionList, signing::RelaySigningContext, P2PPeerConfig};
-use helix_types::{BlsPublicKey, BlsPublicKeyBytes, Transaction, Transactions};
+use helix_types::{BlsPublicKey, BlsPublicKeyBytes, Transaction};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_tungstenite::connect_async;
 use tracing::{error, info, warn};
-use tree_hash::TreeHash;
 
 use crate::{
     messages::{HelloMessage, InclusionListMessage, P2PMessage, SignedP2PMessage},
-    tx_ordering::compute_shared_inclusion_list,
+    tx_ordering::{compute_final_inclusion_list, compute_shared_inclusion_list},
 };
 
 pub mod messages;
@@ -219,33 +218,14 @@ impl P2PApi {
                     });
                 }
                 P2PApiRequest::SettledInclusionList { slot, inclusion_list, result_tx } => {
-                    let mut il_by_frequency = HashMap::new();
-                    let il: Transactions =
-                        inclusion_list.txs.into_iter().map(Transaction).collect::<Vec<_>>().into();
-                    il_by_frequency.insert(il.tree_hash_root(), (il, 1));
-                    vote_map.into_iter().for_each(|(_, (il_slot, il))| {
-                        if il_slot != slot {
-                            return;
-                        }
-                        let il_hash = il.tree_hash_root();
-                        il_by_frequency
-                            .entry(il_hash)
-                            .and_modify(|(_, c)| *c += 1)
-                            .or_insert((il, 1));
-                    });
-                    let txs = il_by_frequency
-                        .into_iter()
-                        .max_by_key(|(il_hash, (il, c))| {
-                            (*c, il.iter().map(|tx| tx.len()).sum::<usize>(), *il_hash)
-                        })
-                        .map(|(_, (il, _))| {
-                            il.into_iter().map(|tx| tx.to_vec().into()).collect::<Vec<_>>()
-                        });
-                    let inclusion_list = txs.map(|txs| InclusionList { txs: txs.into() });
+                    let vote_map = std::mem::take(&mut vote_map);
+                    let il: Vec<_> = inclusion_list.txs.into_iter().map(Transaction).collect();
+                    let inclusion_list = compute_final_inclusion_list(vote_map, slot, il.into());
+                    let txs: Vec<_> =
+                        inclusion_list.into_iter().map(|tx| tx.to_vec().into()).collect();
                     let _ = result_tx
-                        .send(inclusion_list)
+                        .send(Some(InclusionList { txs }))
                         .inspect_err(|e| error!(err=?e, "failed to send settled inclusion list"));
-                    vote_map = HashMap::new();
                 }
                 P2PApiRequest::PeerMessage((sender, il_msg)) => {
                     // TODO: validate inclusion lists?
