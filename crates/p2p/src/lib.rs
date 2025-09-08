@@ -14,12 +14,12 @@ use tokio_tungstenite::connect_async;
 use tracing::{error, info, warn};
 
 use crate::{
+    il_consensus::{compute_final_inclusion_list, compute_shared_inclusion_list},
     messages::{HelloMessage, InclusionListMessage, P2PMessage, SignedP2PMessage},
-    tx_ordering::{compute_final_inclusion_list, compute_shared_inclusion_list},
 };
 
+pub(crate) mod il_consensus;
 pub mod messages;
-pub(crate) mod tx_ordering;
 
 enum P2PApiRequest {
     PeerMessage((BlsPublicKeyBytes, InclusionListMessage)),
