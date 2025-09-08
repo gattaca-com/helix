@@ -52,7 +52,7 @@ struct PendingBlockSubmissionValue {
 struct PendingHeaderSubmissionValue {
     pub submission: Arc<SignedHeaderSubmission>,
     pub trace: HeaderSubmissionTrace,
-    pub tx_count: Option<u32>,
+    pub tx_count: u32,
 }
 
 const BLOCK_SUBMISSION_FIELD_COUNT: usize = 13;
@@ -727,7 +727,7 @@ impl PostgresDatabaseService {
             value: PostgresNumeric,
             timestamp: i64,
             first_seen: i64,
-            tx_count: Option<i32>,
+            tx_count: i32,
         }
 
         let mut structured_headers: Vec<HeaderParams> = Vec::with_capacity(batch.len());
@@ -750,7 +750,7 @@ impl PostgresDatabaseService {
                 value: PostgresNumeric::from(item.submission.value()),
                 timestamp: item.submission.timestamp() as i64,
                 first_seen: item.trace.receive as i64,
-                tx_count: item.tx_count.map(|c| c as i32),
+                tx_count: item.tx_count as i32,
             });
         }
 
@@ -2125,7 +2125,7 @@ impl DatabaseService for PostgresDatabaseService {
         &self,
         submission: Arc<SignedHeaderSubmission>,
         trace: HeaderSubmissionTrace,
-        tx_count: Option<u32>,
+        tx_count: u32,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_header_submission");
         if let Some(sender) = &self.header_submissions_sender {

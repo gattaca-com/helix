@@ -25,10 +25,7 @@ use helix_common::{
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
 use helix_housekeeper::CurrentSlotInfo;
-use tokio::sync::{
-    broadcast,
-    mpsc::{self, channel},
-};
+use tokio::sync::{broadcast, mpsc::channel};
 use tower::{buffer::BufferLayer, limit::RateLimitLayer, timeout::TimeoutLayer, ServiceBuilder};
 use tower_http::limit::RequestBodyLimitLayer;
 
@@ -113,7 +110,6 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
     let current_slot_info = CurrentSlotInfo::new();
     let (sort_tx, _) = crossbeam_channel::bounded(1000);
     let (br_tx, _) = broadcast::channel(1);
-    let (v2_tx, _) = mpsc::channel(100);
     let shared_floor = FloorBid::new();
 
     let builder_api_service = BuilderApi::<MockApi>::new(
@@ -128,7 +124,6 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
         current_slot_info.clone(),
         sort_tx,
         br_tx,
-        v2_tx,
         shared_floor,
         BestGetHeader::new(),
     );

@@ -9,7 +9,6 @@ use helix_common::{
         v3::header_submission_v3::HeaderSubmissionV3, BidSubmission,
     },
     metadata_provider::MetadataProvider,
-    metrics::ApiMetrics,
     task,
     utils::{extract_request_id, utcnow_ns},
     HeaderSubmissionTrace, RequestTimings,
@@ -22,33 +21,11 @@ use tracing::{debug, error, info, trace, warn, Instrument};
 
 use super::api::BuilderApi;
 use crate::{
-    builder::{api::sanity_check_block_submission, error::BuilderApiError, v2_check::V2SubMessage},
+    builder::{api::sanity_check_block_submission, error::BuilderApiError},
     Api,
 };
 
 impl<A: Api> BuilderApi<A> {
-    /// Handles the submission of a new payload header by performing various checks and
-    /// verifications before saving the header to the auctioneer.
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&parts.headers)))]
-    pub async fn submit_header(
-        Extension(api): Extension<Arc<BuilderApi<A>>>,
-        Extension(timings): Extension<RequestTimings>,
-        parts: Parts,
-        body: bytes::Bytes,
-    ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = HeaderSubmissionTrace::init_from_timings(timings);
-        trace.metadata = api.metadata_provider.get_metadata(&parts.headers);
-
-        debug!(timestamp_request_start = trace.receive,);
-
-        // Decode the incoming request body into a payload
-        let (payload, is_cancellations_enabled) =
-            decode_header_submission(parts, body, &mut trace).await?;
-        ApiMetrics::cancellable_bid(is_cancellations_enabled);
-
-        Self::handle_submit_header(&api, payload, None, None, is_cancellations_enabled, trace).await
-    }
-
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&parts.headers)))]
     pub async fn submit_header_v3(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
@@ -68,8 +45,8 @@ impl<A: Api> BuilderApi<A> {
         Self::handle_submit_header(
             &api,
             payload.submission,
-            Some(payload.url),
-            Some(payload.tx_count),
+            payload.url,
+            payload.tx_count,
             is_cancellations_enabled,
             trace,
         )
@@ -79,8 +56,8 @@ impl<A: Api> BuilderApi<A> {
     pub(crate) async fn handle_submit_header(
         api: &Arc<BuilderApi<A>>,
         payload: SignedHeaderSubmission,
-        payload_address: Option<Vec<u8>>,
-        block_tx_count: Option<u32>,
+        payload_address: Vec<u8>,
+        block_tx_count: u32,
         is_cancellations_enabled: bool,
         mut trace: HeaderSubmissionTrace,
     ) -> Result<StatusCode, BuilderApiError> {
@@ -226,22 +203,11 @@ impl<A: Api> BuilderApi<A> {
             "submit_header request finished"
         );
 
-        if payload_address.is_none() {
-            if let Err(err) = api
-                .v2_checks_tx
-                .try_send(V2SubMessage::new_from_header_submission(&payload, trace.receive))
-            {
-                error!(%err, "failed to send block to v2 checker");
-            }
-        }
-
-        if let Some(payload_addr) = payload_address {
-            api.auctioneer.save_payload_address(
-                payload.block_hash(),
-                payload.builder_public_key(),
-                payload_addr,
-            );
-        };
+        api.auctioneer.save_payload_address(
+            payload.block_hash(),
+            payload.builder_public_key(),
+            payload_address,
+        );
 
         api.tx_root_cache
             .insert(*payload.block_hash(), (payload.slot().as_u64(), payload.transactions_root()));
@@ -264,67 +230,6 @@ impl<A: Api> BuilderApi<A> {
 
         Ok(StatusCode::OK)
     }
-}
-
-/// `decode_payload` decodes the payload from `SubmitBlockParams` into a `SignedHeaderSubmission`
-/// object.
-///
-/// - Supports both SSZ and JSON encodings for deserialization.
-/// - Automatically falls back to JSON if SSZ deserialization fails.
-/// - Does *not* handle GZIP-compressed headers.
-///
-/// It returns a tuple of the decoded header and if cancellations are enabled.
-pub async fn decode_header_submission(
-    parts: Parts,
-    body_bytes: bytes::Bytes,
-    trace: &mut HeaderSubmissionTrace,
-) -> Result<(SignedHeaderSubmission, bool), BuilderApiError> {
-    // Extract the query parameters
-    let is_cancellations_enabled = parts
-        .uri
-        .query()
-        .unwrap_or("")
-        .split('&')
-        .find_map(|part| {
-            let mut split = part.splitn(2, '=');
-            if split.next()? == "cancellations" {
-                Some(split.next()? == "1")
-            } else {
-                None
-            }
-        })
-        .unwrap_or(false);
-
-    info!(
-        headers = ?parts.headers,
-        "received header",
-    );
-
-    let is_ssz = parts.headers.get("Content-Type").and_then(|val| val.to_str().ok()) ==
-        Some("application/octet-stream");
-
-    // Decode header
-    let header: SignedHeaderSubmission = if is_ssz {
-        SignedHeaderSubmission::from_ssz_bytes(&body_bytes)
-            .map_err(|err| BuilderApiError::SszDeserializeError(format!("{err:?}")))?
-    } else {
-        serde_json::from_slice(&body_bytes)?
-    };
-
-    header.validate_payload_ssz_lengths()?;
-
-    trace.decode = utcnow_ns();
-    debug!(
-        timestamp_after_decoding = trace.decode,
-        decode_latency_ns = trace.decode.saturating_sub(trace.receive),
-        builder_pub_key = ?header.builder_public_key(),
-        block_hash = ?header.block_hash(),
-        proposer_pubkey = ?header.proposer_public_key(),
-        parent_hash = ?header.parent_hash(),
-        value = ?header.value(),
-    );
-
-    Ok((header, is_cancellations_enabled))
 }
 
 pub async fn decode_header_submission_v3(

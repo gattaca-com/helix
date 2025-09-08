@@ -35,7 +35,6 @@ use crate::{
         decoder::SubmissionDecoder,
         error::BuilderApiError,
         hydration::{self, HydrationMessage},
-        v2_check::V2SubMessage,
         BlockSimRequest,
     },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
@@ -60,11 +59,9 @@ pub struct BuilderApi<A: Api> {
     pub sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     /// Subscriber for TopBid updates, SSZ encoded
     pub top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-    /// Send headers/blocks to be checked for V2 submissions
-    pub v2_checks_tx: tokio::sync::mpsc::Sender<V2SubMessage>,
     /// Set in sorter loop
     pub shared_floor: FloorBid,
-    /// Cache of tx roots for v2 submissions
+    /// Cache of tx roots for v3 submissions
     pub tx_root_cache: DashMap<B256, (u64, B256)>,
     /// Best get header to check the current top bid on simulations
     pub shared_best_header: BestGetHeader,
@@ -87,7 +84,6 @@ impl<A: Api> BuilderApi<A> {
         curr_slot_info: CurrentSlotInfo,
         sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-        v2_checks_tx: tokio::sync::mpsc::Sender<V2SubMessage>,
         shared_floor: FloorBid,
         shared_best_header: BestGetHeader,
     ) -> Self {
@@ -129,7 +125,7 @@ impl<A: Api> BuilderApi<A> {
 
             sorter_tx,
             top_bid_tx,
-            v2_checks_tx,
+
             shared_floor,
 
             tx_root_cache,
@@ -379,7 +375,7 @@ impl<A: Api> BuilderApi<A> {
             }
         }
 
-        error!(%err, %builder, "verification failed for submit_block_v2. Demoting builder!");
+        error!(%err, %builder, "verification failed. Demoting builder!");
 
         if let Err(err) = self.auctioneer.demote_builder(builder) {
             error!(%err, %builder, "failed to demote builder in auctioneer");
