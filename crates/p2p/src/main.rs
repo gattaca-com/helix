@@ -1,9 +1,12 @@
 use std::{net::SocketAddr, sync::Arc};
 
+use alloy_consensus::{TxEip1559, TxEnvelope};
+use alloy_primitives::Signature;
+use alloy_rlp::Encodable;
 use axum::{routing::any, Extension, Router};
 use helix_common::{
     api::builder_api::InclusionList, chain_info::ChainInfo, signing::RelaySigningContext,
-    P2PPeerConfig,
+    utils::init_tracing_log, P2PPeerConfig,
 };
 use helix_p2p::P2PApi;
 use helix_types::{BlsKeypair, BlsSecretKey};
@@ -19,6 +22,7 @@ struct Config {
 
 #[tokio::main]
 async fn main() {
+    let _guard = init_tracing_log(&Default::default(), "local", "P2PTest".to_string());
     let mut args = std::env::args().skip(1);
     let config_path = args.next().unwrap();
 
@@ -42,10 +46,45 @@ async fn main() {
         .layer(Extension(p2p_api.clone()));
 
     tokio::spawn(async move {
+        let mut i = port as u64;
         loop {
-            let txs = vec![];
-            p2p_api.share_inclusion_list(42, InclusionList { txs }).await;
-            tokio::time::sleep(std::time::Duration::from_secs(12)).await;
+            let tx = TxEip1559 {
+                chain_id: 5,
+                nonce: port.into(),
+                gas_limit: i,
+                max_fee_per_gas: 42,
+                max_priority_fee_per_gas: 42,
+                to: alloy_primitives::TxKind::Call(Default::default()),
+                value: Default::default(),
+                access_list: Default::default(),
+                input: vec![0u8; port as usize].into(),
+            };
+            let tx = TxEnvelope::new_unhashed(
+                tx.into(),
+                Signature::new(Default::default(), Default::default(), Default::default()),
+            );
+            let mut buf = vec![];
+            tx.encode(&mut buf);
+            let txs = vec![buf.into()];
+            let mut sleeper =
+                core::pin::pin!(tokio::time::sleep(std::time::Duration::from_secs(12)));
+            tokio::select! {
+                il = p2p_api.share_inclusion_list(42, InclusionList { txs }) => {
+                    let Some(il) = il else {
+                        error!("Failed to get inclusion list");
+                        continue;
+                    };
+                    let process = &il.txs[0][10] - 200;
+                    info!("Got inclusion list from p{process:?}");
+                    sleeper.await;
+                },
+                _ = &mut sleeper => {
+                    error!("Timed out waiting for inclusion list");
+                }
+            }
+            i += 42;
+            i = i.wrapping_mul(3);
+            i = i ^ 0xf0f0f0f0f0;
         }
     });
 

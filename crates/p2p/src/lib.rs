@@ -14,10 +14,10 @@ use helix_common::{api::builder_api::InclusionList, signing::RelaySigningContext
 use helix_types::{BlsPublicKey, BlsPublicKeyBytes, Transaction, Transactions};
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_tungstenite::connect_async;
-use tracing::error;
+use tracing::{error, info};
 use tree_hash::TreeHash;
 
-use crate::messages::{InclusionListMessage, P2PMessage, SignedP2PMessage};
+use crate::messages::{HelloMessage, InclusionListMessage, P2PMessage, SignedP2PMessage};
 
 pub mod messages;
 
@@ -96,7 +96,7 @@ impl P2PApi {
         Extension(api): Extension<Arc<P2PApi>>,
         ws: WebSocketUpgrade,
     ) -> Result<impl IntoResponse, P2PApiError> {
-        println!("got request");
+        info!("got new peer connection");
         Ok(ws.on_upgrade(|socket| async move { api.handle_ws_connection(socket, None).await }))
     }
 
@@ -114,6 +114,13 @@ impl P2PApi {
         E: std::fmt::Debug,
     {
         let mut broadcast_rx = self.broadcast_tx.subscribe();
+        let hello_message =
+            P2PMessage::Hello(HelloMessage { pubkey: self.signing_context.keypair.pk.clone() });
+        let signed_hello_message = hello_message.sign(&self.signing_context);
+        if let Err(err) = socket.send(signed_hello_message.try_into().unwrap()).await {
+            error!(err=?err, "failed to send hello message");
+            return;
+        }
         loop {
             tokio::select! {
                 res = broadcast_rx.recv() => {
@@ -121,7 +128,6 @@ impl P2PApi {
                         // Sender was closed
                         break;
                     };
-                    println!("sending message");
                     let serialized = msg.try_into().unwrap();
                     socket.send(serialized).await.unwrap();
                 },
@@ -138,6 +144,7 @@ impl P2PApi {
                     if let P2PMessage::Hello(hello_msg) = &msg.message {
                         // TODO: check the pubkey is from a known peer
                         msg.verify_signature(&hello_msg.pubkey).unwrap();
+                        info!("Verified Hello message from peer: {}", hello_msg.pubkey);
 
                         if let Some(pubkey) = &peer_pubkey {
                             if pubkey != &hello_msg.pubkey {
