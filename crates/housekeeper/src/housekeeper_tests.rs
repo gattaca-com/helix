@@ -15,6 +15,7 @@ use helix_common::{
 };
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_datastore::MockAuctioneer;
+use helix_p2p::P2PApi;
 use tokio::sync::broadcast;
 
 use crate::housekeeper::Housekeeper;
@@ -36,13 +37,17 @@ fn get_housekeeper() -> HelperVars {
     //     proposer_duties_has_been_read.clone(),
     // );
 
+    let dummy_signing_context = Default::default();
+    let chain_info = Arc::new(ChainInfo::for_mainnet());
+
     let auctioneer = MockAuctioneer::new();
     let housekeeper = Housekeeper::new(
         Arc::new(db),
         beacon_client.clone().into(),
         Arc::new(auctioneer),
         &RelayConfig::default(),
-        Arc::new(ChainInfo::for_mainnet()),
+        chain_info.clone(),
+        P2PApi::new(vec![], dummy_signing_context),
     );
 
     HelperVars {

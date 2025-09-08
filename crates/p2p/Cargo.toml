@@ -7,6 +7,9 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+alloy-consensus.workspace = true
+alloy-primitives.workspace = true
+alloy-rlp.workspace = true
 axum.workspace = true
 ethereum_ssz.workspace = true
 ethereum_ssz_derive.workspace = true

@@ -1,8 +1,11 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use axum::{routing::any, Extension, Router};
-use helix_common::{chain_info::ChainInfo, signing::RelaySigningContext, P2PPeerConfig};
-use helix_p2p::{messages::InclusionListMessage, P2PApi};
+use helix_common::{
+    api::builder_api::InclusionList, chain_info::ChainInfo, signing::RelaySigningContext,
+    P2PPeerConfig,
+};
+use helix_p2p::P2PApi;
 use helix_types::{BlsKeypair, BlsSecretKey};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
@@ -32,7 +35,7 @@ async fn main() {
     let chain_info = Arc::new(ChainInfo::for_hoodi());
     let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info));
 
-    let p2p_api = P2PApi::new(peer_configs, relay_signing_context).await;
+    let p2p_api = P2PApi::new(peer_configs, relay_signing_context);
 
     let router = Router::new()
         .route("/relay/v1/p2p", any(P2PApi::p2p_connect))
@@ -40,9 +43,9 @@ async fn main() {
 
     tokio::spawn(async move {
         loop {
-            let message = InclusionListMessage { slot: 42, inclusion_list: vec![].into() }.into();
-            p2p_api.broadcast(message);
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let txs = vec![];
+            p2p_api.share_inclusion_list(42, InclusionList { txs }).await;
+            tokio::time::sleep(std::time::Duration::from_secs(12)).await;
         }
     });
 

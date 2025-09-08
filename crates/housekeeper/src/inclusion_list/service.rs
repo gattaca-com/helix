@@ -8,6 +8,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
+use helix_p2p::P2PApi;
 use helix_types::{BlsPublicKeyBytes, Slot};
 use tracing::{error, info, warn};
 
@@ -21,6 +22,7 @@ pub struct InclusionListService<DB: DatabaseService, A: Auctioneer> {
     auctioneer: Arc<A>,
     http_il_fetcher: HttpInclusionListFetcher,
     chain_info: Arc<ChainInfo>,
+    p2p: Arc<P2PApi>,
 }
 
 impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
@@ -29,10 +31,11 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
         auctioneer: Arc<A>,
         config: InclusionListConfig,
         chain_info: Arc<ChainInfo>,
+        p2p: Arc<P2PApi>,
     ) -> Self {
         let http_il_fetcher = HttpInclusionListFetcher::new(config);
 
-        Self { db, auctioneer, http_il_fetcher, chain_info }
+        Self { db, auctioneer, http_il_fetcher, chain_info, p2p }
     }
 
     /// Fetch and persist inclusion list for this slot.
@@ -77,8 +80,8 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
 
     async fn fetch_inclusion_list_or_timeout(&self, slot: u64) -> Option<InclusionList> {
         tokio::select! {
-            inclusion_list = self.http_il_fetcher.fetch_inclusion_list_with_retry(slot) => {
-                Some(inclusion_list)
+            inclusion_list = self.fetch_inclusion_list_and_share_in_p2p(slot) => {
+                inclusion_list
             }
             _ = tokio::time::sleep(self.time_to_missing_inclusion_list_cutoff(slot.into())) => {
                 warn!(head_slot = slot,
@@ -88,6 +91,11 @@ impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
                 None
             }
         }
+    }
+
+    async fn fetch_inclusion_list_and_share_in_p2p(&self, slot: u64) -> Option<InclusionList> {
+        let inclusion_list = self.http_il_fetcher.fetch_inclusion_list_with_retry(slot).await;
+        self.p2p.share_inclusion_list(slot, inclusion_list).await
     }
 
     fn time_to_missing_inclusion_list_cutoff(&self, slot: Slot) -> Duration {

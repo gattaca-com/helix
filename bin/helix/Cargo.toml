@@ -16,6 +16,7 @@ helix-common.workspace = true
 helix-database.workspace = true
 helix-datastore.workspace = true
 helix-housekeeper.workspace = true
+helix-p2p.workspace = true
 helix-types.workspace = true
 helix-website.workspace = true
 parking_lot.workspace = true

@@ -1,5 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use alloy_consensus::TxEnvelope;
+use alloy_primitives::Bytes;
+use alloy_rlp::Decodable;
 use axum::{
     extract::WebSocketUpgrade,
     http::{StatusCode, Uri},
@@ -7,36 +10,51 @@ use axum::{
     Extension,
 };
 use futures::{Sink, SinkExt, Stream, StreamExt};
-use helix_common::{signing::RelaySigningContext, P2PPeerConfig};
-use helix_types::{BlsPublicKey, BlsPublicKeyBytes};
-use tokio::sync::{broadcast, mpsc};
+use helix_common::{api::builder_api::InclusionList, signing::RelaySigningContext, P2PPeerConfig};
+use helix_types::{BlsPublicKey, BlsPublicKeyBytes, Transaction, Transactions};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_tungstenite::connect_async;
 use tracing::error;
+use tree_hash::TreeHash;
 
-use crate::messages::{P2PMessage, SignedP2PMessage};
+use crate::messages::{InclusionListMessage, P2PMessage, SignedP2PMessage};
 
 pub mod messages;
 
-struct P2PPeer {
-    uri: Uri,
-    pubkey: BlsPublicKey,
+enum P2PApiRequest {
+    PeerMessage((BlsPublicKeyBytes, InclusionListMessage)),
+    LocalInclusionList {
+        slot: u64,
+        inclusion_list: InclusionList,
+        result_tx: oneshot::Sender<Option<InclusionList>>,
+    },
+    SharedInclusionList {
+        slot: u64,
+        inclusion_list: InclusionList,
+        result_tx: oneshot::Sender<Option<InclusionList>>,
+    },
+    SettledInclusionList {
+        slot: u64,
+        inclusion_list: InclusionList,
+        result_tx: oneshot::Sender<Option<InclusionList>>,
+    },
 }
 
 pub struct P2PApi {
     broadcast_tx: broadcast::Sender<SignedP2PMessage>,
-    peer_messages_tx: mpsc::Sender<P2PMessage>,
+    api_requests_tx: mpsc::Sender<P2PApiRequest>,
     signing_context: Arc<RelaySigningContext>,
     peer_configs: Vec<P2PPeerConfig>,
 }
 
 impl P2PApi {
-    pub async fn new(
+    pub fn new(
         peer_configs: Vec<P2PPeerConfig>,
         signing_context: Arc<RelaySigningContext>,
     ) -> Arc<Self> {
         let (broadcast_tx, _) = broadcast::channel(100);
-        let (peer_messages_tx, peer_messages_rx) = mpsc::channel(2000);
-        let this = Arc::new(Self { peer_configs, broadcast_tx, peer_messages_tx, signing_context });
+        let (api_requests_tx, api_requests_rx) = mpsc::channel(2000);
+        let this = Arc::new(Self { peer_configs, broadcast_tx, api_requests_tx, signing_context });
         for peer_config in &this.peer_configs {
             let uri: Uri = peer_config
                 .url
@@ -47,10 +65,10 @@ impl P2PApi {
             let peer_config = peer_config.clone();
             tokio::spawn(async move {
                 let (ws, _response) = connect_async(uri).await.unwrap();
-                this_clone.handle_ws_connection(ws, Some(peer_config)).await;
+                this_clone.handle_ws_connection(ws, Some(peer_config.verifying_key)).await;
             });
         }
-        tokio::spawn(this.clone().handle_incoming_messages(peer_messages_rx));
+        tokio::spawn(this.clone().handle_incoming_messages(api_requests_rx));
         this
     }
 
@@ -58,6 +76,19 @@ impl P2PApi {
         let signed_message = message.sign(&self.signing_context);
         // Ignore error if there are no active receivers.
         let _ = self.broadcast_tx.send(signed_message);
+    }
+
+    pub async fn share_inclusion_list(
+        &self,
+        slot: u64,
+        inclusion_list: InclusionList,
+    ) -> Option<InclusionList> {
+        let (result_tx, result_rx) = oneshot::channel();
+        self.api_requests_tx
+            .send(P2PApiRequest::LocalInclusionList { slot, inclusion_list, result_tx })
+            .await
+            .unwrap();
+        result_rx.await.unwrap()
     }
 
     #[tracing::instrument(skip_all)]
@@ -69,8 +100,11 @@ impl P2PApi {
         Ok(ws.on_upgrade(|socket| async move { api.handle_ws_connection(socket, None).await }))
     }
 
-    async fn handle_ws_connection<M, S, E>(&self, mut socket: S, peer_config: Option<P2PPeerConfig>)
-    where
+    async fn handle_ws_connection<M, S, E>(
+        &self,
+        mut socket: S,
+        mut peer_pubkey: Option<BlsPublicKey>,
+    ) where
         S: Stream<Item = Result<M, E>> + Sink<M> + Unpin,
         M: TryFrom<SignedP2PMessage> + std::fmt::Debug,
         SignedP2PMessage: TryFrom<M>,
@@ -100,10 +134,30 @@ impl P2PApi {
                         break;
                     };
                     let msg: SignedP2PMessage = msg.try_into().unwrap();
-                    if let Some(config) = &peer_config {
-                        msg.verify_signature(&config.verifying_key).unwrap();
+                    // Handle Hello message in-place
+                    if let P2PMessage::Hello(hello_msg) = &msg.message {
+                        // TODO: check the pubkey is from a known peer
+                        msg.verify_signature(&hello_msg.pubkey).unwrap();
+
+                        if let Some(pubkey) = &peer_pubkey {
+                            if pubkey != &hello_msg.pubkey {
+                                error!("Received unexpected pubkey. Got {pubkey}, expected {}", hello_msg.pubkey);
+                                return;
+                            }
+                            continue;
+                        }
+                        peer_pubkey = Some(hello_msg.pubkey.clone());
+                        continue;
+                    } else if peer_pubkey.is_none() {
+                        error!("First message is not a Hello. Disconnecting from peer...");
+                        return;
                     }
-                    self.peer_messages_tx.send(msg.message).await.unwrap();
+                    // Verify message signature and send to main process
+                    msg.verify_signature(peer_pubkey.as_ref().unwrap()).unwrap();
+                    let P2PMessage::InclusionList(il_msg) = msg.message else {
+                        unreachable!("already checked")
+                    };
+                    self.api_requests_tx.send(P2PApiRequest::PeerMessage((peer_pubkey.as_ref().unwrap().serialize().into(), il_msg))).await.unwrap();
                 }
             };
         }
@@ -111,11 +165,120 @@ impl P2PApi {
 
     async fn handle_incoming_messages(
         self: Arc<Self>,
-        mut peer_messages_rx: mpsc::Receiver<P2PMessage>,
-    ) -> ! {
-        loop {
-            let P2PMessage::LocalInclusionList(msg) = peer_messages_rx.recv().await.unwrap();
-            println!("{}", msg.slot);
+        mut api_requests_rx: mpsc::Receiver<P2PApiRequest>,
+    ) {
+        const CUTOFF_TIME_1: Duration = Duration::from_secs(2);
+        const CUTOFF_TIME_2: Duration = Duration::from_secs(2);
+        let mut vote_map: HashMap<BlsPublicKeyBytes, (u64, messages::InclusionList)> =
+            HashMap::new();
+        while let Some(request) = api_requests_rx.recv().await {
+            match request {
+                P2PApiRequest::LocalInclusionList { slot, inclusion_list, result_tx } => {
+                    self.broadcast(InclusionListMessage::new(slot, inclusion_list.clone()).into());
+                    let api_requests_tx = self.api_requests_tx.clone();
+                    let shared_il_msg =
+                        P2PApiRequest::SharedInclusionList { slot, inclusion_list, result_tx };
+                    tokio::spawn(async move {
+                        // Sleep for t_1 time
+                        tokio::time::sleep(CUTOFF_TIME_1).await;
+                        let _ = api_requests_tx.send(shared_il_msg).await.inspect_err(
+                            |e| error!(err=?e, "failed to send shared inclusion list"),
+                        );
+                    });
+                }
+                P2PApiRequest::SharedInclusionList { slot, inclusion_list, result_tx } => {
+                    let mut tx_frequency = HashMap::new();
+                    vote_map.retain(|_, (il_slot, _)| *il_slot >= slot);
+                    for (_peer, (_il_slot, il)) in &vote_map {
+                        for tx in il.iter() {
+                            let Ok(decoded_tx) = TxEnvelope::decode(&mut &tx[..]) else {
+                                continue;
+                            };
+
+                            tx_frequency
+                                .entry(*decoded_tx.tx_hash())
+                                .and_modify(|(_, c)| *c += 1)
+                                .or_insert((tx.clone(), 1));
+                        }
+                    }
+                    inclusion_list.txs.iter().for_each(|tx| {
+                        let Ok(decoded_tx) = TxEnvelope::decode(&mut &tx[..]) else {
+                            return;
+                        };
+
+                        tx_frequency
+                            .entry(*decoded_tx.tx_hash())
+                            .and_modify(|(_, c)| *c += 1)
+                            .or_insert((Transaction(tx.clone()), 1));
+                    });
+                    let mut tx_frequency_ordered: Vec<_> = tx_frequency.into_iter().collect();
+                    // Order descending by (frequency, tx_hash)
+                    tx_frequency_ordered.sort_unstable_by(
+                        |(tx_hash1, (_, freq1)), (tx_hash2, (_, freq2))| {
+                            freq2.cmp(freq1).then(tx_hash2.cmp(tx_hash1))
+                        },
+                    );
+
+                    let mut bytes_available = 8000;
+                    let final_il: Vec<_> = tx_frequency_ordered
+                        .into_iter()
+                        .map(|(_, (tx, _))| Bytes::from(tx.to_vec()))
+                        .filter(|tx| {
+                            if tx.len() > bytes_available {
+                                false
+                            } else {
+                                bytes_available -= tx.len();
+                                true
+                            }
+                        })
+                        .collect();
+                    let inclusion_list = InclusionList { txs: final_il };
+                    self.broadcast(InclusionListMessage::new(slot, inclusion_list.clone()).into());
+                    let api_requests_tx = self.api_requests_tx.clone();
+                    let shared_il_msg =
+                        P2PApiRequest::SettledInclusionList { slot, inclusion_list, result_tx };
+                    tokio::spawn(async move {
+                        // Sleep for t_2 time
+                        tokio::time::sleep(CUTOFF_TIME_2).await;
+                        let _ = api_requests_tx.send(shared_il_msg).await.inspect_err(
+                            |e| error!(err=?e, "failed to send shared inclusion list"),
+                        );
+                    });
+                }
+                P2PApiRequest::SettledInclusionList { slot, inclusion_list, result_tx } => {
+                    let mut il_by_frequency = HashMap::new();
+                    let il: Transactions =
+                        inclusion_list.txs.into_iter().map(Transaction).collect::<Vec<_>>().into();
+                    il_by_frequency.insert(il.tree_hash_root(), (il, 1));
+                    vote_map.into_iter().for_each(|(_, (il_slot, il))| {
+                        if il_slot != slot {
+                            return;
+                        }
+                        let il_hash = il.tree_hash_root();
+                        il_by_frequency
+                            .entry(il_hash)
+                            .and_modify(|(_, c)| *c += 1)
+                            .or_insert((il, 1));
+                    });
+                    let txs = il_by_frequency
+                        .into_iter()
+                        .max_by_key(|(il_hash, (il, c))| {
+                            (*c, il.iter().map(|tx| tx.len()).sum::<usize>(), *il_hash)
+                        })
+                        .map(|(_, (il, _))| {
+                            il.into_iter().map(|tx| tx.to_vec().into()).collect::<Vec<_>>()
+                        });
+                    let inclusion_list = txs.map(|txs| InclusionList { txs: txs.into() });
+                    let _ = result_tx
+                        .send(inclusion_list)
+                        .inspect_err(|e| error!(err=?e, "failed to send settled inclusion list"));
+                    vote_map = HashMap::new();
+                }
+                P2PApiRequest::PeerMessage((sender, il_msg)) => {
+                    // TODO: validate inclusion lists?
+                    vote_map.insert(sender, (il_msg.slot, il_msg.inclusion_list));
+                }
+            }
         }
     }
 }

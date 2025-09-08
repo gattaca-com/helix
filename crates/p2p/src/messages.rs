@@ -72,7 +72,8 @@ impl TryFrom<SignedP2PMessage> for tokio_tungstenite::tungstenite::Message {
 #[ssz(enum_behaviour = "union")]
 #[tree_hash(enum_behaviour = "transparent")]
 pub enum P2PMessage {
-    LocalInclusionList(InclusionListMessage),
+    Hello(HelloMessage),
+    InclusionList(InclusionListMessage),
 }
 
 impl helix_types::SignedRoot for P2PMessage {}
@@ -85,14 +86,34 @@ impl P2PMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
+pub struct HelloMessage {
+    pub pubkey: BlsPublicKey,
+}
+
+impl From<HelloMessage> for P2PMessage {
+    fn from(msg: HelloMessage) -> Self {
+        P2PMessage::Hello(msg)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
 pub struct InclusionListMessage {
     pub slot: u64,
     pub inclusion_list: InclusionList,
 }
 
+impl InclusionListMessage {
+    pub fn new(slot: u64, inclusion_list: helix_common::api::builder_api::InclusionList) -> Self {
+        let inclusion_list =
+            inclusion_list.txs.into_iter().map(Transaction).collect::<Vec<_>>().into();
+
+        Self { slot, inclusion_list }
+    }
+}
+
 impl From<InclusionListMessage> for P2PMessage {
     fn from(msg: InclusionListMessage) -> Self {
-        P2PMessage::LocalInclusionList(msg)
+        P2PMessage::InclusionList(msg)
     }
 }
 

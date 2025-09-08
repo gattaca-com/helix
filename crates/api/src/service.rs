@@ -52,12 +52,11 @@ pub async fn run_api_service<A: Api>(
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
     shared_floor: FloorBid,
+    p2p_api: Arc<P2PApi>,
 ) {
     let broadcasters = init_broadcasters(&config).await;
 
     let client = reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
-
-    let p2p_api = P2PApi::new(config.p2p.clone(), relay_signing_context.clone()).await;
 
     let mut simulators = vec![];
 

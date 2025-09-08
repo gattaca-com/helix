@@ -21,6 +21,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
+use helix_p2p::P2PApi;
 use helix_types::{BlsPublicKeyBytes, Epoch, Slot, SlotClockTrait};
 use tokio::sync::{broadcast, Mutex};
 use tracing::{debug, error, info, warn, Instrument};
@@ -101,12 +102,19 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         auctioneer: Arc<A>,
         config: &RelayConfig,
         chain_info: Arc<ChainInfo>,
+        p2p_api: Arc<P2PApi>,
     ) -> Self {
         let primev_service =
             config.primev_config.clone().map(|p| EthereumPrimevService::new(p).unwrap());
 
         let inclusion_list_service = config.inclusion_list.clone().map(|config| {
-            InclusionListService::new(db.clone(), auctioneer.clone(), config, chain_info.clone())
+            InclusionListService::new(
+                db.clone(),
+                auctioneer.clone(),
+                config,
+                chain_info.clone(),
+                p2p_api,
+            )
         });
 
         Self {

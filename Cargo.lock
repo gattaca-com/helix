@@ -3666,6 +3666,7 @@ dependencies = [
  "helix-database",
  "helix-datastore",
  "helix-housekeeper",
+ "helix-p2p",
  "helix-types",
  "helix-website",
  "parking_lot",
@@ -3863,6 +3864,7 @@ dependencies = [
  "helix-common",
  "helix-database",
  "helix-datastore",
+ "helix-p2p",
  "helix-types",
  "httpmock",
  "parking_lot",
@@ -3880,6 +3882,9 @@ dependencies = [
 name = "helix-p2p"
 version = "0.0.1"
 dependencies = [
+ "alloy-consensus",
+ "alloy-primitives",
+ "alloy-rlp",
  "axum 0.8.4",
  "ethereum_ssz",
  "ethereum_ssz_derive",

@@ -3,7 +3,7 @@ use std::{collections::HashSet, fs::File, path::PathBuf};
 use alloy_primitives::B256;
 use clap::Parser;
 use eyre::ensure;
-use helix_types::{BlsKeypair, BlsPublicKeyBytes, BlsSecretKey};
+use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
