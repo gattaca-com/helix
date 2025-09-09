@@ -84,7 +84,7 @@ async fn main() {
             }
             i += 42;
             i = i.wrapping_mul(3);
-            i = i ^ 0xf0f0f0f0f0;
+            i ^= 0xf0f0f0f0f0;
         }
     });
 

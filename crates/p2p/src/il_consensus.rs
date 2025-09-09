@@ -7,6 +7,8 @@ use tree_hash::TreeHash;
 
 use crate::messages::InclusionList;
 
+const INCLUSION_LIST_MAX_BYTES: usize = 8000;
+
 pub(crate) fn compute_shared_inclusion_list(
     vote_map: &HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
     slot: u64,
@@ -38,10 +40,10 @@ pub(crate) fn compute_shared_inclusion_list(
         freq2.cmp(freq1).then(tx_hash2.cmp(tx_hash1))
     });
 
-    let mut bytes_available = 8000;
+    let mut bytes_available = INCLUSION_LIST_MAX_BYTES;
     let final_il: Vec<_> = tx_frequency_ordered
         .into_iter()
-        .map(|(_, (tx, _))| tx.into())
+        .map(|(_, (tx, _))| tx)
         .filter(|tx: &Transaction| {
             if tx.len() > bytes_available {
                 false
@@ -110,7 +112,7 @@ mod tests {
     }
 
     fn create_full_il(start: u64) -> Vec<Transaction> {
-        let mut remaining_bytes = 8000;
+        let mut remaining_bytes = INCLUSION_LIST_MAX_BYTES;
         (start..)
             .map(create_tx)
             .take_while(|tx| {
@@ -130,13 +132,13 @@ mod tests {
         // 3 ILs, all the same
         let txs: Vec<Transaction> = create_full_il(0);
 
-        let vote_map = HashMap::from([
-            ([0_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
-            ([1_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
-            ([2_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
-        ]);
         let slot = 1;
-        let inclusion_list = InclusionList::default();
+        let inclusion_list = InclusionList::new(txs.clone()).unwrap();
+
+        let vote_map = HashMap::from([
+            ([1_u8; 48].into(), (slot, InclusionList::new(txs.clone()).unwrap())),
+            ([2_u8; 48].into(), (slot, InclusionList::new(txs.clone()).unwrap())),
+        ]);
         let shared_il = compute_shared_inclusion_list(&vote_map, slot, inclusion_list);
 
         assert_eq!(shared_il.len(), txs.len());
@@ -152,13 +154,13 @@ mod tests {
         let txs: Vec<Transaction> = create_full_il(0);
         let txs_different: Vec<Transaction> = create_full_il(1000);
 
-        let vote_map = HashMap::from([
-            ([0_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
-            ([1_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
-            ([2_u8; 48].into(), (1, InclusionList::new(txs_different).unwrap())),
-        ]);
         let slot = 1;
-        let inclusion_list = InclusionList::default();
+        let inclusion_list = InclusionList::new(txs.clone()).unwrap();
+
+        let vote_map = HashMap::from([
+            ([1_u8; 48].into(), (slot, inclusion_list.clone())),
+            ([2_u8; 48].into(), (slot, InclusionList::new(txs_different).unwrap())),
+        ]);
         let shared_il = compute_shared_inclusion_list(&vote_map, slot, inclusion_list);
 
         assert_eq!(shared_il.len(), txs.len());
@@ -170,7 +172,7 @@ mod tests {
 
     #[test]
     fn test_compute_shared_inclusion_list_shuffled() {
-        // Three ILs, with some transactions that appear in multiple ILs
+        // 3 ILs, with some transactions that appear in multiple ILs
         let txs: Vec<Transaction> = create_full_il(0);
         // 200 random txs, and the first 200 txs from the main IL
         let txs_1: Vec<Transaction> = create_full_il(1000)
@@ -185,13 +187,13 @@ mod tests {
             .chain(txs.iter().cloned().skip(250))
             .collect();
 
-        let vote_map = HashMap::from([
-            ([0_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
-            ([1_u8; 48].into(), (1, InclusionList::new(txs_1).unwrap())),
-            ([2_u8; 48].into(), (1, InclusionList::new(txs_2).unwrap())),
-        ]);
         let slot = 1;
-        let inclusion_list = InclusionList::default();
+        let inclusion_list = InclusionList::new(txs.clone()).unwrap();
+
+        let vote_map = HashMap::from([
+            ([1_u8; 48].into(), (slot, InclusionList::new(txs_1).unwrap())),
+            ([2_u8; 48].into(), (slot, InclusionList::new(txs_2).unwrap())),
+        ]);
         let shared_il = compute_shared_inclusion_list(&vote_map, slot, inclusion_list);
 
         assert_eq!(shared_il.len(), txs.len());
@@ -199,5 +201,40 @@ mod tests {
         for tx in shared_il {
             assert!(txs.contains(&tx));
         }
+    }
+
+    #[test]
+    fn test_compute_final_inclusion_list_simple() {
+        // 3 ILs, all the same
+        let txs: Vec<Transaction> = create_full_il(0);
+
+        let slot = 1;
+        let inclusion_list = InclusionList::new(txs.clone()).unwrap();
+
+        let vote_map = HashMap::from([
+            ([1_u8; 48].into(), (slot, inclusion_list.clone())),
+            ([2_u8; 48].into(), (slot, inclusion_list.clone())),
+        ]);
+        let final_il = compute_final_inclusion_list(vote_map, slot, inclusion_list);
+
+        assert_eq!(final_il, txs.into());
+    }
+
+    #[test]
+    fn test_compute_final_inclusion_list_one_different() {
+        // 3 ILs, two same, one different
+        let txs: Vec<Transaction> = create_full_il(0);
+        let txs_different: Vec<Transaction> = create_full_il(1000);
+
+        let slot = 1;
+        let inclusion_list = InclusionList::new(txs.clone()).unwrap();
+
+        let vote_map = HashMap::from([
+            ([1_u8; 48].into(), (slot, inclusion_list.clone())),
+            ([2_u8; 48].into(), (slot, InclusionList::new(txs_different).unwrap())),
+        ]);
+        let final_il = compute_final_inclusion_list(vote_map, slot, inclusion_list);
+
+        assert_eq!(final_il, txs.into());
     }
 }

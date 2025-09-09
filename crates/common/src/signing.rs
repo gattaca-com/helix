@@ -5,7 +5,7 @@ use helix_types::{BlsKeypair, BlsPublicKeyBytes, BlsSignature, SignedRoot};
 
 use crate::chain_info::ChainInfo;
 
-// TODO: which domain should we use?
+// Arbitrary domain for signing relay messages
 pub const RELAY_DOMAIN: &[u8; 32] = b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0relay";
 
 #[derive(Clone)]
