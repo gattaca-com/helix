@@ -15,14 +15,14 @@ use tracing::{error, info, warn};
 
 use crate::{
     il_consensus::{compute_final_inclusion_list, compute_shared_inclusion_list},
-    messages::{HelloMessage, InclusionListMessage, P2PMessage, SignedP2PMessage},
+    messages::{InclusionListMessage, P2PMessage, SignedHelloMessage},
 };
 
 pub(crate) mod il_consensus;
 pub mod messages;
 
 enum P2PApiRequest {
-    PeerMessage((BlsPublicKeyBytes, InclusionListMessage)),
+    PeerMessage { sender: BlsPublicKeyBytes, message: P2PMessage },
     LocalInclusionList(InclusionListRequest),
     SharedInclusionList(InclusionListRequest),
     SettledInclusionList(InclusionListRequest),
@@ -35,7 +35,7 @@ struct InclusionListRequest {
 }
 
 pub struct P2PApi {
-    broadcast_tx: broadcast::Sender<SignedP2PMessage>,
+    broadcast_tx: broadcast::Sender<P2PMessage>,
     api_requests_tx: mpsc::Sender<P2PApiRequest>,
     signing_context: Arc<RelaySigningContext>,
     peer_configs: Vec<P2PPeerConfig>,
@@ -66,10 +66,9 @@ impl P2PApi {
         this
     }
 
-    pub fn broadcast(&self, message: P2PMessage) {
-        let signed_message = message.sign(&self.signing_context);
+    fn broadcast(&self, message: P2PMessage) {
         // Ignore error if there are no active receivers.
-        let _ = self.broadcast_tx.send(signed_message);
+        let _ = self.broadcast_tx.send(message);
     }
 
     pub async fn share_inclusion_list(
@@ -109,18 +108,16 @@ impl P2PApi {
         mut peer_pubkey: Option<BlsPublicKey>,
     ) where
         S: Stream<Item = Result<M, E>> + Sink<M> + Unpin,
-        M: TryFrom<SignedP2PMessage> + std::fmt::Debug,
-        SignedP2PMessage: TryFrom<M>,
-        <M as TryFrom<SignedP2PMessage>>::Error: std::fmt::Debug,
-        <SignedP2PMessage as TryFrom<M>>::Error: std::fmt::Debug,
+        M: TryFrom<P2PMessage> + std::fmt::Debug,
+        P2PMessage: TryFrom<M>,
+        <M as TryFrom<P2PMessage>>::Error: std::fmt::Debug,
+        <P2PMessage as TryFrom<M>>::Error: std::fmt::Debug,
         <S as futures::Sink<M>>::Error: std::fmt::Debug,
         E: std::fmt::Debug,
     {
         let mut broadcast_rx = self.broadcast_tx.subscribe();
-        let hello_message =
-            P2PMessage::Hello(HelloMessage { pubkey: self.signing_context.keypair.pk.clone() });
-        let signed_hello_message = hello_message.sign(&self.signing_context);
-        if let Err(err) = socket.send(signed_hello_message.try_into().unwrap()).await {
+        let hello_message = P2PMessage::Hello(SignedHelloMessage::new(&self.signing_context));
+        if let Err(err) = socket.send(hello_message.try_into().unwrap()).await {
             error!(err=?err, "failed to send hello message");
             return;
         }
@@ -142,32 +139,34 @@ impl P2PApi {
                     let Ok(msg) = res.inspect_err(|e| error!(err=?e, "failed to receive websocket message")) else {
                         break;
                     };
-                    let msg: SignedP2PMessage = msg.try_into().unwrap();
+                    let message: P2PMessage = msg.try_into().unwrap();
                     // Handle Hello message in-place
-                    if let P2PMessage::Hello(hello_msg) = &msg.message {
-                        // TODO: check the pubkey is from a known peer
-                        msg.verify_signature(&hello_msg.pubkey).unwrap();
-                        info!("Verified Hello message from peer: {}", hello_msg.pubkey);
-
-                        if let Some(pubkey) = &peer_pubkey {
-                            if pubkey != &hello_msg.pubkey {
-                                error!("Received unexpected pubkey. Got {pubkey}, expected {}", hello_msg.pubkey);
-                                return;
-                            }
-                            continue;
+                    if let P2PMessage::Hello(hello_msg) = message {
+                        let pubkey = hello_msg.pubkey().unwrap();
+                        // Check peer is known
+                        let known_peer = self.peer_configs.iter().any(|config| config.verifying_key == pubkey);
+                        if !known_peer {
+                            error!("Received Hello from unknown peer: {pubkey}. Disconnecting...");
+                            return;
                         }
-                        peer_pubkey = Some(hello_msg.pubkey.clone());
-                        continue;
+                        hello_msg.verify_signature(&pubkey).unwrap();
+                        info!("Verified Hello message from peer: {pubkey}");
+
+                        let Some(peer_pubkey) = &peer_pubkey else {
+                            peer_pubkey = Some(pubkey.clone());
+                            continue;
+                        };
+                        if peer_pubkey != &pubkey {
+                            error!("Received unexpected pubkey. Got {pubkey}, expected {peer_pubkey}");
+                            return;
+                        }
                     } else if peer_pubkey.is_none() {
                         error!("First message is not a Hello. Disconnecting from peer...");
                         return;
+                    } else {
+                        let sender = peer_pubkey.as_ref().unwrap().serialize().into();
+                        self.api_requests_tx.send(P2PApiRequest::PeerMessage { sender, message }).await.unwrap();
                     }
-                    // Verify message signature and send to main process
-                    msg.verify_signature(peer_pubkey.as_ref().unwrap()).unwrap();
-                    let P2PMessage::InclusionList(il_msg) = msg.message else {
-                        unreachable!("already checked")
-                    };
-                    self.api_requests_tx.send(P2PApiRequest::PeerMessage((peer_pubkey.as_ref().unwrap().serialize().into(), il_msg))).await.unwrap();
                 }
             };
         }
@@ -234,8 +233,10 @@ impl P2PApi {
                         .send(Some(InclusionList { txs }))
                         .inspect_err(|e| error!(err=?e, "failed to send settled inclusion list"));
                 }
-                P2PApiRequest::PeerMessage((sender, il_msg)) => {
-                    // TODO: validate inclusion lists?
+                P2PApiRequest::PeerMessage { sender, message } => {
+                    let P2PMessage::InclusionList(il_msg) = message else {
+                        unreachable!("already checked")
+                    };
                     vote_map.insert(sender, (il_msg.slot, il_msg.inclusion_list));
                 }
             }

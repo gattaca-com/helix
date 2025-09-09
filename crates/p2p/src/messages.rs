@@ -1,98 +1,128 @@
-use helix_common::signing::{RelaySigningContext, RELAY_DOMAIN};
-use helix_types::{BlsPublicKey, BlsSignature, EthSpec, MainnetEthSpec, SignedRoot, Transaction};
+use std::time::Duration;
+
+use helix_common::{
+    signing::{RelaySigningContext, RELAY_DOMAIN},
+    utils::utcnow_ms,
+};
+use helix_types::{
+    BlsPublicKey, BlsPublicKeyBytes, BlsSignature, EthSpec, MainnetEthSpec, SignedRoot, Transaction,
+};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use ssz_types::VariableList;
 use tree_hash_derive::TreeHash;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignedP2PMessage {
-    pub message: P2PMessage,
-    /// Signature over SSZ hash-tree-root of message.
-    signature: BlsSignature,
-}
+const VALID_DURATION_MS: u64 = Duration::from_secs(5).as_millis() as u64;
 
 #[derive(Debug, thiserror::Error)]
-#[error("message verification failed")]
-pub struct MessageVerificationError;
-
-impl SignedP2PMessage {
-    pub fn verify_signature(&self, pubkey: &BlsPublicKey) -> Result<(), MessageVerificationError> {
-        let signing_root = self.message.signing_root(RELAY_DOMAIN.into());
-        if self.signature.verify(pubkey, signing_root) {
-            Ok(())
-        } else {
-            Err(MessageVerificationError)
-        }
-    }
+pub enum MessageVerificationError {
+    #[error("message expiration too far in the future")]
+    MessageTooFarInFuture,
+    #[error("message already expired")]
+    ExpiredMessage,
+    #[error("signature is invalid")]
+    InvalidSignature,
+    #[error("could not deserialize public key")]
+    CouldNotDeserializePubkey,
 }
 
 // These impls are to avoid code duplication between both websockets
-impl TryFrom<axum::extract::ws::Message> for SignedP2PMessage {
+impl TryFrom<axum::extract::ws::Message> for P2PMessage {
     type Error = String;
 
     fn try_from(value: axum::extract::ws::Message) -> Result<Self, Self::Error> {
         let text = value.into_text().map_err(|e| format!("Failed to convert to text: {e}"))?;
-        serde_json::from_str(&text)
-            .map_err(|e| format!("Failed to deserialize SignedP2PMessage: {e}"))
+        serde_json::from_str(&text).map_err(|e| format!("Failed to deserialize P2PMessage: {e}"))
     }
 }
 
-impl TryFrom<tokio_tungstenite::tungstenite::Message> for SignedP2PMessage {
+impl TryFrom<tokio_tungstenite::tungstenite::Message> for P2PMessage {
     type Error = String;
 
     fn try_from(value: tokio_tungstenite::tungstenite::Message) -> Result<Self, Self::Error> {
         let text = value.into_text().map_err(|e| format!("Failed to convert to text: {e}"))?;
-        serde_json::from_str(&text)
-            .map_err(|e| format!("Failed to deserialize SignedP2PMessage: {e}"))
+        serde_json::from_str(&text).map_err(|e| format!("Failed to deserialize P2PMessage: {e}"))
     }
 }
 
-impl TryFrom<SignedP2PMessage> for axum::extract::ws::Message {
+impl TryFrom<P2PMessage> for axum::extract::ws::Message {
     type Error = String;
 
-    fn try_from(value: SignedP2PMessage) -> Result<Self, Self::Error> {
+    fn try_from(value: P2PMessage) -> Result<Self, Self::Error> {
         let text = serde_json::to_string(&value)
-            .map_err(|e| format!("Failed to serialize SignedP2PMessage: {e}"))?;
+            .map_err(|e| format!("Failed to serialize P2PMessage: {e}"))?;
         Ok(axum::extract::ws::Message::text(text))
     }
 }
 
-impl TryFrom<SignedP2PMessage> for tokio_tungstenite::tungstenite::Message {
+impl TryFrom<P2PMessage> for tokio_tungstenite::tungstenite::Message {
     type Error = String;
 
-    fn try_from(value: SignedP2PMessage) -> Result<Self, Self::Error> {
+    fn try_from(value: P2PMessage) -> Result<Self, Self::Error> {
         let text = serde_json::to_string(&value)
-            .map_err(|e| format!("Failed to serialize SignedP2PMessage: {e}"))?;
+            .map_err(|e| format!("Failed to serialize P2PMessage: {e}"))?;
         Ok(tokio_tungstenite::tungstenite::Message::text(text))
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
-#[ssz(enum_behaviour = "union")]
-#[tree_hash(enum_behaviour = "transparent")]
-pub enum P2PMessage {
-    Hello(HelloMessage),
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) enum P2PMessage {
+    Hello(SignedHelloMessage),
     InclusionList(InclusionListMessage),
 }
 
-impl helix_types::SignedRoot for P2PMessage {}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct SignedHelloMessage {
+    pub(crate) message: HelloMessage,
+    /// Signature over SSZ hash-tree-root of message.
+    signature: BlsSignature,
+}
 
-impl P2PMessage {
-    pub(crate) fn sign(self, signing_context: &RelaySigningContext) -> SignedP2PMessage {
-        let signature = signing_context.sign_relay_message(&self);
-        SignedP2PMessage { message: self, signature }
+impl SignedHelloMessage {
+    pub(crate) fn new(signing_context: &RelaySigningContext) -> Self {
+        let message = HelloMessage::new(signing_context.pubkey.clone());
+        let signature = signing_context.sign_relay_message(&message);
+        Self { message, signature }
+    }
+
+    pub(crate) fn pubkey(&self) -> Result<BlsPublicKey, MessageVerificationError> {
+        BlsPublicKey::deserialize(&*self.message.pubkey)
+            .map_err(|_| MessageVerificationError::CouldNotDeserializePubkey)
+    }
+
+    pub(crate) fn verify_signature(
+        &self,
+        pubkey: &BlsPublicKey,
+    ) -> Result<(), MessageVerificationError> {
+        let now = utcnow_ms();
+        if self.message.valid_until < now {
+            return Err(MessageVerificationError::ExpiredMessage);
+        } else if self.message.valid_until > now + 2 * VALID_DURATION_MS {
+            return Err(MessageVerificationError::MessageTooFarInFuture);
+        }
+        let signing_root = self.message.signing_root(RELAY_DOMAIN.into());
+
+        if !self.signature.verify(pubkey, signing_root) {
+            return Err(MessageVerificationError::InvalidSignature);
+        }
+        Ok(())
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
 pub struct HelloMessage {
-    pub pubkey: BlsPublicKey,
+    /// BLS public key of the sender.
+    pub pubkey: BlsPublicKeyBytes,
+    /// Timestamp to avoid replay attacks.
+    valid_until: u64,
 }
 
-impl From<HelloMessage> for P2PMessage {
-    fn from(msg: HelloMessage) -> Self {
-        P2PMessage::Hello(msg)
+impl helix_types::SignedRoot for HelloMessage {}
+
+impl HelloMessage {
+    fn new(pubkey: BlsPublicKeyBytes) -> Self {
+        let valid_until = utcnow_ms() + VALID_DURATION_MS;
+        Self { pubkey, valid_until }
     }
 }
 
