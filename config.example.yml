@@ -35,7 +35,7 @@ router_config:
     - route: RegisterValidators
     - route: Status
 block_merging_config:
-  is_enabled: true
+  is_enabled: false
   max_merged_bid_age_ms: 250
 target_get_payload_propagation_duration_ms: 0
 primev_config: null

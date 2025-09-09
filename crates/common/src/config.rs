@@ -150,7 +150,7 @@ pub struct TimingGameConfig {
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct BlockMergingConfig {
     /// Flag to enable this feature.
-    #[serde(default = "default_bool::<true>")]
+    #[serde(default = "default_bool::<false>")]
     pub is_enabled: bool,
     /// Maximum age of a merged bid before it is considered stale and discarded.
     #[serde(default = "default_u64::<250>")]
