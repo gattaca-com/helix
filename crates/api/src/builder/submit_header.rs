@@ -22,7 +22,7 @@ use tracing::{debug, error, info, trace, warn, Instrument};
 use super::api::BuilderApi;
 use crate::{
     builder::{api::sanity_check_block_submission, error::BuilderApiError},
-    Api,
+    Api, HEADER_API_KEY,
 };
 
 impl<A: Api> BuilderApi<A> {
@@ -39,8 +39,8 @@ impl<A: Api> BuilderApi<A> {
         debug!(timestamp_request_start = trace.receive,);
 
         // Decode the incoming request body into a payload
-        let (payload, is_cancellations_enabled) =
-            decode_header_submission_v3(parts, body, &mut trace).await?;
+        let (skip_sigverify, payload, is_cancellations_enabled) =
+            decode_header_submission_v3(&api, parts, body, &mut trace).await?;
 
         Self::handle_submit_header(
             &api,
@@ -49,6 +49,7 @@ impl<A: Api> BuilderApi<A> {
             payload.tx_count,
             is_cancellations_enabled,
             trace,
+            skip_sigverify,
         )
         .await
     }
@@ -60,6 +61,7 @@ impl<A: Api> BuilderApi<A> {
         block_tx_count: u32,
         is_cancellations_enabled: bool,
         mut trace: HeaderSubmissionTrace,
+        skip_sigverify: bool,
     ) -> Result<StatusCode, BuilderApiError> {
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
 
@@ -160,9 +162,11 @@ impl<A: Api> BuilderApi<A> {
         trace.pre_checks = utcnow_ns();
 
         // Verify the payload signature
-        if let Err(err) = payload.verify_signature(api.chain_info.builder_domain) {
-            warn!(%err, "failed to verify signature");
-            return Err(BuilderApiError::SignatureVerificationFailed);
+        if !skip_sigverify {
+            if let Err(err) = payload.verify_signature(api.chain_info.builder_domain) {
+                warn!(%err, "failed to verify signature");
+                return Err(BuilderApiError::SignatureVerificationFailed);
+            }
         }
         trace.signature = utcnow_ns();
 
@@ -232,11 +236,12 @@ impl<A: Api> BuilderApi<A> {
     }
 }
 
-pub async fn decode_header_submission_v3(
+pub async fn decode_header_submission_v3<A: Api>(
+    api: &Arc<BuilderApi<A>>,
     parts: Parts,
     body_bytes: bytes::Bytes,
     trace: &mut HeaderSubmissionTrace,
-) -> Result<(HeaderSubmissionV3, bool), BuilderApiError> {
+) -> Result<(bool, HeaderSubmissionV3, bool), BuilderApiError> {
     // Extract the query parameters
     let is_cancellations_enabled = parts
         .uri
@@ -268,6 +273,10 @@ pub async fn decode_header_submission_v3(
         _ => serde_json::from_slice(&body_bytes)?,
     };
 
+    let skip_sigverify = parts.headers.get(HEADER_API_KEY).is_some_and(|key| {
+        api.auctioneer.validate_api_key(key, submission_v3.submission.builder_public_key())
+    });
+
     trace.decode = utcnow_ns();
     debug!(
         timestamp_after_decoding = trace.decode,
@@ -279,5 +288,5 @@ pub async fn decode_header_submission_v3(
         value = ?submission_v3.submission.value(),
     );
 
-    Ok((submission_v3, is_cancellations_enabled))
+    Ok((skip_sigverify, submission_v3, is_cancellations_enabled))
 }
