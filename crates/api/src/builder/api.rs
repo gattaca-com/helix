@@ -26,7 +26,7 @@ use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{
-    BlobWithMetadata, BlobsBundle, BlockMergingData, BlsPublicKeyBytes, Bundle,
+    BlobWithMetadata, BlobsBundle, BlockMergingData, BlsPublicKeyBytes, BundleOrder,
     DehydratedBidSubmission, KzgCommitment, MergeableBundle, MergeableOrder, MergeableOrders,
     MergeableTransaction, Order, SignedBidSubmission, SignedBidSubmissionWithMergingData, Slot,
     Transactions,
@@ -757,7 +757,7 @@ fn order_to_mergeable(
                 })
                 .collect::<Result<_, OrderValidationError>>()?;
 
-            let Bundle { reverting_txs, dropping_txs, .. } = bundle;
+            let BundleOrder { reverting_txs, dropping_txs, .. } = bundle;
 
             let mergeable_bundle =
                 MergeableBundle { transactions, reverting_txs, dropping_txs }.into();

@@ -23,16 +23,16 @@ pub struct SignedBidSubmissionWithMergingData {
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]
 pub enum Order {
-    Tx(Transaction),
-    Bundle(Bundle),
+    Tx(TransactionOrder),
+    Bundle(BundleOrder),
 }
 
 impl TestRandom for Order {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
         if rng.random() {
-            Order::Tx(Transaction::random_for_test(rng))
+            Order::Tx(TransactionOrder::random_for_test(rng))
         } else {
-            Order::Bundle(Bundle::random_for_test(rng))
+            Order::Bundle(BundleOrder::random_for_test(rng))
         }
     }
 }
@@ -42,7 +42,7 @@ pub type TxIndices = SmallVec<[usize; 8]>;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Encode, Decode, TestRandom)]
 #[serde(deny_unknown_fields)]
-pub struct Transaction {
+pub struct TransactionOrder {
     /// Index into block.transactions
     pub index: usize,
     /// If the transaction is allowed to revert
@@ -53,7 +53,7 @@ pub struct Transaction {
 #[serde(deny_unknown_fields)]
 /// References a bundle of transactions via their indices.
 /// All indices are for the block the transactions come from.
-pub struct Bundle {
+pub struct BundleOrder {
     /// Signals txs that are part of the bundle and ordering of txs.
     /// Indices are for the block body the transactions come from.
     pub txs: TxIndices,
@@ -68,7 +68,7 @@ pub struct Bundle {
 #[derive(Debug, Clone, Copy)]
 pub struct InvalidTxIndex;
 
-impl Bundle {
+impl BundleOrder {
     pub fn validate(&self) -> Result<(), InvalidTxIndex> {
         if self.reverting_txs.iter().any(|&i| i >= self.txs.len()) ||
             self.dropping_txs.iter().any(|&i| i >= self.txs.len())
