@@ -12,6 +12,8 @@ use ssz_derive::{Decode, Encode};
 use ssz_types::VariableList;
 use tree_hash_derive::TreeHash;
 
+use crate::socket::WSMessage;
+
 const VALID_DURATION_MS: u64 = Duration::from_secs(5).as_millis() as u64;
 
 #[derive(Debug, thiserror::Error)]
@@ -26,55 +28,37 @@ pub enum MessageVerificationError {
     CouldNotDeserializePubkey,
 }
 
-// These impls are to avoid code duplication between both websockets
-impl TryFrom<axum::extract::ws::Message> for P2PMessage {
-    type Error = String;
-
-    fn try_from(value: axum::extract::ws::Message) -> Result<Self, Self::Error> {
-        let text = value.into_text().map_err(|e| format!("Failed to convert to text: {e}"))?;
-        serde_json::from_str(&text).map_err(|e| format!("Failed to deserialize P2PMessage: {e}"))
-    }
-}
-
-impl TryFrom<tokio_tungstenite::tungstenite::Message> for P2PMessage {
-    type Error = String;
-
-    fn try_from(value: tokio_tungstenite::tungstenite::Message) -> Result<Self, Self::Error> {
-        let text = value.into_text().map_err(|e| format!("Failed to convert to text: {e}"))?;
-        serde_json::from_str(&text).map_err(|e| format!("Failed to deserialize P2PMessage: {e}"))
-    }
-}
-
-impl TryFrom<P2PMessage> for axum::extract::ws::Message {
-    type Error = String;
-
-    fn try_from(value: P2PMessage) -> Result<Self, Self::Error> {
-        let text = serde_json::to_string(&value)
-            .map_err(|e| format!("Failed to serialize P2PMessage: {e}"))?;
-        Ok(axum::extract::ws::Message::text(text))
-    }
-}
-
-impl TryFrom<P2PMessage> for tokio_tungstenite::tungstenite::Message {
-    type Error = String;
-
-    fn try_from(value: P2PMessage) -> Result<Self, Self::Error> {
-        let text = serde_json::to_string(&value)
-            .map_err(|e| format!("Failed to serialize P2PMessage: {e}"))?;
-        Ok(tokio_tungstenite::tungstenite::Message::text(text))
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum P2PMessage {
     Hello(SignedHelloMessage),
     InclusionList(InclusionListMessage),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum EncodingError {
+    #[error("serde error: {_0}")]
+    Serde(#[from] serde_json::Error),
+    #[error("invalid utf8: {_0}")]
+    InvalidUtf8(#[from] tokio_tungstenite::tungstenite::Error),
+}
+
+impl P2PMessage {
+    pub fn to_ws_message(&self) -> Result<WSMessage, EncodingError> {
+        let text = serde_json::to_string(&self)?;
+        Ok(WSMessage::text(text))
+    }
+
+    pub fn from_ws_message(message: &WSMessage) -> Result<Self, EncodingError> {
+        let text = message.to_text()?;
+        Ok(serde_json::from_str(&text)?)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SignedHelloMessage {
     pub(crate) message: HelloMessage,
     /// Signature over SSZ hash-tree-root of message.
+    // TODO: serialize
     signature: BlsSignature,
 }
 

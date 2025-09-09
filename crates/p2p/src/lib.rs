@@ -6,7 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
     Extension,
 };
-use futures::{Sink, SinkExt, Stream, StreamExt};
+use futures::{SinkExt, StreamExt};
 use helix_common::{api::builder_api::InclusionList, signing::RelaySigningContext, P2PPeerConfig};
 use helix_types::{BlsPublicKey, BlsPublicKeyBytes, Transaction};
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -16,10 +16,12 @@ use tracing::{error, info, warn};
 use crate::{
     il_consensus::{compute_final_inclusion_list, compute_shared_inclusion_list},
     messages::{InclusionListMessage, P2PMessage, SignedHelloMessage},
+    socket::PeerSocket,
 };
 
 pub(crate) mod il_consensus;
 pub mod messages;
+mod socket;
 
 enum P2PApiRequest {
     PeerMessage { sender: BlsPublicKeyBytes, message: P2PMessage },
@@ -59,7 +61,7 @@ impl P2PApi {
             let peer_config = peer_config.clone();
             tokio::spawn(async move {
                 let (ws, _response) = connect_async(uri).await.unwrap();
-                this_clone.handle_ws_connection(ws, Some(peer_config.verifying_key)).await;
+                this_clone.handle_ws_connection(ws.into(), Some(peer_config.verifying_key)).await;
             });
         }
         tokio::spawn(this.clone().handle_incoming_messages(api_requests_rx));
@@ -95,29 +97,23 @@ impl P2PApi {
     ) -> Result<impl IntoResponse, P2PApiError> {
         info!("got new peer connection");
         // Upgrade connection to WebSocket, spawning a new task to handle the connection
-        let ws = ws
-            .on_failed_upgrade(|error| warn!(%error, "websocket upgrade failed"))
-            .on_upgrade(|socket| async move { api.handle_ws_connection(socket, None).await });
+        let ws =
+            ws.on_failed_upgrade(|error| warn!(%error, "websocket upgrade failed")).on_upgrade(
+                |socket| async move { api.handle_ws_connection(socket.into(), None).await },
+            );
 
         Ok(ws)
     }
 
-    async fn handle_ws_connection<M, S, E>(
+    async fn handle_ws_connection(
         &self,
-        mut socket: S,
+        mut socket: PeerSocket,
         mut peer_pubkey: Option<BlsPublicKey>,
-    ) where
-        S: Stream<Item = Result<M, E>> + Sink<M> + Unpin,
-        M: TryFrom<P2PMessage> + std::fmt::Debug,
-        P2PMessage: TryFrom<M>,
-        <M as TryFrom<P2PMessage>>::Error: std::fmt::Debug,
-        <P2PMessage as TryFrom<M>>::Error: std::fmt::Debug,
-        <S as futures::Sink<M>>::Error: std::fmt::Debug,
-        E: std::fmt::Debug,
-    {
+    ) {
         let mut broadcast_rx = self.broadcast_tx.subscribe();
+        // Send an initial Hello message
         let hello_message = P2PMessage::Hello(SignedHelloMessage::new(&self.signing_context));
-        if let Err(err) = socket.send(hello_message.try_into().unwrap()).await {
+        if let Err(err) = socket.send(hello_message.to_ws_message().unwrap()).await {
             error!(err=?err, "failed to send hello message");
             return;
         }
@@ -128,7 +124,7 @@ impl P2PApi {
                         // Sender was closed
                         break;
                     };
-                    let serialized = msg.try_into().unwrap();
+                    let serialized = msg.to_ws_message().unwrap();
                     socket.send(serialized).await.unwrap();
                 },
                 res = socket.next() => {
@@ -139,7 +135,7 @@ impl P2PApi {
                     let Ok(msg) = res.inspect_err(|e| error!(err=?e, "failed to receive websocket message")) else {
                         break;
                     };
-                    let message: P2PMessage = msg.try_into().unwrap();
+                    let message = P2PMessage::from_ws_message(&msg).unwrap();
                     // Handle Hello message in-place
                     if let P2PMessage::Hello(hello_msg) = message {
                         let pubkey = hello_msg.pubkey().unwrap();
