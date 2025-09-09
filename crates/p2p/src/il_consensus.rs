@@ -82,5 +82,122 @@ pub(crate) fn compute_final_inclusion_list(
 
 #[cfg(test)]
 mod tests {
-    // TODO: add unit tests
+    use alloy_consensus::TxEip1559;
+    use alloy_primitives::{Bytes, Signature};
+    use alloy_rlp::Encodable;
+
+    use super::*;
+
+    fn create_tx(nonce: u64) -> Bytes {
+        let dummy_tx = TxEip1559 {
+            chain_id: 42,
+            nonce,
+            gas_limit: 42,
+            max_fee_per_gas: 42,
+            max_priority_fee_per_gas: 42,
+            to: Default::default(),
+            value: Default::default(),
+            access_list: Default::default(),
+            input: Default::default(),
+        };
+        let mut buf = vec![];
+        TxEnvelope::new_unhashed(
+            dummy_tx.into(),
+            Signature::new(Default::default(), Default::default(), Default::default()),
+        )
+        .encode(&mut buf);
+        buf.into()
+    }
+
+    fn create_full_il(start: u64) -> Vec<Transaction> {
+        let mut remaining_bytes = 8000;
+        (start..)
+            .map(create_tx)
+            .take_while(|tx| {
+                if remaining_bytes < tx.len() {
+                    false
+                } else {
+                    remaining_bytes -= tx.len();
+                    true
+                }
+            })
+            .map(Transaction)
+            .collect()
+    }
+
+    #[test]
+    fn test_compute_shared_inclusion_list_simple() {
+        // 3 ILs, all the same
+        let txs: Vec<Transaction> = create_full_il(0);
+
+        let mut vote_map = HashMap::from([
+            ([0_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
+            ([1_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
+            ([2_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
+        ]);
+        let slot = 1;
+        let inclusion_list = InclusionList::default();
+        let shared_il = compute_shared_inclusion_list(&mut vote_map, slot, inclusion_list);
+
+        assert_eq!(shared_il.len(), txs.len());
+
+        for tx in shared_il {
+            assert!(txs.contains(&tx));
+        }
+    }
+
+    #[test]
+    fn test_compute_shared_inclusion_list_one_different() {
+        // 3 ILs, two same, one different
+        let txs: Vec<Transaction> = create_full_il(0);
+        let txs_different: Vec<Transaction> = create_full_il(1000);
+
+        let mut vote_map = HashMap::from([
+            ([0_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
+            ([1_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
+            ([2_u8; 48].into(), (1, InclusionList::new(txs_different).unwrap())),
+        ]);
+        let slot = 1;
+        let inclusion_list = InclusionList::default();
+        let shared_il = compute_shared_inclusion_list(&mut vote_map, slot, inclusion_list);
+
+        assert_eq!(shared_il.len(), txs.len());
+
+        for tx in shared_il {
+            assert!(txs.contains(&tx));
+        }
+    }
+
+    #[test]
+    fn test_compute_shared_inclusion_list_shuffled() {
+        // Three ILs, with some transactions that appear in multiple ILs
+        let txs: Vec<Transaction> = create_full_il(0);
+        // 200 random txs, and the first 200 txs from the main IL
+        let txs_1: Vec<Transaction> = create_full_il(1000)
+            .into_iter()
+            .take(200)
+            .chain(txs.iter().cloned().take(250))
+            .collect();
+        // 200 random txs, and the rest of txs from the main IL
+        let txs_2: Vec<Transaction> = create_full_il(2000)
+            .into_iter()
+            .take(200)
+            .chain(txs.iter().cloned().skip(250))
+            .collect();
+
+        let mut vote_map = HashMap::from([
+            ([0_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
+            ([1_u8; 48].into(), (1, InclusionList::new(txs_1).unwrap())),
+            ([2_u8; 48].into(), (1, InclusionList::new(txs_2).unwrap())),
+        ]);
+        let slot = 1;
+        let inclusion_list = InclusionList::default();
+        let shared_il = compute_shared_inclusion_list(&mut vote_map, slot, inclusion_list);
+
+        assert_eq!(shared_il.len(), txs.len());
+
+        for tx in shared_il {
+            assert!(txs.contains(&tx));
+        }
+    }
 }
