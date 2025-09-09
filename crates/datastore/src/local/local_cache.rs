@@ -208,8 +208,10 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
-    fn update_builder_infos(&self, builder_infos: &[BuilderInfoDocument]) {
-        self.api_key_cache.clear();
+    fn update_builder_infos(&self, builder_infos: &[BuilderInfoDocument], clear_api_cache: bool) {
+        if clear_api_cache {
+            self.api_key_cache.clear();
+        }
 
         for builder_info in builder_infos {
             if let Some(api_key) = builder_info.builder_info.api_key.as_ref() {
@@ -436,7 +438,7 @@ mod tests {
         // Test case 1: Builder exists
         let builder_info_doc =
             BuilderConfig { pub_key: builder_pub_key, builder_info: builder_info.clone() };
-        cache.update_builder_infos(&[builder_info_doc]);
+        cache.update_builder_infos(&[builder_info_doc], false);
 
         let get_result = cache.get_builder_info(&builder_pub_key);
         assert!(get_result.is_ok(), "Failed to get builder info");
@@ -505,7 +507,7 @@ mod tests {
         let builder_info_doc = BuilderConfig { pub_key: builder_pub_key, builder_info };
 
         // Set builder info in the cache
-        cache.update_builder_infos(&[builder_info_doc]);
+        cache.update_builder_infos(&[builder_info_doc], false);
 
         // Test: Demote builder
         let result = cache.demote_builder(&builder_pub_key);
@@ -528,7 +530,7 @@ mod tests {
         let builder_info_doc = BuilderConfig { pub_key: builder_pub_key_optimistic, builder_info };
 
         // Set builder info in the cache
-        cache.update_builder_infos(&[builder_info_doc]);
+        cache.update_builder_infos(&[builder_info_doc], false);
 
         assert!(
             cache.get_builder_info(&builder_pub_key_optimistic).unwrap().is_optimistic,
