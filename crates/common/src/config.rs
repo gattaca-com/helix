@@ -303,8 +303,6 @@ impl RouterConfig {
         self.replace_condensed_with_real(Route::BuilderApi, &[
             Route::GetValidators,
             Route::SubmitBlock,
-            Route::SubmitBlockOptimistic,
-            Route::SubmitHeader,
             Route::GetTopBid,
             Route::GetInclusionList,
             Route::SubmitHeaderV3,
@@ -355,22 +353,10 @@ impl RouterConfig {
             return Ok(true);
         }
 
-        if routes.contains(&Route::SubmitHeader) {
-            ensure!(
-                routes.contains(&Route::SubmitBlockOptimistic),
-                "v2 enabled but missing submit block"
-            );
-        }
-
-        if routes.contains(&Route::SubmitBlockOptimistic) {
-            ensure!(routes.contains(&Route::SubmitHeader), "v2 enabled but missing submit header");
-        }
-
         let is_get_header_instance =
             routes.contains(&Route::ProposerApi) || routes.contains(&Route::GetHeader);
         let is_submission_instance = routes.contains(&Route::BuilderApi) ||
             routes.contains(&Route::SubmitBlock) ||
-            routes.contains(&Route::SubmitHeader) ||
             routes.contains(&Route::SubmitHeaderV3);
 
         if is_get_header_instance {
@@ -424,8 +410,6 @@ pub enum Route {
     DataApi,
     GetValidators,
     SubmitBlock,
-    SubmitBlockOptimistic,
-    SubmitHeader,
     GetTopBid,
     Status,
     RegisterValidators,
@@ -443,10 +427,6 @@ impl Route {
         match self {
             Route::GetValidators => format!("{PATH_BUILDER_API}{PATH_GET_VALIDATORS}"),
             Route::SubmitBlock => format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK}"),
-            Route::SubmitBlockOptimistic => {
-                format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK_OPTIMISTIC_V2}")
-            }
-            Route::SubmitHeader => format!("{PATH_BUILDER_API}{PATH_SUBMIT_HEADER}"),
             Route::GetTopBid => format!("{PATH_BUILDER_API}{PATH_GET_TOP_BID}"),
             Route::GetInclusionList => format!("{PATH_BUILDER_API}{PATH_GET_INCLUSION_LIST}"),
             Route::Status => format!("{PATH_PROPOSER_API}{PATH_STATUS}"),
@@ -514,7 +494,6 @@ fn test_config() {
         enabled_routes: vec![
             RouteInfo { route: Route::GetValidators, rate_limit: None },
             RouteInfo { route: Route::SubmitBlock, rate_limit: None },
-            RouteInfo { route: Route::SubmitBlockOptimistic, rate_limit: None },
             RouteInfo { route: Route::ValidatorRegistration, rate_limit: None },
             RouteInfo {
                 route: Route::GetHeader,
@@ -561,24 +540,6 @@ mod tests {
         let result = config.validate_bid_sorter();
         assert!(result.is_ok());
         assert!(result.unwrap());
-    }
-
-    #[test]
-    fn test_validate_bid_sorter_submit_header_without_optimistic() {
-        let config = create_router_config(vec![Route::SubmitHeader]);
-
-        let result = config.validate_bid_sorter();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("v2 enabled but missing submit block"));
-    }
-
-    #[test]
-    fn test_validate_bid_sorter_optimistic_without_submit_header() {
-        let config = create_router_config(vec![Route::SubmitBlockOptimistic]);
-
-        let result = config.validate_bid_sorter();
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("v2 enabled but missing submit header"));
     }
 
     #[test]
@@ -640,20 +601,6 @@ mod tests {
         let result = config.validate_bid_sorter();
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("routes should have get_top_bid enabled"));
-    }
-
-    #[test]
-    fn test_validate_bid_sorter_valid_v2_routes() {
-        let config = create_router_config(vec![
-            Route::SubmitHeader,
-            Route::SubmitBlockOptimistic,
-            Route::GetHeader,
-            Route::GetTopBid,
-        ]);
-
-        let result = config.validate_bid_sorter();
-        assert!(result.is_ok());
-        assert!(result.unwrap());
     }
 
     #[test]

@@ -23,7 +23,7 @@ use tracing::{error, info};
 use crate::{
     builder::{
         self, api::BuilderApi, multi_simulator::MultiSimulator,
-        optimistic_simulator::OptimisticSimulator, v2_check::V2SubChecker,
+        optimistic_simulator::OptimisticSimulator,
     },
     gossip::{self},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
@@ -82,10 +82,6 @@ pub async fn run_api_service<A: Api>(
 
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
-    let (v2_checks_tx, v2_checks_rx) = tokio::sync::mpsc::channel(10_000);
-    let v2_checker = V2SubChecker::<A>::new(v2_checks_rx, auctioneer.clone(), db.clone());
-    tokio::spawn(v2_checker.run());
-
     let builder_api = BuilderApi::<A>::new(
         auctioneer.clone(),
         db.clone(),
@@ -98,7 +94,6 @@ pub async fn run_api_service<A: Api>(
         current_slot_info.clone(),
         sorter_tx,
         top_bid_tx,
-        v2_checks_tx,
         shared_floor,
         shared_best_header.clone(),
     );

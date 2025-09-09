@@ -157,7 +157,7 @@ pub trait DatabaseService: Send + Sync + Clone {
         &self,
         submission: Arc<SignedHeaderSubmission>,
         trace: HeaderSubmissionTrace,
-        tx_count: Option<u32>,
+        tx_count: u32,
     ) -> Result<(), DatabaseError>;
 
     async fn save_gossiped_payload_trace(

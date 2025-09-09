@@ -53,9 +53,6 @@ pub trait BidSubmission {
 
     fn transactions_root(&self) -> B256;
 
-    /// True if full submission payload, false if not (e.g. Optimistic V2)
-    fn is_full_payload(&self) -> bool;
-
     /// Validates that the bid trace and execution payload are consistent
     fn validate(&self) -> Result<(), BidValidationError>;
 
@@ -86,12 +83,12 @@ pub enum OptimisticVersion {
     #[default]
     NotOptimistic = 0,
     V1 = 1,
-    V2 = 2,
+    // V2 = 2,
     V3 = 3,
 }
 
 impl OptimisticVersion {
     pub fn is_optimistic(&self) -> bool {
-        matches!(self, Self::V1 | Self::V2 | Self::V3)
+        matches!(self, Self::V1 | Self::V3)
     }
 }

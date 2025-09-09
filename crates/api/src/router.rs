@@ -53,8 +53,6 @@ pub fn build_router<A: Api>(
         let method = match route_info.route {
             Route::GetValidators => get(BuilderApi::<A>::get_validators),
             Route::SubmitBlock => post(BuilderApi::<A>::submit_block),
-            Route::SubmitBlockOptimistic => post(BuilderApi::<A>::submit_block_v2),
-            Route::SubmitHeader => post(BuilderApi::<A>::submit_header),
             Route::GetTopBid => get(BuilderApi::<A>::get_top_bid),
             Route::Status => get(proposer::status),
             Route::RegisterValidators => post(ProposerApi::<A>::register_validators),

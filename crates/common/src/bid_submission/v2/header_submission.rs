@@ -175,10 +175,6 @@ impl BidSubmission for SignedHeaderSubmission {
         }
     }
 
-    fn is_full_payload(&self) -> bool {
-        false
-    }
-
     fn validate(&self) -> Result<(), BidValidationError> {
         let bid_trace = self.bid_trace();
 

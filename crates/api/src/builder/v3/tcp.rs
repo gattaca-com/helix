@@ -59,8 +59,8 @@ async fn handle_builder_connection<A: Api>(
                     match BuilderApi::handle_submit_header(
                         &builder_api,
                         header.submission,
-                        Some(header.url),
-                        Some(header.tx_count),
+                        header.url,
+                        header.tx_count,
                         msg_header.message_flags.contains(MessageHeaderFlags::CANCELLATION_ENABLED),
                         trace,
                         false,
