@@ -44,8 +44,8 @@ impl SubmissionTrace {
     }
 
     pub fn record_metrics(&self, optimistic_version: OptimisticVersion) {
-        if matches!(optimistic_version, OptimisticVersion::V2 | OptimisticVersion::V3) {
-            // ignore v2/v3 as the traces come from the payload only
+        if matches!(optimistic_version, OptimisticVersion::V3) {
+            // ignore v3 as the traces come from the payload only
             return;
         }
 

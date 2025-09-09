@@ -47,7 +47,7 @@ pub trait Auctioneer: Send + Sync + Clone {
 
     fn demote_builder(&self, builder_pub_key: &BlsPublicKeyBytes) -> Result<(), AuctioneerError>;
 
-    fn update_builder_infos(&self, builder_infos: &[BuilderInfoDocument]);
+    fn update_builder_infos(&self, builder_infos: &[BuilderInfoDocument], clear_api_cache: bool);
 
     fn seen_or_insert_block_hash(&self, block_hash: &B256) -> bool;
 

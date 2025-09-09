@@ -86,7 +86,8 @@ impl Auctioneer for MockAuctioneer {
         Ok(())
     }
 
-    fn update_builder_infos(&self, _builder_infos: &[BuilderInfoDocument]) {}
+    fn update_builder_infos(&self, _builder_infos: &[BuilderInfoDocument], _clear_api_cache: bool) {
+    }
 
     fn seen_or_insert_block_hash(&self, _block_hash: &B256) -> bool {
         false

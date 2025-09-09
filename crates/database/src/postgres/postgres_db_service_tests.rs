@@ -591,7 +591,7 @@ mod tests {
             .store_header_submission(
                 Arc::new(signed_bid_submission),
                 HeaderSubmissionTrace::default(),
-                None,
+                0,
             )
             .await?;
         Ok(())

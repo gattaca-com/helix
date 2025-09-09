@@ -158,10 +158,6 @@ impl BidSubmission for SignedBidSubmission {
         }
     }
 
-    fn is_full_payload(&self) -> bool {
-        true
-    }
-
     fn validate(&self) -> Result<(), super::BidValidationError> {
         let bid_trace = self.bid_trace();
         let execution_payload = self.execution_payload_ref();

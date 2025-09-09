@@ -1,73 +1,24 @@
 use std::sync::Arc;
 
-use axum::{http::StatusCode, Extension};
+use axum::http::StatusCode;
 use helix_common::{
     bid_submission::{BidSubmission, OptimisticVersion},
-    metadata_provider::MetadataProvider,
     task,
-    utils::{extract_request_id, utcnow_ns},
-    RequestTimings, SubmissionTrace,
+    utils::utcnow_ns,
+    SubmissionTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::SignedBidSubmission;
-use http::request::Parts;
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{debug, error, warn, Instrument};
 
 use super::api::BuilderApi;
 use crate::{
-    builder::{
-        api::{decode_payload, sanity_check_block_submission},
-        error::BuilderApiError,
-        v2_check::V2SubMessage,
-    },
+    builder::{api::sanity_check_block_submission, error::BuilderApiError},
     Api,
 };
 
 impl<A: Api> BuilderApi<A> {
-    /// Handles the submission of a new block by performing various checks and verifications
-    /// before saving the submission to the auctioneer. This is expected to pair with submit_header.
-    ///
-    /// 1. Receives the request and decodes the payload into a `SignedBidSubmission` object.
-    /// 2. Validates the builder and checks against the next proposer duty.
-    /// 3. Verifies the signature of the payload.
-    /// 4. Runs further validations against auctioneer.
-    /// 5. Simulates the block to validate the payment.
-    /// 6. Saves the bid to auctioneer and db.
-    ///
-    /// Implements this API: https://docs.titanrelay.xyz/builders/builder-integration#optimistic-v2
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&parts.headers)))]
-    pub async fn submit_block_v2(
-        Extension(api): Extension<Arc<BuilderApi<A>>>,
-        Extension(timings): Extension<RequestTimings>,
-        parts: Parts,
-        body: bytes::Bytes,
-    ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = SubmissionTrace::init_from_timings(timings);
-        trace.metadata = api.metadata_provider.get_metadata(&parts.headers);
-
-        // Decode the incoming request body into a payload
-        // v2 submissions are never hydrated
-        let (skip_sigverify, payload_with_merging_data, _) =
-            decode_payload(0, &api, &parts.uri, &parts.headers, body, &mut trace).await?;
-        let payload = payload_with_merging_data.submission;
-
-        tracing::Span::current().record("slot", payload.slot().as_u64() as i64);
-        tracing::Span::current()
-            .record("builder_pubkey", tracing::field::display(payload.builder_public_key()));
-        tracing::Span::current()
-            .record("block_hash", tracing::field::display(payload.message().block_hash));
-
-        info!(
-            decode_time = trace.decode.saturating_sub(trace.read_body),
-            block_value = %payload.value(),
-            "payload decoded",
-        );
-
-        Self::handle_optimistic_payload(api, payload, trace, OptimisticVersion::V2, skip_sigverify)
-            .await
-    }
-
     pub(crate) async fn handle_optimistic_payload(
         api: Arc<BuilderApi<A>>,
         payload: SignedBidSubmission,
@@ -198,15 +149,6 @@ impl<A: Api> BuilderApi<A> {
                 return Err(err);
             }
         };
-
-        if optimistic_version == OptimisticVersion::V2 {
-            if let Err(err) = api
-                .v2_checks_tx
-                .try_send(V2SubMessage::new_from_block_submission(&payload, trace.receive))
-            {
-                error!(%err, "failed to send block to v2 checker");
-            }
-        }
 
         // Save bid to auctioneer
         api.auctioneer.save_execution_payload(
