@@ -17,8 +17,11 @@ use crate::builder::{
 
 fn get_simulator(endpoint: &str) -> RpcSimulator<MockDatabaseService> {
     let http = Client::new();
-    let simulator_config =
-        SimulatorConfig { url: endpoint.to_string(), namespace: "test".to_string() };
+    let simulator_config = SimulatorConfig {
+        url: endpoint.to_string(),
+        namespace: "test".to_string(),
+        is_merging_simulator: true,
+    };
     RpcSimulator::new(http, simulator_config, Arc::new(MockDatabaseService::default()))
 }
 

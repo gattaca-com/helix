@@ -93,9 +93,9 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> MultiSimulator<A, D
         loop {
             let index = self.next_index();
 
-            if self.is_simulator_enabled(index) {
-                let simulator = &self.simulators[index];
+            let simulator = &self.simulators[index];
 
+            if simulator.is_merging_simulator() && self.is_simulator_enabled(index) {
                 // Process the request with the selected simulator
                 return simulator.process_merge_request(request).await;
             }

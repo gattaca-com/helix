@@ -179,6 +179,8 @@ pub struct SimulatorConfig {
     pub url: String,
     #[serde(default = "default_namespace")]
     pub namespace: String,
+    #[serde(default = "default_bool::<false>")]
+    pub is_merging_simulator: bool,
 }
 
 fn default_namespace() -> String {
@@ -499,6 +501,7 @@ fn test_config() {
     config.simulators = vec![SimulatorConfig {
         url: "http://localhost:8080".to_string(),
         namespace: "test".to_string(),
+        is_merging_simulator: true,
     }];
     config
         .beacon_clients

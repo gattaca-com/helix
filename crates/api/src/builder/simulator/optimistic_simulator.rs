@@ -56,6 +56,10 @@ impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator
         &self.simulator.simulator_config.url
     }
 
+    pub fn is_merging_simulator(&self) -> bool {
+        self.simulator.simulator_config.is_merging_simulator
+    }
+
     /// This is a lightweight operation as all params are references.
     pub fn clone_for_async(&self) -> Self {
         Self {
