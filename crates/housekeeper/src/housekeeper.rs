@@ -345,7 +345,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     async fn sync_builder_info_changes(&self) -> Result<(), HousekeeperError> {
         let builder_infos = self.db.get_all_builder_infos().await?;
         debug!(builder_infos = builder_infos.len(), "updating builder infos");
-        self.auctioneer.update_builder_infos(&builder_infos);
+        self.auctioneer.update_builder_infos(&builder_infos, true);
 
         Ok(())
     }
@@ -482,7 +482,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             }
         }
 
-        auctioneer.update_builder_infos(&primev_builders_config);
+        auctioneer.update_builder_infos(&primev_builders_config, false);
 
         db.store_builders_info(primev_builders_config.as_slice()).await?;
 

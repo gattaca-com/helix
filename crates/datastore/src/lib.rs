@@ -17,7 +17,7 @@ pub async fn start_auctioneer(
     let auctioneer_clone = auctioneer.clone();
     tokio::spawn(async move {
         let builder_infos = db.get_all_builder_infos().await.expect("failed to load builder infos");
-        auctioneer_clone.update_builder_infos(&builder_infos);
+        auctioneer_clone.update_builder_infos(&builder_infos, true);
     });
 
     Ok(auctioneer)
