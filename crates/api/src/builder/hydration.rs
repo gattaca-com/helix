@@ -8,7 +8,7 @@ pub type HydrationMessage =
     (u64, DehydratedBidSubmission, oneshot::Sender<Result<SignedBidSubmission, HydrationError>>);
 
 pub fn spawn_hydration_task(mut hydration_tx: tokio::sync::mpsc::Receiver<HydrationMessage>) {
-    tokio::task::spawn_blocking(|| async move {
+    tokio::spawn(async move {
         let mut last_slot = 0;
         let mut cache = HydrationCache::new();
 
