@@ -8,7 +8,7 @@ use tree_hash::TreeHash;
 use crate::messages::InclusionList;
 
 pub(crate) fn compute_shared_inclusion_list(
-    vote_map: &mut HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
+    vote_map: &HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
     slot: u64,
     inclusion_list: InclusionList,
 ) -> InclusionList {
@@ -130,14 +130,14 @@ mod tests {
         // 3 ILs, all the same
         let txs: Vec<Transaction> = create_full_il(0);
 
-        let mut vote_map = HashMap::from([
+        let vote_map = HashMap::from([
             ([0_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
             ([1_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
             ([2_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
         ]);
         let slot = 1;
         let inclusion_list = InclusionList::default();
-        let shared_il = compute_shared_inclusion_list(&mut vote_map, slot, inclusion_list);
+        let shared_il = compute_shared_inclusion_list(&vote_map, slot, inclusion_list);
 
         assert_eq!(shared_il.len(), txs.len());
 
@@ -152,14 +152,14 @@ mod tests {
         let txs: Vec<Transaction> = create_full_il(0);
         let txs_different: Vec<Transaction> = create_full_il(1000);
 
-        let mut vote_map = HashMap::from([
+        let vote_map = HashMap::from([
             ([0_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
             ([1_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
             ([2_u8; 48].into(), (1, InclusionList::new(txs_different).unwrap())),
         ]);
         let slot = 1;
         let inclusion_list = InclusionList::default();
-        let shared_il = compute_shared_inclusion_list(&mut vote_map, slot, inclusion_list);
+        let shared_il = compute_shared_inclusion_list(&vote_map, slot, inclusion_list);
 
         assert_eq!(shared_il.len(), txs.len());
 
@@ -185,14 +185,14 @@ mod tests {
             .chain(txs.iter().cloned().skip(250))
             .collect();
 
-        let mut vote_map = HashMap::from([
+        let vote_map = HashMap::from([
             ([0_u8; 48].into(), (1, InclusionList::new(txs.clone()).unwrap())),
             ([1_u8; 48].into(), (1, InclusionList::new(txs_1).unwrap())),
             ([2_u8; 48].into(), (1, InclusionList::new(txs_2).unwrap())),
         ]);
         let slot = 1;
         let inclusion_list = InclusionList::default();
-        let shared_il = compute_shared_inclusion_list(&mut vote_map, slot, inclusion_list);
+        let shared_il = compute_shared_inclusion_list(&vote_map, slot, inclusion_list);
 
         assert_eq!(shared_il.len(), txs.len());
 

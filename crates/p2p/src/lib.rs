@@ -200,7 +200,7 @@ impl P2PApi {
                 }
                 P2PApiRequest::SharedInclusionList { slot, inclusion_list, result_tx } => {
                     let il: Vec<_> = inclusion_list.txs.into_iter().map(Transaction).collect();
-                    let shared_il = compute_shared_inclusion_list(&mut vote_map, slot, il.into());
+                    let shared_il = compute_shared_inclusion_list(&vote_map, slot, il.into());
 
                     let txs = shared_il.into_iter().map(|tx| tx.to_vec().into()).collect();
                     let inclusion_list = InclusionList { txs };
