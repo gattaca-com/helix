@@ -1,8 +1,8 @@
 use alloy_primitives::B256;
 use helix_common::Filtering;
 use helix_types::{
-    BeaconBlockBodyElectra, BeaconBlockElectra, BlsPublicKey, PayloadAndBlobs, SignedBeaconBlock,
-    SignedBeaconBlockElectra, SignedBlindedBeaconBlock, VersionedSignedProposal,
+    BeaconBlockBodyElectra, BeaconBlockElectra, BlsPublicKeyBytes, PayloadAndBlobs,
+    SignedBeaconBlock, SignedBeaconBlockElectra, SignedBlindedBeaconBlock, VersionedSignedProposal,
 };
 use serde::Deserialize;
 
@@ -14,7 +14,7 @@ pub const GET_HEADER_REQUEST_CUTOFF_MS: i64 = 3000;
 pub struct GetHeaderParams {
     pub slot: u64,
     pub parent_hash: B256,
-    pub pubkey: BlsPublicKey,
+    pub pubkey: BlsPublicKeyBytes,
 }
 
 pub fn unblind_beacon_block(
@@ -27,16 +27,17 @@ pub fn unblind_beacon_block(
         SignedBlindedBeaconBlock::Bellatrix(_) |
         SignedBlindedBeaconBlock::Capella(_) |
         SignedBlindedBeaconBlock::Deneb(_) |
-        SignedBlindedBeaconBlock::Fulu(_) => Err(ProposerApiError::UnsupportedBeaconChainVersion),
+        SignedBlindedBeaconBlock::Fulu(_) |
+        SignedBlindedBeaconBlock::Gloas(_) => Err(ProposerApiError::UnsupportedBeaconChainVersion),
         SignedBlindedBeaconBlock::Electra(blinded_block) => {
             let signature = blinded_block.signature.clone();
             let block = &blinded_block.message;
             let body = &block.body;
             let execution_payload = versioned_execution_payload
                 .execution_payload
-                .as_electra()
-                .map_err(|_| ProposerApiError::PayloadTypeMismatch)?
-                .clone();
+                .clone()
+                .to_lighthouse_electra_paylaod()
+                .map_err(ProposerApiError::SszError)?;
 
             let blobs_bundle = &versioned_execution_payload.blobs_bundle;
 

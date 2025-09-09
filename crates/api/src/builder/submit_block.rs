@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use axum::{
-    body::Body,
-    http::{Request, StatusCode},
-    Extension,
-};
+use axum::{http::StatusCode, Extension};
 use helix_common::{
     self,
     bid_sorter::BidSorterMessage,
@@ -13,11 +9,12 @@ use helix_common::{
     metrics::ApiMetrics,
     task,
     utils::{extract_request_id, utcnow_ns},
-    SubmissionTrace,
+    RequestTimings, SubmissionTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::BlockMergingPreferences;
+use http::request::Parts;
 use tracing::{debug, error, info, trace, warn, Instrument, Level};
 
 use super::api::BuilderApi;
@@ -27,7 +24,7 @@ use crate::{
         error::BuilderApiError,
     },
     proposer::MergingPoolMessage,
-    Api, HEADER_API_KEY,
+    Api,
 };
 
 impl<A: Api> BuilderApi<A> {
@@ -43,7 +40,7 @@ impl<A: Api> BuilderApi<A> {
     ///
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
     #[tracing::instrument(skip_all, fields(
-        id =% extract_request_id(req.headers()),
+        id =% extract_request_id(&parts.headers),
         slot = tracing::field::Empty, // submission slot
         builder_pubkey = tracing::field::Empty,
         builder_id = tracing::field::Empty,
@@ -51,16 +48,13 @@ impl<A: Api> BuilderApi<A> {
     ), err, ret(level = Level::DEBUG))]
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
-        Extension(on_receive_ns): Extension<u64>,
-        req: Request<Body>,
+        Extension(timings): Extension<RequestTimings>,
+        parts: Parts,
+        body: bytes::Bytes,
     ) -> Result<StatusCode, BuilderApiError> {
         trace!("new block submission");
 
-        let mut trace = SubmissionTrace {
-            receive: on_receive_ns,
-            read_body: utcnow_ns(),
-            ..Default::default()
-        };
+        let mut trace = SubmissionTrace::init_from_timings(timings);
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
         tracing::Span::current().record("slot", (head_slot.as_u64() + 1) as i64);
 
@@ -70,24 +64,24 @@ impl<A: Api> BuilderApi<A> {
             return Err(BuilderApiError::ProposerDutyNotFound);
         };
 
-        trace.metadata = api.metadata_provider.get_metadata(req.headers());
+        trace.metadata = api.metadata_provider.get_metadata(&parts.headers);
 
         debug!(%head_slot, timestamp_request_start = trace.receive);
 
         // Decode the incoming request body into a payload
-        let (parts, body) = req.into_parts();
-        let (payload_with_merging_data, is_cancellations_enabled) =
-            decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
 
+        let (skip_sigverify, payload_with_merging_data, is_cancellations_enabled) = decode_payload(
+            head_slot.as_u64() + 1,
+            &api,
+            &parts.uri,
+            &parts.headers,
+            body,
+            &mut trace,
+        )
+        .await?;
         let payload = payload_with_merging_data.submission;
         let merging_data = payload_with_merging_data.merging_data;
-
         ApiMetrics::cancellable_bid(is_cancellations_enabled);
-
-        let skip_sigverify = parts
-            .headers
-            .get(HEADER_API_KEY)
-            .is_some_and(|key| api.auctioneer.validate_api_key(key, payload.builder_public_key()));
 
         let block_hash = payload.message().block_hash;
 
@@ -116,9 +110,6 @@ impl<A: Api> BuilderApi<A> {
                 got: payload.slot(),
             });
         }
-
-        payload.blobs_bundle().validate()?;
-        trace!("validated blobs bundle");
 
         // Fetch the next payload attributes and validate basic information
         let payload_attributes =
@@ -261,9 +252,6 @@ impl<A: Api> BuilderApi<A> {
         );
         trace.auctioneer_update = utcnow_ns();
         trace!("saved payload to auctioneer");
-
-        api.auctioneer.save_bid_trace(payload.bid_trace());
-        trace!("saved bid trace to auctioneer");
 
         // Log some final info
         trace.request_finish = utcnow_ns();

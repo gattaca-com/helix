@@ -11,11 +11,11 @@ use helix_common::{
     metrics::GetHeaderMetric,
     resign_builder_bid, task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
-    BidRequest, GetHeaderTrace,
+    BidRequest, GetHeaderTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::BlsPublicKey;
+use helix_types::BlsPublicKeyBytes;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
 
@@ -41,7 +41,7 @@ impl<A: Api> ProposerApi<A> {
     #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
-        Extension(on_receive_ns): Extension<u64>,
+        Extension(timings): Extension<RequestTimings>,
         Extension(Terminating(terminating)): Extension<Terminating>,
         headers: HeaderMap,
         Path(GetHeaderParams { slot, parent_hash, pubkey }): Path<GetHeaderParams>,
@@ -50,7 +50,7 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
 
-        let mut trace = GetHeaderTrace { receive: on_receive_ns, ..Default::default() };
+        let mut trace = GetHeaderTrace { receive: timings.on_receive_ns, ..Default::default() };
 
         let (head_slot, duty) = proposer_api.curr_slot_info.slot_info();
         debug!(
@@ -173,7 +173,7 @@ impl<A: Api> ProposerApi<A> {
             warn!("no bid found");
             return Err(ProposerApiError::NoBidPrepared);
         };
-        if bid.value() == &U256::ZERO {
+        if bid.value == U256::ZERO {
             warn!("best bid value is 0");
             return Err(ProposerApiError::BidValueZero);
         }
@@ -191,7 +191,7 @@ impl<A: Api> ProposerApi<A> {
             match merged_block_bid {
                 None => bid,
                 // If the current best bid has equal or higher value, we use that
-                Some((_, merged_bid)) if merged_bid.value() <= bid.value() => bid,
+                Some((_, merged_bid)) if merged_bid.value <= bid.value => bid,
                 // If the merged bid is stale, we use the current best bid
                 Some((time, _)) if time < now_ms - max_merged_bid_age_ms => bid,
                 // Otherwise, we use the merged bid
@@ -201,9 +201,9 @@ impl<A: Api> ProposerApi<A> {
             bid
         };
 
-        let bid_block_hash = bid.header().block_hash().0;
+        let bid_block_hash = bid.header.block_hash;
         debug!(
-            value = ?bid.value(),
+            value = ?bid.value,
             block_hash =% bid_block_hash,
             "delivering bid",
         );
@@ -213,7 +213,7 @@ impl<A: Api> ProposerApi<A> {
             proposer_api.db.clone(),
             slot,
             bid_request.parent_hash,
-            bid_request.pubkey.clone(),
+            bid_request.pubkey,
             bid_block_hash,
             trace,
             mev_boost,
@@ -223,12 +223,7 @@ impl<A: Api> ProposerApi<A> {
 
         let proposer_pubkey_clone = bid_request.pubkey;
 
-        let fork = if bid.as_electra().is_ok() {
-            helix_types::ForkName::Electra
-        } else {
-            error!("builder bid is not on Electra fork!! This should not happen");
-            return Err(ProposerApiError::InternalServerError);
-        };
+        let fork = proposer_api.chain_info.current_fork_name();
 
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
 
@@ -257,7 +252,7 @@ async fn save_get_header_call<DB: DatabaseService + 'static>(
     db: Arc<DB>,
     slot: u64,
     parent_hash: B256,
-    public_key: BlsPublicKey,
+    public_key: BlsPublicKeyBytes,
     best_block_hash: B256,
     trace: GetHeaderTrace,
     mev_boost: bool,

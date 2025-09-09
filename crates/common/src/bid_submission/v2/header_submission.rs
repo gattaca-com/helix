@@ -1,19 +1,32 @@
+use std::sync::Arc;
+
 use alloy_primitives::{Address, B256, U256};
 use helix_types::{
-    Bloom, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayloadHeader,
-    ExecutionPayloadHeaderElectra, ExecutionPayloadHeaderRef, ExecutionRequests, ExtraData,
-    KzgCommitments, SigError, SignedMessage, SignedRoot, Slot, TestRandom,
+    Bloom, BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes,
+    ExecutionPayloadHeader, ExecutionRequests, ExtraData, KzgCommitments, SigError, SignedMessage,
+    SignedRoot, Slot, TestRandom, ValidationError,
 };
 use ssz_derive::{Decode, Encode};
 
 use crate::bid_submission::{BidSubmission, BidTrace, BidValidationError};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode, TestRandom)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode)]
 pub struct HeaderSubmissionElectra {
     pub bid_trace: BidTrace,
-    pub execution_payload_header: ExecutionPayloadHeaderElectra,
-    pub execution_requests: ExecutionRequests,
+    pub execution_payload_header: ExecutionPayloadHeader,
+    pub execution_requests: Arc<ExecutionRequests>,
     pub commitments: KzgCommitments,
+}
+
+impl TestRandom for HeaderSubmissionElectra {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self {
+            bid_trace: BidTrace::random_for_test(rng),
+            execution_payload_header: ExecutionPayloadHeader::random_for_test(rng),
+            execution_requests: Arc::new(ExecutionRequests::random_for_test(rng)),
+            commitments: KzgCommitments::default(),
+        }
+    }
 }
 
 pub type SignedHeaderSubmissionElectra = SignedMessage<HeaderSubmissionElectra>;
@@ -32,7 +45,7 @@ impl BidSubmission for SignedHeaderSubmission {
         }
     }
 
-    fn signature(&self) -> &BlsSignature {
+    fn signature(&self) -> &BlsSignatureBytes {
         match self {
             Self::Electra(signed_header_submission) => &signed_header_submission.signature,
         }
@@ -50,11 +63,11 @@ impl BidSubmission for SignedHeaderSubmission {
         &self.bid_trace().block_hash
     }
 
-    fn builder_public_key(&self) -> &BlsPublicKey {
+    fn builder_public_key(&self) -> &BlsPublicKeyBytes {
         &self.bid_trace().builder_pubkey
     }
 
-    fn proposer_public_key(&self) -> &BlsPublicKey {
+    fn proposer_public_key(&self) -> &BlsPublicKeyBytes {
         &self.bid_trace().proposer_pubkey
     }
 
@@ -169,35 +182,33 @@ impl BidSubmission for SignedHeaderSubmission {
     fn validate(&self) -> Result<(), BidValidationError> {
         let bid_trace = self.bid_trace();
 
-        let execution_payload_header: ExecutionPayloadHeaderRef = match self {
-            SignedHeaderSubmission::Electra(bid) => (&bid.message.execution_payload_header).into(),
-        };
+        let execution_payload_header = self.execution_payload_header();
 
-        if bid_trace.parent_hash != execution_payload_header.parent_hash().0 {
+        if bid_trace.parent_hash != execution_payload_header.parent_hash {
             return Err(BidValidationError::ParentHashMismatch {
                 message: bid_trace.parent_hash,
-                payload: execution_payload_header.parent_hash().0,
+                payload: execution_payload_header.parent_hash,
             });
         }
 
-        if bid_trace.block_hash != execution_payload_header.block_hash().0 {
+        if bid_trace.block_hash != execution_payload_header.block_hash {
             return Err(BidValidationError::BlockHashMismatch {
                 message: bid_trace.block_hash,
-                payload: execution_payload_header.block_hash().0,
+                payload: execution_payload_header.block_hash,
             });
         }
 
-        if bid_trace.gas_limit != execution_payload_header.gas_limit() {
+        if bid_trace.gas_limit != execution_payload_header.gas_limit {
             return Err(BidValidationError::GasLimitMismatch {
                 message: bid_trace.gas_limit,
-                payload: execution_payload_header.gas_limit(),
+                payload: execution_payload_header.gas_limit,
             });
         }
 
-        if bid_trace.gas_used != execution_payload_header.gas_used() {
+        if bid_trace.gas_used != execution_payload_header.gas_used {
             return Err(BidValidationError::GasUsedMismatch {
                 message: bid_trace.gas_used,
-                payload: execution_payload_header.gas_used(),
+                payload: execution_payload_header.gas_used,
             });
         }
 
@@ -216,12 +227,16 @@ impl BidSubmission for SignedHeaderSubmission {
 }
 
 impl SignedHeaderSubmission {
-    pub fn verify_signature(&self, spec: &ChainSpec) -> Result<(), SigError> {
-        let domain = spec.get_builder_domain();
+    pub fn verify_signature(&self, builder_domain: B256) -> Result<(), SigError> {
         let valid = match self {
             SignedHeaderSubmission::Electra(bid) => {
-                let message = bid.message.bid_trace.signing_root(domain);
-                bid.signature.verify(&bid.message.bid_trace.builder_pubkey, message)
+                let message = bid.message.bid_trace.signing_root(builder_domain);
+                let uncompressed_builder_pubkey =
+                    BlsPublicKey::deserialize(bid.message.bid_trace.builder_pubkey.as_slice())
+                        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
+                let uncompressed_signature = BlsSignature::deserialize(bid.signature.as_slice())
+                    .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
+                uncompressed_signature.verify(&uncompressed_builder_pubkey, message)
             }
         };
 
@@ -232,10 +247,20 @@ impl SignedHeaderSubmission {
         Ok(())
     }
 
-    pub fn execution_payload_header(&self) -> ExecutionPayloadHeader {
+    pub fn validate_payload_ssz_lengths(&self) -> Result<(), ValidationError> {
+        match self {
+            SignedHeaderSubmission::Electra(bid) => {
+                bid.message.execution_payload_header.validate_ssz_lengths()?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn execution_payload_header(&self) -> &ExecutionPayloadHeader {
         match self {
             Self::Electra(signed_header_submission) => {
-                signed_header_submission.message.execution_payload_header.clone().into()
+                &signed_header_submission.message.execution_payload_header
             }
         }
     }

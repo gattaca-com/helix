@@ -9,7 +9,7 @@ use ssz::{Decode, Encode};
 fn benchmark_blob_bundle_conversion(c: &mut Criterion) {
     let mut group = c.benchmark_group("blob_bundle_conversion");
 
-    let data_json = include_bytes!("../src/testdata/signed-bid-submission-electra.json");
+    let data_json = include_bytes!("../src/testdata/signed-bid-submission-electra-3.json");
     let submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
     let blobs_bundle = submission.blobs_bundle().as_ssz_bytes();
 

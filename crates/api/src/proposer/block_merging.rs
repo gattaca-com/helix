@@ -7,10 +7,9 @@ use alloy_primitives::{
 use helix_common::{bid_submission::BidSubmission, simulator::BlockSimError, utils::utcnow_ms};
 use helix_datastore::Auctioneer;
 use helix_types::{
-    mock_public_key_bytes, BlobWithMetadata, BlobsBundle, BlsPublicKey, BuilderBid,
-    BuilderBidElectra, ExecutionPayloadHeader, ExecutionPayloadRef, KzgCommitment, KzgCommitments,
-    MergeableOrder, MergeableOrderWithOrigin, MergeableOrders, PayloadAndBlobs,
-    SignedBidSubmission, ValidatorRegistrationData,
+    mock_public_key_bytes, BlobWithMetadata, BlobsBundle, BlsPublicKeyBytes, BuilderBid,
+    ExecutionPayloadHeader, KzgCommitments, MergeableOrder, MergeableOrderWithOrigin,
+    MergeableOrders, PayloadAndBlobs, SignedBidSubmission, ValidatorRegistrationData,
 };
 use parking_lot::RwLock;
 use tokio::{
@@ -174,14 +173,14 @@ impl<A: Api> ProposerApi<A> {
     ) -> JoinHandle<MergingTaskResult> {
         let base_block_time_ms = utcnow_ms();
         let proposer_fee_recipient = registration_data.fee_recipient;
-        let proposer_pubkey = registration_data.pubkey.clone();
+        let proposer_pubkey = registration_data.pubkey;
 
         debug!("merging block");
 
         let merge_request = BlockMergeRequest::new(
-            *base_bid.value(),
+            base_bid.value,
             proposer_fee_recipient,
-            ExecutionPayloadRef::from(&payload.execution_payload),
+            &payload.execution_payload,
             mergeable_orders,
         );
 
@@ -191,9 +190,9 @@ impl<A: Api> ProposerApi<A> {
 
             // Sanity check: if the merged payload has a lower value than the original bid,
             // we return the original bid.
-            if base_bid.value() >= &response.proposer_value {
+            if base_bid.value >= response.proposer_value {
                 return Err(PayloadMergingError::MergedPayloadNotValuable {
-                    original: *base_bid.value(),
+                    original: base_bid.value,
                     merged: response.proposer_value,
                 });
             }
@@ -228,7 +227,7 @@ impl<A: Api> ProposerApi<A> {
             return Ok(MergingTaskState::RetryFetch);
         };
         let registration_data = next_duty.entry.registration.message;
-        let block_hash = best_bid.header().block_hash().0;
+        let block_hash = best_bid.header.block_hash;
         // Try to fetch the best bid's block.
         let payload = self
             .get_execution_payload(slot, &registration_data.pubkey, &block_hash, true)
@@ -243,29 +242,25 @@ impl<A: Api> ProposerApi<A> {
         &self,
         slot: u64,
         base_block_time_ms: u64,
-        proposer_pubkey: BlsPublicKey,
+        proposer_pubkey: BlsPublicKeyBytes,
         original_payload: PayloadAndBlobs,
         response: BlockMergeResponse,
         blobs: &HashMap<B256, BlobWithMetadata>,
     ) -> Result<(), PayloadMergingError> {
-        let header = ExecutionPayloadHeader::from(response.execution_payload.to_ref())
-            .as_electra()
-            .map_err(|_| PayloadMergingError::PayloadNotElectra)?
-            .clone();
+        let header = ExecutionPayloadHeader::from(&response.execution_payload);
 
         let merged_blobs_bundle =
             append_merged_blobs(original_payload.blobs_bundle, blobs, &response)?;
 
-        let blob_kzg_commitments = KzgCommitments::new(
-            merged_blobs_bundle.commitments.iter().map(|k| KzgCommitment(**k)).collect(),
-        )
-        .unwrap();
-        let block_hash = response.execution_payload.block_hash().0;
+        let blob_kzg_commitments =
+            KzgCommitments::new(merged_blobs_bundle.commitments.iter().map(|k| *k).collect())
+                .unwrap();
+        let block_hash = response.execution_payload.block_hash;
 
-        let new_bid = BuilderBidElectra {
+        let new_bid = BuilderBid {
             header,
             blob_kzg_commitments,
-            execution_requests: response.execution_requests,
+            execution_requests: Arc::new(response.execution_requests),
             value: response.proposer_value,
             pubkey: mock_public_key_bytes(), // this will be replaced when signing the header
         };
@@ -284,7 +279,7 @@ impl<A: Api> ProposerApi<A> {
         );
 
         // Update best merged block
-        let parent_block_hash = new_bid.header.parent_hash.0;
+        let parent_block_hash = new_bid.header.parent_hash;
         self.shared_best_merged.store(slot, base_block_time_ms, parent_block_hash, new_bid.into());
 
         Ok(())
@@ -301,8 +296,8 @@ enum PayloadMergingError {
     BlobNotFound,
     #[error("simulator error: {_0}")]
     SimulatorError(#[from] BlockSimError),
-    #[error("payload not from electra fork")]
-    PayloadNotElectra,
+    #[error("reached maximum blob count for block")]
+    MaxBlobCountReached,
 }
 
 /// Appends the merged blobs to the original blobs bundle.
@@ -315,16 +310,23 @@ fn append_merged_blobs(
 
     response.appended_blobs.iter().try_for_each(|vh| {
         let blob_bundle = blobs.get(vh).ok_or(PayloadMergingError::BlobNotFound)?;
-        extend_bundle(&mut merged_blobs_bundle, blob_bundle.clone());
+        extend_bundle(&mut merged_blobs_bundle, blob_bundle.clone())?;
         Ok::<(), PayloadMergingError>(())
     })?;
     Ok(merged_blobs_bundle)
 }
 
-fn extend_bundle(bundle: &mut BlobsBundle, other_bundle: BlobWithMetadata) {
-    bundle.commitments.push(other_bundle.commitment);
+fn extend_bundle(
+    bundle: &mut BlobsBundle,
+    other_bundle: BlobWithMetadata,
+) -> Result<(), PayloadMergingError> {
+    bundle
+        .commitments
+        .push(other_bundle.commitment)
+        .map_err(|_| PayloadMergingError::MaxBlobCountReached)?;
     bundle.proofs.push(other_bundle.proof);
     bundle.blobs.push(other_bundle.blob);
+    Ok(())
 }
 
 /// Represents the possible states of the block merging task
@@ -345,7 +347,7 @@ enum MergingTaskState {
     GotMergedBlock {
         slot: u64,
         base_block_time_ms: u64,
-        proposer_pubkey: BlsPublicKey,
+        proposer_pubkey: BlsPublicKeyBytes,
         original_payload: PayloadAndBlobs,
         response: BlockMergeResponse,
     },
@@ -364,7 +366,7 @@ impl MergingTaskState {
     fn new_merged_block(
         slot: u64,
         base_block_time_ms: u64,
-        proposer_pubkey: BlsPublicKey,
+        proposer_pubkey: BlsPublicKeyBytes,
         original_payload: PayloadAndBlobs,
         response: BlockMergeResponse,
     ) -> MergingTaskState {

@@ -8,7 +8,7 @@ use axum::{
 use helix_common::{bid_submission::BidValidationError, simulator::BlockSimError};
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
-use helix_types::{BlobsError, BlsPublicKey, Slot};
+use helix_types::{BlsPublicKey, BlsPublicKeyBytes, HydrationError, Slot, ValidationError};
 
 use super::v3::V3Error;
 
@@ -62,6 +62,9 @@ pub enum BuilderApiError {
     #[error("invalid api key")]
     InvalidApiKey,
 
+    #[error("untrusted builder on dehydrated payload")]
+    UntrustedBuilderOnDehydratedPayload,
+
     #[error("payload attributes not yet known")]
     PayloadAttributesNotYetKnown,
 
@@ -81,7 +84,7 @@ pub enum BuilderApiError {
     FeeRecipientMismatch { got: Address, expected: Address },
 
     #[error("proposer public key mismatch. got: {got:?}, expected: {expected:?}")]
-    ProposerPublicKeyMismatch { got: Box<BlsPublicKey>, expected: Box<BlsPublicKey> },
+    ProposerPublicKeyMismatch { got: BlsPublicKeyBytes, expected: BlsPublicKeyBytes },
 
     #[error("slot mismatch. got: {got}, expected: {expected}")]
     SlotMismatch { got: u64, expected: u64 },
@@ -145,14 +148,14 @@ pub enum BuilderApiError {
         collateral: {collateral:?}, collateral required: {collateral_required:?}"
     )]
     NotEnoughOptimisticCollateral {
-        builder_pub_key: Box<BlsPublicKey>,
+        builder_pub_key: BlsPublicKeyBytes,
         collateral: U256,
         collateral_required: U256,
         is_optimistic: bool,
     },
 
     #[error("builder is not optimistic. builder_pub_key: {builder_pub_key:?}")]
-    BuilderNotOptimistic { builder_pub_key: BlsPublicKey },
+    BuilderNotOptimistic { builder_pub_key: BlsPublicKeyBytes },
 
     #[error("builder not in proposer's trusted list: {proposer_trusted_builders:?}")]
     BuilderNotInProposersTrustedList { proposer_trusted_builders: Vec<String> },
@@ -161,10 +164,13 @@ pub enum BuilderApiError {
     InvalidPayloadType { fork_name: String },
 
     #[error(transparent)]
-    BlobsError(#[from] BlobsError),
+    ValidationError(#[from] ValidationError),
 
     #[error("out of sequence submission for slot: {bid_slot}. seen: {seen}, this request: {this}")]
     OutOfSequence { seen: u64, this: u64, bid_slot: u64 },
+
+    #[error(transparent)]
+    HydrationError(#[from] HydrationError),
 }
 
 impl IntoResponse for BuilderApiError {
@@ -211,10 +217,12 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::BuilderNotInProposersTrustedList { .. } |
             BuilderApiError::PayloadError(_) |
             BuilderApiError::BidValidationError(_) |
-            BuilderApiError::BlobsError(_) |
-            BuilderApiError::OutOfSequence { .. } => StatusCode::BAD_REQUEST,
+            BuilderApiError::ValidationError(_) |
+            BuilderApiError::OutOfSequence { .. } |
+            BuilderApiError::HydrationError(_) => StatusCode::BAD_REQUEST,
 
-            BuilderApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
+            BuilderApiError::InvalidApiKey |
+            BuilderApiError::UntrustedBuilderOnDehydratedPayload => StatusCode::UNAUTHORIZED,
 
             BuilderApiError::InternalError |
             BuilderApiError::AuctioneerError(_) |

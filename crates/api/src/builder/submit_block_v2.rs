@@ -1,21 +1,18 @@
 use std::sync::Arc;
 
-use axum::{
-    body::Body,
-    http::{Request, StatusCode},
-    Extension,
-};
+use axum::{http::StatusCode, Extension};
 use helix_common::{
     bid_submission::{BidSubmission, OptimisticVersion},
     metadata_provider::MetadataProvider,
     task,
     utils::{extract_request_id, utcnow_ns},
-    SubmissionTrace,
+    RequestTimings, SubmissionTrace,
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::SignedBidSubmission;
-use tracing::{debug, error, info, trace, warn, Instrument};
+use http::request::Parts;
+use tracing::{debug, error, info, warn, Instrument};
 
 use super::api::BuilderApi;
 use crate::{
@@ -24,7 +21,7 @@ use crate::{
         error::BuilderApiError,
         v2_check::V2SubMessage,
     },
-    Api, HEADER_API_KEY,
+    Api,
 };
 
 impl<A: Api> BuilderApi<A> {
@@ -39,29 +36,21 @@ impl<A: Api> BuilderApi<A> {
     /// 6. Saves the bid to auctioneer and db.
     ///
     /// Implements this API: https://docs.titanrelay.xyz/builders/builder-integration#optimistic-v2
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(req.headers())))]
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&parts.headers)))]
     pub async fn submit_block_v2(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
-        Extension(on_receive_ns): Extension<u64>,
-        req: Request<Body>,
+        Extension(timings): Extension<RequestTimings>,
+        parts: Parts,
+        body: bytes::Bytes,
     ) -> Result<StatusCode, BuilderApiError> {
-        let mut trace = SubmissionTrace {
-            receive: on_receive_ns,
-            read_body: utcnow_ns(),
-            ..Default::default()
-        };
-        trace.metadata = api.metadata_provider.get_metadata(req.headers());
+        let mut trace = SubmissionTrace::init_from_timings(timings);
+        trace.metadata = api.metadata_provider.get_metadata(&parts.headers);
 
         // Decode the incoming request body into a payload
-        let (parts, body) = req.into_parts();
-        let (payload_with_merging_data, _) =
-            decode_payload(&parts.uri, &parts.headers, body, &mut trace).await?;
+        // v2 submissions are never hydrated
+        let (skip_sigverify, payload_with_merging_data, _) =
+            decode_payload(0, &api, &parts.uri, &parts.headers, body, &mut trace).await?;
         let payload = payload_with_merging_data.submission;
-
-        let skip_sigverify = parts
-            .headers
-            .get(HEADER_API_KEY)
-            .is_some_and(|key| api.auctioneer.validate_api_key(key, payload.builder_public_key()));
 
         tracing::Span::current().record("slot", payload.slot().as_u64() as i64);
         tracing::Span::current()
@@ -88,7 +77,7 @@ impl<A: Api> BuilderApi<A> {
     ) -> Result<StatusCode, BuilderApiError> {
         let (head_slot, next_duty) = api.curr_slot_info.slot_info();
 
-        let builder_pub_key = payload.builder_public_key().clone();
+        let builder_pub_key = payload.builder_public_key();
         let block_hash = payload.message().block_hash;
 
         // Verify the payload is for the current slot
@@ -105,9 +94,6 @@ impl<A: Api> BuilderApi<A> {
                 got: payload.slot(),
             });
         }
-
-        payload.blobs_bundle().validate()?;
-        trace!("validated blobs bundle");
 
         // Verify that we have a validator connected for this slot
         // Note: in `submit_block_v2` we have to do this check after decoding
@@ -138,7 +124,7 @@ impl<A: Api> BuilderApi<A> {
         {
             warn!("proposer has regional filtering enabled, discarding {optimistic_version:?} submission");
             return Err(BuilderApiError::BuilderNotOptimistic {
-                builder_pub_key: payload.builder_public_key().clone(),
+                builder_pub_key: *payload.builder_public_key(),
             });
         }
 
@@ -173,13 +159,8 @@ impl<A: Api> BuilderApi<A> {
                     return Err(BuilderApiError::AuctioneerError(err))
                 }
                 _ => {
-                    api.demote_builder(
-                        payload.slot().as_u64(),
-                        &builder_pub_key,
-                        &block_hash,
-                        &err,
-                    )
-                    .await;
+                    api.demote_builder(payload.slot().as_u64(), builder_pub_key, &block_hash, &err)
+                        .await;
                     return Err(err);
                 }
             }
@@ -212,7 +193,7 @@ impl<A: Api> BuilderApi<A> {
             Ok(val) => val,
             Err(err) => {
                 // Any invalid submission for optimistic v2/v3 results in a demotion.
-                api.demote_builder(payload.slot().as_u64(), &builder_pub_key, &block_hash, &err)
+                api.demote_builder(payload.slot().as_u64(), builder_pub_key, &block_hash, &err)
                     .await;
                 return Err(err);
             }
@@ -236,11 +217,14 @@ impl<A: Api> BuilderApi<A> {
         );
         trace.auctioneer_update = utcnow_ns();
 
-        api.auctioneer.save_bid_trace(payload.bid_trace());
-
         // Gossip to other relays
         if api.relay_config.payload_gossip_enabled {
-            api.gossip_payload(&payload, payload.payload_and_blobs_ref()).await;
+            api.gossip_payload(
+                &payload,
+                payload.payload_and_blobs_ref(),
+                api.chain_info.current_fork_name(),
+            )
+            .await;
         }
 
         // Log some final info

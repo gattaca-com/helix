@@ -22,7 +22,7 @@ use super::ProposerApi;
 use crate::{
     proposer::{error::ProposerApiError, PreferencesHeader},
     router::KnownValidatorsLoaded,
-    Api,
+    Api, HEADER_API_KEY,
 };
 
 impl<A: Api> ProposerApi<A> {
@@ -56,7 +56,7 @@ impl<A: Api> ProposerApi<A> {
         let start = Instant::now();
 
         // Get optional api key from headers
-        let api_key = headers.get("x-api-key").and_then(|key| key.to_str().ok());
+        let api_key = headers.get(HEADER_API_KEY).and_then(|key| key.to_str().ok());
 
         let pool_name = match api_key {
             Some(api_key) => match proposer_api.db.get_validator_pool_name(api_key).await? {
@@ -117,8 +117,7 @@ impl<A: Api> ProposerApi<A> {
         trace!(%head_slot, num_registrations,);
 
         // Bulk check if the validators are known
-        let registration_pub_keys =
-            registrations.iter().map(|r| r.message.pubkey.clone()).collect();
+        let registration_pub_keys = registrations.iter().map(|r| r.message.pubkey).collect();
         let known_pub_keys = proposer_api.db.check_known_validators(registration_pub_keys).await?;
 
         // Check each registration
@@ -133,7 +132,7 @@ impl<A: Api> ProposerApi<A> {
             let proposer_api_clone = proposer_api.clone();
             let start_time = Instant::now();
 
-            let pub_key = registration.message.pubkey.clone();
+            let pub_key = registration.message.pubkey;
 
             if !known_pub_keys.contains(&pub_key) {
                 unknown_registrations += 1;
@@ -212,13 +211,8 @@ pub fn validate_registration(
     chain_info: &ChainInfo,
     registration: &SignedValidatorRegistration,
 ) -> Result<(), ProposerApiError> {
-    // Validate registration time
     validate_registration_time(chain_info, registration)?;
-
-    // Verify the signature
-    if !registration.verify_signature(&chain_info.context) {
-        return Err(ProposerApiError::InvalidSignature);
-    }
+    registration.verify_signature(chain_info.builder_domain)?;
 
     Ok(())
 }

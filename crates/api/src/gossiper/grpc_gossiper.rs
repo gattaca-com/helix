@@ -97,7 +97,7 @@ impl GrpcGossiperClient {
                 Ok(Err(err)) => {
                     error!(%err, "Client call failed.");
                     GossipMetrics::out_count(PAYLOAD_ID, false);
-                    Err(GossipError::BroadcastError(err))
+                    Err(GossipError::BroadcastError(err.into()))
                 }
                 Err(_) => {
                     error!("Client call timed out.");
@@ -133,7 +133,7 @@ impl GrpcGossiperClient {
                 Ok(Err(err)) => {
                     error!(%err, "Client call failed.");
                     GossipMetrics::out_count(GET_PAYLOAD_ID, false);
-                    Err(GossipError::BroadcastError(err))
+                    Err(GossipError::BroadcastError(err.into()))
                 }
                 Err(_) => {
                     error!("Client call timed out.");
@@ -168,7 +168,7 @@ impl GrpcGossiperClient {
                 Ok(Err(err)) => {
                     error!(%err, "Client call failed.");
                     GossipMetrics::out_count(REQUEST_PAYLOAD_ID, false);
-                    Err(GossipError::BroadcastError(err))
+                    Err(GossipError::BroadcastError(err.into()))
                 }
                 Err(_) => {
                     error!("Client call timed out.");

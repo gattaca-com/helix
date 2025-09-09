@@ -21,6 +21,7 @@ lh-slot-clock.workspace = true
 lh-test-random.workspace = true
 lh-types.workspace = true
 rand.workspace = true
+rustc-hash.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 smallvec.workspace = true
@@ -38,3 +39,11 @@ criterion.workspace = true
 [[bench]]
 harness = false
 name = "blob_bundle"
+
+[[bench]]
+harness = false
+name = "execution_payload"
+
+[[bench]]
+harness = false
+name = "signed_bid_submission"

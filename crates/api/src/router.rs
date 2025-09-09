@@ -5,6 +5,7 @@ use std::{
 
 use axum::{
     error_handling::HandleErrorLayer,
+    extract::DefaultBodyLimit,
     http::StatusCode,
     middleware,
     routing::{get, post},
@@ -16,15 +17,12 @@ use tower::{timeout::TimeoutLayer, BoxError, ServiceBuilder};
 use tower_governor::{
     governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer,
 };
-use tower_http::{
-    limit::RequestBodyLimitLayer,
-    request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
-};
+use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tracing::{info, warn};
 
 use crate::{
-    builder::api::{BuilderApi, MAX_PAYLOAD_LENGTH},
-    middleware::{inner_metrics_middleware, outer_metrics_middleware},
+    builder::api::BuilderApi,
+    middleware::body_limit_middleware,
     proposer::{self, ProposerApi},
     relay_data::{BidsCache, DataApi, DeliveredPayloadsCache},
     service::API_REQUEST_TIMEOUT,
@@ -105,11 +103,11 @@ pub fn build_router<A: Api>(
         }
     });
 
-    // add layers, split in two to make the traits happy, layers are applied bottom to top across
-    // router.layer, but in order for each of the two
+    // middleware
     router = router.layer(
         ServiceBuilder::new()
-            .layer(middleware::from_fn(inner_metrics_middleware)) // body size
+            .layer(DefaultBodyLimit::disable())
+            .layer(middleware::from_fn(body_limit_middleware)) // body size
             .layer(SetRequestIdLayer::x_request_id(MakeRequestUuid)) // request ids
             .layer(PropagateRequestIdLayer::x_request_id()) // propagate request id
             .layer(HandleErrorLayer::new(|uri: Uri, headers: HeaderMap, e: BoxError| async move {
@@ -120,14 +118,7 @@ pub fn build_router<A: Api>(
             .layer(TimeoutLayer::new(API_REQUEST_TIMEOUT)),
     );
 
-    // this is applied first
-    router = router.layer(
-        ServiceBuilder::new()
-            .layer(middleware::from_fn(outer_metrics_middleware)) // status and full latency
-            .layer(RequestBodyLimitLayer::new(MAX_PAYLOAD_LENGTH)), // streaming body limit
-    );
-
-    // Add Extension layers
+    // extensions
     router = router
         .layer(Extension(builder_api))
         .layer(Extension(proposer_api))

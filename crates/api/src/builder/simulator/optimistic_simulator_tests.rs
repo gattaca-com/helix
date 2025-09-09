@@ -9,7 +9,7 @@ mod simulator_tests {
     use helix_database::mock_database_service::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_types::{
-        BidTrace, BlobsBundle, BlsPublicKey, BlsSignature, ExecutionPayloadElectra,
+        BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload,
         SignedBidSubmission, SignedBidSubmissionElectra, TestRandomSeed,
     };
     use reqwest::Client;
@@ -39,21 +39,20 @@ mod simulator_tests {
     }
 
     fn get_sim_req() -> BlockSimRequest {
-        let electra_exec_payload = ExecutionPayloadElectra {
-            block_hash: b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5")
-                .into(),
-            ..Default::default()
+        let electra_exec_payload = ExecutionPayload {
+            block_hash: b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5"),
+            ..ExecutionPayload::test_random()
         };
 
         let bid_trace = BidTrace {
-            builder_pubkey: BlsPublicKey::test_random(),
+            builder_pubkey: BlsPublicKeyBytes::random(),
             block_hash: b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5"),
             ..BidTrace::test_random()
         };
         let signed_bid_submission = SignedBidSubmissionElectra {
             message: bid_trace,
             execution_payload: electra_exec_payload.into(),
-            signature: BlsSignature::test_random(),
+            signature: BlsSignatureBytes::random(),
             blobs_bundle: BlobsBundle::default().into(),
             execution_requests: Default::default(),
         };

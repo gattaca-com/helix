@@ -1,13 +1,12 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use alloy_consensus::{Bytes48, TxEip4844, TxType};
 use alloy_primitives::{Address, B256, U256};
-use axum::{
-    body::{to_bytes, Body},
-    http::StatusCode,
-    response::IntoResponse,
-    Extension,
-};
+use axum::{http::StatusCode, response::IntoResponse, Extension};
 use bytes::Bytes;
 use dashmap::DashMap;
 use helix_common::{
@@ -18,6 +17,7 @@ use helix_common::{
     bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     bid_submission::BidSubmission,
     chain_info::ChainInfo,
+    metrics::HYDRATION_LATENCY,
     simulator::BlockSimError,
     utils::utcnow_ns,
     BuilderInfo, RelayConfig, SubmissionTrace, ValidatorPreferences,
@@ -26,25 +26,31 @@ use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{
-    BlobWithMetadata, BlobsBundle, BlockMergingData, BlsPublicKey, Bundle, KzgCommitment,
-    MergeableBundle, MergeableOrder, MergeableOrders, MergeableTransaction, Order,
-    SignedBidSubmission, SignedBidSubmissionWithMergingData, Slot, Transactions,
+    BlobWithMetadata, BlobsBundle, BlockMergingData, BlsPublicKeyBytes, Bundle,
+    DehydratedBidSubmission, KzgCommitment, MergeableBundle, MergeableOrder, MergeableOrders,
+    MergeableTransaction, Order, SignedBidSubmission, SignedBidSubmissionWithMergingData, Slot,
+    Transactions,
 };
-use http::{HeaderMap, Uri};
+use http::{HeaderMap, HeaderValue, Uri};
 use parking_lot::RwLock;
+use tokio::sync::oneshot;
 use tracing::{debug, error, trace, warn};
 
 use super::multi_simulator::MultiSimulator;
 use crate::{
     builder::{
-        decoder::SubmissionDecoder, error::BuilderApiError, v2_check::V2SubMessage, BlockSimRequest,
+        decoder::SubmissionDecoder,
+        error::BuilderApiError,
+        hydration::{self, HydrationMessage},
+        v2_check::V2SubMessage,
+        BlockSimRequest,
     },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::MergingPoolMessage,
-    Api, HEADER_SEQUENCE,
+    Api, HEADER_API_KEY, HEADER_HYDRATE, HEADER_SEQUENCE,
 };
 
-pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 10;
+pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB
 
 #[derive(Clone)]
 pub struct BuilderApi<A: Api> {
@@ -73,7 +79,9 @@ pub struct BuilderApi<A: Api> {
     /// Best get header to check the current top bid on simulations
     pub shared_best_header: BestGetHeader,
     /// Builder pubkey -> (bid_slot, largest sequence number)
-    pub sequence_numbers: DashMap<BlsPublicKey, (Slot, u64)>,
+    pub sequence_numbers: DashMap<BlsPublicKeyBytes, (Slot, u64)>,
+    /// Hydration task sender
+    pub hydration_tx: tokio::sync::mpsc::Sender<HydrationMessage>,
 }
 
 impl<A: Api> BuilderApi<A> {
@@ -114,6 +122,9 @@ impl<A: Api> BuilderApi<A> {
             }
         });
 
+        let (hydration_tx, hydration_rx) = tokio::sync::mpsc::channel(10_000);
+        hydration::spawn_hydration_task(hydration_rx);
+
         Self {
             auctioneer,
             db,
@@ -136,6 +147,8 @@ impl<A: Api> BuilderApi<A> {
             tx_root_cache,
             shared_best_header,
             sequence_numbers,
+
+            hydration_tx,
         }
     }
 
@@ -204,7 +217,7 @@ impl<A: Api> BuilderApi<A> {
             trace!("skipping signature verification");
         } else {
             // Verify the payload signature
-            if let Err(err) = payload.verify_signature(&self.chain_info.context) {
+            if let Err(err) = payload.verify_signature(self.chain_info.builder_domain) {
                 warn!(%err, "failed to verify signature");
                 return Err(BuilderApiError::SignatureVerificationFailed);
             }
@@ -264,11 +277,8 @@ impl<A: Api> BuilderApi<A> {
 
         debug!("validating block");
 
-        let current_slot_coord = (
-            payload.slot().as_u64(),
-            payload.proposer_public_key().clone(),
-            *payload.parent_hash(),
-        );
+        let current_slot_coord =
+            (payload.slot().as_u64(), *payload.proposer_public_key(), *payload.parent_hash());
 
         let inclusion_list = self
             .current_inclusion_list
@@ -325,7 +335,7 @@ impl<A: Api> BuilderApi<A> {
                 "builder is not optimistic"
             );
             return Err(BuilderApiError::BuilderNotOptimistic {
-                builder_pub_key: payload.builder_public_key().clone(),
+                builder_pub_key: *payload.builder_public_key(),
             });
         } else if builder_info.collateral < payload.value() {
             warn!(
@@ -335,7 +345,7 @@ impl<A: Api> BuilderApi<A> {
                 "builder does not have enough collateral"
             );
             return Err(BuilderApiError::NotEnoughOptimisticCollateral {
-                builder_pub_key: payload.builder_public_key().clone().into(),
+                builder_pub_key: *payload.builder_public_key(),
                 collateral: builder_info.collateral,
                 collateral_required: payload.value(),
                 is_optimistic: builder_info.is_optimistic,
@@ -347,7 +357,7 @@ impl<A: Api> BuilderApi<A> {
     }
 
     /// Fetch the builder's information. Default info is returned if fetching fails.
-    pub(crate) fn fetch_builder_info(&self, builder_pub_key: &BlsPublicKey) -> BuilderInfo {
+    pub(crate) fn fetch_builder_info(&self, builder_pub_key: &BlsPublicKeyBytes) -> BuilderInfo {
         match self.auctioneer.get_builder_info(builder_pub_key) {
             Ok(info) => info,
             Err(err) => {
@@ -371,7 +381,7 @@ impl<A: Api> BuilderApi<A> {
     pub(crate) async fn demote_builder(
         &self,
         slot: u64,
-        builder: &BlsPublicKey,
+        builder: &BlsPublicKeyBytes,
         block_hash: &B256,
         err: &BuilderApiError,
     ) {
@@ -404,7 +414,7 @@ impl<A: Api> BuilderApi<A> {
     /// Assume the slot is already validated
     pub(crate) fn check_and_update_sequence_number(
         &self,
-        builder_pubkey: &BlsPublicKey,
+        builder_pubkey: &BlsPublicKeyBytes,
         bid_slot: Slot,
         headers: &HeaderMap,
     ) -> Result<(), BuilderApiError> {
@@ -437,7 +447,7 @@ impl<A: Api> BuilderApi<A> {
                 });
             }
         } else {
-            self.sequence_numbers.insert(builder_pubkey.clone(), (bid_slot, new_seq));
+            self.sequence_numbers.insert(*builder_pubkey, (bid_slot, new_seq));
         }
 
         Ok(())
@@ -450,14 +460,16 @@ impl<A: Api> BuilderApi<A> {
 /// - Automatically falls back to JSON if SSZ deserialization fails.
 /// - Handles GZIP-compressed payloads.
 ///
-/// It returns a tuple of the decoded payload and if cancellations are enabled.
+/// Returns (skip_sigverify, payload, is_cancellations_enabled)
 #[tracing::instrument(skip_all)]
-pub async fn decode_payload(
+pub async fn decode_payload<A: Api>(
+    bid_slot: u64,
+    api: &BuilderApi<A>,
     uri: &Uri,
     headers: &HeaderMap,
-    req: Body,
+    body_bytes: bytes::Bytes,
     trace: &mut SubmissionTrace,
-) -> Result<(SignedBidSubmissionWithMergingData, bool), BuilderApiError> {
+) -> Result<(bool, SignedBidSubmissionWithMergingData, bool), BuilderApiError> {
     // Extract the query parameters
     let is_cancellations_enabled = uri
         .query()
@@ -473,13 +485,81 @@ pub async fn decode_payload(
         })
         .unwrap_or(false);
 
+    const TRUE_HEADER: HeaderValue = HeaderValue::from_static("true");
+    const HEADER_IS_MERGEABLE: &str = "x-mergeable";
+
+    let has_mergeable_data =
+        matches!(headers.get(HEADER_IS_MERGEABLE), Some(header) if header == TRUE_HEADER);
+
     let decoder = SubmissionDecoder::from_headers(headers);
-    let body_bytes = to_bytes(req, MAX_PAYLOAD_LENGTH).await?;
-    let payload_with_merging_data = decoder.decode(body_bytes)?;
+
+    let should_hydrate = headers.get(HEADER_HYDRATE).is_some();
+    let (skip_sigverify, payload_with_merging_data): (bool, SignedBidSubmissionWithMergingData) =
+        if should_hydrate {
+            let dehydrated_payload: DehydratedBidSubmission = decoder.decode(body_bytes)?;
+
+            // caches are per builder and the builder pubkey is still unvalidated so we rely on the
+            // api key pubkey for safety
+            let skip_sigverify = headers.get(HEADER_API_KEY).is_some_and(|key| {
+                api.auctioneer.validate_api_key(key, dehydrated_payload.builder_pubkey())
+            });
+
+            if !skip_sigverify {
+                return Err(BuilderApiError::UntrustedBuilderOnDehydratedPayload);
+            }
+
+            let start = Instant::now();
+            let (tx, rx) = oneshot::channel();
+            api.hydration_tx
+                .send((bid_slot, dehydrated_payload, tx))
+                .await
+                .inspect_err(|_| error!("failed to send dehydrated payload to hydration task"))
+                .map_err(|_| BuilderApiError::InternalError)?;
+
+            let res = match tokio::time::timeout(Duration::from_millis(500), rx).await {
+                Ok(Ok(res)) => res.map_err(BuilderApiError::HydrationError),
+                _ => {
+                    error!("timed out waiting for hydrated payload");
+                    Err(BuilderApiError::InternalError)
+                }
+            }?;
+
+            HYDRATION_LATENCY.observe(start.elapsed().as_micros() as f64);
+
+            // TODO: add support for merging data on dehydrated payloads
+            let payload_with_merging_data = SignedBidSubmissionWithMergingData {
+                submission: res,
+                merging_data: Default::default(),
+            };
+            (skip_sigverify, payload_with_merging_data)
+        } else {
+            let payload_with_merging_data: SignedBidSubmissionWithMergingData =
+                if has_mergeable_data {
+                    decoder.decode(body_bytes)?
+                } else {
+                    let submission: SignedBidSubmission = decoder.decode(body_bytes)?;
+                    SignedBidSubmissionWithMergingData {
+                        submission,
+                        merging_data: Default::default(),
+                    }
+                };
+            let payload = &payload_with_merging_data.submission;
+
+            let skip_sigverify = headers.get(HEADER_API_KEY).is_some_and(|key| {
+                api.auctioneer.validate_api_key(key, payload.builder_public_key())
+            });
+
+            (skip_sigverify, payload_with_merging_data)
+        };
+
     let payload = &payload_with_merging_data.submission;
+
+    payload.validate_payload_ssz_lengths()?;
 
     trace.decode = utcnow_ns();
     debug!(
+        skip_sigverify,
+        is_cancellations_enabled,
         timestamp_after_decoding = trace.decode,
         decode_latency_ns = trace.decode.saturating_sub(trace.receive),
         builder_pub_key = ?payload.builder_public_key(),
@@ -487,11 +567,11 @@ pub async fn decode_payload(
         proposer_pubkey = ?payload.proposer_public_key(),
         parent_hash = ?payload.parent_hash(),
         value = ?payload.value(),
-        num_tx = payload.execution_payload_ref().transactions().len(),
+        num_tx = payload.execution_payload_ref().transactions.len(),
         "payload info"
     );
 
-    Ok((payload_with_merging_data, is_cancellations_enabled))
+    Ok((skip_sigverify, payload_with_merging_data, is_cancellations_enabled))
 }
 
 /// - Validates the expected block.timestamp.
@@ -543,8 +623,8 @@ pub(crate) fn sanity_check_block_submission(
 
     if next_duty.entry.registration.message.pubkey != bid_trace.proposer_pubkey {
         return Err(BuilderApiError::ProposerPublicKeyMismatch {
-            got: bid_trace.proposer_pubkey.clone().into(),
-            expected: next_duty.entry.registration.message.pubkey.clone().into(),
+            got: bid_trace.proposer_pubkey,
+            expected: next_duty.entry.registration.message.pubkey,
         });
     }
 
@@ -592,16 +672,16 @@ pub fn get_mergeable_orders(
     merging_data: BlockMergingData,
 ) -> Result<MergeableOrders, OrderValidationError> {
     let execution_payload = payload.execution_payload_ref();
-    if execution_payload.fee_recipient() != merging_data.builder_address {
+    if execution_payload.fee_recipient != merging_data.builder_address {
         return Err(OrderValidationError::FeeRecipientMismatch {
             got: merging_data.builder_address,
-            expected: execution_payload.fee_recipient(),
+            expected: execution_payload.fee_recipient,
         });
     }
     let block_blobs_bundles = payload.blobs_bundle();
     let blob_versioned_hashes: Vec<_> =
         block_blobs_bundles.commitments.iter().map(|c| calculate_versioned_hash(*c)).collect();
-    let txs = execution_payload.transactions();
+    let txs = &execution_payload.transactions;
 
     // Expand all orders to include the tx's bytes, checking for missing blobs.
     let mergeable_orders = merging_data
@@ -722,34 +802,9 @@ fn calculate_versioned_hash(commitment: Bytes48) -> B256 {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{
-        header::{CONTENT_ENCODING, CONTENT_TYPE},
-        HeaderValue, Uri,
-    };
-    use http::Request;
     use ssz::Decode;
 
     use super::*;
-
-    async fn build_test_request(payload: Vec<u8>, is_gzip: bool, is_ssz: bool) -> Request<Body> {
-        let mut req = Request::new(Body::from(payload));
-        *req.uri_mut() = Uri::from_static("/some_path?cancellations=1");
-
-        if is_gzip {
-            req.headers_mut().insert(CONTENT_ENCODING, HeaderValue::from_static("gzip"));
-        }
-
-        if is_ssz {
-            req.headers_mut()
-                .insert(CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
-        }
-
-        req
-    }
-
-    async fn create_test_submission_trace() -> SubmissionTrace {
-        SubmissionTrace::default()
-    }
 
     #[tokio::test]
     async fn test_decode_json_payload() {
@@ -757,10 +812,10 @@ mod tests {
 
         match serde_json::from_slice::<SignedBidSubmission>(&json_payload) {
             Ok(res) => {
-                println!("THIS IS THE RESULT: {:?}", res);
+                println!("THIS IS THE RESULT: {res:?}");
             }
             Err(err) => {
-                println!("THIS IS THE ERR: {:?}", err);
+                println!("THIS IS THE ERR: {err:?}");
             }
         }
     }
@@ -896,10 +951,10 @@ mod tests {
         ];
         match serde_json::from_slice::<SignedBidSubmission>(&json_payload) {
             Ok(res) => {
-                println!("THIS IS THE RESULT: {:?}", res);
+                println!("THIS IS THE RESULT: {res:?}");
             }
             Err(err) => {
-                println!("THIS IS THE ERR: {:?}", err);
+                println!("THIS IS THE ERR: {err:?}");
             }
         }
     }
@@ -909,10 +964,10 @@ mod tests {
         let ssz_payload: Vec<u8> = vec![];
         match SignedBidSubmission::from_ssz_bytes(&ssz_payload) {
             Ok(res) => {
-                println!("THIS IS THE RESULT: {:?}", res);
+                println!("THIS IS THE RESULT: {res:?}");
             }
             Err(err) => {
-                println!("THIS IS THE ERR: {:?}", err);
+                println!("THIS IS THE ERR: {err:?}");
             }
         }
     }
@@ -1000,30 +1055,11 @@ mod tests {
 
         match SignedBidSubmission::from_ssz_bytes(&ssz_payload) {
             Ok(res) => {
-                println!("THIS IS THE RESULT: {:?}", res);
+                println!("THIS IS THE RESULT: {res:?}");
             }
             Err(err) => {
-                println!("THIS IS THE ERR: {:?}", err);
+                println!("THIS IS THE ERR: {err:?}");
             }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_decode_payload_too_large() {
-        let payload = vec![0u8; MAX_PAYLOAD_LENGTH + 1];
-        let req = build_test_request(payload, false, false).await;
-        let mut trace = create_test_submission_trace().await;
-
-        let (parts, body) = req.into_parts();
-        let result = decode_payload(&parts.uri, &parts.headers, body, &mut trace).await;
-        match result {
-            Ok(_) => panic!("Should have failed"),
-            Err(err) => match err {
-                BuilderApiError::AxumError(err) => {
-                    assert_eq!(err.to_string(), "length limit exceeded");
-                }
-                _ => panic!("Should have failed with AxumError"),
-            },
         }
     }
 }

@@ -1,7 +1,7 @@
 use alloy_consensus::TxEnvelope;
 use alloy_primitives::{Address, Bytes, B256, U256};
 use alloy_rlp::Decodable;
-use helix_types::{BlsPublicKey, BlsPublicKeyBytes, SignedValidatorRegistration, Slot};
+use helix_types::{BlsPublicKeyBytes, SignedValidatorRegistration, Slot};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 
@@ -47,7 +47,7 @@ pub struct TopBidUpdate {
     pub value: U256,
 }
 
-pub type SlotCoordinate = (u64, BlsPublicKey, B256);
+pub type SlotCoordinate = (u64, BlsPublicKeyBytes, B256);
 
 #[derive(Clone, Debug)]
 pub struct InclusionListWithKey {
@@ -80,7 +80,7 @@ impl TryFrom<InclusionList> for InclusionListWithMetadata {
 
         for encoded_tx in inclusion_list.txs {
             let decoded_tx = TxEnvelope::decode(&mut encoded_tx.as_ref())
-                .map_err(|err| format!("Failed to decode transaction: {}", err))?;
+                .map_err(|err| format!("Failed to decode transaction: {err}"))?;
             let tx_with_md =
                 InclusionListTxWithMetadata { hash: *decoded_tx.hash(), bytes: encoded_tx };
 

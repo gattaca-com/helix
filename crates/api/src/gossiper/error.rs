@@ -1,12 +1,10 @@
-use helix_types::CryptoError;
-
 #[derive(Debug, thiserror::Error)]
 pub enum GossipError {
     #[error("Client is not connected")]
     ClientNotConnected,
 
     #[error("Failed to broadcast block: {0}")]
-    BroadcastError(#[from] tonic::Status),
+    BroadcastError(Box<tonic::Status>),
 
     #[error("Failed to reconnect")]
     ReconnectFailed,
@@ -23,8 +21,8 @@ pub enum GossipError {
     #[error("Uuid decode error: {0:?}")]
     UuidDecodeError(#[from] uuid::Error),
 
-    #[error("Bls decode error: {0:?}")]
-    BlsDecodeError(CryptoError),
+    #[error("bls decode error")]
+    BlsDecodeError,
 
     #[error("Slice decode error: {0:?}")]
     SliceDecodeError(#[from] std::array::TryFromSliceError),

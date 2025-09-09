@@ -60,6 +60,7 @@ pub async fn process_gossip_messages<A: Api>(
                                     PayloadAndBlobsRef::from(&execution_payload),
                                     payload.slot,
                                     &payload.proposer_pub_key,
+                                    proposer.chain_info.current_fork_name(),
                                 ))
                                 .await
                         }

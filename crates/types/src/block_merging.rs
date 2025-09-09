@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 use ssz_derive::{Decode, Encode};
 
 use crate::{
-    blobs::{KzgCommitment, KzgProof},
+    fields::{KzgCommitment, KzgProof},
     Blob, SignedBidSubmission,
 };
 
@@ -29,7 +29,7 @@ pub enum Order {
 
 impl TestRandom for Order {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
-        if rng.gen() {
+        if rng.random() {
             Order::Tx(Transaction::random_for_test(rng))
         } else {
             Order::Bundle(Bundle::random_for_test(rng))

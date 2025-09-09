@@ -1,6 +1,6 @@
 use alloy_primitives::{Address, B256, U256};
 use helix_types::{
-    BidTrace, Bloom, BlsPublicKey, BlsSignature, ExtraData, SignedBidSubmission, Slot,
+    BidTrace, Bloom, BlsPublicKeyBytes, BlsSignatureBytes, ExtraData, SignedBidSubmission, Slot,
 };
 use tree_hash::TreeHash;
 
@@ -14,7 +14,7 @@ impl BidSubmission for SignedBidSubmission {
         }
     }
 
-    fn signature(&self) -> &BlsSignature {
+    fn signature(&self) -> &BlsSignatureBytes {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => &signed_bid_submission.signature,
         }
@@ -44,7 +44,7 @@ impl BidSubmission for SignedBidSubmission {
         }
     }
 
-    fn builder_public_key(&self) -> &BlsPublicKey {
+    fn builder_public_key(&self) -> &BlsPublicKeyBytes {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 &signed_bid_submission.message.builder_pubkey
@@ -52,7 +52,7 @@ impl BidSubmission for SignedBidSubmission {
         }
     }
 
-    fn proposer_public_key(&self) -> &BlsPublicKey {
+    fn proposer_public_key(&self) -> &BlsPublicKeyBytes {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 &signed_bid_submission.message.proposer_pubkey
@@ -154,9 +154,7 @@ impl BidSubmission for SignedBidSubmission {
 
     fn transactions_root(&self) -> B256 {
         match self {
-            SignedBidSubmission::Electra(bid) => {
-                bid.execution_payload.transactions.tree_hash_root()
-            }
+            SignedBidSubmission::Electra(bid) => bid.execution_payload.transaction_root(),
         }
     }
 
@@ -168,31 +166,31 @@ impl BidSubmission for SignedBidSubmission {
         let bid_trace = self.bid_trace();
         let execution_payload = self.execution_payload_ref();
 
-        if bid_trace.parent_hash != *execution_payload.parent_hash() {
+        if bid_trace.parent_hash != execution_payload.parent_hash {
             return Err(BidValidationError::ParentHashMismatch {
                 message: bid_trace.parent_hash,
-                payload: *execution_payload.parent_hash(),
+                payload: execution_payload.parent_hash,
             });
         }
 
-        if bid_trace.block_hash != *execution_payload.block_hash() {
+        if bid_trace.block_hash != execution_payload.block_hash {
             return Err(BidValidationError::BlockHashMismatch {
                 message: bid_trace.block_hash,
-                payload: *execution_payload.block_hash(),
+                payload: execution_payload.block_hash,
             });
         }
 
-        if bid_trace.gas_limit != execution_payload.gas_limit() {
+        if bid_trace.gas_limit != execution_payload.gas_limit {
             return Err(BidValidationError::GasLimitMismatch {
                 message: bid_trace.gas_limit,
-                payload: execution_payload.gas_limit(),
+                payload: execution_payload.gas_limit,
             });
         }
 
-        if bid_trace.gas_used != execution_payload.gas_used() {
+        if bid_trace.gas_used != execution_payload.gas_used {
             return Err(BidValidationError::GasUsedMismatch {
                 message: bid_trace.gas_used,
-                payload: execution_payload.gas_used(),
+                payload: execution_payload.gas_used,
             });
         }
 

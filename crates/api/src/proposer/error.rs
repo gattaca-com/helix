@@ -6,7 +6,7 @@ use axum::{
 use helix_beacon::error::BeaconClientError;
 use helix_database::error::DatabaseError;
 use helix_datastore::error::AuctioneerError;
-use helix_types::{BlsPublicKey, Slot};
+use helix_types::{BlsPublicKey, SigError, Slot, SszError};
 use hyper::StatusCode;
 use thiserror::Error;
 
@@ -172,6 +172,12 @@ pub enum ProposerApiError {
 
     #[error("blob kzg commitments mismatch in blinded block and payload")]
     BlobKzgCommitmentsMismatch,
+
+    #[error("ssz error: {0:?}")]
+    SszError(SszError),
+
+    #[error(transparent)]
+    SigError(#[from] SigError),
 }
 
 impl IntoResponse for ProposerApiError {
@@ -226,7 +232,9 @@ impl IntoResponse for ProposerApiError {
             ProposerApiError::InvalidBlindedBlockSlot { .. } |
             ProposerApiError::InvalidBlindedBlockParentHash { .. } |
             ProposerApiError::ParentHashUnknownForSlot { .. } |
-            ProposerApiError::BlobKzgCommitmentsMismatch => StatusCode::BAD_REQUEST,
+            ProposerApiError::BlobKzgCommitmentsMismatch |
+            ProposerApiError::SszError(_) |
+            ProposerApiError::SigError(_) => StatusCode::BAD_REQUEST,
 
             ProposerApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
 

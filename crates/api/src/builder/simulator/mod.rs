@@ -17,7 +17,7 @@ use helix_common::{
     ValidatorPreferences,
 };
 use helix_types::{
-    BidTrace, BlobsBundle, BlsSignature, ExecutionPayload, ExecutionPayloadRef, ExecutionRequests,
+    BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests,
     MergeableOrderWithOrigin, SignedBidSubmission,
 };
 use serde_json::json;
@@ -28,7 +28,7 @@ pub struct BlockSimRequest {
     pub registered_gas_limit: u64,
     pub message: BidTrace,
     pub execution_payload: ExecutionPayload,
-    pub signature: BlsSignature,
+    pub signature: BlsSignatureBytes,
     pub proposer_preferences: ValidatorPreferences,
     pub blobs_bundle: Option<Arc<BlobsBundle>>,
     pub execution_requests: Option<Arc<ExecutionRequests>>,
@@ -48,8 +48,8 @@ impl BlockSimRequest {
         Self {
             registered_gas_limit,
             message: block.bid_trace().clone(),
-            execution_payload: block.execution_payload_ref().clone_from_ref(),
-            signature: block.signature().clone(),
+            execution_payload: block.execution_payload_ref().clone(),
+            signature: *block.signature(),
             apply_blacklist: proposer_preferences.filtering.is_regional(),
             proposer_preferences,
             blobs_bundle: Some(block.blobs_bundle().clone()),
@@ -65,7 +65,7 @@ pub struct BlockMergeRequestRef<'a> {
     /// The original payload value
     pub original_value: U256,
     pub proposer_fee_recipient: Address,
-    pub execution_payload: ExecutionPayloadRef<'a>,
+    pub execution_payload: &'a ExecutionPayload,
     pub merging_data: &'a [MergeableOrderWithOrigin],
 }
 
@@ -80,10 +80,10 @@ impl BlockMergeRequest {
     pub fn new(
         original_value: U256,
         proposer_fee_recipient: Address,
-        execution_payload: ExecutionPayloadRef,
+        execution_payload: &ExecutionPayload,
         merging_data: &[MergeableOrderWithOrigin],
     ) -> Self {
-        let block_hash = *execution_payload.block_hash();
+        let block_hash = execution_payload.block_hash;
         // We serialize the request ahead of time, to avoid copying the original
         // payload and merging data.
         let request_ref = BlockMergeRequestRef {

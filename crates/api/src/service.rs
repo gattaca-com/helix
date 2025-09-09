@@ -223,7 +223,7 @@ mod test {
         )
         .expect("could not convert env signing key to SecretKey");
         let public_key = signing_key.public_key();
-        assert_eq!(format!("{:?}", public_key), "0x99c8b06e7626f20754156946717a3be789c10bcd1979536dbf71003c58475b489ab3982e85d7ed0b7b5ad1cbc381d65d");
+        assert_eq!(format!("{public_key:?}"), "0x99c8b06e7626f20754156946717a3be789c10bcd1979536dbf71003c58475b489ab3982e85d7ed0b7b5ad1cbc381d65d");
     }
 
     #[tokio::test]

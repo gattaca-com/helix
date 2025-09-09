@@ -7,7 +7,7 @@ use ethers::{
     types::transaction::eip2718::TypedTransaction,
 };
 use helix_common::{PrimevConfig, ProposerDuty};
-use helix_types::BlsPublicKey;
+use helix_types::BlsPublicKeyBytes;
 use tracing::{debug, error};
 
 #[derive(Debug, EthEvent)]
@@ -20,11 +20,11 @@ pub struct ValueChanged {
 }
 
 /// Helper function to process BLS keys from raw event data
-fn process_bls_key_data(data: &[u8]) -> Option<BlsPublicKey> {
+fn process_bls_key_data(data: &[u8]) -> Option<BlsPublicKeyBytes> {
     debug!(raw = alloy_primitives::hex::encode_prefixed(data), "Raw BLS key data");
 
     // Try directly with the raw data first
-    if let Ok(key) = BlsPublicKey::deserialize(data) {
+    if let Ok(key) = BlsPublicKeyBytes::try_from(data) {
         return Some(key);
     }
 
@@ -50,7 +50,7 @@ fn process_bls_key_data(data: &[u8]) -> Option<BlsPublicKey> {
     let key_bytes = &data_part[..48];
 
     // Extract the BLS key
-    match BlsPublicKey::deserialize(key_bytes) {
+    match BlsPublicKeyBytes::try_from(key_bytes) {
         Ok(key) => Some(key),
         Err(err) => {
             debug!("Failed to create BLS key from processed data: {:?}", err);
@@ -137,7 +137,7 @@ impl EthereumPrimevService {
 }
 
 impl EthereumPrimevService {
-    pub async fn get_registered_primev_builders(&self) -> Vec<BlsPublicKey> {
+    pub async fn get_registered_primev_builders(&self) -> Vec<BlsPublicKeyBytes> {
         let event = self.builder_contract.event_for_name("BLSKeyAdded").unwrap().from_block(0);
 
         let providers: Vec<ValueChanged> = match event.query().await {
@@ -163,14 +163,14 @@ impl EthereumPrimevService {
     pub async fn get_registered_primev_validators(
         &self,
         proposer_duties: Vec<ProposerDuty>,
-    ) -> Vec<BlsPublicKey> {
+    ) -> Vec<BlsPublicKeyBytes> {
         if proposer_duties.is_empty() {
             debug!("No proposer duties provided, skipping validator check");
             return Vec::new();
         }
 
         let validator_pubkeys: Vec<Bytes> =
-            proposer_duties.iter().map(|duty| Bytes::from(duty.pubkey.serialize())).collect();
+            proposer_duties.iter().map(|duty| Bytes::from(duty.pubkey.0)).collect();
 
         let func = match self.validator_contract.abi().function("areValidatorsOptedIn") {
             Ok(f) => f,
@@ -248,7 +248,7 @@ impl EthereumPrimevService {
         for (index, status) in opted_in_statuses.iter().enumerate() {
             if status.0 || status.1 || status.2 {
                 if let Some(duty) = proposer_duties.get(index) {
-                    opted_in_validators.push(duty.pubkey.clone());
+                    opted_in_validators.push(duty.pubkey);
                 }
             }
         }

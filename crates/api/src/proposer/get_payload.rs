@@ -1,12 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
-use axum::{
-    body::{to_bytes, Body},
-    http::{HeaderMap, Request},
-    response::IntoResponse,
-    Extension,
-};
+use axum::{http::HeaderMap, response::IntoResponse, Extension};
 use helix_beacon::types::BroadcastValidation;
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry,
@@ -14,12 +9,12 @@ use helix_common::{
     metadata_provider::MetadataProvider,
     task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
-    GetPayloadTrace,
+    GetPayloadTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
 use helix_datastore::{error::AuctioneerError, Auctioneer};
 use helix_types::{
-    BlsPublicKey, ChainSpec, ExecPayload, ExecutionPayloadHeader, GetPayloadResponse,
+    BlindedPayloadRef, BlsPublicKey, BlsPublicKeyBytes, ChainSpec, ExecPayload, GetPayloadResponse,
     PayloadAndBlobs, SigError, SignedBlindedBeaconBlock, Slot, SlotClockTrait,
     VersionedSignedProposal,
 };
@@ -28,7 +23,7 @@ use tracing::{debug, error, info, warn, Instrument};
 
 use super::ProposerApi;
 use crate::{
-    constants::{GET_PAYLOAD_REQUEST_CUTOFF_MS, MAX_BLINDED_BLOCK_LENGTH},
+    constants::GET_PAYLOAD_REQUEST_CUTOFF_MS,
     gossiper::types::{BroadcastGetPayloadParams, RequestPayloadParams},
     proposer::{error::ProposerApiError, unblind_beacon_block},
     Api,
@@ -46,31 +41,24 @@ impl<A: Api> ProposerApi<A> {
     /// 6. Returns the unblinded payload to proposer.
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlock>
-    #[tracing::instrument(skip_all, fields(id))]
+    #[tracing::instrument(skip_all, fields(id), err)]
     pub async fn get_payload(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
-        Extension(on_receive_ns): Extension<u64>,
+        Extension(timings): Extension<RequestTimings>,
         headers: HeaderMap,
-        req: Request<Body>,
+        body: bytes::Bytes,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         let request_id = extract_request_id(&headers);
         tracing::Span::current().record("id", request_id.to_string());
 
-        let mut trace = GetPayloadTrace { receive: on_receive_ns, ..Default::default() };
+        let mut trace = GetPayloadTrace::init_from_timings(timings);
 
         let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
 
-        let signed_blinded_block: SignedBlindedBeaconBlock =
-            match deserialize_get_payload_bytes(req).await {
-                Ok(signed_block) => signed_block,
-                Err(err) => {
-                    warn!(
-                        error = %err,
-                        "failed to deserialize signed block",
-                    );
-                    return Err(err);
-                }
-            };
+        let signed_blinded_block: SignedBlindedBeaconBlock = serde_json::from_slice(&body)
+            .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
+
+        trace.decode = utcnow_ns();
 
         let block_hash = signed_blinded_block
             .message()
@@ -232,7 +220,11 @@ impl<A: Api> ProposerApi<A> {
             return Err(err);
         }
 
-        if let Err(err) = validate_block_equality(&versioned_payload, &signed_blinded_block) {
+        if let Err(err) = validate_block_equality(
+            &versioned_payload,
+            &signed_blinded_block,
+            &self.chain_info.context,
+        ) {
             error!(
                 %err,
                 "execution payload invalid, does not match known ExecutionPayload",
@@ -293,8 +285,7 @@ impl<A: Api> ProposerApi<A> {
             self_clone
                 .save_delivered_payload_info(
                     payload_clone,
-                    &signed_blinded_block,
-                    &proposer_public_key,
+                    proposer_public_key,
                     &trace_clone,
                     user_agent,
                 )
@@ -331,7 +322,8 @@ impl<A: Api> ProposerApi<A> {
             }
         }
 
-        let get_payload_response = GetPayloadResponse::new_no_metadata(Some(fork), payload);
+        let get_payload_response =
+            GetPayloadResponse { version: fork, metadata: Default::default(), data: payload };
 
         // Return response
         info!(?trace, timestamp = utcnow_ns(), "delivering payload");
@@ -376,7 +368,7 @@ impl<A: Api> ProposerApi<A> {
     pub(crate) async fn get_execution_payload(
         &self,
         slot: u64,
-        pub_key: &BlsPublicKey,
+        pub_key: &BlsPublicKeyBytes,
         block_hash: &B256,
         request_missing_payload: bool,
     ) -> Result<PayloadAndBlobs, ProposerApiError> {
@@ -418,7 +410,7 @@ impl<A: Api> ProposerApi<A> {
                         warn!("execution payload not found");
                     }
                     if retry == 0 && request_missing_payload {
-                        let proposer_pubkey_clone = pub_key.clone();
+                        let proposer_pubkey_clone = *pub_key;
                         let gossiper = self.gossiper.clone();
                         let block_hash = *block_hash;
 
@@ -451,28 +443,15 @@ impl<A: Api> ProposerApi<A> {
     async fn save_delivered_payload_info(
         &self,
         payload: Arc<PayloadAndBlobs>,
-        signed_blinded_block: &SignedBlindedBeaconBlock,
-        proposer_public_key: &BlsPublicKey,
+        proposer_public_key: BlsPublicKeyBytes,
         trace: &GetPayloadTrace,
         user_agent: Option<String>,
     ) {
-        let bid_trace = match self.auctioneer.get_bid_trace(
-            signed_blinded_block.message().slot().into(),
-            proposer_public_key,
-            &payload.execution_payload.block_hash().0,
-        ) {
-            Some(bt) => bt,
-            None => {
-                error!("bid trace not found");
-                return;
-            }
-        };
-
         let db = self.db.clone();
         let trace = *trace;
         task::spawn(file!(), line!(), async move {
             if let Err(err) =
-                db.save_delivered_payload(&bid_trace, payload, &trace, user_agent).await
+                db.save_delivered_payload(proposer_public_key, payload, &trace, user_agent).await
             {
                 error!(%err, "error saving payload to database");
             }
@@ -514,14 +493,6 @@ impl<A: Api> ProposerApi<A> {
             });
         }
     }
-}
-
-async fn deserialize_get_payload_bytes(
-    req: Request<Body>,
-) -> Result<SignedBlindedBeaconBlock, ProposerApiError> {
-    let body = req.into_body();
-    let body_bytes = to_bytes(body, MAX_BLINDED_BLOCK_LENGTH).await?;
-    Ok(serde_json::from_slice(&body_bytes)?)
 }
 
 /// Validates the proposal coordinate of a given `SignedBlindedBeaconBlock`.
@@ -571,32 +542,38 @@ fn validate_proposal_coordinate(
 fn validate_block_equality(
     local_versioned_payload: &PayloadAndBlobs,
     provided_signed_blinded_block: &SignedBlindedBeaconBlock,
+    spec: &ChainSpec,
 ) -> Result<(), ProposerApiError> {
-    let message = provided_signed_blinded_block.message();
-    let body = message.body();
+    if provided_signed_blinded_block.fork_name(spec).is_err() {
+        return Err(ProposerApiError::UnsupportedBeaconChainVersion);
+    }
 
-    let local_header = local_versioned_payload.execution_payload.to_ref().into();
+    let body = provided_signed_blinded_block.message().body();
+    let provided_ex_payload =
+        body.execution_payload().map_err(|_| ProposerApiError::PayloadTypeMismatch)?;
 
-    match local_header {
-        ExecutionPayloadHeader::Bellatrix(_) |
-        ExecutionPayloadHeader::Capella(_) |
-        ExecutionPayloadHeader::Deneb(_) |
-        ExecutionPayloadHeader::Fulu(_) => {
-            return Err(ProposerApiError::UnsupportedBeaconChainVersion)
-        }
+    let local_payload = &local_versioned_payload.execution_payload;
 
-        ExecutionPayloadHeader::Electra(local_header) => {
-            let provided_header = &body
-                .execution_payload_electra()
-                .map_err(|_| ProposerApiError::PayloadTypeMismatch)?
-                .execution_payload_header;
-
+    match provided_ex_payload {
+        BlindedPayloadRef::Bellatrix(_) |
+        BlindedPayloadRef::Capella(_) |
+        BlindedPayloadRef::Deneb(_) |
+        BlindedPayloadRef::Fulu(_) |
+        BlindedPayloadRef::Gloas(_) => return Err(ProposerApiError::UnsupportedBeaconChainVersion),
+        BlindedPayloadRef::Electra(blinded_payload) => {
             info!(
-                local_header = ?local_header,
-                provided_header = ?provided_header,
+                local_header = ?local_payload,
+                provided_header = ?blinded_payload,
                 provided_version = %provided_signed_blinded_block.fork_name_unchecked(),
                 "validating block equality",
             );
+
+            let local_header = local_payload
+                .to_header()
+                .to_lighthouse_electra_header()
+                .map_err(ProposerApiError::SszError)?;
+
+            let provided_header = &blinded_payload.execution_payload_header;
 
             if &local_header != provided_header {
                 return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
@@ -620,10 +597,12 @@ fn validate_block_equality(
 fn verify_signed_blinded_block_signature(
     chain_info: &ChainInfo,
     signed_blinded_beacon_block: &mut SignedBlindedBeaconBlock,
-    public_key: &BlsPublicKey,
+    public_key: &BlsPublicKeyBytes,
     genesis_validators_root: B256,
     context: &ChainSpec,
 ) -> Result<(), SigError> {
+    let uncompressed_public_key = BlsPublicKey::deserialize(public_key.as_slice())
+        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
     let slot = signed_blinded_beacon_block.message().slot();
     let epoch = slot.epoch(chain_info.slots_per_epoch());
     let fork = context.fork_at_epoch(epoch);
@@ -632,7 +611,7 @@ fn verify_signed_blinded_block_signature(
 
     let valid = signed_blinded_beacon_block.verify_signature(
         None,
-        public_key,
+        &uncompressed_public_key,
         &fork,
         genesis_validators_root,
         context,

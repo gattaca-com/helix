@@ -1,5 +1,5 @@
 use alloy_primitives::{Address, B256, U256};
-use helix_types::{BlsPublicKey, Slot};
+use helix_types::{BlsPublicKey, BlsPublicKeyBytes, Slot};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -53,8 +53,8 @@ pub struct DeliveredPayloadsResponse {
     pub slot: Slot,
     pub parent_hash: B256,
     pub block_hash: B256,
-    pub builder_pubkey: BlsPublicKey,
-    pub proposer_pubkey: BlsPublicKey,
+    pub builder_pubkey: BlsPublicKeyBytes,
+    pub proposer_pubkey: BlsPublicKeyBytes,
     pub proposer_fee_recipient: Address,
     #[serde(with = "serde_utils::quoted_u64")]
     pub gas_limit: u64,
@@ -97,8 +97,8 @@ pub struct ReceivedBlocksResponse {
     pub slot: Slot,
     pub parent_hash: B256,
     pub block_hash: B256,
-    pub builder_pubkey: BlsPublicKey,
-    pub proposer_pubkey: BlsPublicKey,
+    pub builder_pubkey: BlsPublicKeyBytes,
+    pub proposer_pubkey: BlsPublicKeyBytes,
     pub proposer_fee_recipient: Address,
     #[serde(with = "serde_utils::quoted_u64")]
     pub gas_limit: u64,
@@ -118,5 +118,5 @@ pub struct ReceivedBlocksResponse {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ValidatorRegistrationParams {
-    pub pubkey: BlsPublicKey,
+    pub pubkey: BlsPublicKeyBytes,
 }

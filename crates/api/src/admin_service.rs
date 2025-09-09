@@ -39,6 +39,7 @@ async fn disable_kill_switch<A: Auctioneer>(
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod test {
     use std::sync::Arc;
 

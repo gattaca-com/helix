@@ -21,7 +21,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
-use helix_types::{BlsPublicKey, Epoch, Slot, SlotClockTrait};
+use helix_types::{BlsPublicKeyBytes, Epoch, Slot, SlotClockTrait};
 use tokio::sync::{broadcast, Mutex};
 use tracing::{debug, error, info, warn, Instrument};
 
@@ -312,7 +312,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         if let Some(inclusion_list_service) = self.inclusion_list_service.as_ref() {
             if let Some(next_duty) = proposer_duties.iter().find(|duty| duty.slot == head_slot) {
-                let pub_key = next_duty.pubkey.clone();
+                let pub_key = next_duty.pubkey;
                 let inclusion_list_service = inclusion_list_service.clone();
                 task::spawn(
                     file!(),
@@ -376,7 +376,10 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     async fn update_proposer_duties_in_db(
         &self,
         proposer_duties: &[ProposerDuty],
-        signed_validator_registrations: &HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>,
+        signed_validator_registrations: &HashMap<
+            BlsPublicKeyBytes,
+            SignedValidatorRegistrationEntry,
+        >,
     ) -> Result<(), HousekeeperError> {
         debug!("updating proposer duties");
 
@@ -519,13 +522,14 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     /// Fetch validator registrations for `pub_keys` from database.
     async fn fetch_signed_validator_registrations(
         &self,
-        pubkeys: &[&BlsPublicKey],
-    ) -> Result<HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>, HousekeeperError> {
+        pubkeys: &[&BlsPublicKeyBytes],
+    ) -> Result<HashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>, HousekeeperError>
+    {
         let registrations: Vec<SignedValidatorRegistrationEntry> =
             self.db.get_validator_registrations_for_pub_keys(pubkeys).await?;
 
         let registrations =
-            registrations.into_iter().map(|entry| (entry.public_key().clone(), entry)).collect();
+            registrations.into_iter().map(|entry| (*entry.public_key(), entry)).collect();
 
         Ok(registrations)
     }
@@ -535,11 +539,12 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         &self,
         epoch: Epoch,
     ) -> Result<
-        (Vec<ProposerDuty>, HashMap<BlsPublicKey, SignedValidatorRegistrationEntry>),
+        (Vec<ProposerDuty>, HashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>),
         HousekeeperError,
     > {
         let proposer_duties = self.fetch_duties(epoch.as_u64()).await?;
-        let pubkeys: Vec<&BlsPublicKey> = proposer_duties.iter().map(|duty| &duty.pubkey).collect();
+        let pubkeys: Vec<&BlsPublicKeyBytes> =
+            proposer_duties.iter().map(|duty| &duty.pubkey).collect();
         let signed_validator_registrations =
             self.fetch_signed_validator_registrations(&pubkeys).await?;
 

@@ -1,20 +1,18 @@
 use std::sync::Arc;
 
 use alloy_primitives::{Address, B256, U256};
-use lh_test_random::TestRandom;
-use lh_types::{test_utils::TestRandom, ExecutionPayloadElectra, MainnetEthSpec, SignedRoot, Slot};
+use lh_types::{test_utils::TestRandom, SignedRoot, Slot};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    error::SigError, BlobsBundle, BlsPublicKey, BlsSignature, ChainSpec, ExecutionPayloadRef,
-    ExecutionRequests, PayloadAndBlobsRef,
+    error::SigError, fields::ExecutionRequests, BlobsBundle, BlsPublicKey, BlsPublicKeyBytes,
+    BlsSignature, BlsSignatureBytes, ExecutionPayload, PayloadAndBlobsRef, ValidationError,
 };
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash, TestRandom,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
+#[serde(deny_unknown_fields)]
 pub struct BidTrace {
     /// The slot associated with the block.
     #[serde(with = "serde_utils::quoted_u64")]
@@ -24,9 +22,9 @@ pub struct BidTrace {
     /// The hash of the block.
     pub block_hash: B256,
     /// The public key of the builder.
-    pub builder_pubkey: BlsPublicKey,
+    pub builder_pubkey: BlsPublicKeyBytes,
     /// The public key of the proposer.
-    pub proposer_pubkey: BlsPublicKey,
+    pub proposer_pubkey: BlsPublicKeyBytes,
     /// The recipient of the proposer's fee.
     pub proposer_fee_recipient: Address,
     /// The gas limit associated with the block.
@@ -40,6 +38,22 @@ pub struct BidTrace {
     pub value: U256,
 }
 
+impl TestRandom for BidTrace {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self {
+            slot: u64::random_for_test(rng),
+            parent_hash: B256::random_for_test(rng),
+            block_hash: B256::random_for_test(rng),
+            builder_pubkey: BlsPublicKeyBytes::random(),
+            proposer_pubkey: BlsPublicKeyBytes::random(),
+            proposer_fee_recipient: Address::random_for_test(rng),
+            gas_limit: u64::random_for_test(rng),
+            gas_used: u64::random_for_test(rng),
+            value: U256::random_for_test(rng),
+        }
+    }
+}
+
 impl SignedRoot for BidTrace {}
 
 impl BidTrace {
@@ -48,14 +62,26 @@ impl BidTrace {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 #[serde(deny_unknown_fields)]
 pub struct SignedBidSubmissionElectra {
     pub message: BidTrace,
-    pub execution_payload: Arc<ExecutionPayloadElectra<MainnetEthSpec>>,
+    pub execution_payload: Arc<ExecutionPayload>,
     pub blobs_bundle: Arc<BlobsBundle>,
     pub execution_requests: Arc<ExecutionRequests>,
-    pub signature: BlsSignature,
+    pub signature: BlsSignatureBytes,
+}
+
+impl TestRandom for SignedBidSubmissionElectra {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self {
+            message: BidTrace::random_for_test(rng),
+            execution_payload: ExecutionPayload::random_for_test(rng).into(),
+            blobs_bundle: BlobsBundle::random_for_test(rng).into(),
+            execution_requests: ExecutionRequests::random_for_test(rng).into(),
+            signature: BlsSignatureBytes::random(),
+        }
+    }
 }
 
 /// Request object of POST `/relay/v1/builder/blocks`
@@ -73,12 +99,28 @@ impl From<SignedBidSubmissionElectra> for SignedBidSubmission {
 }
 
 impl SignedBidSubmission {
-    pub fn verify_signature(&self, spec: &ChainSpec) -> Result<(), SigError> {
-        let domain = spec.get_builder_domain();
+    pub fn validate_payload_ssz_lengths(&self) -> Result<(), ValidationError> {
+        match self {
+            SignedBidSubmission::Electra(bid) => {
+                bid.execution_payload.validate_ssz_lengths()?;
+                bid.blobs_bundle.validate_ssz_lengths()?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn verify_signature(&self, builder_domain: B256) -> Result<(), SigError> {
         let valid = match self {
             SignedBidSubmission::Electra(bid) => {
-                let message = bid.message.signing_root(domain);
-                bid.signature.verify(&bid.message.builder_pubkey, message)
+                let uncompressed_builder_pubkey =
+                    BlsPublicKey::deserialize(bid.message.builder_pubkey.as_slice())
+                        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
+                let uncompressed_signature = BlsSignature::deserialize(bid.signature.as_slice())
+                    .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
+
+                let message = bid.message.signing_root(builder_domain);
+                uncompressed_signature.verify(&uncompressed_builder_pubkey, message)
             }
         };
 
@@ -119,10 +161,10 @@ impl SignedBidSubmission {
         }
     }
 
-    pub fn execution_payload_ref(&self) -> ExecutionPayloadRef {
+    pub fn execution_payload_ref(&self) -> &ExecutionPayload {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
-                ExecutionPayloadRef::Electra(&signed_bid_submission.execution_payload)
+                &signed_bid_submission.execution_payload
             }
         }
     }
@@ -157,7 +199,7 @@ mod tests {
     // from the relay API spec, adding the blob and the proposer_pubkey field
     fn electra_bid_submission() {
         let data_json = include_str!("testdata/signed-bid-submission-electra.json");
-        let s = test_encode_decode_json::<SignedBidSubmission>(&data_json);
+        let s = test_encode_decode_json::<SignedBidSubmission>(data_json);
         assert!(matches!(s, SignedBidSubmission::Electra(_)));
     }
 
@@ -165,7 +207,7 @@ mod tests {
     // from alloy
     fn electra_bid_submission_2() {
         let data_json = include_str!("testdata/signed-bid-submission-electra-2.json");
-        let s = test_encode_decode_json::<SignedBidSubmission>(&data_json);
+        let s = test_encode_decode_json::<SignedBidSubmission>(data_json);
         assert!(matches!(s, SignedBidSubmission::Electra(_)));
 
         let data_ssz = include_bytes!("testdata/signed-bid-submission-electra-2.bin");

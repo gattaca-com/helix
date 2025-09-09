@@ -4,7 +4,7 @@ use alloy_primitives::b256;
 use helix_common::{simulator::BlockSimError, BuilderInfo, SimulatorConfig, ValidatorPreferences};
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_types::{
-    BidTrace, BlobsBundle, BlsSignature, ExecutionPayloadElectra, ExecutionRequests,
+    BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests,
     SignedBeaconBlock, SignedBidSubmission, SignedBidSubmissionElectra, TestRandomSeed,
 };
 use reqwest::Client;
@@ -35,7 +35,7 @@ async fn get_block(slot_number: u64) -> BlockSimRequest {
     let client = Client::new();
     let beacon_node_url = "http://localhost:5052/eth/v2/beacon/blocks";
 
-    let url = format!("{}/{}", beacon_node_url, slot_number);
+    let url = format!("{beacon_node_url}/{slot_number}");
     let response = client.get(&url).send().await.unwrap();
     let block_response: BlockResponse = response.json().await.unwrap();
 
@@ -51,8 +51,11 @@ async fn get_block(slot_number: u64) -> BlockSimRequest {
     let bid_trace = BidTrace::test_random();
     let signed_bid_submission = SignedBidSubmissionElectra {
         message: bid_trace,
-        signature: block_response.data.signature().clone(),
-        execution_payload: electra_exec_payload.into(),
+        signature: block_response.data.signature().serialize().into(),
+        execution_payload: ExecutionPayload::from_lighthouse_electra_payload_unsafe(
+            electra_exec_payload,
+        )
+        .into(),
         blobs_bundle: BlobsBundle::default().into(),
         execution_requests: ExecutionRequests::default().into(),
     };
@@ -69,10 +72,9 @@ async fn get_block(slot_number: u64) -> BlockSimRequest {
 }
 
 fn get_sim_req() -> BlockSimRequest {
-    let electra_exec_payload = ExecutionPayloadElectra {
-        block_hash: b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5")
-            .into(),
-        ..Default::default()
+    let electra_exec_payload = ExecutionPayload {
+        block_hash: b256!("9962816e9d0a39fd4c80935338a741dc916d1545694e41eb5a505e1a3098f9e5"),
+        ..ExecutionPayload::test_random()
     };
 
     let bid_trace = BidTrace {
@@ -82,7 +84,7 @@ fn get_sim_req() -> BlockSimRequest {
 
     let signed_bid_submission = SignedBidSubmissionElectra {
         message: bid_trace,
-        signature: BlsSignature::test_random(),
+        signature: BlsSignatureBytes::random(),
         execution_payload: electra_exec_payload.into(),
         blobs_bundle: BlobsBundle::default().into(),
         execution_requests: ExecutionRequests::default().into(),
@@ -155,7 +157,7 @@ async fn test_process_request_from_beacon() -> Result<(), BlockSimError> {
             }
             Err(err) => Err(BlockSimError::RpcError(err.to_string())),
         },
-        Err(e) => panic!("Error: {:?}", e),
+        Err(e) => panic!("Error: {e:?}"),
     }
 }
 

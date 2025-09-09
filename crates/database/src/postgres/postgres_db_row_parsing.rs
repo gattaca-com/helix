@@ -3,12 +3,11 @@ use helix_common::{
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
     },
-    BuilderInfo, Filtering, GetPayloadTrace, ProposerInfo, SignedValidatorRegistrationEntry,
-    ValidatorPreferences,
+    BuilderInfo, Filtering, ProposerInfo, SignedValidatorRegistrationEntry, ValidatorPreferences,
 };
 use helix_types::{
-    BidTrace, Bloom, BlsPublicKey, BlsSignature, ExecutionPayloadBellatrix, ExtraData,
-    SignedValidatorRegistration, Transaction, Transactions, ValidatorRegistration,
+    BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, SignedValidatorRegistration,
+    ValidatorRegistration,
 };
 use thiserror::Error;
 
@@ -45,58 +44,18 @@ impl FromRow for BidTrace {
             slot: parse_i32_to_u64(row.get::<&str, i32>("slot_number"))?,
             parent_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("parent_hash"))?,
             block_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("block_hash"))?,
-            builder_pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("builder_public_key"))?,
-            proposer_pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("proposer_public_key"))?,
+            builder_pubkey: parse_bytes_to_pubkey_bytes(
+                row.get::<&str, &[u8]>("builder_public_key"),
+            )?,
+            proposer_pubkey: parse_bytes_to_pubkey_bytes(
+                row.get::<&str, &[u8]>("proposer_public_key"),
+            )?,
             proposer_fee_recipient: parse_bytes_to_address(
                 row.get::<&str, &[u8]>("proposer_fee_recipient"),
             )?,
             gas_limit: parse_i32_to_u64(row.get::<&str, i32>("gas_limit"))?,
             gas_used: parse_i32_to_u64(row.get::<&str, i32>("gas_used"))?,
             value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("submission_value")),
-        })
-    }
-}
-
-impl FromRow for GetPayloadTrace {
-    fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError> {
-        Ok(GetPayloadTrace {
-            receive: parse_i64_to_u64(row.get::<&str, i64>("receive"))?,
-            proposer_index_validated: parse_i64_to_u64(
-                row.get::<&str, i64>("proposer_index_validated"),
-            )?,
-            signature_validated: parse_i64_to_u64(row.get::<&str, i64>("signature_validated"))?,
-            payload_fetched: parse_i64_to_u64(row.get::<&str, i64>("payload_fetched"))?,
-            validation_complete: parse_i64_to_u64(row.get::<&str, i64>("validation_complete"))?,
-            beacon_client_broadcast: parse_i64_to_u64(
-                row.get::<&str, i64>("beacon_client_broadcast"),
-            )?,
-            broadcaster_block_broadcast: parse_i64_to_u64(
-                row.get::<&str, i64>("broadcaster_block_broadcast"),
-            )?,
-            on_deliver_payload: parse_i64_to_u64(row.get::<&str, i64>("on_deliver_payload"))?,
-        })
-    }
-}
-
-impl FromRow for ExecutionPayloadBellatrix {
-    fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError> {
-        Ok(ExecutionPayloadBellatrix {
-            parent_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("payload_parent_hash"))?.into(),
-            fee_recipient: parse_bytes_to_address(row.get::<&str, &[u8]>("payload_fee_recipient"))?,
-            state_root: parse_bytes_to_hash(row.get::<&str, &[u8]>("payload_state_root"))?,
-            receipts_root: parse_bytes_to_hash(row.get::<&str, &[u8]>("payload_receipts_root"))?,
-            logs_bloom: parse_logs_bloom(row.get::<&str, &[u8]>("payload_logs_bloom"))?,
-            prev_randao: parse_bytes_to_hash(row.get::<&str, &[u8]>("payload_prev_randao"))?,
-            block_number: parse_i32_to_u64(row.get::<&str, i32>("payload_block_number"))?,
-            gas_limit: parse_i32_to_u64(row.get::<&str, i32>("payload_gas_limit"))?,
-            gas_used: parse_i32_to_u64(row.get::<&str, i32>("payload_gas_used"))?,
-            timestamp: parse_i64_to_u64(row.get::<&str, i64>("payload_timestamp"))?,
-            extra_data: parse_extra_data(row.get::<&str, &[u8]>("payload_extra_data"))?,
-            base_fee_per_gas: parse_numeric_to_u256(
-                row.get::<&str, PostgresNumeric>("payload_base_fee_per_gas"),
-            ),
-            block_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("payload_block_hash"))?.into(),
-            transactions: parse_transactions(row.get::<&str, Vec<Vec<u8>>>("txs"))?,
         })
     }
 }
@@ -109,10 +68,10 @@ impl FromRow for BidSubmissionDocument {
                 slot: parse_i32_to_u64(row.get::<&str, i32>("slot_number"))?,
                 parent_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("parent_hash"))?,
                 block_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("block_hash"))?,
-                builder_pubkey: parse_bytes_to_pubkey(
+                builder_pubkey: parse_bytes_to_pubkey_bytes(
                     row.get::<&str, &[u8]>("builder_public_key"),
                 )?,
-                proposer_pubkey: parse_bytes_to_pubkey(
+                proposer_pubkey: parse_bytes_to_pubkey_bytes(
                     row.get::<&str, &[u8]>("proposer_public_key"),
                 )?,
                 proposer_fee_recipient: parse_bytes_to_address(
@@ -141,9 +100,9 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                         )?,
                         gas_limit: parse_i32_to_u64(row.get::<&str, i32>("gas_limit"))?,
                         timestamp: parse_i64_to_u64(row.get::<&str, i64>("timestamp"))?,
-                        pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?,
+                        pubkey: parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("public_key"))?,
                     },
-                    signature: parse_bytes_to_signature(row.get::<&str, &[u8]>("signature"))?,
+                    signature: parse_bytes_to_signature_bytes(row.get::<&str, &[u8]>("signature"))?,
                 },
                 preferences: ValidatorPreferences {
                     //TODO: change to filtering after migration
@@ -171,7 +130,7 @@ impl FromRow for BuilderInfoDocument {
         Self: Sized,
     {
         Ok(BuilderInfoDocument {
-            pub_key: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?,
+            pub_key: parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("public_key"))?,
             builder_info: BuilderInfo::from_row(row)?,
         })
     }
@@ -207,9 +166,9 @@ impl FromRow for SignedValidatorRegistration {
                 fee_recipient: parse_bytes_to_address(row.get::<&str, &[u8]>("fee_recipient"))?,
                 gas_limit: parse_i32_to_u64(row.get::<&str, i32>("gas_limit"))?,
                 timestamp: parse_i64_to_u64(row.get::<&str, i64>("timestamp"))?,
-                pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("public_key"))?,
+                pubkey: parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("public_key"))?,
             },
-            signature: parse_bytes_to_signature(row.get::<&str, &[u8]>("signature"))?,
+            signature: parse_bytes_to_signature_bytes(row.get::<&str, &[u8]>("signature"))?,
         })
     }
 }
@@ -254,7 +213,7 @@ impl FromRow for ProposerInfo {
     {
         Ok(ProposerInfo {
             name: row.get::<&str, &str>("name").to_string(),
-            pubkey: parse_bytes_to_pubkey(row.get::<&str, &[u8]>("pub_key"))?,
+            pubkey: parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("pub_key"))?,
         })
     }
 }
@@ -298,12 +257,14 @@ pub fn parse_bytes_to_address(hash: &[u8]) -> Result<Address, DatabaseError> {
     Address::try_from(hash).map_err(|e| DatabaseError::RowParsingError(Box::new(e)))
 }
 
-pub fn parse_bytes_to_pubkey(pubkey: &[u8]) -> Result<BlsPublicKey, DatabaseError> {
-    BlsPublicKey::deserialize(pubkey).map_err(DatabaseError::CryptoError)
+pub fn parse_bytes_to_pubkey_bytes(pubkey: &[u8]) -> Result<BlsPublicKeyBytes, DatabaseError> {
+    BlsPublicKeyBytes::try_from(pubkey).map_err(|_| DatabaseError::InvalidBlsBytes)
 }
 
-pub fn parse_bytes_to_signature(signature: &[u8]) -> Result<BlsSignature, DatabaseError> {
-    BlsSignature::deserialize(signature).map_err(DatabaseError::CryptoError)
+pub fn parse_bytes_to_signature_bytes(
+    signature: &[u8],
+) -> Result<BlsSignatureBytes, DatabaseError> {
+    BlsSignatureBytes::try_from(signature).map_err(|_| DatabaseError::InvalidBlsBytes)
 }
 
 pub fn parse_numeric_to_u256(value: PostgresNumeric) -> U256 {
@@ -316,21 +277,4 @@ pub fn parse_rows<T: FromRow>(rows: Vec<tokio_postgres::Row>) -> Result<Vec<T>, 
 
 pub fn parse_row<T: FromRow>(row: &tokio_postgres::Row) -> Result<T, DatabaseError> {
     T::from_row(row)
-}
-
-pub fn parse_logs_bloom(bytes: &[u8]) -> Result<Bloom, DatabaseError> {
-    Bloom::new(bytes.to_vec()).map_err(DatabaseError::SszError)
-}
-
-pub fn parse_extra_data(bytes: &[u8]) -> Result<ExtraData, DatabaseError> {
-    ExtraData::new(bytes.to_vec()).map_err(DatabaseError::SszError)
-}
-
-pub fn parse_transactions(bytes_vec: Vec<Vec<u8>>) -> Result<Transactions, DatabaseError> {
-    let transactions: Vec<Transaction> = bytes_vec
-        .into_iter()
-        .map(|tx| Transaction::new(tx).map_err(DatabaseError::SszError))
-        .collect::<Result<Vec<Transaction>, DatabaseError>>()?;
-
-    Transactions::new(transactions).map_err(DatabaseError::SszError)
 }

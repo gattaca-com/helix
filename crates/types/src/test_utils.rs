@@ -1,18 +1,10 @@
-use std::sync::Arc;
-
-use alloy_consensus::Blob;
 use alloy_primitives::{b256, B256};
-use lh_types::{
-    test_utils::{TestRandom, XorShiftRng},
-    BeaconBlockElectra, BlindedPayload, FullPayload, MainnetEthSpec,
-};
+use lh_types::test_utils::{TestRandom, XorShiftRng};
 use rand::SeedableRng;
 use serde_json::Value;
 use ssz::{Decode, Encode};
 
-use crate::{
-    blobs::KzgCommitment, BlobsBundle, BlsPublicKey, BlsSecretKey, ExecutionPayloadElectra,
-};
+use crate::{BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey};
 
 /// Test that the encoding and decoding works, returns the decoded struct
 pub fn test_encode_decode_json<T: serde::Serialize + serde::de::DeserializeOwned>(d: &str) -> T {
@@ -50,6 +42,10 @@ pub fn get_fixed_pubkey(i: usize) -> BlsPublicKey {
     key.public_key()
 }
 
+pub fn get_fixed_pubkey_bytes(i: usize) -> BlsPublicKeyBytes {
+    get_fixed_pubkey(i).serialize().into()
+}
+
 pub fn get_fixed_secret(i: usize) -> BlsSecretKey {
     const KEYS: [B256; 5] = [
         b256!("64496d4e301e541a6e1237d6ef13a8f8b8b6cb82be9d8ac90073a833dfc2af11"),
@@ -62,28 +58,6 @@ pub fn get_fixed_secret(i: usize) -> BlsSecretKey {
     let key = KEYS[i];
     let key = BlsSecretKey::deserialize(key.as_slice()).unwrap();
     key
-}
-
-pub fn get_payload_electra() -> (
-    ExecutionPayloadElectra,
-    BeaconBlockElectra<MainnetEthSpec, BlindedPayload<MainnetEthSpec>>,
-    BlobsBundle,
-) {
-    let mut full_payload: BeaconBlockElectra<MainnetEthSpec, FullPayload<MainnetEthSpec>> =
-        BeaconBlockElectra::test_random();
-
-    full_payload.body.blob_kzg_commitments = Default::default();
-
-    let execution_payload = full_payload.clone().body.execution_payload.execution_payload;
-    let blinded = full_payload.clone_as_blinded();
-
-    let mut blobs_bundle = BlobsBundle::test_random();
-    blobs_bundle.commitments =
-        blinded.body.blob_kzg_commitments.iter().map(|p| KzgCommitment::from(p.0)).collect();
-    blobs_bundle.blobs =
-        blobs_bundle.commitments.iter().map(|_| Arc::new(Blob::random())).collect::<Vec<_>>();
-
-    (execution_payload, blinded, blobs_bundle)
 }
 
 pub fn initialize_test_tracing() {

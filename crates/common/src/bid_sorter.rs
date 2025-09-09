@@ -5,9 +5,7 @@ use alloy_primitives::{
     B256, U256,
 };
 use bytes::Bytes;
-use helix_types::{
-    BlockMergingPreferences, BlsPublicKey, BlsPublicKeyBytes, BuilderBid, SignedBidSubmission,
-};
+use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
 use parking_lot::RwLock;
 use ssz::Encode;
 use tracing::info;
@@ -62,18 +60,18 @@ impl BestGetHeader {
             return U256::ZERO;
         }
 
-        *entry.bid.value()
+        entry.bid.value
     }
 
     pub fn load(
         &self,
         slot: u64,
         parent_hash: &B256,
-        _validator_pubkey: &BlsPublicKey,
+        _validator_pubkey: &BlsPublicKeyBytes,
     ) -> Option<BuilderBid> {
         let entry = (*self.0.read()).clone()?;
 
-        if entry.slot != slot || entry.bid.header().parent_hash().0 != *parent_hash {
+        if entry.slot != slot || entry.bid.header.parent_hash != *parent_hash {
             return None;
         }
 
@@ -145,7 +143,7 @@ pub enum BidSorterMessage {
         before_sorter_ns: u64,
     },
     /// Demotion of a builder pubkey, all its bids are invalidated for this slot
-    Demotion(BlsPublicKey),
+    Demotion(BlsPublicKeyBytes),
     /// New slot update
     Slot(u64),
 }
@@ -171,7 +169,7 @@ impl BidSorterMessage {
         let header = bid_submission_to_builder_bid_unsigned(submission);
         Self::Submission {
             bid,
-            builder_pubkey: bid_trace.builder_pubkey.serialize().into(),
+            builder_pubkey: bid_trace.builder_pubkey,
             slot: bid_trace.slot,
             header,
             is_cancellable,
@@ -193,7 +191,7 @@ impl BidSorterMessage {
         let header = header_submission_to_builder_bid_unsigned(submission);
         Self::Submission {
             bid,
-            builder_pubkey: bid_trace.builder_pubkey.serialize().into(),
+            builder_pubkey: bid_trace.builder_pubkey,
             slot: bid_trace.slot,
             header,
             is_cancellable,
@@ -386,7 +384,6 @@ impl BidSorter {
                     BID_SORTER_QUEUE_LATENCY_US.observe(queue_latency_ns as f64 / 1000.);
                 }
                 BidSorterMessage::Demotion(demoted) => {
-                    let demoted = demoted.serialize().into();
                     if !self.demotions.insert(demoted) {
                         // already demoted
                         self.local_telemetry.duplicate_demotions += 1;
@@ -541,11 +538,11 @@ impl BidSorter {
         let top_bid_update = TopBidUpdate {
             timestamp: utcnow_ms(),
             slot: self.curr_bid_slot,
-            block_number: h.header().block_number(),
-            block_hash: h.header().block_hash().0,
-            parent_hash: h.header().parent_hash().0,
+            block_number: h.header.block_number,
+            block_hash: h.header.block_hash,
+            parent_hash: h.header.parent_hash,
             builder_pubkey,
-            fee_recipient: h.header().fee_recipient(),
+            fee_recipient: h.header.fee_recipient,
             value: bid.value,
         }
         .as_ssz_bytes()

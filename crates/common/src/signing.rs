@@ -1,23 +1,28 @@
 use std::sync::Arc;
 
 use alloy_primitives::B256;
-use helix_types::{BlsKeypair, BlsPublicKey, BlsSignature, SignedRoot};
+use helix_types::{BlsKeypair, BlsPublicKeyBytes, BlsSignature, SignedRoot};
 
 use crate::chain_info::ChainInfo;
 
 #[derive(Clone)]
 pub struct RelaySigningContext {
     pub keypair: BlsKeypair,
+    pub pubkey: BlsPublicKeyBytes,
     pub context: Arc<ChainInfo>,
 }
 
 impl RelaySigningContext {
-    pub fn pubkey(&self) -> &BlsPublicKey {
-        &self.keypair.pk
+    pub fn new(keypair: BlsKeypair, context: Arc<ChainInfo>) -> Self {
+        Self { pubkey: keypair.pk.serialize().into(), keypair, context }
+    }
+
+    pub fn pubkey(&self) -> &BlsPublicKeyBytes {
+        &self.pubkey
     }
 
     pub fn sign_builder_message(&self, msg: &impl SignedRoot) -> BlsSignature {
-        let domain = self.context.context.get_builder_domain();
+        let domain = self.context.builder_domain;
         let root = msg.signing_root(domain);
         self.sign(root)
     }
@@ -29,6 +34,10 @@ impl RelaySigningContext {
 
 impl Default for RelaySigningContext {
     fn default() -> Self {
-        Self { keypair: BlsKeypair::random(), context: ChainInfo::for_mainnet().into() }
+        Self {
+            keypair: BlsKeypair::random(),
+            context: ChainInfo::for_mainnet().into(),
+            pubkey: BlsPublicKeyBytes::default(),
+        }
     }
 }

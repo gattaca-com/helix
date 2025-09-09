@@ -50,7 +50,6 @@ impl std::fmt::Display for Network {
 }
 
 /// Runtime config with all chain specific information
-#[derive(Clone)]
 pub struct ChainInfo {
     pub network: Network,
     pub genesis_validators_root: B256,
@@ -59,50 +58,59 @@ pub struct ChainInfo {
     pub clock: SlotClock,
     // TODO: remove?
     pub genesis_time_in_secs: u64,
+    pub builder_domain: B256,
 }
 
 impl ChainInfo {
     pub fn for_mainnet() -> Self {
         let context = ChainSpec::mainnet();
+        let builder_domain = context.get_builder_domain();
         Self {
             network: Network::Mainnet,
             genesis_validators_root: B256::from(MAINNET_GENESIS_VALIDATOR_ROOT),
             clock: mainnet_slot_clock(context.seconds_per_slot),
             context,
             genesis_time_in_secs: MAINNET_GENESIS_TIME,
+            builder_domain,
         }
     }
 
     pub fn for_sepolia() -> Self {
         let context = sepolia_spec();
+        let builder_domain = context.get_builder_domain();
         Self {
             network: Network::Sepolia,
             genesis_validators_root: B256::from(SEPOLIA_GENESIS_VALIDATOR_ROOT),
             clock: sepolia_slot_clock(context.seconds_per_slot),
             context,
             genesis_time_in_secs: SEPOLIA_GENESIS_TIME,
+            builder_domain,
         }
     }
 
     pub fn for_holesky() -> Self {
         let context = holesky_spec();
+        let builder_domain = context.get_builder_domain();
         Self {
             network: Network::Holesky,
             genesis_validators_root: B256::from(HOLESKY_GENESIS_VALIDATOR_ROOT),
             clock: holesky_slot_clock(context.seconds_per_slot),
             context,
             genesis_time_in_secs: HOLESKY_GENESIS_TIME,
+            builder_domain,
         }
     }
 
     pub fn for_hoodi() -> Self {
         let context = hoodi_spec();
+        let builder_domain = context.get_builder_domain();
         Self {
             network: Network::Hoodi,
             genesis_validators_root: B256::from(HOODI_GENESIS_VALIDATOR_ROOT),
             clock: hoodi_slot_clock(context.seconds_per_slot),
             context,
             genesis_time_in_secs: HOODI_GENESIS_TIME,
+            builder_domain,
         }
     }
 
@@ -114,8 +122,15 @@ impl ChainInfo {
         let context = spec_from_file(&config);
         let network = Network::Custom(config.clone());
         let clock = custom_slot_clock(genesis_time_in_secs, context.seconds_per_slot);
-
-        Self { network, genesis_validators_root, context, clock, genesis_time_in_secs }
+        let builder_domain = context.get_builder_domain();
+        Self {
+            network,
+            genesis_validators_root,
+            context,
+            clock,
+            genesis_time_in_secs,
+            builder_domain,
+        }
     }
 
     pub fn current_fork_name(&self) -> ForkName {

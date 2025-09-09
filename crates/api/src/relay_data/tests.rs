@@ -11,7 +11,7 @@ mod data_api_tests {
         PATH_VALIDATOR_REGISTRATION,
     };
     use helix_database::mock_database_service::MockDatabaseService;
-    use helix_types::{BlsPublicKey, SignedValidatorRegistration, TestRandomSeed};
+    use helix_types::{BlsPublicKeyBytes, SignedValidatorRegistration};
     use reqwest::StatusCode;
     use serial_test::serial;
     use tokio::sync::oneshot;
@@ -95,7 +95,7 @@ mod data_api_tests {
     }
 
     fn get_test_validator_registration_params() -> ValidatorRegistrationParams {
-        ValidatorRegistrationParams { pubkey: BlsPublicKey::test_random() }
+        ValidatorRegistrationParams { pubkey: BlsPublicKeyBytes::random() }
     }
 
     // *** TESTS ***
