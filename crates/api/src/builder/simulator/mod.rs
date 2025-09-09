@@ -11,15 +11,16 @@ mod simulator_tests;
 
 use std::sync::Arc;
 
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256, U256};
 use helix_common::{
     api::builder_api::InclusionListWithMetadata, bid_submission::BidSubmission,
     ValidatorPreferences,
 };
 use helix_types::{
     BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests,
-    SignedBidSubmission,
+    MergeableOrderWithOrigin, SignedBidSubmission,
 };
+use serde_json::json;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockSimRequest {
@@ -56,5 +57,42 @@ impl BlockSimRequest {
             parent_beacon_block_root,
             inclusion_list,
         }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BlockMergeRequestRef<'a> {
+    /// The original payload value
+    pub original_value: U256,
+    pub proposer_fee_recipient: Address,
+    pub execution_payload: &'a ExecutionPayload,
+    pub merging_data: &'a [MergeableOrderWithOrigin],
+}
+
+pub struct BlockMergeRequest {
+    /// The serialized request
+    request: serde_json::Value,
+    /// The block hash of the execution payload
+    block_hash: B256,
+}
+
+impl BlockMergeRequest {
+    pub fn new(
+        original_value: U256,
+        proposer_fee_recipient: Address,
+        execution_payload: &ExecutionPayload,
+        merging_data: &[MergeableOrderWithOrigin],
+    ) -> Self {
+        let block_hash = execution_payload.block_hash;
+        // We serialize the request ahead of time, to avoid copying the original
+        // payload and merging data.
+        let request_ref = BlockMergeRequestRef {
+            original_value,
+            proposer_fee_recipient,
+            execution_payload,
+            merging_data,
+        };
+        let request = json!(request_ref);
+        Self { request, block_hash }
     }
 }

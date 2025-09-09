@@ -82,17 +82,20 @@ pub async fn run_api_service<A: Api>(
 
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
 
+    let (merge_pool_tx, pool_rx) = tokio::sync::mpsc::channel(10_000);
+
     let builder_api = BuilderApi::<A>::new(
         auctioneer.clone(),
         db.clone(),
         chain_info.clone(),
-        simulator,
+        simulator.clone(),
         gossiper.clone(),
         metadata_provider.clone(),
         config.clone(),
         validator_preferences.clone(),
         current_slot_info.clone(),
         sorter_tx,
+        merge_pool_tx,
         top_bid_tx,
         shared_floor,
         shared_best_header.clone(),
@@ -121,6 +124,7 @@ pub async fn run_api_service<A: Api>(
     let proposer_api = Arc::new(ProposerApi::<A>::new(
         auctioneer.clone(),
         db.clone(),
+        simulator,
         gossiper.clone(),
         metadata_provider.clone(),
         relay_signing_context,
@@ -139,6 +143,10 @@ pub async fn run_api_service<A: Api>(
         proposer_api.clone(),
         gossip_receiver,
     ));
+
+    if config.block_merging_config.is_enabled {
+        tokio::spawn(proposer_api.clone().process_block_merging(pool_rx));
+    }
 
     let data_api = Arc::new(DataApi::<A>::new(validator_preferences.clone(), db.clone()));
 

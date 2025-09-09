@@ -5,7 +5,7 @@ use alloy_primitives::{
     B256, U256,
 };
 use bytes::Bytes;
-use helix_types::{BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
+use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
 use parking_lot::RwLock;
 use ssz::Encode;
 use tracing::info;
@@ -28,6 +28,7 @@ use crate::{
 struct GetHeaderEntry {
     slot: u64,
     bid: BuilderBid,
+    metadata: BlockMergingPreferences,
 }
 
 /// Shared container for get_header response, thread safe
@@ -45,8 +46,8 @@ impl BestGetHeader {
         Self(Arc::new(RwLock::new(None)))
     }
 
-    fn store(&self, slot: u64, bid: BuilderBid) {
-        *self.0.write() = Some(GetHeaderEntry { slot, bid });
+    fn store(&self, slot: u64, bid: BuilderBid, metadata: BlockMergingPreferences) {
+        *self.0.write() = Some(GetHeaderEntry { slot, bid, metadata });
     }
 
     pub fn best_bid(&self, _slot: u64) -> U256 {
@@ -75,6 +76,16 @@ impl BestGetHeader {
         }
 
         Some(entry.bid)
+    }
+
+    pub fn load_any(&self, slot: u64) -> Option<(BuilderBid, BlockMergingPreferences)> {
+        let entry = (*self.0.read()).clone()?;
+
+        if entry.slot != slot {
+            return None;
+        }
+
+        Some((entry.bid, entry.metadata))
     }
 
     fn reset(&self) {
@@ -126,6 +137,8 @@ pub enum BidSorterMessage {
         slot: u64,
         header: BuilderBid,
         is_cancellable: bool,
+        /// Preferences related to block merging.
+        merging_preferences: BlockMergingPreferences,
         simulation_time_ns: u64,
         before_sorter_ns: u64,
     },
@@ -141,6 +154,7 @@ impl BidSorterMessage {
         trace: &SubmissionTrace,
         optimistic_version: OptimisticVersion,
         is_cancellable: bool,
+        merging_preferences: BlockMergingPreferences,
         before_sorter_ns: u64,
     ) -> Self {
         let bid_trace = submission.bid_trace();
@@ -159,6 +173,7 @@ impl BidSorterMessage {
             slot: bid_trace.slot,
             header,
             is_cancellable,
+            merging_preferences,
             simulation_time_ns,
             before_sorter_ns,
         }
@@ -180,6 +195,7 @@ impl BidSorterMessage {
             slot: bid_trace.slot,
             header,
             is_cancellable,
+            merging_preferences: BlockMergingPreferences::default(),
             simulation_time_ns: 0,
             before_sorter_ns,
         }
@@ -277,8 +293,8 @@ pub struct BidSorter {
     /// All bid entries for the current slot, used for sorting
     bids: HashMap<BlsPublicKeyBytes, BidEntry>,
     /// All headers received for this slot
-    /// on_receive_ns -> header
-    headers: HashMap<u64, BuilderBid>,
+    /// on_receive_ns -> (header, merging_preferences)
+    headers: HashMap<u64, (BuilderBid, BlockMergingPreferences)>,
     /// Demoted builders in this slot for live demotions
     demotions: HashSet<BlsPublicKeyBytes>,
     /// Current best bid
@@ -331,6 +347,7 @@ impl BidSorter {
                     slot,
                     header,
                     is_cancellable,
+                    merging_preferences,
                     simulation_time_ns,
                     before_sorter_ns,
                 } => {
@@ -344,7 +361,7 @@ impl BidSorter {
                         continue;
                     }
 
-                    self.headers.insert(bid.on_receive_ns, header);
+                    self.headers.insert(bid.on_receive_ns, (header, merging_preferences));
                     self.process_header(builder_pubkey, bid, is_cancellable);
 
                     // telemetry
@@ -513,7 +530,7 @@ impl BidSorter {
     }
 
     fn update_top_bid(&mut self, builder_pubkey: BlsPublicKeyBytes, bid: Bid) {
-        let Some(h) = self.headers.get(&bid.on_receive_ns) else {
+        let Some((h, merging_preferences)) = self.headers.get(&bid.on_receive_ns) else {
             // this should never happen
             return;
         };
@@ -533,7 +550,7 @@ impl BidSorter {
         let _ = self.top_bid_tx.send(top_bid_update);
 
         self.curr_bid = Some((builder_pubkey, bid));
-        self.shared_best_header.store(self.curr_bid_slot, h.clone());
+        self.shared_best_header.store(self.curr_bid_slot, h.clone(), *merging_preferences);
 
         self.local_telemetry.top_bids += 1;
         TopBidMetrics::top_bid_update_count();

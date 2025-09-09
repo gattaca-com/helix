@@ -185,6 +185,23 @@ lazy_static! {
     )
     .unwrap();
 
+    static ref BLOCK_MERGE_STATUS: IntCounterVec = register_int_counter_vec_with_registry!(
+        "block_merge_status_total",
+        "Count of block merge statuses",
+        &["is_success"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref BLOCK_MERGE_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
+        "block_merge_latency_secs",
+        "Latency of block merging",
+        &["simulator"],
+        vec![0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 50.0],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     static ref BUILDER_DEMOTION_COUNT: IntCounter = register_int_counter_with_registry!(
         "builder_demotion_count_total",
         "Count of builder demotions",
@@ -621,6 +638,14 @@ impl SimulatorMetrics {
 
     pub fn timer(simulator: &str) -> HistogramTimer {
         SIMULATOR_LATENCY.with_label_values(&[simulator]).start_timer()
+    }
+
+    pub fn block_merge_status(is_success: bool) {
+        BLOCK_MERGE_STATUS.with_label_values(&[is_success.to_string().as_str()]).inc();
+    }
+
+    pub fn block_merge_timer(simulator: &str) -> HistogramTimer {
+        BLOCK_MERGE_LATENCY.with_label_values(&[simulator]).start_timer()
     }
 
     pub fn demotion_count() {

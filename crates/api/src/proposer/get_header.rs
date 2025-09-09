@@ -165,63 +165,86 @@ impl<A: Api> ProposerApi<A> {
             &bid_request.pubkey,
         );
 
-        trace.best_bid_fetched = utcnow_ns();
+        let now_ns = utcnow_ns();
+        trace.best_bid_fetched = now_ns;
         debug!(trace = ?trace, "best bid fetched");
 
-        if let Some(bid) = get_best_bid_res {
-            if bid.value == U256::ZERO {
-                warn!("best bid value is 0");
-                return Err(ProposerApiError::BidValueZero);
-            }
-
-            let bid_block_hash = bid.header.block_hash;
-            debug!(
-                value = ?bid.value,
-                block_hash =% bid_block_hash,
-                "delivering bid",
-            );
-
-            // Save trace to DB
-            save_get_header_call(
-                proposer_api.db.clone(),
-                slot,
-                bid_request.parent_hash,
-                bid_request.pubkey,
-                bid_block_hash,
-                trace,
-                mev_boost,
-                user_agent.clone(),
-            )
-            .await;
-
-            let proposer_pubkey_clone = bid_request.pubkey;
-
-            let fork = proposer_api.chain_info.current_fork_name();
-
-            let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
-
-            if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
-                // Request payload in the background
-                task::spawn(file!(), line!(), async move {
-                    proposer_api
-                        .gossiper
-                        .request_payload(RequestPayloadParams {
-                            slot,
-                            proposer_pub_key: proposer_pubkey_clone,
-                            block_hash: bid_block_hash,
-                        })
-                        .await
-                });
-            }
-
-            let signed_bid = serde_json::to_value(signed_bid)?;
-            info!(block_hash =% bid_block_hash, "delivering bid");
-
-            Ok(axum::Json(signed_bid))
-        } else {
+        let Some(bid) = get_best_bid_res else {
             warn!("no bid found");
-            Err(ProposerApiError::NoBidPrepared)
+            return Err(ProposerApiError::NoBidPrepared);
+        };
+        if bid.value == U256::ZERO {
+            warn!("best bid value is 0");
+            return Err(ProposerApiError::BidValueZero);
         }
+
+        // Try to fetch a merged block if block merging is enabled
+        let bid = if proposer_api.relay_config.block_merging_config.is_enabled {
+            let merged_block_bid = proposer_api
+                .shared_best_merged
+                .load(bid_request.slot.into(), &bid_request.parent_hash);
+            let max_merged_bid_age_ms =
+                proposer_api.relay_config.block_merging_config.max_merged_bid_age_ms;
+
+            let now_ms = Duration::from_nanos(now_ns).as_millis() as u64;
+
+            match merged_block_bid {
+                None => bid,
+                // If the current best bid has equal or higher value, we use that
+                Some((_, merged_bid)) if merged_bid.value <= bid.value => bid,
+                // If the merged bid is stale, we use the current best bid
+                Some((time, _)) if time < now_ms - max_merged_bid_age_ms => bid,
+                // Otherwise, we use the merged bid
+                Some((_, merged_bid)) => merged_bid,
+            }
+        } else {
+            bid
+        };
+
+        let bid_block_hash = bid.header.block_hash;
+        debug!(
+            value = ?bid.value,
+            block_hash =% bid_block_hash,
+            "delivering bid",
+        );
+
+        // Save trace to DB
+        save_get_header_call(
+            proposer_api.db.clone(),
+            slot,
+            bid_request.parent_hash,
+            bid_request.pubkey,
+            bid_block_hash,
+            trace,
+            mev_boost,
+            user_agent.clone(),
+        )
+        .await;
+
+        let proposer_pubkey_clone = bid_request.pubkey;
+
+        let fork = proposer_api.chain_info.current_fork_name();
+
+        let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
+
+        if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
+            // Request payload in the background
+            task::spawn(file!(), line!(), async move {
+                proposer_api
+                    .gossiper
+                    .request_payload(RequestPayloadParams {
+                        slot,
+                        proposer_pub_key: proposer_pubkey_clone,
+                        block_hash: bid_block_hash,
+                    })
+                    .await
+            });
+        }
+
+        let signed_bid = serde_json::to_value(signed_bid)?;
+        info!(block_hash =% bid_block_hash, "delivering bid");
+
+        Ok(axum::Json(signed_bid))
     }
 }
 

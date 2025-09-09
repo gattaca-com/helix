@@ -1,5 +1,6 @@
 mod bid_submission;
 mod blobs;
+mod block_merging;
 mod builder_bid;
 mod clock;
 mod error;
@@ -15,6 +16,7 @@ use std::sync::Arc;
 
 pub use bid_submission::*;
 pub use blobs::*;
+pub use block_merging::*;
 pub use builder_bid::*;
 pub use clock::*;
 pub use error::*;

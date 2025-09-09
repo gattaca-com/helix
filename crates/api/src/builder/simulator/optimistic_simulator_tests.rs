@@ -35,6 +35,7 @@ mod simulator_tests {
         OptimisticSimulator::new(Arc::new(auctioneer), Arc::new(db), http, SimulatorConfig {
             url: endpoint.to_string(),
             namespace: "test".to_string(),
+            is_merging_simulator: true,
         })
     }
 

@@ -13,15 +13,17 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
+use helix_types::BlockMergingPreferences;
 use http::request::Parts;
 use tracing::{debug, error, info, trace, warn, Instrument, Level};
 
 use super::api::BuilderApi;
 use crate::{
     builder::{
-        api::{decode_payload, sanity_check_block_submission},
+        api::{decode_payload, get_mergeable_orders, sanity_check_block_submission},
         error::BuilderApiError,
     },
+    proposer::MergingPoolMessage,
     Api,
 };
 
@@ -68,7 +70,7 @@ impl<A: Api> BuilderApi<A> {
 
         // Decode the incoming request body into a payload
 
-        let (skip_sigverify, payload, is_cancellations_enabled) = decode_payload(
+        let (skip_sigverify, payload_with_merging_data, is_cancellations_enabled) = decode_payload(
             head_slot.as_u64() + 1,
             &api,
             &parts.uri,
@@ -77,6 +79,8 @@ impl<A: Api> BuilderApi<A> {
             &mut trace,
         )
         .await?;
+        let payload = payload_with_merging_data.submission;
+        let merging_data = payload_with_merging_data.merging_data;
         ApiMetrics::cancellable_bid(is_cancellations_enabled);
 
         let block_hash = payload.message().block_hash;
@@ -206,17 +210,38 @@ impl<A: Api> BuilderApi<A> {
         };
         trace!(is_optimistic = was_simulated_optimistically, "verified submitted block");
 
+        let merging_preferences =
+            BlockMergingPreferences { allow_appending: merging_data.allow_appending };
+
         if let Err(err) = api.sorter_tx.try_send(BidSorterMessage::new_from_block_submission(
             &payload,
             &trace,
             optimistic_version,
             is_cancellations_enabled,
+            merging_preferences,
             utcnow_ns(),
         )) {
             error!(?err, "failed to send submission to sorter");
             return Err(BuilderApiError::InternalError);
         };
         trace!("sent bid to bid sorter");
+
+        // Skip mergeable orders extraction if block merging is not enabled
+        if api.relay_config.block_merging_config.is_enabled {
+            // In case the merging data is malformed, we log any error and discard it
+            let mergeable_orders = get_mergeable_orders(&payload, merging_data)
+                .inspect_err(|e| warn!(%e, "failed to get mergeable orders"))
+                .ok();
+
+            if mergeable_orders.as_ref().is_some_and(|o| !o.orders.is_empty()) {
+                let orders = mergeable_orders.unwrap();
+                let message = MergingPoolMessage::new(&payload, orders);
+                // We only log the error if this fails
+                let _ = api.merge_pool_tx.try_send(message).inspect_err(|err| {
+                    error!(?err, "failed to send mergeable orders to merging pool");
+                });
+            }
+        }
 
         // Save the execution payload
         api.auctioneer.save_execution_payload(

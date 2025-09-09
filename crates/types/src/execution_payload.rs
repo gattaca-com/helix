@@ -296,6 +296,32 @@ impl TestRandom for ExecutionPayloadHeader {
     }
 }
 
+impl From<&ExecutionPayload> for ExecutionPayloadHeader {
+    fn from(value: &ExecutionPayload) -> Self {
+        let transactions_root = value.transactions.tree_hash_root();
+        let withdrawals_root = value.withdrawals.tree_hash_root();
+        Self {
+            parent_hash: value.parent_hash,
+            fee_recipient: value.fee_recipient,
+            state_root: value.state_root,
+            receipts_root: value.receipts_root,
+            logs_bloom: value.logs_bloom,
+            prev_randao: value.prev_randao,
+            block_number: value.block_number,
+            gas_limit: value.gas_limit,
+            gas_used: value.gas_used,
+            timestamp: value.timestamp,
+            extra_data: value.extra_data.clone(),
+            base_fee_per_gas: value.base_fee_per_gas,
+            block_hash: value.block_hash,
+            transactions_root,
+            withdrawals_root,
+            blob_gas_used: value.blob_gas_used,
+            excess_blob_gas: value.excess_blob_gas,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use lh_types::{ForkName, MainnetEthSpec};

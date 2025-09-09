@@ -37,6 +37,9 @@ pub struct RelayConfig {
     /// Configuration for timing game parameters.
     #[serde(default)]
     pub timing_game_config: TimingGameConfig,
+    /// Configuration for block merging parameters.
+    #[serde(default)]
+    pub block_merging_config: BlockMergingConfig,
     #[serde(default)]
     pub primev_config: Option<PrimevConfig>,
     pub discord_webhook_url: Option<Url>,
@@ -144,6 +147,16 @@ pub struct TimingGameConfig {
     pub default_client_latency_ms: u64,
 }
 
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct BlockMergingConfig {
+    /// Flag to enable this feature.
+    #[serde(default = "default_bool::<false>")]
+    pub is_enabled: bool,
+    /// Maximum age of a merged bid before it is considered stale and discarded.
+    #[serde(default = "default_u64::<250>")]
+    pub max_merged_bid_age_ms: u64,
+}
+
 fn default_port() -> u16 {
     5432
 }
@@ -166,6 +179,8 @@ pub struct SimulatorConfig {
     pub url: String,
     #[serde(default = "default_namespace")]
     pub namespace: String,
+    #[serde(default = "default_bool::<false>")]
+    pub is_merging_simulator: bool,
 }
 
 fn default_namespace() -> String {
@@ -466,6 +481,7 @@ fn test_config() {
     config.simulators = vec![SimulatorConfig {
         url: "http://localhost:8080".to_string(),
         namespace: "test".to_string(),
+        is_merging_simulator: true,
     }];
     config
         .beacon_clients
