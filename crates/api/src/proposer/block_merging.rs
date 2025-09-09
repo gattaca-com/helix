@@ -270,7 +270,6 @@ impl<A: Api> ProposerApi<A> {
             execution_payload: response.execution_payload,
             blobs_bundle: merged_blobs_bundle,
         };
-        // We just log the errors as we can't really do anything about them
         self.auctioneer.save_execution_payload(
             slot,
             &proposer_pubkey,
