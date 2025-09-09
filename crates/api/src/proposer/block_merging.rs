@@ -253,8 +253,8 @@ impl<A: Api> ProposerApi<A> {
             append_merged_blobs(original_payload.blobs_bundle, blobs, &response)?;
 
         let blob_kzg_commitments =
-            KzgCommitments::new(merged_blobs_bundle.commitments.iter().map(|k| *k).collect())
-                .unwrap();
+            KzgCommitments::new(merged_blobs_bundle.commitments.iter().copied().collect())
+                .map_err(|_| PayloadMergingError::MaxBlobCountReached)?;
         let block_hash = response.execution_payload.block_hash;
 
         let new_bid = BuilderBid {
@@ -280,7 +280,7 @@ impl<A: Api> ProposerApi<A> {
 
         // Update best merged block
         let parent_block_hash = new_bid.header.parent_hash;
-        self.shared_best_merged.store(slot, base_block_time_ms, parent_block_hash, new_bid.into());
+        self.shared_best_merged.store(slot, base_block_time_ms, parent_block_hash, new_bid);
 
         Ok(())
     }
