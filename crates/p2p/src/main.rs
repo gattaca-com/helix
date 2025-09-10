@@ -73,9 +73,7 @@ async fn main() {
 
             // Sleep until the start of the next slot
             let sleep_duration = slot_duration.saturating_sub(
-                chain_info
-                    .duration_into_slot(chain_info.current_slot())
-                    .unwrap_or(Default::default()),
+                chain_info.duration_into_slot(chain_info.current_slot()).unwrap_or_default(),
             );
             if sleep_duration < cutoff_time_1 {
                 tokio::time::sleep(sleep_duration).await;
