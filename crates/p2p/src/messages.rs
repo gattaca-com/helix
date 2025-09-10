@@ -5,7 +5,8 @@ use helix_common::{
     utils::utcnow_ms,
 };
 use helix_types::{
-    BlsPublicKey, BlsPublicKeyBytes, BlsSignature, EthSpec, MainnetEthSpec, SignedRoot, Transaction,
+    BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, EthSpec, MainnetEthSpec,
+    SignedRoot, Transaction,
 };
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
@@ -22,6 +23,8 @@ pub enum MessageAuthenticationError {
     MessageTooFarInFuture,
     #[error("message already expired")]
     ExpiredMessage,
+    #[error("could not deserialize signature")]
+    CouldNotDeserializeSignature,
     #[error("signature is invalid")]
     InvalidSignature,
     #[error("could not deserialize public key")]
@@ -33,7 +36,6 @@ pub enum MessageAuthenticationError {
 /// The rest of messages are control messages.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-#[expect(clippy::large_enum_variant)]
 pub(crate) enum RawP2PMessage {
     /// Initial authentication message
     Hello(SignedHelloMessage),
@@ -72,14 +74,13 @@ pub(crate) enum EncodingError {
 pub(crate) struct SignedHelloMessage {
     pub(crate) message: HelloMessage,
     /// Signature over SSZ hash-tree-root of message.
-    // TODO: serialize
-    signature: BlsSignature,
+    signature: BlsSignatureBytes,
 }
 
 impl SignedHelloMessage {
     pub(crate) fn new(signing_context: &RelaySigningContext) -> Self {
         let message = HelloMessage::new(signing_context.pubkey);
-        let signature = signing_context.sign_relay_message(&message);
+        let signature = signing_context.sign_relay_message(&message).serialize().into();
         Self { message, signature }
     }
 
@@ -100,7 +101,10 @@ impl SignedHelloMessage {
         }
         let signing_root = self.message.signing_root(RELAY_DOMAIN.into());
 
-        if !self.signature.verify(pubkey, signing_root) {
+        let signature = BlsSignature::deserialize(self.signature.as_ref())
+            .map_err(|_| MessageAuthenticationError::CouldNotDeserializeSignature)?;
+
+        if !signature.verify(pubkey, signing_root) {
             return Err(MessageAuthenticationError::InvalidSignature);
         }
         Ok(())
