@@ -5,9 +5,8 @@ use futures::FutureExt;
 use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, bid_sorter::BidSorterMessage,
-    chain_info::ChainInfo, utils::utcnow_sec,
+    chain_info::ChainInfo, local_cache::LocalCache, utils::utcnow_sec,
 };
-use helix_datastore::Auctioneer;
 use helix_types::{Slot, SlotClockTrait};
 use tokio::{
     sync::broadcast,
@@ -40,22 +39,22 @@ pub struct SlotUpdate {
 }
 
 /// Manages the update of head slots and the fetching of new proposer duties.
-pub struct ChainEventUpdater<A: Auctioneer + 'static> {
+pub struct ChainEventUpdater {
     head_slot: u64,
     known_payload_attributes: HashMap<(B256, Slot), PayloadAttributesEvent>,
 
     proposer_duties: Vec<BuilderGetValidatorsResponseEntry>,
 
-    auctioneer: Arc<A>,
+    auctioneer: Arc<LocalCache>,
     chain_info: Arc<ChainInfo>,
     curr_slot_info: CurrentSlotInfo,
 
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
 }
 
-impl<A: Auctioneer + 'static> ChainEventUpdater<A> {
+impl ChainEventUpdater {
     pub fn new(
-        auctioneer: Arc<A>,
+        auctioneer: Arc<LocalCache>,
         chain_info: Arc<ChainInfo>,
         curr_slot_info: CurrentSlotInfo,
         sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,

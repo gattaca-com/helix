@@ -2,9 +2,8 @@ use std::{net::SocketAddr, sync::Arc};
 
 use axum::{routing::get, Router};
 use helix_beacon::{beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient};
-use helix_common::{chain_info::ChainInfo, NetworkConfig, RelayConfig};
+use helix_common::{chain_info::ChainInfo, local_cache::LocalCache, NetworkConfig, RelayConfig};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_datastore::MockAuctioneer;
 use helix_housekeeper::{ChainEventUpdater, CurrentSlotInfo};
 use parking_lot::RwLock;
 use tokio::{net::TcpListener, sync::broadcast};
@@ -74,7 +73,7 @@ impl WebsiteService {
 
         let (tx, _) = crossbeam_channel::bounded(0);
         let chain_updater = ChainEventUpdater::new(
-            Arc::new(MockAuctioneer::new()),
+            Arc::new(LocalCache::new_test()),
             chain_info,
             current_slot_info,
             tx,

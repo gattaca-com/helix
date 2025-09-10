@@ -11,10 +11,10 @@ use helix_beacon::{
 use helix_common::{
     bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     chain_info::ChainInfo,
+    local_cache::LocalCache,
     signing::RelaySigningContext,
     BroadcasterConfig, RelayConfig,
 };
-use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
 use moka::sync::Cache;
 use tokio::sync::mpsc;
@@ -39,7 +39,7 @@ pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 pub async fn run_api_service<A: Api>(
     mut config: RelayConfig,
     db: Arc<A::DatabaseService>,
-    auctioneer: Arc<A::Auctioneer>,
+    auctioneer: Arc<LocalCache>,
     current_slot_info: CurrentSlotInfo,
     chain_info: Arc<ChainInfo>,
     relay_signing_context: Arc<RelaySigningContext>,
@@ -59,7 +59,7 @@ pub async fn run_api_service<A: Api>(
     let mut simulators = vec![];
 
     for cfg in &config.simulators {
-        let simulator = OptimisticSimulator::<A::Auctioneer, A::DatabaseService>::new(
+        let simulator = OptimisticSimulator::<A::DatabaseService>::new(
             auctioneer.clone(),
             db.clone(),
             client.clone(),

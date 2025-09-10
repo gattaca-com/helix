@@ -18,12 +18,12 @@ use helix_common::{
     },
     bid_sorter::{BestGetHeader, FloorBid},
     chain_info::ChainInfo,
+    local_cache::LocalCache,
     metadata_provider::DefaultMetadataProvider,
     signing::RelaySigningContext,
     RelayConfig, Route, ValidatorPreferences,
 };
 use helix_database::mock_database_service::MockDatabaseService;
-use helix_datastore::MockAuctioneer;
 use helix_housekeeper::CurrentSlotInfo;
 use tokio::sync::{broadcast, mpsc::channel};
 use tower::{buffer::BufferLayer, limit::RateLimitLayer, timeout::TimeoutLayer, ServiceBuilder};
@@ -44,7 +44,6 @@ use crate::{
 pub struct MockApi;
 
 impl Api for MockApi {
-    type Auctioneer = MockAuctioneer;
     type DatabaseService = MockDatabaseService;
     type MetadataProvider = DefaultMetadataProvider;
 }
@@ -56,7 +55,7 @@ pub fn app() -> Router {
     let client = node.beacon_client();
 
     let api_service = Arc::new(ProposerApi::<MockApi>::new(
-        Arc::new(MockAuctioneer::default()),
+        Arc::new(LocalCache::new_test()),
         Arc::new(MockDatabaseService::default()),
         MultiSimulator::new(vec![]),
         GrpcGossiperClientManager::mock().into(),
@@ -115,7 +114,7 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
     let shared_floor = FloorBid::new();
 
     let builder_api_service = BuilderApi::<MockApi>::new(
-        Arc::new(MockAuctioneer::default()),
+        Arc::new(LocalCache::new_test()),
         Arc::new(MockDatabaseService::default()),
         Arc::new(ChainInfo::for_mainnet()),
         MultiSimulator::new(vec![]),
@@ -156,10 +155,9 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
     (router, builder_api_service, current_slot_info)
 }
 
-pub fn proposer_api_app(
-) -> (Router, Arc<ProposerApi<MockApi>>, CurrentSlotInfo, Arc<MockAuctioneer>) {
+pub fn proposer_api_app() -> (Router, Arc<ProposerApi<MockApi>>, CurrentSlotInfo, Arc<LocalCache>) {
     let (v3_sender, _v3_receiver) = channel(32);
-    let auctioneer = Arc::new(MockAuctioneer::default());
+    let auctioneer = Arc::new(LocalCache::new_test());
     let node = MockBeaconNode::new();
     let client = node.beacon_client();
 

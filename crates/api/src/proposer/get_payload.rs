@@ -6,13 +6,13 @@ use helix_beacon::types::BroadcastValidation;
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry,
     chain_info::ChainInfo,
+    local_cache::AuctioneerError,
     metadata_provider::MetadataProvider,
     task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
     GetPayloadTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
-use helix_datastore::{error::AuctioneerError, Auctioneer};
 use helix_types::{
     BlindedPayloadRef, BlsPublicKey, BlsPublicKeyBytes, ChainSpec, ExecPayload, GetPayloadResponse,
     PayloadAndBlobs, SigError, SignedBlindedBeaconBlock, Slot, SlotClockTrait,

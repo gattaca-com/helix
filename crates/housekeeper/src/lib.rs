@@ -12,9 +12,10 @@ use std::sync::Arc;
 
 pub use chain_event_updater::{ChainEventUpdater, PayloadAttributesUpdate, SlotUpdate};
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
-use helix_common::{bid_sorter::BidSorterMessage, chain_info::ChainInfo, RelayConfig};
+use helix_common::{
+    bid_sorter::BidSorterMessage, chain_info::ChainInfo, local_cache::LocalCache, RelayConfig,
+};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_datastore::local::local_cache::LocalCache;
 pub use housekeeper::Housekeeper;
 pub use primev_service::EthereumPrimevService;
 pub use slot_info::CurrentSlotInfo;

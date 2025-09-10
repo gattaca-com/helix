@@ -8,7 +8,6 @@ use axum::{
 use bytes::Bytes;
 use futures::StreamExt;
 use helix_common::{self, metrics::TopBidMetrics};
-use helix_datastore::Auctioneer;
 use hyper::HeaderMap;
 use tokio::time::{self};
 use tracing::{debug, error};

@@ -14,7 +14,6 @@ use helix_common::{
     HeaderSubmissionTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use http::request::Parts;
 use ssz::Decode;
 use tracing::{debug, error, info, trace, warn, Instrument};

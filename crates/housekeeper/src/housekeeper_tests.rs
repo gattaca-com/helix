@@ -11,10 +11,9 @@ use helix_beacon::{
 };
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
-    config::PrimevConfig, RelayConfig, ValidatorSummary,
+    config::PrimevConfig, local_cache::LocalCache, RelayConfig, ValidatorSummary,
 };
 use helix_database::mock_database_service::MockDatabaseService;
-use helix_datastore::MockAuctioneer;
 use tokio::sync::broadcast;
 
 use crate::housekeeper::Housekeeper;
@@ -36,7 +35,8 @@ fn get_housekeeper() -> HelperVars {
     //     proposer_duties_has_been_read.clone(),
     // );
 
-    let auctioneer = MockAuctioneer::new();
+    let sorter_tx = crossbeam_channel::unbounded().0;
+    let auctioneer = LocalCache::new(sorter_tx);
     let housekeeper = Housekeeper::new(
         Arc::new(db),
         beacon_client.clone().into(),
@@ -58,7 +58,7 @@ fn get_housekeeper() -> HelperVars {
 }
 
 async fn start_housekeeper(
-    housekeeper: Housekeeper<MockDatabaseService, MockAuctioneer>,
+    housekeeper: Housekeeper<MockDatabaseService>,
     beacon_client: MultiBeaconClient,
 ) {
     let (head_event_sender, head_event_receiver) = broadcast::channel(1);
@@ -67,7 +67,7 @@ async fn start_housekeeper(
 }
 
 struct HelperVars {
-    pub housekeeper: Housekeeper<MockDatabaseService, MockAuctioneer>,
+    pub housekeeper: Housekeeper<MockDatabaseService>,
     pub chan_head_events_capacity: Arc<AtomicUsize>,
     pub known_validators: Arc<Mutex<Vec<ValidatorSummary>>>,
     pub proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>>,
@@ -166,7 +166,7 @@ async fn test_state_validators_have_been_read() {
 //     let proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>> =
 //         Arc::new(Mutex::new(vec![]));
 //     // Create a tracked mock auctioneer
-//     let mock_auctioneer = MockAuctioneer::new();
+//     let mock_auctioneer = LocalCache::new_test();
 //     let db = Arc::new(MockDatabaseService::new(known_validators.clone(),
 // proposer_duties.clone()));
 

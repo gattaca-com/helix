@@ -12,7 +12,6 @@ use helix_common::{
     RequestTimings, SubmissionTrace,
 };
 use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use helix_types::BlockMergingPreferences;
 use http::request::Parts;
 use tracing::{debug, error, info, trace, warn, Instrument};

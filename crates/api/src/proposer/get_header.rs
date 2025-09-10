@@ -14,7 +14,6 @@ use helix_common::{
     BidRequest, GetHeaderTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use helix_types::BlsPublicKeyBytes;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
