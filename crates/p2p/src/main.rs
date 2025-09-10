@@ -31,6 +31,7 @@ async fn main() {
     let port = config.port;
 
     let p2p_config = P2PConfig { peers: config.peer_configs, ..P2PConfig::default() };
+    let cutoff_time_1 = Duration::from_millis(p2p_config.cutoff_1_ms);
 
     let private_key_bytes = hex::decode(&config.private_key).unwrap();
     let private_key = BlsSecretKey::deserialize(&private_key_bytes).unwrap();
@@ -67,10 +68,22 @@ async fn main() {
             let mut buf = vec![];
             tx.encode(&mut buf);
             let txs = vec![Transaction(buf.into())].into();
+
+            let slot_duration = Duration::from_secs(chain_info.seconds_per_slot());
+
+            // Sleep until the start of the next slot
+            let sleep_duration = slot_duration.saturating_sub(
+                chain_info
+                    .duration_into_slot(chain_info.current_slot())
+                    .unwrap_or(Default::default()),
+            );
+            if sleep_duration < cutoff_time_1 {
+                tokio::time::sleep(sleep_duration).await;
+            }
+
             let slot = chain_info.current_slot();
-            let sleep_duration = Duration::from_secs(chain_info.seconds_per_slot())
-                .saturating_sub(chain_info.duration_into_slot(slot).unwrap_or(Default::default()));
-            let mut sleeper = core::pin::pin!(tokio::time::sleep(sleep_duration));
+
+            let mut sleeper = core::pin::pin!(tokio::time::sleep(slot_duration));
             tokio::select! {
                 il = p2p_api.share_inclusion_list(slot.into(), InclusionList { txs }) => {
                     let Some(il) = il else {

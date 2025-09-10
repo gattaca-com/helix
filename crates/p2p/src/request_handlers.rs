@@ -3,10 +3,10 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use helix_common::api::builder_api::InclusionList;
 use helix_types::BlsPublicKeyBytes;
 use tokio::sync::{mpsc, oneshot};
-use tracing::error;
+use tracing::{error, trace, warn};
 
 use crate::{
-    il_consensus::{compute_final_inclusion_list, compute_shared_inclusion_list},
+    inclusion_lists::consensus::{compute_final_inclusion_list, compute_shared_inclusion_list},
     messages::{InclusionListMessage, P2PMessage},
     P2PApi,
 };
@@ -38,17 +38,28 @@ impl P2PApi {
         while let Some(request) = api_requests_rx.recv().await {
             match request {
                 P2PApiRequest::LocalInclusionList(request) => {
+                    // Compute duration until cutoff 1
+                    let duration_into_slot =
+                        self.signing_context.context.duration_into_slot(request.slot.into());
+                    if duration_into_slot.is_none() {
+                        warn!("got inclusion list for a slot in the future, skipping");
+                        let _ = request.result_tx.send(Some(request.inclusion_list));
+                        continue;
+                    }
+                    let sleep_time = cutoff_time_1.saturating_sub(duration_into_slot.unwrap());
+
+                    // If request was too late into the slot, skip it
+                    if sleep_time.is_zero() {
+                        warn!("got inclusion list too late into the slot, skipping");
+                        let _ = request.result_tx.send(Some(request.inclusion_list));
+                        continue;
+                    }
+
                     let msg =
                         InclusionListMessage::new(request.slot, request.inclusion_list.clone());
                     self.broadcast(msg.into());
 
                     let api_requests_tx = self.api_requests_tx.clone();
-
-                    // Compute duration until cutoff 1
-                    let duration_into_slot =
-                        self.signing_context.context.duration_into_slot(request.slot.into());
-                    let sleep_time =
-                        cutoff_time_1.saturating_sub(duration_into_slot.unwrap_or_default());
 
                     // Spawn a task that sleeps until cutoff time and advances us to the next step
                     tokio::spawn(async move {
@@ -62,6 +73,7 @@ impl P2PApi {
                 }
                 P2PApiRequest::SharedInclusionList(request) => {
                     let InclusionListRequest { slot, inclusion_list, .. } = request;
+                    trace!("computing shared inclusion list");
                     let shared_il = compute_shared_inclusion_list(&vote_map, slot, inclusion_list);
 
                     let msg = InclusionListMessage::new(slot, shared_il.clone());
@@ -75,6 +87,11 @@ impl P2PApi {
                     let sleep_time =
                         cutoff_time_2.saturating_sub(duration_into_slot.unwrap_or_default());
 
+                    if !sleep_time.is_zero() {
+                        warn!("got shared inclusion list too late into the slot, skipping");
+                        let _ = request.result_tx.send(Some(shared_il));
+                        continue;
+                    }
                     let settle_request =
                         InclusionListRequest { inclusion_list: shared_il, ..request };
 
@@ -91,6 +108,7 @@ impl P2PApi {
                 P2PApiRequest::SettledInclusionList(request) => {
                     let InclusionListRequest { slot, inclusion_list, result_tx } = request;
                     let vote_map = std::mem::take(&mut vote_map);
+                    trace!("computing final inclusion list");
                     let final_il = compute_final_inclusion_list(vote_map, slot, inclusion_list);
 
                     // Send result back to requester
@@ -100,6 +118,7 @@ impl P2PApi {
                 }
                 P2PApiRequest::PeerMessage { sender, message } => {
                     let P2PMessage::InclusionList(il_msg) = message;
+                    trace!(peer=%sender, "got IL from peer");
                     vote_map.insert(sender, (il_msg.slot, il_msg.inclusion_list));
                 }
             }
