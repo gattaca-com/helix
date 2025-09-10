@@ -1,11 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use axum::{
-    extract::WebSocketUpgrade,
-    http::{HeaderMap, StatusCode, Uri},
-    response::IntoResponse,
-    Extension,
-};
+use axum::{extract::WebSocketUpgrade, http::Uri, response::IntoResponse, Extension};
 use futures::{SinkExt, StreamExt};
 use helix_common::{signing::RelaySigningContext, P2PPeerConfig};
 use helix_types::{BlsPublicKey, BlsPublicKeyBytes};
@@ -48,23 +43,17 @@ impl P2PApi {
     pub async fn p2p_connect(
         Extension(api): Extension<Arc<P2PApi>>,
         ws: WebSocketUpgrade,
-    ) -> Result<impl IntoResponse, P2PConnectError> {
+    ) -> Result<impl IntoResponse, std::convert::Infallible> {
         info!("got new peer connection");
-        // Check if the peer selects a supported sub-protocol
-        let ws = ws.protocols([P2P_PROTOCOL_NAME]);
-
-        // Return an error if sub-protocol is not supported
-        if ws.selected_protocol().is_none() {
-            warn!("got connection with unsupported protocol");
-            return Err(P2PConnectError::UnsupportedProtocol);
-        }
-
         // Upgrade connection to WebSocket, spawning a new task to handle the connection.
-        let response = ws
+        let ws = ws
+            // Set supported protocols. If the connecting peer specifies an unsupported
+            // protocol, we will reject the connection.
+            .protocols([P2P_PROTOCOL_NAME])
             .on_failed_upgrade(|error| warn!(%error, "websocket upgrade failed"))
             .on_upgrade(|socket| api.on_peer_connection(socket.into()));
 
-        Ok(response)
+        Ok(ws)
     }
 
     async fn connect_to_peer(
@@ -80,15 +69,12 @@ impl P2PApi {
         }
         // Attempt to connect, waiting for a bit before retrying
         loop {
-            if let Ok((ws, response)) = connect_async(request.clone()).await {
-                if validate_server_response(response.headers()) {
-                    warn!(%pubkey, "tried to connect to peer that does not support required sub-protocol");
-                    continue;
-                }
-                let _ = self.handle_ws_connection(ws.into(), Some((pubkey_bytes, pubkey.clone()))).await.inspect_err(|e| {
-                    error!(err=?e, direction="outbound", peer=%pubkey_bytes, "websocket communication error")
-                });
+            let Ok((ws, _response)) = connect_async(request.clone()).await else {
+                continue;
             };
+            let _ = self.handle_ws_connection(ws.into(), Some((pubkey_bytes, pubkey.clone()))).await.inspect_err(|e| {
+                error!(err=?e, direction="outbound", peer=%pubkey_bytes, "websocket communication error")
+            });
 
             // TODO: change to an exponential backoff?
             tokio::time::sleep(Duration::from_secs(10)).await;
@@ -96,7 +82,6 @@ impl P2PApi {
     }
 
     async fn on_peer_connection(self: Arc<Self>, socket: axum::extract::ws::WebSocket) {
-        info!("accepted new peer connection");
         // If connection fails, log the error and return.
         let _ = self
             .handle_ws_connection(socket.into(), None)
@@ -190,28 +175,6 @@ fn url_to_client_request(url: &str) -> axum::http::Request<()> {
         .expect("peer URL should be valid URL of ");
 
     request
-}
-
-fn validate_server_response(headers: &HeaderMap) -> bool {
-    headers
-        .get(axum::http::header::SEC_WEBSOCKET_PROTOCOL)
-        .map(|p| p != P2P_PROTOCOL_NAME)
-        .unwrap_or(true)
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum P2PConnectError {
-    #[error("unsupported protocol")]
-    UnsupportedProtocol,
-}
-
-impl IntoResponse for P2PConnectError {
-    fn into_response(self) -> axum::response::Response {
-        let code = match self {
-            P2PConnectError::UnsupportedProtocol => StatusCode::BAD_REQUEST,
-        };
-        (code, self.to_string()).into_response()
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
