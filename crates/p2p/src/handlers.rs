@@ -1,14 +1,11 @@
 use std::{sync::Arc, time::Duration};
 
-use axum::{extract::WebSocketUpgrade, http::Uri, response::IntoResponse, Extension};
+use axum::{extract::WebSocketUpgrade, response::IntoResponse, Extension};
 use futures::{SinkExt, StreamExt};
 use helix_common::{signing::RelaySigningContext, P2PPeerConfig};
 use helix_types::{BlsPublicKey, BlsPublicKeyBytes};
 use tokio::sync::{broadcast, mpsc};
-use tokio_tungstenite::{
-    connect_async,
-    tungstenite::{client::IntoClientRequest, ClientRequestBuilder},
-};
+use tokio_tungstenite::{connect_async, tungstenite::client::IntoClientRequest};
 use tracing::{error, info, warn};
 
 use crate::{
@@ -16,8 +13,6 @@ use crate::{
     socket::PeerSocket,
     P2PApi, P2PApiRequest,
 };
-
-const P2P_PROTOCOL_NAME: &str = "relay-p2p/1.0";
 
 impl P2PApi {
     /// Creates a new instance.
@@ -31,7 +26,12 @@ impl P2PApi {
         let this = Arc::new(Self { peer_configs, broadcast_tx, api_requests_tx, signing_context });
         for peer_config in &this.peer_configs {
             // Parse URL and try to turn into a request ahead-of-time, panicking on error
-            let request = url_to_client_request(&peer_config.url);
+            let request = peer_config
+                .url
+                .as_str()
+                .into_client_request()
+                .inspect_err(|e| error!(err=?e, url=%peer_config.url, "invalid peer URL"))
+                .expect("peer URL in config should be valid");
 
             tokio::spawn(this.clone().connect_to_peer(request, peer_config.verifying_key.clone()));
         }
@@ -45,11 +45,8 @@ impl P2PApi {
         ws: WebSocketUpgrade,
     ) -> Result<impl IntoResponse, std::convert::Infallible> {
         info!("got new peer connection");
-        // Upgrade connection to WebSocket, spawning a new task to handle the connection.
+        // Upgrade connection to WebSocket, spawning a new task to handle the connection
         let ws = ws
-            // Set supported protocols. If the connecting peer specifies an unsupported
-            // protocol, we will reject the connection.
-            .protocols([P2P_PROTOCOL_NAME])
             .on_failed_upgrade(|error| warn!(%error, "websocket upgrade failed"))
             .on_upgrade(|socket| api.on_peer_connection(socket.into()));
 
@@ -81,10 +78,10 @@ impl P2PApi {
         }
     }
 
-    async fn on_peer_connection(self: Arc<Self>, socket: axum::extract::ws::WebSocket) {
+    async fn on_peer_connection(self: Arc<Self>, socket: PeerSocket) {
         // If connection fails, log the error and return.
         let _ = self
-            .handle_ws_connection(socket.into(), None)
+            .handle_ws_connection(socket, None)
             .await
             .inspect_err(|e| error!(err=?e, direction="inbound", "websocket communication error"));
     }
@@ -160,21 +157,6 @@ impl P2PApi {
 
         Ok(())
     }
-}
-
-fn url_to_client_request(url: &str) -> axum::http::Request<()> {
-    let uri: Uri = url
-        .parse()
-        .inspect_err(|e| error!(err=?e, %url, "failed to parse peer URL"))
-        .expect("peer URL should be valid");
-
-    let request = ClientRequestBuilder::new(uri)
-        .with_sub_protocol(P2P_PROTOCOL_NAME)
-        .into_client_request()
-        .inspect_err(|e| error!(err=?e, %url, "failed to turn URL into client request"))
-        .expect("peer URL should be valid URL of ");
-
-    request
 }
 
 #[derive(Debug, thiserror::Error)]
