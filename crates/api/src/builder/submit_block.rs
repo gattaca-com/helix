@@ -15,7 +15,7 @@ use helix_database::DatabaseService;
 use helix_datastore::Auctioneer;
 use helix_types::BlockMergingPreferences;
 use http::request::Parts;
-use tracing::{debug, error, info, trace, warn, Instrument, Level};
+use tracing::{debug, error, info, trace, warn, Instrument};
 
 use super::api::BuilderApi;
 use crate::{
@@ -45,7 +45,7 @@ impl<A: Api> BuilderApi<A> {
         builder_pubkey = tracing::field::Empty,
         builder_id = tracing::field::Empty,
         block_hash = tracing::field::Empty,
-    ), err, ret(level = Level::DEBUG))]
+    ), err)]
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
         Extension(timings): Extension<RequestTimings>,
@@ -60,16 +60,12 @@ impl<A: Api> BuilderApi<A> {
 
         // Verify that we have a validator connected for this slot
         let Some(next_duty) = next_duty else {
-            warn!("could not find slot duty");
             return Err(BuilderApiError::ProposerDutyNotFound);
         };
 
         trace.metadata = api.metadata_provider.get_metadata(&parts.headers);
 
-        debug!(%head_slot, timestamp_request_start = trace.receive);
-
         // Decode the incoming request body into a payload
-
         let (skip_sigverify, payload_with_merging_data, is_cancellations_enabled) = decode_payload(
             head_slot.as_u64() + 1,
             &api,
@@ -276,5 +272,40 @@ impl<A: Api> BuilderApi<A> {
         );
 
         Ok(StatusCode::OK)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use helix_common::chain_info::ChainInfo;
+    use helix_types::{BidTrace, SignedBidSubmission, SignedBidSubmissionElectra, TestRandomSeed};
+    use ssz::Encode;
+
+    #[tokio::test]
+    async fn test_locl() {
+        let clock = ChainInfo::for_mainnet();
+
+        let curr_slot = clock.current_slot();
+
+        let bid_trace = BidTrace { slot: curr_slot.as_u64() + 1, ..BidTrace::test_random() };
+        let sub = SignedBidSubmissionElectra {
+            message: bid_trace,
+            ..SignedBidSubmissionElectra::test_random()
+        };
+
+        let block = SignedBidSubmission::Electra(sub);
+        let bytes = block.as_ssz_bytes();
+
+        let res = reqwest::Client::builder()
+            .build()
+            .unwrap()
+            .post("http://0.0.0.0:4040/relay/v1/builder/blocks")
+            .header("Content-Type", "application/octet-stream")
+            .body(bytes)
+            .send()
+            .await
+            .unwrap();
+
+        println!("{}", res.status().as_str())
     }
 }
