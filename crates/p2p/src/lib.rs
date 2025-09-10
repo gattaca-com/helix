@@ -11,7 +11,7 @@ use crate::{
     request_handlers::{InclusionListRequest, P2PApiRequest},
 };
 
-pub(crate) mod il_consensus;
+pub(crate) mod inclusion_lists;
 mod message_handler;
 pub mod messages;
 mod request_handlers;
