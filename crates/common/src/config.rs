@@ -3,7 +3,7 @@ use std::{collections::HashSet, fs::File, path::PathBuf};
 use alloy_primitives::B256;
 use clap::Parser;
 use eyre::ensure;
-use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey};
+use helix_types::{BlsKeypair, BlsPublicKeyBytes, BlsSecretKey};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
@@ -205,7 +205,7 @@ pub struct P2PPeerConfig {
     /// A valid URL is of the form 'ws://<peer-url>/relay/v1/p2p'
     pub url: String,
     /// The BLS public key of the peer, to verify its identity.
-    pub verifying_key: BlsPublicKey,
+    pub pubkey: BlsPublicKeyBytes,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

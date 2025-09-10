@@ -79,7 +79,7 @@ impl SignedHelloMessage {
         Self { message, signature }
     }
 
-    pub(crate) fn pubkey(&self) -> Result<BlsPublicKey, MessageAuthenticationError> {
+    pub(crate) fn deserialize_pubkey(&self) -> Result<BlsPublicKey, MessageAuthenticationError> {
         BlsPublicKey::deserialize(&*self.message.pubkey)
             .map_err(|_| MessageAuthenticationError::CouldNotDeserializePubkey)
     }

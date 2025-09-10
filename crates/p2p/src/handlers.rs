@@ -25,10 +25,21 @@ impl P2PApi {
         let (api_requests_tx, api_requests_rx) = mpsc::channel(2000);
         let this = Arc::new(Self { peer_configs, broadcast_tx, api_requests_tx, signing_context });
         for peer_config in &this.peer_configs {
+            let peer_pubkey = peer_config.pubkey;
             // Parse URL and try to turn into a request ahead-of-time, panicking on error
             let request = url_to_client_request(&peer_config.url);
+            // Verify serialized public key is valid
+            let pubkey = BlsPublicKey::deserialize(peer_pubkey.as_ref())
+                .inspect_err(
+                    |e| error!(err=?e, pubkey=%peer_pubkey, "failed to deserialize peer pubkey"),
+                )
+                .expect("pubkey should be valid");
 
-            tokio::spawn(this.clone().connect_to_peer(request, peer_config.verifying_key.clone()));
+            // If the peer's pubkey is less than ours, don't try to connect.
+            // Imposing an order on the pubkeys prevents redundant connections between peers.
+            if peer_pubkey > this.signing_context.pubkey {
+                tokio::spawn(this.clone().connect_to_peer(request, pubkey, peer_pubkey));
+            }
         }
         tokio::spawn(this.clone().handle_requests(api_requests_rx));
         this
@@ -52,13 +63,8 @@ impl P2PApi {
         self: Arc<Self>,
         request: axum::http::Request<()>,
         pubkey: BlsPublicKey,
+        pubkey_bytes: BlsPublicKeyBytes,
     ) {
-        let pubkey_bytes = pubkey.serialize().into();
-        // If the peer's pubkey is less than ours, don't try to connect.
-        // Imposing an order on the pubkeys prevents redundant connections between peers.
-        if pubkey_bytes <= self.signing_context.pubkey {
-            return;
-        }
         // Attempt to connect, waiting for a bit before retrying
         loop {
             if let Ok((ws, _response)) = connect_async(request.clone()).await {
@@ -119,13 +125,14 @@ impl P2PApi {
     ) -> Result<(), WsConnectionError> {
         match message {
             RawP2PMessage::Hello(hello_msg) => {
-                let pubkey = hello_msg.pubkey()?;
+                let pubkey_bytes = hello_msg.message.pubkey;
                 // Check peer is known
                 let known_peer =
-                    self.peer_configs.iter().any(|config| config.verifying_key == pubkey);
+                    self.peer_configs.iter().any(|config| config.pubkey == pubkey_bytes);
                 if !known_peer {
-                    return Err(WsConnectionError::UnknownPeer(pubkey));
+                    return Err(WsConnectionError::UnknownPeer(pubkey_bytes));
                 }
+                let pubkey = hello_msg.deserialize_pubkey()?;
                 hello_msg.verify_signature(&pubkey)?;
                 info!("Verified Hello message from peer: {pubkey}");
 
@@ -174,7 +181,7 @@ enum WsConnectionError {
     #[error("got an unexpected pubkey, got: {_0}, expected: {_1}")]
     UnexpectedPubkey(BlsPublicKey, BlsPublicKey),
     #[error("not a known peer: {_0}")]
-    UnknownPeer(BlsPublicKey),
+    UnknownPeer(BlsPublicKeyBytes),
     #[error("initial authentication failed: {_0}")]
     MessageAuthentication(#[from] MessageAuthenticationError),
     #[error("receiver was closed")]
