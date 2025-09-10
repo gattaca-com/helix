@@ -1,17 +1,17 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use axum::{extract::WebSocketUpgrade, http::Uri, response::IntoResponse, Extension};
+use axum::{extract::WebSocketUpgrade, response::IntoResponse, Extension};
 use futures::{SinkExt, StreamExt};
 use helix_common::{api::builder_api::InclusionList, signing::RelaySigningContext, P2PPeerConfig};
 use helix_types::{BlsPublicKey, BlsPublicKeyBytes};
 use tokio::sync::{broadcast, mpsc, oneshot};
-use tokio_tungstenite::connect_async;
+use tokio_tungstenite::{connect_async, tungstenite::client::IntoClientRequest};
 use tracing::{error, info, warn};
 
 use crate::{
     il_consensus::{compute_final_inclusion_list, compute_shared_inclusion_list},
     messages::{
-        InclusionListMessage, MessageAuthenticationError, P2PMessage, RawP2PMessage,
+        EncodingError, InclusionListMessage, MessageAuthenticationError, P2PMessage, RawP2PMessage,
         SignedHelloMessage,
     },
     socket::PeerSocket,
@@ -50,28 +50,43 @@ impl P2PApi {
         let (api_requests_tx, api_requests_rx) = mpsc::channel(2000);
         let this = Arc::new(Self { peer_configs, broadcast_tx, api_requests_tx, signing_context });
         for peer_config in &this.peer_configs {
-            let uri: Uri = peer_config
+            // Parse URL and try to turn into a request ahead-of-time, panicking on error
+            let request = peer_config
                 .url
-                .parse()
-                .inspect_err(|e| error!(err=?e, "invalid peer URL"))
-                .unwrap();
-            tokio::spawn(this.clone().connect_to_peer(uri, peer_config.verifying_key.clone()));
+                .as_str()
+                .into_client_request()
+                .inspect_err(|e| error!(err=?e, url=%peer_config.url, "invalid peer URL"))
+                .expect("peer URL in config should be valid");
+
+            tokio::spawn(this.clone().connect_to_peer(request, peer_config.verifying_key.clone()));
         }
         tokio::spawn(this.clone().handle_incoming_messages(api_requests_rx));
         this
     }
 
-    async fn connect_to_peer(self: Arc<Self>, uri: Uri, verifying_key: BlsPublicKey) {
-        let pubkey_bytes = verifying_key.serialize().into();
+    async fn connect_to_peer(
+        self: Arc<Self>,
+        request: axum::http::Request<()>,
+        pubkey: BlsPublicKey,
+    ) {
+        let pubkey_bytes = pubkey.serialize().into();
         // If the peer's pubkey is less than ours, don't try to connect.
         // Imposing an order on the pubkeys prevents redundant connections between peers.
         if pubkey_bytes <= self.signing_context.pubkey {
             return;
         }
-        let Ok((ws, _response)) = connect_async(uri).await else {
-            return;
-        };
-        self.handle_ws_connection(ws.into(), Some((pubkey_bytes, verifying_key))).await;
+        // Attempt to connect, waiting for a bit before retrying
+        loop {
+            let Ok((ws, _response)) = connect_async(request.clone()).await else {
+                continue;
+            };
+            let _ = self.handle_ws_connection(ws.into(), Some((pubkey_bytes, pubkey.clone()))).await.inspect_err(|e| {
+                error!(err=?e, direction="outbound", peer=%pubkey_bytes, "websocket communication error")
+            });
+
+            // TODO: change to an exponential backoff?
+            tokio::time::sleep(Duration::from_secs(10)).await;
+        }
     }
 
     fn broadcast(&self, message: P2PMessage) {
@@ -85,15 +100,27 @@ impl P2PApi {
         inclusion_list: InclusionList,
     ) -> Option<InclusionList> {
         let (result_tx, result_rx) = oneshot::channel();
-        self.api_requests_tx
+        // Send request to P2P API
+        if let Err(err) = self
+            .api_requests_tx
             .send(P2PApiRequest::LocalInclusionList(InclusionListRequest {
                 slot,
                 inclusion_list,
                 result_tx,
             }))
             .await
-            .unwrap();
-        result_rx.await.unwrap()
+        {
+            // If API service is unavailable, just return the original IL and log a warning
+            warn!("failed to send inclusion list to P2P API");
+            match err.0 {
+                P2PApiRequest::LocalInclusionList(request) => {
+                    return Some(request.inclusion_list);
+                }
+                _ => unreachable!("the returned value is an inclusion list request"),
+            }
+        }
+        // If API service drops the channel, return None and log a warning
+        result_rx.await.inspect_err(|_| warn!("response channel was dropped")).ok().flatten()
     }
 
     #[tracing::instrument(skip_all)]
@@ -103,46 +130,48 @@ impl P2PApi {
     ) -> Result<impl IntoResponse, std::convert::Infallible> {
         info!("got new peer connection");
         // Upgrade connection to WebSocket, spawning a new task to handle the connection
-        let ws =
-            ws.on_failed_upgrade(|error| warn!(%error, "websocket upgrade failed")).on_upgrade(
-                |socket| async move { api.handle_ws_connection(socket.into(), None).await },
-            );
+        let ws = ws
+            .on_failed_upgrade(|error| warn!(%error, "websocket upgrade failed"))
+            .on_upgrade(|socket| api.on_peer_connection(socket.into()));
 
         Ok(ws)
+    }
+
+    async fn on_peer_connection(self: Arc<Self>, socket: PeerSocket) {
+        // If connection fails, log the error and return.
+        let _ = self
+            .handle_ws_connection(socket, None)
+            .await
+            .inspect_err(|e| error!(err=?e, direction="inbound", "websocket communication error"));
     }
 
     async fn handle_ws_connection(
         &self,
         mut socket: PeerSocket,
         mut peer_pubkey: Option<(BlsPublicKeyBytes, BlsPublicKey)>,
-    ) {
+    ) -> Result<(), WsConnectionError> {
         let mut broadcast_rx = self.broadcast_tx.subscribe();
         // Send an initial Hello message
         let hello_message = RawP2PMessage::Hello(SignedHelloMessage::new(&self.signing_context));
-        if let Err(err) = socket.send(hello_message.to_ws_message().unwrap()).await {
-            error!(err=?err, "failed to send initial Hello message");
-            return;
-        }
+        socket.send(hello_message.to_ws_message()).await.map_err(WsConnectionError::SendError)?;
         loop {
             tokio::select! {
                 res = broadcast_rx.recv() => {
                     let Ok(msg) = res else {
                         // Sender was closed
-                        break;
+                        return Ok(());
                     };
-                    let serialized = RawP2PMessage::Other(msg).to_ws_message().unwrap();
-                    socket.send(serialized).await.unwrap();
+                    let serialized = RawP2PMessage::Other(msg).to_ws_message();
+                    socket.send(serialized).await.map_err(WsConnectionError::SendError)?;
                 },
                 res = socket.next() => {
                     let Some(res) = res else {
                         // Socket was closed
-                        break;
+                        return Ok(());
                     };
-                    let Ok(msg) = res.inspect_err(|e| error!(err=?e, "failed to receive websocket message")) else {
-                        break;
-                    };
-                    let message = RawP2PMessage::from_ws_message(&msg).unwrap();
-                    self.handle_raw_message(message, &mut peer_pubkey).await.unwrap();
+                    let msg = res.map_err(WsConnectionError::RecvError)?;
+                    let message = RawP2PMessage::from_ws_message(&msg)?;
+                    self.handle_raw_message(message, &mut peer_pubkey).await?;
                 }
             };
         }
@@ -152,15 +181,14 @@ impl P2PApi {
         &self,
         message: RawP2PMessage,
         peer_pubkey: &mut Option<(BlsPublicKeyBytes, BlsPublicKey)>,
-    ) -> Result<(), WsConnectionHandler> {
+    ) -> Result<(), WsConnectionError> {
         // Handle Hello message in-place
         if let RawP2PMessage::Hello(hello_msg) = &message {
             let pubkey = hello_msg.pubkey()?;
             // Check peer is known
             let known_peer = self.peer_configs.iter().any(|config| config.verifying_key == pubkey);
             if !known_peer {
-                error!("Received Hello from unknown peer: {pubkey}. Disconnecting...");
-                return Err(WsConnectionHandler::UnknownPeer(pubkey));
+                return Err(WsConnectionError::UnknownPeer(pubkey));
             }
             hello_msg.verify_signature(&pubkey)?;
             info!("Verified Hello message from peer: {pubkey}");
@@ -170,14 +198,12 @@ impl P2PApi {
                 return Ok(());
             };
             if peer_pubkey != &pubkey {
-                error!("Received unexpected pubkey. Got {pubkey}, expected {peer_pubkey}");
-                return Err(WsConnectionHandler::UnexpectedPubkey(pubkey, peer_pubkey.clone()));
+                return Err(WsConnectionError::UnexpectedPubkey(pubkey, peer_pubkey.clone()));
             }
         }
 
         let Some((sender, _)) = &peer_pubkey else {
-            error!("First message is not a Hello. Disconnecting from peer...");
-            return Err(WsConnectionHandler::NoHello);
+            return Err(WsConnectionError::NoHello);
         };
         let sender = *sender;
 
@@ -186,7 +212,7 @@ impl P2PApi {
                 self.api_requests_tx
                     .send(P2PApiRequest::PeerMessage { sender, message })
                     .await
-                    .map_err(|_| WsConnectionHandler::ChannelClosed)?;
+                    .map_err(|_| WsConnectionError::ChannelClosed)?;
             }
             RawP2PMessage::Hello(_) => {
                 unreachable!("already handled above")
@@ -257,7 +283,13 @@ impl P2PApi {
 }
 
 #[derive(Debug, thiserror::Error)]
-enum WsConnectionHandler {
+enum WsConnectionError {
+    #[error("failed to send message")]
+    SendError(crate::socket::Error),
+    #[error("failed to receive message")]
+    RecvError(crate::socket::Error),
+    #[error("failed to decode message")]
+    DecodingError(#[from] EncodingError),
     #[error("first message from peer was not a Hello")]
     NoHello,
     #[error("got an unexpected pubkey, got: {_0}, expected: {_1}")]

@@ -41,15 +41,13 @@ pub(crate) enum RawP2PMessage {
 }
 
 impl RawP2PMessage {
-    #[expect(clippy::result_large_err)]
-    pub fn to_ws_message(&self) -> Result<WSMessage, EncodingError> {
-        let text = serde_json::to_string(&self)?;
-        Ok(WSMessage::text(text))
+    pub fn to_ws_message(&self) -> WSMessage {
+        let text = serde_json::to_string(&self).expect("encoding cannot fail");
+        WSMessage::text(text)
     }
 
-    #[expect(clippy::result_large_err)]
     pub fn from_ws_message(message: &WSMessage) -> Result<Self, EncodingError> {
-        let text = message.to_text()?;
+        let text = message.to_text().map_err(Box::new)?;
         Ok(serde_json::from_str(text)?)
     }
 }
@@ -64,7 +62,7 @@ pub(crate) enum EncodingError {
     #[error("serde error: {_0}")]
     Serde(#[from] serde_json::Error),
     #[error("invalid utf8: {_0}")]
-    InvalidUtf8(#[from] tokio_tungstenite::tungstenite::Error),
+    InvalidUtf8(#[from] Box<tokio_tungstenite::tungstenite::Error>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
