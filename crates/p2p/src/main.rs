@@ -9,7 +9,7 @@ use helix_common::{
     utils::init_tracing_log, P2PPeerConfig,
 };
 use helix_p2p::P2PApi;
-use helix_types::{BlsKeypair, BlsSecretKey};
+use helix_types::{BlsKeypair, BlsSecretKey, Transaction};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
@@ -65,7 +65,7 @@ async fn main() {
             );
             let mut buf = vec![];
             tx.encode(&mut buf);
-            let txs = vec![buf.into()];
+            let txs = vec![Transaction(buf.into())].into();
             let mut sleeper =
                 core::pin::pin!(tokio::time::sleep(std::time::Duration::from_secs(12)));
             tokio::select! {

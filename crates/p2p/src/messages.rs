@@ -1,16 +1,13 @@
 use std::time::Duration;
 
 use helix_common::{
+    api::builder_api::InclusionList,
     signing::{RelaySigningContext, RELAY_DOMAIN},
     utils::utcnow_ms,
 };
-use helix_types::{
-    BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, EthSpec, MainnetEthSpec,
-    SignedRoot, Transaction,
-};
+use helix_types::{BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, SignedRoot};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
-use ssz_types::VariableList;
 use tree_hash_derive::TreeHash;
 
 use crate::socket::WSMessage;
@@ -128,17 +125,14 @@ impl HelloMessage {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InclusionListMessage {
     pub slot: u64,
     pub inclusion_list: InclusionList,
 }
 
 impl InclusionListMessage {
-    pub fn new(slot: u64, inclusion_list: helix_common::api::builder_api::InclusionList) -> Self {
-        let inclusion_list =
-            inclusion_list.txs.into_iter().map(Transaction).collect::<Vec<_>>().into();
-
+    pub fn new(slot: u64, inclusion_list: InclusionList) -> Self {
         Self { slot, inclusion_list }
     }
 }
@@ -148,6 +142,3 @@ impl From<InclusionListMessage> for P2PMessage {
         P2PMessage::InclusionList(msg)
     }
 }
-
-pub type InclusionList =
-    VariableList<Transaction, <MainnetEthSpec as EthSpec>::MaxTransactionsPerPayload>;
