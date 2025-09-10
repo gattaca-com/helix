@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use alloy_consensus::{TxEip1559, TxEnvelope};
 use alloy_primitives::Signature;
@@ -38,7 +38,7 @@ async fn main() {
     let keypair = BlsKeypair::from_components(private_key.public_key(), private_key);
     let pubkey = keypair.pk.clone();
     let chain_info = Arc::new(ChainInfo::for_hoodi());
-    let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info));
+    let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info.clone()));
 
     let p2p_api = P2PApi::new(p2p_config, relay_signing_context);
 
@@ -67,10 +67,12 @@ async fn main() {
             let mut buf = vec![];
             tx.encode(&mut buf);
             let txs = vec![Transaction(buf.into())].into();
-            let mut sleeper =
-                core::pin::pin!(tokio::time::sleep(std::time::Duration::from_secs(12)));
+            let slot = chain_info.current_slot();
+            let sleep_duration = Duration::from_secs(chain_info.seconds_per_slot())
+                .saturating_sub(chain_info.duration_into_slot(slot).unwrap_or(Default::default()));
+            let mut sleeper = core::pin::pin!(tokio::time::sleep(sleep_duration));
             tokio::select! {
-                il = p2p_api.share_inclusion_list(42, InclusionList { txs }) => {
+                il = p2p_api.share_inclusion_list(slot.into(), InclusionList { txs }) => {
                     let Some(il) = il else {
                         error!("Failed to get inclusion list");
                         continue;
