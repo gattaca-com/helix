@@ -1,37 +1,18 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use axum::{extract::WebSocketUpgrade, response::IntoResponse, Extension};
 use futures::{SinkExt, StreamExt};
-use helix_common::{api::builder_api::InclusionList, signing::RelaySigningContext, P2PPeerConfig};
+use helix_common::{signing::RelaySigningContext, P2PPeerConfig};
 use helix_types::{BlsPublicKey, BlsPublicKeyBytes};
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::{connect_async, tungstenite::client::IntoClientRequest};
 use tracing::{error, info, warn};
 
 use crate::{
-    il_consensus::{compute_final_inclusion_list, compute_shared_inclusion_list},
-    messages::{
-        EncodingError, InclusionListMessage, MessageAuthenticationError, P2PMessage, RawP2PMessage,
-        SignedHelloMessage,
-    },
+    messages::{EncodingError, MessageAuthenticationError, RawP2PMessage, SignedHelloMessage},
     socket::PeerSocket,
-    P2PApi,
+    P2PApi, P2PApiRequest,
 };
-
-#[derive(Debug)]
-pub(crate) enum P2PApiRequest {
-    PeerMessage { sender: BlsPublicKeyBytes, message: P2PMessage },
-    LocalInclusionList(InclusionListRequest),
-    SharedInclusionList(InclusionListRequest),
-    SettledInclusionList(InclusionListRequest),
-}
-
-#[derive(Debug)]
-pub(crate) struct InclusionListRequest {
-    pub(crate) slot: u64,
-    pub(crate) inclusion_list: InclusionList,
-    pub(crate) result_tx: oneshot::Sender<Option<InclusionList>>,
-}
 
 impl P2PApi {
     /// Creates a new instance.
@@ -54,7 +35,7 @@ impl P2PApi {
 
             tokio::spawn(this.clone().connect_to_peer(request, peer_config.verifying_key.clone()));
         }
-        tokio::spawn(this.clone().handle_incoming_messages(api_requests_rx));
+        tokio::spawn(this.clone().handle_requests(api_requests_rx));
         this
     }
 
@@ -175,65 +156,6 @@ impl P2PApi {
         }
 
         Ok(())
-    }
-
-    async fn handle_incoming_messages(
-        self: Arc<Self>,
-        mut api_requests_rx: mpsc::Receiver<P2PApiRequest>,
-    ) {
-        const CUTOFF_TIME_1: Duration = Duration::from_secs(2);
-        const CUTOFF_TIME_2: Duration = Duration::from_secs(2);
-        let mut vote_map: HashMap<BlsPublicKeyBytes, (u64, InclusionList)> = HashMap::new();
-        while let Some(request) = api_requests_rx.recv().await {
-            match request {
-                P2PApiRequest::LocalInclusionList(request) => {
-                    let msg =
-                        InclusionListMessage::new(request.slot, request.inclusion_list.clone());
-                    self.broadcast(msg.into());
-
-                    let api_requests_tx = self.api_requests_tx.clone();
-                    let shared_il_msg = P2PApiRequest::SharedInclusionList(request);
-                    tokio::spawn(async move {
-                        // Sleep for t_1 time
-                        tokio::time::sleep(CUTOFF_TIME_1).await;
-                        let _ = api_requests_tx.send(shared_il_msg).await.inspect_err(
-                            |e| error!(err=?e, "failed to send shared inclusion list"),
-                        );
-                    });
-                }
-                P2PApiRequest::SharedInclusionList(request) => {
-                    let InclusionListRequest { slot, inclusion_list, .. } = request;
-                    let shared_il = compute_shared_inclusion_list(&vote_map, slot, inclusion_list);
-
-                    let msg = InclusionListMessage::new(slot, shared_il.clone());
-                    self.broadcast(msg.into());
-
-                    let api_requests_tx = self.api_requests_tx.clone();
-                    let settle_request =
-                        InclusionListRequest { inclusion_list: shared_il, ..request };
-                    let shared_il_msg = P2PApiRequest::SettledInclusionList(settle_request);
-                    tokio::spawn(async move {
-                        // Sleep for t_2 time
-                        tokio::time::sleep(CUTOFF_TIME_2).await;
-                        let _ = api_requests_tx.send(shared_il_msg).await.inspect_err(
-                            |e| error!(err=?e, "failed to send shared inclusion list"),
-                        );
-                    });
-                }
-                P2PApiRequest::SettledInclusionList(request) => {
-                    let InclusionListRequest { slot, inclusion_list, result_tx } = request;
-                    let vote_map = std::mem::take(&mut vote_map);
-                    let final_il = compute_final_inclusion_list(vote_map, slot, inclusion_list);
-                    let _ = result_tx
-                        .send(Some(final_il))
-                        .inspect_err(|e| error!(err=?e, "failed to send settled inclusion list"));
-                }
-                P2PApiRequest::PeerMessage { sender, message } => {
-                    let P2PMessage::InclusionList(il_msg) = message;
-                    vote_map.insert(sender, (il_msg.slot, il_msg.inclusion_list));
-                }
-            }
-        }
     }
 }
 
