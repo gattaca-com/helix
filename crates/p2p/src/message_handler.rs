@@ -10,8 +10,9 @@ use tracing::{error, info, warn};
 
 use crate::{
     messages::{EncodingError, MessageAuthenticationError, RawP2PMessage, SignedHelloMessage},
+    request_handlers::P2PApiRequest,
     socket::PeerSocket,
-    P2PApi, P2PApiRequest,
+    P2PApi,
 };
 
 impl P2PApi {
