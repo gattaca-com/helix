@@ -139,6 +139,10 @@ impl<A: Api> ProposerApi<A> {
             } => {
                 // If we are past the slot for the block, skip storing it
                 if let Some((_, blobs)) = best_orders.load(slot) {
+                    self.alert_manager.send(&format!(
+                        "Merged block created for slot {} (value: {})",
+                        slot, response.proposer_value
+                    ));
                     let _ = self
                         .store_merged_payload(
                             slot,
