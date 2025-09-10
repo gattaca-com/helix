@@ -69,8 +69,10 @@ pub async fn run_api_service<A: Api>(
     }
 
     let simulator = MultiSimulator::new(simulators);
-    let sim = simulator.clone();
-    tokio::spawn(sim.start_sync_monitor());
+    if !config.is_local_dev {
+        let sim = simulator.clone();
+        tokio::spawn(sim.start_sync_monitor());
+    }
 
     let gossiper = Arc::new(
         GrpcGossiperClientManager::new(config.relays.iter().map(|cfg| cfg.url.clone()).collect())
