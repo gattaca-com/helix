@@ -1,3 +1,4 @@
+pub mod alerts;
 pub mod api;
 pub mod bid_sorter;
 pub mod bid_submission;

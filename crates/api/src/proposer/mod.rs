@@ -15,8 +15,8 @@ use axum::{response::IntoResponse, Extension};
 pub use block_merging::MergingPoolMessage;
 use helix_beacon::{multi_beacon_client::MultiBeaconClient, BlockBroadcaster};
 use helix_common::{
-    bid_sorter::BestGetHeader, chain_info::ChainInfo, signing::RelaySigningContext, RelayConfig,
-    ValidatorPreferences,
+    alerts::AlertManager, bid_sorter::BestGetHeader, chain_info::ChainInfo,
+    signing::RelaySigningContext, RelayConfig, ValidatorPreferences,
 };
 use helix_housekeeper::CurrentSlotInfo;
 use helix_types::BlsPublicKeyBytes;
@@ -53,6 +53,8 @@ pub struct ProposerApi<A: Api> {
 
     /// Set in the block merging process
     pub shared_best_merged: BestMergedBlock,
+
+    pub alert_manager: AlertManager,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -63,7 +65,6 @@ impl<A: Api> ProposerApi<A> {
         gossiper: Arc<GrpcGossiperClientManager>,
         metadata_provider: Arc<A::MetadataProvider>,
         signing_context: Arc<RelaySigningContext>,
-
         broadcasters: Vec<Arc<BlockBroadcaster>>,
         multi_beacon_client: Arc<MultiBeaconClient>,
         chain_info: Arc<ChainInfo>,
@@ -84,11 +85,12 @@ impl<A: Api> ProposerApi<A> {
             chain_info,
             metadata_provider,
             validator_preferences,
-            relay_config,
+            relay_config: relay_config.clone(),
             v3_payload_request,
             curr_slot_info,
             shared_best_header,
             shared_best_merged: BestMergedBlock::new(),
+            alert_manager: AlertManager::from_relay_config(&relay_config),
         }
     }
 }
