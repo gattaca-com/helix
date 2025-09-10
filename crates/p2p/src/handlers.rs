@@ -26,12 +26,7 @@ impl P2PApi {
         let this = Arc::new(Self { peer_configs, broadcast_tx, api_requests_tx, signing_context });
         for peer_config in &this.peer_configs {
             // Parse URL and try to turn into a request ahead-of-time, panicking on error
-            let request = peer_config
-                .url
-                .as_str()
-                .into_client_request()
-                .inspect_err(|e| error!(err=?e, url=%peer_config.url, "invalid peer URL"))
-                .expect("peer URL in config should be valid");
+            let request = url_to_client_request(&peer_config.url);
 
             tokio::spawn(this.clone().connect_to_peer(request, peer_config.verifying_key.clone()));
         }
@@ -66,12 +61,11 @@ impl P2PApi {
         }
         // Attempt to connect, waiting for a bit before retrying
         loop {
-            let Ok((ws, _response)) = connect_async(request.clone()).await else {
-                continue;
-            };
-            let _ = self.handle_ws_connection(ws.into(), Some((pubkey_bytes, pubkey.clone()))).await.inspect_err(|e| {
-                error!(err=?e, direction="outbound", peer=%pubkey_bytes, "websocket communication error")
-            });
+            if let Ok((ws, _response)) = connect_async(request.clone()).await {
+                let _ = self.handle_ws_connection(ws.into(), Some((pubkey_bytes, pubkey.clone()))).await.inspect_err(|e| {
+                   error!(err=?e, direction="outbound", peer=%pubkey_bytes, "websocket communication error")
+               });
+            }
 
             // TODO: change to an exponential backoff?
             tokio::time::sleep(Duration::from_secs(10)).await;
@@ -157,6 +151,14 @@ impl P2PApi {
 
         Ok(())
     }
+}
+
+fn url_to_client_request(url: &str) -> axum::http::Request<()> {
+    let request = url
+        .into_client_request()
+        .inspect_err(|e| error!(err=?e, %url, "invalid peer URL"))
+        .expect("peer URL in config should be valid");
+    request
 }
 
 #[derive(Debug, thiserror::Error)]
