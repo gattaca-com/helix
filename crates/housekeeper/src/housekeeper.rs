@@ -92,6 +92,8 @@ pub struct Housekeeper<DB: DatabaseService + 'static, A: Auctioneer + 'static> {
     primev_service: Option<EthereumPrimevService>,
     slots: HousekeeperSlots,
     inclusion_list_service: Option<InclusionListService<DB, A>>,
+    local_builders: Vec<BuilderConfig>,
+    is_local_dev: bool,
 }
 
 impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
@@ -117,6 +119,8 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
             primev_service,
             slots: HousekeeperSlots::default(),
             inclusion_list_service,
+            local_builders: config.builders.clone(),
+            is_local_dev: config.is_local_dev,
         }
     }
 
@@ -196,26 +200,30 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         // known validators
         if self.should_refresh_known_validators(head_slot.as_u64()) {
-            let housekeeper = self.clone();
-            task::spawn(
-                file!(),
-                line!(),
-                async move {
-                    let Ok(_guard) = housekeeper.slots.updating_refreshed_validators.try_lock()
-                    else {
-                        warn!("refreshed validators update already in progress");
-                        return;
-                    };
-                    let start = Instant::now();
-                    if let Err(err) = housekeeper.refresh_known_validators().await {
-                        error!(%err, "failed to refresh known validators");
-                    } else {
-                        housekeeper.slots.update_refreshed_validators(head_slot);
+            if self.is_local_dev {
+                warn!("skipping refresh of known validators")
+            } else {
+                let housekeeper = self.clone();
+                task::spawn(
+                    file!(),
+                    line!(),
+                    async move {
+                        let Ok(_guard) = housekeeper.slots.updating_refreshed_validators.try_lock()
+                        else {
+                            warn!("refreshed validators update already in progress");
+                            return;
+                        };
+                        let start = Instant::now();
+                        if let Err(err) = housekeeper.refresh_known_validators().await {
+                            error!(%err, "failed to refresh known validators");
+                        } else {
+                            housekeeper.slots.update_refreshed_validators(head_slot);
+                        }
+                        info!(duration = ?start.elapsed(), "refresh validators task completed");
                     }
-                    info!(duration = ?start.elapsed(), "refresh validators task completed");
-                }
-                .in_current_span(),
-            );
+                    .in_current_span(),
+                );
+            }
         }
 
         // builder info updated every slot
@@ -239,25 +247,29 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
         // trusted proposers
         if self.should_update_trusted_proposers(head_slot.as_u64()) {
-            let housekeeper = self.clone();
-            task::spawn(
-                file!(),
-                line!(),
-                async move {
-                    let Ok(_guard) = housekeeper.slots.updating_trusted_proposers.try_lock() else {
-                        warn!("trusted proposer update already in progress");
-                        return;
-                    };
-                    let start = Instant::now();
-                    if let Err(err) = housekeeper.update_trusted_proposers().await {
-                        error!(%err, "failed to update trusted proposers");
-                    } else {
-                        housekeeper.slots.update_trusted_proposers(head_slot);
+            if self.is_local_dev {
+                warn!("skipping refresh of trusted proposers")
+            } else {
+                let housekeeper = self.clone();
+                task::spawn(
+                    file!(),
+                    line!(),
+                    async move {
+                        let Ok(_guard) = housekeeper.slots.updating_trusted_proposers.try_lock() else {
+                            warn!("trusted proposer update already in progress");
+                            return;
+                        };
+                        let start = Instant::now();
+                        if let Err(err) = housekeeper.update_trusted_proposers().await {
+                            error!(%err, "failed to update trusted proposers");
+                        } else {
+                            housekeeper.slots.update_trusted_proposers(head_slot);
+                        }
+                        info!(duration = ?start.elapsed(), "update trusted proposers task completed");
                     }
-                    info!(duration = ?start.elapsed(), "update trusted proposers task completed");
-                }
-                .in_current_span(),
-            );
+                    .in_current_span(),
+                );
+            }
         }
     }
 
@@ -343,8 +355,13 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
 
     /// Synchronizes builder information changes.
     async fn sync_builder_info_changes(&self) -> Result<(), HousekeeperError> {
-        let builder_infos = self.db.get_all_builder_infos().await?;
+        let mut builder_infos = self.db.get_all_builder_infos().await?;
         debug!(builder_infos = builder_infos.len(), "updating builder infos");
+
+        if self.is_local_dev {
+            builder_infos.extend_from_slice(&self.local_builders.as_slice());
+        }
+
         self.auctioneer.update_builder_infos(&builder_infos, true);
 
         Ok(())

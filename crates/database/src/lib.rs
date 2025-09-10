@@ -19,22 +19,25 @@ pub async fn start_db_service(
     known_validators_loaded: Arc<AtomicBool>,
 ) -> eyre::Result<Arc<PostgresDatabaseService>> {
     let mut postgres_db = PostgresDatabaseService::from_relay_config(config).await;
-    postgres_db.init_forever().await;
 
-    postgres_db.init_region(&config.postgres).await;
-    postgres_db
-        .store_builders_info(&config.builders)
-        .await
-        .expect("failed to store builders info from config");
+    if !config.is_local_dev {
+        postgres_db.init_forever().await;
 
-    tokio::spawn({
-        let known_validators_loaded = known_validators_loaded.clone();
-        let postgres_db = postgres_db.clone();
-        async move {
-            postgres_db.load_known_validators().await;
-            known_validators_loaded.store(true, Ordering::Relaxed);
-        }
-    });
+        postgres_db.init_region(&config.postgres).await;
+        postgres_db
+            .store_builders_info(&config.builders)
+            .await
+            .expect("failed to store builders info from config");
+
+        tokio::spawn({
+            let known_validators_loaded = known_validators_loaded.clone();
+            let postgres_db = postgres_db.clone();
+            async move {
+                postgres_db.load_known_validators().await;
+                known_validators_loaded.store(true, Ordering::Relaxed);
+            }
+        });
+    }
 
     //postgres_db.load_validator_registrations().await;
     postgres_db.start_processors().await;

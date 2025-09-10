@@ -53,6 +53,8 @@ pub struct RelayConfig {
     pub inclusion_list: Option<InclusionListConfig>,
     pub housekeeper: bool,
     pub admin_token: String,
+    #[serde(default)]
+    pub is_local_dev: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
