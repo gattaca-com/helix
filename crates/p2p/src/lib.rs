@@ -200,6 +200,7 @@ impl P2PApi {
             if peer_pubkey != &pubkey {
                 return Err(WsConnectionError::UnexpectedPubkey(pubkey, peer_pubkey.clone()));
             }
+            return Ok(());
         }
 
         let Some((sender, _)) = &peer_pubkey else {
