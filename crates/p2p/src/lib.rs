@@ -182,41 +182,35 @@ impl P2PApi {
         message: RawP2PMessage,
         peer_pubkey: &mut Option<(BlsPublicKeyBytes, BlsPublicKey)>,
     ) -> Result<(), WsConnectionError> {
-        // Handle Hello message in-place
-        if let RawP2PMessage::Hello(hello_msg) = &message {
-            let pubkey = hello_msg.pubkey()?;
-            // Check peer is known
-            let known_peer = self.peer_configs.iter().any(|config| config.verifying_key == pubkey);
-            if !known_peer {
-                return Err(WsConnectionError::UnknownPeer(pubkey));
-            }
-            hello_msg.verify_signature(&pubkey)?;
-            info!("Verified Hello message from peer: {pubkey}");
-
-            let Some((_, peer_pubkey)) = &peer_pubkey else {
-                *peer_pubkey = Some((pubkey.serialize().into(), pubkey));
-                return Ok(());
-            };
-            if peer_pubkey != &pubkey {
-                return Err(WsConnectionError::UnexpectedPubkey(pubkey, peer_pubkey.clone()));
-            }
-            return Ok(());
-        }
-
-        let Some((sender, _)) = &peer_pubkey else {
-            return Err(WsConnectionError::NoHello);
-        };
-        let sender = *sender;
-
         match message {
+            RawP2PMessage::Hello(hello_msg) => {
+                let pubkey = hello_msg.pubkey()?;
+                // Check peer is known
+                let known_peer =
+                    self.peer_configs.iter().any(|config| config.verifying_key == pubkey);
+                if !known_peer {
+                    return Err(WsConnectionError::UnknownPeer(pubkey));
+                }
+                hello_msg.verify_signature(&pubkey)?;
+                info!("Verified Hello message from peer: {pubkey}");
+
+                let Some((_, peer_pubkey)) = &peer_pubkey else {
+                    *peer_pubkey = Some((pubkey.serialize().into(), pubkey));
+                    return Ok(());
+                };
+                if peer_pubkey != &pubkey {
+                    return Err(WsConnectionError::UnexpectedPubkey(pubkey, peer_pubkey.clone()));
+                }
+            }
             RawP2PMessage::Other(message) => {
+                let Some((sender, _)) = &peer_pubkey else {
+                    return Err(WsConnectionError::NoHello);
+                };
+                let sender = *sender;
                 self.api_requests_tx
                     .send(P2PApiRequest::PeerMessage { sender, message })
                     .await
                     .map_err(|_| WsConnectionError::ChannelClosed)?;
-            }
-            RawP2PMessage::Hello(_) => {
-                unreachable!("already handled above")
             }
         }
 
