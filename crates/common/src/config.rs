@@ -45,6 +45,8 @@ pub struct RelayConfig {
     #[serde(default)]
     pub primev_config: Option<PrimevConfig>,
     pub discord_webhook_url: Option<Url>,
+    #[serde(default)]
+    pub alerts_config: Option<AlertsConfig>,
     /// If `header_gossip_enabled` is `false` this setting has no effect.
     #[serde(default)]
     pub payload_gossip_enabled: bool,
@@ -169,6 +171,12 @@ pub const fn default_bool<const B: bool>() -> bool {
 
 pub const fn default_u64<const D: u64>() -> u64 {
     D
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AlertsConfig {
+    pub telegram_bot_token: String,
+    pub chat_id: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

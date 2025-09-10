@@ -114,7 +114,13 @@ impl<A: Api> ProposerApi<A> {
             // If we couldn't fetch a base block, try again.
             MergingTaskState::RetryFetch => self.spawn_base_block_fetch_task(),
             // We fetched the base block, so we start a merging task.
-            MergingTaskState::FetchedBaseBlock { slot, best_bid, registration_data, payload } => {
+            MergingTaskState::FetchedBaseBlock {
+                slot,
+                parent_beacon_block_root,
+                best_bid,
+                registration_data,
+                payload,
+            } => {
                 // If we have no mergeable orders, we go back to fetching the base block.
                 if let Some((mergeable_orders, _)) = best_orders.load(slot) {
                     self.spawn_merging_task(
@@ -122,6 +128,7 @@ impl<A: Api> ProposerApi<A> {
                         best_bid,
                         registration_data,
                         payload,
+                        parent_beacon_block_root,
                         mergeable_orders,
                     )
                 } else {
@@ -139,6 +146,10 @@ impl<A: Api> ProposerApi<A> {
             } => {
                 // If we are past the slot for the block, skip storing it
                 if let Some((_, blobs)) = best_orders.load(slot) {
+                    self.alert_manager.send(&format!(
+                        "Merged block created for slot {} (value: {})",
+                        slot, response.proposer_value
+                    ));
                     let _ = self
                         .store_merged_payload(
                             slot,
@@ -169,6 +180,7 @@ impl<A: Api> ProposerApi<A> {
         base_bid: BuilderBid,
         registration_data: ValidatorRegistrationData,
         payload: PayloadAndBlobs,
+        parent_beacon_block_root: Option<B256>,
         mergeable_orders: &[MergeableOrderWithOrigin],
     ) -> JoinHandle<MergingTaskResult> {
         let base_block_time_ms = utcnow_ms();
@@ -181,6 +193,7 @@ impl<A: Api> ProposerApi<A> {
             base_bid.value,
             proposer_fee_recipient,
             &payload.execution_payload,
+            parent_beacon_block_root,
             mergeable_orders,
         );
 
@@ -234,8 +247,21 @@ impl<A: Api> ProposerApi<A> {
             .await
             .inspect_err(|err| warn!(%err, "failed to fetch base block"))?;
 
+        let parent_beacon_block_root = self
+            .curr_slot_info
+            .payload_attributes(payload.execution_payload.parent_hash, slot.into())
+            .and_then(|payload_attrs_update| {
+                payload_attrs_update.payload_attributes.parent_beacon_block_root
+            });
+
         // Found the base block, we can now start with the merging process.
-        Ok(MergingTaskState::new_base_block(slot, best_bid, registration_data, payload))
+        Ok(MergingTaskState::new_base_block(
+            slot,
+            parent_beacon_block_root,
+            best_bid,
+            registration_data,
+            payload,
+        ))
     }
 
     fn store_merged_payload(
@@ -337,6 +363,7 @@ enum MergingTaskState {
     /// We can send a request to the simulator to start appending orders.
     FetchedBaseBlock {
         slot: u64,
+        parent_beacon_block_root: Option<B256>,
         best_bid: BuilderBid,
         registration_data: ValidatorRegistrationData,
         payload: PayloadAndBlobs,
@@ -355,11 +382,18 @@ enum MergingTaskState {
 impl MergingTaskState {
     fn new_base_block(
         slot: u64,
+        parent_beacon_block_root: Option<B256>,
         best_bid: BuilderBid,
         registration_data: ValidatorRegistrationData,
         payload: PayloadAndBlobs,
     ) -> MergingTaskState {
-        MergingTaskState::FetchedBaseBlock { slot, best_bid, registration_data, payload }
+        MergingTaskState::FetchedBaseBlock {
+            slot,
+            parent_beacon_block_root,
+            best_bid,
+            registration_data,
+            payload,
+        }
     }
 
     fn new_merged_block(
