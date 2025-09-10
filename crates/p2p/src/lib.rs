@@ -55,15 +55,23 @@ impl P2PApi {
                 .parse()
                 .inspect_err(|e| error!(err=?e, "invalid peer URL"))
                 .unwrap();
-            let this_clone = this.clone();
-            let peer_config = peer_config.clone();
-            tokio::spawn(async move {
-                let (ws, _response) = connect_async(uri).await.unwrap();
-                this_clone.handle_ws_connection(ws.into(), Some(peer_config.verifying_key)).await;
-            });
+            tokio::spawn(this.clone().connect_to_peer(uri, peer_config.verifying_key.clone()));
         }
         tokio::spawn(this.clone().handle_incoming_messages(api_requests_rx));
         this
+    }
+
+    async fn connect_to_peer(self: Arc<Self>, uri: Uri, verifying_key: BlsPublicKey) {
+        let pubkey_bytes = verifying_key.serialize().into();
+        // If the peer's pubkey is less than ours, don't try to connect.
+        // Imposing an order on the pubkeys prevents redundant connections between peers.
+        if pubkey_bytes <= self.signing_context.pubkey {
+            return;
+        }
+        let Ok((ws, _response)) = connect_async(uri).await else {
+            return;
+        };
+        self.handle_ws_connection(ws.into(), Some((pubkey_bytes, verifying_key))).await;
     }
 
     fn broadcast(&self, message: P2PMessage) {
@@ -106,11 +114,9 @@ impl P2PApi {
     async fn handle_ws_connection(
         &self,
         mut socket: PeerSocket,
-        peer_pubkey: Option<BlsPublicKey>,
+        mut peer_pubkey: Option<(BlsPublicKeyBytes, BlsPublicKey)>,
     ) {
         let mut broadcast_rx = self.broadcast_tx.subscribe();
-        // Cache the public key bytes
-        let mut peer_pubkey = peer_pubkey.map(|pk| (pk.serialize().into(), pk));
         // Send an initial Hello message
         let hello_message = RawP2PMessage::Hello(SignedHelloMessage::new(&self.signing_context));
         if let Err(err) = socket.send(hello_message.to_ws_message().unwrap()).await {
