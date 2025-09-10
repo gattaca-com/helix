@@ -32,8 +32,9 @@ impl P2PApi {
         mut api_requests_rx: mpsc::Receiver<P2PApiRequest>,
     ) {
         const CUTOFF_TIME_1: Duration = Duration::from_secs(2);
-        const CUTOFF_TIME_2: Duration = Duration::from_secs(2);
+        const CUTOFF_TIME_2: Duration = Duration::from_secs(4);
         let mut vote_map: HashMap<BlsPublicKeyBytes, (u64, InclusionList)> = HashMap::new();
+
         while let Some(request) = api_requests_rx.recv().await {
             match request {
                 P2PApiRequest::LocalInclusionList(request) => {
@@ -42,10 +43,18 @@ impl P2PApi {
                     self.broadcast(msg.into());
 
                     let api_requests_tx = self.api_requests_tx.clone();
-                    let shared_il_msg = P2PApiRequest::SharedInclusionList(request);
+
+                    // Compute duration until cutoff 1
+                    let duration_into_slot =
+                        self.signing_context.context.duration_into_slot(request.slot.into());
+                    let sleep_time =
+                        CUTOFF_TIME_1.saturating_sub(duration_into_slot.unwrap_or_default());
+
+                    // Spawn a task that sleeps until cutoff time and advances us to the next step
                     tokio::spawn(async move {
-                        // Sleep for t_1 time
-                        tokio::time::sleep(CUTOFF_TIME_1).await;
+                        // Sleep until t_1 time
+                        tokio::time::sleep(sleep_time).await;
+                        let shared_il_msg = P2PApiRequest::SharedInclusionList(request);
                         let _ = api_requests_tx.send(shared_il_msg).await.inspect_err(
                             |e| error!(err=?e, "failed to send shared inclusion list"),
                         );
@@ -59,12 +68,21 @@ impl P2PApi {
                     self.broadcast(msg.into());
 
                     let api_requests_tx = self.api_requests_tx.clone();
+
+                    // Compute duration until cutoff 2
+                    let duration_into_slot =
+                        self.signing_context.context.duration_into_slot(request.slot.into());
+                    let sleep_time =
+                        CUTOFF_TIME_2.saturating_sub(duration_into_slot.unwrap_or_default());
+
                     let settle_request =
                         InclusionListRequest { inclusion_list: shared_il, ..request };
-                    let shared_il_msg = P2PApiRequest::SettledInclusionList(settle_request);
+
+                    // Spawn a task that sleeps until cutoff time and advances us to the next step
                     tokio::spawn(async move {
-                        // Sleep for t_2 time
-                        tokio::time::sleep(CUTOFF_TIME_2).await;
+                        // Sleep until t_2 time
+                        tokio::time::sleep(sleep_time).await;
+                        let shared_il_msg = P2PApiRequest::SettledInclusionList(settle_request);
                         let _ = api_requests_tx.send(shared_il_msg).await.inspect_err(
                             |e| error!(err=?e, "failed to send shared inclusion list"),
                         );
@@ -74,6 +92,8 @@ impl P2PApi {
                     let InclusionListRequest { slot, inclusion_list, result_tx } = request;
                     let vote_map = std::mem::take(&mut vote_map);
                     let final_il = compute_final_inclusion_list(vote_map, slot, inclusion_list);
+
+                    // Send result back to requester
                     let _ = result_tx
                         .send(Some(final_il))
                         .inspect_err(|e| error!(err=?e, "failed to send settled inclusion list"));
