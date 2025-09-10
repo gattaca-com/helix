@@ -23,7 +23,7 @@ pub struct RelayConfig {
     #[serde(default)]
     pub relays: Vec<RelayGossipConfig>,
     #[serde(default)]
-    pub p2p: Vec<P2PPeerConfig>,
+    pub p2p: P2PConfig,
     #[serde(default)]
     pub builders: Vec<BuilderConfig>,
     #[serde(default)]
@@ -205,6 +205,19 @@ pub struct BeaconClientConfig {
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RelayGossipConfig {
     pub url: String,
+}
+
+#[derive(Default, Serialize, Deserialize, Clone)]
+pub struct P2PConfig {
+    /// Information on known peers
+    pub peers: Vec<P2PPeerConfig>,
+    /// Duration until the first cutoff (t_1)
+    #[serde(default = "default_u64::<2000>")]
+    pub cutoff_1_ms: u64,
+    /// Duration until the second cutoff (t_2)
+    /// Should be higher than [`Self::cutoff_1_ms`]
+    #[serde(default = "default_u64::<4000>")]
+    pub cutoff_2_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

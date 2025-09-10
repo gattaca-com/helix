@@ -2,10 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use axum::{extract::WebSocketUpgrade, response::IntoResponse, Extension};
 use futures::{SinkExt, StreamExt};
-use helix_common::{signing::RelaySigningContext, P2PPeerConfig};
 use helix_types::{BlsPublicKey, BlsPublicKeyBytes};
-use tokio::sync::{broadcast, mpsc};
-use tokio_tungstenite::{connect_async, tungstenite::client::IntoClientRequest};
+use tokio_tungstenite::connect_async;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -16,36 +14,6 @@ use crate::{
 };
 
 impl P2PApi {
-    /// Creates a new instance.
-    /// Starts new tasks for starting new connections and handling incoming messages.
-    pub fn new(
-        peer_configs: Vec<P2PPeerConfig>,
-        signing_context: Arc<RelaySigningContext>,
-    ) -> Arc<Self> {
-        let (broadcast_tx, _) = broadcast::channel(100);
-        let (api_requests_tx, api_requests_rx) = mpsc::channel(2000);
-        let this = Arc::new(Self { peer_configs, broadcast_tx, api_requests_tx, signing_context });
-        for peer_config in &this.peer_configs {
-            let peer_pubkey = peer_config.pubkey;
-            // Parse URL and try to turn into a request ahead-of-time, panicking on error
-            let request = url_to_client_request(&peer_config.url);
-            // Verify serialized public key is valid
-            let pubkey = BlsPublicKey::deserialize(peer_pubkey.as_ref())
-                .inspect_err(
-                    |e| error!(err=?e, pubkey=%peer_pubkey, "failed to deserialize peer pubkey"),
-                )
-                .expect("pubkey should be valid");
-
-            // If the peer's pubkey is less than ours, don't try to connect.
-            // Imposing an order on the pubkeys prevents redundant connections between peers.
-            if peer_pubkey > this.signing_context.pubkey {
-                tokio::spawn(this.clone().connect_to_peer(request, pubkey, peer_pubkey));
-            }
-        }
-        tokio::spawn(this.clone().handle_requests(api_requests_rx));
-        this
-    }
-
     #[tracing::instrument(skip_all)]
     pub async fn p2p_connect(
         Extension(api): Extension<Arc<P2PApi>>,
@@ -60,7 +28,7 @@ impl P2PApi {
         Ok(ws)
     }
 
-    async fn connect_to_peer(
+    pub(crate) async fn connect_to_peer(
         self: Arc<Self>,
         request: axum::http::Request<()>,
         pubkey: BlsPublicKey,
@@ -129,7 +97,7 @@ impl P2PApi {
                 let pubkey_bytes = hello_msg.message.pubkey;
                 // Check peer is known
                 let known_peer =
-                    self.peer_configs.iter().any(|config| config.pubkey == pubkey_bytes);
+                    self.p2p_config.peers.iter().any(|config| config.pubkey == pubkey_bytes);
                 if !known_peer {
                     return Err(WsConnectionError::UnknownPeer(pubkey_bytes));
                 }
@@ -159,14 +127,6 @@ impl P2PApi {
 
         Ok(())
     }
-}
-
-fn url_to_client_request(url: &str) -> axum::http::Request<()> {
-    let request = url
-        .into_client_request()
-        .inspect_err(|e| error!(err=?e, %url, "invalid peer URL"))
-        .expect("peer URL in config should be valid");
-    request
 }
 
 #[derive(Debug, thiserror::Error)]

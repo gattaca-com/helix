@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
-use helix_common::{api::builder_api::InclusionList, signing::RelaySigningContext, P2PPeerConfig};
+use helix_common::{api::builder_api::InclusionList, signing::RelaySigningContext, P2PConfig};
+use helix_types::BlsPublicKey;
 use tokio::sync::{broadcast, mpsc, oneshot};
-use tracing::warn;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+use tracing::{error, warn};
 
 use crate::{
     messages::P2PMessage,
@@ -19,10 +21,37 @@ pub struct P2PApi {
     broadcast_tx: broadcast::Sender<P2PMessage>,
     api_requests_tx: mpsc::Sender<P2PApiRequest>,
     signing_context: Arc<RelaySigningContext>,
-    peer_configs: Vec<P2PPeerConfig>,
+    p2p_config: P2PConfig,
 }
 
 impl P2PApi {
+    /// Creates a new instance.
+    /// Starts new tasks for starting new connections and handling incoming messages.
+    pub fn new(p2p_config: P2PConfig, signing_context: Arc<RelaySigningContext>) -> Arc<Self> {
+        let (broadcast_tx, _) = broadcast::channel(100);
+        let (api_requests_tx, api_requests_rx) = mpsc::channel(2000);
+        let this = Arc::new(Self { p2p_config, broadcast_tx, api_requests_tx, signing_context });
+        for peer_config in &this.p2p_config.peers {
+            let peer_pubkey = peer_config.pubkey;
+            // Parse URL and try to turn into a request ahead-of-time, panicking on error
+            let request = url_to_client_request(&peer_config.url);
+            // Verify serialized public key is valid
+            let pubkey = BlsPublicKey::deserialize(peer_pubkey.as_ref())
+                .inspect_err(
+                    |e| error!(err=?e, pubkey=%peer_pubkey, "failed to deserialize peer pubkey"),
+                )
+                .expect("pubkey should be valid");
+
+            // If the peer's pubkey is less than ours, don't try to connect.
+            // Imposing an order on the pubkeys prevents redundant connections between peers.
+            if peer_pubkey > this.signing_context.pubkey {
+                tokio::spawn(this.clone().connect_to_peer(request, pubkey, peer_pubkey));
+            }
+        }
+        tokio::spawn(this.clone().handle_requests(api_requests_rx));
+        this
+    }
+
     fn broadcast(&self, message: P2PMessage) {
         // Ignore error if there are no active receivers.
         let _ = self.broadcast_tx.send(message);
@@ -53,4 +82,12 @@ impl P2PApi {
         // If API service drops the channel, return None and log a warning
         result_rx.await.inspect_err(|_| warn!("response channel was dropped")).ok().flatten()
     }
+}
+
+fn url_to_client_request(url: &str) -> axum::http::Request<()> {
+    let request = url
+        .into_client_request()
+        .inspect_err(|e| error!(err=?e, %url, "invalid peer URL"))
+        .expect("peer URL in config should be valid");
+    request
 }

@@ -47,7 +47,7 @@ fn get_housekeeper() -> HelperVars {
         Arc::new(auctioneer),
         &RelayConfig::default(),
         chain_info.clone(),
-        P2PApi::new(vec![], dummy_signing_context),
+        P2PApi::new(Default::default(), dummy_signing_context),
     );
 
     HelperVars {

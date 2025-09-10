@@ -6,7 +6,7 @@ use alloy_rlp::Encodable;
 use axum::{routing::any, Extension, Router};
 use helix_common::{
     api::builder_api::InclusionList, chain_info::ChainInfo, signing::RelaySigningContext,
-    utils::init_tracing_log, P2PPeerConfig,
+    utils::init_tracing_log, P2PConfig, P2PPeerConfig,
 };
 use helix_p2p::P2PApi;
 use helix_types::{BlsKeypair, BlsSecretKey, Transaction};
@@ -29,7 +29,8 @@ async fn main() {
     let file_str = std::fs::read_to_string(config_path).unwrap();
     let config: Config = serde_json::from_str(&file_str).unwrap();
     let port = config.port;
-    let peer_configs = config.peer_configs;
+
+    let p2p_config = P2PConfig { peers: config.peer_configs, ..P2PConfig::default() };
 
     let private_key_bytes = hex::decode(&config.private_key).unwrap();
     let private_key = BlsSecretKey::deserialize(&private_key_bytes).unwrap();
@@ -39,7 +40,7 @@ async fn main() {
     let chain_info = Arc::new(ChainInfo::for_hoodi());
     let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info));
 
-    let p2p_api = P2PApi::new(peer_configs, relay_signing_context);
+    let p2p_api = P2PApi::new(p2p_config, relay_signing_context);
 
     let router = Router::new()
         .route("/relay/v1/p2p", any(P2PApi::p2p_connect))

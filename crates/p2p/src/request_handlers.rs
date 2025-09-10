@@ -31,8 +31,8 @@ impl P2PApi {
         self: Arc<Self>,
         mut api_requests_rx: mpsc::Receiver<P2PApiRequest>,
     ) {
-        const CUTOFF_TIME_1: Duration = Duration::from_secs(2);
-        const CUTOFF_TIME_2: Duration = Duration::from_secs(4);
+        let cutoff_time_1 = Duration::from_millis(self.p2p_config.cutoff_1_ms);
+        let cutoff_time_2 = Duration::from_millis(self.p2p_config.cutoff_2_ms);
         let mut vote_map: HashMap<BlsPublicKeyBytes, (u64, InclusionList)> = HashMap::new();
 
         while let Some(request) = api_requests_rx.recv().await {
@@ -48,7 +48,7 @@ impl P2PApi {
                     let duration_into_slot =
                         self.signing_context.context.duration_into_slot(request.slot.into());
                     let sleep_time =
-                        CUTOFF_TIME_1.saturating_sub(duration_into_slot.unwrap_or_default());
+                        cutoff_time_1.saturating_sub(duration_into_slot.unwrap_or_default());
 
                     // Spawn a task that sleeps until cutoff time and advances us to the next step
                     tokio::spawn(async move {
@@ -73,7 +73,7 @@ impl P2PApi {
                     let duration_into_slot =
                         self.signing_context.context.duration_into_slot(request.slot.into());
                     let sleep_time =
-                        CUTOFF_TIME_2.saturating_sub(duration_into_slot.unwrap_or_default());
+                        cutoff_time_2.saturating_sub(duration_into_slot.unwrap_or_default());
 
                     let settle_request =
                         InclusionListRequest { inclusion_list: shared_il, ..request };
