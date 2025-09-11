@@ -138,6 +138,9 @@ mod tests {
             p2p_apis.push(p2p_api);
         }
 
+        // Wait a bit for all peers to connect with each other
+        tokio::time::sleep(Duration::from_secs(8)).await;
+
         let mut rng = SmallRng::seed_from_u64(seed);
         info!(%seed, "Using seed for random number generation");
 
@@ -198,6 +201,7 @@ mod tests {
                 error!(%slot, %seed, "Timed out waiting for inclusion lists");
                 panic!("Timed out waiting for inclusion lists");
             };
+            info!(%slot, "Got inclusion lists from all peers");
 
             assert_eq!(results.len(), n_peers);
             let mut results_map = HashMap::new();
@@ -206,7 +210,7 @@ mod tests {
                 results_map.entry(hash).and_modify(|(c, _)| *c += 1).or_insert((1, il));
             }
             let n_unique = results_map.len();
-            assert_eq!(n_unique, 1, "Expected only one inclusion list, got {n_unique}");
+            assert_eq!(n_unique, 1, "Expected only one inclusion list");
             let (_hash, (n, _il)) = results_map.into_iter().next().unwrap();
             assert_eq!(n, n_peers, "Expected all peers to return an inclusion list");
 

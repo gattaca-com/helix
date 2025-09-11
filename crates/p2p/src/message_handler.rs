@@ -38,14 +38,18 @@ impl P2PApi {
         loop {
             debug!(peer=%pubkey_bytes, "connecting to peer");
 
-            if let Ok((ws, _response)) = connect_async(request.clone()).await {
+            let connection_result = connect_async(request.clone())
+                .await
+                .inspect_err(|e| warn!(err=%e,peer=%pubkey_bytes, "failed to connect to peer"));
+
+            if let Ok((ws, _response)) = connection_result {
                 let _ = self.handle_ws_connection(ws.into(), Some((pubkey_bytes, pubkey.clone()))).await.inspect_err(|e| {
-                   error!(err=?e, direction="outbound", peer=%pubkey_bytes, "websocket communication error")
+                   warn!(err=?e, direction="outbound", peer=%pubkey_bytes, "websocket communication error")
                });
             }
 
             // TODO: change to an exponential backoff?
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            tokio::time::sleep(Duration::from_secs(8)).await;
         }
     }
 
