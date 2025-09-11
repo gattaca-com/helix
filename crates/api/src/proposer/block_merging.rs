@@ -138,6 +138,7 @@ impl<A: Api> ProposerApi<A> {
             // Store it, and go back to fetching the base block again.
             MergingTaskState::GotMergedBlock {
                 slot,
+                base_bid_value,
                 base_block_time_ms,
                 proposer_pubkey,
                 original_payload,
@@ -146,8 +147,18 @@ impl<A: Api> ProposerApi<A> {
                 // If we are past the slot for the block, skip storing it
                 if let Some((_, blobs)) = best_orders.load(slot) {
                     self.alert_manager.send(&format!(
-                        "Merged block created for slot {} (value: {})",
-                        slot, response.proposer_value
+                        "📦 *Merged block*\n\
+                        • Slot: `{}`\n\
+                        • Value: {} → {}\n\
+                        • Transactions: {} → {}\n\
+                        • Blobs: {} → {}",
+                        slot,
+                        base_bid_value,
+                        response.proposer_value,
+                        original_payload.execution_payload.transactions.len(),
+                        response.execution_payload.transactions.len(),
+                        original_payload.blobs_bundle.blobs.len(),
+                        original_payload.blobs_bundle.blobs.len() + response.appended_blobs.len()
                     ));
                     let _ = self
                         .store_merged_payload(
@@ -211,6 +222,7 @@ impl<A: Api> ProposerApi<A> {
 
             Ok(MergingTaskState::new_merged_block(
                 slot,
+                base_bid.value,
                 base_block_time_ms,
                 proposer_pubkey,
                 payload,
@@ -371,6 +383,7 @@ enum MergingTaskState {
     /// We can now start the process again after updating the best merged block.
     GotMergedBlock {
         slot: u64,
+        base_bid_value: U256,
         base_block_time_ms: u64,
         proposer_pubkey: BlsPublicKeyBytes,
         original_payload: PayloadAndBlobs,
@@ -397,6 +410,7 @@ impl MergingTaskState {
 
     fn new_merged_block(
         slot: u64,
+        base_bid_value: U256,
         base_block_time_ms: u64,
         proposer_pubkey: BlsPublicKeyBytes,
         original_payload: PayloadAndBlobs,
@@ -404,6 +418,7 @@ impl MergingTaskState {
     ) -> MergingTaskState {
         MergingTaskState::GotMergedBlock {
             slot,
+            base_bid_value,
             proposer_pubkey,
             base_block_time_ms,
             original_payload,
