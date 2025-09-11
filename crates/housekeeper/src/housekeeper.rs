@@ -15,12 +15,11 @@ use helix_beacon::{
     types::{HeadEventData, StateId},
 };
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, task,
-    utils::utcnow_dur, BuilderConfig, BuilderInfo, ProposerDuty, RelayConfig,
-    SignedValidatorRegistrationEntry,
+    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
+    local_cache::LocalCache, task, utils::utcnow_dur, BuilderConfig, BuilderInfo, ProposerDuty,
+    RelayConfig, SignedValidatorRegistrationEntry,
 };
 use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use helix_types::{BlsPublicKeyBytes, Epoch, Slot, SlotClockTrait};
 use tokio::sync::{broadcast, Mutex};
 use tracing::{debug, error, info, warn, Instrument};
@@ -84,23 +83,23 @@ impl HousekeeperSlots {
 /// If running multiple API instances in a single region only one housekeeper is needed as services
 /// will sync through db.
 #[derive(Clone)]
-pub struct Housekeeper<DB: DatabaseService + 'static, A: Auctioneer + 'static> {
+pub struct Housekeeper<DB: DatabaseService + 'static> {
     db: Arc<DB>,
     beacon_client: Arc<MultiBeaconClient>,
-    auctioneer: Arc<A>,
+    auctioneer: Arc<LocalCache>,
     chain_info: Arc<ChainInfo>,
     primev_service: Option<EthereumPrimevService>,
     slots: HousekeeperSlots,
-    inclusion_list_service: Option<InclusionListService<DB, A>>,
+    inclusion_list_service: Option<InclusionListService<DB>>,
     local_builders: Vec<BuilderConfig>,
     is_local_dev: bool,
 }
 
-impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
+impl<DB: DatabaseService> Housekeeper<DB> {
     pub fn new(
         db: Arc<DB>,
         beacon_client: Arc<MultiBeaconClient>,
-        auctioneer: Arc<A>,
+        auctioneer: Arc<LocalCache>,
         config: &RelayConfig,
         chain_info: Arc<ChainInfo>,
     ) -> Self {
@@ -359,7 +358,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
         debug!(builder_infos = builder_infos.len(), "updating builder infos");
 
         if self.is_local_dev {
-            builder_infos.extend_from_slice(&self.local_builders.as_slice());
+            builder_infos.extend_from_slice(self.local_builders.as_slice());
         }
 
         self.auctioneer.update_builder_infos(&builder_infos, true);
@@ -432,7 +431,7 @@ impl<DB: DatabaseService, A: Auctioneer> Housekeeper<DB, A> {
     /// Updates primev builders and validators using pre-fetched proposer duties
     async fn primev_update_with_duties(
         primev_service: EthereumPrimevService,
-        auctioneer: Arc<A>,
+        auctioneer: Arc<LocalCache>,
         db: Arc<DB>,
         proposer_duties: Vec<ProposerDuty>,
     ) -> Result<(), HousekeeperError> {

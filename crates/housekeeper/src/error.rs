@@ -1,6 +1,6 @@
 use helix_beacon::error::BeaconClientError;
+use helix_common::local_cache::AuctioneerError;
 use helix_database::error::DatabaseError;
-use helix_datastore::error::AuctioneerError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

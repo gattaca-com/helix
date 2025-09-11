@@ -17,6 +17,7 @@ bitflags.workspace = true
 bytes.workspace = true
 clap.workspace = true
 crossbeam-channel.workspace = true
+dashmap.workspace = true
 ethereum_serde_utils.workspace = true
 ethereum_ssz.workspace = true
 ethereum_ssz_derive.workspace = true

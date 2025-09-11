@@ -1,6 +1,5 @@
 use helix_common::{bid_submission::BidSubmission, task, utils::utcnow_ns, GossipedPayloadTrace};
 use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use helix_types::{ForkName, PayloadAndBlobsRef, SignedBidSubmission};
 use tracing::{debug, error};
 use uuid::Uuid;

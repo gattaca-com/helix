@@ -5,7 +5,6 @@ use alloy_primitives::{
     B256, U256,
 };
 use helix_common::{bid_submission::BidSubmission, simulator::BlockSimError, utils::utcnow_ms};
-use helix_datastore::Auctioneer;
 use helix_types::{
     mock_public_key_bytes, BlobWithMetadata, BlobsBundle, BlsPublicKeyBytes, BuilderBid,
     ExecutionPayloadHeader, KzgCommitments, MergeableOrder, MergeableOrderWithOrigin,

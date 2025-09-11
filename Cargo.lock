@@ -990,7 +990,7 @@ version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d7b9decdf35d8908a7e3ef02f64c5e9b1695e230154c0e8de3969142d9b94c"
 dependencies = [
- "futures 0.3.31",
+ "futures",
  "pharos",
  "rustc_version 0.4.1",
 ]
@@ -2364,7 +2364,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d81175dab5ec79c30e0576df2ed2c244e1721720c302000bb321b107e82e265c"
 dependencies = [
- "futures 0.3.31",
+ "futures",
 ]
 
 [[package]]
@@ -2700,7 +2700,7 @@ dependencies = [
  "ethereum_serde_utils",
  "ethereum_ssz",
  "ethereum_ssz_derive",
- "futures 0.3.31",
+ "futures",
  "futures-util",
  "libp2p-identity",
  "mediatype",
@@ -3337,12 +3337,6 @@ checksum = "e6d5a32815ae3f33302d95fdcb2ce17862f8c65363dcfd29360480ba1001fc9c"
 
 [[package]]
 name = "futures"
-version = "0.1.31"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a471a38ef8ed83cd6e40aa59c1ffe17db6855c18e3604d9c4ed8c08ebc28678"
-
-[[package]]
-name = "futures"
 version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65bc07b1a8bc7c85c5f2e110c476c7389b4554ba72af57d8445ea63a576b0876"
@@ -3451,7 +3445,6 @@ version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9fa08315bb612088cc391249efdc3bc77536f16c91f6cf495e6fbe85b20a4a81"
 dependencies = [
- "futures 0.1.31",
  "futures-channel",
  "futures-core",
  "futures-io",
@@ -3717,21 +3710,16 @@ version = "0.0.1"
 dependencies = [
  "crossbeam-channel",
  "eyre",
- "futures 0.3.31",
  "helix-api",
  "helix-beacon",
  "helix-common",
  "helix-database",
- "helix-datastore",
  "helix-housekeeper",
  "helix-types",
  "helix-website",
- "parking_lot",
  "tikv-jemallocator",
  "tokio",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -3750,11 +3738,10 @@ dependencies = [
  "ethereum_serde_utils",
  "ethereum_ssz",
  "flate2",
- "futures 0.3.31",
+ "futures",
  "helix-beacon",
  "helix-common",
  "helix-database",
- "helix-datastore",
  "helix-housekeeper",
  "helix-types",
  "http 1.3.1",
@@ -3796,7 +3783,7 @@ dependencies = [
  "axum 0.8.4",
  "ethereum_serde_utils",
  "ethereum_ssz",
- "futures 0.3.31",
+ "futures",
  "helix-common",
  "helix-types",
  "http 1.3.1",
@@ -3826,6 +3813,7 @@ dependencies = [
  "bytes",
  "clap",
  "crossbeam-channel",
+ "dashmap 5.5.3",
  "ethereum_serde_utils",
  "ethereum_ssz",
  "ethereum_ssz_derive",
@@ -3880,34 +3868,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "helix-datastore"
-version = "0.0.1"
-dependencies = [
- "alloy-primitives",
- "async-trait",
- "auto_impl",
- "axum 0.8.4",
- "crossbeam-channel",
- "dashmap 5.5.3",
- "ethereum_ssz",
- "eyre",
- "futures-util",
- "helix-beacon",
- "helix-common",
- "helix-database",
- "helix-types",
- "http 1.3.1",
- "moka",
- "parking_lot",
- "serde",
- "serde_json",
- "serial_test",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "helix-housekeeper"
 version = "0.0.1"
 dependencies = [
@@ -3916,11 +3876,10 @@ dependencies = [
  "crossbeam-channel",
  "ethers",
  "eyre",
- "futures 0.3.31",
+ "futures",
  "helix-beacon",
  "helix-common",
  "helix-database",
- "helix-datastore",
  "helix-types",
  "httpmock",
  "parking_lot",
@@ -3978,7 +3937,6 @@ dependencies = [
  "helix-beacon",
  "helix-common",
  "helix-database",
- "helix-datastore",
  "helix-housekeeper",
  "helix-types",
  "num-format",
@@ -5688,7 +5646,7 @@ version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9567389417feee6ce15dd6527a8a1ecac205ef62c2932bcf3d9f6fc5b78b414"
 dependencies = [
- "futures 0.3.31",
+ "futures",
  "rustc_version 0.4.1",
 ]
 
@@ -7216,7 +7174,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "538c30747ae860d6fb88330addbbd3e0ddbe46d662d032855596d8a8ca260611"
 dependencies = [
  "dashmap 5.5.3",
- "futures 0.3.31",
+ "futures",
  "lazy_static",
  "log",
  "parking_lot",
@@ -7728,7 +7686,7 @@ dependencies = [
  "derive_more 0.99.20",
  "dptree",
  "either",
- "futures 0.3.31",
+ "futures",
  "log",
  "mime",
  "pin-project",
@@ -7754,7 +7712,7 @@ dependencies = [
  "chrono",
  "derive_more 0.99.20",
  "either",
- "futures 0.3.31",
+ "futures",
  "log",
  "mime",
  "once_cell",
@@ -9353,7 +9311,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c173014acad22e83f16403ee360115b38846fe754e735c5d9d3803fe70c6abc"
 dependencies = [
  "async_io_stream",
- "futures 0.3.31",
+ "futures",
  "js-sys",
  "log",
  "pharos",

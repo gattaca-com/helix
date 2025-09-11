@@ -8,10 +8,10 @@ use std::{
 
 use alloy_primitives::B256;
 use helix_common::{
-    metrics::SimulatorMetrics, simulator::BlockSimError, task, BuilderInfo, SimulatorConfig,
+    local_cache::LocalCache, metrics::SimulatorMetrics, simulator::BlockSimError, task,
+    BuilderInfo, SimulatorConfig,
 };
 use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use helix_types::BlsPublicKeyBytes;
 use reqwest::Client;
 use tokio::time::sleep;
@@ -25,9 +25,9 @@ use crate::builder::{
 /// OptimisticSimulator is responsible for running simulations optimistically or synchronously based
 /// on the builder's status.
 #[derive(Clone)]
-pub struct OptimisticSimulator<A: Auctioneer + 'static, DB: DatabaseService + 'static> {
+pub struct OptimisticSimulator<DB: DatabaseService + 'static> {
     simulator: Arc<RpcSimulator<DB>>,
-    auctioneer: Arc<A>,
+    auctioneer: Arc<LocalCache>,
     db: Arc<DB>,
     /// The `failsafe_triggered` flag serves as a circuit breaker for the optimistic simulation
     /// process.
@@ -39,9 +39,9 @@ pub struct OptimisticSimulator<A: Auctioneer + 'static, DB: DatabaseService + 's
     optimistic_state: Arc<PauseState>,
 }
 
-impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> OptimisticSimulator<A, DB> {
+impl<DB: DatabaseService + 'static> OptimisticSimulator<DB> {
     pub fn new(
-        auctioneer: Arc<A>,
+        auctioneer: Arc<LocalCache>,
         db: Arc<DB>,
         http: Client,
         simulator_config: SimulatorConfig,

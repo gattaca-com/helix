@@ -16,7 +16,6 @@ futures.workspace = true
 helix-beacon.workspace = true
 helix-common.workspace = true
 helix-database.workspace = true
-helix-datastore.workspace = true
 helix-types.workspace = true
 httpmock.workspace = true
 parking_lot.workspace = true

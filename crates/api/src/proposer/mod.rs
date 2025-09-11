@@ -16,7 +16,7 @@ pub use block_merging::MergingPoolMessage;
 use helix_beacon::{multi_beacon_client::MultiBeaconClient, BlockBroadcaster};
 use helix_common::{
     alerts::AlertManager, bid_sorter::BestGetHeader, chain_info::ChainInfo,
-    signing::RelaySigningContext, RelayConfig, ValidatorPreferences,
+    local_cache::LocalCache, signing::RelaySigningContext, RelayConfig, ValidatorPreferences,
 };
 use helix_housekeeper::CurrentSlotInfo;
 use helix_types::BlsPublicKeyBytes;
@@ -31,9 +31,9 @@ use crate::{
 
 #[derive(Clone)]
 pub struct ProposerApi<A: Api> {
-    pub auctioneer: Arc<A::Auctioneer>,
+    pub auctioneer: Arc<LocalCache>,
     pub db: Arc<A::DatabaseService>,
-    pub simulator: MultiSimulator<A::Auctioneer, A::DatabaseService>,
+    pub simulator: MultiSimulator<A::DatabaseService>,
     pub gossiper: Arc<GrpcGossiperClientManager>,
     pub broadcasters: Vec<Arc<BlockBroadcaster>>,
     pub multi_beacon_client: Arc<MultiBeaconClient>,
@@ -59,9 +59,9 @@ pub struct ProposerApi<A: Api> {
 
 impl<A: Api> ProposerApi<A> {
     pub fn new(
-        auctioneer: Arc<A::Auctioneer>,
+        auctioneer: Arc<LocalCache>,
         db: Arc<A::DatabaseService>,
-        simulator: MultiSimulator<A::Auctioneer, A::DatabaseService>,
+        simulator: MultiSimulator<A::DatabaseService>,
         gossiper: Arc<GrpcGossiperClientManager>,
         metadata_provider: Arc<A::MetadataProvider>,
         signing_context: Arc<RelaySigningContext>,

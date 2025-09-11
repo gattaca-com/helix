@@ -4,23 +4,25 @@ use std::sync::{
 };
 
 use alloy_primitives::B256;
-use dashmap::{DashMap, DashSet};
-use helix_common::{
-    api::builder_api::{
-        BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
-        SlotCoordinate,
-    },
-    bid_sorter::BidSorterMessage,
-    BuilderInfo, ProposerInfo,
+use axum::{
+    http::StatusCode,
+    response::{IntoResponse, Response},
 };
-use helix_database::types::BuilderInfoDocument;
-use helix_types::{BlsPublicKeyBytes, ForkName, PayloadAndBlobs};
+use dashmap::{DashMap, DashSet};
+use helix_types::{BlsPublicKeyBytes, CryptoError, ForkName, PayloadAndBlobs};
 use http::HeaderValue;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
 use tracing::{error, info, instrument, warn};
 
-use crate::{error::AuctioneerError, Auctioneer};
+use crate::{
+    api::builder_api::{
+        BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
+        SlotCoordinate,
+    },
+    bid_sorter::BidSorterMessage,
+    BuilderConfig, BuilderInfo, ProposerInfo,
+};
 
 type ExecutionPayloadKey = (u64, BlsPublicKeyBytes, B256);
 
@@ -28,6 +30,62 @@ const ESTIMATED_TRUSTED_PROPOSERS: usize = 200_000;
 const ESTIMATED_BID_UPPER_BOUND: usize = 10_000;
 const ESTIMATED_BUILDER_INFOS_UPPER_BOUND: usize = 1000;
 const MAX_PRIMEV_PROPOSERS: usize = 64;
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuctioneerError {
+    #[error("unexpected value type")]
+    UnexpectedValueType,
+
+    #[error("crypto error: {0:?}")]
+    CryptoError(CryptoError),
+
+    #[error("from utf8 error: {0}")]
+    FromUtf8Error(#[from] std::string::FromUtf8Error),
+
+    #[error("parse int error: {0}")]
+    ParseIntError(#[from] std::num::ParseIntError),
+
+    #[error("from hex error: {0}")]
+    FromHexError(#[from] alloy_primitives::hex::FromHexError),
+
+    #[error("past slot already delivered")]
+    PastSlotAlreadyDelivered,
+
+    #[error("another payload already delivered for slot")]
+    AnotherPayloadAlreadyDeliveredForSlot,
+
+    #[error("ssz deserialize error: {0:?}")]
+    SszDeserializeError(ssz::DecodeError),
+
+    #[error("Slice conversion error: {0:?}")]
+    SliceConversionError(#[from] core::array::TryFromSliceError),
+
+    #[error("no execution payload for this request")]
+    ExecutionPayloadNotFound,
+
+    #[error("builder not found for pubkey {pub_key:?}")]
+    BuilderNotFound { pub_key: BlsPublicKeyBytes },
+}
+
+impl IntoResponse for AuctioneerError {
+    fn into_response(self) -> Response {
+        let code = match self {
+            AuctioneerError::UnexpectedValueType |
+            AuctioneerError::CryptoError(_) |
+            AuctioneerError::FromUtf8Error(_) |
+            AuctioneerError::ParseIntError(_) |
+            AuctioneerError::FromHexError(_) |
+            AuctioneerError::PastSlotAlreadyDelivered |
+            AuctioneerError::AnotherPayloadAlreadyDeliveredForSlot |
+            AuctioneerError::SszDeserializeError(_) |
+            AuctioneerError::SliceConversionError(_) |
+            AuctioneerError::ExecutionPayloadNotFound |
+            AuctioneerError::BuilderNotFound { .. } => StatusCode::BAD_REQUEST,
+        };
+
+        (code, self.to_string()).into_response()
+    }
+}
 
 #[derive(Clone)]
 pub struct LocalCache {
@@ -51,11 +109,8 @@ pub struct LocalCache {
 
 #[allow(dead_code)]
 impl LocalCache {
-    pub async fn new(sorter_tx: crossbeam_channel::Sender<BidSorterMessage>) -> Self {
-        let (inclusion_list, mut il_recv) = broadcast::channel(1);
-
-        // ensure at least one subscriber is running
-        tokio::spawn(async move { while let Ok(_message) = il_recv.recv().await {} });
+    pub fn new(sorter_tx: crossbeam_channel::Sender<BidSorterMessage>) -> Self {
+        let (inclusion_list, _) = broadcast::channel(1);
 
         let seen_block_hashes = Arc::new(DashSet::with_capacity(ESTIMATED_BID_UPPER_BOUND));
         let builder_info_cache =
@@ -87,14 +142,19 @@ impl LocalCache {
         }
     }
 
-    fn get_last_hash_delivered(&self) -> Option<B256> {
+    pub fn new_test() -> Self {
+        let (tx, _) = crossbeam_channel::bounded(0);
+        Self::new(tx)
+    }
+
+    pub fn get_last_hash_delivered(&self) -> Option<B256> {
         *self.last_delivered_hash.read()
     }
 }
 
-impl Auctioneer for LocalCache {
+impl LocalCache {
     #[instrument(skip_all)]
-    fn get_last_slot_delivered(&self) -> Option<u64> {
+    pub fn get_last_slot_delivered(&self) -> Option<u64> {
         let last_slot_delivered = self.last_delivered_slot.load(Ordering::Relaxed);
         if last_slot_delivered == 0 {
             return None;
@@ -104,7 +164,7 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
-    fn check_and_set_last_slot_and_hash_delivered(
+    pub fn check_and_set_last_slot_and_hash_delivered(
         &self,
         slot: u64,
         hash: &B256,
@@ -139,7 +199,7 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
-    fn save_execution_payload(
+    pub fn save_execution_payload(
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKeyBytes,
@@ -151,7 +211,7 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
-    fn get_execution_payload(
+    pub fn get_execution_payload(
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKeyBytes,
@@ -167,7 +227,7 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
-    fn get_builder_info(
+    pub fn get_builder_info(
         &self,
         builder_pub_key: &BlsPublicKeyBytes,
     ) -> Result<BuilderInfo, AuctioneerError> {
@@ -178,17 +238,20 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
-    fn contains_api_key(&self, api_key: &HeaderValue) -> bool {
+    pub fn contains_api_key(&self, api_key: &HeaderValue) -> bool {
         self.api_key_cache.contains_key(api_key)
     }
 
     #[instrument(skip_all)]
-    fn validate_api_key(&self, api_key: &HeaderValue, pubkey: &BlsPublicKeyBytes) -> bool {
+    pub fn validate_api_key(&self, api_key: &HeaderValue, pubkey: &BlsPublicKeyBytes) -> bool {
         self.api_key_cache.get(api_key).is_some_and(|p| p.value().contains(pubkey))
     }
 
     #[instrument(skip_all)]
-    fn demote_builder(&self, builder_pub_key: &BlsPublicKeyBytes) -> Result<(), AuctioneerError> {
+    pub fn demote_builder(
+        &self,
+        builder_pub_key: &BlsPublicKeyBytes,
+    ) -> Result<(), AuctioneerError> {
         if let Err(e) = self.sorter_tx.try_send(BidSorterMessage::Demotion(*builder_pub_key)) {
             error!(%e, builder_pub_key = %builder_pub_key, "failed to send demotion to sorter");
         }
@@ -208,7 +271,7 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
-    fn update_builder_infos(&self, builder_infos: &[BuilderInfoDocument], clear_api_cache: bool) {
+    pub fn update_builder_infos(&self, builder_infos: &[BuilderConfig], clear_api_cache: bool) {
         if clear_api_cache {
             self.api_key_cache.clear();
         }
@@ -226,24 +289,24 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
-    fn seen_or_insert_block_hash(&self, block_hash: &B256) -> bool {
+    pub fn seen_or_insert_block_hash(&self, block_hash: &B256) -> bool {
         !self.seen_block_hashes.insert(*block_hash)
     }
 
     #[instrument(skip_all)]
-    fn update_trusted_proposers(&self, proposer_whitelist: Vec<ProposerInfo>) {
+    pub fn update_trusted_proposers(&self, proposer_whitelist: Vec<ProposerInfo>) {
         for proposer in &proposer_whitelist {
             self.trusted_proposers.insert(proposer.pubkey, proposer.clone());
         }
     }
 
     #[instrument(skip_all)]
-    fn is_trusted_proposer(&self, proposer_pub_key: &BlsPublicKeyBytes) -> bool {
+    pub fn is_trusted_proposer(&self, proposer_pub_key: &BlsPublicKeyBytes) -> bool {
         self.trusted_proposers.contains_key(proposer_pub_key)
     }
 
     #[instrument(skip_all)]
-    fn update_primev_proposers(&self, primev_proposers: &[BlsPublicKeyBytes]) {
+    pub fn update_primev_proposers(&self, primev_proposers: &[BlsPublicKeyBytes]) {
         self.primev_proposers.clear();
         for proposer in primev_proposers {
             self.primev_proposers.insert(*proposer);
@@ -251,17 +314,17 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
-    fn is_primev_proposer(&self, proposer_pub_key: &BlsPublicKeyBytes) -> bool {
+    pub fn is_primev_proposer(&self, proposer_pub_key: &BlsPublicKeyBytes) -> bool {
         self.primev_proposers.contains(proposer_pub_key)
     }
 
     #[instrument(skip_all)]
-    fn get_payload_url(&self, block_hash: &B256) -> Option<(BlsPublicKeyBytes, Vec<u8>)> {
+    pub fn get_payload_url(&self, block_hash: &B256) -> Option<(BlsPublicKeyBytes, Vec<u8>)> {
         self.payload_address_cache.get(block_hash).map(|r| r.value().clone())
     }
 
     #[instrument(skip_all)]
-    fn save_payload_address(
+    pub fn save_payload_address(
         &self,
         block_hash: &B256,
         builder_pub_key: &BlsPublicKeyBytes,
@@ -270,20 +333,20 @@ impl Auctioneer for LocalCache {
         self.payload_address_cache.insert(*block_hash, (*builder_pub_key, payload_socket_address));
     }
 
-    fn kill_switch_enabled(&self) -> bool {
+    pub fn kill_switch_enabled(&self) -> bool {
         self.kill_switch.load(Ordering::Relaxed)
     }
 
-    fn enable_kill_switch(&self) {
+    pub fn enable_kill_switch(&self) {
         self.kill_switch.store(true, Ordering::Relaxed);
     }
 
-    fn disable_kill_switch(&self) {
+    pub fn disable_kill_switch(&self) {
         self.kill_switch.store(false, Ordering::Relaxed);
     }
 
     #[instrument(skip_all)]
-    fn update_current_inclusion_list(
+    pub fn update_current_inclusion_list(
         &self,
         inclusion_list: InclusionListWithMetadata,
         slot_coordinate: SlotCoordinate,
@@ -295,22 +358,22 @@ impl Auctioneer for LocalCache {
     }
 
     #[instrument(skip_all)]
-    fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey> {
+    pub fn get_inclusion_list(&self) -> broadcast::Receiver<InclusionListWithKey> {
         self.inclusion_list.subscribe()
     }
 
     #[instrument(skip_all)]
-    fn update_proposer_duties(&self, duties: Vec<BuilderGetValidatorsResponseEntry>) {
+    pub fn update_proposer_duties(&self, duties: Vec<BuilderGetValidatorsResponseEntry>) {
         *self.proposer_duties.write() = duties;
     }
 
     #[instrument(skip_all)]
-    fn get_proposer_duties(&self) -> Vec<BuilderGetValidatorsResponseEntry> {
+    pub fn get_proposer_duties(&self) -> Vec<BuilderGetValidatorsResponseEntry> {
         self.proposer_duties.read().clone()
     }
 
     #[instrument(skip_all)]
-    fn process_slot(&self, head_slot: u64) {
+    pub fn process_slot(&self, head_slot: u64) {
         info!(head_slot, "Processing new slot in local cache, clearing old data");
 
         self.seen_block_hashes.clear();
@@ -323,21 +386,21 @@ impl Auctioneer for LocalCache {
 mod tests {
 
     use alloy_primitives::U256;
-    use helix_common::BuilderConfig;
     use helix_types::{
         get_fixed_pubkey, get_fixed_pubkey_bytes, BlobsBundle, BlsPublicKey, ExecutionPayload,
         ForkName, PayloadAndBlobsRef, TestRandomSeed,
     };
 
     use super::*;
+    use crate::BuilderConfig;
 
     /// #######################################################################
     /// ########################### Auctioneer tests ##########################
     /// #######################################################################
 
     #[tokio::test]
-    async fn test_get_and_check_last_slot_and_hash_delivered() {
-        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
+    pub async fn test_get_and_check_last_slot_and_hash_delivered() {
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0);
 
         let slot = 42;
         let block_hash = B256::try_from([4u8; 32].as_ref()).unwrap();
@@ -352,8 +415,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_set_past_slot() {
-        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
+    pub async fn test_set_past_slot() {
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0);
 
         let slot = 42;
         let block_hash = B256::try_from([4u8; 32].as_ref()).unwrap();
@@ -367,8 +430,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_set_same_slot_different_hash() {
-        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
+    pub async fn test_set_same_slot_different_hash() {
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0);
 
         let slot = 42;
         let block_hash1 = B256::try_from([4u8; 32].as_ref()).unwrap();
@@ -383,8 +446,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_and_save_execution_payload() {
-        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
+    pub async fn test_get_and_save_execution_payload() {
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0);
 
         let slot = 42;
         let proposer_pub_key = BlsPublicKey::test_random();
@@ -420,8 +483,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_builder_info() {
-        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
+    pub async fn test_get_builder_info() {
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0);
 
         let builder_pub_key = BlsPublicKeyBytes::random();
         let unknown_builder_pub_key = BlsPublicKeyBytes::random();
@@ -458,8 +521,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_trusted_proposers_and_update_trusted_proposers() {
-        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
+    pub async fn test_get_trusted_proposers_and_update_trusted_proposers() {
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0);
 
         let is_trusted = cache.is_trusted_proposer(&BlsPublicKey::test_random().serialize().into());
         assert!(!is_trusted, "Failed to check trusted proposer");
@@ -491,8 +554,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_demote_non_optimistic_builder() {
-        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
+    pub async fn test_demote_non_optimistic_builder() {
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0);
 
         let builder_pub_key = BlsPublicKeyBytes::random();
         let builder_info = BuilderInfo {
@@ -515,8 +578,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_demote_optimistic_builder() {
-        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
+    pub async fn test_demote_optimistic_builder() {
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0);
 
         let builder_pub_key_optimistic = BlsPublicKeyBytes::random();
         let builder_info = BuilderInfo {
@@ -546,8 +609,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_seen_or_insert_block_hash() {
-        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
+    pub async fn test_seen_or_insert_block_hash() {
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0);
 
         let _slot = 42;
         let block_hash = B256::random();
@@ -573,8 +636,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_kill_switch() {
-        let cache = LocalCache::new(crossbeam_channel::bounded(1).0).await;
+    pub async fn test_kill_switch() {
+        let cache = LocalCache::new(crossbeam_channel::bounded(1).0);
 
         let result = cache.kill_switch_enabled();
         assert!(!result, "Kill switch should be disabled by default");

@@ -9,20 +9,15 @@ version.workspace = true
 [dependencies]
 crossbeam-channel.workspace = true
 eyre.workspace = true
-futures.workspace = true
 helix-api.workspace = true
 helix-beacon.workspace = true
 helix-common.workspace = true
 helix-database.workspace = true
-helix-datastore.workspace = true
 helix-housekeeper.workspace = true
 helix-types.workspace = true
 helix-website.workspace = true
-parking_lot.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-tracing-appender.workspace = true
-tracing-subscriber.workspace = true
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator.workspace = true
