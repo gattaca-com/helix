@@ -67,7 +67,7 @@ impl P2PApi {
         this
     }
 
-    fn is_enabled(&self) -> bool {
+    pub fn is_enabled(&self) -> bool {
         self.p2p_config.is_enabled && !self.p2p_config.peers.is_empty()
     }
 

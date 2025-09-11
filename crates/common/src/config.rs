@@ -388,6 +388,10 @@ impl RouterConfig {
         ]);
     }
 
+    pub fn enable_p2p(&mut self) {
+        self.extend([Route::P2P]);
+    }
+
     fn contains(&self, route: Route) -> bool {
         self.enabled_routes.iter().map(|x| x.route).collect::<HashSet<_>>().contains(&route)
     }

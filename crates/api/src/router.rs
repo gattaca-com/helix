@@ -48,6 +48,11 @@ pub fn build_router<A: Api>(
 ) -> Router {
     router_config.resolve_condensed_routes();
 
+    // Enable P2P route if P2P is enabled in config
+    if p2p_api.is_enabled() {
+        router_config.enable_p2p();
+    }
+
     let mut router = Router::new();
     let mut limiters = Vec::new();
 
