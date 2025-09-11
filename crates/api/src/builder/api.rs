@@ -291,6 +291,10 @@ impl<A: Api> BuilderApi<A> {
             inclusion_list,
         );
 
+        if self.relay_config.is_local_dev {
+            return Ok(true)
+        }
+
         let result = self.simulator.process_request(sim_request, builder_info, is_top_bid).await;
 
         match result {
