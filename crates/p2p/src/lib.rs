@@ -29,7 +29,7 @@ impl P2PApi {
     /// Starts new tasks for starting new connections and handling incoming messages.
     pub fn new(p2p_config: P2PConfig, signing_context: Arc<RelaySigningContext>) -> Arc<Self> {
         let (broadcast_tx, _) = broadcast::channel(100);
-        let (api_requests_tx, api_requests_rx) = mpsc::channel(2000);
+        let (api_requests_tx, api_requests_rx) = mpsc::channel(100);
         let this = Arc::new(Self { p2p_config, broadcast_tx, api_requests_tx, signing_context });
 
         // If P2P is disabled, return the service without starting any tasks.
