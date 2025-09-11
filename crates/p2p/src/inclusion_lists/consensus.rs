@@ -58,13 +58,14 @@ pub(crate) fn compute_shared_inclusion_list(
 }
 
 pub(crate) fn compute_final_inclusion_list(
-    vote_map: HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
+    vote_map: &mut HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
     slot: u64,
     inclusion_list: InclusionList,
 ) -> InclusionList {
-    let mut il_by_frequency = HashMap::new();
+    let mut il_by_frequency = HashMap::with_capacity(vote_map.len() + 1);
     il_by_frequency.insert(inclusion_list.tree_hash_root(), (inclusion_list, 1));
-    vote_map.into_iter().for_each(|(_, (il_slot, il))| {
+
+    vote_map.drain().for_each(|(_, (il_slot, il))| {
         if il_slot != slot {
             return;
         }
@@ -207,11 +208,11 @@ mod tests {
         let slot = 1;
         let inclusion_list = create_full_il(0);
 
-        let vote_map = HashMap::from([
+        let mut vote_map = HashMap::from([
             ([1_u8; 48].into(), (slot, inclusion_list.clone())),
             ([2_u8; 48].into(), (slot, inclusion_list.clone())),
         ]);
-        let final_il = compute_final_inclusion_list(vote_map, slot, inclusion_list.clone());
+        let final_il = compute_final_inclusion_list(&mut vote_map, slot, inclusion_list.clone());
 
         assert_eq!(final_il, inclusion_list);
     }
@@ -223,11 +224,11 @@ mod tests {
         let inclusion_list = create_full_il(0);
         let il_different = create_full_il(1000);
 
-        let vote_map = HashMap::from([
+        let mut vote_map = HashMap::from([
             ([1_u8; 48].into(), (slot, inclusion_list.clone())),
             ([2_u8; 48].into(), (slot, il_different)),
         ]);
-        let final_il = compute_final_inclusion_list(vote_map, slot, inclusion_list.clone());
+        let final_il = compute_final_inclusion_list(&mut vote_map, slot, inclusion_list.clone());
 
         assert_eq!(final_il, inclusion_list);
     }

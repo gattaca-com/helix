@@ -41,13 +41,14 @@ impl P2PApi {
                 P2PApiRequest::FinalInclusionList(request) => {
                     inclusion_lists_service.handle_final_inclusion_list(request);
                 }
-                P2PApiRequest::PeerMessage {
-                    message: P2PMessage::InclusionList(il_msg),
-                    sender,
-                } => {
-                    inclusion_lists_service
-                        .handle_peer_inclusion_list(sender, (il_msg.slot, il_msg.inclusion_list));
-                }
+                P2PApiRequest::PeerMessage { message, sender } => match message {
+                    P2PMessage::LocalInclusionList(il_msg) => {
+                        inclusion_lists_service.handle_peer_local_inclusion_list(sender, il_msg);
+                    }
+                    P2PMessage::SharedInclusionList(il_msg) => {
+                        inclusion_lists_service.handle_peer_shared_inclusion_list(sender, il_msg);
+                    }
+                },
             }
         }
     }

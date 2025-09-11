@@ -6,19 +6,18 @@ use tracing::{error, trace, warn};
 
 use crate::{
     inclusion_lists::consensus,
-    messages::InclusionListMessage,
+    messages::{InclusionListMessage, P2PMessage},
     request_handlers::{InclusionListRequest, P2PApiRequest},
     P2PApi,
 };
 
 pub(crate) struct MultiRelayInclusionListsService {
     p2p_api: Arc<P2PApi>,
-    // TODO: use
-    // current_slot: u64,
-    // TODO: clean up vote map
-    vote_map: HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
     cutoff_1: Duration,
     cutoff_2: Duration,
+
+    local_ils: HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
+    shared_ils: HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
 }
 
 impl MultiRelayInclusionListsService {
@@ -26,13 +25,14 @@ impl MultiRelayInclusionListsService {
         Self {
             cutoff_1: Duration::from_millis(p2p_api.p2p_config.cutoff_1_ms),
             cutoff_2: Duration::from_millis(p2p_api.p2p_config.cutoff_2_ms),
-            // current_slot: 0,
-            vote_map: HashMap::new(),
+            local_ils: HashMap::with_capacity(p2p_api.p2p_config.peers.len()),
+            shared_ils: HashMap::with_capacity(p2p_api.p2p_config.peers.len()),
             p2p_api,
         }
     }
 
     pub(crate) fn handle_local_inclusion_list(&mut self, request: InclusionListRequest) {
+        trace!(slot=%request.slot, "broadcasting local inclusion list");
         // Compute duration until cutoff 1
         let duration_into_slot =
             self.p2p_api.signing_context.context.duration_into_slot(request.slot.into());
@@ -51,7 +51,7 @@ impl MultiRelayInclusionListsService {
         }
 
         let msg = InclusionListMessage::new(request.slot, request.inclusion_list.clone());
-        self.p2p_api.broadcast(msg.into());
+        self.p2p_api.broadcast(P2PMessage::LocalInclusionList(msg));
 
         let api_requests_tx = self.p2p_api.api_requests_tx.clone();
 
@@ -63,18 +63,20 @@ impl MultiRelayInclusionListsService {
             let _ = api_requests_tx
                 .send(shared_il_msg)
                 .await
-                .inspect_err(|e| error!(err=?e, "failed to send shared inclusion list"));
+                .inspect_err(|e| error!(err=?e, "failed to send SharedInclusionList"));
         });
     }
 
     pub(crate) fn handle_shared_inclusion_list(&mut self, request: InclusionListRequest) {
         let InclusionListRequest { slot, inclusion_list, .. } = request;
-        trace!("computing shared inclusion list");
+        trace!(local_ils_count=%self.local_ils.len(), "computing shared inclusion list");
+
         let shared_il =
-            consensus::compute_shared_inclusion_list(&self.vote_map, slot, inclusion_list);
+            consensus::compute_shared_inclusion_list(&self.local_ils, slot, inclusion_list);
+        self.local_ils.clear();
 
         let msg = InclusionListMessage::new(slot, shared_il.clone());
-        self.p2p_api.broadcast(msg.into());
+        self.p2p_api.broadcast(P2PMessage::SharedInclusionList(msg));
 
         let api_requests_tx = self.p2p_api.api_requests_tx.clone();
 
@@ -98,28 +100,40 @@ impl MultiRelayInclusionListsService {
             let _ = api_requests_tx
                 .send(shared_il_msg)
                 .await
-                .inspect_err(|e| error!(err=?e, "failed to send shared inclusion list"));
+                .inspect_err(|e| error!(err=?e, "failed to send FinalInclusionList"));
         });
     }
 
     pub(crate) fn handle_final_inclusion_list(&mut self, request: InclusionListRequest) {
         let InclusionListRequest { slot, inclusion_list, result_tx } = request;
-        let vote_map = std::mem::take(&mut self.vote_map);
-        trace!("computing final inclusion list");
-        let final_il = consensus::compute_final_inclusion_list(vote_map, slot, inclusion_list);
+        trace!(shared_ils_count=%self.shared_ils.len(), "computing final inclusion list");
+
+        let final_il =
+            consensus::compute_final_inclusion_list(&mut self.shared_ils, slot, inclusion_list);
+
+        self.shared_ils.clear();
 
         // Send result back to requester
         let _ = result_tx
             .send(Some(final_il))
-            .inspect_err(|e| error!(err=?e, "failed to send settled inclusion list"));
+            .inspect_err(|e| error!(err=?e, "failed to send final inclusion list response"));
     }
 
-    pub(crate) fn handle_peer_inclusion_list(
+    pub(crate) fn handle_peer_local_inclusion_list(
         &mut self,
         sender: BlsPublicKeyBytes,
-        (slot, inclusion_list): (u64, InclusionList),
+        il_msg: InclusionListMessage,
     ) {
-        trace!(peer=%sender, "got IL from peer");
-        self.vote_map.insert(sender, (slot, inclusion_list));
+        trace!(peer=%sender, "got local IL from peer");
+        self.local_ils.insert(sender, (il_msg.slot, il_msg.inclusion_list));
+    }
+
+    pub(crate) fn handle_peer_shared_inclusion_list(
+        &mut self,
+        sender: BlsPublicKeyBytes,
+        il_msg: InclusionListMessage,
+    ) {
+        trace!(peer=%sender, "got shared IL from peer");
+        self.shared_ils.insert(sender, (il_msg.slot, il_msg.inclusion_list));
     }
 }

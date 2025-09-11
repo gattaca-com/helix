@@ -71,11 +71,6 @@ impl P2PApi {
         self.p2p_config.is_enabled && !self.p2p_config.peers.is_empty()
     }
 
-    fn broadcast(&self, message: P2PMessage) {
-        // Ignore error if there are no active receivers.
-        let _ = self.broadcast_tx.send(message);
-    }
-
     pub async fn share_inclusion_list(
         &self,
         slot: u64,

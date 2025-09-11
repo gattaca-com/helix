@@ -54,7 +54,8 @@ impl RawP2PMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum P2PMessage {
-    InclusionList(InclusionListMessage),
+    LocalInclusionList(InclusionListMessage),
+    SharedInclusionList(InclusionListMessage),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -132,12 +133,6 @@ pub struct InclusionListMessage {
 impl InclusionListMessage {
     pub fn new(slot: u64, inclusion_list: InclusionList) -> Self {
         Self { slot, inclusion_list }
-    }
-}
-
-impl From<InclusionListMessage> for P2PMessage {
-    fn from(msg: InclusionListMessage) -> Self {
-        P2PMessage::InclusionList(msg)
     }
 }
 

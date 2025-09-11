@@ -7,7 +7,9 @@ use tokio_tungstenite::connect_async;
 use tracing::{debug, error, warn};
 
 use crate::{
-    messages::{EncodingError, MessageAuthenticationError, RawP2PMessage, SignedHelloMessage},
+    messages::{
+        EncodingError, MessageAuthenticationError, P2PMessage, RawP2PMessage, SignedHelloMessage,
+    },
     request_handlers::P2PApiRequest,
     socket::PeerSocket,
     P2PApi,
@@ -66,7 +68,6 @@ impl P2PApi {
         mut socket: PeerSocket,
         mut peer_pubkey: Option<(BlsPublicKeyBytes, BlsPublicKey)>,
     ) -> Result<(), WsConnectionError> {
-        debug!("handling new websocket connection");
         let mut broadcast_rx = self.broadcast_tx.subscribe();
         // Send an initial Hello message
         let hello_message = RawP2PMessage::Hello(SignedHelloMessage::new(&self.signing_context));
@@ -137,6 +138,11 @@ impl P2PApi {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn broadcast(&self, message: P2PMessage) {
+        // Ignore error if there are no active receivers.
+        let _ = self.broadcast_tx.send(message);
     }
 }
 
