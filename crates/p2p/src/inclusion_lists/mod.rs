@@ -155,7 +155,6 @@ mod tests {
 
             info!(%slot, "Generating transactions");
 
-            // Generate enough transactions to fill two inclusion lists
             let mut remaining_bytes = mempool_bytes_per_slot;
             let all_txs: Vec<_> = (0..)
                 .map(|id| create_random_tx(id, &mut rng))
