@@ -6,7 +6,7 @@ use helix_common::api::builder_api::InclusionList;
 use helix_types::BlsPublicKeyBytes;
 use tree_hash::TreeHash;
 
-const INCLUSION_LIST_MAX_BYTES: usize = 8000;
+pub(crate) const INCLUSION_LIST_MAX_BYTES: usize = 8 * 1024;
 
 pub(crate) fn compute_shared_inclusion_list(
     vote_map: &HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
