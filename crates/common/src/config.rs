@@ -220,6 +220,19 @@ pub struct P2PConfig {
     pub cutoff_2_ms: u64,
 }
 
+impl P2PConfig {
+    /// Validates P2P config is sane
+    pub fn validate(&self) {
+        let mut peer_pubkeys = HashSet::with_capacity(self.peers.len());
+        for peer in &self.peers {
+            let pubkey = peer.pubkey;
+            assert!(!peer_pubkeys.contains(&pubkey), "duplicate peer pubkey found: {pubkey}");
+            peer_pubkeys.insert(pubkey);
+        }
+        assert!(self.cutoff_1_ms < self.cutoff_2_ms);
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct P2PPeerConfig {
     /// The URL of the peer.
