@@ -5,10 +5,13 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use helix_common::{bid_submission::BidValidationError, simulator::BlockSimError};
+use helix_common::{
+    bid_submission::BidValidationError, local_cache::AuctioneerError, simulator::BlockSimError,
+};
 use helix_database::error::DatabaseError;
-use helix_datastore::error::AuctioneerError;
-use helix_types::{BlsPublicKey, BlsPublicKeyBytes, HydrationError, Slot, ValidationError};
+use helix_types::{
+    BlsPublicKey, BlsPublicKeyBytes, ForkName, HydrationError, Slot, ValidationError,
+};
 
 use super::v3::V3Error;
 
@@ -161,7 +164,7 @@ pub enum BuilderApiError {
     BuilderNotInProposersTrustedList { proposer_trusted_builders: Vec<String> },
 
     #[error("not {fork_name:?} payload")]
-    InvalidPayloadType { fork_name: String },
+    InvalidPayloadType { fork_name: ForkName },
 
     #[error(transparent)]
     ValidationError(#[from] ValidationError),

@@ -1,4 +1,9 @@
-use teloxide::{prelude::Requester, types::ChatId, Bot};
+use teloxide::{
+    payloads::SendMessageSetters,
+    prelude::Requester,
+    types::{ChatId, ParseMode},
+    Bot,
+};
 use tracing::error;
 
 use crate::RelayConfig;
@@ -31,7 +36,9 @@ impl AlertManager {
                 let msg = message.to_owned();
 
                 tokio::spawn(async move {
-                    if let Err(e) = bot.send_message(chat_id, msg).await {
+                    if let Err(e) =
+                        bot.send_message(chat_id, msg).parse_mode(ParseMode::MarkdownV2).await
+                    {
                         error!("alert send error: {}", e);
                     }
                 });

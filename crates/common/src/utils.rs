@@ -21,8 +21,11 @@ use uuid::Uuid;
 use crate::LoggingConfig;
 
 pub fn init_tracing_log(config: &LoggingConfig, region: &str, instance_id: String) -> WorkerGuard {
-    let format =
-        tracing_subscriber::fmt::format().with_level(true).with_thread_ids(false).with_target(true);
+    let format = tracing_subscriber::fmt::format()
+        .with_level(true)
+        .with_thread_ids(false)
+        .with_target(true)
+        .compact();
 
     let log_level = std::env::var("RUST_LOG")
         .map(|lev| lev.parse().expect("invalid RUST_LOG, change to eg 'info'"))
@@ -92,7 +95,7 @@ pub fn init_tracing_log(config: &LoggingConfig, region: &str, instance_id: Strin
 }
 
 const CRATES: &[&str] =
-    &["api", "beacon", "common", "database", "datastore", "housekeeper", "p2p", "types", "website"];
+    &["api", "beacon", "common", "database", "housekeeper", "p2p", "types", "website"];
 
 fn get_crate_filter(crates_level: tracing::Level) -> EnvFilter {
     let mut env_filter = EnvFilter::new("info");

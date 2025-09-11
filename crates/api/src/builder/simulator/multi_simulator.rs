@@ -8,22 +8,21 @@ use std::{
 
 use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, BuilderInfo};
 use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use tokio::time::sleep;
 
 use super::{optimistic_simulator::OptimisticSimulator, BlockMergeRequest, BlockSimRequest};
 use crate::builder::rpc_simulator::BlockMergeResponse;
 
 #[derive(Clone)]
-pub struct MultiSimulator<A: Auctioneer + 'static, DB: DatabaseService + 'static> {
-    pub simulators: Arc<Vec<OptimisticSimulator<A, DB>>>,
+pub struct MultiSimulator<DB: DatabaseService + 'static> {
+    pub simulators: Arc<Vec<OptimisticSimulator<DB>>>,
     next_index: Arc<AtomicUsize>,
     // never resized after init
     enabled: Arc<Vec<AtomicBool>>,
 }
 
-impl<A: Auctioneer + 'static, DB: DatabaseService + 'static> MultiSimulator<A, DB> {
-    pub fn new(simulators: Vec<OptimisticSimulator<A, DB>>) -> Self {
+impl<DB: DatabaseService + 'static> MultiSimulator<DB> {
+    pub fn new(simulators: Vec<OptimisticSimulator<DB>>) -> Self {
         let enabled = vec![true; simulators.len()].into_iter().map(AtomicBool::new).collect();
         Self {
             simulators: Arc::new(simulators),

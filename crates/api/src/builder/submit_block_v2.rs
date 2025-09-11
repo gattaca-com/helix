@@ -8,7 +8,6 @@ use helix_common::{
     SubmissionTrace,
 };
 use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use helix_types::SignedBidSubmission;
 use tracing::{debug, error, warn, Instrument};
 

@@ -4,10 +4,10 @@ use alloy_primitives::B256;
 use helix_common::{
     api::builder_api::{InclusionList, InclusionListWithMetadata},
     chain_info::ChainInfo,
+    local_cache::LocalCache,
     InclusionListConfig,
 };
 use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use helix_p2p::P2PApi;
 use helix_types::{BlsPublicKeyBytes, Slot};
 use tracing::{error, info, warn};
@@ -17,18 +17,18 @@ use crate::inclusion_list::http_fetcher::HttpInclusionListFetcher;
 const MISSING_INCLUSION_LIST_CUTOFF: Duration = Duration::from_secs(6);
 
 #[derive(Clone)]
-pub struct InclusionListService<DB: DatabaseService, A: Auctioneer> {
+pub struct InclusionListService<DB: DatabaseService> {
     db: Arc<DB>,
-    auctioneer: Arc<A>,
+    auctioneer: Arc<LocalCache>,
     http_il_fetcher: HttpInclusionListFetcher,
     chain_info: Arc<ChainInfo>,
     p2p: Arc<P2PApi>,
 }
 
-impl<DB: DatabaseService, A: Auctioneer> InclusionListService<DB, A> {
+impl<DB: DatabaseService> InclusionListService<DB> {
     pub fn new(
         db: Arc<DB>,
-        auctioneer: Arc<A>,
+        auctioneer: Arc<LocalCache>,
         config: InclusionListConfig,
         chain_info: Arc<ChainInfo>,
         p2p: Arc<P2PApi>,

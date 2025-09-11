@@ -4,10 +4,10 @@ mod simulator_tests {
 
     use alloy_primitives::{b256, U256};
     use helix_common::{
-        simulator::BlockSimError, BuilderInfo, SimulatorConfig, ValidatorPreferences,
+        local_cache::LocalCache, simulator::BlockSimError, BuilderInfo, SimulatorConfig,
+        ValidatorPreferences,
     };
     use helix_database::mock_database_service::MockDatabaseService;
-    use helix_datastore::MockAuctioneer;
     use helix_types::{
         BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload,
         SignedBidSubmission, SignedBidSubmissionElectra, TestRandomSeed,
@@ -23,13 +23,12 @@ mod simulator_tests {
 
     fn get_optimistic_simulator(
         endpoint: &str,
-        builder_info: Option<BuilderInfo>,
-        builder_demoted: Arc<AtomicBool>,
-    ) -> OptimisticSimulator<MockAuctioneer, MockDatabaseService> {
+        _builder_info: Option<BuilderInfo>,
+        _builder_demoted: Arc<AtomicBool>,
+    ) -> OptimisticSimulator<MockDatabaseService> {
         let http = Client::new();
-        let mut auctioneer = MockAuctioneer::new();
-        auctioneer.builder_info = builder_info;
-        auctioneer.builder_demoted = builder_demoted;
+        let auctioneer = LocalCache::new_test();
+
         let db =
             MockDatabaseService::new(Arc::new(Default::default()), Arc::new(Default::default()));
         OptimisticSimulator::new(Arc::new(auctioneer), Arc::new(db), http, SimulatorConfig {

@@ -7,12 +7,12 @@ use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
     bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     chain_info::ChainInfo,
+    local_cache::LocalCache,
     metadata_provider::MetadataProvider,
     signing::RelaySigningContext,
     RelayConfig,
 };
 use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use helix_housekeeper::CurrentSlotInfo;
 use helix_p2p::P2PApi;
 use service::run_api_service;
@@ -39,7 +39,7 @@ mod grpc {
 pub fn start_api_service<A: Api>(
     config: RelayConfig,
     db: Arc<A::DatabaseService>,
-    auctioneer: Arc<A::Auctioneer>,
+    auctioneer: Arc<LocalCache>,
     chain_info: Arc<ChainInfo>,
     relay_signing_context: Arc<RelaySigningContext>,
     multi_beacon_client: Arc<MultiBeaconClient>,
@@ -72,12 +72,11 @@ pub fn start_api_service<A: Api>(
     ));
 }
 
-pub fn start_admin_service<A: Auctioneer + 'static>(auctioneer: Arc<A>, config: &RelayConfig) {
+pub fn start_admin_service(auctioneer: Arc<LocalCache>, config: &RelayConfig) {
     tokio::spawn(admin_service::run_admin_service(auctioneer, config.clone()));
 }
 
 pub trait Api: Clone + Send + Sync + 'static {
-    type Auctioneer: Auctioneer;
     type DatabaseService: DatabaseService;
     type MetadataProvider: MetadataProvider;
 }

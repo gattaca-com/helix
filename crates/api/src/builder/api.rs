@@ -17,13 +17,13 @@ use helix_common::{
     bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
     bid_submission::BidSubmission,
     chain_info::ChainInfo,
+    local_cache::LocalCache,
     metrics::HYDRATION_LATENCY,
     simulator::BlockSimError,
     utils::utcnow_ns,
     BuilderInfo, RelayConfig, SubmissionTrace, ValidatorPreferences,
 };
 use helix_database::DatabaseService;
-use helix_datastore::Auctioneer;
 use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate};
 use helix_types::{
     BlobWithMetadata, BlobsBundle, BlockMergingData, BlsPublicKeyBytes, BundleOrder,
@@ -53,10 +53,10 @@ pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB
 
 #[derive(Clone)]
 pub struct BuilderApi<A: Api> {
-    pub auctioneer: Arc<A::Auctioneer>,
+    pub auctioneer: Arc<LocalCache>,
     pub db: Arc<A::DatabaseService>,
     pub chain_info: Arc<ChainInfo>,
-    pub simulator: MultiSimulator<A::Auctioneer, A::DatabaseService>,
+    pub simulator: MultiSimulator<A::DatabaseService>,
     pub gossiper: Arc<GrpcGossiperClientManager>,
     pub metadata_provider: Arc<A::MetadataProvider>,
     pub relay_config: Arc<RelayConfig>,
@@ -83,10 +83,10 @@ pub struct BuilderApi<A: Api> {
 
 impl<A: Api> BuilderApi<A> {
     pub fn new(
-        auctioneer: Arc<A::Auctioneer>,
+        auctioneer: Arc<LocalCache>,
         db: Arc<A::DatabaseService>,
         chain_info: Arc<ChainInfo>,
-        simulator: MultiSimulator<A::Auctioneer, A::DatabaseService>,
+        simulator: MultiSimulator<A::DatabaseService>,
         gossiper: Arc<GrpcGossiperClientManager>,
         metadata_provider: Arc<A::MetadataProvider>,
         relay_config: RelayConfig,
@@ -196,10 +196,7 @@ impl<A: Api> BuilderApi<A> {
     ) -> Result<(), BuilderApiError> {
         match self.auctioneer.seen_or_insert_block_hash(block_hash) {
             false => Ok(()),
-            true => {
-                debug!(?block_hash, "duplicate block hash");
-                Err(BuilderApiError::DuplicateBlockHash { block_hash: *block_hash })
-            }
+            true => Err(BuilderApiError::DuplicateBlockHash { block_hash: *block_hash }),
         }
     }
 
@@ -290,6 +287,10 @@ impl<A: Api> BuilderApi<A> {
             payload_attributes.payload_attributes.parent_beacon_block_root,
             inclusion_list,
         );
+
+        if self.relay_config.is_local_dev {
+            return Ok(true)
+        }
 
         let result = self.simulator.process_request(sim_request, builder_info, is_top_bid).await;
 
@@ -584,7 +585,7 @@ pub(crate) fn sanity_check_block_submission(
     // Check block is for current fork
     if chain_info.current_fork_name() != payload.fork_name() {
         return Err(BuilderApiError::InvalidPayloadType {
-            fork_name: chain_info.current_fork_name().to_string(),
+            fork_name: chain_info.current_fork_name(),
         });
     }
 

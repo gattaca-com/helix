@@ -10,16 +10,18 @@ use eyre::eyre;
 use helix_api::{start_admin_service, start_api_service, Api};
 use helix_beacon::start_beacon_client;
 use helix_common::{
-    bid_sorter::{start_bid_sorter, BestGetHeader, FloorBid},
+    bid_sorter::{start_bid_sorter, BestGetHeader, BidSorterMessage, FloorBid},
     load_config, load_keypair,
+    local_cache::LocalCache,
     metadata_provider::DefaultMetadataProvider,
     metrics::start_metrics_server,
     signing::RelaySigningContext,
     utils::{init_panic_hook, init_tracing_log},
     RelayConfig,
 };
-use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, start_db_service};
-use helix_datastore::{local::local_cache::LocalCache, start_auctioneer};
+use helix_database::{
+    postgres::postgres_db_service::PostgresDatabaseService, start_db_service, DatabaseService,
+};
 use helix_housekeeper::start_housekeeper;
 use helix_p2p::P2PApi;
 use helix_types::BlsKeypair;
@@ -35,7 +37,6 @@ static GLOBAL: Jemalloc = Jemalloc;
 struct ApiProd;
 
 impl Api for ApiProd {
-    type Auctioneer = LocalCache;
     type DatabaseService = PostgresDatabaseService;
     type MetadataProvider = DefaultMetadataProvider;
 }
@@ -165,4 +166,18 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     }
 
     Ok(())
+}
+
+pub async fn start_auctioneer(
+    sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
+    db: Arc<PostgresDatabaseService>,
+) -> eyre::Result<Arc<LocalCache>> {
+    let auctioneer = Arc::new(LocalCache::new(sorter_tx));
+    let auctioneer_clone = auctioneer.clone();
+    tokio::spawn(async move {
+        let builder_infos = db.get_all_builder_infos().await.expect("failed to load builder infos");
+        auctioneer_clone.update_builder_infos(&builder_infos, true);
+    });
+
+    Ok(auctioneer)
 }
