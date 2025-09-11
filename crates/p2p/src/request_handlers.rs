@@ -4,7 +4,9 @@ use helix_common::api::builder_api::InclusionList;
 use helix_types::BlsPublicKeyBytes;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{inclusion_lists::MultiRelayInclusionListsService, messages::P2PMessage, P2PApi};
+use crate::{
+    inclusion_lists::service::MultiRelayInclusionListsService, messages::P2PMessage, P2PApi,
+};
 
 #[derive(Debug)]
 pub(crate) enum P2PApiRequest {
