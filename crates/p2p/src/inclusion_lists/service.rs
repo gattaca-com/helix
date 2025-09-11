@@ -83,7 +83,7 @@ impl MultiRelayInclusionListsService {
             self.p2p_api.signing_context.context.duration_into_slot(request.slot.into());
         let sleep_time = self.cutoff_2.saturating_sub(duration_into_slot.unwrap_or_default());
 
-        if !sleep_time.is_zero() {
+        if sleep_time.is_zero() {
             warn!("got shared inclusion list too late into the slot, skipping");
             let _ = request.result_tx.send(Some(shared_il));
             return;
