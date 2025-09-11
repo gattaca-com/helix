@@ -138,13 +138,71 @@ impl InclusionListMessage {
 
 #[cfg(test)]
 mod tests {
-    use crate::messages::{P2PMessage, RawP2PMessage};
+    use std::fmt::Debug;
 
-    fn test_roundtrip(msg: &RawP2PMessage) {
+    use alloy_primitives::Bytes;
+    use helix_common::api::builder_api::InclusionList;
+    use helix_types::Transaction;
+    use serde::{Deserialize, Serialize};
+
+    use crate::messages::{InclusionListMessage, P2PMessage, RawP2PMessage, SignedHelloMessage};
+
+    fn test_roundtrip<T: Serialize + for<'de> Deserialize<'de> + Debug>(msg: &T) {
         let serialized = serde_json::to_string(msg).unwrap();
-        let deserialized: RawP2PMessage = serde_json::from_str(&serialized).unwrap();
+        let deserialized: T = serde_json::from_str(&serialized).unwrap();
         assert_eq!(format!("{:?}", msg), format!("{:?}", &deserialized));
     }
+
+    // Adds a new variant to RawP2PMessage and checks that it doesn't break deserialization of old
+    // messages.
+    #[test]
+    fn test_backwards_compatibility() {
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        struct SomeStruct {
+            a: String,
+            bc: u64,
+        }
+
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        enum NewP2PMessage {
+            LocalInclusionList(InclusionListMessage),
+            SharedInclusionList(InclusionListMessage),
+            NewVariant(SomeStruct),
+        }
+
+        #[derive(Debug, Clone, Serialize, Deserialize)]
+        #[serde(untagged)]
+        enum NewRawP2PMessage {
+            /// Initial authentication message
+            Hello(SignedHelloMessage),
+            /// Other, unauthenticated messages
+            Other(NewP2PMessage),
+        }
+
+        let new_message = NewRawP2PMessage::Other(NewP2PMessage::NewVariant(SomeStruct {
+            a: "test".into(),
+            bc: 123,
+        }));
+        // Sanity check that it works
+        test_roundtrip(&new_message);
+
+        // Check that message fails to be deserialized by old version
+        // TODO: should we support this case?
+        let serialized = serde_json::to_string(&new_message).unwrap();
+        let deserialized: Result<RawP2PMessage, _> = serde_json::from_str(&serialized);
+        deserialized.unwrap_err();
+
+        // Check that old messages still deserialize correctly
+        let old_message = RawP2PMessage::Other(P2PMessage::LocalInclusionList(
+            InclusionListMessage::new(123, InclusionList {
+                txs: vec![Transaction(Bytes::from([0, 6, 5]))].into(),
+            }),
+        ));
+        let serialized = serde_json::to_string(&old_message).unwrap();
+        let _: NewRawP2PMessage = serde_json::from_str(&serialized).unwrap();
+    }
+
+    // ### Unit tests for each variant ###
 
     #[test]
     fn test_hello_message_encoding() {
