@@ -95,6 +95,10 @@ impl P2PApi {
         match message {
             RawP2PMessage::Hello(hello_msg) => {
                 let pubkey_bytes = hello_msg.message.pubkey;
+                // Sanity check: we're not talking to ourselves
+                if pubkey_bytes == self.signing_context.pubkey {
+                    return Err(WsConnectionError::ReceivedOwnPubkey);
+                }
                 // Check peer is known
                 let known_peer =
                     self.p2p_config.peers.iter().any(|config| config.pubkey == pubkey_bytes);
@@ -141,6 +145,8 @@ enum WsConnectionError {
     NoHello,
     #[error("got an unexpected pubkey, got: {_0}, expected: {_1}")]
     UnexpectedPubkey(BlsPublicKey, BlsPublicKey),
+    #[error("peer sent our own pubkey in Hello message")]
+    ReceivedOwnPubkey,
     #[error("not a known peer: {_0}")]
     UnknownPeer(BlsPublicKeyBytes),
     #[error("initial authentication failed: {_0}")]
