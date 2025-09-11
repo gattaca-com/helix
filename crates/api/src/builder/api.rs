@@ -196,10 +196,7 @@ impl<A: Api> BuilderApi<A> {
     ) -> Result<(), BuilderApiError> {
         match self.auctioneer.seen_or_insert_block_hash(block_hash) {
             false => Ok(()),
-            true => {
-                debug!(?block_hash, "duplicate block hash");
-                Err(BuilderApiError::DuplicateBlockHash { block_hash: *block_hash })
-            }
+            true => Err(BuilderApiError::DuplicateBlockHash { block_hash: *block_hash }),
         }
     }
 
@@ -588,7 +585,7 @@ pub(crate) fn sanity_check_block_submission(
     // Check block is for current fork
     if chain_info.current_fork_name() != payload.fork_name() {
         return Err(BuilderApiError::InvalidPayloadType {
-            fork_name: chain_info.current_fork_name().to_string(),
+            fork_name: chain_info.current_fork_name(),
         });
     }
 
