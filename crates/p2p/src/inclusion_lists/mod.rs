@@ -52,6 +52,17 @@ mod tests {
         Transaction(buf.into())
     }
 
+    async fn wait_until_next_slot(chain_info: &ChainInfo) {
+        let slot_duration = Duration::from_secs(chain_info.seconds_per_slot());
+
+        // Unless we are at the start of a slot, sleep until the start of the next one
+        let sleep_duration = slot_duration.saturating_sub(
+            chain_info.duration_into_slot(chain_info.current_slot()).unwrap_or_default(),
+        );
+
+        tokio::time::sleep(sleep_duration).await;
+    }
+
     fn start_p2p_peer(
         join_set: &mut JoinSet<()>,
         chain_info: Arc<ChainInfo>,
@@ -86,11 +97,10 @@ mod tests {
 
     #[tokio::test]
     async fn multi_relay_inclusion_lists_integration_test() {
-        let instance_id = "multi_relay_inclusion_lists_integration_test".to_string();
-        let _guard = init_tracing_log(&Default::default(), "local", instance_id);
+        let _guard = init_tracing_log(&Default::default(), "", Default::default());
 
         let n_peers = 5;
-        let n_slots = 8;
+        let n_slots = 16;
         // Approximate max number of bytes in the mempool per slot.
         // ILs will be built from random samples of the mempool.
         let mempool_bytes_per_slot = 2 * INCLUSION_LIST_MAX_BYTES;
@@ -131,21 +141,16 @@ mod tests {
         let mut rng = SmallRng::seed_from_u64(seed);
         info!(%seed, "Using seed for random number generation");
 
-        let cutoff_time_1 = Duration::from_millis(p2p_config.cutoff_1_ms);
-
         let slot_duration = Duration::from_secs(chain_info.seconds_per_slot());
 
-        // Unless we are at the start of a slot, sleep until the start of the next one
-        let sleep_duration = slot_duration.saturating_sub(
-            chain_info.duration_into_slot(chain_info.current_slot()).unwrap_or_default(),
-        );
+        info!("Sleeping until the start of the next slot");
+        wait_until_next_slot(&chain_info).await;
+        info!(%n_slots, "Starting simulation");
 
-        if sleep_duration < cutoff_time_1 / 2 {
-            tokio::time::sleep(sleep_duration).await;
-        }
+        for slot in 0..n_slots {
+            let real_slot = chain_info.current_slot();
 
-        for _ in 0..n_slots {
-            let slot = chain_info.current_slot();
+            info!(%slot, "Generating transactions");
 
             // Generate enough transactions to fill two inclusion lists
             let mut remaining_bytes = mempool_bytes_per_slot;
@@ -160,6 +165,8 @@ mod tests {
                     }
                 })
                 .collect();
+
+            info!(%slot, count=%all_txs.len(), "Generated transactions");
 
             let mut join_set = JoinSet::new();
 
@@ -182,9 +189,10 @@ mod tests {
                 // Share IL in the background
                 let p2p_api = p2p_api.clone();
                 join_set.spawn(async move {
-                    p2p_api.share_inclusion_list(slot.into(), inclusion_list).await
+                    p2p_api.share_inclusion_list(real_slot.into(), inclusion_list).await
                 });
             }
+            info!(%slot, "Sent transactions to each process");
 
             let Ok(results) = tokio::time::timeout(slot_duration, join_set.join_all()).await else {
                 error!(%slot, %seed, "Timed out waiting for inclusion lists");
@@ -201,6 +209,9 @@ mod tests {
             assert_eq!(n_unique, 1, "Expected only one inclusion list, got {n_unique}");
             let (_hash, (n, _il)) = results_map.into_iter().next().unwrap();
             assert_eq!(n, n_peers, "Expected all peers to return an inclusion list");
+
+            info!(%slot, %n_slots, "All peers returned the same inclusion list. Waiting until next slot");
+            wait_until_next_slot(&chain_info).await;
         }
 
         apis_joinset.shutdown().await;

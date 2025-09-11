@@ -36,6 +36,8 @@ impl P2PApi {
     ) {
         // Attempt to connect, waiting for a bit before retrying
         loop {
+            debug!(peer=%pubkey_bytes, "connecting to peer");
+
             if let Ok((ws, _response)) = connect_async(request.clone()).await {
                 let _ = self.handle_ws_connection(ws.into(), Some((pubkey_bytes, pubkey.clone()))).await.inspect_err(|e| {
                    error!(err=?e, direction="outbound", peer=%pubkey_bytes, "websocket communication error")
@@ -60,6 +62,7 @@ impl P2PApi {
         mut socket: PeerSocket,
         mut peer_pubkey: Option<(BlsPublicKeyBytes, BlsPublicKey)>,
     ) -> Result<(), WsConnectionError> {
+        debug!("handling new websocket connection");
         let mut broadcast_rx = self.broadcast_tx.subscribe();
         // Send an initial Hello message
         let hello_message = RawP2PMessage::Hello(SignedHelloMessage::new(&self.signing_context));
