@@ -215,6 +215,8 @@ impl<A: Api> BuilderApi<A> {
             is_cancellations_enabled,
             merging_preferences,
             utcnow_ns(),
+            payload_attributes.withdrawals_root, /* this has been validated in
+                                                  * sanity_check_block_submission */
         )) {
             error!(?err, "failed to send submission to sorter");
             return Err(BuilderApiError::InternalError);
