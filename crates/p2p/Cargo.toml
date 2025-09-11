@@ -18,7 +18,6 @@ helix-common.workspace = true
 helix-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-ssz_types.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
