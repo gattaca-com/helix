@@ -10,11 +10,8 @@ mod tests {
     use alloy_rlp::Encodable as _;
     use axum::{routing::any, Extension, Router};
     use helix_common::{
-        api::builder_api::InclusionList,
-        chain_info::ChainInfo,
-        signing::RelaySigningContext,
-        utils::{init_tracing_log, utcnow_sec},
-        P2PConfig, P2PPeerConfig,
+        api::builder_api::InclusionList, chain_info::ChainInfo, signing::RelaySigningContext,
+        utils::utcnow_sec, P2PConfig, P2PPeerConfig,
     };
     use helix_types::{BlsKeypair, BlsSecretKey, Transaction};
     use rand::{rngs::SmallRng, seq::IndexedRandom, Rng as _, SeedableRng};
@@ -97,7 +94,9 @@ mod tests {
 
     #[tokio::test]
     async fn multi_relay_inclusion_lists_integration_test() {
-        let _guard = init_tracing_log(&Default::default(), "", Default::default());
+        // Enable to produce logs
+        // let _guard =
+        //     helix_common::utils::init_tracing_log(&Default::default(), "", Default::default());
 
         let n_peers = 5;
         let n_slots = 4;
