@@ -29,7 +29,7 @@ pub enum MessageAuthenticationError {
 }
 
 /// P2P messages, as sent through the wire.
-/// [`RawP2PMessage::Other`] is meant to be handled by the main processing logic.
+/// [`RawP2PMessage::Other`] variant is meant to be handled by [crate::P2PApi::handle_requests].
 /// The rest of messages are control messages.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -52,6 +52,7 @@ impl RawP2PMessage {
     }
 }
 
+/// P2P messages, as seen by the main processing logic in [crate::P2PApi::handle_requests].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum P2PMessage {
     LocalInclusionList(InclusionListMessage),
@@ -63,6 +64,7 @@ pub(crate) enum EncodingError {
     #[error("serde error: {_0}")]
     Serde(#[from] serde_json::Error),
     #[error("invalid utf8: {_0}")]
+    // Boxed due to big size
     InvalidUtf8(#[from] Box<tokio_tungstenite::tungstenite::Error>),
 }
 

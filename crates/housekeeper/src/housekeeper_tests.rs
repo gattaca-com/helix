@@ -36,9 +36,6 @@ fn get_housekeeper() -> HelperVars {
     //     proposer_duties_has_been_read.clone(),
     // );
 
-    let dummy_signing_context = Default::default();
-    let chain_info = Arc::new(ChainInfo::for_mainnet());
-
     let sorter_tx = crossbeam_channel::unbounded().0;
     let auctioneer = LocalCache::new(sorter_tx);
     let housekeeper = Housekeeper::new(
@@ -46,8 +43,8 @@ fn get_housekeeper() -> HelperVars {
         beacon_client.clone().into(),
         Arc::new(auctioneer),
         &RelayConfig::default(),
-        chain_info.clone(),
-        P2PApi::new(Default::default(), dummy_signing_context),
+        Arc::new(ChainInfo::for_mainnet()),
+        P2PApi::new(Default::default(), Default::default()),
     );
 
     HelperVars {

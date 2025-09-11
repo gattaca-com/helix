@@ -8,6 +8,9 @@ use tree_hash::TreeHash;
 
 pub(crate) const INCLUSION_LIST_MAX_BYTES: usize = 8 * 1024;
 
+/// Compute a shared inclusion list by sorting transactions into it in descending frequency order up
+/// to the maximum byte size. Ties are broken lexicographically via the transaction hash.
+/// Inclusion lists from older slots are ignored.
 pub(crate) fn compute_shared_inclusion_list(
     vote_map: &HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
     slot: u64,
@@ -39,6 +42,7 @@ pub(crate) fn compute_shared_inclusion_list(
         freq2.cmp(freq1).then(tx_hash2.cmp(tx_hash1))
     });
 
+    // Create an inclusion list by selecting at each step the best transaction that fits.
     let mut bytes_available = INCLUSION_LIST_MAX_BYTES;
     let txs: Vec<_> = tx_frequency_ordered
         .into_iter()
@@ -53,10 +57,13 @@ pub(crate) fn compute_shared_inclusion_list(
         })
         .collect();
 
-    // Truncate if over
     InclusionList { txs: txs.into() }
 }
 
+/// Compute the final inclusion list by selecting the most frequent inclusion list by our peers.
+/// Ties are broken by maximizing inclusion list byte size, with lexicographical sorting via the
+/// inclusion list hash as a fallback key.
+/// Inclusion lists from older slots are ignored.
 pub(crate) fn compute_final_inclusion_list(
     vote_map: &mut HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
     slot: u64,
@@ -65,6 +72,7 @@ pub(crate) fn compute_final_inclusion_list(
     let mut il_by_frequency = HashMap::with_capacity(vote_map.len() + 1);
     il_by_frequency.insert(inclusion_list.tree_hash_root(), (inclusion_list, 1));
 
+    // Drain the vote map to avoid cloning inclusion lists
     vote_map.drain().for_each(|(_, (il_slot, il))| {
         if il_slot != slot {
             return;
