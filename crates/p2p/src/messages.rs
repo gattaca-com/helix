@@ -138,9 +138,64 @@ impl InclusionListMessage {
 
 #[cfg(test)]
 mod tests {
+    use crate::messages::{P2PMessage, RawP2PMessage};
+
+    fn test_roundtrip(msg: &RawP2PMessage) {
+        let serialized = serde_json::to_string(msg).unwrap();
+        let deserialized: RawP2PMessage = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(format!("{:?}", msg), format!("{:?}", &deserialized));
+    }
+
     #[test]
-    fn test_message_serialization() {
-        // TODO: add unit tests for message de/serialization
-        // TODO: add tests for new message types
+    fn test_hello_message_encoding() {
+        let serialized_message = r#"{
+            "message": {
+                "pubkey": "0x8c9b2ed97d5879ef7df8458131b5c5ea3c8b55588d93c936274984ed9b24c65dbc35eb8f4ea72cdfb904f4b382a0973c",
+                "valid_until": 1757622216306
+            },
+            "signature": "0xaa37e23d9ad2e987c27994f9c1e961bd06e866f8f531071f267e10fb98c5825e887710788ffa45b12c48ec1bad30588d0396e0d6dc54ee2197cd28ba912fd6e903495c99af368832c78875a2ef62218469d9936b3c94f8c52fc5195380681900"
+        }"#;
+        let message: RawP2PMessage = serde_json::from_str(&serialized_message).unwrap();
+        assert!(matches!(message, RawP2PMessage::Hello(_)));
+
+        test_roundtrip(&message);
+    }
+
+    #[test]
+    fn test_local_inclusion_list_encoding() {
+        let serialized_message = r#"{
+            "LocalInclusionList": {
+                "slot": 12345,
+                "inclusion_list": {
+                    "txs": [
+                        "0x6236236262362236f362362362a2626436575685967984232414",
+                        "0x356723567235672f56723567235672a5672356723567235672356723567238"
+                    ]
+                }
+            }
+        }"#;
+        let message: RawP2PMessage = serde_json::from_str(&serialized_message).unwrap();
+        assert!(matches!(message, RawP2PMessage::Other(P2PMessage::LocalInclusionList(_))));
+
+        test_roundtrip(&message);
+    }
+
+    #[test]
+    fn test_shared_inclusion_list_encoding() {
+        let serialized_message = r#"{
+            "SharedInclusionList": {
+                "slot": 12345,
+                "inclusion_list": {
+                    "txs": [
+                        "0x6236236262362236f362362362a2626436575685967984232414",
+                        "0x356723567235672f56723567235672a5672356723567235672356723567238"
+                    ]
+                }
+            }
+        }"#;
+        let message: RawP2PMessage = serde_json::from_str(&serialized_message).unwrap();
+        assert!(matches!(message, RawP2PMessage::Other(P2PMessage::SharedInclusionList(_))));
+
+        test_roundtrip(&message);
     }
 }
