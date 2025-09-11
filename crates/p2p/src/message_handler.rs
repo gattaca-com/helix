@@ -4,7 +4,7 @@ use axum::{extract::WebSocketUpgrade, response::IntoResponse, Extension};
 use futures::{SinkExt, StreamExt};
 use helix_types::{BlsPublicKey, BlsPublicKeyBytes};
 use tokio_tungstenite::connect_async;
-use tracing::{error, info, warn};
+use tracing::{debug, error, warn};
 
 use crate::{
     messages::{EncodingError, MessageAuthenticationError, RawP2PMessage, SignedHelloMessage},
@@ -19,7 +19,7 @@ impl P2PApi {
         Extension(api): Extension<Arc<P2PApi>>,
         ws: WebSocketUpgrade,
     ) -> Result<impl IntoResponse, std::convert::Infallible> {
-        info!("got new peer connection");
+        debug!("got new peer connection");
         // Upgrade connection to WebSocket, spawning a new task to handle the connection
         let ws = ws
             .on_failed_upgrade(|error| warn!(%error, "websocket upgrade failed"))
@@ -107,7 +107,7 @@ impl P2PApi {
                 }
                 let pubkey = hello_msg.deserialize_pubkey()?;
                 hello_msg.verify_signature(&pubkey)?;
-                info!("Verified Hello message from peer: {pubkey}");
+                debug!(peer=%pubkey, "Verified Hello message from peer");
 
                 let Some((_, peer_pubkey)) = &peer_pubkey else {
                     *peer_pubkey = Some((pubkey.serialize().into(), pubkey));

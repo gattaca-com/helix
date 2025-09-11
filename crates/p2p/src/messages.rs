@@ -140,3 +140,12 @@ impl From<InclusionListMessage> for P2PMessage {
         P2PMessage::InclusionList(msg)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_message_serialization() {
+        // TODO: add unit tests for message de/serialization
+        // TODO: add tests for new message types
+    }
+}
