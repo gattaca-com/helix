@@ -209,7 +209,11 @@ pub struct RelayGossipConfig {
 
 #[derive(Default, Serialize, Deserialize, Clone)]
 pub struct P2PConfig {
+    /// Whether P2P functionality is enabled or not
+    #[serde(default = "default_bool::<false>")]
+    pub is_enabled: bool,
     /// Information on known peers
+    #[serde(default)]
     pub peers: Vec<P2PPeerConfig>,
     /// Duration until the first cutoff (t_1)
     #[serde(default = "default_u64::<2000>")]

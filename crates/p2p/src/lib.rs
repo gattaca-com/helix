@@ -4,7 +4,7 @@ use helix_common::{api::builder_api::InclusionList, signing::RelaySigningContext
 use helix_types::BlsPublicKey;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     messages::P2PMessage,
@@ -28,11 +28,23 @@ impl P2PApi {
     /// Creates a new instance.
     /// Starts new tasks for starting new connections and handling incoming messages.
     pub fn new(p2p_config: P2PConfig, signing_context: Arc<RelaySigningContext>) -> Arc<Self> {
-        p2p_config.validate();
-
         let (broadcast_tx, _) = broadcast::channel(100);
         let (api_requests_tx, api_requests_rx) = mpsc::channel(2000);
         let this = Arc::new(Self { p2p_config, broadcast_tx, api_requests_tx, signing_context });
+
+        // If P2P is disabled, return the service without starting any tasks.
+        // This will cause all requests to be ignored.
+        if !this.p2p_config.is_enabled {
+            info!("P2P module is disabled.");
+            return this;
+        }
+        if this.p2p_config.peers.is_empty() {
+            warn!("P2P module is enabled but no peers were configured.");
+            return this;
+        }
+        // Validate configuration and fail if it's invalid
+        this.p2p_config.validate();
+
         for peer_config in &this.p2p_config.peers {
             let peer_pubkey = peer_config.pubkey;
             // Parse URL and try to turn into a request ahead-of-time, panicking on error
@@ -51,7 +63,12 @@ impl P2PApi {
             }
         }
         tokio::spawn(this.clone().handle_requests(api_requests_rx));
+        info!(peer_count=%this.p2p_config.peers.len(), "Initialized P2P module");
         this
+    }
+
+    fn is_enabled(&self) -> bool {
+        self.p2p_config.is_enabled && !self.p2p_config.peers.is_empty()
     }
 
     fn broadcast(&self, message: P2PMessage) {
@@ -64,6 +81,10 @@ impl P2PApi {
         slot: u64,
         inclusion_list: InclusionList,
     ) -> Option<InclusionList> {
+        // Skip P2P consensus if P2P is disabled
+        if !self.is_enabled() {
+            return Some(inclusion_list);
+        }
         let (result_tx, result_rx) = oneshot::channel();
         let request = P2PApiRequest::LocalInclusionList(InclusionListRequest {
             slot,
