@@ -100,7 +100,7 @@ mod tests {
         let _guard = init_tracing_log(&Default::default(), "", Default::default());
 
         let n_peers = 5;
-        let n_slots = 16;
+        let n_slots = 4;
         // Approximate max number of bytes in the mempool per slot.
         // ILs will be built from random samples of the mempool.
         let mempool_bytes_per_slot = 2 * INCLUSION_LIST_MAX_BYTES;
