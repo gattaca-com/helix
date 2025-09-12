@@ -35,7 +35,7 @@ pub enum MessageAuthenticationError {
 #[serde(untagged)]
 pub(crate) enum RawP2PMessage {
     /// Initial authentication message
-    Hello(SignedHelloMessage),
+    Hello(HelloMessage),
     /// Other, unauthenticated messages
     Other(P2PMessage),
 }
@@ -69,21 +69,36 @@ pub(crate) enum EncodingError {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct SignedHelloMessage {
-    pub(crate) message: HelloMessage,
-    /// Signature over SSZ hash-tree-root of message.
+pub(crate) struct HelloMessage {
+    /// BLS public key of the sender.
+    pub pubkey: BlsPublicKeyBytes,
+    /// Timestamp to avoid replay attacks.
+    valid_until: u64,
+    /// Signature over SSZ hash-tree-root of [`Self::pubkey`] and [`Self::valid_until`].
+    /// See [`MessageToSign`] for the specific format.
     signature: BlsSignatureBytes,
 }
 
-impl SignedHelloMessage {
+/// Used for generating the [`signature`](HelloMessage::signature) in [`HelloMessage`].
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
+struct MessageToSign {
+    pubkey: BlsPublicKeyBytes,
+    valid_until: u64,
+}
+
+impl helix_types::SignedRoot for MessageToSign {}
+
+impl HelloMessage {
     pub(crate) fn new(signing_context: &RelaySigningContext) -> Self {
-        let message = HelloMessage::new(signing_context.pubkey);
+        let valid_until = utcnow_ms() + VALID_DURATION_MS;
+        let pubkey = signing_context.pubkey;
+        let message = MessageToSign { pubkey, valid_until };
         let signature = signing_context.sign_relay_message(&message).serialize().into();
-        Self { message, signature }
+        Self { pubkey, valid_until, signature }
     }
 
     pub(crate) fn deserialize_pubkey(&self) -> Result<BlsPublicKey, MessageAuthenticationError> {
-        BlsPublicKey::deserialize(&*self.message.pubkey)
+        BlsPublicKey::deserialize(&*self.pubkey)
             .map_err(|_| MessageAuthenticationError::CouldNotDeserializePubkey)
     }
 
@@ -92,12 +107,13 @@ impl SignedHelloMessage {
         pubkey: &BlsPublicKey,
     ) -> Result<(), MessageAuthenticationError> {
         let now = utcnow_ms();
-        if self.message.valid_until < now {
+        if self.valid_until < now {
             return Err(MessageAuthenticationError::ExpiredMessage);
-        } else if self.message.valid_until > now + 2 * VALID_DURATION_MS {
+        } else if self.valid_until > now + 2 * VALID_DURATION_MS {
             return Err(MessageAuthenticationError::MessageTooFarInFuture);
         }
-        let signing_root = self.message.signing_root(RELAY_DOMAIN.into());
+        let message = MessageToSign { pubkey: self.pubkey, valid_until: self.valid_until };
+        let signing_root = message.signing_root(RELAY_DOMAIN.into());
 
         let signature = BlsSignature::deserialize(self.signature.as_ref())
             .map_err(|_| MessageAuthenticationError::CouldNotDeserializeSignature)?;
@@ -106,23 +122,6 @@ impl SignedHelloMessage {
             return Err(MessageAuthenticationError::InvalidSignature);
         }
         Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]
-pub struct HelloMessage {
-    /// BLS public key of the sender.
-    pub pubkey: BlsPublicKeyBytes,
-    /// Timestamp to avoid replay attacks.
-    valid_until: u64,
-}
-
-impl helix_types::SignedRoot for HelloMessage {}
-
-impl HelloMessage {
-    fn new(pubkey: BlsPublicKeyBytes) -> Self {
-        let valid_until = utcnow_ms() + VALID_DURATION_MS;
-        Self { pubkey, valid_until }
     }
 }
 
@@ -147,7 +146,7 @@ mod tests {
     use helix_types::Transaction;
     use serde::{Deserialize, Serialize};
 
-    use crate::messages::{InclusionListMessage, P2PMessage, RawP2PMessage, SignedHelloMessage};
+    use crate::messages::{HelloMessage, InclusionListMessage, P2PMessage, RawP2PMessage};
 
     fn test_roundtrip<T: Serialize + for<'de> Deserialize<'de> + Debug>(msg: &T) {
         let serialized = serde_json::to_string(msg).unwrap();
@@ -176,7 +175,7 @@ mod tests {
         #[serde(untagged)]
         enum NewRawP2PMessage {
             /// Initial authentication message
-            Hello(SignedHelloMessage),
+            Hello(HelloMessage),
             /// Other, unauthenticated messages
             Other(NewP2PMessage),
         }
@@ -209,10 +208,8 @@ mod tests {
     #[test]
     fn test_hello_message_encoding() {
         let serialized_message = r#"{
-            "message": {
-                "pubkey": "0x8c9b2ed97d5879ef7df8458131b5c5ea3c8b55588d93c936274984ed9b24c65dbc35eb8f4ea72cdfb904f4b382a0973c",
-                "valid_until": 1757622216306
-            },
+            "pubkey": "0x8c9b2ed97d5879ef7df8458131b5c5ea3c8b55588d93c936274984ed9b24c65dbc35eb8f4ea72cdfb904f4b382a0973c",
+            "valid_until": 1757622216306,
             "signature": "0xaa37e23d9ad2e987c27994f9c1e961bd06e866f8f531071f267e10fb98c5825e887710788ffa45b12c48ec1bad30588d0396e0d6dc54ee2197cd28ba912fd6e903495c99af368832c78875a2ef62218469d9936b3c94f8c52fc5195380681900"
         }"#;
         let message: RawP2PMessage = serde_json::from_str(&serialized_message).unwrap();

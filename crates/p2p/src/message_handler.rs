@@ -8,7 +8,7 @@ use tracing::{debug, error, warn};
 
 use crate::{
     messages::{
-        EncodingError, MessageAuthenticationError, P2PMessage, RawP2PMessage, SignedHelloMessage,
+        EncodingError, HelloMessage, MessageAuthenticationError, P2PMessage, RawP2PMessage,
     },
     request_handlers::P2PApiRequest,
     socket::PeerSocket,
@@ -70,7 +70,7 @@ impl P2PApi {
     ) -> Result<(), WsConnectionError> {
         let mut broadcast_rx = self.broadcast_tx.subscribe();
         // Send an initial Hello message
-        let hello_message = RawP2PMessage::Hello(SignedHelloMessage::new(&self.signing_context));
+        let hello_message = RawP2PMessage::Hello(HelloMessage::new(&self.signing_context));
         socket.send(hello_message.to_ws_message()).await.map_err(WsConnectionError::SendError)?;
         loop {
             tokio::select! {
@@ -102,7 +102,7 @@ impl P2PApi {
     ) -> Result<(), WsConnectionError> {
         match message {
             RawP2PMessage::Hello(hello_msg) => {
-                let pubkey_bytes = hello_msg.message.pubkey;
+                let pubkey_bytes = hello_msg.pubkey;
                 // Sanity check: we're not talking to ourselves
                 if pubkey_bytes == self.signing_context.pubkey {
                     return Err(WsConnectionError::ReceivedOwnPubkey);
