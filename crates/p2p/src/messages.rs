@@ -59,7 +59,7 @@ pub(crate) enum P2PMessage {
     SharedInclusionList(InclusionListMessage),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum P2PMessageType {
     /// Inclusion list related messages.
     /// - [`P2PMessage::LocalInclusionList`]
@@ -129,10 +129,14 @@ impl HelloMessage {
         self
     }
 
-    pub(crate) fn into_supported_message_types(mut self) -> Vec<P2PMessageType> {
+    pub(crate) fn into_supported_message_types(self) -> Vec<P2PMessageType> {
+        let mut smt = self.supported_message_types;
+        // Remove duplicates
+        smt.sort();
+        smt.dedup();
         // Drop unknown message types
-        self.supported_message_types.retain(|m| !matches!(m, P2PMessageType::Unknown));
-        self.supported_message_types
+        smt.retain(|m| !matches!(m, P2PMessageType::Unknown));
+        smt
     }
 
     pub(crate) fn deserialize_pubkey(&self) -> Result<BlsPublicKey, MessageAuthenticationError> {
