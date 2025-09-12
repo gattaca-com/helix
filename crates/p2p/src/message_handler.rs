@@ -145,9 +145,11 @@ impl P2PApi {
                 hello_msg.verify_signature(&pubkey)?;
                 debug!(peer=%pubkey, "Verified Hello message from peer");
 
+                let supported_message_types = hello_msg.into_supported_message_types();
+
                 let Some(peer_info) = opt_peer_info else {
                     let mut peer_info = PeerInfo::new(pubkey_bytes, pubkey);
-                    peer_info.set_supported_message_types(hello_msg.supported_message_types);
+                    peer_info.set_supported_message_types(supported_message_types);
                     *opt_peer_info = Some(peer_info);
                     return Ok(());
                 };
@@ -158,7 +160,7 @@ impl P2PApi {
                     ));
                 }
                 // Override previously known supported message types
-                peer_info.set_supported_message_types(hello_msg.supported_message_types);
+                peer_info.set_supported_message_types(supported_message_types);
             }
             RawP2PMessage::Other(message) => {
                 let Some(peer_info) = &opt_peer_info else {

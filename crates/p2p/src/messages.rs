@@ -65,6 +65,8 @@ pub(crate) enum P2PMessageType {
     /// - [`P2PMessage::LocalInclusionList`]
     /// - [`P2PMessage::SharedInclusionList`]
     InclusionList,
+    #[serde(other)]
+    Unknown,
 }
 
 impl P2PMessageType {
@@ -72,6 +74,7 @@ impl P2PMessageType {
         match (self, message) {
             (P2PMessageType::InclusionList, P2PMessage::LocalInclusionList(_)) => true,
             (P2PMessageType::InclusionList, P2PMessage::SharedInclusionList(_)) => true,
+            (P2PMessageType::Unknown, _) => false,
         }
     }
 }
@@ -97,7 +100,7 @@ pub(crate) struct HelloMessage {
     /// List of message types the sender supports.
     /// It's expected the receiver won't send messages of types not in this list.
     #[serde(default)]
-    pub supported_message_types: Vec<P2PMessageType>,
+    supported_message_types: Vec<P2PMessageType>,
 }
 
 /// Used for generating the [`signature`](HelloMessage::signature) in [`HelloMessage`].
@@ -124,6 +127,12 @@ impl HelloMessage {
     ) -> Self {
         self.supported_message_types = supported_message_types;
         self
+    }
+
+    pub(crate) fn into_supported_message_types(mut self) -> Vec<P2PMessageType> {
+        // Drop unknown message types
+        self.supported_message_types.retain(|m| !matches!(m, P2PMessageType::Unknown));
+        self.supported_message_types
     }
 
     pub(crate) fn deserialize_pubkey(&self) -> Result<BlsPublicKey, MessageAuthenticationError> {
@@ -241,6 +250,20 @@ mod tests {
             "valid_until": 1757622216306,
             "signature": "0xaa37e23d9ad2e987c27994f9c1e961bd06e866f8f531071f267e10fb98c5825e887710788ffa45b12c48ec1bad30588d0396e0d6dc54ee2197cd28ba912fd6e903495c99af368832c78875a2ef62218469d9936b3c94f8c52fc5195380681900",
             "supported_message_types": ["InclusionList"]
+        }"#;
+        let message: RawP2PMessage = serde_json::from_str(&serialized_message).unwrap();
+        assert!(matches!(message, RawP2PMessage::Hello(_)));
+
+        test_roundtrip(&message);
+    }
+
+    #[test]
+    fn test_hello_message_encoding_unknown_message_type() {
+        let serialized_message = r#"{
+            "pubkey": "0x8c9b2ed97d5879ef7df8458131b5c5ea3c8b55588d93c936274984ed9b24c65dbc35eb8f4ea72cdfb904f4b382a0973c",
+            "valid_until": 1757622216306,
+            "signature": "0xaa37e23d9ad2e987c27994f9c1e961bd06e866f8f531071f267e10fb98c5825e887710788ffa45b12c48ec1bad30588d0396e0d6dc54ee2197cd28ba912fd6e903495c99af368832c78875a2ef62218469d9936b3c94f8c52fc5195380681900",
+            "supported_message_types": ["InclusionList", "NewFeature"]
         }"#;
         let message: RawP2PMessage = serde_json::from_str(&serialized_message).unwrap();
         assert!(matches!(message, RawP2PMessage::Hello(_)));
