@@ -110,18 +110,7 @@ impl<A: Api> BuilderApi<A> {
         }
 
         // Handle duplicates.
-        if let Err(err) = api.check_for_duplicate_block_hash(block_hash) {
-            match err {
-                BuilderApiError::DuplicateBlockHash { block_hash } => {
-                    // We dont return the error here as we want to continue processing the request.
-                    // This mitigates the risk of someone sending an invalid payload
-                    // with a valid header, which would block subsequent submissions with the same
-                    // header and valid payload.
-                    debug!(?block_hash, builder_pub_key = ?payload.builder_public_key(), "block hash already seen");
-                }
-                _ => return Err(err),
-            }
-        }
+        api.check_for_duplicate_block_hash(block_hash)?;
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
