@@ -8,12 +8,33 @@ use tracing::{debug, error, warn};
 
 use crate::{
     messages::{
-        EncodingError, HelloMessage, MessageAuthenticationError, P2PMessage, RawP2PMessage,
+        EncodingError, HelloMessage, MessageAuthenticationError, P2PMessage, P2PMessageType,
+        RawP2PMessage,
     },
     request_handlers::P2PApiRequest,
     socket::PeerSocket,
     P2PApi,
 };
+
+struct PeerInfo {
+    pubkey_bytes: BlsPublicKeyBytes,
+    pubkey: BlsPublicKey,
+    supported_message_types: Vec<P2PMessageType>,
+}
+
+impl PeerInfo {
+    fn new(pubkey_bytes: BlsPublicKeyBytes, pubkey: BlsPublicKey) -> Self {
+        Self { pubkey_bytes, pubkey, supported_message_types: Vec::new() }
+    }
+
+    fn set_supported_message_types(&mut self, supported_message_types: Vec<P2PMessageType>) {
+        self.supported_message_types = supported_message_types;
+    }
+
+    fn supports_message(&self, message: &P2PMessage) -> bool {
+        self.supported_message_types.iter().any(|msg_type| msg_type.supports_message(message))
+    }
+}
 
 impl P2PApi {
     #[tracing::instrument(skip_all)]
@@ -66,11 +87,16 @@ impl P2PApi {
     async fn handle_ws_connection(
         &self,
         mut socket: PeerSocket,
-        mut peer_pubkey: Option<(BlsPublicKeyBytes, BlsPublicKey)>,
+        peer_pubkey: Option<(BlsPublicKeyBytes, BlsPublicKey)>,
     ) -> Result<(), WsConnectionError> {
+        let mut peer_info =
+            peer_pubkey.map(|(pubkey_bytes, pubkey)| PeerInfo::new(pubkey_bytes, pubkey));
         let mut broadcast_rx = self.broadcast_tx.subscribe();
         // Send an initial Hello message
-        let hello_message = RawP2PMessage::Hello(HelloMessage::new(&self.signing_context));
+        let hello_message = RawP2PMessage::Hello(
+            HelloMessage::new(&self.signing_context)
+                .with_supported_message_types(vec![P2PMessageType::InclusionList]),
+        );
         socket.send(hello_message.to_ws_message()).await.map_err(WsConnectionError::SendError)?;
         loop {
             tokio::select! {
@@ -79,8 +105,10 @@ impl P2PApi {
                         // Sender was closed
                         return Ok(());
                     };
-                    let serialized = RawP2PMessage::Other(msg).to_ws_message();
-                    socket.send(serialized).await.map_err(WsConnectionError::SendError)?;
+                    if peer_supports_message_type(&peer_info, &msg) {
+                        let serialized = RawP2PMessage::Other(msg).to_ws_message();
+                        socket.send(serialized).await.map_err(WsConnectionError::SendError)?;
+                    }
                 },
                 res = socket.next() => {
                     let Some(res) = res else {
@@ -89,7 +117,7 @@ impl P2PApi {
                     };
                     let msg = res.map_err(WsConnectionError::RecvError)?;
                     let message = RawP2PMessage::from_ws_message(&msg)?;
-                    self.handle_raw_message(message, &mut peer_pubkey).await?;
+                    self.handle_raw_message(message, &mut peer_info).await?;
                 }
             };
         }
@@ -98,7 +126,7 @@ impl P2PApi {
     async fn handle_raw_message(
         &self,
         message: RawP2PMessage,
-        peer_pubkey: &mut Option<(BlsPublicKeyBytes, BlsPublicKey)>,
+        opt_peer_info: &mut Option<PeerInfo>,
     ) -> Result<(), WsConnectionError> {
         match message {
             RawP2PMessage::Hello(hello_msg) => {
@@ -117,19 +145,26 @@ impl P2PApi {
                 hello_msg.verify_signature(&pubkey)?;
                 debug!(peer=%pubkey, "Verified Hello message from peer");
 
-                let Some((_, peer_pubkey)) = &peer_pubkey else {
-                    *peer_pubkey = Some((pubkey.serialize().into(), pubkey));
+                let Some(peer_info) = opt_peer_info else {
+                    let mut peer_info = PeerInfo::new(pubkey_bytes, pubkey);
+                    peer_info.set_supported_message_types(hello_msg.supported_message_types);
+                    *opt_peer_info = Some(peer_info);
                     return Ok(());
                 };
-                if peer_pubkey != &pubkey {
-                    return Err(WsConnectionError::UnexpectedPubkey(pubkey, peer_pubkey.clone()));
+                if peer_info.pubkey != pubkey {
+                    return Err(WsConnectionError::UnexpectedPubkey(
+                        pubkey,
+                        peer_info.pubkey.clone(),
+                    ));
                 }
+                // Override previously known supported message types
+                peer_info.set_supported_message_types(hello_msg.supported_message_types);
             }
             RawP2PMessage::Other(message) => {
-                let Some((sender, _)) = &peer_pubkey else {
+                let Some(peer_info) = &opt_peer_info else {
                     return Err(WsConnectionError::NoHello);
                 };
-                let sender = *sender;
+                let sender = peer_info.pubkey_bytes;
                 self.api_requests_tx
                     .send(P2PApiRequest::PeerMessage { sender, message })
                     .await
@@ -144,6 +179,13 @@ impl P2PApi {
         // Ignore error if there are no active receivers.
         let _ = self.broadcast_tx.send(message);
     }
+}
+
+fn peer_supports_message_type(opt_peer_info: &Option<PeerInfo>, message: &P2PMessage) -> bool {
+    let Some(peer_info) = opt_peer_info else {
+        return false;
+    };
+    peer_info.supports_message(message)
 }
 
 #[derive(Debug, thiserror::Error)]
