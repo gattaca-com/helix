@@ -6,7 +6,7 @@ use std::{
 use helix_common::{metrics::SimulatorMetrics, SimulatorConfig};
 use helix_types::BlsPublicKeyBytes;
 use tokio::{sync::mpsc, task::JoinSet};
-use tracing::{error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     builder::{
@@ -15,6 +15,20 @@ use crate::{
     },
     service::SIMULATOR_REQUEST_TIMEOUT,
 };
+
+#[derive(Default)]
+struct LocalTelemetry {
+    sims_reqs: usize,
+    sims_sent_immediately: usize,
+    sims_reqs_dropped: usize,
+    stale_sim_reqs: usize,
+    // waiting to be sent
+    max_pending: usize,
+    // waiting for result
+    max_in_flight: usize,
+    merge_reqs: usize,
+    dropped_merge_reqs: usize,
+}
 
 // TODO:
 // - avoid sending blobs, and validate them here on a blocking task
@@ -25,6 +39,7 @@ pub struct SimulatorManager {
     requests: PendingRquests,
     join_set: JoinSet<SimReponse>,
     last_bid_slot: u64,
+    local_telemetry: LocalTelemetry,
 }
 
 impl SimulatorManager {
@@ -40,7 +55,13 @@ impl SimulatorManager {
         let requests = PendingRquests::with_capacity(200);
         let join_set = JoinSet::new();
 
-        Self { simulators, requests, join_set, last_bid_slot: 0 }
+        Self {
+            simulators,
+            requests,
+            join_set,
+            last_bid_slot: 0,
+            local_telemetry: LocalTelemetry::default(),
+        }
     }
 
     pub async fn run(
@@ -82,23 +103,32 @@ impl SimulatorManager {
     fn handle_sim_request(&mut self, req: SimulatorRequest) {
         if req.bid_slot() > self.last_bid_slot {
             self.handle_new_slot(req.bid_slot());
+        } else if req.bid_slot() < self.last_bid_slot {
+            self.local_telemetry.stale_sim_reqs += 1;
+            return;
         }
 
+        self.local_telemetry.sims_reqs += 1;
         if let Some(id) = self.next_sim_client() {
+            self.local_telemetry.sims_sent_immediately += 1;
             self.spawn_sim(id, req)
         } else {
-            self.requests.store(req)
+            self.requests.store(req, &mut self.local_telemetry)
         }
     }
 
     fn handle_merge_request(&mut self, req: BlockMergeRequest) {
+        self.local_telemetry.merge_reqs += 1;
         if let Some(id) = self.next_merge_client() {
             let client = &mut self.simulators[id];
             let to_send = client.merge_request_builder(&req);
             client.pending += 1;
 
+            self.local_telemetry.max_in_flight =
+                self.local_telemetry.max_in_flight.max(client.pending);
             let timer = SimulatorMetrics::block_merge_timer(client.endpoint());
             self.join_set.spawn(async move {
+                debug!(block_hash =% req.block_hash, "sending merge request");
                 let res = SimulatorClient::do_merge_request(to_send).await;
                 timer.stop_and_record();
                 SimulatorMetrics::block_merge_status(res.is_ok());
@@ -107,6 +137,7 @@ impl SimulatorManager {
                 (id, None)
             });
         } else {
+            self.local_telemetry.dropped_merge_reqs += 1;
             warn!("no client available for merging! Dropping request");
         }
     }
@@ -130,11 +161,17 @@ impl SimulatorManager {
         let to_send = client.sim_request_builder(&req.request, req.is_top_bid);
         client.pending += 1;
 
+        self.local_telemetry.max_in_flight = self.local_telemetry.max_in_flight.max(client.pending);
         let timer = SimulatorMetrics::timer(client.endpoint());
         self.join_set.spawn(async move {
+            let block_hash = req.request.message.block_hash;
+            debug!(%block_hash, "sending simulation request");
+
             SimulatorMetrics::sim_count(req.is_optimistic);
             let res = SimulatorClient::do_sim_request(to_send).await;
-            timer.stop_and_record();
+            let time = timer.stop_and_record();
+
+            debug!(%block_hash, time_secs = time, ?res, "simulation completed");
 
             let paused_until = if let Err(err) = res.as_ref() {
                 SimulatorMetrics::sim_status(false);
@@ -174,6 +211,7 @@ impl SimulatorManager {
 
     // TODO: local telemetry
     fn handle_new_slot(&mut self, bid_slot: u64) {
+        self.report();
         self.last_bid_slot = bid_slot;
         self.requests.clear(bid_slot);
         let now = Instant::now();
@@ -182,6 +220,23 @@ impl SimulatorManager {
                 s.paused_until = None;
             }
         }
+    }
+
+    fn report(&mut self) {
+        let tel = std::mem::take(&mut self.local_telemetry);
+
+        info!(
+            bid_slot = self.last_bid_slot,
+            sims_reqs = tel.sims_reqs,
+            sims_sent_immediately = tel.sims_sent_immediately,
+            sims_reqs_dropped = tel.sims_reqs_dropped,
+            stale_sim_reqs = tel.stale_sim_reqs,
+            max_pending = tel.max_pending,
+            max_in_flight = tel.max_in_flight,
+            merge_reqs = tel.merge_reqs,
+            dropped_merge_reqs = tel.dropped_merge_reqs,
+            "sim manager telemetry"
+        )
     }
 }
 
@@ -201,7 +256,7 @@ impl PendingRquests {
         }
     }
 
-    fn store(&mut self, req: SimulatorRequest) {
+    fn store(&mut self, req: SimulatorRequest, local_telemetry: &mut LocalTelemetry) {
         if let Some((i, _)) =
             self.builder_pubkeys.iter_mut().enumerate().find(|(_, r)| **r == *req.builder_pubkey())
         {
@@ -209,12 +264,16 @@ impl PendingRquests {
                 self.sort_keys[i] = req.sort_key();
                 self.builder_pubkeys[i] = *req.builder_pubkey();
                 self.map[i] = req;
+
+                local_telemetry.sims_reqs_dropped += 1;
             }
         } else {
             self.sort_keys.push(req.sort_key());
             self.builder_pubkeys.push(*req.builder_pubkey());
             self.map.push(req);
         }
+
+        local_telemetry.max_pending = local_telemetry.max_pending.max(self.map.len())
     }
 
     fn next_req(&mut self) -> Option<SimulatorRequest> {
