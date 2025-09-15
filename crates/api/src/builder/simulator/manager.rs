@@ -4,6 +4,7 @@ use std::{
 };
 
 use helix_common::{metrics::SimulatorMetrics, SimulatorConfig};
+use helix_types::BlsPublicKeyBytes;
 use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{error, warn};
 
@@ -17,7 +18,8 @@ use crate::{
 
 // TODO:
 // - avoid sending blobs, and validate them here on a blocking task
-// - send only block deltas + use SSZ not json
+// - send only block deltas
+// - use SSZ not json
 pub struct SimulatorManager {
     simulators: Vec<SimulatorClient>,
     requests: PendingRquests,
@@ -35,7 +37,7 @@ impl SimulatorManager {
             .map(|config| SimulatorClient::new(client.clone(), config))
             .collect();
 
-        let requests = PendingRquests(Vec::with_capacity(200));
+        let requests = PendingRquests::with_capacity(200);
         let join_set = JoinSet::new();
 
         Self { simulators, requests, join_set, last_bid_slot: 0 }
@@ -170,32 +172,54 @@ impl SimulatorManager {
 }
 
 /// Pending requests, we only keep the last one for each builder
-struct PendingRquests(Vec<SimulatorRequest>);
+struct PendingRquests {
+    map: Vec<SimulatorRequest>,
+    sort_keys: Vec<(u8, u8, u64)>,
+    builder_pubkeys: Vec<BlsPublicKeyBytes>,
+}
 
 impl PendingRquests {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            map: Vec::with_capacity(capacity),
+            builder_pubkeys: Vec::with_capacity(capacity),
+            sort_keys: Vec::with_capacity(capacity),
+        }
+    }
+
     fn store(&mut self, req: SimulatorRequest) {
-        if let Some(entry) = self.0.iter_mut().find(|r| r.builder_pubkey() == req.builder_pubkey())
+        if let Some((i, _)) =
+            self.builder_pubkeys.iter_mut().enumerate().find(|(_, r)| **r == *req.builder_pubkey())
         {
-            if req.on_receive_ns > entry.on_receive_ns {
-                *entry = req;
+            if req.on_receive_ns > self.map[i].on_receive_ns {
+                self.sort_keys[i] = req.sort_key();
+                self.builder_pubkeys[i] = *req.builder_pubkey();
+                self.map[i] = req;
             }
         } else {
-            self.0.push(req);
+            self.sort_keys.push(req.sort_key());
+            self.builder_pubkeys.push(*req.builder_pubkey());
+            self.map.push(req);
         }
     }
 
     fn next_req(&mut self) -> Option<SimulatorRequest> {
-        let i = self.0.iter().enumerate().max_by_key(|(_, r)| r.sort_key()).map(|(i, _)| i)?;
-        Some(self.0.swap_remove(i))
+        let i = self.sort_keys.iter().enumerate().max_by_key(|(_, r)| *r).map(|(i, _)| i)?;
+
+        self.sort_keys.swap_remove(i);
+        self.builder_pubkeys.swap_remove(i);
+        Some(self.map.swap_remove(i))
     }
 
     fn clear(&mut self, bid_slot: u64) {
         let mut i = 0;
 
-        while i < self.0.len() {
-            let req = &self.0[i];
+        while i < self.map.len() {
+            let req = &self.map[i];
             if req.is_closed() || req.bid_slot() < bid_slot {
-                self.0.swap_remove(i);
+                self.sort_keys.swap_remove(i);
+                self.builder_pubkeys.swap_remove(i);
+                self.map.swap_remove(i);
             } else {
                 i += 1;
             }

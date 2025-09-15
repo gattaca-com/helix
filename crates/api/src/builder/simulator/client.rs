@@ -120,7 +120,7 @@ impl SimulatorClient {
         let res = res.error_for_status()?;
         let res: Value = res.json().await?;
 
-        // parse {"jsonrpc":"2.0","id":0,"result":false}
+        // {"jsonrpc":"2.0","id":0,"result":false}
         let sync_result = &res["result"];
         match sync_result {
             // Fully synced
