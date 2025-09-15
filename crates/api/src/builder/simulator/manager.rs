@@ -97,8 +97,12 @@ impl SimulatorManager {
             let to_send = client.merge_request_builder(&req);
             client.pending += 1;
 
+            let timer = SimulatorMetrics::block_merge_timer(client.endpoint());
             self.join_set.spawn(async move {
                 let res = SimulatorClient::do_merge_request(to_send).await;
+                timer.stop_and_record();
+                SimulatorMetrics::block_merge_status(res.is_ok());
+
                 let _ = req.res_tx.send(res);
                 (id, None)
             });
@@ -126,11 +130,21 @@ impl SimulatorManager {
         let to_send = client.sim_request_builder(&req.request, req.is_top_bid);
         client.pending += 1;
 
+        let timer = SimulatorMetrics::timer(client.endpoint());
         self.join_set.spawn(async move {
+            SimulatorMetrics::sim_count(req.is_optimistic);
             let res = SimulatorClient::do_sim_request(to_send).await;
-            let paused_until = if res.as_ref().is_err_and(|e| e.is_temporary()) {
-                Some(Instant::now() + PAUSE_DURATION)
+            timer.stop_and_record();
+
+            let paused_until = if let Err(err) = res.as_ref() {
+                SimulatorMetrics::sim_status(false);
+                if err.is_temporary() {
+                    Some(Instant::now() + PAUSE_DURATION)
+                } else {
+                    None
+                }
             } else {
+                SimulatorMetrics::sim_status(true);
                 None
             };
 

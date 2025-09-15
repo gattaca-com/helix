@@ -136,7 +136,7 @@ pub struct BlockMergeResponse {
 }
 
 pub type SimResult = Result<(), BlockSimError>;
-// (id, paused_until)
+// (simulator id, paused_until)
 pub type SimReponse = (usize, Option<Instant>);
 
 pub struct SimulatorRequest {
