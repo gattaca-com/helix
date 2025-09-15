@@ -153,7 +153,7 @@ impl SimulatorRequest {
     pub fn sort_key(&self) -> (u8, u8, u64) {
         let open = if self.is_closed() { 0 } else { 1 };
         let top = if self.is_top_bid { 1 } else { 0 };
-        (open, top, self.on_receive_ns)
+        (open, top, u64::MAX - self.on_receive_ns)
     }
 
     pub fn is_closed(&self) -> bool {
