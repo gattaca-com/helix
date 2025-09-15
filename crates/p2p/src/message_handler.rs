@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use axum::{extract::WebSocketUpgrade, response::IntoResponse, Extension};
 use futures::{SinkExt, StreamExt};
-use helix_types::{BlsPublicKey, BlsPublicKeyBytes};
+use helix_types::BlsPublicKeyBytes;
 use tokio_tungstenite::connect_async;
 use tracing::{debug, error, warn};
 
@@ -17,14 +17,13 @@ use crate::{
 };
 
 struct PeerInfo {
-    pubkey_bytes: BlsPublicKeyBytes,
-    pubkey: BlsPublicKey,
+    pubkey: BlsPublicKeyBytes,
     supported_message_types: Vec<P2PMessageType>,
 }
 
 impl PeerInfo {
-    fn new(pubkey_bytes: BlsPublicKeyBytes, pubkey: BlsPublicKey) -> Self {
-        Self { pubkey_bytes, pubkey, supported_message_types: Vec::new() }
+    fn new(pubkey: BlsPublicKeyBytes) -> Self {
+        Self { pubkey, supported_message_types: Vec::new() }
     }
 
     fn set_supported_message_types(&mut self, supported_message_types: Vec<P2PMessageType>) {
@@ -54,20 +53,19 @@ impl P2PApi {
     pub(crate) async fn connect_to_peer(
         self: Arc<Self>,
         request: axum::http::Request<()>,
-        pubkey: BlsPublicKey,
-        pubkey_bytes: BlsPublicKeyBytes,
+        pubkey: BlsPublicKeyBytes,
     ) {
         // Attempt to connect, waiting for a bit before retrying
         loop {
-            debug!(peer=%pubkey_bytes, "connecting to peer");
+            debug!(peer=%pubkey, "connecting to peer");
 
             let connection_result = connect_async(request.clone())
                 .await
-                .inspect_err(|e| warn!(err=%e,peer=%pubkey_bytes, "failed to connect to peer"));
+                .inspect_err(|e| warn!(err=%e,peer=%pubkey, "failed to connect to peer"));
 
             if let Ok((ws, _response)) = connection_result {
-                let _ = self.handle_ws_connection(ws.into(), Some((pubkey_bytes, pubkey.clone()))).await.inspect_err(|e| {
-                   warn!(err=?e, direction="outbound", peer=%pubkey_bytes, "websocket communication error")
+                let _ = self.handle_ws_connection(ws.into(), Some(pubkey)).await.inspect_err(|e| {
+                   warn!(err=?e, direction="outbound", peer=%pubkey, "websocket communication error")
                });
             }
 
@@ -87,10 +85,9 @@ impl P2PApi {
     async fn handle_ws_connection(
         &self,
         mut socket: PeerSocket,
-        peer_pubkey: Option<(BlsPublicKeyBytes, BlsPublicKey)>,
+        peer_pubkey: Option<BlsPublicKeyBytes>,
     ) -> Result<(), WsConnectionError> {
-        let mut peer_info =
-            peer_pubkey.map(|(pubkey_bytes, pubkey)| PeerInfo::new(pubkey_bytes, pubkey));
+        let mut peer_info = peer_pubkey.map(|pubkey| PeerInfo::new(pubkey));
         let mut broadcast_rx = self.broadcast_tx.subscribe();
         // Send an initial Hello message
         let hello_message = RawP2PMessage::Hello(
@@ -130,34 +127,32 @@ impl P2PApi {
     ) -> Result<(), WsConnectionError> {
         match message {
             RawP2PMessage::Hello(hello_msg) => {
-                let pubkey_bytes = hello_msg.pubkey;
+                let pubkey = hello_msg.pubkey;
                 // Sanity check: we're not talking to ourselves
-                if pubkey_bytes == self.signing_context.pubkey {
+                if pubkey == self.signing_context.pubkey {
                     return Err(WsConnectionError::ReceivedOwnPubkey);
                 }
                 // Check peer is known
-                let known_peer =
-                    self.p2p_config.peers.iter().any(|config| config.pubkey == pubkey_bytes);
+                let known_peer = self.p2p_config.peers.iter().any(|config| config.pubkey == pubkey);
                 if !known_peer {
-                    return Err(WsConnectionError::UnknownPeer(pubkey_bytes));
+                    return Err(WsConnectionError::UnknownPeer(pubkey));
                 }
-                let pubkey = hello_msg.deserialize_pubkey()?;
-                hello_msg.verify_signature(&pubkey)?;
+                {
+                    let deserialized_pubkey = hello_msg.deserialize_pubkey()?;
+                    hello_msg.verify_signature(&deserialized_pubkey)?;
+                }
                 debug!(peer=%pubkey, "Verified Hello message from peer");
 
                 let supported_message_types = hello_msg.into_supported_message_types();
 
                 let Some(peer_info) = opt_peer_info else {
-                    let mut peer_info = PeerInfo::new(pubkey_bytes, pubkey);
+                    let mut peer_info = PeerInfo::new(pubkey);
                     peer_info.set_supported_message_types(supported_message_types);
                     *opt_peer_info = Some(peer_info);
                     return Ok(());
                 };
                 if peer_info.pubkey != pubkey {
-                    return Err(WsConnectionError::UnexpectedPubkey(
-                        pubkey,
-                        peer_info.pubkey.clone(),
-                    ));
+                    return Err(WsConnectionError::UnexpectedPubkey(pubkey, peer_info.pubkey));
                 }
                 // Override previously known supported message types
                 peer_info.set_supported_message_types(supported_message_types);
@@ -166,7 +161,7 @@ impl P2PApi {
                 let Some(peer_info) = &opt_peer_info else {
                     return Err(WsConnectionError::NoHello);
                 };
-                let sender = peer_info.pubkey_bytes;
+                let sender = peer_info.pubkey;
                 self.api_requests_tx
                     .send(P2PApiRequest::PeerMessage { sender, message })
                     .await
@@ -201,7 +196,7 @@ enum WsConnectionError {
     #[error("first message from peer was not a Hello")]
     NoHello,
     #[error("got an unexpected pubkey, got: {_0}, expected: {_1}")]
-    UnexpectedPubkey(BlsPublicKey, BlsPublicKey),
+    UnexpectedPubkey(BlsPublicKeyBytes, BlsPublicKeyBytes),
     #[error("peer sent our own pubkey in Hello message")]
     ReceivedOwnPubkey,
     #[error("not a known peer: {_0}")]

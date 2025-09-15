@@ -50,7 +50,7 @@ impl P2PApi {
             // Parse URL and try to turn into a request ahead-of-time, panicking on error
             let request = url_to_client_request(&peer_config.url);
             // Verify serialized public key is valid
-            let pubkey = BlsPublicKey::deserialize(peer_pubkey.as_ref())
+            let _deserialized_pubkey = BlsPublicKey::deserialize(peer_pubkey.as_ref())
                 .inspect_err(
                     |e| error!(err=?e, pubkey=%peer_pubkey, "failed to deserialize peer pubkey"),
                 )
@@ -59,7 +59,7 @@ impl P2PApi {
             // If the peer's pubkey is less than ours, don't try to connect.
             // Imposing an order on the pubkeys prevents redundant connections between peers.
             if peer_pubkey > this.signing_context.pubkey {
-                tokio::spawn(this.clone().connect_to_peer(request, pubkey, peer_pubkey));
+                tokio::spawn(this.clone().connect_to_peer(request, peer_pubkey));
             }
         }
         tokio::spawn(this.clone().handle_requests(api_requests_rx));
