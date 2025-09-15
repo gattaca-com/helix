@@ -264,9 +264,9 @@ impl PendingRquests {
                 self.sort_keys[i] = req.sort_key();
                 self.builder_pubkeys[i] = *req.builder_pubkey();
                 self.map[i] = req;
-
-                local_telemetry.sims_reqs_dropped += 1;
             }
+
+            local_telemetry.sims_reqs_dropped += 1;
         } else {
             self.sort_keys.push(req.sort_key());
             self.builder_pubkeys.push(*req.builder_pubkey());
