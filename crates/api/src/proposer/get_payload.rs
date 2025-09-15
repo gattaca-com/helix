@@ -568,8 +568,9 @@ fn validate_block_equality(
                 "validating block equality",
             );
 
+            // TODO: we should already have the header, as we served it in "get_header"
             let local_header = local_payload
-                .to_header()
+                .to_header(None)
                 .to_lighthouse_electra_header()
                 .map_err(ProposerApiError::SszError)?;
 

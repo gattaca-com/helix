@@ -43,10 +43,13 @@ pub fn resign_builder_bid(
     bid
 }
 
-pub fn bid_submission_to_builder_bid_unsigned(submission: &SignedBidSubmission) -> BuilderBid {
+pub fn bid_submission_to_builder_bid_unsigned(
+    submission: &SignedBidSubmission,
+    withdrawals_root: B256,
+) -> BuilderBid {
     match submission {
         SignedBidSubmission::Electra(bid) => {
-            let header = bid.execution_payload.to_header();
+            let header = bid.execution_payload.to_header(Some(withdrawals_root));
             let execution_requests = bid.execution_requests.clone();
 
             BuilderBid {
