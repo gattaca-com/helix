@@ -18,7 +18,7 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    builder::{rpc_simulator::BlockMergeResponse, BlockMergeRequest},
+    builder::{simulator::BlockMergeResponse, BlockMergeRequest},
     proposer::{error::ProposerApiError, ProposerApi},
     Api,
 };
@@ -199,7 +199,7 @@ impl<A: Api> ProposerApi<A> {
 
         debug!("merging block");
 
-        let merge_request = BlockMergeRequest::new(
+        let (merge_request, res_rx) = BlockMergeRequest::new(
             base_bid.value,
             proposer_fee_recipient,
             &payload.execution_payload,
@@ -209,7 +209,8 @@ impl<A: Api> ProposerApi<A> {
 
         let this = self.clone();
         tokio::spawn(async move {
-            let response = this.simulator.process_merge_request(merge_request).await?;
+            this.merge_requests_tx.send(merge_request).await?;
+            let response = res_rx.await??;
 
             // Sanity check: if the merged payload has a lower value than the original bid,
             // we return the original bid.
@@ -334,6 +335,10 @@ enum PayloadMergingError {
     SimulatorError(#[from] BlockSimError),
     #[error("reached maximum blob count for block")]
     MaxBlobCountReached,
+    #[error("failed sending merge request to manager")]
+    SendFailed(#[from] tokio::sync::mpsc::error::SendError<BlockMergeRequest>),
+    #[error("failed receive response from manager. Was the request dropped?")]
+    RecvFailed(#[from] tokio::sync::oneshot::error::RecvError),
 }
 
 /// Appends the merged blobs to the original blobs bundle.

@@ -19,7 +19,6 @@ use helix_common::{
         v2::header_submission::SignedHeaderSubmission, BidSubmission, OptimisticVersion,
     },
     metrics::DbMetricRecord,
-    simulator::BlockSimError,
     utils::utcnow_ms,
     BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace,
     HeaderSubmissionTrace, PostgresConfig, ProposerInfo, RelayConfig,
@@ -1712,25 +1711,23 @@ impl DatabaseService for PostgresDatabaseService {
     async fn save_simulation_result(
         &self,
         block_hash: B256,
-        block_sim_result: Result<(), BlockSimError>,
+        block_sim_error: String,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("save_simulation_result");
 
-        if let Err(e) = block_sim_result {
-            self.pool
-                .get()
-                .await?
-                .execute(
-                    "
+        self.pool
+            .get()
+            .await?
+            .execute(
+                "
                         INSERT INTO simulation_error (block_hash, error)
                         VALUES ($1, $2)
                         ON CONFLICT (block_hash)
                         DO NOTHING
                     ",
-                    &[&(block_hash.as_slice()), &(&format!("{e:?}"))],
-                )
-                .await?;
-        }
+                &[&(block_hash.as_slice()), &(&block_sim_error)],
+            )
+            .await?;
 
         record.record_success();
         Ok(())

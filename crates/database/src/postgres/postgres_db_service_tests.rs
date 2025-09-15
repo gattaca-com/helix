@@ -400,9 +400,10 @@ mod tests {
 
         let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
         let block_hash = Default::default();
-        let block_sim_result = Err(BlockSimError::Timeout);
+        let block_sim_result = BlockSimError::Timeout;
 
-        let result = db_service.save_simulation_result(block_hash, block_sim_result).await;
+        let result =
+            db_service.save_simulation_result(block_hash, block_sim_result.to_string()).await;
         assert!(result.is_ok());
     }
 

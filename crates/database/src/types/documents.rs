@@ -4,7 +4,6 @@ use helix_common::{
         builder_api::BuilderGetValidatorsResponseEntry,
         data_api::{DeliveredPayloadsResponse, ReceivedBlocksResponse},
     },
-    simulator::BlockSimError,
     BuilderConfig, SubmissionTrace,
 };
 use helix_types::{BidTrace, BlsPublicKey, TestRandom};
@@ -74,18 +73,6 @@ impl DemotionDocument {
 }
 
 pub type BuilderInfoDocument = BuilderConfig;
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BlockSimErrorDocument {
-    pub block_hash: B256,
-    pub sim_error: BlockSimError,
-}
-
-impl BlockSimErrorDocument {
-    pub fn new(block_hash: B256, sim_error: BlockSimError) -> Self {
-        Self { block_hash, sim_error }
-    }
-}
 
 #[derive(Serialize, Deserialize)]
 pub struct KnownValidatorsDocument {

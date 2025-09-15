@@ -191,6 +191,9 @@ pub struct SimulatorConfig {
     pub namespace: String,
     #[serde(default = "default_bool::<false>")]
     pub is_merging_simulator: bool,
+    /// roughly number of cores on simulator
+    #[serde(default)]
+    pub max_concurrent_tasks: Option<usize>,
 }
 
 fn default_namespace() -> String {
@@ -492,6 +495,7 @@ fn test_config() {
         url: "http://localhost:8080".to_string(),
         namespace: "test".to_string(),
         is_merging_simulator: true,
+        max_concurrent_tasks: None,
     }];
     config
         .beacon_clients

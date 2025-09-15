@@ -30,10 +30,7 @@ use tower::{buffer::BufferLayer, limit::RateLimitLayer, timeout::TimeoutLayer, S
 use tower_http::limit::RequestBodyLimitLayer;
 
 use crate::{
-    builder::{
-        api::{BuilderApi, MAX_PAYLOAD_LENGTH},
-        multi_simulator::MultiSimulator,
-    },
+    builder::api::{BuilderApi, MAX_PAYLOAD_LENGTH},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::{self, ProposerApi},
     relay_data::DataApi,
@@ -50,6 +47,7 @@ impl Api for MockApi {
 
 pub fn app() -> Router {
     let (v3_sender, _v3_receiver) = channel(32);
+    let (merge_tx, _) = channel(32);
 
     let node = MockBeaconNode::new();
     let client = node.beacon_client();
@@ -57,7 +55,6 @@ pub fn app() -> Router {
     let api_service = Arc::new(ProposerApi::<MockApi>::new(
         Arc::new(LocalCache::new_test()),
         Arc::new(MockDatabaseService::default()),
-        MultiSimulator::new(vec![]),
         GrpcGossiperClientManager::mock().into(),
         Arc::new(DefaultMetadataProvider),
         Arc::new(RelaySigningContext::default()),
@@ -69,6 +66,7 @@ pub fn app() -> Router {
         v3_sender,
         Default::default(),
         BestGetHeader::new(),
+        merge_tx,
     ));
 
     let data_api = Arc::new(DataApi::<MockApi>::new(
@@ -111,13 +109,13 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
     let (sort_tx, _) = crossbeam_channel::bounded(1000);
     let (merge_pool_tx, _) = tokio::sync::mpsc::channel(1000);
     let (br_tx, _) = broadcast::channel(1);
+    let (sim_tx, _) = channel(32);
     let shared_floor = FloorBid::new();
 
     let builder_api_service = BuilderApi::<MockApi>::new(
         Arc::new(LocalCache::new_test()),
         Arc::new(MockDatabaseService::default()),
         Arc::new(ChainInfo::for_mainnet()),
-        MultiSimulator::new(vec![]),
         GrpcGossiperClientManager::mock().into(),
         Arc::new(DefaultMetadataProvider),
         RelayConfig::default(),
@@ -128,6 +126,7 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
         br_tx,
         shared_floor,
         BestGetHeader::new(),
+        sim_tx,
     );
     let builder_api_service = Arc::new(builder_api_service);
 
@@ -157,6 +156,7 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
 
 pub fn proposer_api_app() -> (Router, Arc<ProposerApi<MockApi>>, CurrentSlotInfo, Arc<LocalCache>) {
     let (v3_sender, _v3_receiver) = channel(32);
+    let (merge_tx, _) = channel(32);
     let auctioneer = Arc::new(LocalCache::new_test());
     let node = MockBeaconNode::new();
     let client = node.beacon_client();
@@ -165,7 +165,6 @@ pub fn proposer_api_app() -> (Router, Arc<ProposerApi<MockApi>>, CurrentSlotInfo
     let proposer_api_service = Arc::new(ProposerApi::<MockApi>::new(
         auctioneer.clone(),
         Arc::new(MockDatabaseService::default()),
-        MultiSimulator::new(vec![]),
         GrpcGossiperClientManager::mock().into(),
         Arc::new(DefaultMetadataProvider),
         Arc::new(RelaySigningContext::default()),
@@ -177,6 +176,7 @@ pub fn proposer_api_app() -> (Router, Arc<ProposerApi<MockApi>>, CurrentSlotInfo
         v3_sender,
         current_slot_info.clone(),
         BestGetHeader::new(),
+        merge_tx,
     ));
 
     let router = Router::new()
