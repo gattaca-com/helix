@@ -7,11 +7,11 @@ use tokio_tungstenite::connect_async;
 use tracing::{debug, error, warn};
 
 use crate::{
+    event_handlers::NetworkEvent,
     messages::{
         EncodingError, HelloMessage, MessageAuthenticationError, NetworkMessage,
         NetworkMessageType, RawNetworkMessage,
     },
-    request_handlers::NetworkEvent,
     socket::PeerSocket,
     RelayNetworkApi,
 };
@@ -163,7 +163,7 @@ impl RelayNetworkApi {
                     return Err(WsConnectionError::NoHello);
                 };
                 let sender = peer_info.pubkey;
-                self.api_requests_tx
+                self.api_events_tx
                     .send(NetworkEvent::PeerMessage { sender, message })
                     .await
                     .map_err(|_| WsConnectionError::ChannelClosed)?;

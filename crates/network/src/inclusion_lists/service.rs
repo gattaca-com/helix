@@ -5,9 +5,9 @@ use helix_types::BlsPublicKeyBytes;
 use tracing::{error, trace, warn};
 
 use crate::{
+    event_handlers::{InclusionListEvent, NetworkEvent},
     inclusion_lists::consensus,
     messages::{InclusionListMessage, NetworkMessage},
-    request_handlers::{InclusionListRequest, NetworkEvent},
     RelayNetworkApi,
 };
 
@@ -34,60 +34,60 @@ impl MultiRelayInclusionListsService {
         }
     }
 
-    pub(crate) fn handle_local_inclusion_list(&mut self, request: InclusionListRequest) {
-        // Check request's slot is not in the past
-        if self.last_slot > request.slot {
-            warn!(slot=%request.slot, last_slot=%self.last_slot, "got local inclusion list request for a past slot, skipping");
-            let _ = request.result_tx.send(Some(request.inclusion_list));
+    pub(crate) fn handle_local_inclusion_list(&mut self, event: InclusionListEvent) {
+        // Check event's slot is not in the past
+        if self.last_slot > event.slot {
+            warn!(slot=%event.slot, last_slot=%self.last_slot, "got local inclusion list event for a past slot, skipping");
+            let _ = event.result_tx.send(Some(event.inclusion_list));
             return;
         }
 
         // Compute duration until first cutoff points
         let duration_into_slot =
-            self.network_api.signing_context.context.duration_into_slot(request.slot.into());
+            self.network_api.signing_context.context.duration_into_slot(event.slot.into());
 
         // Check the slot is not in the future
         if duration_into_slot.is_none() {
             warn!("got inclusion list for a slot in the future, skipping");
-            let _ = request.result_tx.send(Some(request.inclusion_list));
+            let _ = event.result_tx.send(Some(event.inclusion_list));
             return;
         }
         let sleep_time = self.cutoff_1.saturating_sub(duration_into_slot.unwrap());
 
-        // If request was too late into the slot, ignore it
+        // If event was too late into the slot, ignore it
         if sleep_time.is_zero() {
             warn!("got inclusion list too late into the slot, skipping");
-            let _ = request.result_tx.send(Some(request.inclusion_list));
+            let _ = event.result_tx.send(Some(event.inclusion_list));
             return;
         }
-        self.last_slot = request.slot;
+        self.last_slot = event.slot;
 
-        let msg = InclusionListMessage::new(request.slot, request.inclusion_list.clone());
+        let msg = InclusionListMessage::new(event.slot, event.inclusion_list.clone());
 
-        trace!(slot=%request.slot, "broadcasting local inclusion list");
+        trace!(slot=%event.slot, "broadcasting local inclusion list");
         self.network_api.broadcast(NetworkMessage::LocalInclusionList(msg));
 
-        let api_requests_tx = self.network_api.api_requests_tx.clone();
+        let api_events_tx = self.network_api.api_events_tx.clone();
 
         // Spawn a task that sleeps until cutoff time and advances us to the next step
         tokio::spawn(async move {
             // Sleep until t_1 time
             tokio::time::sleep(sleep_time).await;
-            let shared_il_msg = NetworkEvent::SharedInclusionList(request);
-            let _ = api_requests_tx
+            let shared_il_msg = NetworkEvent::SharedInclusionList(event);
+            let _ = api_events_tx
                 .send(shared_il_msg)
                 .await
                 .inspect_err(|e| error!(err=?e, "failed to send SharedInclusionList"));
         });
     }
 
-    pub(crate) fn handle_shared_inclusion_list(&mut self, request: InclusionListRequest) {
-        if self.last_slot > request.slot {
-            warn!(slot=%request.slot, last_slot=%self.last_slot, "got shared inclusion list request for a past slot, skipping");
-            let _ = request.result_tx.send(Some(request.inclusion_list));
+    pub(crate) fn handle_shared_inclusion_list(&mut self, event: InclusionListEvent) {
+        if self.last_slot > event.slot {
+            warn!(slot=%event.slot, last_slot=%self.last_slot, "got shared inclusion list event for a past slot, skipping");
+            let _ = event.result_tx.send(Some(event.inclusion_list));
             return;
         }
-        let InclusionListRequest { slot, inclusion_list, .. } = request;
+        let InclusionListEvent { slot, inclusion_list, .. } = event;
         trace!(local_ils_count=%self.local_ils.len(), "computing shared inclusion list");
 
         let shared_il =
@@ -97,39 +97,39 @@ impl MultiRelayInclusionListsService {
         let msg = InclusionListMessage::new(slot, shared_il.clone());
         self.network_api.broadcast(NetworkMessage::SharedInclusionList(msg));
 
-        let api_requests_tx = self.network_api.api_requests_tx.clone();
+        let api_events_tx = self.network_api.api_events_tx.clone();
 
         // Compute duration until cutoff 2
         let duration_into_slot =
-            self.network_api.signing_context.context.duration_into_slot(request.slot.into());
+            self.network_api.signing_context.context.duration_into_slot(event.slot.into());
         let sleep_time = self.cutoff_2.saturating_sub(duration_into_slot.unwrap_or_default());
 
         if sleep_time.is_zero() {
             warn!("got shared inclusion list too late into the slot, skipping");
-            let _ = request.result_tx.send(Some(shared_il));
+            let _ = event.result_tx.send(Some(shared_il));
             return;
         }
-        let settle_request = InclusionListRequest { inclusion_list: shared_il, ..request };
+        let settle_event = InclusionListEvent { inclusion_list: shared_il, ..event };
 
         // Spawn a task that sleeps until cutoff time and advances us to the next step
         tokio::spawn(async move {
             // Sleep until t_2 time
             tokio::time::sleep(sleep_time).await;
-            let shared_il_msg = NetworkEvent::FinalInclusionList(settle_request);
-            let _ = api_requests_tx
+            let shared_il_msg = NetworkEvent::FinalInclusionList(settle_event);
+            let _ = api_events_tx
                 .send(shared_il_msg)
                 .await
                 .inspect_err(|e| error!(err=?e, "failed to send FinalInclusionList"));
         });
     }
 
-    pub(crate) fn handle_final_inclusion_list(&mut self, request: InclusionListRequest) {
-        if self.last_slot > request.slot {
-            warn!(slot=%request.slot, last_slot=%self.last_slot, "got final inclusion list request for a past slot, skipping");
-            let _ = request.result_tx.send(Some(request.inclusion_list));
+    pub(crate) fn handle_final_inclusion_list(&mut self, event: InclusionListEvent) {
+        if self.last_slot > event.slot {
+            warn!(slot=%event.slot, last_slot=%self.last_slot, "got final inclusion list event for a past slot, skipping");
+            let _ = event.result_tx.send(Some(event.inclusion_list));
             return;
         }
-        let InclusionListRequest { slot, inclusion_list, result_tx } = request;
+        let InclusionListEvent { slot, inclusion_list, result_tx } = event;
         trace!(shared_ils_count=%self.shared_ils.len(), "computing final inclusion list");
 
         let final_il =
@@ -137,7 +137,7 @@ impl MultiRelayInclusionListsService {
 
         self.shared_ils.clear();
 
-        // Send result back to requester
+        // Send result back to eventer
         let _ = result_tx
             .send(Some(final_il))
             .inspect_err(|e| error!(err=?e, "failed to send final inclusion list response"));

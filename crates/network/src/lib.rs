@@ -9,19 +9,19 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tracing::{error, info, warn};
 
 use crate::{
+    event_handlers::{InclusionListEvent, NetworkEvent},
     messages::NetworkMessage,
-    request_handlers::{InclusionListRequest, NetworkEvent},
 };
 
+mod event_handlers;
 pub(crate) mod inclusion_lists;
 mod message_handler;
 pub mod messages;
-mod request_handlers;
 mod socket;
 
 pub struct RelayNetworkApi {
     broadcast_tx: broadcast::Sender<NetworkMessage>,
-    api_requests_tx: mpsc::Sender<NetworkEvent>,
+    api_events_tx: mpsc::Sender<NetworkEvent>,
     signing_context: Arc<RelaySigningContext>,
     network_config: RelayNetworkConfig,
 }
@@ -34,12 +34,11 @@ impl RelayNetworkApi {
         signing_context: Arc<RelaySigningContext>,
     ) -> Arc<Self> {
         let (broadcast_tx, _) = broadcast::channel(100);
-        let (api_requests_tx, api_requests_rx) = mpsc::channel(100);
-        let this =
-            Arc::new(Self { network_config, broadcast_tx, api_requests_tx, signing_context });
+        let (api_events_tx, api_events_rx) = mpsc::channel(100);
+        let this = Arc::new(Self { network_config, broadcast_tx, api_events_tx, signing_context });
 
         // If it's disabled, return the service without starting any tasks.
-        // This will cause all requests to be ignored.
+        // This will cause all events to be ignored.
         if !this.network_config.is_enabled {
             info!("Network module is disabled.");
             return this;
@@ -53,8 +52,8 @@ impl RelayNetworkApi {
 
         for peer_config in &this.network_config.peers {
             let peer_pubkey = peer_config.pubkey;
-            // Parse URL and try to turn into a request ahead-of-time, panicking on error
-            let request = url_to_client_request(&peer_config.url);
+            // Parse URL and try to turn into a event ahead-of-time, panicking on error
+            let request = url_to_client_event(&peer_config.url);
             // Verify serialized public key is valid
             let _deserialized_pubkey = BlsPublicKey::deserialize(peer_pubkey.as_ref())
                 .inspect_err(
@@ -68,7 +67,7 @@ impl RelayNetworkApi {
                 tokio::spawn(this.clone().connect_to_peer(request, peer_pubkey));
             }
         }
-        tokio::spawn(this.clone().handle_requests(api_requests_rx));
+        tokio::spawn(this.clone().event_handling_loop(api_events_rx));
         info!(peer_count=%this.network_config.peers.len(), "Initialized network module");
         this
     }
@@ -87,20 +86,20 @@ impl RelayNetworkApi {
             return Some(inclusion_list);
         }
         let (result_tx, result_rx) = oneshot::channel();
-        let request = NetworkEvent::LocalInclusionList(InclusionListRequest {
+        let event = NetworkEvent::LocalInclusionList(InclusionListEvent {
             slot,
             inclusion_list,
             result_tx,
         });
-        // Send request to API
-        if let Err(err) = self.api_requests_tx.send(request).await {
+        // Send event to API
+        if let Err(err) = self.api_events_tx.send(event).await {
             // If API service is unavailable, just return the original IL and log a warning
             warn!("failed to send inclusion list to network API");
             match err.0 {
-                NetworkEvent::LocalInclusionList(request) => {
-                    return Some(request.inclusion_list);
+                NetworkEvent::LocalInclusionList(event) => {
+                    return Some(event.inclusion_list);
                 }
-                _ => unreachable!("the returned value is an inclusion list request"),
+                _ => unreachable!("the returned value is an inclusion list event"),
             }
         }
         // If API service drops the channel, return None and log a warning
@@ -108,7 +107,7 @@ impl RelayNetworkApi {
     }
 }
 
-fn url_to_client_request(url: &str) -> axum::http::Request<()> {
+fn url_to_client_event(url: &str) -> axum::http::Request<()> {
     let request = url
         .into_client_request()
         .inspect_err(|e| error!(err=?e, %url, "invalid peer URL"))

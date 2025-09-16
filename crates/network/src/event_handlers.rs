@@ -12,35 +12,35 @@ use crate::{
 #[derive(Debug)]
 pub(crate) enum NetworkEvent {
     PeerMessage { sender: BlsPublicKeyBytes, message: NetworkMessage },
-    LocalInclusionList(InclusionListRequest),
-    SharedInclusionList(InclusionListRequest),
-    FinalInclusionList(InclusionListRequest),
+    LocalInclusionList(InclusionListEvent),
+    SharedInclusionList(InclusionListEvent),
+    FinalInclusionList(InclusionListEvent),
 }
 
 #[derive(Debug)]
-pub(crate) struct InclusionListRequest {
+pub(crate) struct InclusionListEvent {
     pub(crate) slot: u64,
     pub(crate) inclusion_list: InclusionList,
     pub(crate) result_tx: oneshot::Sender<Option<InclusionList>>,
 }
 
 impl RelayNetworkApi {
-    pub(crate) async fn handle_requests(
+    pub(crate) async fn event_handling_loop(
         self: Arc<Self>,
-        mut api_requests_rx: mpsc::Receiver<NetworkEvent>,
+        mut events_rx: mpsc::Receiver<NetworkEvent>,
     ) {
         let mut inclusion_lists_service = MultiRelayInclusionListsService::new(self.clone());
 
-        while let Some(request) = api_requests_rx.recv().await {
-            match request {
-                NetworkEvent::LocalInclusionList(request) => {
-                    inclusion_lists_service.handle_local_inclusion_list(request);
+        while let Some(event) = events_rx.recv().await {
+            match event {
+                NetworkEvent::LocalInclusionList(event) => {
+                    inclusion_lists_service.handle_local_inclusion_list(event);
                 }
-                NetworkEvent::SharedInclusionList(request) => {
-                    inclusion_lists_service.handle_shared_inclusion_list(request);
+                NetworkEvent::SharedInclusionList(event) => {
+                    inclusion_lists_service.handle_shared_inclusion_list(event);
                 }
-                NetworkEvent::FinalInclusionList(request) => {
-                    inclusion_lists_service.handle_final_inclusion_list(request);
+                NetworkEvent::FinalInclusionList(event) => {
+                    inclusion_lists_service.handle_final_inclusion_list(event);
                 }
                 NetworkEvent::PeerMessage { message, sender } => match message {
                     NetworkMessage::LocalInclusionList(il_msg) => {
