@@ -25,7 +25,7 @@ pub(crate) struct InclusionListEvent {
 }
 
 impl RelayNetworkManager {
-    pub(crate) async fn event_handling_loop(
+    pub(crate) async fn run_event_handling_loop(
         self: Arc<Self>,
         mut events_rx: mpsc::Receiver<NetworkEvent>,
     ) {

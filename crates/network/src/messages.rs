@@ -30,7 +30,7 @@ pub enum MessageAuthenticationError {
 
 /// Messages, as sent through the wire.
 /// [`RawNetworkMessage::Other`] variant is meant to be handled by
-/// [crate::RelayNetworkApi::event_handling_loop]. The rest of messages are control messages.
+/// [crate::RelayNetworkApi::run_event_handling_loop]. The rest of messages are control messages.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum RawNetworkMessage {
@@ -52,7 +52,8 @@ impl RawNetworkMessage {
     }
 }
 
-/// Messages, as seen by the main processing logic in [crate::RelayNetworkApi::event_handling_loop].
+/// Messages, as seen by the main processing logic in
+/// [crate::RelayNetworkApi::run_event_handling_loop].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum NetworkMessage {
     LocalInclusionList(InclusionListMessage),

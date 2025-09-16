@@ -69,7 +69,7 @@ impl RelayNetworkManager {
                 tokio::spawn(this.clone().connect_to_peer(request, peer_pubkey));
             }
         }
-        tokio::spawn(this.clone().event_handling_loop(api_events_rx));
+        tokio::spawn(this.clone().run_event_handling_loop(api_events_rx));
         info!(peer_count=%this.network_config.peers.len(), "Initialized network module");
         this
     }
