@@ -87,7 +87,7 @@ impl RelayNetworkApi {
         mut socket: PeerSocket,
         peer_pubkey: Option<BlsPublicKeyBytes>,
     ) -> Result<(), WsConnectionError> {
-        let mut peer_info = peer_pubkey.map(|pubkey| PeerInfo::new(pubkey));
+        let mut peer_info = peer_pubkey.map(PeerInfo::new);
         let mut broadcast_rx = self.broadcast_tx.subscribe();
         // Send an initial Hello message
         let hello_message = RawNetworkMessage::Hello(
