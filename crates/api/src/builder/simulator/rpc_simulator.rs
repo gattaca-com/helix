@@ -277,14 +277,31 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
             return Err(BlockSimError::RpcError(response.status().to_string()));
         }
 
-        match response.json::<RpcResult<BlockMergeResponse>>().await {
-            Ok(rpc_response) => match rpc_response {
-                RpcResult::Err { error } => {
-                    Err(BlockSimError::BlockValidationFailed(error.message))
+        let json_response: Value = match response.json().await {
+            Ok(json_response) => json_response,
+            Err(err) => {
+                error!(%err, "error parsing mergeBlockV1 response");
+                return Err(BlockSimError::RpcError(err.to_string()));
+            }
+        };
+
+        debug!("Processing merge RPC response, json_response = {:?}", &json_response);
+
+        match &json_response {
+            Value::Object(obj) => {
+                if let Some(Value::String(message)) = obj.get("error") {
+                    Err(BlockSimError::BlockValidationFailed(message.clone()))
+                } else {
+                    Ok(serde_json::from_value(json_response).map_err(|err| {
+                        error!(%err, "error deserializing mergeBlockV1 response");
+                        BlockSimError::RpcError(err.to_string())
+                    })?)
                 }
-                RpcResult::Ok(response) => Ok(response),
-            },
-            Err(err) => Err(BlockSimError::RpcError(err.to_string())),
+            }
+            _ => {
+                error!(%json_response, "unexpected mergeBlockV1 response format");
+                Err(BlockSimError::RpcError("unexpected response format".into()))
+            }
         }
     }
 }
