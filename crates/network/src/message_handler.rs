@@ -8,17 +8,17 @@ use tracing::{debug, error, warn};
 
 use crate::{
     messages::{
-        EncodingError, HelloMessage, MessageAuthenticationError, P2PMessage, P2PMessageType,
-        RawP2PMessage,
+        EncodingError, HelloMessage, MessageAuthenticationError, NetworkMessage,
+        NetworkMessageType, RawNetworkMessage,
     },
-    request_handlers::P2PApiRequest,
+    request_handlers::NetworkEvent,
     socket::PeerSocket,
-    P2PApi,
+    RelayNetworkApi,
 };
 
 struct PeerInfo {
     pubkey: BlsPublicKeyBytes,
-    supported_message_types: Vec<P2PMessageType>,
+    supported_message_types: Vec<NetworkMessageType>,
 }
 
 impl PeerInfo {
@@ -26,19 +26,19 @@ impl PeerInfo {
         Self { pubkey, supported_message_types: Vec::new() }
     }
 
-    fn set_supported_message_types(&mut self, supported_message_types: Vec<P2PMessageType>) {
+    fn set_supported_message_types(&mut self, supported_message_types: Vec<NetworkMessageType>) {
         self.supported_message_types = supported_message_types;
     }
 
-    fn supports_message(&self, message: &P2PMessage) -> bool {
+    fn supports_message(&self, message: &NetworkMessage) -> bool {
         self.supported_message_types.iter().any(|msg_type| msg_type.supports_message(message))
     }
 }
 
-impl P2PApi {
+impl RelayNetworkApi {
     #[tracing::instrument(skip_all)]
-    pub async fn p2p_connect(
-        Extension(api): Extension<Arc<P2PApi>>,
+    pub async fn connect(
+        Extension(api): Extension<Arc<RelayNetworkApi>>,
         ws: WebSocketUpgrade,
     ) -> Result<impl IntoResponse, std::convert::Infallible> {
         debug!("got new peer connection");
@@ -90,9 +90,9 @@ impl P2PApi {
         let mut peer_info = peer_pubkey.map(|pubkey| PeerInfo::new(pubkey));
         let mut broadcast_rx = self.broadcast_tx.subscribe();
         // Send an initial Hello message
-        let hello_message = RawP2PMessage::Hello(
+        let hello_message = RawNetworkMessage::Hello(
             HelloMessage::new(&self.signing_context)
-                .with_supported_message_types(vec![P2PMessageType::InclusionList]),
+                .with_supported_message_types(vec![NetworkMessageType::InclusionList]),
         );
         socket.send(hello_message.to_ws_message()).await.map_err(WsConnectionError::SendError)?;
         loop {
@@ -103,7 +103,7 @@ impl P2PApi {
                         return Ok(());
                     };
                     if peer_supports_message_type(&peer_info, &msg) {
-                        let serialized = RawP2PMessage::Other(msg).to_ws_message();
+                        let serialized = RawNetworkMessage::Other(msg).to_ws_message();
                         socket.send(serialized).await.map_err(WsConnectionError::SendError)?;
                     }
                 },
@@ -113,7 +113,7 @@ impl P2PApi {
                         return Ok(());
                     };
                     let msg = res.map_err(WsConnectionError::RecvError)?;
-                    let message = RawP2PMessage::from_ws_message(&msg)?;
+                    let message = RawNetworkMessage::from_ws_message(&msg)?;
                     self.handle_raw_message(message, &mut peer_info).await?;
                 }
             };
@@ -122,18 +122,19 @@ impl P2PApi {
 
     async fn handle_raw_message(
         &self,
-        message: RawP2PMessage,
+        message: RawNetworkMessage,
         opt_peer_info: &mut Option<PeerInfo>,
     ) -> Result<(), WsConnectionError> {
         match message {
-            RawP2PMessage::Hello(hello_msg) => {
+            RawNetworkMessage::Hello(hello_msg) => {
                 let pubkey = hello_msg.pubkey;
                 // Sanity check: we're not talking to ourselves
                 if pubkey == self.signing_context.pubkey {
                     return Err(WsConnectionError::ReceivedOwnPubkey);
                 }
                 // Check peer is known
-                let known_peer = self.p2p_config.peers.iter().any(|config| config.pubkey == pubkey);
+                let known_peer =
+                    self.network_config.peers.iter().any(|config| config.pubkey == pubkey);
                 if !known_peer {
                     return Err(WsConnectionError::UnknownPeer(pubkey));
                 }
@@ -157,13 +158,13 @@ impl P2PApi {
                 // Override previously known supported message types
                 peer_info.set_supported_message_types(supported_message_types);
             }
-            RawP2PMessage::Other(message) => {
+            RawNetworkMessage::Other(message) => {
                 let Some(peer_info) = &opt_peer_info else {
                     return Err(WsConnectionError::NoHello);
                 };
                 let sender = peer_info.pubkey;
                 self.api_requests_tx
-                    .send(P2PApiRequest::PeerMessage { sender, message })
+                    .send(NetworkEvent::PeerMessage { sender, message })
                     .await
                     .map_err(|_| WsConnectionError::ChannelClosed)?;
             }
@@ -172,13 +173,13 @@ impl P2PApi {
         Ok(())
     }
 
-    pub(crate) fn broadcast(&self, message: P2PMessage) {
+    pub(crate) fn broadcast(&self, message: NetworkMessage) {
         // Ignore error if there are no active receivers.
         let _ = self.broadcast_tx.send(message);
     }
 }
 
-fn peer_supports_message_type(opt_peer_info: &Option<PeerInfo>, message: &P2PMessage) -> bool {
+fn peer_supports_message_type(opt_peer_info: &Option<PeerInfo>, message: &NetworkMessage) -> bool {
     let Some(peer_info) = opt_peer_info else {
         return false;
     };

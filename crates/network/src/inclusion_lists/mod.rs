@@ -11,7 +11,7 @@ mod tests {
     use axum::{routing::any, Extension, Router};
     use helix_common::{
         api::builder_api::InclusionList, chain_info::ChainInfo, signing::RelaySigningContext,
-        utils::utcnow_sec, P2PConfig, P2PPeerConfig,
+        utils::utcnow_sec, RelayNetworkConfig, RelayNetworkPeerConfig,
     };
     use helix_types::{BlsKeypair, BlsSecretKey, Transaction};
     use rand::{rngs::SmallRng, seq::IndexedRandom, Rng as _, SeedableRng};
@@ -19,7 +19,9 @@ mod tests {
     use tracing::{error, info};
     use tree_hash::TreeHash;
 
-    use crate::{inclusion_lists::consensus::INCLUSION_LIST_MAX_BYTES, P2PApi};
+    use crate::{inclusion_lists::consensus::INCLUSION_LIST_MAX_BYTES, RelayNetworkApi};
+
+    const RELAY_CONNECT_PATH: &str = "/relay/v1/network";
 
     fn create_random_tx(id: u64, rng: &mut SmallRng) -> Transaction {
         // Pad with random bytes to randomize tx length
@@ -60,24 +62,24 @@ mod tests {
         tokio::time::sleep(sleep_duration).await;
     }
 
-    fn start_p2p_peer(
+    fn start_network_relay(
         join_set: &mut JoinSet<()>,
         chain_info: Arc<ChainInfo>,
         port: u16,
         private_key: BlsSecretKey,
-        p2p_config: P2PConfig,
-    ) -> Arc<P2PApi> {
+        network_config: RelayNetworkConfig,
+    ) -> Arc<RelayNetworkApi> {
         let keypair = BlsKeypair::from_components(private_key.public_key(), private_key);
         let pubkey = keypair.pk.clone();
         let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info.clone()));
 
-        let p2p_api = P2PApi::new(p2p_config, relay_signing_context);
+        let network_api = RelayNetworkApi::new(network_config, relay_signing_context);
 
         let router = Router::new()
-            .route("/relay/v1/p2p", any(P2PApi::p2p_connect))
-            .layer(Extension(p2p_api.clone()));
+            .route(RELAY_CONNECT_PATH, any(RelayNetworkApi::connect))
+            .layer(Extension(network_api.clone()));
 
-        info!("Listening on ws://127.0.0.1:{port}/relay/v1/p2p with pubkey: {pubkey}");
+        info!("Listening on ws://127.0.0.1:{port}{RELAY_CONNECT_PATH} with pubkey: {pubkey}");
 
         join_set.spawn(async move {
             let listener =
@@ -89,7 +91,7 @@ mod tests {
                 Err(e) => error!("Server exited with error: {e}"),
             }
         });
-        p2p_api
+        network_api
     }
 
     #[tokio::test]
@@ -108,15 +110,19 @@ mod tests {
 
         let port_start = 4050_u16;
 
-        let mut p2p_config =
-            P2PConfig { is_enabled: true, peers: vec![], cutoff_1_ms: 2000, cutoff_2_ms: 4000 };
+        let mut network_config = RelayNetworkConfig {
+            is_enabled: true,
+            peers: vec![],
+            cutoff_1_ms: 2000,
+            cutoff_2_ms: 4000,
+        };
         let ports = (port_start..).take(n_peers).collect::<Vec<_>>();
         let keypairs = (0..n_peers).map(|_| BlsKeypair::random()).collect::<Vec<_>>();
 
-        // We generate a single P2P config, since peers won't connect to themselves
-        p2p_config.peers = (0..n_peers)
-            .map(|i| P2PPeerConfig {
-                url: format!("ws://127.0.0.1:{}/relay/v1/p2p", ports[i]),
+        // We generate a single config, since peers won't connect to themselves
+        network_config.peers = (0..n_peers)
+            .map(|i| RelayNetworkPeerConfig {
+                url: format!("ws://127.0.0.1:{}{RELAY_CONNECT_PATH}", ports[i]),
                 pubkey: keypairs[i].pk.serialize().into(),
             })
             .collect();
@@ -124,17 +130,17 @@ mod tests {
         let chain_info = Arc::new(ChainInfo::for_hoodi());
 
         let mut apis_joinset = JoinSet::new();
-        let mut p2p_apis = Vec::with_capacity(n_peers);
+        let mut network_apis = Vec::with_capacity(n_peers);
 
         for i in 0..n_peers {
-            let p2p_api = start_p2p_peer(
+            let network_api = start_network_relay(
                 &mut apis_joinset,
                 chain_info.clone(),
                 ports[i],
                 keypairs[i].sk.clone(),
-                p2p_config.clone(),
+                network_config.clone(),
             );
-            p2p_apis.push(p2p_api);
+            network_apis.push(network_api);
         }
 
         // Wait a bit for all peers to connect with each other
@@ -172,7 +178,7 @@ mod tests {
             let mut join_set = JoinSet::new();
 
             // Send the transactions to all peers
-            for p2p_api in &p2p_apis {
+            for network_api in &network_apis {
                 let mut remaining_bytes = INCLUSION_LIST_MAX_BYTES;
                 let txs: Vec<Transaction> = all_txs
                     .choose_multiple(&mut rng, all_txs.len())
@@ -188,9 +194,9 @@ mod tests {
                     .collect();
                 let inclusion_list = InclusionList { txs: txs.into() };
                 // Share IL in the background
-                let p2p_api = p2p_api.clone();
+                let network_api = network_api.clone();
                 join_set.spawn(async move {
-                    p2p_api.share_inclusion_list(real_slot.into(), inclusion_list).await
+                    network_api.share_inclusion_list(real_slot.into(), inclusion_list).await
                 });
             }
             info!(%slot, "Sent transactions to each process");

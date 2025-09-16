@@ -16,7 +16,7 @@ use helix_common::{
     bid_sorter::BidSorterMessage, chain_info::ChainInfo, local_cache::LocalCache, RelayConfig,
 };
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_p2p::P2PApi;
+use helix_network::RelayNetworkApi;
 pub use housekeeper::Housekeeper;
 pub use primev_service::EthereumPrimevService;
 pub use slot_info::CurrentSlotInfo;
@@ -33,7 +33,7 @@ pub async fn start_housekeeper(
     beacon_client: Arc<MultiBeaconClient>,
     chain_info: Arc<ChainInfo>,
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
-    p2p_api: Arc<P2PApi>,
+    relay_network_api: Arc<RelayNetworkApi>,
 ) -> eyre::Result<CurrentSlotInfo> {
     let (head_event_sender, head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
     beacon_client.subscribe_to_head_events(head_event_sender).await;
@@ -49,7 +49,7 @@ pub async fn start_housekeeper(
             auctioneer.clone(),
             config,
             chain_info.clone(),
-            p2p_api,
+            relay_network_api,
         );
         housekeeper.start(head_event_receiver.resubscribe()).await?;
     }

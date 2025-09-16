@@ -20,7 +20,7 @@ use helix_common::{
     RelayConfig, SignedValidatorRegistrationEntry,
 };
 use helix_database::DatabaseService;
-use helix_p2p::P2PApi;
+use helix_network::RelayNetworkApi;
 use helix_types::{BlsPublicKeyBytes, Epoch, Slot, SlotClockTrait};
 use tokio::sync::{broadcast, Mutex};
 use tracing::{debug, error, info, warn, Instrument};
@@ -103,7 +103,7 @@ impl<DB: DatabaseService> Housekeeper<DB> {
         auctioneer: Arc<LocalCache>,
         config: &RelayConfig,
         chain_info: Arc<ChainInfo>,
-        p2p_api: Arc<P2PApi>,
+        relay_network_api: Arc<RelayNetworkApi>,
     ) -> Self {
         let primev_service =
             config.primev_config.clone().map(|p| EthereumPrimevService::new(p).unwrap());
@@ -114,7 +114,7 @@ impl<DB: DatabaseService> Housekeeper<DB> {
                 auctioneer.clone(),
                 config,
                 chain_info.clone(),
-                p2p_api,
+                relay_network_api,
             )
         });
 

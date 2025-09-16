@@ -5,12 +5,13 @@ use helix_types::BlsPublicKeyBytes;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    inclusion_lists::service::MultiRelayInclusionListsService, messages::P2PMessage, P2PApi,
+    inclusion_lists::service::MultiRelayInclusionListsService, messages::NetworkMessage,
+    RelayNetworkApi,
 };
 
 #[derive(Debug)]
-pub(crate) enum P2PApiRequest {
-    PeerMessage { sender: BlsPublicKeyBytes, message: P2PMessage },
+pub(crate) enum NetworkEvent {
+    PeerMessage { sender: BlsPublicKeyBytes, message: NetworkMessage },
     LocalInclusionList(InclusionListRequest),
     SharedInclusionList(InclusionListRequest),
     FinalInclusionList(InclusionListRequest),
@@ -23,29 +24,29 @@ pub(crate) struct InclusionListRequest {
     pub(crate) result_tx: oneshot::Sender<Option<InclusionList>>,
 }
 
-impl P2PApi {
+impl RelayNetworkApi {
     pub(crate) async fn handle_requests(
         self: Arc<Self>,
-        mut api_requests_rx: mpsc::Receiver<P2PApiRequest>,
+        mut api_requests_rx: mpsc::Receiver<NetworkEvent>,
     ) {
         let mut inclusion_lists_service = MultiRelayInclusionListsService::new(self.clone());
 
         while let Some(request) = api_requests_rx.recv().await {
             match request {
-                P2PApiRequest::LocalInclusionList(request) => {
+                NetworkEvent::LocalInclusionList(request) => {
                     inclusion_lists_service.handle_local_inclusion_list(request);
                 }
-                P2PApiRequest::SharedInclusionList(request) => {
+                NetworkEvent::SharedInclusionList(request) => {
                     inclusion_lists_service.handle_shared_inclusion_list(request);
                 }
-                P2PApiRequest::FinalInclusionList(request) => {
+                NetworkEvent::FinalInclusionList(request) => {
                     inclusion_lists_service.handle_final_inclusion_list(request);
                 }
-                P2PApiRequest::PeerMessage { message, sender } => match message {
-                    P2PMessage::LocalInclusionList(il_msg) => {
+                NetworkEvent::PeerMessage { message, sender } => match message {
+                    NetworkMessage::LocalInclusionList(il_msg) => {
                         inclusion_lists_service.handle_peer_local_inclusion_list(sender, il_msg);
                     }
-                    P2PMessage::SharedInclusionList(il_msg) => {
+                    NetworkMessage::SharedInclusionList(il_msg) => {
                         inclusion_lists_service.handle_peer_shared_inclusion_list(sender, il_msg);
                     }
                 },

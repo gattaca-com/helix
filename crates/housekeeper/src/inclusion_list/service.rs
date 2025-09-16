@@ -8,7 +8,7 @@ use helix_common::{
     InclusionListConfig,
 };
 use helix_database::DatabaseService;
-use helix_p2p::P2PApi;
+use helix_network::RelayNetworkApi;
 use helix_types::{BlsPublicKeyBytes, Slot};
 use tracing::{error, info, warn};
 
@@ -22,7 +22,7 @@ pub struct InclusionListService<DB: DatabaseService> {
     auctioneer: Arc<LocalCache>,
     http_il_fetcher: HttpInclusionListFetcher,
     chain_info: Arc<ChainInfo>,
-    p2p: Arc<P2PApi>,
+    network_api: Arc<RelayNetworkApi>,
 }
 
 impl<DB: DatabaseService> InclusionListService<DB> {
@@ -31,11 +31,11 @@ impl<DB: DatabaseService> InclusionListService<DB> {
         auctioneer: Arc<LocalCache>,
         config: InclusionListConfig,
         chain_info: Arc<ChainInfo>,
-        p2p: Arc<P2PApi>,
+        network_api: Arc<RelayNetworkApi>,
     ) -> Self {
         let http_il_fetcher = HttpInclusionListFetcher::new(config);
 
-        Self { db, auctioneer, http_il_fetcher, chain_info, p2p }
+        Self { db, auctioneer, http_il_fetcher, chain_info, network_api }
     }
 
     /// Fetch and persist inclusion list for this slot.
@@ -80,7 +80,7 @@ impl<DB: DatabaseService> InclusionListService<DB> {
 
     async fn fetch_inclusion_list_or_timeout(&self, slot: u64) -> Option<InclusionList> {
         tokio::select! {
-            inclusion_list = self.fetch_inclusion_list_and_share_in_p2p(slot) => {
+            inclusion_list = self.fetch_inclusion_list_and_share_with_peers(slot) => {
                 inclusion_list
             }
             _ = tokio::time::sleep(self.time_to_missing_inclusion_list_cutoff(slot.into())) => {
@@ -93,9 +93,9 @@ impl<DB: DatabaseService> InclusionListService<DB> {
         }
     }
 
-    async fn fetch_inclusion_list_and_share_in_p2p(&self, slot: u64) -> Option<InclusionList> {
+    async fn fetch_inclusion_list_and_share_with_peers(&self, slot: u64) -> Option<InclusionList> {
         let inclusion_list = self.http_il_fetcher.fetch_inclusion_list_with_retry(slot).await;
-        self.p2p.share_inclusion_list(slot, inclusion_list).await
+        self.network_api.share_inclusion_list(slot, inclusion_list).await
     }
 
     fn time_to_missing_inclusion_list_cutoff(&self, slot: Slot) -> Duration {

@@ -7,7 +7,7 @@ members = [
   "crates/common",
   "crates/database",
   "crates/housekeeper",
-  "crates/p2p",
+  "crates/network",
   "crates/types",
   "crates/website",
 ]
@@ -53,7 +53,7 @@ helix-beacon = { path = "./crates/beacon" }
 helix-common = { path = "crates/common" }
 helix-database = { path = "./crates/database" }
 helix-housekeeper = { path = "./crates/housekeeper" }
-helix-p2p = { path = "./crates/p2p" }
+helix-network = { path = "./crates/network" }
 helix-types = { path = "./crates/types" }
 helix-website = { path = "./crates/website" }
 http = "1.0"

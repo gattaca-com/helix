@@ -28,19 +28,19 @@ pub enum MessageAuthenticationError {
     CouldNotDeserializePubkey,
 }
 
-/// P2P messages, as sent through the wire.
-/// [`RawP2PMessage::Other`] variant is meant to be handled by [crate::P2PApi::handle_requests].
-/// The rest of messages are control messages.
+/// Messages, as sent through the wire.
+/// [`RawNetworkMessage::Other`] variant is meant to be handled by
+/// [crate::RelayNetworkApi::handle_requests]. The rest of messages are control messages.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-pub(crate) enum RawP2PMessage {
+pub(crate) enum RawNetworkMessage {
     /// Initial authentication message
     Hello(HelloMessage),
     /// Other, unauthenticated messages
-    Other(P2PMessage),
+    Other(NetworkMessage),
 }
 
-impl RawP2PMessage {
+impl RawNetworkMessage {
     pub fn to_ws_message(&self) -> WSMessage {
         let text = serde_json::to_string(&self).expect("encoding cannot fail");
         WSMessage::text(text)
@@ -52,29 +52,29 @@ impl RawP2PMessage {
     }
 }
 
-/// P2P messages, as seen by the main processing logic in [crate::P2PApi::handle_requests].
+/// Messages, as seen by the main processing logic in [crate::RelayNetworkApi::handle_requests].
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) enum P2PMessage {
+pub(crate) enum NetworkMessage {
     LocalInclusionList(InclusionListMessage),
     SharedInclusionList(InclusionListMessage),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum P2PMessageType {
+pub(crate) enum NetworkMessageType {
     /// Inclusion list related messages.
-    /// - [`P2PMessage::LocalInclusionList`]
-    /// - [`P2PMessage::SharedInclusionList`]
+    /// - [`NetworkMessage::LocalInclusionList`]
+    /// - [`NetworkMessage::SharedInclusionList`]
     InclusionList,
     #[serde(other)]
     Unknown,
 }
 
-impl P2PMessageType {
-    pub(crate) fn supports_message(&self, message: &P2PMessage) -> bool {
+impl NetworkMessageType {
+    pub(crate) fn supports_message(&self, message: &NetworkMessage) -> bool {
         match (self, message) {
-            (P2PMessageType::InclusionList, P2PMessage::LocalInclusionList(_)) => true,
-            (P2PMessageType::InclusionList, P2PMessage::SharedInclusionList(_)) => true,
-            (P2PMessageType::Unknown, _) => false,
+            (NetworkMessageType::InclusionList, NetworkMessage::LocalInclusionList(_)) => true,
+            (NetworkMessageType::InclusionList, NetworkMessage::SharedInclusionList(_)) => true,
+            (NetworkMessageType::Unknown, _) => false,
         }
     }
 }
@@ -100,7 +100,7 @@ pub(crate) struct HelloMessage {
     /// List of message types the sender supports.
     /// It's expected the receiver won't send messages of types not in this list.
     #[serde(default)]
-    supported_message_types: Vec<P2PMessageType>,
+    supported_message_types: Vec<NetworkMessageType>,
 }
 
 /// Used for generating the [`signature`](HelloMessage::signature) in [`HelloMessage`].
@@ -123,19 +123,19 @@ impl HelloMessage {
 
     pub(crate) fn with_supported_message_types(
         mut self,
-        supported_message_types: Vec<P2PMessageType>,
+        supported_message_types: Vec<NetworkMessageType>,
     ) -> Self {
         self.supported_message_types = supported_message_types;
         self
     }
 
-    pub(crate) fn into_supported_message_types(self) -> Vec<P2PMessageType> {
+    pub(crate) fn into_supported_message_types(self) -> Vec<NetworkMessageType> {
         let mut smt = self.supported_message_types;
         // Remove duplicates
         smt.sort();
         smt.dedup();
         // Drop unknown message types
-        smt.retain(|m| !matches!(m, P2PMessageType::Unknown));
+        smt.retain(|m| !matches!(m, NetworkMessageType::Unknown));
         smt
     }
 
@@ -188,7 +188,7 @@ mod tests {
     use helix_types::Transaction;
     use serde::{Deserialize, Serialize};
 
-    use crate::messages::{HelloMessage, InclusionListMessage, P2PMessage, RawP2PMessage};
+    use crate::messages::{HelloMessage, InclusionListMessage, NetworkMessage, RawNetworkMessage};
 
     fn test_roundtrip<T: Serialize + for<'de> Deserialize<'de> + Debug>(msg: &T) {
         let serialized = serde_json::to_string(msg).unwrap();
@@ -196,8 +196,8 @@ mod tests {
         assert_eq!(format!("{:?}", msg), format!("{:?}", &deserialized));
     }
 
-    // Adds a new variant to RawP2PMessage and checks that it doesn't break deserialization of old
-    // messages.
+    // Adds a new variant to RawNetworkMessage and checks that it doesn't break deserialization of
+    // old messages.
     #[test]
     fn test_backwards_compatibility() {
         #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,7 +207,7 @@ mod tests {
         }
 
         #[derive(Debug, Clone, Serialize, Deserialize)]
-        enum NewP2PMessage {
+        enum NewNetworkMessage {
             LocalInclusionList(InclusionListMessage),
             SharedInclusionList(InclusionListMessage),
             NewVariant(SomeStruct),
@@ -215,14 +215,14 @@ mod tests {
 
         #[derive(Debug, Clone, Serialize, Deserialize)]
         #[serde(untagged)]
-        enum NewRawP2PMessage {
+        enum NewRawNetworkMessage {
             /// Initial authentication message
             Hello(HelloMessage),
             /// Other, unauthenticated messages
-            Other(NewP2PMessage),
+            Other(NewNetworkMessage),
         }
 
-        let new_message = NewRawP2PMessage::Other(NewP2PMessage::NewVariant(SomeStruct {
+        let new_message = NewRawNetworkMessage::Other(NewNetworkMessage::NewVariant(SomeStruct {
             a: "test".into(),
             bc: 123,
         }));
@@ -232,17 +232,17 @@ mod tests {
         // Check that message fails to be deserialized by old version
         // TODO: should we support this case?
         let serialized = serde_json::to_string(&new_message).unwrap();
-        let deserialized: Result<RawP2PMessage, _> = serde_json::from_str(&serialized);
+        let deserialized: Result<RawNetworkMessage, _> = serde_json::from_str(&serialized);
         deserialized.unwrap_err();
 
         // Check that old messages still deserialize correctly
-        let old_message = RawP2PMessage::Other(P2PMessage::LocalInclusionList(
+        let old_message = RawNetworkMessage::Other(NetworkMessage::LocalInclusionList(
             InclusionListMessage::new(123, InclusionList {
                 txs: vec![Transaction(Bytes::from([0, 6, 5]))].into(),
             }),
         ));
         let serialized = serde_json::to_string(&old_message).unwrap();
-        let _: NewRawP2PMessage = serde_json::from_str(&serialized).unwrap();
+        let _: NewRawNetworkMessage = serde_json::from_str(&serialized).unwrap();
     }
 
     // ### Unit tests for each variant ###
@@ -255,8 +255,8 @@ mod tests {
             "signature": "0xaa37e23d9ad2e987c27994f9c1e961bd06e866f8f531071f267e10fb98c5825e887710788ffa45b12c48ec1bad30588d0396e0d6dc54ee2197cd28ba912fd6e903495c99af368832c78875a2ef62218469d9936b3c94f8c52fc5195380681900",
             "supported_message_types": ["InclusionList"]
         }"#;
-        let message: RawP2PMessage = serde_json::from_str(&serialized_message).unwrap();
-        assert!(matches!(message, RawP2PMessage::Hello(_)));
+        let message: RawNetworkMessage = serde_json::from_str(&serialized_message).unwrap();
+        assert!(matches!(message, RawNetworkMessage::Hello(_)));
 
         test_roundtrip(&message);
     }
@@ -269,8 +269,8 @@ mod tests {
             "signature": "0xaa37e23d9ad2e987c27994f9c1e961bd06e866f8f531071f267e10fb98c5825e887710788ffa45b12c48ec1bad30588d0396e0d6dc54ee2197cd28ba912fd6e903495c99af368832c78875a2ef62218469d9936b3c94f8c52fc5195380681900",
             "supported_message_types": ["InclusionList", "NewFeature"]
         }"#;
-        let message: RawP2PMessage = serde_json::from_str(&serialized_message).unwrap();
-        assert!(matches!(message, RawP2PMessage::Hello(_)));
+        let message: RawNetworkMessage = serde_json::from_str(&serialized_message).unwrap();
+        assert!(matches!(message, RawNetworkMessage::Hello(_)));
 
         test_roundtrip(&message);
     }
@@ -288,8 +288,8 @@ mod tests {
                 }
             }
         }"#;
-        let message: RawP2PMessage = serde_json::from_str(&serialized_message).unwrap();
-        assert!(matches!(message, RawP2PMessage::Other(P2PMessage::LocalInclusionList(_))));
+        let message: RawNetworkMessage = serde_json::from_str(&serialized_message).unwrap();
+        assert!(matches!(message, RawNetworkMessage::Other(NetworkMessage::LocalInclusionList(_))));
 
         test_roundtrip(&message);
     }
@@ -307,8 +307,11 @@ mod tests {
                 }
             }
         }"#;
-        let message: RawP2PMessage = serde_json::from_str(&serialized_message).unwrap();
-        assert!(matches!(message, RawP2PMessage::Other(P2PMessage::SharedInclusionList(_))));
+        let message: RawNetworkMessage = serde_json::from_str(&serialized_message).unwrap();
+        assert!(matches!(
+            message,
+            RawNetworkMessage::Other(NetworkMessage::SharedInclusionList(_))
+        ));
 
         test_roundtrip(&message);
     }

@@ -3715,7 +3715,7 @@ dependencies = [
  "helix-common",
  "helix-database",
  "helix-housekeeper",
- "helix-p2p",
+ "helix-network",
  "helix-types",
  "helix-website",
  "tikv-jemallocator",
@@ -3744,7 +3744,7 @@ dependencies = [
  "helix-common",
  "helix-database",
  "helix-housekeeper",
- "helix-p2p",
+ "helix-network",
  "helix-types",
  "http 1.3.1",
  "http-body 1.0.1",
@@ -3883,7 +3883,7 @@ dependencies = [
  "helix-beacon",
  "helix-common",
  "helix-database",
- "helix-p2p",
+ "helix-network",
  "helix-types",
  "httpmock",
  "parking_lot",
@@ -3898,7 +3898,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "helix-p2p"
+name = "helix-network"
 version = "0.0.1"
 dependencies = [
  "alloy-consensus",

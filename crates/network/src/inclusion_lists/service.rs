@@ -6,13 +6,13 @@ use tracing::{error, trace, warn};
 
 use crate::{
     inclusion_lists::consensus,
-    messages::{InclusionListMessage, P2PMessage},
-    request_handlers::{InclusionListRequest, P2PApiRequest},
-    P2PApi,
+    messages::{InclusionListMessage, NetworkMessage},
+    request_handlers::{InclusionListRequest, NetworkEvent},
+    RelayNetworkApi,
 };
 
 pub(crate) struct MultiRelayInclusionListsService {
-    p2p_api: Arc<P2PApi>,
+    network_api: Arc<RelayNetworkApi>,
     cutoff_1: Duration,
     cutoff_2: Duration,
 
@@ -23,14 +23,14 @@ pub(crate) struct MultiRelayInclusionListsService {
 }
 
 impl MultiRelayInclusionListsService {
-    pub(crate) fn new(p2p_api: Arc<P2PApi>) -> Self {
+    pub(crate) fn new(network_api: Arc<RelayNetworkApi>) -> Self {
         Self {
-            cutoff_1: Duration::from_millis(p2p_api.p2p_config.cutoff_1_ms),
-            cutoff_2: Duration::from_millis(p2p_api.p2p_config.cutoff_2_ms),
-            local_ils: HashMap::with_capacity(p2p_api.p2p_config.peers.len()),
-            shared_ils: HashMap::with_capacity(p2p_api.p2p_config.peers.len()),
+            cutoff_1: Duration::from_millis(network_api.network_config.cutoff_1_ms),
+            cutoff_2: Duration::from_millis(network_api.network_config.cutoff_2_ms),
+            local_ils: HashMap::with_capacity(network_api.network_config.peers.len()),
+            shared_ils: HashMap::with_capacity(network_api.network_config.peers.len()),
             last_slot: 0,
-            p2p_api,
+            network_api,
         }
     }
 
@@ -44,7 +44,7 @@ impl MultiRelayInclusionListsService {
 
         // Compute duration until first cutoff points
         let duration_into_slot =
-            self.p2p_api.signing_context.context.duration_into_slot(request.slot.into());
+            self.network_api.signing_context.context.duration_into_slot(request.slot.into());
 
         // Check the slot is not in the future
         if duration_into_slot.is_none() {
@@ -65,15 +65,15 @@ impl MultiRelayInclusionListsService {
         let msg = InclusionListMessage::new(request.slot, request.inclusion_list.clone());
 
         trace!(slot=%request.slot, "broadcasting local inclusion list");
-        self.p2p_api.broadcast(P2PMessage::LocalInclusionList(msg));
+        self.network_api.broadcast(NetworkMessage::LocalInclusionList(msg));
 
-        let api_requests_tx = self.p2p_api.api_requests_tx.clone();
+        let api_requests_tx = self.network_api.api_requests_tx.clone();
 
         // Spawn a task that sleeps until cutoff time and advances us to the next step
         tokio::spawn(async move {
             // Sleep until t_1 time
             tokio::time::sleep(sleep_time).await;
-            let shared_il_msg = P2PApiRequest::SharedInclusionList(request);
+            let shared_il_msg = NetworkEvent::SharedInclusionList(request);
             let _ = api_requests_tx
                 .send(shared_il_msg)
                 .await
@@ -95,13 +95,13 @@ impl MultiRelayInclusionListsService {
         self.local_ils.clear();
 
         let msg = InclusionListMessage::new(slot, shared_il.clone());
-        self.p2p_api.broadcast(P2PMessage::SharedInclusionList(msg));
+        self.network_api.broadcast(NetworkMessage::SharedInclusionList(msg));
 
-        let api_requests_tx = self.p2p_api.api_requests_tx.clone();
+        let api_requests_tx = self.network_api.api_requests_tx.clone();
 
         // Compute duration until cutoff 2
         let duration_into_slot =
-            self.p2p_api.signing_context.context.duration_into_slot(request.slot.into());
+            self.network_api.signing_context.context.duration_into_slot(request.slot.into());
         let sleep_time = self.cutoff_2.saturating_sub(duration_into_slot.unwrap_or_default());
 
         if sleep_time.is_zero() {
@@ -115,7 +115,7 @@ impl MultiRelayInclusionListsService {
         tokio::spawn(async move {
             // Sleep until t_2 time
             tokio::time::sleep(sleep_time).await;
-            let shared_il_msg = P2PApiRequest::FinalInclusionList(settle_request);
+            let shared_il_msg = NetworkEvent::FinalInclusionList(settle_request);
             let _ = api_requests_tx
                 .send(shared_il_msg)
                 .await

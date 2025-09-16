@@ -14,7 +14,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_housekeeper::CurrentSlotInfo;
-use helix_p2p::P2PApi;
+use helix_network::RelayNetworkApi;
 use service::run_api_service;
 
 pub mod admin_service;
@@ -51,7 +51,7 @@ pub fn start_api_service<A: Api>(
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
     shared_floor: FloorBid,
-    p2p_api: Arc<P2PApi>,
+    relay_network_api: Arc<RelayNetworkApi>,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),
@@ -68,7 +68,7 @@ pub fn start_api_service<A: Api>(
         top_bid_tx,
         shared_best_header,
         shared_floor,
-        p2p_api,
+        relay_network_api,
     ));
 }
 

@@ -16,7 +16,7 @@ use helix_common::{
     BroadcasterConfig, RelayConfig,
 };
 use helix_housekeeper::CurrentSlotInfo;
-use helix_p2p::P2PApi;
+use helix_network::RelayNetworkApi;
 use moka::sync::Cache;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -52,7 +52,7 @@ pub async fn run_api_service<A: Api>(
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
     shared_floor: FloorBid,
-    p2p_api: Arc<P2PApi>,
+    relay_network_api: Arc<RelayNetworkApi>,
 ) {
     let broadcasters = init_broadcasters(&config).await;
 
@@ -168,7 +168,7 @@ pub async fn run_api_service<A: Api>(
         builder_api,
         proposer_api,
         data_api,
-        p2p_api,
+        relay_network_api,
         bids_cache,
         delivered_payloads_cache,
         known_validators_loaded,

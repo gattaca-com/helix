@@ -23,7 +23,7 @@ pub struct RelayConfig {
     #[serde(default)]
     pub relays: Vec<RelayGossipConfig>,
     #[serde(default)]
-    pub p2p: P2PConfig,
+    pub relay_network: RelayNetworkConfig,
     #[serde(default)]
     pub builders: Vec<BuilderConfig>,
     #[serde(default)]
@@ -210,13 +210,13 @@ pub struct RelayGossipConfig {
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
-pub struct P2PConfig {
-    /// Whether P2P functionality is enabled or not
+pub struct RelayNetworkConfig {
+    /// Whether functionality is enabled or not
     #[serde(default = "default_bool::<false>")]
     pub is_enabled: bool,
     /// Information on known peers
     #[serde(default)]
-    pub peers: Vec<P2PPeerConfig>,
+    pub peers: Vec<RelayNetworkPeerConfig>,
     /// Duration until the first cutoff (t_1)
     #[serde(default = "default_u64::<2000>")]
     pub cutoff_1_ms: u64,
@@ -226,8 +226,8 @@ pub struct P2PConfig {
     pub cutoff_2_ms: u64,
 }
 
-impl P2PConfig {
-    /// Validates P2P config is sane
+impl RelayNetworkConfig {
+    /// Validates config is sane
     pub fn validate(&self) {
         let mut peer_pubkeys = HashSet::with_capacity(self.peers.len());
         for peer in &self.peers {
@@ -240,9 +240,9 @@ impl P2PConfig {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct P2PPeerConfig {
+pub struct RelayNetworkPeerConfig {
     /// The URL of the peer.
-    /// A valid URL is of the form 'ws://<peer-url>/relay/v1/p2p'
+    /// A valid URL is of the form 'ws://<peer-url>/relay/v1/network'
     pub url: String,
     /// The BLS public key of the peer, to verify its identity.
     pub pubkey: BlsPublicKeyBytes,
@@ -388,8 +388,8 @@ impl RouterConfig {
         ]);
     }
 
-    pub fn enable_p2p(&mut self) {
-        self.extend([Route::P2P]);
+    pub fn enable_relay_network(&mut self) {
+        self.extend([Route::RelayNetwork]);
     }
 
     fn contains(&self, route: Route) -> bool {
@@ -490,7 +490,7 @@ pub enum Route {
     ValidatorRegistration,
     SubmitHeaderV3,
     GetInclusionList,
-    P2P,
+    RelayNetwork,
 }
 
 impl Route {
@@ -514,7 +514,7 @@ impl Route {
             Route::ProposerApi => panic!("ProposerApi is not a real route"),
             Route::DataApi => panic!("DataApi is not a real route"),
             Route::SubmitHeaderV3 => format!("{PATH_BUILDER_API_V3}{PATH_SUBMIT_HEADER}"),
-            Route::P2P => PATH_P2P.to_string(),
+            Route::RelayNetwork => PATH_RELAY_NETWORK.to_string(),
         }
     }
 }
