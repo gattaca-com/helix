@@ -12,7 +12,6 @@ mod tests {
             v2::header_submission::{HeaderSubmissionElectra, SignedHeaderSubmission},
             OptimisticVersion,
         },
-        simulator::BlockSimError,
         utils::{utcnow_ns, utcnow_sec},
         validator_preferences::ValidatorPreferences,
         Filtering, GetPayloadTrace, HeaderSubmissionTrace, PostgresConfig, SubmissionTrace,
@@ -391,19 +390,6 @@ mod tests {
 
         let result =
             db_service.db_demote_builder(0, &public_key, &Default::default(), "".to_string()).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_save_simulation_result() {
-        run_setup().await;
-
-        let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
-        let block_hash = Default::default();
-        let block_sim_result = BlockSimError::Timeout;
-
-        let result =
-            db_service.save_simulation_result(block_hash, block_sim_result.to_string()).await;
         assert!(result.is_ok());
     }
 

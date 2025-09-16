@@ -193,14 +193,6 @@ impl DatabaseService for MockDatabaseService {
         Ok(())
     }
 
-    async fn save_simulation_result(
-        &self,
-        _block_hash: B256,
-        _block_sim_error: String,
-    ) -> Result<(), DatabaseError> {
-        Ok(())
-    }
-
     async fn get_bids(
         &self,
         _filters: &BidFilters,

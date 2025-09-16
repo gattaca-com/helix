@@ -451,18 +451,9 @@ impl<A: Api> BuilderApi<A> {
         }
 
         if let Err(err) =
-            self.db.db_demote_builder(slot, builder_public_key, block_hash, reason.clone()).await
+            self.db.db_demote_builder(slot, builder_public_key, block_hash, reason).await
         {
             self.failsafe_triggered.store(true, Ordering::Relaxed);
-            error!(
-                builder=%builder_public_key,
-                err=%err,
-                "Failed to demote builder in database"
-            );
-        }
-
-        // TODO: do we even need this?
-        if let Err(err) = self.db.save_simulation_result(*block_hash, reason).await {
             error!(
                 builder=%builder_public_key,
                 err=%err,

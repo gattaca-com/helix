@@ -114,12 +114,6 @@ pub trait DatabaseService: Send + Sync + Clone {
         reason: String,
     ) -> Result<(), DatabaseError>;
 
-    async fn save_simulation_result(
-        &self,
-        block_hash: B256,
-        block_sim_error: String,
-    ) -> Result<(), DatabaseError>;
-
     async fn get_bids(
         &self,
         filters: &BidFilters,
