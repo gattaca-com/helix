@@ -5,9 +5,9 @@ use helix_types::BlsPublicKeyBytes;
 use tracing::{error, trace, warn};
 
 use crate::{
-    event_handlers::{InclusionListEvent, NetworkEvent},
+    event_handlers::{InclusionListEvent, InclusionListEventInfo, NetworkEvent},
     inclusion_lists::consensus,
-    messages::{InclusionListMessage, NetworkMessage},
+    messages::{InclusionListMessage, InclusionListMessageInfo, NetworkMessage},
     RelayNetworkManager,
 };
 
@@ -34,7 +34,15 @@ impl MultiRelayInclusionListsService {
         }
     }
 
-    pub(crate) fn handle_local_inclusion_list(&mut self, event: InclusionListEvent) {
+    pub(crate) fn handle(&mut self, event: InclusionListEvent) {
+        match event {
+            InclusionListEvent::Local(event) => self.handle_local_inclusion_list(event),
+            InclusionListEvent::Shared(event) => self.handle_shared_inclusion_list(event),
+            InclusionListEvent::Final(event) => self.handle_final_inclusion_list(event),
+        }
+    }
+
+    pub(crate) fn handle_local_inclusion_list(&mut self, event: InclusionListEventInfo) {
         // Check event's slot is not in the past
         if self.last_slot > event.slot {
             warn!(slot=%event.slot, last_slot=%self.last_slot, "got local inclusion list event for a past slot, skipping");
@@ -62,10 +70,10 @@ impl MultiRelayInclusionListsService {
         }
         self.last_slot = event.slot;
 
-        let msg = InclusionListMessage::new(event.slot, event.inclusion_list.clone());
+        let msg = InclusionListMessageInfo::new(event.slot, event.inclusion_list.clone());
 
         trace!(slot=%event.slot, "broadcasting local inclusion list");
-        self.network_api.broadcast(NetworkMessage::LocalInclusionList(msg));
+        self.network_api.broadcast(NetworkMessage::InclusionList(InclusionListMessage::Local(msg)));
 
         let api_events_tx = self.network_api.api_events_tx.clone();
 
@@ -73,7 +81,7 @@ impl MultiRelayInclusionListsService {
         tokio::spawn(async move {
             // Sleep until t_1 time
             tokio::time::sleep(sleep_time).await;
-            let shared_il_msg = NetworkEvent::SharedInclusionList(event);
+            let shared_il_msg = NetworkEvent::InclusionList(InclusionListEvent::Shared(event));
             let _ = api_events_tx
                 .send(shared_il_msg)
                 .await
@@ -81,21 +89,22 @@ impl MultiRelayInclusionListsService {
         });
     }
 
-    pub(crate) fn handle_shared_inclusion_list(&mut self, event: InclusionListEvent) {
+    pub(crate) fn handle_shared_inclusion_list(&mut self, event: InclusionListEventInfo) {
         if self.last_slot > event.slot {
             warn!(slot=%event.slot, last_slot=%self.last_slot, "got shared inclusion list event for a past slot, skipping");
             let _ = event.result_tx.send(Some(event.inclusion_list));
             return;
         }
-        let InclusionListEvent { slot, inclusion_list, .. } = event;
+        let InclusionListEventInfo { slot, inclusion_list, .. } = event;
         trace!(local_ils_count=%self.local_ils.len(), "computing shared inclusion list");
 
         let shared_il =
             consensus::compute_shared_inclusion_list(&self.local_ils, slot, inclusion_list);
         self.local_ils.clear();
 
-        let msg = InclusionListMessage::new(slot, shared_il.clone());
-        self.network_api.broadcast(NetworkMessage::SharedInclusionList(msg));
+        let msg = InclusionListMessageInfo::new(slot, shared_il.clone());
+        self.network_api
+            .broadcast(NetworkMessage::InclusionList(InclusionListMessage::Shared(msg)));
 
         let api_events_tx = self.network_api.api_events_tx.clone();
 
@@ -109,13 +118,14 @@ impl MultiRelayInclusionListsService {
             let _ = event.result_tx.send(Some(shared_il));
             return;
         }
-        let settle_event = InclusionListEvent { inclusion_list: shared_il, ..event };
+        let settle_event = InclusionListEventInfo { inclusion_list: shared_il, ..event };
 
         // Spawn a task that sleeps until cutoff time and advances us to the next step
         tokio::spawn(async move {
             // Sleep until t_2 time
             tokio::time::sleep(sleep_time).await;
-            let shared_il_msg = NetworkEvent::FinalInclusionList(settle_event);
+            let shared_il_msg =
+                NetworkEvent::InclusionList(InclusionListEvent::Final(settle_event));
             let _ = api_events_tx
                 .send(shared_il_msg)
                 .await
@@ -123,13 +133,13 @@ impl MultiRelayInclusionListsService {
         });
     }
 
-    pub(crate) fn handle_final_inclusion_list(&mut self, event: InclusionListEvent) {
+    pub(crate) fn handle_final_inclusion_list(&mut self, event: InclusionListEventInfo) {
         if self.last_slot > event.slot {
             warn!(slot=%event.slot, last_slot=%self.last_slot, "got final inclusion list event for a past slot, skipping");
             let _ = event.result_tx.send(Some(event.inclusion_list));
             return;
         }
-        let InclusionListEvent { slot, inclusion_list, result_tx } = event;
+        let InclusionListEventInfo { slot, inclusion_list, result_tx } = event;
         trace!(shared_ils_count=%self.shared_ils.len(), "computing final inclusion list");
 
         let final_il =
@@ -143,10 +153,25 @@ impl MultiRelayInclusionListsService {
             .inspect_err(|e| error!(err=?e, "failed to send final inclusion list response"));
     }
 
-    pub(crate) fn handle_peer_local_inclusion_list(
+    pub(crate) fn handle_peer_message(
         &mut self,
         sender: BlsPublicKeyBytes,
         il_msg: InclusionListMessage,
+    ) {
+        match il_msg {
+            InclusionListMessage::Local(il_msg) => {
+                self.handle_peer_local_inclusion_list(sender, il_msg)
+            }
+            InclusionListMessage::Shared(il_msg) => {
+                self.handle_peer_shared_inclusion_list(sender, il_msg)
+            }
+        }
+    }
+
+    pub(crate) fn handle_peer_local_inclusion_list(
+        &mut self,
+        sender: BlsPublicKeyBytes,
+        il_msg: InclusionListMessageInfo,
     ) {
         if self.last_slot > il_msg.slot {
             warn!(slot=%il_msg.slot, last_slot=%self.last_slot, "got local inclusion list from peer for a past slot, skipping");
@@ -159,7 +184,7 @@ impl MultiRelayInclusionListsService {
     pub(crate) fn handle_peer_shared_inclusion_list(
         &mut self,
         sender: BlsPublicKeyBytes,
-        il_msg: InclusionListMessage,
+        il_msg: InclusionListMessageInfo,
     ) {
         if self.last_slot > il_msg.slot {
             warn!(slot=%il_msg.slot, last_slot=%self.last_slot, "got shared inclusion list from peer for a past slot, skipping");

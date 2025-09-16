@@ -57,15 +57,12 @@ impl RawNetworkMessage {
 /// [crate::RelayNetworkManager::run_event_handling_loop].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum NetworkMessage {
-    LocalInclusionList(InclusionListMessage),
-    SharedInclusionList(InclusionListMessage),
+    InclusionList(InclusionListMessage),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum NetworkMessageType {
-    /// Inclusion list related messages.
-    /// - [`NetworkMessage::LocalInclusionList`]
-    /// - [`NetworkMessage::SharedInclusionList`]
+    /// Inclusion list related messages ([`NetworkMessage::InclusionList`])
     InclusionList,
     #[serde(other)]
     Unknown,
@@ -74,8 +71,7 @@ pub(crate) enum NetworkMessageType {
 impl NetworkMessageType {
     pub(crate) fn supports_message(&self, message: &NetworkMessage) -> bool {
         match (self, message) {
-            (NetworkMessageType::InclusionList, NetworkMessage::LocalInclusionList(_)) => true,
-            (NetworkMessageType::InclusionList, NetworkMessage::SharedInclusionList(_)) => true,
+            (NetworkMessageType::InclusionList, NetworkMessage::InclusionList(_)) => true,
             (NetworkMessageType::Unknown, _) => false,
         }
     }
@@ -170,12 +166,18 @@ impl HelloMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InclusionListMessage {
+pub enum InclusionListMessage {
+    Local(InclusionListMessageInfo),
+    Shared(InclusionListMessageInfo),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InclusionListMessageInfo {
     pub slot: u64,
     pub inclusion_list: InclusionList,
 }
 
-impl InclusionListMessage {
+impl InclusionListMessageInfo {
     pub fn new(slot: u64, inclusion_list: InclusionList) -> Self {
         Self { slot, inclusion_list }
     }
@@ -190,7 +192,10 @@ mod tests {
     use helix_types::Transaction;
     use serde::{Deserialize, Serialize};
 
-    use crate::messages::{HelloMessage, InclusionListMessage, NetworkMessage, RawNetworkMessage};
+    use crate::messages::{
+        HelloMessage, InclusionListMessage, InclusionListMessageInfo, NetworkMessage,
+        RawNetworkMessage,
+    };
 
     fn test_roundtrip<T: Serialize + for<'de> Deserialize<'de> + Debug>(msg: &T) {
         let serialized = serde_json::to_string(msg).unwrap();
@@ -210,8 +215,7 @@ mod tests {
 
         #[derive(Debug, Clone, Serialize, Deserialize)]
         enum NewNetworkMessage {
-            LocalInclusionList(InclusionListMessage),
-            SharedInclusionList(InclusionListMessage),
+            InclusionList(InclusionListMessage),
             NewVariant(SomeStruct),
         }
 
@@ -238,10 +242,10 @@ mod tests {
         deserialized.unwrap_err();
 
         // Check that old messages still deserialize correctly
-        let old_message = RawNetworkMessage::Other(NetworkMessage::LocalInclusionList(
-            InclusionListMessage::new(123, InclusionList {
+        let old_message = RawNetworkMessage::Other(NetworkMessage::InclusionList(
+            InclusionListMessage::Local(InclusionListMessageInfo::new(123, InclusionList {
                 txs: vec![Transaction(Bytes::from([0, 6, 5]))].into(),
-            }),
+            })),
         ));
         let serialized = serde_json::to_string(&old_message).unwrap();
         let _: NewRawNetworkMessage = serde_json::from_str(&serialized).unwrap();
@@ -280,18 +284,23 @@ mod tests {
     #[test]
     fn test_local_inclusion_list_encoding() {
         let serialized_message = r#"{
-            "LocalInclusionList": {
-                "slot": 12345,
-                "inclusion_list": {
-                    "txs": [
-                        "0x6236236262362236f362362362a2626436575685967984232414",
-                        "0x356723567235672f56723567235672a5672356723567235672356723567238"
-                    ]
+            "InclusionList": {
+                "Local": {
+                    "slot": 12345,
+                    "inclusion_list": {
+                        "txs": [
+                            "0x6236236262362236f362362362a2626436575685967984232414",
+                            "0x356723567235672f56723567235672a5672356723567235672356723567238"
+                        ]
+                    }
                 }
             }
         }"#;
         let message: RawNetworkMessage = serde_json::from_str(&serialized_message).unwrap();
-        assert!(matches!(message, RawNetworkMessage::Other(NetworkMessage::LocalInclusionList(_))));
+        assert!(matches!(
+            message,
+            RawNetworkMessage::Other(NetworkMessage::InclusionList(InclusionListMessage::Local(_)))
+        ));
 
         test_roundtrip(&message);
     }
@@ -299,20 +308,24 @@ mod tests {
     #[test]
     fn test_shared_inclusion_list_encoding() {
         let serialized_message = r#"{
-            "SharedInclusionList": {
-                "slot": 12345,
-                "inclusion_list": {
-                    "txs": [
-                        "0x6236236262362236f362362362a2626436575685967984232414",
-                        "0x356723567235672f56723567235672a5672356723567235672356723567238"
-                    ]
+            "InclusionList": {
+                "Shared": {
+                    "slot": 12345,
+                    "inclusion_list": {
+                        "txs": [
+                            "0x6236236262362236f362362362a2626436575685967984232414",
+                            "0x356723567235672f56723567235672a5672356723567235672356723567238"
+                        ]
+                    }
                 }
             }
         }"#;
         let message: RawNetworkMessage = serde_json::from_str(&serialized_message).unwrap();
         assert!(matches!(
             message,
-            RawNetworkMessage::Other(NetworkMessage::SharedInclusionList(_))
+            RawNetworkMessage::Other(NetworkMessage::InclusionList(InclusionListMessage::Shared(
+                _
+            )))
         ));
 
         test_roundtrip(&message);

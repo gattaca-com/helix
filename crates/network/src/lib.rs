@@ -10,7 +10,7 @@ use tracing::{error, info, warn};
 
 use crate::{
     api::RelayNetworkApi,
-    event_handlers::{InclusionListEvent, NetworkEvent},
+    event_handlers::{InclusionListEvent, InclusionListEventInfo, NetworkEvent},
     messages::NetworkMessage,
 };
 
@@ -92,17 +92,18 @@ impl RelayNetworkManager {
             return Some(inclusion_list);
         }
         let (result_tx, result_rx) = oneshot::channel();
-        let event = NetworkEvent::LocalInclusionList(InclusionListEvent {
-            slot,
-            inclusion_list,
-            result_tx,
-        });
+        let event =
+            NetworkEvent::InclusionList(InclusionListEvent::Local(InclusionListEventInfo {
+                slot,
+                inclusion_list,
+                result_tx,
+            }));
         // Send event to API
         if let Err(err) = self.api_events_tx.send(event).await {
             // If API service is unavailable, just return the original IL and log a warning
             warn!("failed to send inclusion list to network API");
             match err.0 {
-                NetworkEvent::LocalInclusionList(event) => {
+                NetworkEvent::InclusionList(InclusionListEvent::Local(event)) => {
                     return Some(event.inclusion_list);
                 }
                 _ => unreachable!("the returned value is an inclusion list event"),
