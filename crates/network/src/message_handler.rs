@@ -1,6 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use axum::{extract::WebSocketUpgrade, response::IntoResponse, Extension};
 use futures::{SinkExt, StreamExt};
 use helix_types::BlsPublicKeyBytes;
 use tokio_tungstenite::connect_async;
@@ -13,7 +12,7 @@ use crate::{
         NetworkMessageType, RawNetworkMessage,
     },
     socket::PeerSocket,
-    RelayNetworkApi,
+    RelayNetworkManager,
 };
 
 struct PeerInfo {
@@ -35,21 +34,7 @@ impl PeerInfo {
     }
 }
 
-impl RelayNetworkApi {
-    #[tracing::instrument(skip_all)]
-    pub async fn connect(
-        Extension(api): Extension<Arc<RelayNetworkApi>>,
-        ws: WebSocketUpgrade,
-    ) -> Result<impl IntoResponse, std::convert::Infallible> {
-        debug!("got new peer connection");
-        // Upgrade connection to WebSocket, spawning a new task to handle the connection
-        let ws = ws
-            .on_failed_upgrade(|error| warn!(%error, "websocket upgrade failed"))
-            .on_upgrade(|socket| api.on_peer_connection(socket.into()));
-
-        Ok(ws)
-    }
-
+impl RelayNetworkManager {
     pub(crate) async fn connect_to_peer(
         self: Arc<Self>,
         request: axum::http::Request<()>,
@@ -74,7 +59,7 @@ impl RelayNetworkApi {
         }
     }
 
-    async fn on_peer_connection(self: Arc<Self>, socket: PeerSocket) {
+    pub(crate) async fn on_peer_connection(self: Arc<Self>, socket: PeerSocket) {
         // If connection fails, log the error and return.
         let _ = self
             .handle_ws_connection(socket, None)

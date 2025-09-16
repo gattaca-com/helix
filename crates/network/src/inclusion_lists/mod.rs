@@ -19,7 +19,10 @@ mod tests {
     use tracing::{error, info};
     use tree_hash::TreeHash;
 
-    use crate::{inclusion_lists::consensus::INCLUSION_LIST_MAX_BYTES, RelayNetworkApi};
+    use crate::{
+        api::RelayNetworkApi, inclusion_lists::consensus::INCLUSION_LIST_MAX_BYTES,
+        RelayNetworkManager,
+    };
 
     const RELAY_CONNECT_PATH: &str = "/relay/v1/network";
 
@@ -68,16 +71,16 @@ mod tests {
         port: u16,
         private_key: BlsSecretKey,
         network_config: RelayNetworkConfig,
-    ) -> Arc<RelayNetworkApi> {
+    ) -> Arc<RelayNetworkManager> {
         let keypair = BlsKeypair::from_components(private_key.public_key(), private_key);
         let pubkey = keypair.pk.clone();
         let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info.clone()));
 
-        let network_api = RelayNetworkApi::new(network_config, relay_signing_context);
+        let network_api = RelayNetworkManager::new(network_config, relay_signing_context);
 
         let router = Router::new()
             .route(RELAY_CONNECT_PATH, any(RelayNetworkApi::connect))
-            .layer(Extension(network_api.clone()));
+            .layer(Extension(network_api.api()));
 
         info!("Listening on ws://127.0.0.1:{port}{RELAY_CONNECT_PATH} with pubkey: {pubkey}");
 

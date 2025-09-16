@@ -6,7 +6,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     inclusion_lists::service::MultiRelayInclusionListsService, messages::NetworkMessage,
-    RelayNetworkApi,
+    RelayNetworkManager,
 };
 
 #[derive(Debug)]
@@ -24,7 +24,7 @@ pub(crate) struct InclusionListEvent {
     pub(crate) result_tx: oneshot::Sender<Option<InclusionList>>,
 }
 
-impl RelayNetworkApi {
+impl RelayNetworkManager {
     pub(crate) async fn event_handling_loop(
         self: Arc<Self>,
         mut events_rx: mpsc::Receiver<NetworkEvent>,

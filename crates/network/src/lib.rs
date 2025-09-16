@@ -9,24 +9,26 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tracing::{error, info, warn};
 
 use crate::{
+    api::RelayNetworkApi,
     event_handlers::{InclusionListEvent, NetworkEvent},
     messages::NetworkMessage,
 };
 
+pub mod api;
 mod event_handlers;
 pub(crate) mod inclusion_lists;
 mod message_handler;
 pub mod messages;
 mod socket;
 
-pub struct RelayNetworkApi {
+pub struct RelayNetworkManager {
     broadcast_tx: broadcast::Sender<NetworkMessage>,
     api_events_tx: mpsc::Sender<NetworkEvent>,
     signing_context: Arc<RelaySigningContext>,
     network_config: RelayNetworkConfig,
 }
 
-impl RelayNetworkApi {
+impl RelayNetworkManager {
     /// Creates a new instance.
     /// Starts new tasks for starting new connections and handling incoming messages.
     pub fn new(
@@ -70,6 +72,10 @@ impl RelayNetworkApi {
         tokio::spawn(this.clone().event_handling_loop(api_events_rx));
         info!(peer_count=%this.network_config.peers.len(), "Initialized network module");
         this
+    }
+
+    pub fn api(self: &Arc<Self>) -> RelayNetworkApi {
+        RelayNetworkApi::new(self.clone())
     }
 
     pub fn is_enabled(&self) -> bool {

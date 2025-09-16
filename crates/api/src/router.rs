@@ -12,7 +12,7 @@ use axum::{
     Extension, Router,
 };
 use helix_common::{utils::extract_request_id, Route, RouterConfig};
-use helix_network::RelayNetworkApi;
+use helix_network::api::RelayNetworkApi;
 use hyper::{HeaderMap, Uri};
 use tower::{timeout::TimeoutLayer, BoxError, ServiceBuilder};
 use tower_governor::{
@@ -40,7 +40,7 @@ pub fn build_router<A: Api>(
     builder_api: Arc<BuilderApi<A>>,
     proposer_api: Arc<ProposerApi<A>>,
     data_api: Arc<DataApi<A>>,
-    relay_network_api: Arc<RelayNetworkApi>,
+    relay_network_api: RelayNetworkApi,
     bids_cache: BidsCache,
     delivered_payloads_cache: DeliveredPayloadsCache,
     known_validators_loaded: Arc<AtomicBool>,

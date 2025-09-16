@@ -8,11 +8,11 @@ use crate::{
     event_handlers::{InclusionListEvent, NetworkEvent},
     inclusion_lists::consensus,
     messages::{InclusionListMessage, NetworkMessage},
-    RelayNetworkApi,
+    RelayNetworkManager,
 };
 
 pub(crate) struct MultiRelayInclusionListsService {
-    network_api: Arc<RelayNetworkApi>,
+    network_api: Arc<RelayNetworkManager>,
     cutoff_1: Duration,
     cutoff_2: Duration,
 
@@ -23,7 +23,7 @@ pub(crate) struct MultiRelayInclusionListsService {
 }
 
 impl MultiRelayInclusionListsService {
-    pub(crate) fn new(network_api: Arc<RelayNetworkApi>) -> Self {
+    pub(crate) fn new(network_api: Arc<RelayNetworkManager>) -> Self {
         Self {
             cutoff_1: Duration::from_millis(network_api.network_config.cutoff_1_ms),
             cutoff_2: Duration::from_millis(network_api.network_config.cutoff_2_ms),
