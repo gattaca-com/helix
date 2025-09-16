@@ -41,7 +41,7 @@ impl<T> RpcResult<T> {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockMergeResponse {
     pub execution_payload: ExecutionPayload,
     pub execution_requests: ExecutionRequests,
@@ -287,20 +287,15 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
 
         debug!("Processing merge RPC response, json_response = {:?}", &json_response);
 
-        match &json_response {
-            Value::Object(obj) => {
-                if let Some(Value::String(message)) = obj.get("error") {
-                    Err(BlockSimError::BlockValidationFailed(message.clone()))
-                } else {
-                    Ok(serde_json::from_value(json_response).map_err(|err| {
-                        error!(%err, "error deserializing mergeBlockV1 response");
-                        BlockSimError::RpcError(err.to_string())
-                    })?)
-                }
+        // Need to deserialize the response here to RpcResult<BlockMergeResponse>
+        match &serde_json::from_value::<RpcResult<BlockMergeResponse>>(json_response.clone()) {
+            Ok(RpcResult::Ok(merge_response)) => Ok(merge_response.clone()),
+            Ok(RpcResult::Err { error }) => {
+                Err(BlockSimError::BlockValidationFailed(error.message.clone()))
             }
-            _ => {
-                error!(%json_response, "unexpected mergeBlockV1 response format");
-                Err(BlockSimError::RpcError("unexpected response format".into()))
+            Err(err) => {
+                error!(%err, "error deserializing mergeBlockV1 response");
+                Err(BlockSimError::RpcError(err.to_string()))
             }
         }
     }
