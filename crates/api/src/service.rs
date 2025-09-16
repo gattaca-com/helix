@@ -65,7 +65,8 @@ pub async fn run_api_service<A: Api>(
     let (sim_requests_tx, sim_requests_rx) = mpsc::channel(10_000);
     let (merge_requests_tx, merge_requests_rx) = mpsc::channel(10_000);
 
-    let sim_manager = SimulatorManager::new(config.simulators.clone());
+    let accept_optimistic = Arc::new(AtomicBool::new(true));
+    let sim_manager = SimulatorManager::new(config.simulators.clone(), accept_optimistic.clone());
     tokio::spawn(sim_manager.run(sim_requests_rx, merge_requests_rx, config.is_local_dev));
 
     let builder_api = BuilderApi::<A>::new(
@@ -83,6 +84,7 @@ pub async fn run_api_service<A: Api>(
         shared_floor,
         shared_best_header.clone(),
         sim_requests_tx,
+        accept_optimistic,
     );
     let builder_api = Arc::new(builder_api);
 

@@ -1,5 +1,9 @@
 use std::{
     self,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -40,10 +44,11 @@ pub struct SimulatorManager {
     join_set: JoinSet<SimReponse>,
     last_bid_slot: u64,
     local_telemetry: LocalTelemetry,
+    accept_optimistic: Arc<AtomicBool>,
 }
 
 impl SimulatorManager {
-    pub fn new(configs: Vec<SimulatorConfig>) -> Self {
+    pub fn new(configs: Vec<SimulatorConfig>, accept_optimistic: Arc<AtomicBool>) -> Self {
         let client =
             reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
 
@@ -61,6 +66,7 @@ impl SimulatorManager {
             join_set,
             last_bid_slot: 0,
             local_telemetry: LocalTelemetry::default(),
+            accept_optimistic,
         }
     }
 
@@ -95,7 +101,17 @@ impl SimulatorManager {
                 Some(req) = sim_requests_rx.recv() => self.handle_sim_request(req),
                 Some(req) = merge_requests_rx.recv() => self.handle_merge_request(req),
                 Some(Ok(resp)) = self.join_set.join_next(), if !self.join_set.is_empty()  => self.handle_task_response(resp),
-                Some((id, is_synced)) = sync_rx.recv() => self.simulators[id].is_synced = is_synced,
+                Some((id, is_synced)) = sync_rx.recv() => {
+                    self.simulators[id].is_synced = is_synced;
+                    if !is_local_dev {
+                        let new = self.simulators.iter().any(|s|s.can_simulate_light());
+                        let prev = self.accept_optimistic.swap(new, Ordering::Relaxed);
+                        if new != prev {
+                            warn!(prev, new, "changing optimistic simulation status");
+                        }
+                    }
+
+                },
             }
         }
     }

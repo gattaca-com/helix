@@ -35,14 +35,19 @@ impl SimulatorClient {
         &self.config.url
     }
 
-    pub fn can_simulate(&self) -> bool {
+    /// A lighter check to decide whether we should accept optimistic submissions
+    pub fn can_simulate_light(&self) -> bool {
         self.is_synced &&
-            match self.config.max_concurrent_tasks {
-                Some(max) => self.pending < max,
-                None => true,
-            } &&
             match self.paused_until {
                 Some(until) => Instant::now() > until,
+                None => true,
+            }
+    }
+
+    pub fn can_simulate(&self) -> bool {
+        self.can_simulate_light() &&
+            match self.config.max_concurrent_tasks {
+                Some(max) => self.pending < max,
                 None => true,
             }
     }

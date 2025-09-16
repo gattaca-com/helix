@@ -80,8 +80,10 @@ pub struct BuilderApi<A: Api> {
     pub sequence_numbers: DashMap<BlsPublicKeyBytes, (Slot, u64)>,
     /// Hydration task sender
     pub hydration_tx: tokio::sync::mpsc::Sender<HydrationMessage>,
-    /// Failsafe: if we fail to demote a builder we pause all optimistic simulations
+    /// Failsafe: if we fail to demote we pause all optimistic submissions
     pub failsafe_triggered: Arc<AtomicBool>,
+    /// Failsafe: if we fail don't have any synced client we pause all optimistic submissions
+    pub accept_optimistic: Arc<AtomicBool>,
     /// Send simulation requests
     pub sim_requests_tx: mpsc::Sender<SimulatorRequest>,
 }
@@ -102,6 +104,7 @@ impl<A: Api> BuilderApi<A> {
         shared_floor: FloorBid,
         shared_best_header: BestGetHeader,
         sim_requests_tx: mpsc::Sender<SimulatorRequest>,
+        accept_optimistic: Arc<AtomicBool>,
     ) -> Self {
         let tx_root_cache = DashMap::with_capacity(1000);
         let sequence_numbers = DashMap::with_capacity(1000);
@@ -152,6 +155,7 @@ impl<A: Api> BuilderApi<A> {
             sim_requests_tx,
 
             failsafe_triggered: Arc::new(false.into()),
+            accept_optimistic,
         }
     }
 
@@ -356,7 +360,9 @@ impl<A: Api> BuilderApi<A> {
                 return false;
             }
 
-            if self.failsafe_triggered.load(Ordering::Relaxed) {
+            if self.failsafe_triggered.load(Ordering::Relaxed) ||
+                !self.accept_optimistic.load(Ordering::Relaxed)
+            {
                 return false;
             }
 
