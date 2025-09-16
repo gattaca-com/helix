@@ -125,7 +125,7 @@ impl<T> RpcResult<T> {
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockMergeResponse {
     pub execution_payload: ExecutionPayload,
     pub execution_requests: ExecutionRequests,

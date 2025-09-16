@@ -6,6 +6,7 @@ use reqwest::{
     RequestBuilder,
 };
 use serde_json::{json, Value};
+use tracing::debug;
 
 use crate::builder::{
     simulator::{BlockMergeResponse, BlockSimRpcResponse, RpcResult},
@@ -106,6 +107,8 @@ impl SimulatorClient {
         let res = to_send.send().await?;
         let res = res.error_for_status()?;
         let res: RpcResult<BlockMergeResponse> = res.json().await?;
+
+        debug!(?res, "received merge response");
 
         match res {
             RpcResult::Err { error } => Err(BlockSimError::BlockValidationFailed(error.message)),

@@ -225,6 +225,7 @@ impl<A: Api> ProposerApi<A> {
         let fork = proposer_api.chain_info.current_fork_name();
 
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
+        proposer_api.auctioneer.mark_header_served(&bid_block_hash);
 
         if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
             // Request payload in the background
