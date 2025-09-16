@@ -98,7 +98,7 @@ impl ExecutionPayload {
         Ok(())
     }
 
-    pub fn to_header(&self) -> ExecutionPayloadHeader {
+    pub fn to_header(&self, withdrawals_root: Option<B256>) -> ExecutionPayloadHeader {
         ExecutionPayloadHeader {
             parent_hash: self.parent_hash,
             fee_recipient: self.fee_recipient,
@@ -114,7 +114,7 @@ impl ExecutionPayload {
             base_fee_per_gas: self.base_fee_per_gas,
             block_hash: self.block_hash,
             transactions_root: self.transaction_root(),
-            withdrawals_root: self.withdrawals.tree_hash_root(),
+            withdrawals_root: withdrawals_root.unwrap_or_else(|| self.withdrawals.tree_hash_root()),
             blob_gas_used: self.blob_gas_used,
             excess_blob_gas: self.excess_blob_gas,
         }
@@ -386,7 +386,7 @@ mod tests {
             LhExecutionPayload::from_ssz_bytes_by_fork(&ssz_bytes, ForkName::Electra).unwrap();
         let lh_decode = lh_decode.as_electra().unwrap();
 
-        let header = our_payload.to_header();
+        let header = our_payload.to_header(None);
         let lh_header = LhExecutionPayloadHeader::from(lh_decode);
 
         assert_eq!(header.tree_hash_root(), lh_header.tree_hash_root());

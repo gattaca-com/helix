@@ -156,6 +156,7 @@ impl BidSorterMessage {
         is_cancellable: bool,
         merging_preferences: BlockMergingPreferences,
         before_sorter_ns: u64,
+        withdrawals_root: B256,
     ) -> Self {
         let bid_trace = submission.bid_trace();
         let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
@@ -166,7 +167,7 @@ impl BidSorterMessage {
             trace.simulation.saturating_sub(trace.signature)
         };
 
-        let header = bid_submission_to_builder_bid_unsigned(submission);
+        let header = bid_submission_to_builder_bid_unsigned(submission, withdrawals_root);
         Self::Submission {
             bid,
             builder_pubkey: bid_trace.builder_pubkey,
