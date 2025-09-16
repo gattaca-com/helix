@@ -378,6 +378,9 @@ impl<A: Api> ProposerApi<A> {
             self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot());
         let slot_cutoff_millis = (slot_time * 1000) + GET_PAYLOAD_REQUEST_CUTOFF_MS as u64;
 
+        let mut is_v3 = false;
+        let mut builder_pub_key = None;
+
         if let Some((builder_pubkey, payload_address)) = self.auctioneer.get_payload_url(block_hash)
         {
             // Fetch v3 optimistic payload from builder. This will complete asynchronously.
@@ -393,6 +396,9 @@ impl<A: Api> ProposerApi<A> {
             {
                 error!("Failed to send v3 payload request: {e:?}");
             }
+
+            is_v3 = true;
+            builder_pub_key = Some(builder_pubkey);
         }
 
         let mut retry = 0; // Try at least once to cover case where get_payload is called too late.
@@ -436,6 +442,17 @@ impl<A: Api> ProposerApi<A> {
             sleep(RETRY_DELAY).await;
         }
 
+        if is_v3 && self.auctioneer.has_header_been_served(block_hash) {
+            warn!("v3 payload request was made, but no payload found. The builder may have failed to deliver the payload in time.");
+            self.demote_builder(
+                slot,
+                &builder_pub_key.expect("builder pubkey must be set if is_v3 is true"),
+                block_hash,
+                "v3 header served but no payload found",
+            )
+            .await;
+        }
+
         error!("max retries reached trying to fetch execution payload");
         Err(ProposerApiError::NoExecutionPayloadFound)
     }
@@ -456,6 +473,24 @@ impl<A: Api> ProposerApi<A> {
                 error!(%err, "error saving payload to database");
             }
         });
+    }
+
+    async fn demote_builder(
+        &self,
+        slot: u64,
+        builder: &BlsPublicKeyBytes,
+        block_hash: &B256,
+        reason: &str,
+    ) {
+        if let Err(err) = self.auctioneer.demote_builder(builder) {
+            error!(%err, %builder, "failed to demote builder in auctioneer");
+        }
+
+        if let Err(err) =
+            self.db.db_demote_builder(slot, builder, block_hash, reason.to_string()).await
+        {
+            error!(%err,  %builder, "Failed to demote builder in database");
+        }
     }
 
     /// `broadcast_signed_block` sends the provided signed block to all registered broadcasters
