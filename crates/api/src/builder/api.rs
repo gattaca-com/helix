@@ -1,6 +1,9 @@
 use std::{
     collections::HashMap,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -18,7 +21,7 @@ use helix_common::{
     bid_submission::BidSubmission,
     chain_info::ChainInfo,
     local_cache::LocalCache,
-    metrics::HYDRATION_LATENCY,
+    metrics::{SimulatorMetrics, HYDRATION_LATENCY},
     simulator::BlockSimError,
     utils::utcnow_ns,
     BuilderInfo, RelayConfig, SubmissionTrace, ValidatorPreferences,
@@ -33,16 +36,15 @@ use helix_types::{
 };
 use http::{HeaderMap, HeaderValue, Uri};
 use parking_lot::RwLock;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, trace, warn};
 
-use super::multi_simulator::MultiSimulator;
 use crate::{
     builder::{
         decoder::SubmissionDecoder,
         error::BuilderApiError,
         hydration::{self, HydrationMessage},
-        BlockSimRequest,
+        BlockSimRequest, SimResult, SimulatorRequest,
     },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::MergingPoolMessage,
@@ -56,7 +58,6 @@ pub struct BuilderApi<A: Api> {
     pub auctioneer: Arc<LocalCache>,
     pub db: Arc<A::DatabaseService>,
     pub chain_info: Arc<ChainInfo>,
-    pub simulator: MultiSimulator<A::DatabaseService>,
     pub gossiper: Arc<GrpcGossiperClientManager>,
     pub metadata_provider: Arc<A::MetadataProvider>,
     pub relay_config: Arc<RelayConfig>,
@@ -79,6 +80,12 @@ pub struct BuilderApi<A: Api> {
     pub sequence_numbers: DashMap<BlsPublicKeyBytes, (Slot, u64)>,
     /// Hydration task sender
     pub hydration_tx: tokio::sync::mpsc::Sender<HydrationMessage>,
+    /// Failsafe: if we fail to demote we pause all optimistic submissions
+    pub failsafe_triggered: Arc<AtomicBool>,
+    /// Failsafe: if we fail don't have any synced client we pause all optimistic submissions
+    pub accept_optimistic: Arc<AtomicBool>,
+    /// Send simulation requests
+    pub sim_requests_tx: mpsc::Sender<SimulatorRequest>,
 }
 
 impl<A: Api> BuilderApi<A> {
@@ -86,7 +93,6 @@ impl<A: Api> BuilderApi<A> {
         auctioneer: Arc<LocalCache>,
         db: Arc<A::DatabaseService>,
         chain_info: Arc<ChainInfo>,
-        simulator: MultiSimulator<A::DatabaseService>,
         gossiper: Arc<GrpcGossiperClientManager>,
         metadata_provider: Arc<A::MetadataProvider>,
         relay_config: RelayConfig,
@@ -97,6 +103,8 @@ impl<A: Api> BuilderApi<A> {
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
         shared_floor: FloorBid,
         shared_best_header: BestGetHeader,
+        sim_requests_tx: mpsc::Sender<SimulatorRequest>,
+        accept_optimistic: Arc<AtomicBool>,
     ) -> Self {
         let tx_root_cache = DashMap::with_capacity(1000);
         let sequence_numbers = DashMap::with_capacity(1000);
@@ -118,14 +126,13 @@ impl<A: Api> BuilderApi<A> {
             }
         });
 
-        let (hydration_tx, hydration_rx) = tokio::sync::mpsc::channel(10_000);
+        let (hydration_tx, hydration_rx) = mpsc::channel(10_000);
         hydration::spawn_hydration_task(hydration_rx);
 
         Self {
             auctioneer,
             db,
             chain_info,
-            simulator,
             gossiper,
             metadata_provider,
             relay_config: Arc::new(relay_config),
@@ -145,6 +152,10 @@ impl<A: Api> BuilderApi<A> {
             sequence_numbers,
 
             hydration_tx,
+            sim_requests_tx,
+
+            failsafe_triggered: Arc::new(false.into()),
+            accept_optimistic,
         }
     }
 
@@ -280,7 +291,7 @@ impl<A: Api> BuilderApi<A> {
             .filter(|il| il.key == current_slot_coord)
             .map(|il| il.inclusion_list.clone());
 
-        let sim_request = BlockSimRequest::new(
+        let request = BlockSimRequest::new(
             registration_info.registration.message.gas_limit,
             payload,
             registration_info.preferences,
@@ -292,19 +303,30 @@ impl<A: Api> BuilderApi<A> {
             return Ok(true)
         }
 
-        let result = self.simulator.process_request(sim_request, builder_info, is_top_bid).await;
+        let sim_optimistic = self.should_process_optimistically(&request, builder_info);
+        let (res_tx, res_rx) = oneshot::channel();
+        let sim_request = SimulatorRequest {
+            request,
+            on_receive_ns: trace.receive,
+            is_top_bid,
+            is_optimistic: sim_optimistic,
+            res_tx,
+        };
 
-        match result {
-            Ok(sim_optimistic) => {
-                trace.simulation = utcnow_ns();
-                debug!(
-                    sim_latency = trace.simulation.saturating_sub(trace.signature),
-                    "block simulation successful"
-                );
+        if sim_optimistic {
+            debug!("skipping simulation");
+            trace.simulation = utcnow_ns();
+            let cloned = self.clone();
+            let builder_info = builder_info.clone();
+            tokio::spawn(async move {
+                let _ = cloned.send_simulation(res_rx, sim_request, &builder_info).await;
+            });
 
-                Ok(sim_optimistic)
-            }
-            Err(err) => match &err {
+            Ok(true)
+        } else if let Err(err) = self.send_simulation(res_rx, sim_request, builder_info).await {
+            trace.simulation = utcnow_ns();
+
+            match &err {
                 BlockSimError::BlockValidationFailed(reason) => {
                     warn!(err = %reason, "block validation failed");
                     Err(BuilderApiError::BlockValidationError(err))
@@ -313,7 +335,130 @@ impl<A: Api> BuilderApi<A> {
                     error!(%err, "error simulating block");
                     Err(BuilderApiError::InternalError)
                 }
-            },
+            }
+        } else {
+            trace.simulation = utcnow_ns();
+
+            debug!(
+                sim_latency = trace.simulation.saturating_sub(trace.signature),
+                "block simulation successful"
+            );
+
+            Ok(false)
+        }
+    }
+
+    fn should_process_optimistically(
+        &self,
+        request: &BlockSimRequest,
+        builder_info: &BuilderInfo,
+    ) -> bool {
+        if builder_info.is_optimistic && request.message.value <= builder_info.collateral {
+            if request.proposer_preferences.filtering.is_regional() &&
+                !builder_info.can_process_regional_slot_optimistically()
+            {
+                return false;
+            }
+
+            if self.failsafe_triggered.load(Ordering::Relaxed) ||
+                !self.accept_optimistic.load(Ordering::Relaxed)
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        false
+    }
+
+    async fn send_simulation(
+        &self,
+        res_rx: oneshot::Receiver<SimResult>,
+        request: SimulatorRequest,
+        builder_info: &BuilderInfo,
+    ) -> Result<(), BlockSimError> {
+        let bid_slot = request.bid_slot();
+        let builder = *request.builder_pubkey();
+        let block_hash = request.request.message.block_hash;
+
+        if let Err(err) = self.sim_requests_tx.send(request).await {
+            error!(%err, "failed to send sim to manager, this should never happen");
+            return Err(BlockSimError::NoSimulatorAvailable)
+        }
+
+        let Ok(res) = res_rx.await else {
+            warn!("request was dropped by manager");
+            return Err(BlockSimError::SimulationDropped)
+        };
+
+        if let Err(err) = res {
+            if builder_info.is_optimistic {
+                if err.is_already_known() {
+                    warn!(
+                        %builder,
+                        %block_hash,
+                        "Block already known. Skipping demotion"
+                    );
+                    return Ok(());
+                }
+
+                if err.is_too_old() {
+                    warn!(
+                        %builder,
+                        %block_hash,
+                        "Block is too old. Skipping demotion"
+                    );
+                    return Ok(());
+                }
+
+                warn!(
+                    %builder,
+                    %block_hash,
+                    %err,
+                    "Block simulation resulted in an error. Demoting builder...",
+                );
+
+                self.demote_builder_due_to_error(bid_slot, &builder, &block_hash, err.to_string())
+                    .await;
+            }
+
+            return Err(err);
+        }
+
+        Ok(())
+    }
+
+    /// Demotes a builder in the `auctioneer` and `db`.
+    ///
+    /// If demotion fails, the failsafe is triggered to halt all optimistic simulations.
+    async fn demote_builder_due_to_error(
+        &self,
+        slot: u64,
+        builder_public_key: &BlsPublicKeyBytes,
+        block_hash: &B256,
+        reason: String,
+    ) {
+        SimulatorMetrics::demotion_count();
+
+        if let Err(err) = self.auctioneer.demote_builder(builder_public_key) {
+            self.failsafe_triggered.store(true, Ordering::Relaxed);
+            error!(
+                builder=%builder_public_key,
+                err=%err,
+                "Failed to demote builder in auctioneer"
+            );
+        }
+
+        if let Err(err) =
+            self.db.db_demote_builder(slot, builder_public_key, block_hash, reason).await
+        {
+            self.failsafe_triggered.store(true, Ordering::Relaxed);
+            error!(
+                builder=%builder_public_key,
+                err=%err,
+                "Failed to demote builder in database"
+            );
         }
     }
 

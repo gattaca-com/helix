@@ -21,11 +21,11 @@ use helix_common::{
 use helix_housekeeper::CurrentSlotInfo;
 use helix_types::BlsPublicKeyBytes;
 use hyper::StatusCode;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::{self, Sender};
 pub use types::*;
 
 use crate::{
-    builder::multi_simulator::MultiSimulator, gossiper::grpc_gossiper::GrpcGossiperClientManager,
+    builder::BlockMergeRequest, gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::block_merging::BestMergedBlock, router::Terminating, Api,
 };
 
@@ -33,7 +33,6 @@ use crate::{
 pub struct ProposerApi<A: Api> {
     pub auctioneer: Arc<LocalCache>,
     pub db: Arc<A::DatabaseService>,
-    pub simulator: MultiSimulator<A::DatabaseService>,
     pub gossiper: Arc<GrpcGossiperClientManager>,
     pub broadcasters: Vec<Arc<BlockBroadcaster>>,
     pub multi_beacon_client: Arc<MultiBeaconClient>,
@@ -53,7 +52,8 @@ pub struct ProposerApi<A: Api> {
 
     /// Set in the block merging process
     pub shared_best_merged: BestMergedBlock,
-
+    /// Send simulation requests
+    pub merge_requests_tx: mpsc::Sender<BlockMergeRequest>,
     pub alert_manager: AlertManager,
 }
 
@@ -61,7 +61,6 @@ impl<A: Api> ProposerApi<A> {
     pub fn new(
         auctioneer: Arc<LocalCache>,
         db: Arc<A::DatabaseService>,
-        simulator: MultiSimulator<A::DatabaseService>,
         gossiper: Arc<GrpcGossiperClientManager>,
         metadata_provider: Arc<A::MetadataProvider>,
         signing_context: Arc<RelaySigningContext>,
@@ -73,13 +72,13 @@ impl<A: Api> ProposerApi<A> {
         v3_payload_request: Sender<(u64, B256, BlsPublicKeyBytes, Vec<u8>)>,
         curr_slot_info: CurrentSlotInfo,
         shared_best_header: BestGetHeader,
+        merge_requests_tx: mpsc::Sender<BlockMergeRequest>,
     ) -> Self {
         Self {
             auctioneer,
             db,
             gossiper,
             broadcasters,
-            simulator,
             signing_context,
             multi_beacon_client,
             chain_info,
@@ -91,6 +90,7 @@ impl<A: Api> ProposerApi<A> {
             shared_best_header,
             shared_best_merged: BestMergedBlock::new(),
             alert_manager: AlertManager::from_relay_config(&relay_config),
+            merge_requests_tx,
         }
     }
 }

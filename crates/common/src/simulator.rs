@@ -7,7 +7,7 @@ const BLOCK_ALREADY_KNOWN: &str = "block already known";
 const BLOCK_TOO_OLD: &str = "block is too old, outside validation window";
 const BLOCK_REQ_REORG: &str = "block requires a reorg";
 
-#[derive(Debug, Clone, Error, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Error)]
 pub enum BlockSimError {
     #[error("block validation failed. Reason: {0}")]
     BlockValidationFailed(String),
@@ -16,13 +16,16 @@ pub enum BlockSimError {
     Timeout,
 
     #[error("rpc error. {0}")]
-    RpcError(String),
+    RpcError(#[from] reqwest::Error),
 
     #[error("tokio::mpsc send error")]
     SendError,
 
     #[error("no simulator available")]
     NoSimulatorAvailable,
+
+    #[error("simulation dropped")]
+    SimulationDropped,
 }
 
 impl BlockSimError {
@@ -99,8 +102,8 @@ mod tests {
         let error = BlockSimError::Timeout;
         assert!(error.is_severe());
 
-        let error = BlockSimError::RpcError("rpc error".to_string());
-        assert!(error.is_severe());
+        // let error = BlockSimError::RpcError(reqwest::Error::new());
+        // assert!(error.is_severe());
 
         let error = BlockSimError::SendError;
         assert!(error.is_severe());

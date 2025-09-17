@@ -32,6 +32,12 @@ impl<A: Api> BuilderApi<A> {
         parts: Parts,
         body: bytes::Bytes,
     ) -> Result<StatusCode, BuilderApiError> {
+        if api.failsafe_triggered.load(std::sync::atomic::Ordering::Relaxed) ||
+            !api.accept_optimistic.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(BuilderApiError::ServiceUnaivailable)
+        }
+
         let mut trace = HeaderSubmissionTrace::init_from_timings(timings);
         trace.metadata = api.metadata_provider.get_metadata(&parts.headers);
 
