@@ -3,6 +3,7 @@ pub mod error;
 pub mod get_inclusion_list;
 pub mod hydration;
 pub mod simulator;
+pub mod simulator_2;
 pub mod types;
 pub mod v3;
 
