@@ -108,7 +108,7 @@ impl SimulatorClient {
 
         match res {
             RpcResult::Err { error } => Err(BlockSimError::BlockValidationFailed(error.message)),
-            RpcResult::Ok(response) => Ok(response),
+            RpcResult::Ok { result } => Ok(result),
         }
     }
 

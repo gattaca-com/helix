@@ -112,7 +112,7 @@ pub struct BlockSimRpcResponse {
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(untagged)]
 pub enum RpcResult<T> {
-    Ok(T),
+    Ok { result: T },
     Err { error: JsonRpcError },
 }
 
