@@ -130,6 +130,14 @@ impl<A: Api> BuilderApi<A> {
 
         api.verify_signature(&payload, skip_sigverify, &mut trace)?;
 
+        // Save bid to auctioneer
+        api.auctioneer.save_execution_payload(
+            payload.slot().as_u64(),
+            &payload.message().proposer_pubkey,
+            payload.block_hash(),
+            payload.payload_and_blobs_ref().to_owned(),
+        );
+
         match api
             .simulate_submission(
                 &payload,
@@ -149,13 +157,6 @@ impl<A: Api> BuilderApi<A> {
             }
         };
 
-        // Save bid to auctioneer
-        api.auctioneer.save_execution_payload(
-            payload.slot().as_u64(),
-            &payload.message().proposer_pubkey,
-            payload.block_hash(),
-            payload.payload_and_blobs_ref().to_owned(),
-        );
         trace.auctioneer_update = utcnow_ns();
 
         // Gossip to other relays

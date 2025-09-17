@@ -185,6 +185,22 @@ lazy_static! {
     )
     .unwrap();
 
+    static ref SIM_MANAGER_COUNT: IntCounterVec = register_int_counter_vec_with_registry!(
+        "sim_manager_count",
+        "Sim manager counts",
+        &["label"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref SIM_MANAGER_GAUGE: GaugeVec = register_gauge_vec_with_registry!(
+        "sim_manager_gauge",
+        "Sim manager gauges",
+        &["label"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     static ref BLOCK_MERGE_STATUS: IntCounterVec = register_int_counter_vec_with_registry!(
         "block_merge_status_total",
         "Count of block merge statuses",
@@ -368,15 +384,6 @@ lazy_static! {
     )
     .unwrap();
 
-
-    static ref BID_IS_CANCELLABLE: IntCounterVec = register_int_counter_vec_with_registry!(
-        "bid_is_cancellable",
-        "Count of cancellable bids",
-        &["is_cancellable"],
-        &RELAY_METRICS_REGISTRY
-    )
-    .unwrap();
-
     pub static ref BID_SIGNING_LATENCY: Histogram = register_histogram_with_registry!(
         "bid_signing_latency_us",
         "Latency of re-singing the get header bid in us",
@@ -522,10 +529,6 @@ impl ApiMetrics {
 
         self.has_completed = true;
     }
-
-    pub fn cancellable_bid(is_cancellable: bool) {
-        BID_IS_CANCELLABLE.with_label_values(&[is_cancellable.to_string().as_str()]).inc();
-    }
 }
 
 impl Drop for ApiMetrics {
@@ -654,6 +657,14 @@ impl SimulatorMetrics {
 
     pub fn simulator_sync(simulator: &str, is_synced: bool) {
         SIMULATOR_SYNC.with_label_values(&[simulator]).set(is_synced as i64 as f64);
+    }
+
+    pub fn sim_mananger_count(label: &str, count: usize) {
+        SIM_MANAGER_COUNT.with_label_values(&[label]).inc_by(count as u64);
+    }
+
+    pub fn sim_manager_gauge(label: &str, val: usize) {
+        SIM_MANAGER_GAUGE.with_label_values(&[label]).set(val as f64);
     }
 }
 

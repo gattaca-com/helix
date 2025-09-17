@@ -93,38 +93,6 @@ impl BestGetHeader {
     }
 }
 
-/// Shared container for floor bid, thread safe
-#[derive(Clone)]
-pub struct FloorBid(Arc<RwLock<(u64, U256)>>);
-
-impl Default for FloorBid {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl FloorBid {
-    pub fn new() -> Self {
-        Self(Arc::new(RwLock::new((0, U256::ZERO))))
-    }
-    pub fn get(&self, bid_slot: u64) -> U256 {
-        let (slot, floor) = *self.0.read();
-        if slot == bid_slot {
-            floor
-        } else {
-            U256::ZERO
-        }
-    }
-
-    fn update(&self, bid_slot: u64, floor: U256) {
-        *self.0.write() = (bid_slot, floor);
-    }
-
-    fn reset(&self) {
-        *self.0.write() = (0, U256::ZERO);
-    }
-}
-
 // ignoring warning because submissions variant will be 99% of messages
 #[allow(clippy::large_enum_variant)]
 pub enum BidSorterMessage {
@@ -136,7 +104,6 @@ pub enum BidSorterMessage {
         builder_pubkey: BlsPublicKeyBytes,
         slot: u64,
         header: BuilderBid,
-        is_cancellable: bool,
         /// Preferences related to block merging.
         merging_preferences: BlockMergingPreferences,
         simulation_time_ns: u64,
@@ -153,9 +120,9 @@ impl BidSorterMessage {
         submission: &SignedBidSubmission,
         trace: &SubmissionTrace,
         optimistic_version: OptimisticVersion,
-        is_cancellable: bool,
         merging_preferences: BlockMergingPreferences,
         before_sorter_ns: u64,
+        withdrawals_root: B256,
     ) -> Self {
         let bid_trace = submission.bid_trace();
         let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
@@ -166,13 +133,12 @@ impl BidSorterMessage {
             trace.simulation.saturating_sub(trace.signature)
         };
 
-        let header = bid_submission_to_builder_bid_unsigned(submission);
+        let header = bid_submission_to_builder_bid_unsigned(submission, withdrawals_root);
         Self::Submission {
             bid,
             builder_pubkey: bid_trace.builder_pubkey,
             slot: bid_trace.slot,
             header,
-            is_cancellable,
             merging_preferences,
             simulation_time_ns,
             before_sorter_ns,
@@ -182,7 +148,6 @@ impl BidSorterMessage {
     pub fn new_from_header_submission(
         submission: &SignedHeaderSubmission,
         on_receive_ns: u64,
-        is_cancellable: bool,
         before_sorter_ns: u64,
     ) -> Self {
         let bid_trace = submission.bid_trace();
@@ -194,7 +159,6 @@ impl BidSorterMessage {
             builder_pubkey: bid_trace.builder_pubkey,
             slot: bid_trace.slot,
             header,
-            is_cancellable,
             merging_preferences: BlockMergingPreferences::default(),
             simulation_time_ns: 0,
             before_sorter_ns,
@@ -202,59 +166,20 @@ impl BidSorterMessage {
     }
 }
 
+/// Latest cancellable bid
 #[derive(Clone, Copy)]
-pub struct BidEntry {
-    /// Latest cancellable bid. Invariant: if `Some` this is always higher than [`bid_non_cancel`]
-    bid_cancel: Option<Bid>,
-    /// Highest non-cancellable bid
-    bid_non_cancel: Option<Bid>,
-}
+pub struct BidEntry(Bid);
 
 impl BidEntry {
-    fn new(bid: Bid, is_cancellable: bool) -> Self {
-        if is_cancellable {
-            Self { bid_cancel: Some(bid), bid_non_cancel: None }
-        } else {
-            Self { bid_cancel: None, bid_non_cancel: Some(bid) }
-        }
-    }
-
-    /// Returns false if the bid didn't trigger an update
-    fn maybe_update(&mut self, bid: Bid, is_cancellable: bool) -> bool {
-        // check that it's higher than non-cancel bid
-        if let Some(curr_non_cancel) = self.bid_non_cancel {
-            if curr_non_cancel.value >= bid.value {
-                return false;
-            }
+    /// Returns true if the bid triggered an update
+    fn maybe_update(&mut self, bid: Bid) -> bool {
+        if self.0.on_receive_ns >= bid.on_receive_ns {
+            return false;
         }
 
-        if is_cancellable {
-            // keep only if it's the latest
-            if let Some(curr_cancel) = self.bid_cancel {
-                if curr_cancel.on_receive_ns >= bid.on_receive_ns {
-                    return false;
-                }
-            }
-
-            self.bid_cancel = Some(bid);
-        } else {
-            if let Some(curr_cancel) = self.bid_cancel {
-                if curr_cancel.value < bid.value {
-                    // invariant: this bid is now too low
-                    self.bid_cancel = None;
-                }
-            }
-
-            self.bid_non_cancel = Some(bid);
-        }
+        self.0 = bid;
 
         true
-    }
-
-    /// Returns the bid entry value, either cancellable or not
-    fn bid(&self) -> Option<Bid> {
-        // this works because of the invariant above
-        self.bid_cancel.or(self.bid_non_cancel)
     }
 }
 
@@ -277,7 +202,6 @@ struct BidSorterTelemetry {
     /// Internal bid processing time of the sorter
     subs_process_time: Duration,
     top_bids: u32,
-    non_cancel_bids: u32,
     new_demotions: u32,
     duplicate_demotions: u32,
     /// Internal demotion processing time of the sorter
@@ -299,12 +223,8 @@ pub struct BidSorter {
     demotions: HashSet<BlsPublicKeyBytes>,
     /// Current best bid
     curr_bid: Option<(BlsPublicKeyBytes, Bid)>,
-    /// Current floor bid value
-    curr_floor: Option<U256>,
     /// Current response for get_header
     shared_best_header: BestGetHeader,
-    /// Current floor bid value
-    shared_floor: FloorBid,
     local_telemetry: BidSorterTelemetry,
 }
 
@@ -313,7 +233,6 @@ impl BidSorter {
         sorter_rx: crossbeam_channel::Receiver<BidSorterMessage>,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
         shared_best_header: BestGetHeader,
-        shared_floor: FloorBid,
     ) -> Self {
         Self {
             sorter_rx,
@@ -323,9 +242,7 @@ impl BidSorter {
             headers: HashMap::with_capacity(2500),
             demotions: HashSet::with_capacity(50),
             curr_bid: None,
-            curr_floor: None,
             shared_best_header,
-            shared_floor,
             local_telemetry: BidSorterTelemetry::default(),
         }
     }
@@ -346,7 +263,6 @@ impl BidSorter {
                     builder_pubkey,
                     slot,
                     header,
-                    is_cancellable,
                     merging_preferences,
                     simulation_time_ns,
                     before_sorter_ns,
@@ -362,7 +278,7 @@ impl BidSorter {
                     }
 
                     self.headers.insert(bid.on_receive_ns, (header, merging_preferences));
-                    self.process_header(builder_pubkey, bid, is_cancellable);
+                    self.process_header(builder_pubkey, bid);
 
                     // telemetry
                     let recv_latency_ns =
@@ -375,9 +291,6 @@ impl BidSorter {
                     self.local_telemetry.subs_process_time +=
                         Duration::from_nanos(process_latency_ns);
                     self.local_telemetry.subs_queue_time += Duration::from_nanos(queue_latency_ns);
-                    if !is_cancellable {
-                        self.local_telemetry.non_cancel_bids += 1;
-                    }
 
                     BID_SORTER_RECV_LATENCY_US.observe(recv_latency_ns as f64 / 1000.);
                     BID_SORTER_PROCESS_LATENCY_US.observe(process_latency_ns as f64 / 1000.);
@@ -402,23 +315,18 @@ impl BidSorter {
         }
     }
 
-    fn process_header(
-        &mut self,
-        new_pubkey: BlsPublicKeyBytes,
-        new_bid: Bid,
-        is_cancellable: bool,
-    ) {
+    fn process_header(&mut self, new_pubkey: BlsPublicKeyBytes, new_bid: Bid) {
         match self.bids.entry(new_pubkey) {
             Entry::Occupied(mut entry) => {
                 let entry = entry.get_mut();
-                if !entry.maybe_update(new_bid, is_cancellable) {
+                if !entry.maybe_update(new_bid) {
                     // bid was stale or too low
                     return;
                 };
             }
 
             Entry::Vacant(entry) => {
-                entry.insert(BidEntry::new(new_bid, is_cancellable));
+                entry.insert(BidEntry(new_bid));
             }
         };
 
@@ -436,17 +344,13 @@ impl BidSorter {
                 self.update_top_bid(new_pubkey, new_bid);
             }
         }
-
-        if !is_cancellable && new_bid.value > self.curr_floor.unwrap_or_default() {
-            self.update_floor_bid(self.curr_bid_slot, new_bid.value);
-        }
     }
 
     /// This is only for in-slot demotions. For builder that were demoted in a past slot we don't
     /// expect to receive optimistic bids here
     fn process_demotion(&mut self, demoted: BlsPublicKeyBytes) {
         // remove entire entry for this builder
-        let Some(entry) = self.bids.remove(&demoted) else {
+        if self.bids.remove(&demoted).is_none() {
             return;
         };
 
@@ -455,23 +359,13 @@ impl BidSorter {
                 self.traverse_update_top_bid();
             }
         }
-
-        match (entry.bid_non_cancel, self.curr_floor) {
-            (Some(bid), Some(floor)) if bid.value == floor => {
-                self.traverse_update_floor_bid();
-            }
-
-            _ => {}
-        }
     }
 
     fn traverse_update_top_bid(&mut self) {
         let mut best = None;
 
         for (pk, entry) in self.bids.iter() {
-            let Some(bid) = entry.bid() else {
-                continue;
-            };
+            let bid = entry.0;
 
             let Some(curr_best) = best else {
                 best = Some((*pk, bid));
@@ -491,29 +385,6 @@ impl BidSorter {
         }
     }
 
-    /// This should be very rare, only if we demote a builder which had the floor bid
-    fn traverse_update_floor_bid(&mut self) {
-        let mut best = None;
-
-        for (_, entry) in self.bids.iter() {
-            let Some(bid_non_cancel) = entry.bid_non_cancel else {
-                continue;
-            };
-
-            let Some(curr_best) = best else {
-                best = Some(bid_non_cancel.value);
-                continue;
-            };
-
-            if bid_non_cancel.value > curr_best {
-                best = Some(bid_non_cancel.value)
-            }
-        }
-
-        let new_floor = best.unwrap_or(U256::ZERO);
-        self.update_floor_bid(self.curr_bid_slot, new_floor);
-    }
-
     fn process_slot(&mut self, head_slot: u64) {
         self.report();
 
@@ -523,10 +394,8 @@ impl BidSorter {
         self.demotions.clear();
 
         self.curr_bid = None;
-        self.curr_floor = None;
 
         self.shared_best_header.reset();
-        self.shared_floor.reset();
     }
 
     fn update_top_bid(&mut self, builder_pubkey: BlsPublicKeyBytes, bid: Bid) {
@@ -556,11 +425,6 @@ impl BidSorter {
         TopBidMetrics::top_bid_update_count();
     }
 
-    fn update_floor_bid(&mut self, bid_slot: u64, floor: U256) {
-        self.curr_floor = Some(floor);
-        self.shared_floor.update(bid_slot, floor);
-    }
-
     fn report(&mut self) {
         let tel = std::mem::take(&mut self.local_telemetry);
 
@@ -579,7 +443,6 @@ impl BidSorter {
             ?avg_sub_recv,
             ?avg_sub_queue,
             top_bids = tel.top_bids,
-            non_cancel_bids = tel.non_cancel_bids,
             new_demotions = tel.new_demotions,
             duplicate_demotions = tel.duplicate_demotions,
             ?avg_demotion_process,
@@ -592,8 +455,7 @@ pub fn start_bid_sorter(
     sorter_rx: crossbeam_channel::Receiver<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
-    shared_floor: FloorBid,
 ) {
-    let bid_sorter = BidSorter::new(sorter_rx, top_bid_tx, shared_best_header, shared_floor);
+    let bid_sorter = BidSorter::new(sorter_rx, top_bid_tx, shared_best_header);
     std::thread::spawn(|| bid_sorter.run());
 }

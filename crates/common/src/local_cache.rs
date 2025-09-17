@@ -103,6 +103,7 @@ pub struct LocalCache {
     primev_proposers: Arc<DashSet<BlsPublicKeyBytes>>,
     kill_switch: Arc<AtomicBool>,
     proposer_duties: Arc<RwLock<Vec<BuilderGetValidatorsResponseEntry>>>,
+    headers_served: Arc<DashSet<B256>>,
 
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
 }
@@ -124,6 +125,7 @@ impl LocalCache {
         let primev_proposers = Arc::new(DashSet::with_capacity(MAX_PRIMEV_PROPOSERS));
         let kill_switch = Arc::new(AtomicBool::new(false));
         let proposer_duties = Arc::new(RwLock::new(Vec::new()));
+        let headers_served = Arc::new(DashSet::with_capacity(ESTIMATED_BID_UPPER_BOUND));
 
         Self {
             inclusion_list,
@@ -138,6 +140,7 @@ impl LocalCache {
             primev_proposers,
             kill_switch,
             proposer_duties,
+            headers_served,
             sorter_tx,
         }
     }
@@ -379,6 +382,17 @@ impl LocalCache {
         self.seen_block_hashes.clear();
         self.execution_payload_cache.clear();
         self.payload_address_cache.clear();
+        self.headers_served.clear();
+    }
+
+    #[instrument(skip_all)]
+    pub fn mark_header_served(&self, block_hash: &B256) {
+        self.headers_served.insert(*block_hash);
+    }
+
+    #[instrument(skip_all)]
+    pub fn has_header_been_served(&self, block_hash: &B256) -> bool {
+        self.headers_served.contains(block_hash)
     }
 }
 
