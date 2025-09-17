@@ -185,6 +185,22 @@ lazy_static! {
     )
     .unwrap();
 
+    static ref SIM_MANAGER_COUNT: IntCounterVec = register_int_counter_vec_with_registry!(
+        "sim_latency_secs",
+        "Sim manager counts",
+        &["count"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    static ref SIM_MANAGER_GAUGE: GaugeVec = register_gauge_vec_with_registry!(
+        "sim_latency_secs",
+        "Sim manager counts",
+        &["count"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     static ref BLOCK_MERGE_STATUS: IntCounterVec = register_int_counter_vec_with_registry!(
         "block_merge_status_total",
         "Count of block merge statuses",
@@ -641,6 +657,14 @@ impl SimulatorMetrics {
 
     pub fn simulator_sync(simulator: &str, is_synced: bool) {
         SIMULATOR_SYNC.with_label_values(&[simulator]).set(is_synced as i64 as f64);
+    }
+
+    pub fn sim_mananger_count(step: &str, count: usize) {
+        SIM_MANAGER_COUNT.with_label_values(&[step]).inc_by(count as u64);
+    }
+
+    pub fn sim_manager_gauge(step: &str, val: usize) {
+        SIM_MANAGER_GAUGE.with_label_values(&[step]).set(val as f64);
     }
 }
 

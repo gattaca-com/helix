@@ -232,7 +232,9 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::ServiceUnaivailable => StatusCode::SERVICE_UNAVAILABLE,
 
             BuilderApiError::BlockValidationError(ref err) => match err {
-                BlockSimError::Timeout => StatusCode::GATEWAY_TIMEOUT,
+                BlockSimError::Timeout | BlockSimError::SimulationDropped => {
+                    StatusCode::REQUEST_TIMEOUT
+                }
 
                 _ => StatusCode::BAD_REQUEST,
             },

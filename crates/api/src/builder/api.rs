@@ -326,6 +326,9 @@ impl<A: Api> BuilderApi<A> {
                     warn!(err = %reason, "block validation failed");
                     Err(BuilderApiError::BlockValidationError(err))
                 }
+
+                BlockSimError::SimulationDropped => Err(BuilderApiError::BlockValidationError(err)),
+
                 _ => {
                     error!(%err, "error simulating block");
                     Err(BuilderApiError::InternalError)
