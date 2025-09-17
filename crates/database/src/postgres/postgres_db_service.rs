@@ -621,7 +621,7 @@ impl PostgresDatabaseService {
                 decode: item.trace.decode as i64,
                 pre_checks: item.trace.pre_checks as i64,
                 signature: item.trace.signature as i64,
-                floor_bid_checks: item.trace.floor_bid_checks as i64,
+                floor_bid_checks: item.trace.signature as i64, // TODO: remove this column
                 simulation: item.trace.simulation as i64,
                 auctioneer_update: item.trace.auctioneer_update as i64,
                 request_finish: item.trace.request_finish as i64,
@@ -811,7 +811,7 @@ impl PostgresDatabaseService {
                 decode: item.trace.decode as i64,
                 pre_checks: item.trace.pre_checks as i64,
                 signature: item.trace.signature as i64,
-                floor_bid_checks: item.trace.floor_bid_checks as i64,
+                floor_bid_checks: item.trace.auctioneer_update as i64,
                 auctioneer_update: item.trace.auctioneer_update as i64,
                 request_finish: item.trace.request_finish as i64,
                 metadata: item.trace.metadata.clone(),

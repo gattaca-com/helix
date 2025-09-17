@@ -61,7 +61,6 @@ async fn handle_builder_connection<A: Api>(
                         header.submission,
                         header.url,
                         header.tx_count,
-                        msg_header.message_flags.contains(MessageHeaderFlags::CANCELLATION_ENABLED),
                         trace,
                         false,
                     )

@@ -18,7 +18,6 @@ pub struct SubmissionTrace {
     // when handler started
     pub start_handler: u64,
     pub decode: u64,
-    pub floor_bid_checks: u64,
     pub pre_checks: u64,
     pub signature: u64,
     pub simulation: u64,
@@ -53,8 +52,7 @@ impl SubmissionTrace {
         record("read_body", self.scheduled_at, self.read_body);
         record("start_handler", self.read_body, self.start_handler);
         record("decode", self.start_handler, self.decode);
-        record("floor_bid_checks", self.decode, self.floor_bid_checks);
-        record("pre_checks", self.floor_bid_checks, self.pre_checks);
+        record("pre_checks", self.decode, self.pre_checks);
 
         if !self.skip_sigverify {
             record("signature", self.pre_checks, self.signature);
@@ -84,7 +82,6 @@ pub struct HeaderSubmissionTrace {
     pub decode: u64,
     pub pre_checks: u64,
     pub signature: u64,
-    pub floor_bid_checks: u64,
     pub auctioneer_update: u64,
     pub request_finish: u64,
     pub metadata: Option<String>,

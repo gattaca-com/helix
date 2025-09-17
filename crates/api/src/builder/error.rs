@@ -125,9 +125,6 @@ pub enum BuilderApiError {
     #[error("already processing newer payload")]
     AlreadyProcessingNewerPayload,
 
-    #[error("accepted bid below floor, skipped validation")]
-    BidBelowFloor,
-
     #[error("block validation error: {0:?}")]
     BlockValidationError(#[from] BlockSimError),
 
@@ -182,8 +179,6 @@ pub enum BuilderApiError {
 impl IntoResponse for BuilderApiError {
     fn into_response(self) -> Response {
         let code = match self {
-            BuilderApiError::BidBelowFloor => StatusCode::ACCEPTED,
-
             BuilderApiError::SerdeDecodeError(_) |
             BuilderApiError::IOError(_) |
             BuilderApiError::SszSerializeError |

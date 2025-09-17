@@ -16,7 +16,7 @@ use helix_common::{
         PATH_PROPOSER_API, PATH_PROPOSER_PAYLOAD_DELIVERED, PATH_REGISTER_VALIDATORS, PATH_STATUS,
         PATH_VALIDATOR_REGISTRATION,
     },
-    bid_sorter::{BestGetHeader, FloorBid},
+    bid_sorter::BestGetHeader,
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metadata_provider::DefaultMetadataProvider,
@@ -110,7 +110,6 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
     let (merge_pool_tx, _) = tokio::sync::mpsc::channel(1000);
     let (br_tx, _) = broadcast::channel(1);
     let (sim_tx, _) = channel(32);
-    let shared_floor = FloorBid::new();
 
     let builder_api_service = BuilderApi::<MockApi>::new(
         Arc::new(LocalCache::new_test()),
@@ -124,7 +123,6 @@ pub fn builder_api_app() -> (Router, Arc<BuilderApi<MockApi>>, CurrentSlotInfo) 
         sort_tx,
         merge_pool_tx,
         br_tx,
-        shared_floor,
         BestGetHeader::new(),
         sim_tx,
         Arc::new(Default::default()),
