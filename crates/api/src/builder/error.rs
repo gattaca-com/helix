@@ -53,6 +53,9 @@ pub enum BuilderApiError {
     #[error("submission for future slot. expected: {expected}, got: {got}")]
     SubmissionForFutureSlot { expected: Slot, got: Slot },
 
+    #[error("submission for wrong slot. expected: {expected}, got: {got}")]
+    SubmissionForWrongSlot { expected: Slot, got: Slot },
+
     #[error("builder blacklisted. pubkey: {pubkey:?}")]
     BuilderBlacklisted { pubkey: BlsPublicKey },
 
@@ -222,7 +225,8 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::BidValidationError(_) |
             BuilderApiError::ValidationError(_) |
             BuilderApiError::OutOfSequence { .. } |
-            BuilderApiError::HydrationError(_) => StatusCode::BAD_REQUEST,
+            BuilderApiError::HydrationError(_) |
+            BuilderApiError::SubmissionForWrongSlot { .. } => StatusCode::BAD_REQUEST,
 
             BuilderApiError::InvalidApiKey |
             BuilderApiError::UntrustedBuilderOnDehydratedPayload => StatusCode::UNAUTHORIZED,

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, ops::Deref, sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
 use futures::FutureExt;
@@ -28,6 +28,14 @@ pub struct PayloadAttributesUpdate {
     pub parent_hash: B256,
     pub withdrawals_root: B256,
     pub payload_attributes: PayloadAttributes,
+}
+
+impl Deref for PayloadAttributesUpdate {
+    type Target = PayloadAttributes;
+
+    fn deref(&self) -> &Self::Target {
+        &self.payload_attributes
+    }
 }
 
 /// Payload for head event updates sent to subscribers.
