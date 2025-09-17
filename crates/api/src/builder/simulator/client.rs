@@ -46,11 +46,7 @@ impl SimulatorClient {
     }
 
     pub fn can_simulate(&self) -> bool {
-        self.can_simulate_light() &&
-            match self.config.max_concurrent_tasks {
-                Some(max) => self.pending < max,
-                None => true,
-            }
+        self.can_simulate_light() && self.pending < self.config.max_concurrent_tasks
     }
 
     pub fn can_merge(&self) -> bool {
