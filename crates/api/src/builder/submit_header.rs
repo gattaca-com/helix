@@ -16,7 +16,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use http::request::Parts;
 use ssz::Decode;
-use tracing::{debug, error, info, trace, warn, Instrument};
+use tracing::{debug, error, info, warn, Instrument};
 
 use super::api::BuilderApi;
 use crate::{
@@ -32,13 +32,19 @@ impl<A: Api> BuilderApi<A> {
         parts: Parts,
         body: bytes::Bytes,
     ) -> Result<StatusCode, BuilderApiError> {
+        if api.failsafe_triggered.load(std::sync::atomic::Ordering::Relaxed) ||
+            !api.accept_optimistic.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(BuilderApiError::ServiceUnaivailable)
+        }
+
         let mut trace = HeaderSubmissionTrace::init_from_timings(timings);
         trace.metadata = api.metadata_provider.get_metadata(&parts.headers);
 
         debug!(timestamp_request_start = trace.receive,);
 
         // Decode the incoming request body into a payload
-        let (skip_sigverify, payload, is_cancellations_enabled) =
+        let (skip_sigverify, payload) =
             decode_header_submission_v3(&api, parts, body, &mut trace).await?;
 
         Self::handle_submit_header(
@@ -46,7 +52,6 @@ impl<A: Api> BuilderApi<A> {
             payload.submission,
             payload.url,
             payload.tx_count,
-            is_cancellations_enabled,
             trace,
             skip_sigverify,
         )
@@ -58,7 +63,6 @@ impl<A: Api> BuilderApi<A> {
         payload: SignedHeaderSubmission,
         payload_address: Vec<u8>,
         block_tx_count: u32,
-        is_cancellations_enabled: bool,
         mut trace: HeaderSubmissionTrace,
         skip_sigverify: bool,
     ) -> Result<StatusCode, BuilderApiError> {
@@ -110,18 +114,7 @@ impl<A: Api> BuilderApi<A> {
         }
 
         // Handle duplicates.
-        if let Err(err) = api.check_for_duplicate_block_hash(block_hash) {
-            match err {
-                BuilderApiError::DuplicateBlockHash { block_hash } => {
-                    // We dont return the error here as we want to continue processing the request.
-                    // This mitigates the risk of someone sending an invalid payload
-                    // with a valid header, which would block subsequent submissions with the same
-                    // header and valid payload.
-                    debug!(?block_hash, builder_pub_key = ?payload.builder_public_key(), "block hash already seen");
-                }
-                _ => return Err(err),
-            }
-        }
+        api.check_for_duplicate_block_hash(block_hash)?;
 
         // Discard any OptimisticV2 submissions if the proposer has regional filtering enabled
         // and the builder is not optimistic for regional filtering.
@@ -179,19 +172,9 @@ impl<A: Api> BuilderApi<A> {
 
         let payload = Arc::new(payload);
 
-        // Verify the payload value is above the floor bid
-        let floor_bid_value = api.get_current_floor(payload.slot());
-        if payload.value() <= floor_bid_value {
-            return Err(BuilderApiError::BidBelowFloor);
-        }
-        trace!(%floor_bid_value, "floor bid checked");
-
-        trace.floor_bid_checks = utcnow_ns();
-
         if let Err(err) = api.sorter_tx.try_send(BidSorterMessage::new_from_header_submission(
             &payload,
             trace.receive,
-            is_cancellations_enabled,
             utcnow_ns(),
         )) {
             error!(?err, "failed to send submission to sorter");
@@ -240,23 +223,7 @@ pub async fn decode_header_submission_v3<A: Api>(
     parts: Parts,
     body_bytes: bytes::Bytes,
     trace: &mut HeaderSubmissionTrace,
-) -> Result<(bool, HeaderSubmissionV3, bool), BuilderApiError> {
-    // Extract the query parameters
-    let is_cancellations_enabled = parts
-        .uri
-        .query()
-        .unwrap_or("")
-        .split('&')
-        .find_map(|part| {
-            let mut split = part.splitn(2, '=');
-            if split.next()? == "cancellations" {
-                Some(split.next()? == "1")
-            } else {
-                None
-            }
-        })
-        .unwrap_or(false);
-
+) -> Result<(bool, HeaderSubmissionV3), BuilderApiError> {
     info!(
         headers = ?parts.headers,
         "received header",
@@ -287,5 +254,5 @@ pub async fn decode_header_submission_v3<A: Api>(
         value = ?submission_v3.submission.value(),
     );
 
-    Ok((skip_sigverify, submission_v3, is_cancellations_enabled))
+    Ok((skip_sigverify, submission_v3))
 }

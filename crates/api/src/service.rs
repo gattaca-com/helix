@@ -9,7 +9,7 @@ use helix_beacon::{
     beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
 };
 use helix_common::{
-    bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
+    bid_sorter::{BestGetHeader, BidSorterMessage},
     chain_info::ChainInfo,
     local_cache::LocalCache,
     signing::RelaySigningContext,
@@ -22,10 +22,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::{
-    builder::{
-        self, api::BuilderApi, multi_simulator::MultiSimulator,
-        optimistic_simulator::OptimisticSimulator,
-    },
+    builder::{self, api::BuilderApi, SimulatorManager},
     gossip::{self},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::ProposerApi,
@@ -51,30 +48,9 @@ pub async fn run_api_service<A: Api>(
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
-    shared_floor: FloorBid,
     relay_network_api: RelayNetworkApi,
 ) {
     let broadcasters = init_broadcasters(&config).await;
-
-    let client = reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
-
-    let mut simulators = vec![];
-
-    for cfg in &config.simulators {
-        let simulator = OptimisticSimulator::<A::DatabaseService>::new(
-            auctioneer.clone(),
-            db.clone(),
-            client.clone(),
-            cfg.clone(),
-        );
-        simulators.push(simulator);
-    }
-
-    let simulator = MultiSimulator::new(simulators);
-    if !config.is_local_dev {
-        let sim = simulator.clone();
-        tokio::spawn(sim.start_sync_monitor());
-    }
 
     let gossiper = Arc::new(
         GrpcGossiperClientManager::new(config.relays.iter().map(|cfg| cfg.url.clone()).collect())
@@ -85,14 +61,19 @@ pub async fn run_api_service<A: Api>(
     let validator_preferences = Arc::new(config.validator_preferences.clone());
 
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
-
     let (merge_pool_tx, pool_rx) = tokio::sync::mpsc::channel(10_000);
+
+    let (sim_requests_tx, sim_requests_rx) = mpsc::channel(10_000);
+    let (merge_requests_tx, merge_requests_rx) = mpsc::channel(10_000);
+
+    let accept_optimistic = Arc::new(AtomicBool::new(true));
+    let sim_manager = SimulatorManager::new(config.simulators.clone(), accept_optimistic.clone());
+    tokio::spawn(sim_manager.run(sim_requests_rx, merge_requests_rx, config.is_local_dev));
 
     let builder_api = BuilderApi::<A>::new(
         auctioneer.clone(),
         db.clone(),
         chain_info.clone(),
-        simulator.clone(),
         gossiper.clone(),
         metadata_provider.clone(),
         config.clone(),
@@ -101,8 +82,9 @@ pub async fn run_api_service<A: Api>(
         sorter_tx,
         merge_pool_tx,
         top_bid_tx,
-        shared_floor,
         shared_best_header.clone(),
+        sim_requests_tx,
+        accept_optimistic,
     );
     let builder_api = Arc::new(builder_api);
 
@@ -128,7 +110,6 @@ pub async fn run_api_service<A: Api>(
     let proposer_api = Arc::new(ProposerApi::<A>::new(
         auctioneer.clone(),
         db.clone(),
-        simulator,
         gossiper.clone(),
         metadata_provider.clone(),
         relay_signing_context,
@@ -140,6 +121,7 @@ pub async fn run_api_service<A: Api>(
         v3_payload_request_send,
         current_slot_info,
         shared_best_header,
+        merge_requests_tx,
     ));
 
     tokio::spawn(gossip::process_gossip_messages(

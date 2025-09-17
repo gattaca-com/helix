@@ -125,9 +125,6 @@ pub enum BuilderApiError {
     #[error("already processing newer payload")]
     AlreadyProcessingNewerPayload,
 
-    #[error("accepted bid below floor, skipped validation")]
-    BidBelowFloor,
-
     #[error("block validation error: {0:?}")]
     BlockValidationError(#[from] BlockSimError),
 
@@ -174,13 +171,14 @@ pub enum BuilderApiError {
 
     #[error(transparent)]
     HydrationError(#[from] HydrationError),
+
+    #[error("service unavailable")]
+    ServiceUnaivailable,
 }
 
 impl IntoResponse for BuilderApiError {
     fn into_response(self) -> Response {
         let code = match self {
-            BuilderApiError::BidBelowFloor => StatusCode::ACCEPTED,
-
             BuilderApiError::SerdeDecodeError(_) |
             BuilderApiError::IOError(_) |
             BuilderApiError::SszSerializeError |
@@ -230,6 +228,8 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::InternalError |
             BuilderApiError::AuctioneerError(_) |
             BuilderApiError::DatabaseError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+
+            BuilderApiError::ServiceUnaivailable => StatusCode::SERVICE_UNAVAILABLE,
 
             BuilderApiError::BlockValidationError(ref err) => match err {
                 BlockSimError::Timeout => StatusCode::GATEWAY_TIMEOUT,

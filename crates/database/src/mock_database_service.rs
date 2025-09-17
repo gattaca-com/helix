@@ -12,7 +12,6 @@ use helix_common::{
         proposer_api::ValidatorRegistrationInfo,
     },
     bid_submission::{v2::header_submission::SignedHeaderSubmission, OptimisticVersion},
-    simulator::BlockSimError,
     BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, HeaderSubmissionTrace,
     ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences,
     ValidatorSummary,
@@ -190,14 +189,6 @@ impl DatabaseService for MockDatabaseService {
         _builder_pub_key: &BlsPublicKeyBytes,
         _block_hash: &B256,
         _reason: String,
-    ) -> Result<(), DatabaseError> {
-        Ok(())
-    }
-
-    async fn save_simulation_result(
-        &self,
-        _block_hash: B256,
-        _block_sim_result: Result<(), BlockSimError>,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }

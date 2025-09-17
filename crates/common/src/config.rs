@@ -171,6 +171,10 @@ pub const fn default_bool<const B: bool>() -> bool {
     B
 }
 
+pub const fn default_usize<const U: usize>() -> usize {
+    U
+}
+
 pub const fn default_u64<const D: u64>() -> u64 {
     D
 }
@@ -193,6 +197,9 @@ pub struct SimulatorConfig {
     pub namespace: String,
     #[serde(default = "default_bool::<false>")]
     pub is_merging_simulator: bool,
+    /// roughly number of cores on simulator
+    #[serde(default = "default_usize::<32>")]
+    pub max_concurrent_tasks: usize,
 }
 
 fn default_namespace() -> String {
@@ -539,6 +546,7 @@ fn test_config() {
         url: "http://localhost:8080".to_string(),
         namespace: "test".to_string(),
         is_merging_simulator: true,
+        max_concurrent_tasks: 0,
     }];
     config
         .beacon_clients

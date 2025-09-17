@@ -1,26 +1,21 @@
-pub mod multi_simulator;
-pub mod optimistic_simulator;
-
-#[cfg(test)]
-mod optimistic_simulator_tests;
-
-pub mod rpc_simulator;
-
-#[cfg(test)]
-mod simulator_tests;
-
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
     api::builder_api::InclusionListWithMetadata, bid_submission::BidSubmission,
-    ValidatorPreferences,
+    simulator::BlockSimError, ValidatorPreferences,
 };
 use helix_types::{
-    BidTrace, BlobsBundle, BlsSignatureBytes, ExecutionPayload, ExecutionRequests,
-    MergeableOrderWithOrigin, SignedBidSubmission,
+    BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload,
+    ExecutionRequests, MergeableOrderWithOrigin, SignedBidSubmission,
 };
 use serde_json::json;
+use tokio::sync::oneshot;
+
+mod client;
+mod manager;
+
+pub use manager::SimulatorManager;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockSimRequest {
@@ -70,11 +65,14 @@ pub struct BlockMergeRequestRef<'a> {
     pub merging_data: &'a [MergeableOrderWithOrigin],
 }
 
+type MergeResult = Result<BlockMergeResponse, BlockSimError>;
+
 pub struct BlockMergeRequest {
     /// The serialized request
-    request: serde_json::Value,
+    pub request: serde_json::Value,
     /// The block hash of the execution payload
-    block_hash: B256,
+    pub block_hash: B256,
+    pub res_tx: oneshot::Sender<MergeResult>,
 }
 
 impl BlockMergeRequest {
@@ -84,7 +82,7 @@ impl BlockMergeRequest {
         execution_payload: &ExecutionPayload,
         parent_beacon_block_root: Option<B256>,
         merging_data: &[MergeableOrderWithOrigin],
-    ) -> Self {
+    ) -> (Self, oneshot::Receiver<MergeResult>) {
         let block_hash = execution_payload.block_hash;
         // We serialize the request ahead of time, to avoid copying the original
         // payload and merging data.
@@ -96,6 +94,77 @@ impl BlockMergeRequest {
             merging_data,
         };
         let request = json!(request_ref);
-        Self { request, block_hash }
+        let (tx, rx) = oneshot::channel();
+        (Self { request, block_hash, res_tx: tx }, rx)
+    }
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct JsonRpcError {
+    pub message: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct BlockSimRpcResponse {
+    pub error: Option<JsonRpcError>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[serde(untagged)]
+pub enum RpcResult<T> {
+    Ok { result: T },
+    Err { error: JsonRpcError },
+}
+
+impl<T> RpcResult<T> {
+    pub fn as_error(&self) -> Option<&JsonRpcError> {
+        match self {
+            RpcResult::Err { error } => Some(error),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlockMergeResponse {
+    pub execution_payload: ExecutionPayload,
+    pub execution_requests: ExecutionRequests,
+    /// Versioned hashes of the appended blob transactions.
+    pub appended_blobs: Vec<B256>,
+    /// Total value for the proposer
+    pub proposer_value: U256,
+}
+
+pub type SimResult = Result<(), BlockSimError>;
+// (simulator id, paused_until)
+pub type SimReponse = (usize, Option<Instant>);
+
+pub struct SimulatorRequest {
+    pub request: BlockSimRequest,
+    /// when submission was received in ns
+    pub on_receive_ns: u64,
+    pub is_top_bid: bool,
+    pub is_optimistic: bool,
+    pub res_tx: oneshot::Sender<SimResult>,
+}
+
+impl SimulatorRequest {
+    // TODO: use a "score" eg how close to top bid even if below
+    pub fn sort_key(&self) -> (u8, u8, u64) {
+        let open = if self.is_closed() { 0 } else { 1 };
+        let top = if self.is_top_bid { 1 } else { 0 };
+        (open, top, u64::MAX - self.on_receive_ns)
+    }
+
+    pub fn is_closed(&self) -> bool {
+        !self.is_optimistic && self.res_tx.is_closed()
+    }
+
+    pub fn bid_slot(&self) -> u64 {
+        self.request.message.slot
+    }
+
+    pub fn builder_pubkey(&self) -> &BlsPublicKeyBytes {
+        &self.request.message.builder_pubkey
     }
 }

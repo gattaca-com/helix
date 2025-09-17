@@ -10,7 +10,6 @@ use helix_common::{
     },
     bid_submission::{v2::header_submission::SignedHeaderSubmission, OptimisticVersion},
     builder_info::BuilderInfo,
-    simulator::BlockSimError,
     GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo,
     SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
 };
@@ -113,12 +112,6 @@ pub trait DatabaseService: Send + Sync + Clone {
         builder_pub_key: &BlsPublicKeyBytes,
         block_hash: &B256,
         reason: String,
-    ) -> Result<(), DatabaseError>;
-
-    async fn save_simulation_result(
-        &self,
-        block_hash: B256,
-        block_sim_result: Result<(), BlockSimError>,
     ) -> Result<(), DatabaseError>;
 
     async fn get_bids(

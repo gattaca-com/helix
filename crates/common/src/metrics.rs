@@ -368,15 +368,6 @@ lazy_static! {
     )
     .unwrap();
 
-
-    static ref BID_IS_CANCELLABLE: IntCounterVec = register_int_counter_vec_with_registry!(
-        "bid_is_cancellable",
-        "Count of cancellable bids",
-        &["is_cancellable"],
-        &RELAY_METRICS_REGISTRY
-    )
-    .unwrap();
-
     pub static ref BID_SIGNING_LATENCY: Histogram = register_histogram_with_registry!(
         "bid_signing_latency_us",
         "Latency of re-singing the get header bid in us",
@@ -521,10 +512,6 @@ impl ApiMetrics {
             .observe(gap_latency.as_secs_f64());
 
         self.has_completed = true;
-    }
-
-    pub fn cancellable_bid(is_cancellable: bool) {
-        BID_IS_CANCELLABLE.with_label_values(&[is_cancellable.to_string().as_str()]).inc();
     }
 }
 

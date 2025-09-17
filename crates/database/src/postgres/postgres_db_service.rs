@@ -19,7 +19,6 @@ use helix_common::{
         v2::header_submission::SignedHeaderSubmission, BidSubmission, OptimisticVersion,
     },
     metrics::DbMetricRecord,
-    simulator::BlockSimError,
     utils::utcnow_ms,
     BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace,
     HeaderSubmissionTrace, PostgresConfig, ProposerInfo, RelayConfig,
@@ -622,7 +621,7 @@ impl PostgresDatabaseService {
                 decode: item.trace.decode as i64,
                 pre_checks: item.trace.pre_checks as i64,
                 signature: item.trace.signature as i64,
-                floor_bid_checks: item.trace.floor_bid_checks as i64,
+                floor_bid_checks: item.trace.signature as i64, // TODO: remove this column
                 simulation: item.trace.simulation as i64,
                 auctioneer_update: item.trace.auctioneer_update as i64,
                 request_finish: item.trace.request_finish as i64,
@@ -812,7 +811,7 @@ impl PostgresDatabaseService {
                 decode: item.trace.decode as i64,
                 pre_checks: item.trace.pre_checks as i64,
                 signature: item.trace.signature as i64,
-                floor_bid_checks: item.trace.floor_bid_checks as i64,
+                floor_bid_checks: item.trace.signature as i64,
                 auctioneer_update: item.trace.auctioneer_update as i64,
                 request_finish: item.trace.request_finish as i64,
                 metadata: item.trace.metadata.clone(),
@@ -1703,34 +1702,6 @@ impl DatabaseService for PostgresDatabaseService {
             .await?;
 
         transaction.commit().await?;
-
-        record.record_success();
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    async fn save_simulation_result(
-        &self,
-        block_hash: B256,
-        block_sim_result: Result<(), BlockSimError>,
-    ) -> Result<(), DatabaseError> {
-        let mut record = DbMetricRecord::new("save_simulation_result");
-
-        if let Err(e) = block_sim_result {
-            self.pool
-                .get()
-                .await?
-                .execute(
-                    "
-                        INSERT INTO simulation_error (block_hash, error)
-                        VALUES ($1, $2)
-                        ON CONFLICT (block_hash)
-                        DO NOTHING
-                    ",
-                    &[&(block_hash.as_slice()), &(&format!("{e:?}"))],
-                )
-                .await?;
-        }
 
         record.record_success();
         Ok(())

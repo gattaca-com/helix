@@ -10,7 +10,7 @@ use eyre::eyre;
 use helix_api::{start_admin_service, start_api_service, Api};
 use helix_beacon::start_beacon_client;
 use helix_common::{
-    bid_sorter::{start_bid_sorter, BestGetHeader, BidSorterMessage, FloorBid},
+    bid_sorter::{start_bid_sorter, BestGetHeader, BidSorterMessage},
     load_config, load_keypair,
     local_cache::LocalCache,
     metadata_provider::DefaultMetadataProvider,
@@ -97,15 +97,9 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
 
     let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
     let shared_best_header = BestGetHeader::new();
-    let shared_floor_bid = FloorBid::new();
 
     if config.router_config.validate_bid_sorter()? {
-        start_bid_sorter(
-            sorter_rx,
-            top_bid_tx.clone(),
-            shared_best_header.clone(),
-            shared_floor_bid.clone(),
-        );
+        start_bid_sorter(sorter_rx, top_bid_tx.clone(), shared_best_header.clone());
     }
 
     let current_slot_info = start_housekeeper(
@@ -138,7 +132,6 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         sorter_tx,
         top_bid_tx,
         shared_best_header,
-        shared_floor_bid,
         relay_network_api.api(),
     );
 
