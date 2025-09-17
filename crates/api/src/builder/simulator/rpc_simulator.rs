@@ -28,7 +28,7 @@ pub struct BlockSimRpcResponse {
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(untagged)]
 pub enum RpcResult<T> {
-    Ok(T),
+    Ok { result: T },
     Err { error: JsonRpcError },
 }
 
@@ -289,7 +289,7 @@ impl<DB: DatabaseService + 'static> RpcSimulator<DB> {
 
         // Need to deserialize the response here to RpcResult<BlockMergeResponse>
         match &serde_json::from_value::<RpcResult<BlockMergeResponse>>(json_response.clone()) {
-            Ok(RpcResult::Ok(merge_response)) => Ok(merge_response.clone()),
+            Ok(RpcResult::Ok { result }) => Ok(result.clone()),
             Ok(RpcResult::Err { error }) => {
                 Err(BlockSimError::BlockValidationFailed(error.message.clone()))
             }
