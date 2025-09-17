@@ -9,7 +9,7 @@ use helix_beacon::{
     beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
 };
 use helix_common::{
-    bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
+    bid_sorter::{BestGetHeader, BidSorterMessage},
     chain_info::ChainInfo,
     local_cache::LocalCache,
     signing::RelaySigningContext,
@@ -47,7 +47,6 @@ pub async fn run_api_service<A: Api>(
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
-    shared_floor: FloorBid,
 ) {
     let broadcasters = init_broadcasters(&config).await;
 
@@ -81,7 +80,6 @@ pub async fn run_api_service<A: Api>(
         sorter_tx,
         merge_pool_tx,
         top_bid_tx,
-        shared_floor,
         shared_best_header.clone(),
         sim_requests_tx,
         accept_optimistic,

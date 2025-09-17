@@ -6,7 +6,6 @@ use helix_common::{
     bid_sorter::BidSorterMessage,
     bid_submission::{BidSubmission, OptimisticVersion},
     metadata_provider::MetadataProvider,
-    metrics::ApiMetrics,
     task,
     utils::{extract_request_id, utcnow_ns},
     RequestTimings, SubmissionTrace,
@@ -65,18 +64,10 @@ impl<A: Api> BuilderApi<A> {
         trace.metadata = api.metadata_provider.get_metadata(&parts.headers);
 
         // Decode the incoming request body into a payload
-        let (skip_sigverify, payload_with_merging_data, is_cancellations_enabled) = decode_payload(
-            head_slot.as_u64() + 1,
-            &api,
-            &parts.uri,
-            &parts.headers,
-            body,
-            &mut trace,
-        )
-        .await?;
+        let (skip_sigverify, payload_with_merging_data) =
+            decode_payload(head_slot.as_u64() + 1, &api, &parts.headers, body, &mut trace).await?;
         let payload = payload_with_merging_data.submission;
         let merging_data = payload_with_merging_data.merging_data;
-        ApiMetrics::cancellable_bid(is_cancellations_enabled);
 
         let block_hash = payload.message().block_hash;
 
@@ -114,14 +105,6 @@ impl<A: Api> BuilderApi<A> {
         // Handle duplicates.
         api.check_for_duplicate_block_hash(&block_hash)?;
         trace!("checked for duplicates");
-
-        // Verify the payload value is above the floor bid
-        let floor_bid_value = api.get_current_floor(payload.slot());
-        if payload.value() <= floor_bid_value {
-            return Err(BuilderApiError::BidBelowFloor);
-        }
-        trace!(%floor_bid_value, "floor bid checked");
-        trace.floor_bid_checks = utcnow_ns();
 
         // Fetch builder info
         let builder_info = api.fetch_builder_info(payload.builder_public_key());
@@ -197,7 +180,6 @@ impl<A: Api> BuilderApi<A> {
             &payload,
             &trace,
             optimistic_version,
-            is_cancellations_enabled,
             merging_preferences,
             utcnow_ns(),
             payload_attributes.withdrawals_root, /* this has been validated in

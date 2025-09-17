@@ -17,7 +17,7 @@ use helix_common::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithKey},
         proposer_api::ValidatorRegistrationInfo,
     },
-    bid_sorter::{BestGetHeader, BidSorterMessage, FloorBid},
+    bid_sorter::{BestGetHeader, BidSorterMessage},
     bid_submission::BidSubmission,
     chain_info::ChainInfo,
     local_cache::LocalCache,
@@ -34,7 +34,7 @@ use helix_types::{
     MergeableTransaction, Order, SignedBidSubmission, SignedBidSubmissionWithMergingData, Slot,
     Transactions,
 };
-use http::{HeaderMap, HeaderValue, Uri};
+use http::{HeaderMap, HeaderValue};
 use parking_lot::RwLock;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, trace, warn};
@@ -70,8 +70,6 @@ pub struct BuilderApi<A: Api> {
     pub merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
     /// Subscriber for TopBid updates, SSZ encoded
     pub top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-    /// Set in sorter loop
-    pub shared_floor: FloorBid,
     /// Cache of tx roots for v3 submissions
     pub tx_root_cache: DashMap<B256, (u64, B256)>,
     /// Best get header to check the current top bid on simulations
@@ -101,7 +99,6 @@ impl<A: Api> BuilderApi<A> {
         sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
         merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-        shared_floor: FloorBid,
         shared_best_header: BestGetHeader,
         sim_requests_tx: mpsc::Sender<SimulatorRequest>,
         accept_optimistic: Arc<AtomicBool>,
@@ -144,8 +141,6 @@ impl<A: Api> BuilderApi<A> {
             sorter_tx,
             merge_pool_tx,
             top_bid_tx,
-
-            shared_floor,
 
             tx_root_cache,
             shared_best_header,
@@ -546,10 +541,6 @@ impl<A: Api> BuilderApi<A> {
         }
     }
 
-    pub(crate) fn get_current_floor(&self, bid_slot: Slot) -> U256 {
-        self.shared_floor.get(bid_slot.as_u64())
-    }
-
     /// Validates the sequence number and updates the local cache, returns error if we've seen a
     /// higher sequence number for the same builder and bid slot.
     ///
@@ -602,31 +593,15 @@ impl<A: Api> BuilderApi<A> {
 /// - Automatically falls back to JSON if SSZ deserialization fails.
 /// - Handles GZIP-compressed payloads.
 ///
-/// Returns (skip_sigverify, payload, is_cancellations_enabled)
+/// Returns (skip_sigverify, payload)
 #[tracing::instrument(skip_all)]
 pub async fn decode_payload<A: Api>(
     bid_slot: u64,
     api: &BuilderApi<A>,
-    uri: &Uri,
     headers: &HeaderMap,
     body_bytes: bytes::Bytes,
     trace: &mut SubmissionTrace,
-) -> Result<(bool, SignedBidSubmissionWithMergingData, bool), BuilderApiError> {
-    // Extract the query parameters
-    let is_cancellations_enabled = uri
-        .query()
-        .unwrap_or("")
-        .split('&')
-        .find_map(|part| {
-            let mut split = part.splitn(2, '=');
-            if split.next()? == "cancellations" {
-                Some(split.next()? == "1")
-            } else {
-                None
-            }
-        })
-        .unwrap_or(false);
-
+) -> Result<(bool, SignedBidSubmissionWithMergingData), BuilderApiError> {
     const TRUE_HEADER: HeaderValue = HeaderValue::from_static("true");
     const HEADER_IS_MERGEABLE: &str = "x-mergeable";
 
@@ -701,7 +676,6 @@ pub async fn decode_payload<A: Api>(
     trace.decode = utcnow_ns();
     debug!(
         skip_sigverify,
-        is_cancellations_enabled,
         timestamp_after_decoding = trace.decode,
         decode_latency_ns = trace.decode.saturating_sub(trace.receive),
         builder_pub_key = ?payload.builder_public_key(),
@@ -713,7 +687,7 @@ pub async fn decode_payload<A: Api>(
         "payload info"
     );
 
-    Ok((skip_sigverify, payload_with_merging_data, is_cancellations_enabled))
+    Ok((skip_sigverify, payload_with_merging_data))
 }
 
 /// - Validates the expected block.timestamp.
