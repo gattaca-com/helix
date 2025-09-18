@@ -155,19 +155,35 @@ impl<A: Api> ProposerApi<A> {
             } => {
                 // If we are past the slot for the block, skip storing it
                 if let Some((_, blobs)) = best_orders.load(slot) {
+                    let builder_inclusions = response
+                        .builder_inclusions
+                        .iter()
+                        .map(|(address, res)| format!("*{}*: {}", res.tx_count, address,))
+                        .collect::<Vec<_>>()
+                        .join("\n");
                     self.alert_manager.send(&format!(
-                        "📦 *Merged block*\n\
-                        • Slot: `{}`\n\
-                        • Value: {} → {}\n\
-                        • Transactions: {} → {}\n\
-                        • Blobs: {} → {}",
+                        "📦 *Merged Block Summary*\n\
+                            \n\
+                            *Slot:* `{}`\n\
+                            *Block Number:* `{}`\n\
+                            *Block Hash:* `{}`\n\
+                            *Value:* `{}` → `{}`\n\
+                            *Transactions:* `{}` → `{}`\n\
+                            *Blobs:* `{}` → `{}`\n\
+                            \n\
+                            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
+                            *Merged txs by builder:*\n{}\n\
+                            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n",
                         slot,
+                        response.execution_payload.block_number,
+                        response.execution_payload.block_hash,
                         base_bid_value,
                         response.proposer_value,
                         original_payload.execution_payload.transactions.len(),
                         response.execution_payload.transactions.len(),
                         original_payload.blobs_bundle.blobs.len(),
-                        original_payload.blobs_bundle.blobs.len() + response.appended_blobs.len()
+                        original_payload.blobs_bundle.blobs.len() + response.appended_blobs.len(),
+                        builder_inclusions
                     ));
                     let _ = self
                         .store_merged_payload(
