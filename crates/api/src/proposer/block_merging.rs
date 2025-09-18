@@ -130,6 +130,7 @@ impl<A: Api> ProposerApi<A> {
                 }
                 // If we have no mergeable orders, we go back to fetching the base block.
                 if let Some((mergeable_orders, _)) = best_orders.load(slot) {
+                    *last_base_block_hash = base_block_hash;
                     self.spawn_merging_task(
                         slot,
                         best_bid,
@@ -152,7 +153,6 @@ impl<A: Api> ProposerApi<A> {
                 original_payload,
                 response,
             } => {
-                *last_base_block_hash = original_payload.execution_payload.block_hash;
                 // If we are past the slot for the block, skip storing it
                 if let Some((_, blobs)) = best_orders.load(slot) {
                     self.alert_manager.send(&format!(
