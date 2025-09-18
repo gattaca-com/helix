@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
@@ -133,6 +133,13 @@ pub struct BlockMergeResponse {
     pub appended_blobs: Vec<B256>,
     /// Total value for the proposer
     pub proposer_value: U256,
+    pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BuilderInclusionResult {
+    pub revenue: U256,
+    pub tx_count: usize,
 }
 
 pub type SimResult = Result<(), BlockSimError>;
