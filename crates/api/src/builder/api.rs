@@ -410,6 +410,17 @@ impl<A: Api> BuilderApi<A> {
                     return Ok(());
                 }
 
+                if err.is_temporary() {
+                    // this will have paused already optimistic simulations in the sim manager
+                    warn!(
+                        %builder,
+                        %block_hash,
+                        %err,
+                        "Temporary error. Skipping demotion"
+                    );
+                    return Ok(());
+                }
+
                 warn!(
                     %builder,
                     %block_hash,

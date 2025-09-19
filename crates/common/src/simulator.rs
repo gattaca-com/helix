@@ -83,6 +83,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn asdasd() {
+        let s = String::from("parent block not found");
+        let err = BlockSimError::BlockValidationFailed(s);
+
+        assert!(err.is_temporary())
+    }
+
+    #[test]
     fn test_is_severe() {
         let error = BlockSimError::BlockValidationFailed("unknown ancestor".to_string());
         assert!(!error.is_severe());
