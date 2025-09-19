@@ -6,8 +6,8 @@ use helix_common::{
     simulator::BlockSimError, ValidatorPreferences,
 };
 use helix_types::{
-    BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload,
-    ExecutionRequests, MergeableOrderWithOrigin, SignedBidSubmission,
+    BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BuilderInclusionResult,
+    ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin, SignedBidSubmission,
 };
 use serde_json::json;
 use tokio::sync::oneshot;
@@ -134,12 +134,6 @@ pub struct BlockMergeResponse {
     /// Total value for the proposer
     pub proposer_value: U256,
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct BuilderInclusionResult {
-    pub revenue: U256,
-    pub tx_count: usize,
 }
 
 pub type SimResult = Result<(), BlockSimError>;
