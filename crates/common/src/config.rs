@@ -224,11 +224,19 @@ pub struct RelayNetworkConfig {
     /// Information on known peers
     #[serde(default)]
     pub peers: Vec<RelayNetworkPeerConfig>,
-    /// Duration until the first cutoff (t_1)
+    /// Duration until the first cutoff point on the slot (t_1),
+    /// when we compute an inclusion list based on the ones
+    /// broadcasted by our peers and broadcast it to them.
+    /// Should be lower than [`Self::cutoff_2_ms`]
+    ///
+    /// See the network's IL module documentation for more details.
     #[serde(default = "default_u64::<2000>")]
     pub cutoff_1_ms: u64,
-    /// Duration until the second cutoff (t_2)
+    /// Duration until the second cutoff point in the slot (t_2),
+    /// when we compute the final inclusion list for the slot.
     /// Should be higher than [`Self::cutoff_1_ms`]
+    ///
+    /// See the network's IL module documentation for more details.
     #[serde(default = "default_u64::<4000>")]
     pub cutoff_2_ms: u64,
 }
