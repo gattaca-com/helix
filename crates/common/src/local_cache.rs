@@ -9,7 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use dashmap::{DashMap, DashSet};
-use helix_types::{BlsPublicKeyBytes, CryptoError, ForkName, PayloadAndBlobs};
+use helix_types::{BlsPublicKeyBytes, CryptoError, ForkName, MergedBlock, PayloadAndBlobs};
 use http::HeaderValue;
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
@@ -104,6 +104,7 @@ pub struct LocalCache {
     kill_switch: Arc<AtomicBool>,
     proposer_duties: Arc<RwLock<Vec<BuilderGetValidatorsResponseEntry>>>,
     headers_served: Arc<DashSet<B256>>,
+    merged_blocks: Arc<DashMap<B256, MergedBlock>>,
 
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
 }
@@ -126,6 +127,7 @@ impl LocalCache {
         let kill_switch = Arc::new(AtomicBool::new(false));
         let proposer_duties = Arc::new(RwLock::new(Vec::new()));
         let headers_served = Arc::new(DashSet::with_capacity(ESTIMATED_BID_UPPER_BOUND));
+        let merged_blocks = Arc::new(DashMap::with_capacity(ESTIMATED_BID_UPPER_BOUND));
 
         Self {
             inclusion_list,
@@ -141,6 +143,7 @@ impl LocalCache {
             kill_switch,
             proposer_duties,
             headers_served,
+            merged_blocks,
             sorter_tx,
         }
     }
@@ -383,6 +386,7 @@ impl LocalCache {
         self.execution_payload_cache.clear();
         self.payload_address_cache.clear();
         self.headers_served.clear();
+        self.merged_blocks.clear();
     }
 
     #[instrument(skip_all)]
@@ -393,6 +397,16 @@ impl LocalCache {
     #[instrument(skip_all)]
     pub fn has_header_been_served(&self, block_hash: &B256) -> bool {
         self.headers_served.contains(block_hash)
+    }
+
+    #[instrument(skip_all)]
+    pub fn save_merged_block(&self, merged_block: MergedBlock) {
+        self.merged_blocks.insert(merged_block.block_hash(), merged_block);
+    }
+
+    #[instrument(skip_all)]
+    pub fn get_merged_block(&self, block_hash: &B256) -> Option<MergedBlock> {
+        self.merged_blocks.get(block_hash).map(|b| b.value().clone())
     }
 }
 
