@@ -13,12 +13,24 @@ use crate::{
 
 pub(crate) struct MultiRelayInclusionListsService {
     network_api: Arc<RelayNetworkManager>,
+    /// Duration until the first cutoff point on the slot (t_1), when
+    /// the shared inclusion list is computed and broadcasted to peers.
+    ///
+    /// For more information, see the [parent module's documentation](super).
     cutoff_1: Duration,
+    /// Duration until the second cutoff point on the slot (t_2), when
+    /// the final inclusion list is computed from the shared inclusion lists.
+    ///
+    /// For more information, see the [parent module's documentation](super).
     cutoff_2: Duration,
-
+    /// The last slot we processed an inclusion list for.
+    /// This is used to ignore out-of-order inclusion lists.
     last_slot: u64,
-
+    /// The local inclusion lists we've received from each peer, and the
+    /// slot they are for.
     local_ils: HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
+    /// The shared inclusion lists we've received from each peer, and the
+    /// slot they are for.
     shared_ils: HashMap<BlsPublicKeyBytes, (u64, InclusionList)>,
 }
 
