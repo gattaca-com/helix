@@ -326,6 +326,9 @@ impl<A: Api> BuilderApi<A> {
                     warn!(err = %reason, "block validation failed");
                     Err(BuilderApiError::BlockValidationError(err))
                 }
+
+                BlockSimError::SimulationDropped => Err(BuilderApiError::BlockValidationError(err)),
+
                 _ => {
                     error!(%err, "error simulating block");
                     Err(BuilderApiError::InternalError)
@@ -403,6 +406,17 @@ impl<A: Api> BuilderApi<A> {
                         %builder,
                         %block_hash,
                         "Block is too old. Skipping demotion"
+                    );
+                    return Ok(());
+                }
+
+                if err.is_temporary() {
+                    // this will have paused already optimistic simulations in the sim manager
+                    warn!(
+                        %builder,
+                        %block_hash,
+                        %err,
+                        "Temporary error. Skipping demotion"
                     );
                     return Ok(());
                 }

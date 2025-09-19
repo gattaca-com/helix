@@ -241,6 +241,14 @@ impl SimulatorManager {
     fn report(&mut self) {
         let tel = std::mem::take(&mut self.local_telemetry);
 
+        SimulatorMetrics::sim_mananger_count("sims_sent_immediately", tel.sims_sent_immediately);
+        SimulatorMetrics::sim_mananger_count("sims_reqs_dropped", tel.sims_reqs_dropped);
+        SimulatorMetrics::sim_mananger_count("stale_sim_reqs", tel.stale_sim_reqs);
+        SimulatorMetrics::sim_manager_gauge("max_pending", tel.max_pending);
+        SimulatorMetrics::sim_manager_gauge("max_in_flight", tel.max_in_flight);
+        SimulatorMetrics::sim_mananger_count("merge_reqs", tel.merge_reqs);
+        SimulatorMetrics::sim_mananger_count("dropped_merge_reqs", tel.dropped_merge_reqs);
+
         info!(
             bid_slot = self.last_bid_slot,
             sims_reqs = tel.sims_reqs,

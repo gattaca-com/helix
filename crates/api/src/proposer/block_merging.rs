@@ -73,6 +73,7 @@ impl BestMergedBlock {
 impl<A: Api> ProposerApi<A> {
     pub async fn process_block_merging(self: Arc<Self>, mut pool_rx: Receiver<MergingPoolMessage>) {
         let mut best_orders = BestMergeableOrders::new();
+        let mut last_base_block_hash = B256::ZERO;
         // This handle is used to perform block merging in the background.
         // See `MergingTaskState` for more details on the possible states of this task.
         let mut handle = self.spawn_base_block_fetch_task();
@@ -82,7 +83,7 @@ impl<A: Api> ProposerApi<A> {
                     self.process_pool_message(msg, &mut best_orders);
                 },
                 res = &mut handle => {
-                    handle = self.handle_merging_task_result(res, &best_orders).await;
+                    handle = self.handle_merging_task_result(res, &mut best_orders, &mut last_base_block_hash).await;
                 },
             }
         }
@@ -99,7 +100,8 @@ impl<A: Api> ProposerApi<A> {
     async fn handle_merging_task_result(
         self: &Arc<Self>,
         result: Result<MergingTaskResult, JoinError>,
-        best_orders: &BestMergeableOrders,
+        best_orders: &mut BestMergeableOrders,
+        last_base_block_hash: &mut B256,
     ) -> JoinHandle<MergingTaskResult> {
         // Start again on any errors.
         let Ok(result) = result.inspect_err(|err| warn!(%err, "merging task panicked")) else {
@@ -120,8 +122,15 @@ impl<A: Api> ProposerApi<A> {
                 registration_data,
                 payload,
             } => {
+                let base_block_hash = best_bid.header.block_hash;
+                // If we have no new orders, and the base block is the same, we skip merging.
+                if !best_orders.has_new_orders() && base_block_hash == *last_base_block_hash {
+                    debug!("skipping merging, no new orders and base block unchanged");
+                    return self.spawn_base_block_fetch_task();
+                }
                 // If we have no mergeable orders, we go back to fetching the base block.
                 if let Some((mergeable_orders, _)) = best_orders.load(slot) {
+                    *last_base_block_hash = base_block_hash;
                     self.spawn_merging_task(
                         slot,
                         best_bid,
@@ -146,19 +155,35 @@ impl<A: Api> ProposerApi<A> {
             } => {
                 // If we are past the slot for the block, skip storing it
                 if let Some((_, blobs)) = best_orders.load(slot) {
+                    let builder_inclusions = response
+                        .builder_inclusions
+                        .iter()
+                        .map(|(address, res)| format!("*{}*: {}", res.tx_count, address,))
+                        .collect::<Vec<_>>()
+                        .join("\n");
                     self.alert_manager.send(&format!(
-                        "📦 *Merged block*\n\
-                        • Slot: `{}`\n\
-                        • Value: {} → {}\n\
-                        • Transactions: {} → {}\n\
-                        • Blobs: {} → {}",
+                        "📦 *Merged Block Summary*\n\
+                            \n\
+                            *Slot:* `{}`\n\
+                            *Block Number:* `{}`\n\
+                            *Block Hash:* `{}`\n\
+                            *Value:* `{}` → `{}`\n\
+                            *Transactions:* `{}` → `{}`\n\
+                            *Blobs:* `{}` → `{}`\n\
+                            \n\
+                            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\
+                            *Merged txs by builder:*\n{}\n\
+                            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n",
                         slot,
+                        response.execution_payload.block_number,
+                        response.execution_payload.block_hash,
                         base_bid_value,
                         response.proposer_value,
                         original_payload.execution_payload.transactions.len(),
                         response.execution_payload.transactions.len(),
                         original_payload.blobs_bundle.blobs.len(),
-                        original_payload.blobs_bundle.blobs.len() + response.appended_blobs.len()
+                        original_payload.blobs_bundle.blobs.len() + response.appended_blobs.len(),
+                        builder_inclusions
                     ));
                     let _ = self
                         .store_merged_payload(
@@ -446,6 +471,7 @@ pub struct BestMergeableOrders {
     order_map: HashMap<MergeableOrder, OrderMetadata>,
     best_orders: Vec<MergeableOrderWithOrigin>,
     mergeable_blob_bundles: HashMap<B256, BlobWithMetadata>,
+    has_new_orders: bool,
 }
 
 impl Default for BestMergeableOrders {
@@ -461,18 +487,25 @@ impl BestMergeableOrders {
             order_map: HashMap::with_capacity(5000),
             mergeable_blob_bundles: HashMap::with_capacity(5000),
             best_orders: Vec::with_capacity(5000),
+            has_new_orders: false,
         }
     }
 
     pub fn load(
-        &self,
+        &mut self,
         slot: u64,
     ) -> Option<(&[MergeableOrderWithOrigin], &HashMap<B256, BlobWithMetadata>)> {
         // If the request is for another slot, return nothing
         if self.current_slot != slot {
             return None;
         }
+        // Reset the new orders flag
+        self.has_new_orders = false;
         Some((&self.best_orders, &self.mergeable_blob_bundles))
+    }
+
+    pub fn has_new_orders(&self) -> bool {
+        self.has_new_orders && !self.best_orders.is_empty()
     }
 
     /// Inserts the orders into the merging pool.
@@ -498,6 +531,9 @@ impl BestMergeableOrders {
                 Entry::Occupied(_) => {}
                 // Otherwise, insert the new order
                 Entry::Vacant(e) => {
+                    // If there were any new orders, we mark it
+                    self.has_new_orders = true;
+
                     let index = self.best_orders.len();
                     // We insert the order to our list of orders
                     self.best_orders.push(MergeableOrderWithOrigin::new(origin, e.key().clone()));
