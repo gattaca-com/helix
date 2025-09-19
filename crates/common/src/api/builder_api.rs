@@ -2,11 +2,10 @@ use alloy_consensus::TxEnvelope;
 use alloy_primitives::{Address, B256, U256};
 use alloy_rlp::Decodable;
 use helix_types::{
-    BlsPublicKeyBytes, EthSpec, MainnetEthSpec, SignedValidatorRegistration, Slot, Transaction,
+    BlsPublicKeyBytes, SignedValidatorRegistration, Slot, Transaction, Transactions,
 };
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
-use ssz_types::VariableList;
 use tree_hash_derive::TreeHash;
 
 use crate::{api::proposer_api::ValidatorRegistrationInfo, BuilderValidatorPreferences};
@@ -97,7 +96,7 @@ impl TryFrom<InclusionList> for InclusionListWithMetadata {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Encode, Decode, TreeHash)]
 pub struct InclusionList {
-    pub txs: VariableList<Transaction, <MainnetEthSpec as EthSpec>::MaxTransactionsPerPayload>,
+    pub txs: Transactions,
 }
 
 impl From<&InclusionListWithMetadata> for InclusionList {
