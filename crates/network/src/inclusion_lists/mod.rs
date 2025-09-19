@@ -13,7 +13,8 @@
 //! +-- local inclusion list computed here
 //! ```
 //!
-//! The local inclusion list is fetched from a trusted node. Candidate
+//! The local inclusion list is fetched from a trusted node and passed to
+//! [crate::RelayNetworkManager::share_inclusion_list]. Candidate
 //! and final shared inclusion lists are computed based on the algorithms
 //! detailed in [`consensus::compute_shared_inclusion_list`] and
 //! [`consensus::compute_final_inclusion_list`], respectively.
