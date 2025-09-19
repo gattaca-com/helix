@@ -3,27 +3,27 @@ use std::{
     time::Duration,
 };
 
-use alloy_primitives::{B256, U256};
+use alloy_primitives::B256;
 use axum::{extract::Path, http::HeaderMap, response::IntoResponse, Extension};
 use helix_common::{
     chain_info::ChainInfo,
     metadata_provider::MetadataProvider,
-    metrics::GetHeaderMetric,
     resign_builder_bid, task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
-    BidRequest, GetHeaderTrace, RequestTimings,
+    GetHeaderTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
 use helix_types::BlsPublicKeyBytes;
-use tokio::time::sleep;
+use tokio::sync::oneshot;
 use tracing::{debug, error, info, warn, Instrument};
 
 use super::ProposerApi;
 use crate::{
+    builder::simulator_2::Event,
     gossiper::types::RequestPayloadParams,
     proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
     router::Terminating,
-    Api, HEADER_TIMEOUT_MS,
+    Api,
 };
 
 impl<A: Api> ProposerApi<A> {
@@ -43,7 +43,7 @@ impl<A: Api> ProposerApi<A> {
         Extension(timings): Extension<RequestTimings>,
         Extension(Terminating(terminating)): Extension<Terminating>,
         headers: HeaderMap,
-        Path(GetHeaderParams { slot, parent_hash, pubkey }): Path<GetHeaderParams>,
+        Path(params): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
         if terminating.load(Ordering::Relaxed) || proposer_api.auctioneer.kill_switch_enabled() {
             return Err(ProposerApiError::ServiceUnavailableError);
@@ -51,33 +51,14 @@ impl<A: Api> ProposerApi<A> {
 
         let mut trace = GetHeaderTrace { receive: timings.on_receive_ns, ..Default::default() };
 
-        let (head_slot, duty) = proposer_api.curr_slot_info.slot_info();
-        debug!(
-            %head_slot,
-            request_ts = trace.receive,
-            %slot,
-            %parent_hash,
-            %pubkey,
-        );
+        let bid_slot = proposer_api.bid_slot.load(Ordering::Relaxed);
 
-        let bid_request = BidRequest { slot: slot.into(), parent_hash, pubkey };
-
-        // Dont allow requests for past slots
-        if bid_request.slot < head_slot {
+        if params.slot != bid_slot {
             debug!("request for past slot");
-            return Err(ProposerApiError::RequestForPastSlot {
-                request_slot: bid_request.slot,
-                head_slot,
-            });
+            return Err(ProposerApiError::RequestWrongSlot { request_slot: params.slot, bid_slot });
         }
 
-        // Only return a bid if there is a proposer connected this slot.
-        let Some(duty) = duty else {
-            debug!("proposer duty not found");
-            return Err(ProposerApiError::ProposerNotRegistered);
-        };
-
-        let ms_into_slot = match validate_bid_request_time(&proposer_api.chain_info, &bid_request) {
+        let _ms_into_slot = match validate_bid_request_time(&proposer_api.chain_info, &params) {
             Ok(ms_into_slot) => ms_into_slot,
             Err(err) => {
                 warn!(%err, "invalid bid request time");
@@ -102,86 +83,78 @@ impl<A: Api> ProposerApi<A> {
 
         info!(client_latency_ms, mev_boost, "request latency");
 
-        let client_timeout_ms = headers
-            .get(HEADER_TIMEOUT_MS)
-            .and_then(|h| h.to_str().ok())
-            .and_then(|h| match h.parse::<u64>() {
-                Ok(delay) => {
-                    // TODO: move to debug at some point
-                    info!("header timeout ms: {}", delay);
-                    Some(delay)
-                }
-                Err(err) => {
-                    warn!(%err, "invalid header timeout ms");
-                    None
-                }
-            });
+        // let client_timeout_ms = headers
+        //     .get(HEADER_TIMEOUT_MS)
+        //     .and_then(|h| h.to_str().ok())
+        //     .and_then(|h| match h.parse::<u64>() {
+        //         Ok(delay) => {
+        //             // TODO: move to debug at some point
+        //             info!("header timeout ms: {}", delay);
+        //             Some(delay)
+        //         }
+        //         Err(err) => {
+        //             warn!(%err, "invalid header timeout ms");
+        //             None
+        //         }
+        //     });
 
-        // If timing games are enabled for the proposer then we sleep a fixed amount before
-        // returning the header
-        if duty.entry.preferences.header_delay || client_timeout_ms.is_some() {
-            let max_sleep_time = proposer_api
-                .relay_config
-                .timing_game_config
-                .latest_header_delay_ms_in_slot
-                .saturating_sub(ms_into_slot);
+        // TODO: timing games
+        // // If timing games are enabled for the proposer then we sleep a fixed amount before
+        // // returning the header
+        // if duty.entry.preferences.header_delay || client_timeout_ms.is_some() {
+        //     let max_sleep_time = proposer_api
+        //         .relay_config
+        //         .timing_game_config
+        //         .latest_header_delay_ms_in_slot
+        //         .saturating_sub(ms_into_slot);
 
-            let target_sleep_time = match client_timeout_ms {
-                Some(timeout_ms) => timeout_ms.saturating_sub(client_latency_ms),
-                None => {
-                    // TODO: convert this to a timeout instead of a delay
-                    duty.entry
-                        .preferences
-                        .delay_ms
-                        .unwrap_or(proposer_api.relay_config.timing_game_config.max_header_delay_ms)
-                }
-            };
+        //     let target_sleep_time = match client_timeout_ms {
+        //         Some(timeout_ms) => timeout_ms.saturating_sub(client_latency_ms),
+        //         None => {
+        //             // TODO: convert this to a timeout instead of a delay
+        //             duty.entry
+        //                 .preferences
+        //                 .delay_ms
+        //
+        // .unwrap_or(proposer_api.relay_config.timing_game_config.max_header_delay_ms)
+        //         }
+        //     };
 
-            let sleep_time_ms = std::cmp::min(max_sleep_time, target_sleep_time);
+        //     let sleep_time_ms = std::cmp::min(max_sleep_time, target_sleep_time);
 
-            let sleep_time = Duration::from_millis(sleep_time_ms);
-            let mut get_header_metric = GetHeaderMetric::new(sleep_time);
+        //     let sleep_time = Duration::from_millis(sleep_time_ms);
+        //     let mut get_header_metric = GetHeaderMetric::new(sleep_time);
 
-            debug!(target: "timing_games", 
-                ?sleep_time,
-                %ms_into_slot,
-                target_sleep_time,
-                max_sleep_time,
-                slot,
-                pubkey = ?bid_request.pubkey,
-                "timing game sleep");
+        //     debug!(target: "timing_games",
+        //         ?sleep_time,
+        //         %ms_into_slot,
+        //         target_sleep_time,
+        //         max_sleep_time,
+        //         slot = params.slot,
+        //         pubkey = ?params.pubkey,
+        //         "timing game sleep");
 
-            if sleep_time > Duration::ZERO {
-                sleep(sleep_time).await;
-            }
+        //     if sleep_time > Duration::ZERO {
+        //         sleep(sleep_time).await;
+        //     }
 
-            get_header_metric.record();
-        }
+        //     get_header_metric.record();
+        // }
 
-        let get_best_bid_res = proposer_api.shared_best_header.load(
-            bid_request.slot.into(),
-            &bid_request.parent_hash,
-            &bid_request.pubkey,
-        );
+        let (tx, rx) = oneshot::channel();
+        proposer_api.auctioneer_tx.send(Event::GetHeader { params, res_tx: tx });
+
+        // TODO: refactor errors
+        let bid = rx.await.map_err(|_| ProposerApiError::BidValueZero)??;
 
         let now_ns = utcnow_ns();
         trace.best_bid_fetched = now_ns;
         debug!(trace = ?trace, "best bid fetched");
 
-        let Some(bid) = get_best_bid_res else {
-            warn!("no bid found");
-            return Err(ProposerApiError::NoBidPrepared);
-        };
-        if bid.value == U256::ZERO {
-            warn!("best bid value is 0");
-            return Err(ProposerApiError::BidValueZero);
-        }
-
         // Try to fetch a merged block if block merging is enabled
         let bid = if proposer_api.relay_config.block_merging_config.is_enabled {
-            let merged_block_bid = proposer_api
-                .shared_best_merged
-                .load(bid_request.slot.into(), &bid_request.parent_hash);
+            let merged_block_bid =
+                proposer_api.shared_best_merged.load(params.slot.into(), &params.parent_hash);
             let max_merged_bid_age_ms =
                 proposer_api.relay_config.block_merging_config.max_merged_bid_age_ms;
 
@@ -210,9 +183,9 @@ impl<A: Api> ProposerApi<A> {
         // Save trace to DB
         save_get_header_call(
             proposer_api.db.clone(),
-            slot,
-            bid_request.parent_hash,
-            bid_request.pubkey,
+            params.slot,
+            params.parent_hash,
+            params.pubkey,
             bid_block_hash,
             trace,
             mev_boost,
@@ -220,7 +193,7 @@ impl<A: Api> ProposerApi<A> {
         )
         .await;
 
-        let proposer_pubkey_clone = bid_request.pubkey;
+        let proposer_pubkey_clone = params.pubkey;
 
         let fork = proposer_api.chain_info.current_fork_name();
 
@@ -233,7 +206,7 @@ impl<A: Api> ProposerApi<A> {
                 proposer_api
                     .gossiper
                     .request_payload(RequestPayloadParams {
-                        slot,
+                        slot: params.slot,
                         proposer_pub_key: proposer_pubkey_clone,
                         block_hash: bid_block_hash,
                     })
@@ -288,11 +261,11 @@ async fn save_get_header_call<DB: DatabaseService + 'static>(
 /// Returns how many ms we are into the slot if ok.
 fn validate_bid_request_time(
     chain_info: &ChainInfo,
-    bid_request: &BidRequest,
+    bid_request: &GetHeaderParams,
 ) -> Result<u64, ProposerApiError> {
     let curr_timestamp_ms = utcnow_ms() as i64;
-    let slot_start_timestamp = chain_info.genesis_time_in_secs +
-        (bid_request.slot.as_u64() * chain_info.seconds_per_slot());
+    let slot_start_timestamp =
+        chain_info.genesis_time_in_secs + (bid_request.slot * chain_info.seconds_per_slot());
     let ms_into_slot = curr_timestamp_ms.saturating_sub((slot_start_timestamp * 1000) as i64);
 
     if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {

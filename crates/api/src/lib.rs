@@ -5,12 +5,8 @@ use std::sync::{atomic::AtomicBool, Arc};
 use bytes::Bytes;
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
-    bid_sorter::{BestGetHeader, BidSorterMessage},
-    chain_info::ChainInfo,
-    local_cache::LocalCache,
-    metadata_provider::MetadataProvider,
-    signing::RelaySigningContext,
-    RelayConfig,
+    chain_info::ChainInfo, local_cache::LocalCache, metadata_provider::MetadataProvider,
+    signing::RelaySigningContext, RelayConfig,
 };
 use helix_database::DatabaseService;
 use helix_housekeeper::CurrentSlotInfo;
@@ -28,9 +24,6 @@ pub mod relay_data;
 pub mod router;
 pub mod service;
 
-#[cfg(test)]
-pub mod test_utils;
-
 mod grpc {
     include!(concat!(env!("OUT_DIR"), "/gossip.rs"));
 }
@@ -46,9 +39,7 @@ pub fn start_api_service<A: Api>(
     current_slot_info: CurrentSlotInfo,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
-    sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-    shared_best_header: BestGetHeader,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),
@@ -61,9 +52,7 @@ pub fn start_api_service<A: Api>(
         metadata_provider,
         known_validators_loaded,
         terminating,
-        sorter_tx,
         top_bid_tx,
-        shared_best_header,
     ));
 }
 
@@ -81,3 +70,4 @@ pub const HEADER_TIMEOUT_MS: &str = "x-timeout-ms";
 pub const HEADER_API_KEY: &str = "x-api-key";
 pub const HEADER_SEQUENCE: &str = "x-sequence";
 pub const HEADER_HYDRATE: &str = "x-hydrate";
+pub const HEADER_IS_MERGEABLE: &str = "x-mergeable";

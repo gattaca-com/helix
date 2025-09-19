@@ -19,11 +19,14 @@ pub enum DehydratedBidSubmission {
     Electra(DehydratedBidSubmissionElectra),
 }
 impl DehydratedBidSubmission {
+    pub fn slot(&self) -> u64 {
+        match self {
+            DehydratedBidSubmission::Electra(s) => s.message.slot,
+        }
+    }
     pub fn builder_pubkey(&self) -> &BlsPublicKeyBytes {
         match self {
-            DehydratedBidSubmission::Electra(dehydrated_bid_submission_electra) => {
-                &dehydrated_bid_submission_electra.message.builder_pubkey
-            }
+            DehydratedBidSubmission::Electra(s) => &s.message.builder_pubkey,
         }
     }
 

@@ -5,12 +5,7 @@ use alloy_primitives::{
     B256, U256,
 };
 use bytes::Bytes;
-use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
-use parking_lot::RwLock;
-use ssz::Encode;
-use tracing::info;
-
-use crate::{
+use helix_common::{
     api::builder_api::TopBidUpdate,
     bid_submission::{
         v2::header_submission::SignedHeaderSubmission, BidSubmission, OptimisticVersion,
@@ -23,75 +18,10 @@ use crate::{
     utils::{avg_duration, utcnow_ms, utcnow_ns},
     SubmissionTrace,
 };
-
-#[derive(Clone)]
-struct GetHeaderEntry {
-    slot: u64,
-    bid: BuilderBid,
-    metadata: BlockMergingPreferences,
-}
-
-/// Shared container for get_header response, thread safe
-#[derive(Clone)]
-pub struct BestGetHeader(Arc<RwLock<Option<GetHeaderEntry>>>);
-
-impl Default for BestGetHeader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl BestGetHeader {
-    pub fn new() -> Self {
-        Self(Arc::new(RwLock::new(None)))
-    }
-
-    fn store(&self, slot: u64, bid: BuilderBid, metadata: BlockMergingPreferences) {
-        *self.0.write() = Some(GetHeaderEntry { slot, bid, metadata });
-    }
-
-    pub fn best_bid(&self, _slot: u64) -> U256 {
-        let guard = self.0.read();
-        let Some(entry) = guard.as_ref() else {
-            return U256::ZERO;
-        };
-
-        if entry.slot != _slot {
-            return U256::ZERO;
-        }
-
-        entry.bid.value
-    }
-
-    pub fn load(
-        &self,
-        slot: u64,
-        parent_hash: &B256,
-        _validator_pubkey: &BlsPublicKeyBytes,
-    ) -> Option<BuilderBid> {
-        let entry = (*self.0.read()).clone()?;
-
-        if entry.slot != slot || entry.bid.header.parent_hash != *parent_hash {
-            return None;
-        }
-
-        Some(entry.bid)
-    }
-
-    pub fn load_any(&self, slot: u64) -> Option<(BuilderBid, BlockMergingPreferences)> {
-        let entry = (*self.0.read()).clone()?;
-
-        if entry.slot != slot {
-            return None;
-        }
-
-        Some((entry.bid, entry.metadata))
-    }
-
-    fn reset(&self) {
-        *self.0.write() = None
-    }
-}
+use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
+use parking_lot::RwLock;
+use ssz::Encode;
+use tracing::info;
 
 // ignoring warning because submissions variant will be 99% of messages
 #[allow(clippy::large_enum_variant)]
@@ -109,10 +39,6 @@ pub enum BidSorterMessage {
         simulation_time_ns: u64,
         before_sorter_ns: u64,
     },
-    /// Demotion of a builder pubkey, all its bids are invalidated for this slot
-    Demotion(BlsPublicKeyBytes),
-    /// New slot update
-    Slot(u64),
 }
 
 impl BidSorterMessage {
@@ -209,7 +135,6 @@ struct BidSorterTelemetry {
 }
 
 pub struct BidSorter {
-    sorter_rx: crossbeam_channel::Receiver<BidSorterMessage>,
     /// Sender for ws updates, TopBidUpdate SSZ encoded
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     /// Head slot + 1
@@ -222,97 +147,92 @@ pub struct BidSorter {
     /// Demoted builders in this slot for live demotions
     demotions: HashSet<BlsPublicKeyBytes>,
     /// Current best bid
-    curr_bid: Option<(BlsPublicKeyBytes, Bid)>,
-    /// Current response for get_header
-    shared_best_header: BestGetHeader,
+    curr_bid: Option<(BlsPublicKeyBytes, Bid, BuilderBid)>,
     local_telemetry: BidSorterTelemetry,
 }
 
 impl BidSorter {
-    pub fn new(
-        sorter_rx: crossbeam_channel::Receiver<BidSorterMessage>,
-        top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-        shared_best_header: BestGetHeader,
-    ) -> Self {
+    pub fn new(top_bid_tx: tokio::sync::broadcast::Sender<Bytes>) -> Self {
         Self {
-            sorter_rx,
             top_bid_tx,
             curr_bid_slot: 0,
             bids: HashMap::with_capacity(250),
             headers: HashMap::with_capacity(2500),
             demotions: HashSet::with_capacity(50),
             curr_bid: None,
-            shared_best_header,
             local_telemetry: BidSorterTelemetry::default(),
         }
     }
 
-    pub fn run(mut self) {
-        info!("starting bid sorter");
+    pub fn sort(
+        &mut self,
+        bid: Bid,
+        builder_pubkey: BlsPublicKeyBytes,
+        slot: u64,
+        header: BuilderBid,
+        merging_preferences: BlockMergingPreferences,
+        simulation_time_ns: u64,
+        before_sorter_ns: u64,
+    ) {
+        let recv_ns = utcnow_ns();
 
-        loop {
-            let Ok(msg) = self.sorter_rx.try_recv() else {
-                continue;
-            };
-
-            let recv_ns = utcnow_ns();
-
-            match msg {
-                BidSorterMessage::Submission {
-                    bid,
-                    builder_pubkey,
-                    slot,
-                    header,
-                    merging_preferences,
-                    simulation_time_ns,
-                    before_sorter_ns,
-                } => {
-                    if self.curr_bid_slot != slot {
-                        self.local_telemetry.past_subs += 1;
-                        continue;
-                    }
-
-                    if self.demotions.contains(&builder_pubkey) {
-                        self.local_telemetry.demoted_subs += 1;
-                        continue;
-                    }
-
-                    self.headers.insert(bid.on_receive_ns, (header, merging_preferences));
-                    self.process_header(builder_pubkey, bid);
-
-                    // telemetry
-                    let recv_latency_ns =
-                        recv_ns.saturating_sub(bid.on_receive_ns + simulation_time_ns);
-                    let process_latency_ns = utcnow_ns().saturating_sub(recv_ns);
-                    let queue_latency_ns = recv_ns.saturating_sub(before_sorter_ns);
-
-                    self.local_telemetry.valid_subs += 1;
-                    self.local_telemetry.subs_recv_time += Duration::from_nanos(recv_latency_ns);
-                    self.local_telemetry.subs_process_time +=
-                        Duration::from_nanos(process_latency_ns);
-                    self.local_telemetry.subs_queue_time += Duration::from_nanos(queue_latency_ns);
-
-                    BID_SORTER_RECV_LATENCY_US.observe(recv_latency_ns as f64 / 1000.);
-                    BID_SORTER_PROCESS_LATENCY_US.observe(process_latency_ns as f64 / 1000.);
-                    BID_SORTER_QUEUE_LATENCY_US.observe(queue_latency_ns as f64 / 1000.);
-                }
-                BidSorterMessage::Demotion(demoted) => {
-                    if !self.demotions.insert(demoted) {
-                        // already demoted
-                        self.local_telemetry.duplicate_demotions += 1;
-                        continue;
-                    }
-
-                    self.process_demotion(demoted);
-
-                    // telemetry
-                    self.local_telemetry.new_demotions += 1;
-                    self.local_telemetry.demotions_process_time +=
-                        Duration::from_nanos(utcnow_ns().saturating_sub(recv_ns));
-                }
-                BidSorterMessage::Slot(head_slot) => self.process_slot(head_slot),
-            }
+        // move this out
+        if self.curr_bid_slot != slot {
+            self.local_telemetry.past_subs += 1;
+            return;
         }
+
+        // move this out
+        if self.demotions.contains(&builder_pubkey) {
+            self.local_telemetry.demoted_subs += 1;
+            return;
+        }
+
+        self.headers.insert(bid.on_receive_ns, (header, merging_preferences));
+        self.process_header(builder_pubkey, bid);
+
+        // telemetry
+        let recv_latency_ns = recv_ns.saturating_sub(bid.on_receive_ns + simulation_time_ns);
+        let process_latency_ns = utcnow_ns().saturating_sub(recv_ns);
+        let queue_latency_ns = recv_ns.saturating_sub(before_sorter_ns);
+
+        self.local_telemetry.valid_subs += 1;
+        self.local_telemetry.subs_recv_time += Duration::from_nanos(recv_latency_ns);
+        self.local_telemetry.subs_process_time += Duration::from_nanos(process_latency_ns);
+        self.local_telemetry.subs_queue_time += Duration::from_nanos(queue_latency_ns);
+
+        BID_SORTER_RECV_LATENCY_US.observe(recv_latency_ns as f64 / 1000.);
+        BID_SORTER_PROCESS_LATENCY_US.observe(process_latency_ns as f64 / 1000.);
+        BID_SORTER_QUEUE_LATENCY_US.observe(queue_latency_ns as f64 / 1000.);
+    }
+
+    pub fn is_top_bid(&self, sub: &SignedBidSubmission) -> bool {
+        todo!()
+    }
+
+    pub fn demote(&mut self, demoted: BlsPublicKeyBytes) {
+        let recv_ns = utcnow_ns();
+
+        if !self.demotions.insert(demoted) {
+            // already demoted
+            self.local_telemetry.duplicate_demotions += 1;
+            return;
+        }
+
+        self.process_demotion(demoted);
+
+        // telemetry
+        self.local_telemetry.new_demotions += 1;
+        self.local_telemetry.demotions_process_time +=
+            Duration::from_nanos(utcnow_ns().saturating_sub(recv_ns));
+    }
+
+    pub fn update_slot(&mut self, head_slot: u64) {
+        self.process_slot(head_slot)
+    }
+
+    pub fn handle_get_header(&self) {
+        todo!()
     }
 
     fn process_header(&mut self, new_pubkey: BlsPublicKeyBytes, new_bid: Bid) {
@@ -330,11 +250,11 @@ impl BidSorter {
             }
         };
 
-        match self.curr_bid {
-            Some((curr_pubkey, curr_bid)) => {
+        match &self.curr_bid {
+            Some((curr_pubkey, curr_bid, _)) => {
                 if new_bid.value > curr_bid.value {
                     self.update_top_bid(new_pubkey, new_bid);
-                } else if new_pubkey == curr_pubkey {
+                } else if new_pubkey == *curr_pubkey {
                     // this was a cancel, need to check all other bids
                     self.traverse_update_top_bid();
                 }
@@ -354,8 +274,8 @@ impl BidSorter {
             return;
         };
 
-        if let Some((curr, _)) = self.curr_bid {
-            if curr == demoted {
+        if let Some((curr, _, _)) = &self.curr_bid {
+            if *curr == demoted {
                 self.traverse_update_top_bid();
             }
         }
@@ -380,7 +300,6 @@ impl BidSorter {
         if let Some((best_pk, best_bid)) = best {
             self.update_top_bid(best_pk, best_bid);
         } else {
-            self.shared_best_header.reset();
             self.curr_bid = None;
         }
     }
@@ -394,8 +313,6 @@ impl BidSorter {
         self.demotions.clear();
 
         self.curr_bid = None;
-
-        self.shared_best_header.reset();
     }
 
     fn update_top_bid(&mut self, builder_pubkey: BlsPublicKeyBytes, bid: Bid) {
@@ -418,8 +335,7 @@ impl BidSorter {
         .into();
         let _ = self.top_bid_tx.send(top_bid_update);
 
-        self.curr_bid = Some((builder_pubkey, bid));
-        self.shared_best_header.store(self.curr_bid_slot, h.clone(), *merging_preferences);
+        self.curr_bid = Some((builder_pubkey, bid, h.clone()));
 
         self.local_telemetry.top_bids += 1;
         TopBidMetrics::top_bid_update_count();
@@ -449,13 +365,4 @@ impl BidSorter {
             "bid sorter telemetry"
         )
     }
-}
-
-pub fn start_bid_sorter(
-    sorter_rx: crossbeam_channel::Receiver<BidSorterMessage>,
-    top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-    shared_best_header: BestGetHeader,
-) {
-    let bid_sorter = BidSorter::new(sorter_rx, top_bid_tx, shared_best_header);
-    std::thread::spawn(|| bid_sorter.run());
 }

@@ -22,29 +22,30 @@ impl<A: Api> BuilderApi<A> {
         Extension(api): Extension<Arc<BuilderApi<A>>>,
         Path(InclusionListPathParams { slot, parent_hash, pub_key }): Path<InclusionListPathParams>,
     ) -> Result<impl IntoResponse, BuilderApiError> {
-        debug!("New request for inclusion list.");
+        // debug!("New request for inclusion list.");
 
-        let list_with_key = api.current_inclusion_list.read();
+        // let list_with_key = api.current_inclusion_list.read();
 
-        let Some(list_with_key) = list_with_key.as_ref() else {
-            debug!(inclusion_lists_enabled = %api.relay_config.inclusion_list.is_some(),
-                "Builder has requested an inclusion list but none have been found in the cache."
-            );
-            return Ok(StatusCode::NOT_FOUND.into_response());
-        };
+        // let Some(list_with_key) = list_with_key.as_ref() else {
+        //     debug!(inclusion_lists_enabled = %api.relay_config.inclusion_list.is_some(),
+        //         "Builder has requested an inclusion list but none have been found in the cache."
+        //     );
+        //     return Ok(StatusCode::NOT_FOUND.into_response());
+        // };
 
-        let (current_list, key) = list_with_key.into();
+        // let (current_list, key) = list_with_key.into();
 
-        if key == &(slot, pub_key, parent_hash) {
-            let response_payload = InclusionList::from(current_list);
-            Ok((StatusCode::OK, axum::Json(response_payload)).into_response())
-        } else {
-            debug!(
-                "Requested inclusion list for a slot in the past. Current slot: {}",
-                api.curr_slot_info.head_slot()
-            );
+        // if key == &(slot, pub_key, parent_hash) {
+        //     let response_payload = InclusionList::from(current_list);
+        //     Ok((StatusCode::OK, axum::Json(response_payload)).into_response())
+        // } else {
+        //     debug!(
+        //         "Requested inclusion list for a slot in the past. Current slot: {}",
+        //         api.curr_slot_info.head_slot()
+        //     );
 
-            Ok(StatusCode::NOT_FOUND.into_response())
-        }
+        //     Ok(StatusCode::NOT_FOUND.into_response())
+        // }
+        Ok(())
     }
 }

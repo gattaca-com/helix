@@ -8,25 +8,30 @@ mod get_payload;
 mod register;
 mod types;
 
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 
-use alloy_primitives::B256;
 use axum::{response::IntoResponse, Extension};
 pub use block_merging::MergingPoolMessage;
+pub use error::*;
 use helix_beacon::{multi_beacon_client::MultiBeaconClient, BlockBroadcaster};
 use helix_common::{
-    alerts::AlertManager, bid_sorter::BestGetHeader, chain_info::ChainInfo,
-    local_cache::LocalCache, signing::RelaySigningContext, RelayConfig, ValidatorPreferences,
+    alerts::AlertManager, chain_info::ChainInfo, local_cache::LocalCache,
+    signing::RelaySigningContext, RelayConfig, ValidatorPreferences,
 };
 use helix_housekeeper::CurrentSlotInfo;
-use helix_types::BlsPublicKeyBytes;
 use hyper::StatusCode;
-use tokio::sync::mpsc::{self, Sender};
+use tokio::sync::mpsc::{self};
 pub use types::*;
 
 use crate::{
-    builder::BlockMergeRequest, gossiper::grpc_gossiper::GrpcGossiperClientManager,
-    proposer::block_merging::BestMergedBlock, router::Terminating, Api,
+    builder::{simulator_2::Event, BlockMergeRequest},
+    gossiper::grpc_gossiper::GrpcGossiperClientManager,
+    proposer::block_merging::BestMergedBlock,
+    router::Terminating,
+    Api,
 };
 
 #[derive(Clone)]
@@ -44,17 +49,17 @@ pub struct ProposerApi<A: Api> {
     pub chain_info: Arc<ChainInfo>,
     pub validator_preferences: Arc<ValidatorPreferences>,
     pub relay_config: RelayConfig,
-    /// Channel on which to send v3 payload fetch requests.
-    pub v3_payload_request: Sender<(u64, B256, BlsPublicKeyBytes, Vec<u8>)>,
-
-    /// Set in the sorter loop
-    pub shared_best_header: BestGetHeader,
-
+    // /// Channel on which to send v3 payload fetch requests.
+    // pub v3_payload_request: Sender<(u64, B256, BlsPublicKeyBytes, Vec<u8>)>,
     /// Set in the block merging process
     pub shared_best_merged: BestMergedBlock,
     /// Send simulation requests
     pub merge_requests_tx: mpsc::Sender<BlockMergeRequest>,
     pub alert_manager: AlertManager,
+    // TODO: set this
+    pub bid_slot: Arc<AtomicU64>,
+
+    pub auctioneer_tx: crossbeam_channel::Sender<Event>,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -69,10 +74,10 @@ impl<A: Api> ProposerApi<A> {
         chain_info: Arc<ChainInfo>,
         validator_preferences: Arc<ValidatorPreferences>,
         relay_config: RelayConfig,
-        v3_payload_request: Sender<(u64, B256, BlsPublicKeyBytes, Vec<u8>)>,
         curr_slot_info: CurrentSlotInfo,
-        shared_best_header: BestGetHeader,
         merge_requests_tx: mpsc::Sender<BlockMergeRequest>,
+        bid_slot: Arc<AtomicU64>,
+        auctioneer_tx: crossbeam_channel::Sender<Event>,
     ) -> Self {
         Self {
             auctioneer,
@@ -85,12 +90,12 @@ impl<A: Api> ProposerApi<A> {
             metadata_provider,
             validator_preferences,
             relay_config: relay_config.clone(),
-            v3_payload_request,
             curr_slot_info,
-            shared_best_header,
             shared_best_merged: BestMergedBlock::new(),
             alert_manager: AlertManager::from_relay_config(&relay_config),
             merge_requests_tx,
+            bid_slot,
+            auctioneer_tx,
         }
     }
 }

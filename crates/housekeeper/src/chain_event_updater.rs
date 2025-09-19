@@ -4,8 +4,8 @@ use alloy_primitives::B256;
 use futures::FutureExt;
 use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, bid_sorter::BidSorterMessage,
-    chain_info::ChainInfo, local_cache::LocalCache, utils::utcnow_sec,
+    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
+    local_cache::LocalCache, utils::utcnow_sec,
 };
 use helix_types::{Slot, SlotClockTrait};
 use tokio::{
@@ -56,8 +56,6 @@ pub struct ChainEventUpdater {
     auctioneer: Arc<LocalCache>,
     chain_info: Arc<ChainInfo>,
     curr_slot_info: CurrentSlotInfo,
-
-    sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
 }
 
 impl ChainEventUpdater {
@@ -65,7 +63,6 @@ impl ChainEventUpdater {
         auctioneer: Arc<LocalCache>,
         chain_info: Arc<ChainInfo>,
         curr_slot_info: CurrentSlotInfo,
-        sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     ) -> Self {
         Self {
             head_slot: 0,
@@ -74,7 +71,6 @@ impl ChainEventUpdater {
             proposer_duties: Vec::new(),
             chain_info,
             curr_slot_info,
-            sorter_tx,
         }
     }
 
@@ -221,7 +217,6 @@ impl ChainEventUpdater {
 
         self.curr_slot_info.handle_new_slot(update, &self.chain_info);
         self.auctioneer.process_slot(slot);
-        let _ = self.sorter_tx.try_send(BidSorterMessage::Slot(slot));
     }
 
     // Handles a new payload attributes event

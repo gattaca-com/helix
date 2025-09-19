@@ -98,7 +98,7 @@ impl<A: Api> ProposerApi<A> {
 
     pub async fn _get_payload(
         &self,
-        mut signed_blinded_block: SignedBlindedBeaconBlock,
+        signed_blinded_block: SignedBlindedBeaconBlock,
         trace: &mut GetPayloadTrace,
         user_agent: Option<String>,
     ) -> Result<GetPayloadResponse, ProposerApiError> {
@@ -117,7 +117,7 @@ impl<A: Api> ProposerApi<A> {
         // Verify that the request is for the current slot
         if signed_blinded_block.message().slot() <= head_slot {
             warn!("request for past slot");
-            return Err(ProposerApiError::RequestForPastSlot {
+            return Err(ProposerApiError::RequestWrongSlot {
                 request_slot: signed_blinded_block.message().slot(),
                 head_slot,
             });
@@ -139,7 +139,7 @@ impl<A: Api> ProposerApi<A> {
         let proposer_public_key = slot_duty.entry.registration.message.pubkey;
         if let Err(err) = verify_signed_blinded_block_signature(
             &self.chain_info,
-            &mut signed_blinded_block,
+            &signed_blinded_block,
             &proposer_public_key,
             self.chain_info.genesis_validators_root,
             &self.chain_info.context,
@@ -378,28 +378,28 @@ impl<A: Api> ProposerApi<A> {
             self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot());
         let slot_cutoff_millis = (slot_time * 1000) + GET_PAYLOAD_REQUEST_CUTOFF_MS as u64;
 
-        let mut is_v3 = false;
-        let mut builder_pub_key = None;
+        // let mut is_v3 = false;
+        // let mut builder_pub_key = None;
 
-        if let Some((builder_pubkey, payload_address)) = self.auctioneer.get_payload_url(block_hash)
-        {
-            // Fetch v3 optimistic payload from builder. This will complete asynchronously.
-            info!(
-                ?builder_pubkey,
-                payload_address = String::from_utf8_lossy(&payload_address).as_ref(),
-                "Requesting v3 payload from builder"
-            );
-            if let Err(e) = self
-                .v3_payload_request
-                .send((slot, *block_hash, builder_pubkey, payload_address))
-                .await
-            {
-                error!("Failed to send v3 payload request: {e:?}");
-            }
+        // if let Some((builder_pubkey, payload_address)) =
+        // self.auctioneer.get_payload_url(block_hash) {
+        //     // Fetch v3 optimistic payload from builder. This will complete asynchronously.
+        //     info!(
+        //         ?builder_pubkey,
+        //         payload_address = String::from_utf8_lossy(&payload_address).as_ref(),
+        //         "Requesting v3 payload from builder"
+        //     );
+        //     if let Err(e) = self
+        //         .v3_payload_request
+        //         .send((slot, *block_hash, builder_pubkey, payload_address))
+        //         .await
+        //     {
+        //         error!("Failed to send v3 payload request: {e:?}");
+        //     }
 
-            is_v3 = true;
-            builder_pub_key = Some(builder_pubkey);
-        }
+        //     is_v3 = true;
+        //     builder_pub_key = Some(builder_pubkey);
+        // }
 
         let mut retry = 0; // Try at least once to cover case where get_payload is called too late.
         while retry == 0 || utcnow_ms() < slot_cutoff_millis {
@@ -442,16 +442,16 @@ impl<A: Api> ProposerApi<A> {
             sleep(RETRY_DELAY).await;
         }
 
-        if is_v3 && self.auctioneer.has_header_been_served(block_hash) {
-            warn!("v3 payload request was made, but no payload found. The builder may have failed to deliver the payload in time.");
-            self.demote_builder(
-                slot,
-                &builder_pub_key.expect("builder pubkey must be set if is_v3 is true"),
-                block_hash,
-                "v3 header served but no payload found",
-            )
-            .await;
-        }
+        // if is_v3 && self.auctioneer.has_header_been_served(block_hash) {
+        //     warn!("v3 payload request was made, but no payload found. The builder may have failed
+        // to deliver the payload in time.");     self.demote_builder(
+        //         slot,
+        //         &builder_pub_key.expect("builder pubkey must be set if is_v3 is true"),
+        //         block_hash,
+        //         "v3 header served but no payload found",
+        //     )
+        //     .await;
+        // }
 
         error!("max retries reached trying to fetch execution payload");
         Err(ProposerApiError::NoExecutionPayloadFound)
@@ -475,23 +475,23 @@ impl<A: Api> ProposerApi<A> {
         });
     }
 
-    async fn demote_builder(
-        &self,
-        slot: u64,
-        builder: &BlsPublicKeyBytes,
-        block_hash: &B256,
-        reason: &str,
-    ) {
-        if let Err(err) = self.auctioneer.demote_builder(builder) {
-            error!(%err, %builder, "failed to demote builder in auctioneer");
-        }
+    // async fn demote_builder(
+    //     &self,
+    //     slot: u64,
+    //     builder: &BlsPublicKeyBytes,
+    //     block_hash: &B256,
+    //     reason: &str,
+    // ) {
+    //     if let Err(err) = self.auctioneer.demote_builder(builder) {
+    //         error!(%err, %builder, "failed to demote builder in auctioneer");
+    //     }
 
-        if let Err(err) =
-            self.db.db_demote_builder(slot, builder, block_hash, reason.to_string()).await
-        {
-            error!(%err,  %builder, "Failed to demote builder in database");
-        }
-    }
+    //     if let Err(err) =
+    //         self.db.db_demote_builder(slot, builder, block_hash, reason.to_string()).await
+    //     {
+    //         error!(%err,  %builder, "Failed to demote builder in database");
+    //     }
+    // }
 
     /// `broadcast_signed_block` sends the provided signed block to all registered broadcasters
     fn broadcast_signed_block(
@@ -632,7 +632,7 @@ fn validate_block_equality(
 
 fn verify_signed_blinded_block_signature(
     chain_info: &ChainInfo,
-    signed_blinded_beacon_block: &mut SignedBlindedBeaconBlock,
+    signed_blinded_beacon_block: &SignedBlindedBeaconBlock,
     public_key: &BlsPublicKeyBytes,
     genesis_validators_root: B256,
     context: &ChainSpec,

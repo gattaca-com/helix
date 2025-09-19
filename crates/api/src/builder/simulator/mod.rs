@@ -12,10 +12,9 @@ use helix_types::{
 use serde_json::json;
 use tokio::sync::oneshot;
 
-mod client;
-mod manager;
+pub mod client;
 
-pub use manager::SimulatorManager;
+use crate::builder::simulator_2::worker::SubmissionResult;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockSimRequest {
@@ -145,7 +144,7 @@ pub struct SimulatorRequest {
     pub on_receive_ns: u64,
     pub is_top_bid: bool,
     pub is_optimistic: bool,
-    pub res_tx: oneshot::Sender<SimResult>,
+    pub res_tx: Option<oneshot::Sender<SubmissionResult>>,
 }
 
 impl SimulatorRequest {
@@ -157,7 +156,7 @@ impl SimulatorRequest {
     }
 
     pub fn is_closed(&self) -> bool {
-        !self.is_optimistic && self.res_tx.is_closed()
+        !self.is_optimistic && self.res_tx.as_ref().is_some_and(|r| r.is_closed())
     }
 
     pub fn bid_slot(&self) -> u64 {

@@ -10,7 +10,7 @@ use crate::proposer::error::ProposerApiError;
 
 pub const GET_HEADER_REQUEST_CUTOFF_MS: i64 = 3000;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, Copy)]
 pub struct GetHeaderParams {
     pub slot: u64,
     pub parent_hash: B256,

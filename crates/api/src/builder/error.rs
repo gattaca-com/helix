@@ -10,10 +10,10 @@ use helix_common::{
 };
 use helix_database::error::DatabaseError;
 use helix_types::{
-    BlsPublicKey, BlsPublicKeyBytes, ForkName, HydrationError, Slot, ValidationError,
+    BlsPublicKey, BlsPublicKeyBytes, ForkName, HydrationError, SigError, Slot, ValidationError,
 };
 
-use super::v3::V3Error;
+// use super::v3::V3Error;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuilderApiError {
@@ -29,9 +29,11 @@ pub enum BuilderApiError {
     #[error("IO error: {0}")]
     IOError(#[from] std::io::Error),
 
-    #[error("payload error: {0}")]
-    PayloadError(#[from] V3Error),
+    #[error("failed to decode payload")]
+    PayloadDecode,
 
+    // #[error("payload error: {0}")]
+    // PayloadError(#[from] V3Error),
     #[error("ssz serialize error")]
     SszSerializeError,
 
@@ -119,11 +121,18 @@ pub enum BuilderApiError {
     #[error("transactions root mismatch. got: {got:?}, expected: {expected:?}")]
     TransactionsRootMismatch { got: B256, expected: B256 },
 
+    // remove this
     #[error("signature verification failed")]
     SignatureVerificationFailed,
 
+    #[error(transparent)]
+    SigError(#[from] SigError),
+
     #[error("payload already delivered")]
     PayloadAlreadyDelivered,
+
+    #[error("delivering payload: bid_slot: {bid_slot}, delivering: {delivering}")]
+    DeliveringPayload { bid_slot: u64, delivering: u64 },
 
     #[error("already processing newer payload")]
     AlreadyProcessingNewerPayload,
@@ -169,14 +178,17 @@ pub enum BuilderApiError {
     #[error(transparent)]
     ValidationError(#[from] ValidationError),
 
-    #[error("out of sequence submission for slot: {bid_slot}. seen: {seen}, this request: {this}")]
-    OutOfSequence { seen: u64, this: u64, bid_slot: u64 },
+    #[error("out of sequence submission: seen: {seen}, this request: {this}")]
+    OutOfSequence { seen: u64, this: u64 },
 
     #[error(transparent)]
     HydrationError(#[from] HydrationError),
 
     #[error("service unavailable")]
     ServiceUnaivailable,
+
+    #[error("request timeout")]
+    RequestTimeout,
 }
 
 impl IntoResponse for BuilderApiError {
@@ -219,12 +231,14 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::NotEnoughOptimisticCollateral { .. } |
             BuilderApiError::BuilderNotOptimistic { .. } |
             BuilderApiError::BuilderNotInProposersTrustedList { .. } |
-            BuilderApiError::PayloadError(_) |
+            // BuilderApiError::PayloadError(_) |
+            BuilderApiError::PayloadDecode |
             BuilderApiError::BidValidationError(_) |
             BuilderApiError::ValidationError(_) |
             BuilderApiError::OutOfSequence { .. } |
             BuilderApiError::HydrationError(_) |
-            BuilderApiError::SubmissionForWrongSlot { .. } => StatusCode::BAD_REQUEST,
+            BuilderApiError::SubmissionForWrongSlot { .. } |
+            BuilderApiError::SigError(_) | BuilderApiError::DeliveringPayload { .. } => StatusCode::BAD_REQUEST,
 
             BuilderApiError::InvalidApiKey |
             BuilderApiError::UntrustedBuilderOnDehydratedPayload => StatusCode::UNAUTHORIZED,
@@ -243,6 +257,8 @@ impl IntoResponse for BuilderApiError {
                 _ => StatusCode::BAD_REQUEST,
             },
             BuilderApiError::InvalidPayloadType { .. } => StatusCode::BAD_REQUEST,
+
+            BuilderApiError::RequestTimeout => StatusCode::REQUEST_TIMEOUT
         };
 
         (code, self.to_string()).into_response()

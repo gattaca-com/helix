@@ -71,13 +71,8 @@ impl WebsiteService {
             current_slot_info: current_slot_info.clone(),
         });
 
-        let (tx, _) = crossbeam_channel::bounded(0);
-        let chain_updater = ChainEventUpdater::new(
-            Arc::new(LocalCache::new_test()),
-            chain_info,
-            current_slot_info,
-            tx,
-        );
+        let chain_updater =
+            ChainEventUpdater::new(Arc::new(LocalCache::new_test()), chain_info, current_slot_info);
         info!("ChainEventUpdater initialized");
 
         let (head_event_tx, head_event_rx) = broadcast::channel(100);

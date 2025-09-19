@@ -10,6 +10,7 @@ use helix_common::metrics::{
     SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
     SUBMISSION_DECOMPRESSED_BYTES,
 };
+use helix_types::BlsPublicKeyBytes;
 use http::{
     header::{CONTENT_ENCODING, CONTENT_TYPE},
     HeaderMap, HeaderValue,
@@ -79,11 +80,46 @@ impl SubmissionDecoder {
         }
     }
 
-    // TODO: pass a buffer pool to avoid allocations
-    pub fn decode<T: Decode + DeserializeOwned>(
-        mut self,
-        body: Bytes,
-    ) -> Result<T, BuilderApiError> {
+    // TODO: we could also just extract the bid trace and send that through before the rest is
+    // decoded after some light validation
+    /// Buf is already decompre
+    pub fn extract_builder_pubkey(&self, buf: &[u8]) -> Result<BlsPublicKeyBytes, BuilderApiError> {
+        match self.encoding {
+            Encoding::Json => {
+                #[derive(serde::Deserialize)]
+                struct Bid {
+                    message: Message,
+                }
+                #[derive(serde::Deserialize)]
+                struct Message {
+                    builder_pubkey: BlsPublicKeyBytes,
+                }
+
+                let bid: Bid = serde_json::from_slice(buf)?;
+
+                Ok(bid.message.builder_pubkey)
+            }
+            Encoding::Ssz => {
+                const BUILDER_PUBKEY_OFFSET: usize = 8 + /* slot */
+                32 + /* parent_hash */
+                32; /* block_hash */
+
+                if buf.len() < BUILDER_PUBKEY_OFFSET + BlsPublicKeyBytes::len_bytes() {
+                    return Err(BuilderApiError::PayloadDecode);
+                }
+
+                let pubkey = unsafe {
+                    core::ptr::read_unaligned(
+                        buf.as_ptr().add(BUILDER_PUBKEY_OFFSET) as *const BlsPublicKeyBytes
+                    )
+                };
+
+                Ok(pubkey)
+            }
+        }
+    }
+
+    pub fn decompress(&mut self, body: Bytes) -> Result<Bytes, BuilderApiError> {
         let start = Instant::now();
         self.bytes_before_decompress = body.len();
         let decompressed = match self.compression {
@@ -118,10 +154,19 @@ impl SubmissionDecoder {
             "decompressed payload"
         );
 
+        Ok(decompressed)
+    }
+
+    // TODO: pass a buffer pool to avoid allocations
+    pub fn decode<T: Decode + DeserializeOwned>(
+        mut self,
+        body: Bytes,
+    ) -> Result<T, BuilderApiError> {
+        let start = Instant::now();
         let payload: T = match self.encoding {
-            Encoding::Ssz => T::from_ssz_bytes(&decompressed)
+            Encoding::Ssz => T::from_ssz_bytes(&body)
                 .map_err(|err| BuilderApiError::SszDeserializeError(format!("{err:?}")))?,
-            Encoding::Json => serde_json::from_slice(&decompressed)?,
+            Encoding::Json => serde_json::from_slice(&body)?,
         };
 
         self.decode_latency = start.elapsed().saturating_sub(self.decompress_latency);

@@ -1,59 +1,46 @@
 use alloy_primitives::B256;
 use helix_common::{bid_submission::BidSubmission, BuilderInfo};
-use helix_types::BlsPublicKeyBytes;
+use helix_types::{BlsPublicKeyBytes, SignedBidSubmission};
 
 use crate::builder::{
     error::BuilderApiError,
-    simulator_2::{NewSubmission, SlotContext, SortingData},
+    simulator_2::{SlotContext, SortingData},
 };
+
+// TODO: metadata
 
 impl SortingData {
     pub fn validate_submission(
         &mut self,
-        submission: &NewSubmission,
+        payload: &SignedBidSubmission,
+        sequence: Option<u64>,
         builder_info: &BuilderInfo,
     ) -> Result<(), BuilderApiError> {
         // slot
-        if submission.slot() != self.slot.bid_slot {
+        if payload.slot() != self.slot.bid_slot {
             return Err(BuilderApiError::SubmissionForWrongSlot {
                 expected: self.slot.bid_slot,
-                got: submission.slot(),
+                got: payload.slot(),
             });
         }
 
         // sequence
-        if let Some(seq) = submission.sequence {
-            self.check_and_update_sequence_number(submission.builder_public_key(), seq)?;
+        if let Some(seq) = sequence {
+            self.check_and_update_sequence_number(payload.builder_public_key(), seq)?;
         }
 
         // duplicates
-        self.check_duplicate_submission(*submission.block_hash())?;
+        self.check_duplicate_submission(*payload.block_hash())?;
 
         // TODO: last slot delivered in get_payload state
-        self.validate_submission_data(&submission.payload, &submission.withdrawals_root)?;
+        // TODO: compute withdrwals root in the worker
+        self.validate_submission_data(payload, &payload.withdrawals_root())?;
 
         // trusted builder
-        if let Some(trusted_builders) =
-            self.slot.registration_data.entry.preferences.trusted_builders.as_ref()
-        {
-            let mut untrusted = false;
-            if let Some(builder_id) = &builder_info.builder_id {
-                if !trusted_builders.contains(builder_id) {
-                    untrusted = true;
-                };
-            } else if let Some(ids) = &builder_info.builder_ids {
-                if ids.iter().all(|id| !trusted_builders.contains(id)) {
-                    untrusted = true;
-                }
-            } else {
-                untrusted = true
-            }
-
-            if untrusted {
-                return Err(BuilderApiError::BuilderNotInProposersTrustedList {
-                    proposer_trusted_builders: vec![], // TODO
-                })
-            }
+        if self.check_if_trusted_builder(payload, builder_info) {
+            return Err(BuilderApiError::BuilderNotInProposersTrustedList {
+                proposer_trusted_builders: vec![], // TODO
+            })
         }
 
         Ok(())
@@ -123,8 +110,45 @@ impl SortingData {
     fn check_and_update_sequence_number(
         &mut self,
         builder: &BlsPublicKeyBytes,
-        seq: u64,
+        new_seq: u64,
     ) -> Result<(), BuilderApiError> {
-        todo!()
+        if let Some(mut old_seq) = self.sequence.get_mut(builder) {
+            if new_seq > *old_seq {
+                // higher sequence number, update
+                *old_seq = new_seq;
+            } else {
+                // stale or duplicated sequence number
+                return Err(BuilderApiError::OutOfSequence { seen: *old_seq, this: new_seq });
+            }
+        } else {
+            self.sequence.insert(*builder, new_seq);
+        }
+
+        Ok(())
+    }
+
+    fn check_if_trusted_builder(
+        &self,
+        submission: &SignedBidSubmission,
+        builder_info: &BuilderInfo,
+    ) -> bool {
+        if let Some(trusted_builders) =
+            &self.slot.registration_data.entry.preferences.trusted_builders
+        {
+            // Handle case where proposer specifies an empty list.
+            if trusted_builders.is_empty() {
+                return true;
+            }
+
+            if let Some(builder_id) = &builder_info.builder_id {
+                trusted_builders.contains(builder_id)
+            } else if let Some(ids) = &builder_info.builder_ids {
+                ids.iter().any(|id| trusted_builders.contains(id))
+            } else {
+                false
+            }
+        } else {
+            true
+        }
     }
 }

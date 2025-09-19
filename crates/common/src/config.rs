@@ -337,7 +337,7 @@ impl RouterConfig {
             Route::SubmitBlock,
             Route::GetTopBid,
             Route::GetInclusionList,
-            Route::SubmitHeaderV3,
+            // Route::SubmitHeaderV3,
         ]);
 
         self.replace_condensed_with_real(Route::ProposerApi, &[
@@ -387,9 +387,9 @@ impl RouterConfig {
 
         let is_get_header_instance =
             routes.contains(&Route::ProposerApi) || routes.contains(&Route::GetHeader);
-        let is_submission_instance = routes.contains(&Route::BuilderApi) ||
-            routes.contains(&Route::SubmitBlock) ||
-            routes.contains(&Route::SubmitHeaderV3);
+        let is_submission_instance =
+            routes.contains(&Route::BuilderApi) || routes.contains(&Route::SubmitBlock);
+        // routes.contains(&Route::SubmitHeaderV3);
 
         if is_get_header_instance {
             ensure!(
@@ -450,7 +450,7 @@ pub enum Route {
     ProposerPayloadDelivered,
     BuilderBidsReceived,
     ValidatorRegistration,
-    SubmitHeaderV3,
+    // SubmitHeaderV3,
     GetInclusionList,
 }
 
@@ -474,7 +474,7 @@ impl Route {
             Route::BuilderApi => panic!("BuilderApi is not a real route"),
             Route::ProposerApi => panic!("ProposerApi is not a real route"),
             Route::DataApi => panic!("DataApi is not a real route"),
-            Route::SubmitHeaderV3 => format!("{PATH_BUILDER_API_V3}{PATH_SUBMIT_HEADER}"),
+            // Route::SubmitHeaderV3 => format!("{PATH_BUILDER_API_V3}{PATH_SUBMIT_HEADER}"),
         }
     }
 }
@@ -637,15 +637,16 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("routes should have get_top_bid enabled"));
     }
 
-    #[test]
-    fn test_validate_bid_sorter_valid_v3_routes() {
-        let config =
-            create_router_config(vec![Route::SubmitHeaderV3, Route::GetHeader, Route::BuilderApi]);
+    // #[test]
+    // fn test_validate_bid_sorter_valid_v3_routes() {
+    //     let config =
+    //         create_router_config(vec![Route::SubmitHeaderV3, Route::GetHeader,
+    // Route::BuilderApi]);
 
-        let result = config.validate_bid_sorter();
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-    }
+    //     let result = config.validate_bid_sorter();
+    //     assert!(result.is_ok());
+    //     assert!(result.unwrap());
+    // }
 
     #[test]
     fn test_validate_bid_sorter_data_api_only() {
