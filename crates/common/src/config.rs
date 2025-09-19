@@ -3,9 +3,10 @@ use std::{collections::HashSet, fs::File, path::PathBuf};
 use alloy_primitives::B256;
 use clap::Parser;
 use eyre::ensure;
-use helix_types::{BlsKeypair, BlsPublicKeyBytes, BlsSecretKey};
+use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 
 use crate::{api::*, chain_info::ChainInfo, BuilderInfo, ValidatorPreferences};
 
@@ -246,21 +247,38 @@ impl RelayNetworkConfig {
     pub fn validate(&self) {
         let mut peer_pubkeys = HashSet::with_capacity(self.peers.len());
         for peer in &self.peers {
+            peer.validate();
             let pubkey = peer.pubkey;
             assert!(!peer_pubkeys.contains(&pubkey), "duplicate peer pubkey found: {pubkey}");
             peer_pubkeys.insert(pubkey);
         }
-        assert!(self.cutoff_1_ms < self.cutoff_2_ms);
+        assert!(self.cutoff_1_ms < self.cutoff_2_ms, "cutoff_1_ms must be less than cutoff_2_ms");
     }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct RelayNetworkPeerConfig {
     /// The URL of the peer.
-    /// A valid URL is of the form 'ws://<peer-url>/relay/v1/network'
-    pub url: String,
+    /// A valid URL is of the form 'ws://<peer-url>'
+    pub url: Url,
     /// The BLS public key of the peer, to verify its identity.
     pub pubkey: BlsPublicKeyBytes,
+}
+
+impl RelayNetworkPeerConfig {
+    fn validate(&self) {
+        // Verify serialized public key is valid
+        let _deserialized_pubkey = BlsPublicKey::deserialize(self.pubkey.as_ref())
+            .inspect_err(
+                |e| error!(err=?e, pubkey=%self.pubkey, "failed to deserialize peer pubkey"),
+            )
+            .expect("pubkey should be valid");
+
+        let has_ws_scheme = ["ws", "wss"].contains(&self.url.scheme());
+        let has_port = self.url.port().is_some();
+
+        assert!(has_ws_scheme || has_port, "peer URL must have ws/wss scheme or a specific port");
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use helix_common::{
-    api::builder_api::InclusionList, signing::RelaySigningContext, RelayNetworkConfig,
+    api::{builder_api::InclusionList, PATH_RELAY_NETWORK},
+    signing::RelaySigningContext,
+    RelayNetworkConfig,
 };
-use helix_types::BlsPublicKey;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tracing::{error, info, warn};
@@ -54,14 +55,10 @@ impl RelayNetworkManager {
 
         for peer_config in &this.network_config.peers {
             let peer_pubkey = peer_config.pubkey;
-            // Parse URL and try to turn into a event ahead-of-time, panicking on error
-            let request = url_to_client_event(&peer_config.url);
-            // Verify serialized public key is valid
-            let _deserialized_pubkey = BlsPublicKey::deserialize(peer_pubkey.as_ref())
-                .inspect_err(
-                    |e| error!(err=?e, pubkey=%peer_pubkey, "failed to deserialize peer pubkey"),
-                )
-                .expect("pubkey should be valid");
+            // Append path to URL and convert to a request ahead of time
+            let url =
+                peer_config.url.join(PATH_RELAY_NETWORK).expect("could not append path to URL");
+            let request = url_to_client_event(url.as_str());
 
             // If the peer's pubkey is less than ours, don't try to connect.
             // Imposing an order on the pubkeys prevents redundant connections between peers.

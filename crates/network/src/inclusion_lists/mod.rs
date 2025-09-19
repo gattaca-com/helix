@@ -106,7 +106,7 @@ mod tests {
             .route(RELAY_CONNECT_PATH, any(RelayNetworkApi::connect))
             .layer(Extension(network_api.api()));
 
-        info!("Listening on ws://127.0.0.1:{port}{RELAY_CONNECT_PATH} with pubkey: {pubkey}");
+        info!("Listening on ws://127.0.0.1:{port} with pubkey: {pubkey}");
 
         join_set.spawn(async move {
             let listener =
@@ -149,7 +149,7 @@ mod tests {
         // We generate a single config, since peers won't connect to themselves
         network_config.peers = (0..n_peers)
             .map(|i| RelayNetworkPeerConfig {
-                url: format!("ws://127.0.0.1:{}{RELAY_CONNECT_PATH}", ports[i]),
+                url: format!("ws://127.0.0.1:{}", ports[i]).parse().unwrap(),
                 pubkey: keypairs[i].pk.serialize().into(),
             })
             .collect();
