@@ -17,7 +17,7 @@ use helix_common::{
     ValidatorSummary,
 };
 use helix_types::{
-    BlsPublicKeyBytes, BlsSignatureBytes, PayloadAndBlobs, SignedBidSubmission,
+    BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, PayloadAndBlobs, SignedBidSubmission,
     SignedValidatorRegistration, TestRandomSeed, ValidatorRegistrationData,
 };
 
@@ -208,14 +208,13 @@ impl DatabaseService for MockDatabaseService {
         _filters: &BidFilters,
         _validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
-        todo!()
-        // let doc = DeliveredPayloadDocument {
-        //     bid_trace: BidTrace::random_for_test(),
-        //     block_number: 0,
-        //     num_txs: 0,
-        // };
+        let doc = DeliveredPayloadDocument {
+            bid_trace: BidTrace::test_random(),
+            block_number: 0,
+            num_txs: 0,
+        };
 
-        // Ok(vec![doc])
+        Ok(vec![doc])
     }
 
     async fn save_get_header_call(

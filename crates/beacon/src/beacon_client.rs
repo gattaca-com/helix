@@ -229,7 +229,7 @@ impl BeaconClient {
 }
 
 pub mod mock_beacon_node {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, sync::Arc};
 
     use httpmock::Mock;
     use serde::{de::DeserializeOwned, Serialize};
@@ -257,31 +257,60 @@ pub mod mock_beacon_node {
             })
         }
 
-        fn mock_api<T: Serialize + DeserializeOwned>(&self, path: &str, status: u16, body: T) {
-            self.server.mock(|when, then| {
+        fn mock_api<T>(&self, path: &str, status: u16, body: T) -> Mock
+        where
+            T: Serialize + DeserializeOwned + Clone + Send + Sync + 'static,
+        {
+            let body = Arc::new(body);
+
+            self.server.mock(move |when, then| {
                 when.path(path);
                 then.status(status)
                     .header("content-type", "application/json")
-                    .json_body_obj(&BeaconResponse { data: body, meta: HashMap::new() });
-            });
+                    .json_body_obj(&BeaconResponse { data: (*body).clone(), meta: HashMap::new() });
+            })
         }
 
-        pub fn with_state_validators(&self, state_validators: Vec<ValidatorSummary>) {
-            self.mock_api(
-                "eth/v1/beacon/states/head/validators?status=active,pending",
-                200,
-                state_validators,
-            );
+        pub fn with_state_validators(&self, state_validators: Vec<ValidatorSummary>) -> Mock {
+            let state_validators = Arc::new(state_validators);
+
+            self.server.mock(move |when, then| {
+                when.path("/eth/v1/beacon/states/head/validators")
+                    .query_param("status", "active,pending");
+                then.status(200).header("content-type", "application/json").json_body_obj(
+                    &BeaconResponse { data: (*state_validators).clone(), meta: HashMap::new() },
+                );
+            })
         }
 
-        pub fn with_sync_status(&self, sync_status: &SyncStatus) {
-            self.mock_api("/eth/v1/node/syncing", 200, sync_status.clone());
+        pub fn with_sync_status(&self, sync_status: &SyncStatus) -> Mock {
+            self.mock_api("/eth/v1/node/syncing", 200, sync_status.clone())
         }
 
         pub fn with_sse_event(&self, topic: &str) -> Mock {
             self.server.mock(|when, then| {
                 when.path("/eth/v1/events").query_param("topics", topic);
                 then.status(200);
+            })
+        }
+
+        pub fn with_proposer_duties(&self, epoch: u64, duties: Vec<ProposerDuty>) -> Mock {
+            let path = format!("/eth/v1/validator/duties/proposer/{epoch}");
+            let duties = Arc::new(duties);
+            let meta = Arc::new({
+                let mut values = HashMap::new();
+                values.insert(
+                    "dependent_root".to_string(),
+                    serde_json::to_value(B256::ZERO).expect("serialize dependent_root"),
+                );
+                values
+            });
+
+            self.server.mock(move |when, then| {
+                when.path(path.as_str());
+                then.status(200).header("content-type", "application/json").json_body_obj(
+                    &BeaconResponse { data: (*duties).clone(), meta: (*meta).clone() },
+                );
             })
         }
     }
@@ -296,7 +325,7 @@ mod beacon_client_tests {
 
     #[tokio::test]
     async fn test_get_sync_status_ok() {
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         let _mock = server.mock("GET", Matcher::Regex("/eth/v1/node/syncing".to_string()))
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -319,7 +348,7 @@ mod beacon_client_tests {
     #[tokio::test]
     async fn test_get_state_validators_ok() {
         // Add \\ as Matcher::Regex() can't deal with "?" properly.
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         let _mock = server.mock("GET", Matcher::Regex("eth/v1/beacon/states/genesis/validators\\?status=active,pending".to_string()))
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -340,7 +369,7 @@ mod beacon_client_tests {
 
     #[tokio::test]
     async fn test_get_proposer_duties_ok() {
-        let mut server = mockito::Server::new();
+        let mut server = mockito::Server::new_async().await;
         let _m = server.mock("GET", Matcher::Regex("/eth/v1/validator/duties/proposer/225740".to_string()))
             .with_status(200)
             .with_header("content-type", "application/json")

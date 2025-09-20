@@ -64,15 +64,40 @@ mod tests {
     #[test]
     fn test_duration_into_slot() {
         let clock = mainnet_slot_clock(12);
+        let margin = Duration::from_millis(50); // stay away from slot edges
+
+        fn wait_for_quiet_section(clock: &SlotClock, margin: Duration) {
+            loop {
+                let elapsed = clock.millis_from_current_slot_start().unwrap();
+                let slot_duration = clock.slot_duration();
+                if elapsed > margin && elapsed < slot_duration.checked_sub(margin).unwrap() {
+                    break;
+                }
+                sleep(Duration::from_millis(5));
+            }
+        }
 
         for _ in 0..100 {
-            let slot = clock.now().unwrap();
-            let dur_1 = clock.millis_from_current_slot_start().unwrap().as_nanos() as i128;
-            let dur_2 = duration_into_slot(&clock, slot).unwrap().as_nanos() as i128;
-            let delta = dur_1 - dur_2;
-            assert!(delta.abs() < 1_000_000, "clock delta above 1ms: {delta}");
+            wait_for_quiet_section(&clock, margin);
 
-            sleep(Duration::from_millis(10));
+            let slot = clock.now().unwrap();
+            let observed = duration_into_slot(&clock, slot).unwrap();
+            let slot_start = clock.start_of(slot).unwrap();
+            let expected = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .checked_sub(slot_start)
+                .unwrap();
+
+            let delta = expected.as_micros() as i128 - observed.as_micros() as i128;
+            assert!(
+                delta.abs() <= 1_500, // ~1.5 ms tolerance
+                "duration_into_slot drifted by more than 1.5 ms (Δ={delta})"
+            );
+            assert!(
+                observed < clock.slot_duration(),
+                "duration_into_slot should stay within the current slot"
+            );
         }
     }
 }

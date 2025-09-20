@@ -247,10 +247,23 @@ impl<A: Api> BuilderApi<A> {
 mod tests {
     use helix_common::chain_info::ChainInfo;
     use helix_types::{BidTrace, SignedBidSubmission, SignedBidSubmissionElectra, TestRandomSeed};
+    use reqwest::Client;
     use ssz::Encode;
+    use tokio::net::TcpStream;
 
     #[tokio::test]
-    async fn test_locl() {
+    async fn test_local() {
+        const ENDPOINT: &str = "http://0.0.0.0:4040/relay/v1/builder/blocks";
+        const CONNECT_ADDR: (&str, u16) = ("127.0.0.1", 4040);
+
+        if TcpStream::connect(CONNECT_ADDR).await.is_err() {
+            println!(
+                "skipping test_local; endpoint {}:{} is not reachable",
+                CONNECT_ADDR.0, CONNECT_ADDR.1
+            );
+            return;
+        }
+
         let clock = ChainInfo::for_mainnet();
 
         let curr_slot = clock.current_slot();
@@ -264,10 +277,8 @@ mod tests {
         let block = SignedBidSubmission::Electra(sub);
         let bytes = block.as_ssz_bytes();
 
-        let res = reqwest::Client::builder()
-            .build()
-            .unwrap()
-            .post("http://0.0.0.0:4040/relay/v1/builder/blocks")
+        let res = Client::new()
+            .post(ENDPOINT)
             .header("Content-Type", "application/octet-stream")
             .body(bytes)
             .send()

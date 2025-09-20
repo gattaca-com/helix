@@ -101,7 +101,6 @@ mod data_api_tests {
     // *** TESTS ***
     #[tokio::test]
     #[serial]
-    #[ignore = "TODO: to fix"]
     async fn test_payload_delivered_slot_and_cursor() {
         // Start the server
         let (tx, http_config, _api, _database) = start_api_server().await;
@@ -118,10 +117,6 @@ mod data_api_tests {
         query_params.cursor = Some(HEAD_SLOT);
 
         // Send JSON encoded request
-        // TODO: this fails with Missing request extension: Extension of type
-        // `alloc::sync::Arc<moka::sync::cache::Cache<alloc::string::String,
-        // alloc::vec::Vec<helix_common::api::data_api::DeliveredPayloadsResponse>>>` was not found.
-        // Perhaps you forgot to add it? See `axum::Extension`.
         let resp = reqwest::Client::new()
             .get(req_url.as_str())
             .header("accept", "application/json")
@@ -139,7 +134,6 @@ mod data_api_tests {
 
     #[tokio::test]
     #[serial]
-    #[ignore = "TODO: to fix"]
     async fn test_payload_delivered_ok() {
         // Start the server
         let (tx, http_config, _api, _database) = start_api_server().await;
@@ -155,10 +149,6 @@ mod data_api_tests {
         let query_params = get_test_proposer_payload_delivered_params();
 
         // Send JSON encoded request
-        // TODO: this fails with: "Missing request extension: Extension of type
-        // `alloc::sync::Arc<moka::sync::cache::Cache<alloc::string::String,
-        // alloc::vec::Vec<helix_common::api::data_api::DeliveredPayloadsResponse>>>` was not found.
-        // Perhaps you forgot to add it? See `axum::Extension`."
         let resp = reqwest::Client::new()
             .get(req_url.as_str())
             .header("accept", "application/json")
@@ -178,7 +168,6 @@ mod data_api_tests {
 
     #[tokio::test]
     #[serial]
-    #[ignore]
     async fn test_builder_bids_missing_filter() {
         // Start the server
         let (tx, http_config, _api, _database) = start_api_server().await;
@@ -211,7 +200,6 @@ mod data_api_tests {
 
     #[tokio::test]
     #[serial]
-    #[ignore]
     async fn test_builder_bids_limit_reached() {
         // Start the server
         let (tx, http_config, _api, _database) = start_api_server().await;
@@ -241,7 +229,6 @@ mod data_api_tests {
 
     #[tokio::test]
     #[serial]
-    #[ignore = "TODO: to fix"]
     async fn test_builder_bids_ok() {
         // Start the server
         let (tx, http_config, _api, _database) = start_api_server().await;
@@ -253,10 +240,6 @@ mod data_api_tests {
         let query_params = get_test_builder_blocks_received_params();
 
         // Send JSON encoded request
-        // TODO: this fails with: "Missing request extension: Extension of type
-        // `alloc::sync::Arc<moka::sync::cache::Cache<alloc::string::String,
-        // alloc::vec::Vec<helix_common::api::data_api::ReceivedBlocksResponse>>>` was not found.
-        // Perhaps you forgot to add it? See `axum::Extension`."
         let resp = reqwest::Client::new()
             .get(req_url.as_str())
             .header("accept", "application/json")

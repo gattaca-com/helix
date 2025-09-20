@@ -25,6 +25,7 @@ use helix_common::{
 };
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_housekeeper::CurrentSlotInfo;
+use moka::sync::Cache;
 use tokio::sync::{broadcast, mpsc::channel};
 use tower::{buffer::BufferLayer, limit::RateLimitLayer, timeout::TimeoutLayer, ServiceBuilder};
 use tower_http::limit::RequestBodyLimitLayer;
@@ -33,7 +34,7 @@ use crate::{
     builder::api::{BuilderApi, MAX_PAYLOAD_LENGTH},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::{self, ProposerApi},
-    relay_data::DataApi,
+    relay_data::{BidsCache, DataApi, DeliveredPayloadsCache},
     Api,
 };
 
@@ -200,10 +201,14 @@ pub fn proposer_api_app() -> (Router, Arc<ProposerApi<MockApi>>, CurrentSlotInfo
 
 pub fn data_api_app() -> (Router, Arc<DataApi<MockApi>>, Arc<MockDatabaseService>) {
     let mock_database = Arc::new(MockDatabaseService::default());
-    let proposer_api_service = Arc::new(DataApi::<MockApi>::new(
+    let data_api_service = Arc::new(DataApi::<MockApi>::new(
         Arc::new(ValidatorPreferences::default()),
         mock_database.clone(),
     ));
+
+    // Provide small caches required by the handlers
+    let bids_cache: BidsCache = Cache::builder().max_capacity(1024).build();
+    let delivered_cache: DeliveredPayloadsCache = Cache::builder().max_capacity(1024).build();
 
     let router = Router::new()
         .route(
@@ -218,7 +223,9 @@ pub fn data_api_app() -> (Router, Arc<DataApi<MockApi>>, Arc<MockDatabaseService
             &format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),
             get(DataApi::<MockApi>::validator_registration),
         )
-        .layer(Extension(proposer_api_service.clone()));
+        .layer(Extension(data_api_service.clone()))
+        .layer(Extension(delivered_cache))
+        .layer(Extension(bids_cache));
 
-    (router, proposer_api_service, mock_database)
+    (router, data_api_service, mock_database)
 }

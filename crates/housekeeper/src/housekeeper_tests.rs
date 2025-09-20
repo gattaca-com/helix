@@ -1,39 +1,31 @@
 use std::{
-    sync::{
-        atomic::{AtomicBool, AtomicUsize},
-        Arc, Mutex,
-    },
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
+use alloy_primitives::B256;
 use helix_beacon::{
     beacon_client::mock_beacon_node::MockBeaconNode, multi_beacon_client::MultiBeaconClient,
+    types::SyncStatus,
 };
 use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
-    config::PrimevConfig, local_cache::LocalCache, RelayConfig, ValidatorSummary,
+    config::PrimevConfig, local_cache::LocalCache, RelayConfig, ValidatorStatus, ValidatorSummary,
 };
 use helix_database::mock_database_service::MockDatabaseService;
+use helix_types::{get_fixed_pubkey_bytes, Epoch, Slot, Validator};
+use httpmock::Mock;
 use tokio::sync::broadcast;
 
 use crate::housekeeper::Housekeeper;
 
-fn get_housekeeper() -> HelperVars {
-    let chan_head_events_capacity = Arc::new(AtomicUsize::new(0));
+fn get_housekeeper(beacon_node: &MockBeaconNode) -> HelperVars {
     let known_validators: Arc<Mutex<Vec<ValidatorSummary>>> = Arc::new(Mutex::new(vec![]));
     let proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>> =
         Arc::new(Mutex::new(vec![]));
-    let state_validators_has_been_read: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
-    let proposer_duties_has_been_read: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
     let db = MockDatabaseService::new(known_validators.clone(), proposer_duties.clone());
-    let beacon_node = MockBeaconNode::new();
+
     let beacon_client = MultiBeaconClient::new(vec![beacon_node.beacon_client().into()]);
-    // let beacon_client = MultiBeaconClient::new(
-    //     subscribed_to_head_events.clone(),
-    //     chan_head_events_capacity.clone(),
-    //     state_validators_has_been_read.clone(),
-    //     proposer_duties_has_been_read.clone(),
-    // );
 
     let sorter_tx = crossbeam_channel::unbounded().0;
     let auctioneer = LocalCache::new(sorter_tx);
@@ -45,16 +37,7 @@ fn get_housekeeper() -> HelperVars {
         Arc::new(ChainInfo::for_mainnet()),
     );
 
-    HelperVars {
-        beacon_node,
-        housekeeper,
-        chan_head_events_capacity,
-        known_validators,
-        proposer_duties,
-        state_validators_has_been_read,
-        proposer_duties_has_been_read,
-        beacon_client,
-    }
+    HelperVars { housekeeper, known_validators, proposer_duties, beacon_client }
 }
 
 async fn start_housekeeper(
@@ -68,73 +51,129 @@ async fn start_housekeeper(
 
 struct HelperVars {
     pub housekeeper: Housekeeper<MockDatabaseService>,
-    pub chan_head_events_capacity: Arc<AtomicUsize>,
     pub known_validators: Arc<Mutex<Vec<ValidatorSummary>>>,
     pub proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>>,
-    pub state_validators_has_been_read: Arc<AtomicBool>,
-    pub proposer_duties_has_been_read: Arc<AtomicBool>,
     pub beacon_client: MultiBeaconClient,
-    pub beacon_node: MockBeaconNode,
+}
+
+struct BeaconTestData {
+    validator_summary: ValidatorSummary,
+    proposer_epoch0: helix_common::ProposerDuty,
+}
+
+struct BeaconMocks<'a> {
+    sync_status: Mock<'a>,
+    state_validators: Mock<'a>,
+    proposer_epoch0: Mock<'a>,
+    proposer_epoch1: Mock<'a>,
+}
+
+fn configure_beacon_node<'a>(beacon_node: &'a MockBeaconNode) -> (BeaconTestData, BeaconMocks<'a>) {
+    let validator_pubkey = get_fixed_pubkey_bytes(0);
+    let validator = Validator {
+        pubkey: validator_pubkey,
+        withdrawal_credentials: B256::ZERO,
+        effective_balance: 1,
+        slashed: false,
+        activation_eligibility_epoch: Epoch::from(0u64),
+        activation_epoch: Epoch::from(0u64),
+        exit_epoch: Epoch::from(0u64),
+        withdrawable_epoch: Epoch::from(0u64),
+    };
+    let validator_summary =
+        ValidatorSummary { index: 1, balance: 1, status: ValidatorStatus::Active, validator };
+
+    let proposer_epoch0 = helix_common::ProposerDuty {
+        pubkey: validator_summary.validator.pubkey,
+        validator_index: 1,
+        slot: Slot::from(19u64),
+    };
+
+    let sync_status =
+        SyncStatus { head_slot: Slot::from(19u64), sync_distance: 0, is_syncing: false };
+
+    let sync_status_mock = beacon_node.with_sync_status(&sync_status);
+    let state_validators_mock = beacon_node.with_state_validators(vec![validator_summary.clone()]);
+    let proposer_duties_epoch0_mock =
+        beacon_node.with_proposer_duties(0, vec![proposer_epoch0.clone()]);
+    let proposer_duties_epoch1_mock =
+        beacon_node.with_proposer_duties(1, vec![helix_common::ProposerDuty {
+            pubkey: validator_summary.validator.pubkey,
+            validator_index: 1,
+            slot: Slot::from(20u64),
+        }]);
+
+    (BeaconTestData { validator_summary, proposer_epoch0 }, BeaconMocks {
+        sync_status: sync_status_mock,
+        state_validators: state_validators_mock,
+        proposer_epoch0: proposer_duties_epoch0_mock,
+        proposer_epoch1: proposer_duties_epoch1_mock,
+    })
 }
 
 #[tokio::test]
 async fn test_head_event_is_processed_by_housekeeper() {
-    let vars = get_housekeeper();
-    let subscribed_to_head_events = vars.beacon_node.with_sse_event("head");
-    start_housekeeper(vars.housekeeper.clone(), vars.beacon_client).await;
-    tokio::time::sleep(Duration::from_millis(10)).await;
+    let beacon_node = MockBeaconNode::new();
+    let (_data, mocks) = configure_beacon_node(&beacon_node);
+    let vars = get_housekeeper(&beacon_node);
+    let subscribed_to_head_events = beacon_node.with_sse_event("head");
+    start_housekeeper(vars.housekeeper.clone(), vars.beacon_client.clone()).await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
 
-    // assert that the len of the channel is correct at 1 as the
-    // beacon client sends a dummy event
-    assert!(vars.chan_head_events_capacity.load(std::sync::atomic::Ordering::Relaxed) == 1);
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // assert that the len of the channel is correct at 0 as the
-    // housekeeper has processed the dummy event
-    subscribed_to_head_events.assert();
-    assert!(vars.chan_head_events_capacity.load(std::sync::atomic::Ordering::Relaxed) == 0);
+    assert!(subscribed_to_head_events.hits() >= 1);
+    assert!(mocks.sync_status.hits() >= 1);
+    assert_eq!(vars.proposer_duties.lock().unwrap().len(), 2);
 }
 
 #[tokio::test]
 async fn test_known_validators_are_set() {
-    let vars = get_housekeeper();
-    start_housekeeper(vars.housekeeper.clone(), vars.beacon_client).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    let beacon_node = MockBeaconNode::new();
+    let (data, _mocks) = configure_beacon_node(&beacon_node);
+    let vars = get_housekeeper(&beacon_node);
+    start_housekeeper(vars.housekeeper.clone(), vars.beacon_client.clone()).await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
 
-    assert!(vars.known_validators.lock().unwrap().len() == 1);
+    assert_eq!(vars.known_validators.lock().unwrap().len(), 1);
     let validators = vars.known_validators.lock().unwrap();
-    assert!(validators[0].balance == 1);
-    assert!(validators[0].index == 1);
+    assert_eq!(validators[0].balance, data.validator_summary.balance);
+    assert_eq!(validators[0].index, data.validator_summary.index);
 }
 
 #[tokio::test]
 async fn test_proposer_duties_set() {
-    let vars = get_housekeeper();
-    start_housekeeper(vars.housekeeper.clone(), vars.beacon_client).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    let beacon_node = MockBeaconNode::new();
+    let (data, _mocks) = configure_beacon_node(&beacon_node);
+    let vars = get_housekeeper(&beacon_node);
+    start_housekeeper(vars.housekeeper.clone(), vars.beacon_client.clone()).await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
 
     assert_eq!(vars.proposer_duties.lock().unwrap().len(), 2);
     let proposer_duties = vars.proposer_duties.lock().unwrap();
-    assert_eq!(proposer_duties[0].validator_index, 1);
-    assert_eq!(proposer_duties[0].slot, 19);
+    assert_eq!(proposer_duties[0].validator_index, data.proposer_epoch0.validator_index);
+    assert_eq!(proposer_duties[0].slot, data.proposer_epoch0.slot);
 }
 
 #[tokio::test]
 async fn test_proposer_duties_have_been_read() {
-    let vars = get_housekeeper();
-    start_housekeeper(vars.housekeeper.clone(), vars.beacon_client).await;
+    let beacon_node = MockBeaconNode::new();
+    let (_data, mocks) = configure_beacon_node(&beacon_node);
+    let vars = get_housekeeper(&beacon_node);
+    start_housekeeper(vars.housekeeper.clone(), vars.beacon_client.clone()).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    assert!(vars.proposer_duties_has_been_read.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(mocks.proposer_epoch0.hits() >= 1);
+    assert!(mocks.proposer_epoch1.hits() >= 1);
 }
 
 #[tokio::test]
 async fn test_state_validators_have_been_read() {
-    let vars = get_housekeeper();
-    start_housekeeper(vars.housekeeper.clone(), vars.beacon_client).await;
+    let beacon_node = MockBeaconNode::new();
+    let (_data, mocks) = configure_beacon_node(&beacon_node);
+    let vars = get_housekeeper(&beacon_node);
+    start_housekeeper(vars.housekeeper.clone(), vars.beacon_client.clone()).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    assert!(vars.state_validators_has_been_read.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(mocks.state_validators.hits() >= 1);
 }
 
 // #[tokio::test]

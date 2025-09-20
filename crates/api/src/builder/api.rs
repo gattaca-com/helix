@@ -932,7 +932,8 @@ fn calculate_versioned_hash(commitment: Bytes48) -> B256 {
 
 #[cfg(test)]
 mod tests {
-    use ssz::Decode;
+    use serde_json::error::Category;
+    use ssz::{Decode, DecodeError};
 
     use super::*;
 
@@ -940,14 +941,8 @@ mod tests {
     async fn test_decode_json_payload() {
         let json_payload: Vec<u8> = vec![];
 
-        match serde_json::from_slice::<SignedBidSubmission>(&json_payload) {
-            Ok(res) => {
-                println!("THIS IS THE RESULT: {res:?}");
-            }
-            Err(err) => {
-                println!("THIS IS THE ERR: {err:?}");
-            }
-        }
+        let err = serde_json::from_slice::<SignedBidSubmission>(&json_payload).unwrap_err();
+        assert_eq!(err.classify(), Category::Eof);
     }
 
     #[tokio::test]
@@ -1079,27 +1074,18 @@ mod tests {
             100, 57, 48, 56, 101, 100, 97, 55, 51, 101, 54, 55, 48, 97, 102, 56, 56, 56, 100, 97,
             52, 49, 97, 102, 49, 55, 49, 53, 48, 53, 34, 10, 125,
         ];
-        match serde_json::from_slice::<SignedBidSubmission>(&json_payload) {
-            Ok(res) => {
-                println!("THIS IS THE RESULT: {res:?}");
-            }
-            Err(err) => {
-                println!("THIS IS THE ERR: {err:?}");
-            }
-        }
+        let err = serde_json::from_slice::<SignedBidSubmission>(&json_payload).unwrap_err();
+        assert_eq!(err.classify(), Category::Data);
+        assert!(err
+            .to_string()
+            .contains("data did not match any variant of untagged enum SignedBidSubmission"));
     }
 
     #[tokio::test]
     async fn test_decode_payload_ssz() {
         let ssz_payload: Vec<u8> = vec![];
-        match SignedBidSubmission::from_ssz_bytes(&ssz_payload) {
-            Ok(res) => {
-                println!("THIS IS THE RESULT: {res:?}");
-            }
-            Err(err) => {
-                println!("THIS IS THE ERR: {err:?}");
-            }
-        }
+        let err = SignedBidSubmission::from_ssz_bytes(&ssz_payload).unwrap_err();
+        assert!(matches!(err, DecodeError::NoMatchingVariant));
     }
 
     #[tokio::test]
@@ -1183,13 +1169,7 @@ mod tests {
             193, 186, 168, 250, 166, 41, 129, 156, 42, 209, 28, 29, 0, 0, 0, 0, 0,
         ];
 
-        match SignedBidSubmission::from_ssz_bytes(&ssz_payload) {
-            Ok(res) => {
-                println!("THIS IS THE RESULT: {res:?}");
-            }
-            Err(err) => {
-                println!("THIS IS THE ERR: {err:?}");
-            }
-        }
+        let err = SignedBidSubmission::from_ssz_bytes(&ssz_payload).unwrap_err();
+        assert!(matches!(err, DecodeError::NoMatchingVariant));
     }
 }

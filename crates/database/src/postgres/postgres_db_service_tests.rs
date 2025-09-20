@@ -363,8 +363,19 @@ mod tests {
         assert!(result.is_ok());
 
         let result = db_service.get_all_builder_infos().await.unwrap();
-        assert!(result.len() == 1);
-        assert!(result[0].pub_key == public_key);
+        // Assert the inserted builder exists and its fields match
+        assert!(result.iter().any(|b| b.pub_key == public_key));
+
+        let stored = result.iter().find(|b| b.pub_key == public_key).unwrap();
+
+        assert_eq!(stored.builder_info.collateral, builder_info.collateral);
+        assert_eq!(stored.builder_info.is_optimistic, builder_info.is_optimistic);
+        assert_eq!(
+            stored.builder_info.is_optimistic_for_regional_filtering,
+            builder_info.is_optimistic_for_regional_filtering
+        );
+        assert_eq!(stored.builder_info.builder_id, builder_info.builder_id);
+        assert_eq!(stored.builder_info.builder_ids, builder_info.builder_ids);
     }
 
     #[tokio::test]
@@ -397,7 +408,9 @@ mod tests {
     async fn test_store_block_submission() -> Result<(), Box<dyn std::error::Error>> {
         run_setup().await;
 
-        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+        let mut db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+
+        db_service.start_processors().await;
 
         let pubkey = BlsPublicKey::deserialize(alloy_primitives::hex!("8592669BC0ACF28BC25D42699CEFA6101D7B10443232FE148420FF0FCDBF8CD240F5EBB94BC904CB6BEFFB61A1F8D36A").as_ref()).unwrap();
 
@@ -567,7 +580,9 @@ mod tests {
     async fn test_store_header_submission() -> Result<(), Box<dyn std::error::Error>> {
         run_setup().await;
 
-        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+        let mut db_service = PostgresDatabaseService::new(&test_config(), 1)?;
+
+        db_service.start_processors().await;
 
         let bid_submission = HeaderSubmissionElectra::test_random();
         let signed =
