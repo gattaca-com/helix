@@ -452,6 +452,8 @@ pub enum Route {
     ValidatorRegistration,
     SubmitHeaderV3,
     GetInclusionList,
+    UpdateValidatorPreferences,
+    GetValidatorPreferences,
 }
 
 impl Route {
@@ -475,6 +477,12 @@ impl Route {
             Route::ProposerApi => panic!("ProposerApi is not a real route"),
             Route::DataApi => panic!("DataApi is not a real route"),
             Route::SubmitHeaderV3 => format!("{PATH_BUILDER_API_V3}{PATH_SUBMIT_HEADER}"),
+            Route::UpdateValidatorPreferences => {
+                format!("{PATH_PROPOSER_API}{PATH_UPDATE_VALIDATOR_PREFERENCES}")
+            }
+            Route::GetValidatorPreferences => {
+                format!("{PATH_PROPOSER_API}{PATH_GET_VALIDATOR_PREFERENCES}")
+            }
         }
     }
 }

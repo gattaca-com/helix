@@ -1140,6 +1140,149 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
+    async fn get_validator_preferences(
+        &self,
+        pub_key: &BlsPublicKeyBytes,
+    ) -> Result<Option<ValidatorPreferences>, DatabaseError> {
+        let mut record = DbMetricRecord::new("get_validator_preferences");
+
+        if let Some(cached_entry) = self.validator_registration_cache.get(pub_key) {
+            record.record_success();
+            return Ok(Some(cached_entry.registration_info.preferences.clone()));
+        }
+
+        let rows = self
+            .pool
+            .get()
+            .await?
+            .query(
+                "
+                SELECT
+                    validator_preferences.filtering,
+                    validator_preferences.trusted_builders,
+                    validator_preferences.header_delay,
+                    validator_preferences.delay_ms,
+                    validator_preferences.disable_inclusion_lists
+                FROM validator_preferences
+                WHERE validator_preferences.public_key = $1
+                ",
+                &[&(pub_key.as_slice())],
+            )
+            .await?;
+
+        let result = if rows.is_empty() {
+            None
+        } else {
+            let prefs: ValidatorPreferences = parse_row(&rows[0])?;
+            Some(prefs)
+        };
+
+        record.record_success();
+        Ok(result)
+    }
+
+    async fn update_validator_preferences(
+        &self,
+        pub_key: &BlsPublicKeyBytes,
+        preferences: &ValidatorPreferences,
+    ) -> Result<(), DatabaseError> {
+        let mut record = DbMetricRecord::new("update_validator_preferences");
+
+        let mut client = self.pool.get().await?;
+        let transaction = client.transaction().await?;
+
+        let trusted_builders: Option<Vec<String>> = preferences
+            .trusted_builders
+            .as_ref()
+            .map(|builders| builders.iter().cloned().collect());
+
+        let filtering_value: i16 = match preferences.filtering {
+            helix_common::Filtering::Regional => 1,
+            helix_common::Filtering::Global => 0,
+        };
+
+        transaction
+            .execute(
+                "
+                INSERT INTO validator_preferences (
+                    public_key,
+                    filtering,
+                    trusted_builders,
+                    header_delay,
+                    delay_ms,
+                    disable_inclusion_lists,
+                    manual_override
+                ) VALUES ($1, $2, $3, $4, $5, $6, TRUE)
+                ON CONFLICT (public_key) 
+                DO UPDATE SET
+                    filtering = EXCLUDED.filtering,
+                    trusted_builders = EXCLUDED.trusted_builders,
+                    header_delay = EXCLUDED.header_delay,
+                    delay_ms = EXCLUDED.delay_ms,
+                    disable_inclusion_lists = EXCLUDED.disable_inclusion_lists,
+                    manual_override = TRUE
+                ",
+                &[
+                    &pub_key.as_slice(),
+                    &filtering_value,
+                    &trusted_builders,
+                    &preferences.header_delay,
+                    &preferences.delay_ms.map(|v| v as i64),
+                    &preferences.disable_inclusion_lists,
+                ],
+            )
+            .await?;
+
+        transaction.commit().await?;
+
+        if let Some(mut cached_entry) = self.validator_registration_cache.get_mut(pub_key) {
+            cached_entry.registration_info.preferences = preferences.clone();
+        }
+
+        record.record_success();
+
+        Ok(())
+    }
+
+    #[instrument(skip_all)]
+    async fn get_pool_validators(
+        &self,
+        pool_name: &str,
+    ) -> Result<Vec<BlsPublicKeyBytes>, DatabaseError> {
+        let mut record = DbMetricRecord::new("get_pool_validators");
+
+        let rows = self
+            .pool
+            .get()
+            .await?
+            .query(
+                "
+                SELECT public_key
+                FROM trusted_proposers
+                WHERE name = $1
+                ",
+                &[&pool_name],
+            )
+            .await?;
+
+        let mut validators = Vec::new();
+        for row in rows {
+            let pubkey_bytes: Vec<u8> = row.try_get("public_key")?;
+            
+            if pubkey_bytes.len() == 48 {
+                let mut key = [0u8; 48];
+                key.copy_from_slice(&pubkey_bytes);
+                validators.push(BlsPublicKeyBytes::from(key));
+            } else {
+                error!(length = pubkey_bytes.len(), "Invalid validator pubkey length in trusted_proposers");
+            }
+        }
+
+        record.record_success();
+        Ok(validators)
+    }
+
+    #[instrument(skip_all)]
     async fn set_known_validators(
         &self,
         known_validators: Vec<ValidatorSummary>,

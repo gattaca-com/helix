@@ -34,28 +34,20 @@ mod proposer_api_tests {
         time::Duration,
     };
 
-    use alloy_primitives::{address, b256, hex, U256};
+    use alloy_primitives::{address, b256, hex, FixedBytes, U256};
     use helix_beacon::multi_beacon_client::MultiBeaconClient;
     use helix_common::{
         api::{
             builder_api::BuilderGetValidatorsResponseEntry,
             proposer_api::ValidatorRegistrationInfo, PATH_GET_PAYLOAD, PATH_PROPOSER_API,
-            PATH_REGISTER_VALIDATORS,
-        },
-        chain_info::ChainInfo,
-        metadata_provider::DefaultMetadataProvider,
-        utils::utcnow_ns,
-        ValidatorPreferences,
+            PATH_REGISTER_VALIDATORS, PATH_UPDATE_VALIDATOR_PREFERENCES, PATH_GET_VALIDATOR_PREFERENCES
+        }, chain_info::ChainInfo, metadata_provider::DefaultMetadataProvider, utils::utcnow_ns, Filtering, ValidatorPreferences
     };
     use helix_database::mock_database_service::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate, SlotUpdate};
     use helix_types::{
-        get_fixed_pubkey, get_fixed_secret, get_payload_deneb, BlobsBundle, BlsPublicKey,
-        BlsSignature, BuilderBidDeneb, ExecutionPayloadDeneb, ExecutionPayloadElectra, ForkName,
-        PayloadAndBlobs, SignedBlindedBeaconBlock, SignedBlindedBeaconBlockDeneb, SignedBuilderBid,
-        SignedBuilderBidInner, SignedRoot, SignedValidatorRegistration, TestRandomSeed,
-        ValidatorRegistration,
+        get_fixed_pubkey, get_fixed_secret, get_payload_deneb, BlobsBundle, BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BuilderBidDeneb, ExecutionPayloadDeneb, ExecutionPayloadElectra, ForkName, PayloadAndBlobs, SignedBlindedBeaconBlock, SignedBlindedBeaconBlockDeneb, SignedBuilderBid, SignedBuilderBidInner, SignedRoot, SignedValidatorRegistration, TestRandomSeed, ValidatorRegistration
     };
     use reqwest::StatusCode;
     use tokio::{
@@ -65,7 +57,7 @@ mod proposer_api_tests {
 
     use crate::{
         gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
-        proposer::{api::ProposerApi, tests::gen_signed_vr},
+        proposer::{api::ProposerApi, tests::gen_signed_vr, UpdateValidatorPreferencesParams, UpdateValidatorPreferencesPayload, ValidatorPreferenceUpdate},
         test_utils::proposer_api_app,
     };
 
@@ -272,6 +264,25 @@ mod proposer_api_tests {
         file.read_to_end(&mut buffer).unwrap();
 
         buffer
+    }
+
+    fn create_test_validator_preferences_request(
+        validators: Vec<(BlsPublicKeyBytes, ValidatorPreferenceUpdate)>,
+    ) -> UpdateValidatorPreferencesParams {
+        UpdateValidatorPreferencesParams {
+            validators: validators
+                .into_iter()
+                .map(|(pubkey, preferences)| UpdateValidatorPreferencesPayload {
+                    pubkey,
+                    preferences,
+                })
+                .collect(),
+        }
+    }
+
+    fn to_pubkey_bytes(pk: BlsPublicKey) -> BlsPublicKeyBytes {
+        let raw: [u8; 48] = pk.serialize();
+        FixedBytes::<48>::from(raw)
     }
 
     // GET_HEADER
@@ -966,5 +977,164 @@ mod proposer_api_tests {
             serde_json::from_slice(&req_payload_bytes).unwrap();
 
         assert!(decoded_submission.as_electra().is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_update_validator_preferences() {
+        let (tx, http_config, _api, _curr_slot_info, _auctioneer) = start_api_server().await;
+
+        let keypair1 = get_fixed_pubkey(0);
+        let pk1 = to_pubkey_bytes(keypair1);
+        let preferences1 = ValidatorPreferenceUpdate {
+            filtering: Some(Filtering::Regional),
+            trusted_builders: Some(vec!["0x93247f2209abcacf57b75a51dafae777f9dd38bc7053d1af526f220a7489a6d3a2753e5f3e8b1cfe39b56f43611df74a".to_string()]),
+            header_delay: Some(true),
+            delay_ms: Some(1000),
+            gossip_blobs: Some(false),
+            disable_inclusion_lists: Some(true),
+        };
+
+        let keypair2 = get_fixed_pubkey(1);
+        let pk2 = to_pubkey_bytes(keypair2);
+        let preferences2 = ValidatorPreferenceUpdate {
+            filtering: Some(Filtering::Regional),
+            trusted_builders: Some(vec!["0x93247f2209abcacf57b75a51dafae777f9dd38bc7053d1af526f220a7489a6d3a2753e5f3e8b1cfe39b56f43611df74a".to_string()]),
+            header_delay: Some(true),
+            delay_ms: Some(1000),
+            gossip_blobs: Some(false),
+            disable_inclusion_lists: Some(true),
+        };
+
+        let request = create_test_validator_preferences_request(vec![(pk1, preferences1), (pk2, preferences2)]);
+
+        let req_url = format!(
+            "{}{}{}",
+            http_config.base_url(),
+            PATH_PROPOSER_API,
+            PATH_UPDATE_VALIDATOR_PREFERENCES
+        );
+
+        let resp = reqwest::Client::new()
+            .post(&req_url)
+            .header("Content-Type", "application/json")
+            .header("X-Api-Key", "valid-api-key")
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn test_update_validator_preferences_missing_api_key() {
+        let (tx, http_config, _api, _curr_slot_info, _auctioneer) = start_api_server().await;
+
+        let keypair = get_fixed_pubkey(2);
+        let validator_pubkey = to_pubkey_bytes(keypair);
+        let preferences = ValidatorPreferenceUpdate {
+            filtering: Some(Filtering::Regional),
+            trusted_builders: None,
+            header_delay: None,
+            delay_ms: None,
+            gossip_blobs: None,
+            disable_inclusion_lists: None,
+        };
+
+        let request = create_test_validator_preferences_request(vec![(validator_pubkey, preferences)]);
+
+        let req_url = format!(
+            "{}{}{}",
+            http_config.base_url(),
+            PATH_PROPOSER_API,
+            PATH_UPDATE_VALIDATOR_PREFERENCES
+        );
+
+        let resp = reqwest::Client::new()
+            .post(&req_url)
+            .header("Content-Type", "application/json")
+            // No X-Api-Key header
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(resp.text().await.unwrap().contains("Invalid API key"));
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn test_update_validator_preferences_invalid_api_key() {
+        let (tx, http_config, _api, _curr_slot_info, _auctioneer) = start_api_server().await;
+
+        let keypair = get_fixed_pubkey(2);
+        let validator_pubkey = to_pubkey_bytes(keypair);
+        let preferences = ValidatorPreferenceUpdate {
+            filtering: Some(Filtering::Regional),
+            trusted_builders: None,
+            header_delay: None,
+            delay_ms: None,
+            gossip_blobs: None,
+            disable_inclusion_lists: None,
+        };
+
+        let request = create_test_validator_preferences_request(vec![(validator_pubkey, preferences)]);
+
+        let req_url = format!(
+            "{}{}{}",
+            http_config.base_url(),
+            PATH_PROPOSER_API,
+            PATH_UPDATE_VALIDATOR_PREFERENCES
+        );
+
+        let resp = reqwest::Client::new()
+            .post(&req_url)
+            .header("Content-Type", "application/json")
+            .header("X-Api-Key", "invalid-api-key")
+            .json(&request)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert!(resp.text().await.unwrap().contains("Invalid API key"));
+
+        let _ = tx.send(());
+    }
+
+    #[tokio::test]
+    async fn test_get_validator_preferences() {
+        let (tx, http_config, _api, _curr_slot_info, _auctioneer) = start_api_server().await;
+
+        let validator_pubkey = get_fixed_pubkey(0);
+
+        let req_url = format!(
+            "{}{}{}/{}",
+            http_config.base_url(),
+            PATH_PROPOSER_API,
+            PATH_GET_VALIDATOR_PREFERENCES,
+            validator_pubkey.as_hex_string()
+        );
+
+        let resp = reqwest::Client::new()
+            .get(&req_url)
+            .header("X-Api-Key", "valid-api-key")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        let body = resp.text().await.unwrap();
+        let preferences: ValidatorPreferences = serde_json::from_str(&body).unwrap();
+        
+        assert!(preferences.header_delay);
+        assert!(preferences.trusted_builders.is_none());
+
+        let _ = tx.send(());
     }
 }
