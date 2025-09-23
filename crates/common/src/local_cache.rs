@@ -162,41 +162,6 @@ impl LocalCache {
     }
 
     #[instrument(skip_all)]
-    pub fn check_and_set_last_slot_and_hash_delivered(
-        &self,
-        slot: u64,
-        hash: &B256,
-    ) -> Result<(), AuctioneerError> {
-        let last_slot_delivered_res = self.get_last_slot_delivered();
-
-        if let Some(last_slot_delivered) = last_slot_delivered_res {
-            if slot < last_slot_delivered {
-                return Err(AuctioneerError::PastSlotAlreadyDelivered);
-            }
-
-            if slot == last_slot_delivered {
-                let last_hash_delivered_res = self.get_last_hash_delivered();
-
-                match last_hash_delivered_res {
-                    Some(last_hash_delivered) => {
-                        if *hash != last_hash_delivered {
-                            return Err(AuctioneerError::AnotherPayloadAlreadyDeliveredForSlot);
-                        }
-                    }
-                    None => return Err(AuctioneerError::UnexpectedValueType),
-                }
-
-                return Ok(());
-            }
-        }
-
-        self.last_delivered_slot.store(slot, Ordering::Relaxed);
-        self.last_delivered_hash.write().replace(*hash);
-
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
     pub fn save_execution_payload(
         &self,
         slot: u64,
@@ -375,57 +340,6 @@ mod tests {
 
     use super::*;
     use crate::BuilderConfig;
-
-    /// #######################################################################
-    /// ########################### Auctioneer tests ##########################
-    /// #######################################################################
-
-    #[tokio::test]
-    pub async fn test_get_and_check_last_slot_and_hash_delivered() {
-        let cache = LocalCache::new();
-
-        let slot = 42;
-        let block_hash = B256::try_from([4u8; 32].as_ref()).unwrap();
-
-        // Test: Save the last slot and hash delivered
-        let set_result = cache.check_and_set_last_slot_and_hash_delivered(slot, &block_hash);
-        assert!(set_result.is_ok(), "Saving last slot and hash delivered failed");
-
-        // Test: Get the last slot delivered
-        let get_result: Option<u64> = cache.get_last_slot_delivered();
-        assert_eq!(get_result.unwrap(), slot, "Slot value mismatch");
-    }
-
-    #[tokio::test]
-    pub async fn test_set_past_slot() {
-        let cache = LocalCache::new();
-
-        let slot = 42;
-        let block_hash = B256::try_from([4u8; 32].as_ref()).unwrap();
-
-        // Set a future slot
-        assert!(cache.check_and_set_last_slot_and_hash_delivered(slot + 1, &block_hash).is_ok());
-
-        // Test: Try to set a past slot
-        let set_result = cache.check_and_set_last_slot_and_hash_delivered(slot, &block_hash);
-        assert!(matches!(set_result, Err(AuctioneerError::PastSlotAlreadyDelivered)));
-    }
-
-    #[tokio::test]
-    pub async fn test_set_same_slot_different_hash() {
-        let cache = LocalCache::new();
-
-        let slot = 42;
-        let block_hash1 = B256::try_from([4u8; 32].as_ref()).unwrap();
-        let block_hash2 = B256::try_from([5u8; 32].as_ref()).unwrap();
-
-        // Set initial slot and hash
-        assert!(cache.check_and_set_last_slot_and_hash_delivered(slot, &block_hash1).is_ok());
-
-        // Test: Set the same slot with a different hash
-        let set_result = cache.check_and_set_last_slot_and_hash_delivered(slot, &block_hash2);
-        assert!(matches!(set_result, Err(AuctioneerError::AnotherPayloadAlreadyDeliveredForSlot)));
-    }
 
     #[tokio::test]
     pub async fn test_get_and_save_execution_payload() {

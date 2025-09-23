@@ -27,7 +27,10 @@ use tokio::sync::mpsc::{self};
 pub use types::*;
 
 use crate::{
-    builder::{simulator_2::Event, BlockMergeRequest},
+    builder::{
+        simulator_2::{worker::WorkerJob, Event},
+        BlockMergeRequest,
+    },
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::block_merging::BestMergedBlock,
     router::Terminating,
@@ -60,6 +63,7 @@ pub struct ProposerApi<A: Api> {
     pub bid_slot: Arc<AtomicU64>,
 
     pub auctioneer_tx: crossbeam_channel::Sender<Event>,
+    pub worker_tx: crossbeam_channel::Sender<WorkerJob>,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -78,6 +82,7 @@ impl<A: Api> ProposerApi<A> {
         merge_requests_tx: mpsc::Sender<BlockMergeRequest>,
         bid_slot: Arc<AtomicU64>,
         auctioneer_tx: crossbeam_channel::Sender<Event>,
+        worker_tx: crossbeam_channel::Sender<WorkerJob>,
     ) -> Self {
         Self {
             auctioneer,
@@ -96,6 +101,7 @@ impl<A: Api> ProposerApi<A> {
             merge_requests_tx,
             bid_slot,
             auctioneer_tx,
+            worker_tx,
         }
     }
 }

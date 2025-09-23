@@ -231,8 +231,8 @@ impl BidSorter {
         self.process_slot(head_slot)
     }
 
-    pub fn handle_get_header(&self) {
-        todo!()
+    pub fn get_header(&self) -> Option<BuilderBid> {
+        self.curr_bid.as_ref().map(|b| b.2.clone())
     }
 
     fn process_header(&mut self, new_pubkey: BlsPublicKeyBytes, new_bid: Bid) {

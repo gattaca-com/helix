@@ -1,6 +1,9 @@
 use std::{
     net::SocketAddr,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{
+        atomic::{AtomicBool, AtomicU64},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -55,8 +58,10 @@ pub async fn run_api_service<A: Api>(
 
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
     let (merge_pool_tx, pool_rx) = tokio::sync::mpsc::channel(10_000);
-
     let (merge_requests_tx, merge_requests_rx) = mpsc::channel(10_000);
+
+    let (worker_tx, woker_rx) = crossbeam_channel::bounded(10_000);
+    let (auctioneer_tx, auctioneer_rx) = crossbeam_channel::bounded(10_000);
 
     let accept_optimistic = Arc::new(AtomicBool::new(true));
 
@@ -69,6 +74,7 @@ pub async fn run_api_service<A: Api>(
         current_slot_info.clone(),
         top_bid_tx,
         accept_optimistic,
+        worker_tx.clone(),
     );
     let builder_api = Arc::new(builder_api);
 
@@ -87,6 +93,8 @@ pub async fn run_api_service<A: Api>(
     //     relay_signing_context.clone(),
     // ));
 
+    let bid_slot = Arc::new(AtomicU64::default());
+
     let proposer_api = Arc::new(ProposerApi::<A>::new(
         auctioneer.clone(),
         db.clone(),
@@ -100,6 +108,9 @@ pub async fn run_api_service<A: Api>(
         config.clone(),
         current_slot_info,
         merge_requests_tx,
+        bid_slot,
+        auctioneer_tx,
+        worker_tx,
     ));
 
     tokio::spawn(gossip::process_gossip_messages(

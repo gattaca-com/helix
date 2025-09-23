@@ -5,9 +5,15 @@ mod sim_manager;
 mod validation;
 pub mod worker;
 
-use std::{collections::BTreeMap, ops::Deref, sync::Arc, time::Instant};
+use std::{
+    collections::BTreeMap,
+    ops::Deref,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use alloy_primitives::B256;
+use alloy_primitives::{B256, U256};
+use helix_beacon::{multi_beacon_client::MultiBeaconClient, types::BroadcastValidation};
 use helix_common::{
     api::builder_api::{
         BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
@@ -16,18 +22,20 @@ use helix_common::{
     chain_info::ChainInfo,
     metrics::SimulatorMetrics,
     simulator::BlockSimError,
-    BuilderInfo, SubmissionTrace,
+    utils::utcnow_ns,
+    BuilderInfo, GetPayloadTrace, RelayConfig, SubmissionTrace,
 };
 use helix_database::DatabaseService;
 use helix_housekeeper::PayloadAttributesUpdate;
 use helix_types::{
-    BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ForkName, HydrationCache,
-    SignedBidSubmission, SignedBuilderBid, Slot,
+    BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ForkName, GetPayloadResponse,
+    HydrationCache, SignedBidSubmission, SignedBlindedBeaconBlock, SignedBuilderBid, Slot,
+    VersionedSignedProposal,
 };
 use moka::ops::compute::Op;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::oneshot;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     builder::{
@@ -35,10 +43,11 @@ use crate::{
         simulator_2::{
             bid_sorter::BidSorter,
             sim_manager::{SimulationResult, SimulatorManager},
-            worker::{Submission, SubmissionResult},
+            worker::{GetPayloadResult, GetPayloadResultData, Submission, SubmissionResult},
         },
         BlockSimRequest, SimReponse, SimulatorRequest,
     },
+    gossiper::{grpc_gossiper::GrpcGossiperClientManager, types::BroadcastGetPayloadParams},
     proposer::{GetHeaderParams, ProposerApiError},
     Api,
 };
@@ -64,13 +73,24 @@ struct Context<A: Api> {
     chain_info: ChainInfo,
     builder_info: FxHashMap<BlsPublicKeyBytes, BuilderInfo>,
     unknown_builder_info: BuilderInfo,
+    gossiper: GrpcGossiperClientManager,
     simulator_manager: SimulatorManager,
+    // on transition to new slot, send ProposerApiError::NoExecutionPayloadFound for these
+    // TODO: check for which hash they sent the request to avoid duplicates
+    pending_payloads: Vec<PendingPayload>,
 
     // flags
     // failsafe_triggered + accept_optimistic
     can_process_optimistic: bool,
 
     db: Arc<A::DatabaseService>,
+    config: RelayConfig,
+}
+
+struct PendingPayload {
+    blinded: SignedBlindedBeaconBlock,
+    res_tx: oneshot::Sender<GetPayloadResult>,
+    retry_at: Instant,
 }
 
 impl<A: Api> Context<A> {
@@ -110,7 +130,12 @@ pub enum Event {
         res_tx: oneshot::Sender<Result<BuilderBid, ProposerApiError>>,
     },
     // Receive multiple of these potentially, assume some validation
-    GetPayload,
+    GetPayload {
+        block_hash: B256,
+        blinded: SignedBlindedBeaconBlock,
+        trace: GetPayloadTrace,
+        res_tx: oneshot::Sender<GetPayloadResult>,
+    },
     NewSlot,
     SimResult(SimulationResult),
     MergeResult,
@@ -144,7 +169,40 @@ impl State {
             },
             (State::Sorting(sorting), Event::GetHeader { params, res_tx }) => {}
 
-            (State::Sorting(sorting), Event::GetPayload) => {}
+            (State::Sorting(sorting), Event::GetPayload { blinded, block_hash, trace, res_tx }) => {
+                // TODO: this serializes the proto, and spawns some tasks so needs a runtime
+                // ctx.gossiper.broadcast_get_payload(BroadcastGetPayloadParams {
+                //     signed_blinded_beacon_block: blinded.clone(),
+                //     request_id: Default::default(),
+                // });
+
+                if let Some(payload) = sorting.payloads.get(&block_hash) {
+                    let res = sorting.handle_get_payload(blinded, payload, trace).map(
+                        |(to_proposer, to_publish, trace)| {
+                            let proposer_pubkey =
+                                sorting.slot.registration_data.entry.registration.message.pubkey;
+
+                            GetPayloadResultData {
+                                to_proposer,
+                                to_publish,
+                                trace,
+                                proposer_pubkey,
+                                fork: sorting.slot.current_fork,
+                            }
+                        },
+                    );
+
+                    let _ = res_tx.send(res);
+                } else {
+                    // we may still receive the payload from builder / gossip, save request for
+                    // later
+                    ctx.pending_payloads.push(PendingPayload {
+                        blinded,
+                        res_tx,
+                        retry_at: Instant::now() + Duration::from_millis(20),
+                    });
+                }
+            }
 
             (State::Sorting(sorting), Event::SimResult(resp)) => {
                 sorting.handle_sim_result(resp, ctx)
@@ -177,6 +235,11 @@ impl State {
                 let _ = res_tx.send(res);
             }
 
+            (State::Broadcasting { slot_ctx, block_hash }, Event::GetPayload { res_tx, .. }) => {
+                // return Err(AuctioneerError::PastSlotAlreadyDelivered);
+                // return Err(AuctioneerError::AnotherPayloadAlreadyDeliveredForSlot);
+            }
+
             _ => todo!(),
         }
     }
@@ -184,14 +247,35 @@ impl State {
 
 impl SortingData {
     fn handle_get_header(&self, params: GetHeaderParams) -> Result<BuilderBid, ProposerApiError> {
-        // let Some(bid) = get_best_bid_res else {
-        //     warn!("no bid found");
-        //     return Err(ProposerApiError::NoBidPrepared);
-        // };
-        // if bid.value == U256::ZERO {
-        //     warn!("best bid value is 0");
-        //     return Err(ProposerApiError::BidValueZero);
-        // }
+        if params.slot != self.slot.bid_slot.as_u64() {
+            return Err(ProposerApiError::RequestWrongSlot {
+                request_slot: params.slot,
+                bid_slot: self.slot.bid_slot.as_u64(),
+            });
+        }
+
+        let Some(bid) = self.sort.get_header() else {
+            return Err(ProposerApiError::NoBidPrepared);
+        };
+
+        // TODO: this check is proably useless
+        if bid.value == U256::ZERO {
+            return Err(ProposerApiError::BidValueZero);
+        }
+
+        Ok(bid)
+    }
+
+    fn handle_get_payload(
+        &self,
+        blinded: SignedBlindedBeaconBlock,
+        local: &SignedBidSubmission,
+        trace: GetPayloadTrace,
+    ) -> Result<(GetPayloadResponse, VersionedSignedProposal, GetPayloadTrace), ProposerApiError>
+    {
+        // TODO: use trace
+        let (to_proposer, to_publish) = self.validate_and_unblind(blinded, local)?;
+        Ok((to_proposer, to_publish, trace))
     }
 
     fn handle_sim_result<A: Api>(&mut self, result: SimulationResult, ctx: &mut Context<A>) {
@@ -214,6 +298,12 @@ impl SortingData {
                             %builder,
                             %block_hash,
                             "Block is too old. Skipping demotion"
+                        );
+                    } else if err.is_temporary() {
+                        warn!(
+                            %builder,
+                            %block_hash,
+                            "Error is temporary. Skipping demotion"
                         );
                     } else {
                         warn!(
@@ -303,6 +393,7 @@ impl SortingData {
         }
 
         // block merging
+        // TODO: sort also after simulation!
 
         Ok((submission, optimistic_version))
     }

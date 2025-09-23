@@ -1,11 +1,13 @@
+use alloy_primitives::B256;
 use bytes::Bytes;
 use helix_common::{
     bid_submission::BidSubmission, chain_info::ChainInfo, local_cache::LocalCache,
-    metadata_provider::MetadataProvider, RelayConfig, SubmissionTrace,
+    metadata_provider::MetadataProvider, GetPayloadTrace, RelayConfig, SubmissionTrace,
 };
 use helix_types::{
-    BlockMergingData, BlsPublicKeyBytes, DehydratedBidSubmission, SignedBidSubmission,
-    SignedBidSubmissionWithMergingData,
+    BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission, ExecPayload,
+    ForkName, GetPayloadResponse, SigError, SignedBidSubmission,
+    SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock, VersionedSignedProposal,
 };
 use http::{HeaderMap, HeaderValue};
 use moka::ops::compute::Op;
@@ -17,7 +19,7 @@ use crate::{
         api::get_mergeable_orders, decoder::SubmissionDecoder, error::BuilderApiError,
         simulator_2::Event,
     },
-    proposer::MergingPoolMessage,
+    proposer::{MergingPoolMessage, ProposerApiError},
     Api, HEADER_API_KEY, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_SEQUENCE,
 };
 
@@ -40,49 +42,67 @@ impl<A: Api> Worker<A> {
                 continue;
             };
 
-            match task {
-                WorkerJob::BlockSubmission { headers, body, mut trace, res_tx } => {
-                    match self.handle_block_submission(headers, body, &mut trace) {
-                        Ok((submission, sequence, merging_data)) => {
-                            let evt = Event::Submission {
-                                submission: submission.clone(),
-                                sequence,
-                                trace,
-                                res_tx,
-                            };
+            self.handle_task(task);
+        }
+    }
 
-                            let _ = self.tx.try_send(evt);
+    fn handle_task(&self, task: WorkerJob) {
+        match task {
+            WorkerJob::BlockSubmission { headers, body, mut trace, res_tx } => {
+                match self.handle_block_submission(headers, body, &mut trace) {
+                    Ok((submission, sequence, merging_data)) => {
+                        let evt = Event::Submission {
+                            submission: submission.clone(),
+                            sequence,
+                            trace,
+                            res_tx,
+                        };
 
-                            if self.relay_config.block_merging_config.is_enabled {
-                                if let Some(merging_data) = merging_data {
-                                    let Submission::Full(payload) = submission else {
-                                        continue;
-                                    };
+                        let _ = self.tx.try_send(evt);
 
-                                    let mergeable_orders =
-                                        get_mergeable_orders(&payload, merging_data)
-                                            .inspect_err(
-                                                |e| warn!(%e, "failed to get mergeable orders"),
-                                            )
-                                            .ok();
+                        if self.relay_config.block_merging_config.is_enabled {
+                            if let Some(merging_data) = merging_data {
+                                let Submission::Full(payload) = submission else {
+                                    return;
+                                };
 
-                                    if mergeable_orders
-                                        .as_ref()
-                                        .is_some_and(|o| !o.orders.is_empty())
-                                    {
-                                        let orders = mergeable_orders.unwrap();
-                                        let message = MergingPoolMessage::new(&payload, orders);
-                                        // We only log the error if this fails
-                                        let _ = self.merge_pool_tx.try_send(message).inspect_err(|err| {
-                                        error!(?err, "failed to send mergeable orders to merging pool");
-                                    });
-                                    }
+                                let mergeable_orders = get_mergeable_orders(&payload, merging_data)
+                                    .inspect_err(|e| warn!(%e, "failed to get mergeable orders"))
+                                    .ok();
+
+                                if mergeable_orders.as_ref().is_some_and(|o| !o.orders.is_empty()) {
+                                    let orders = mergeable_orders.unwrap();
+                                    let message = MergingPoolMessage::new(&payload, orders);
+                                    // We only log the error if this fails
+                                    let _ =
+                                        self.merge_pool_tx.try_send(message).inspect_err(|err| {
+                                            error!(
+                                                ?err,
+                                                "failed to send mergeable orders to merging pool"
+                                            );
+                                        });
                                 }
                             }
                         }
-                        Err(err) => {
-                            let _ = res_tx.send(Err(err));
-                        }
+                    }
+                    Err(err) => {
+                        let _ = res_tx.send(Err(err));
+                    }
+                }
+            }
+
+            WorkerJob::GetPayload { body, mut trace, res_tx } => {
+                match self.handle_get_payload(body, &mut trace) {
+                    Ok((blinded, block_hash)) => {
+                        let _ = self.tx.try_send(Event::GetPayload {
+                            block_hash,
+                            blinded,
+                            trace,
+                            res_tx,
+                        });
+                    }
+                    Err(err) => {
+                        let _ = res_tx.send(Err(err));
                     }
                 }
             }
@@ -141,9 +161,46 @@ impl<A: Api> Worker<A> {
 
         Ok((submission, sequence, merging_data))
     }
+
+    fn handle_get_payload(
+        &self,
+        body: bytes::Bytes,
+        trace: &mut GetPayloadTrace,
+    ) -> Result<(SignedBlindedBeaconBlock, B256), ProposerApiError> {
+        let signed_blinded_block: SignedBlindedBeaconBlock = serde_json::from_slice(&body)?;
+
+        // TODO: we need to get this from the slot duty
+        // we could also just compute the object root and verify the signature
+        // starves the main loop for a few ms
+        let proposer_pubkey = BlsPublicKeyBytes::default();
+
+        verify_signed_blinded_block_signature(
+            &self.chain_info,
+            &signed_blinded_block,
+            &proposer_pubkey,
+        )?;
+
+        let block_hash = signed_blinded_block
+            .message()
+            .body()
+            .execution_payload()
+            .map_err(|_| ProposerApiError::InvalidFork)? // this should never happen as post altair there's always an execution payload
+            .block_hash()
+            .0;
+
+        Ok((signed_blinded_block, block_hash))
+    }
 }
 
 pub type SubmissionResult = Result<(), BuilderApiError>;
+pub struct GetPayloadResultData {
+    pub to_proposer: GetPayloadResponse,
+    pub to_publish: VersionedSignedProposal,
+    pub trace: GetPayloadTrace,
+    pub proposer_pubkey: BlsPublicKeyBytes,
+    pub fork: ForkName,
+}
+pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
 
 #[derive(Clone)]
 pub enum Submission {
@@ -169,4 +226,36 @@ pub enum WorkerJob {
         trace: SubmissionTrace, // TODO: replace this with better tracing
         res_tx: oneshot::Sender<SubmissionResult>,
     },
+
+    GetPayload {
+        body: bytes::Bytes,
+        trace: GetPayloadTrace,
+        res_tx: oneshot::Sender<GetPayloadResult>,
+    },
+}
+
+fn verify_signed_blinded_block_signature(
+    chain_info: &ChainInfo,
+    signed_blinded_beacon_block: &SignedBlindedBeaconBlock,
+    public_key: &BlsPublicKeyBytes,
+) -> Result<(), SigError> {
+    let uncompressed_public_key = BlsPublicKey::deserialize(public_key.as_slice())
+        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
+    let slot = signed_blinded_beacon_block.message().slot();
+    let epoch = slot.epoch(chain_info.slots_per_epoch());
+    let fork = chain_info.context.fork_at_epoch(epoch);
+
+    let valid = signed_blinded_beacon_block.verify_signature(
+        None,
+        &uncompressed_public_key,
+        &fork,
+        chain_info.genesis_validators_root,
+        &chain_info.context,
+    );
+
+    if !valid {
+        return Err(SigError::InvalidBlsSignature);
+    }
+
+    Ok(())
 }

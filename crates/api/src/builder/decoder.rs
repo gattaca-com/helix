@@ -82,7 +82,7 @@ impl SubmissionDecoder {
 
     // TODO: we could also just extract the bid trace and send that through before the rest is
     // decoded after some light validation
-    /// Buf is already decompre
+    /// Buf is already decompressed
     pub fn extract_builder_pubkey(&self, buf: &[u8]) -> Result<BlsPublicKeyBytes, BuilderApiError> {
         match self.encoding {
             Encoding::Json => {
