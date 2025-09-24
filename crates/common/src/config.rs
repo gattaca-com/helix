@@ -3,9 +3,10 @@ use std::{collections::HashSet, fs::File, path::PathBuf};
 use alloy_primitives::B256;
 use clap::Parser;
 use eyre::ensure;
-use helix_types::{BlsKeypair, BlsPublicKeyBytes, BlsSecretKey};
+use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
+use tracing::error;
 
 use crate::{api::*, chain_info::ChainInfo, BuilderInfo, ValidatorPreferences};
 
@@ -22,6 +23,8 @@ pub struct RelayConfig {
     pub beacon_clients: Vec<BeaconClientConfig>,
     #[serde(default)]
     pub relays: Vec<RelayGossipConfig>,
+    #[serde(default)]
+    pub relay_network: RelayNetworkConfig,
     #[serde(default)]
     pub builders: Vec<BuilderConfig>,
     #[serde(default)]
@@ -214,6 +217,70 @@ pub struct RelayGossipConfig {
     pub url: String,
 }
 
+#[derive(Default, Serialize, Deserialize, Clone)]
+pub struct RelayNetworkConfig {
+    /// Whether functionality is enabled or not
+    #[serde(default = "default_bool::<false>")]
+    pub is_enabled: bool,
+    /// Information on known peers
+    #[serde(default)]
+    pub peers: Vec<RelayNetworkPeerConfig>,
+    /// Duration until the first cutoff point on the slot (t_1),
+    /// when we compute an inclusion list based on the ones
+    /// broadcasted by our peers and broadcast it to them.
+    /// Should be lower than [`Self::cutoff_2_ms`]
+    ///
+    /// See the network's IL module documentation for more details.
+    #[serde(default = "default_u64::<2000>")]
+    pub cutoff_1_ms: u64,
+    /// Duration until the second cutoff point in the slot (t_2),
+    /// when we compute the final inclusion list for the slot.
+    /// Should be higher than [`Self::cutoff_1_ms`]
+    ///
+    /// See the network's IL module documentation for more details.
+    #[serde(default = "default_u64::<4000>")]
+    pub cutoff_2_ms: u64,
+}
+
+impl RelayNetworkConfig {
+    /// Validates config is sane
+    pub fn validate(&self) {
+        let mut peer_pubkeys = HashSet::with_capacity(self.peers.len());
+        for peer in &self.peers {
+            peer.validate();
+            let pubkey = peer.pubkey;
+            assert!(!peer_pubkeys.contains(&pubkey), "duplicate peer pubkey found: {pubkey}");
+            peer_pubkeys.insert(pubkey);
+        }
+        assert!(self.cutoff_1_ms < self.cutoff_2_ms, "cutoff_1_ms must be less than cutoff_2_ms");
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RelayNetworkPeerConfig {
+    /// The URL of the peer.
+    /// A valid URL is of the form 'ws://<peer-url>'
+    pub url: Url,
+    /// The BLS public key of the peer, to verify its identity.
+    pub pubkey: BlsPublicKeyBytes,
+}
+
+impl RelayNetworkPeerConfig {
+    fn validate(&self) {
+        // Verify serialized public key is valid
+        let _deserialized_pubkey = BlsPublicKey::deserialize(self.pubkey.as_ref())
+            .inspect_err(
+                |e| error!(err=?e, pubkey=%self.pubkey, "failed to deserialize peer pubkey"),
+            )
+            .expect("pubkey should be valid");
+
+        let has_ws_scheme = ["ws", "wss"].contains(&self.url.scheme());
+        let has_port = self.url.port().is_some();
+
+        assert!(has_ws_scheme || has_port, "peer URL must have ws/wss scheme or a specific port");
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BuilderConfig {
     pub pub_key: BlsPublicKeyBytes,
@@ -354,6 +421,10 @@ impl RouterConfig {
         ]);
     }
 
+    pub fn enable_relay_network(&mut self) {
+        self.extend([Route::RelayNetwork]);
+    }
+
     fn contains(&self, route: Route) -> bool {
         self.enabled_routes.iter().map(|x| x.route).collect::<HashSet<_>>().contains(&route)
     }
@@ -452,6 +523,7 @@ pub enum Route {
     ValidatorRegistration,
     SubmitHeaderV3,
     GetInclusionList,
+    RelayNetwork,
 }
 
 impl Route {
@@ -475,6 +547,7 @@ impl Route {
             Route::ProposerApi => panic!("ProposerApi is not a real route"),
             Route::DataApi => panic!("DataApi is not a real route"),
             Route::SubmitHeaderV3 => format!("{PATH_BUILDER_API_V3}{PATH_SUBMIT_HEADER}"),
+            Route::RelayNetwork => PATH_RELAY_NETWORK.to_string(),
         }
     }
 }

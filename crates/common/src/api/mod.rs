@@ -22,3 +22,5 @@ pub const PATH_DATA_API: &str = "/relay/v1/data";
 pub const PATH_PROPOSER_PAYLOAD_DELIVERED: &str = "/bidtraces/proposer_payload_delivered";
 pub const PATH_BUILDER_BIDS_RECEIVED: &str = "/bidtraces/builder_blocks_received";
 pub const PATH_VALIDATOR_REGISTRATION: &str = "/validator_registration";
+
+pub const PATH_RELAY_NETWORK: &str = "/relay/v1/network";

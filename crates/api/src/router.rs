@@ -8,10 +8,11 @@ use axum::{
     extract::DefaultBodyLimit,
     http::StatusCode,
     middleware,
-    routing::{get, post},
+    routing::{any, get, post},
     Extension, Router,
 };
 use helix_common::{utils::extract_request_id, Route, RouterConfig};
+use helix_network::api::RelayNetworkApi;
 use hyper::{HeaderMap, Uri};
 use tower::{timeout::TimeoutLayer, BoxError, ServiceBuilder};
 use tower_governor::{
@@ -39,12 +40,18 @@ pub fn build_router<A: Api>(
     builder_api: Arc<BuilderApi<A>>,
     proposer_api: Arc<ProposerApi<A>>,
     data_api: Arc<DataApi<A>>,
+    relay_network_api: RelayNetworkApi,
     bids_cache: BidsCache,
     delivered_payloads_cache: DeliveredPayloadsCache,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
 ) -> Router {
     router_config.resolve_condensed_routes();
+
+    // Enable RelayNetwork route if RelayNetwork is enabled in config
+    if relay_network_api.is_enabled() {
+        router_config.enable_relay_network();
+    }
 
     let mut router = Router::new();
     let mut limiters = Vec::new();
@@ -63,6 +70,7 @@ pub fn build_router<A: Api>(
             Route::ValidatorRegistration => get(DataApi::<A>::validator_registration),
             Route::SubmitHeaderV3 => post(BuilderApi::<A>::submit_header_v3),
             Route::GetInclusionList => get(BuilderApi::<A>::get_inclusion_list),
+            Route::RelayNetwork => any(RelayNetworkApi::connect),
             Route::All | Route::BuilderApi | Route::ProposerApi | Route::DataApi => {
                 panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route_info.route);
             }
@@ -121,6 +129,7 @@ pub fn build_router<A: Api>(
         .layer(Extension(builder_api))
         .layer(Extension(proposer_api))
         .layer(Extension(data_api))
+        .layer(Extension(relay_network_api))
         .layer(Extension(bids_cache))
         .layer(Extension(delivered_payloads_cache))
         .layer(Extension(KnownValidatorsLoaded(known_validators_loaded)))

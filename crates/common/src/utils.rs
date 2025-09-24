@@ -94,7 +94,8 @@ pub fn init_tracing_log(config: &LoggingConfig, region: &str, instance_id: Strin
     }
 }
 
-const CRATES: &[&str] = &["api", "beacon", "common", "database", "housekeeper", "types", "website"];
+const CRATES: &[&str] =
+    &["api", "beacon", "common", "database", "housekeeper", "network", "types", "website"];
 
 fn get_crate_filter(crates_level: tracing::Level) -> EnvFilter {
     let mut env_filter = EnvFilter::new("info");
