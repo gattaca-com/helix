@@ -14,6 +14,7 @@ use helix_common::{
     config::PrimevConfig, local_cache::LocalCache, RelayConfig, ValidatorSummary,
 };
 use helix_database::mock_database_service::MockDatabaseService;
+use helix_network::RelayNetworkManager;
 use tokio::sync::broadcast;
 
 use crate::housekeeper::Housekeeper;
@@ -43,6 +44,7 @@ fn get_housekeeper() -> HelperVars {
         Arc::new(auctioneer),
         &RelayConfig::default(),
         Arc::new(ChainInfo::for_mainnet()),
+        RelayNetworkManager::new(Default::default(), Default::default()),
     );
 
     HelperVars {

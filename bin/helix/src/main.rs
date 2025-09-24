@@ -23,6 +23,7 @@ use helix_database::{
     postgres::postgres_db_service::PostgresDatabaseService, start_db_service, DatabaseService,
 };
 use helix_housekeeper::start_housekeeper;
+use helix_network::RelayNetworkManager;
 use helix_types::BlsKeypair;
 use helix_website::website_service::WebsiteService;
 use tikv_jemallocator::Jemalloc;
@@ -91,6 +92,9 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     let db = start_db_service(&config, known_validators_loaded.clone()).await?;
     let auctioneer = start_auctioneer(sorter_tx.clone(), db.clone()).await?;
 
+    let relay_network_api =
+        RelayNetworkManager::new(config.relay_network.clone(), relay_signing_context.clone());
+
     let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
     let shared_best_header = BestGetHeader::new();
 
@@ -105,6 +109,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         beacon_client.clone(),
         chain_info.clone(),
         sorter_tx.clone(),
+        relay_network_api.clone(),
     )
     .await
     .map_err(|e| eyre!("housekeeper init: {e}"))?;
@@ -127,6 +132,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         sorter_tx,
         top_bid_tx,
         shared_best_header,
+        relay_network_api.api(),
     );
 
     let termination_grace_period = config.router_config.shutdown_delay_ms;

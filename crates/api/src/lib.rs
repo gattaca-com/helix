@@ -14,6 +14,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_housekeeper::CurrentSlotInfo;
+use helix_network::api::RelayNetworkApi;
 use service::run_api_service;
 
 pub mod admin_service;
@@ -49,6 +50,7 @@ pub fn start_api_service<A: Api>(
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
+    relay_network_api: RelayNetworkApi,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),
@@ -64,6 +66,7 @@ pub fn start_api_service<A: Api>(
         sorter_tx,
         top_bid_tx,
         shared_best_header,
+        relay_network_api,
     ));
 }
 
