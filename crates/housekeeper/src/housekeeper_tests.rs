@@ -15,6 +15,7 @@ use helix_common::{
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_types::{get_fixed_pubkey_bytes, Epoch, Slot, Validator};
 use httpmock::Mock;
+use helix_network::RelayNetworkManager;
 use tokio::sync::broadcast;
 
 use crate::housekeeper::Housekeeper;
@@ -35,6 +36,7 @@ fn get_housekeeper(beacon_node: &MockBeaconNode) -> HelperVars {
         Arc::new(auctioneer),
         &RelayConfig::default(),
         Arc::new(ChainInfo::for_mainnet()),
+        RelayNetworkManager::new(Default::default(), Default::default()),
     );
 
     HelperVars { housekeeper, known_validators, proposer_duties, beacon_client }

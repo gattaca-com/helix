@@ -36,6 +36,7 @@ serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
 sha2.workspace = true
+ssz_types.workspace = true
 teloxide.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

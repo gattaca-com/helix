@@ -6,7 +6,7 @@ macro_rules! ssz_bytes_wrapper {
         max  = $Max:ty;
     ) => {
         $(#[$attr])*
-        #[derive(Debug, Default, PartialEq, Clone, serde::Serialize, serde::Deserialize, ssz_derive::Encode, ssz_derive::Decode)]
+        #[derive(Debug, Default, PartialEq, Eq, Clone, serde::Serialize, serde::Deserialize, ssz_derive::Encode, ssz_derive::Decode)]
         #[serde(transparent)]
         #[ssz(struct_behaviour = "transparent")]
         $vis struct $Name(pub ::alloy_primitives::Bytes);

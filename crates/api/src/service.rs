@@ -16,6 +16,7 @@ use helix_common::{
     BroadcasterConfig, RelayConfig,
 };
 use helix_housekeeper::CurrentSlotInfo;
+use helix_network::api::RelayNetworkApi;
 use moka::sync::Cache;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -47,6 +48,7 @@ pub async fn run_api_service<A: Api>(
     sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     shared_best_header: BestGetHeader,
+    relay_network_api: RelayNetworkApi,
 ) {
     let broadcasters = init_broadcasters(&config).await;
 
@@ -148,6 +150,7 @@ pub async fn run_api_service<A: Api>(
         builder_api,
         proposer_api,
         data_api,
+        relay_network_api,
         bids_cache,
         delivered_payloads_cache,
         known_validators_loaded,
