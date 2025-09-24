@@ -1194,7 +1194,7 @@ impl DatabaseService for PostgresDatabaseService {
         let trusted_builders: Option<Vec<String>> = preferences
             .trusted_builders
             .as_ref()
-            .map(|builders| builders.iter().cloned().collect());
+            .map(|builders| builders.to_vec());
 
         let filtering_value: i16 = match preferences.filtering {
             helix_common::Filtering::Regional => 1,
