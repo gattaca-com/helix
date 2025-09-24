@@ -13,9 +13,9 @@ use helix_common::{
     config::PrimevConfig, local_cache::LocalCache, RelayConfig, ValidatorStatus, ValidatorSummary,
 };
 use helix_database::mock_database_service::MockDatabaseService;
+use helix_network::RelayNetworkManager;
 use helix_types::{get_fixed_pubkey_bytes, Epoch, Slot, Validator};
 use httpmock::Mock;
-use helix_network::RelayNetworkManager;
 use tokio::sync::broadcast;
 
 use crate::housekeeper::Housekeeper;
