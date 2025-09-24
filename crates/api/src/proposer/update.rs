@@ -1,20 +1,15 @@
+use std::{collections::HashSet, sync::Arc};
+
 use axum::{
     extract::{Json, Path},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Extension,
 };
+use helix_common::{utils::extract_request_id, ValidatorPreferences};
 use helix_database::DatabaseService;
 use helix_types::{BlsPublicKey, BlsPublicKeyBytes};
 use tokio::time::Instant;
-
-use std::{
-    collections::HashSet,
-    sync::Arc,
-};
-
-use helix_common::{utils::extract_request_id, ValidatorPreferences};
-
 use tracing::{debug, warn};
 
 use super::ProposerApi;

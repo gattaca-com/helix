@@ -27,4 +27,3 @@ pub const PATH_UPDATE_VALIDATOR_PREFERENCES: &str = "/validator_preferences";
 pub const PATH_GET_VALIDATOR_PREFERENCES: &str = "/validator_preferences/{pubkey}";
 
 pub const PATH_RELAY_NETWORK: &str = "/relay/v1/network";
-

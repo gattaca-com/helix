@@ -65,7 +65,9 @@ pub fn build_router<A: Api>(
             Route::RegisterValidators => post(ProposerApi::<A>::register_validators),
             Route::GetHeader => get(ProposerApi::<A>::get_header),
             Route::GetPayload => post(ProposerApi::<A>::get_payload),
-            Route::UpdateValidatorPreferences => post(ProposerApi::<A>::update_validator_preferences),
+            Route::UpdateValidatorPreferences => {
+                post(ProposerApi::<A>::update_validator_preferences)
+            }
             Route::GetValidatorPreferences => get(ProposerApi::<A>::get_validator_preferences),
             Route::ProposerPayloadDelivered => get(DataApi::<A>::proposer_payload_delivered),
             Route::BuilderBidsReceived => get(DataApi::<A>::builder_bids_received),

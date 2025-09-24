@@ -1191,10 +1191,8 @@ impl DatabaseService for PostgresDatabaseService {
         let mut client = self.pool.get().await?;
         let transaction = client.transaction().await?;
 
-        let trusted_builders: Option<Vec<String>> = preferences
-            .trusted_builders
-            .as_ref()
-            .map(|builders| builders.to_vec());
+        let trusted_builders: Option<Vec<String>> =
+            preferences.trusted_builders.as_ref().map(|builders| builders.to_vec());
 
         let filtering_value: i16 = match preferences.filtering {
             helix_common::Filtering::Regional => 1,
@@ -1268,13 +1266,16 @@ impl DatabaseService for PostgresDatabaseService {
         let mut validators = Vec::new();
         for row in rows {
             let pubkey_bytes: Vec<u8> = row.try_get("public_key")?;
-            
+
             if pubkey_bytes.len() == 48 {
                 let mut key = [0u8; 48];
                 key.copy_from_slice(&pubkey_bytes);
                 validators.push(BlsPublicKeyBytes::from(key));
             } else {
-                error!(length = pubkey_bytes.len(), "Invalid validator pubkey length in trusted_proposers");
+                error!(
+                    length = pubkey_bytes.len(),
+                    "Invalid validator pubkey length in trusted_proposers"
+                );
             }
         }
 
