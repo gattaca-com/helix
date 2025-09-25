@@ -11,10 +11,7 @@ use helix_types::{
     MergeableOrders, MergedBlock, PayloadAndBlobs, SignedBidSubmission, ValidatorRegistrationData,
 };
 use parking_lot::RwLock;
-use tokio::{
-    sync::mpsc::Receiver,
-    task::{JoinError, JoinHandle},
-};
+use tokio::sync::mpsc::{Receiver, Sender};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -74,17 +71,19 @@ impl<A: Api> ProposerApi<A> {
     pub async fn process_block_merging(self: Arc<Self>, mut pool_rx: Receiver<MergingPoolMessage>) {
         let mut best_orders = BestMergeableOrders::new();
         let mut last_base_block_hash = B256::ZERO;
+        let (merge_task_tx, mut merge_task_rx) =
+            tokio::sync::mpsc::channel::<MergingTaskResult>(100);
         // This handle is used to perform block merging in the background.
         // See `MergingTaskState` for more details on the possible states of this task.
-        let mut handle = self.spawn_base_block_fetch_task();
+        self.spawn_base_block_fetch_task(merge_task_tx.clone());
         loop {
             tokio::select! {
                 Some(msg) = pool_rx.recv() => {
                     self.process_pool_message(msg, &mut best_orders);
                 },
-                res = &mut handle => {
-                    handle = self.handle_merging_task_result(res, &mut best_orders, &mut last_base_block_hash).await;
-                },
+                Some(result) = merge_task_rx.recv() => {
+                    self.handle_merging_task_result(merge_task_tx.clone(), result, &mut best_orders, &mut last_base_block_hash);
+                }
             }
         }
     }
@@ -97,23 +96,21 @@ impl<A: Api> ProposerApi<A> {
         best_orders.insert_orders(current_slot, bid_value, orders);
     }
 
-    async fn handle_merging_task_result(
+    fn handle_merging_task_result(
         self: &Arc<Self>,
-        result: Result<MergingTaskResult, JoinError>,
+        tx: Sender<MergingTaskResult>,
+        result: MergingTaskResult,
         best_orders: &mut BestMergeableOrders,
         last_base_block_hash: &mut B256,
-    ) -> JoinHandle<MergingTaskResult> {
+    ) {
         // Start again on any errors.
-        let Ok(result) = result.inspect_err(|err| warn!(%err, "merging task panicked")) else {
-            return self.spawn_base_block_fetch_task();
-        };
         let Ok(task_result) = result.inspect_err(|err| warn!(%err, "failed when merging payload"))
         else {
-            return self.spawn_base_block_fetch_task();
+            return self.spawn_base_block_fetch_task(tx);
         };
         match task_result {
             // If we couldn't fetch a base block, try again.
-            MergingTaskState::RetryFetch => self.spawn_base_block_fetch_task(),
+            MergingTaskState::RetryFetch => self.spawn_base_block_fetch_task(tx),
             // We fetched the base block, so we start a merging task.
             MergingTaskState::FetchedBaseBlock {
                 slot,
@@ -126,12 +123,13 @@ impl<A: Api> ProposerApi<A> {
                 // If we have no new orders, and the base block is the same, we skip merging.
                 if !best_orders.has_new_orders() && base_block_hash == *last_base_block_hash {
                     debug!("skipping merging, no new orders and base block unchanged");
-                    return self.spawn_base_block_fetch_task();
+                    return self.spawn_base_block_fetch_task(tx);
                 }
                 // If we have no mergeable orders, we go back to fetching the base block.
                 if let Some((mergeable_orders, _)) = best_orders.load(slot) {
                     *last_base_block_hash = base_block_hash;
                     self.spawn_merging_task(
+                        tx,
                         slot,
                         best_bid,
                         registration_data,
@@ -140,7 +138,7 @@ impl<A: Api> ProposerApi<A> {
                         mergeable_orders,
                     )
                 } else {
-                    self.spawn_base_block_fetch_task()
+                    self.spawn_base_block_fetch_task(tx)
                 }
             }
             // We received a merged block from the simulator.
@@ -180,27 +178,29 @@ impl<A: Api> ProposerApi<A> {
                         .inspect_err(|err| warn!(%err, "failed to store merged payload"));
                 }
 
-                self.spawn_base_block_fetch_task()
+                self.spawn_base_block_fetch_task(tx)
             }
         }
     }
 
-    fn spawn_base_block_fetch_task(self: &Arc<Self>) -> JoinHandle<MergingTaskResult> {
-        tokio::spawn({
-            let this = self.clone();
-            async move { this.fetch_base_block().await }
-        })
+    fn spawn_base_block_fetch_task(self: &Arc<Self>, tx: Sender<MergingTaskResult>) {
+        let this = self.clone();
+        tokio::spawn(async move {
+            let res = this.fetch_base_block().await;
+            let _ = tx.send(res).await;
+        });
     }
 
     fn spawn_merging_task(
         self: &Arc<Self>,
+        tx: Sender<MergingTaskResult>,
         slot: u64,
         base_bid: BuilderBid,
         registration_data: ValidatorRegistrationData,
         payload: PayloadAndBlobs,
         parent_beacon_block_root: Option<B256>,
         mergeable_orders: &[MergeableOrderWithOrigin],
-    ) -> JoinHandle<MergingTaskResult> {
+    ) {
         let base_block_time_ms = utcnow_ms();
         let proposer_fee_recipient = registration_data.fee_recipient;
         let proposer_pubkey = registration_data.pubkey;
@@ -217,27 +217,44 @@ impl<A: Api> ProposerApi<A> {
 
         let this = self.clone();
         tokio::spawn(async move {
-            this.merge_requests_tx.send(merge_request).await?;
-            let response = res_rx.await??;
+            if let Err(e) = this.merge_requests_tx.send(merge_request).await {
+                let _ = tx.send(Err(PayloadMergingError::SendFailed(e))).await;
+                return;
+            }
+            let response = match res_rx.await {
+                Ok(Ok(resp)) => resp,
+                Ok(Err(e)) => {
+                    let _ = tx.send(Err(PayloadMergingError::SimulatorError(e))).await;
+                    return;
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(PayloadMergingError::RecvFailed(e))).await;
+                    return;
+                }
+            };
 
             // Sanity check: if the merged payload has a lower value than the original bid,
             // we return the original bid.
             if base_bid.value >= response.proposer_value {
-                return Err(PayloadMergingError::MergedPayloadNotValuable {
-                    original: base_bid.value,
-                    merged: response.proposer_value,
-                });
+                let _ = tx
+                    .send(Err(PayloadMergingError::MergedPayloadNotValuable {
+                        original: base_bid.value,
+                        merged: response.proposer_value,
+                    }))
+                    .await;
+                return;
             }
 
-            Ok(MergingTaskState::new_merged_block(
+            let result = Ok(MergingTaskState::new_merged_block(
                 slot,
                 base_bid.value,
                 base_block_time_ms,
                 proposer_pubkey,
                 payload,
                 response,
-            ))
-        })
+            ));
+            let _ = tx.send(result).await;
+        });
     }
 
     async fn fetch_base_block(&self) -> MergingTaskResult {
