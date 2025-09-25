@@ -178,6 +178,9 @@ pub enum ProposerApiError {
 
     #[error(transparent)]
     SigError(#[from] SigError),
+
+    #[error("failed to deserialize validator public key: {0:?}")]
+    InvalidPublicKey(Vec<u8>),
 }
 
 impl IntoResponse for ProposerApiError {
@@ -234,7 +237,8 @@ impl IntoResponse for ProposerApiError {
             ProposerApiError::ParentHashUnknownForSlot { .. } |
             ProposerApiError::BlobKzgCommitmentsMismatch |
             ProposerApiError::SszError(_) |
-            ProposerApiError::SigError(_) => StatusCode::BAD_REQUEST,
+            ProposerApiError::SigError(_) |
+            ProposerApiError::InvalidPublicKey(_) => StatusCode::BAD_REQUEST,
 
             ProposerApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
 
