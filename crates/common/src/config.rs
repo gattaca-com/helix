@@ -287,6 +287,12 @@ pub struct BuilderConfig {
     pub builder_info: BuilderInfo,
 }
 
+impl BuilderConfig {
+    pub fn test_default() -> Self {
+        Self { pub_key: BlsPublicKeyBytes::random(), builder_info: BuilderInfo::default() }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub enum NetworkConfig {
     #[default]
@@ -514,6 +520,7 @@ pub enum Route {
     GetValidators,
     SubmitBlock,
     GetTopBid,
+    GetBuilderInfo,
     Status,
     RegisterValidators,
     GetHeader,
@@ -534,6 +541,7 @@ impl Route {
             Route::GetValidators => format!("{PATH_BUILDER_API}{PATH_GET_VALIDATORS}"),
             Route::SubmitBlock => format!("{PATH_BUILDER_API}{PATH_SUBMIT_BLOCK}"),
             Route::GetTopBid => format!("{PATH_BUILDER_API}{PATH_GET_TOP_BID}"),
+            Route::GetBuilderInfo => format!("{PATH_BUILDER_API}{PATH_GET_BUILDER_INFO}"),
             Route::GetInclusionList => format!("{PATH_BUILDER_API}{PATH_GET_INCLUSION_LIST}"),
             Route::Status => format!("{PATH_PROPOSER_API}{PATH_STATUS}"),
             Route::RegisterValidators => format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),

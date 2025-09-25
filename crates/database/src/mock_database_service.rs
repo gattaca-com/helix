@@ -12,9 +12,9 @@ use helix_common::{
         proposer_api::ValidatorRegistrationInfo,
     },
     bid_submission::{v2::header_submission::SignedHeaderSubmission, OptimisticVersion},
-    BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, HeaderSubmissionTrace,
-    ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences,
-    ValidatorSummary,
+    BuilderConfig, BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace,
+    HeaderSubmissionTrace, ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace,
+    ValidatorPreferences, ValidatorSummary,
 };
 use helix_types::{
     BlsPublicKeyBytes, BlsSignatureBytes, PayloadAndBlobs, SignedBidSubmission,
@@ -189,6 +189,14 @@ impl DatabaseService for MockDatabaseService {
         _builders: &[BuilderInfoDocument],
     ) -> Result<(), DatabaseError> {
         Ok(())
+    }
+
+    async fn get_builder_info(
+        &self,
+        _builder_pub_key: &BlsPublicKeyBytes,
+    ) -> Result<Option<BuilderInfoDocument>, DatabaseError> {
+        let doc = BuilderConfig::test_default();
+        Ok(Some(doc))
     }
 
     async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError> {

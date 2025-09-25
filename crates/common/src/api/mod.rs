@@ -8,6 +8,7 @@ pub const PATH_GET_VALIDATORS: &str = "/validators";
 pub const PATH_SUBMIT_BLOCK: &str = "/blocks";
 pub const PATH_SUBMIT_HEADER: &str = "/headers";
 pub const PATH_GET_TOP_BID: &str = "/top_bid";
+pub const PATH_GET_BUILDER_INFO: &str = "/builder_info/{pub_key}";
 pub const PATH_GET_INCLUSION_LIST: &str = "/inclusion_list/{slot}/{parent_hash}/{pub_key}";
 
 pub const PATH_PROPOSER_API: &str = "/eth/v1/builder";

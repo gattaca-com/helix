@@ -1,5 +1,6 @@
 pub mod api;
 pub mod error;
+pub mod get_builder_info;
 pub mod get_inclusion_list;
 pub mod hydration;
 pub mod simulator;

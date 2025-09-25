@@ -61,6 +61,7 @@ pub fn build_router<A: Api>(
             Route::GetValidators => get(BuilderApi::<A>::get_validators),
             Route::SubmitBlock => post(BuilderApi::<A>::submit_block),
             Route::GetTopBid => get(BuilderApi::<A>::get_top_bid),
+            Route::GetBuilderInfo => get(BuilderApi::<A>::get_builder_info),
             Route::Status => get(proposer::status),
             Route::RegisterValidators => post(ProposerApi::<A>::register_validators),
             Route::GetHeader => get(ProposerApi::<A>::get_header),

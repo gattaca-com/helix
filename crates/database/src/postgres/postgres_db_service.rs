@@ -1782,6 +1782,33 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
+    async fn get_builder_info(
+        &self,
+        builder_pub_key: &BlsPublicKeyBytes,
+    ) -> Result<Option<BuilderInfoDocument>, DatabaseError> {
+        let mut record = DbMetricRecord::new("get_builder_info");
+
+        let rows = self
+            .high_priority_pool
+            .get()
+            .await?
+            .query("SELECT * FROM builder_info WHERE public_key = $1::bytea", &[
+                &builder_pub_key.as_slice()
+            ])
+            .await?;
+
+        let result = if rows.is_empty() {
+            None
+        } else {
+            let builder_info: BuilderInfoDocument = parse_row(&rows[0])?;
+            Some(builder_info)
+        };
+
+        record.record_success();
+        Ok(result)
+    }
+
+    #[instrument(skip_all)]
     async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_all_builder_infos");
 

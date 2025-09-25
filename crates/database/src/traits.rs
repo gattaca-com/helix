@@ -120,6 +120,11 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError>;
 
+    async fn get_builder_info(
+        &self,
+        builder_pub_key: &BlsPublicKeyBytes,
+    ) -> Result<Option<BuilderInfoDocument>, DatabaseError>;
+
     async fn check_builder_api_key(&self, api_key: &str) -> Result<bool, DatabaseError>;
 
     async fn db_demote_builder(
