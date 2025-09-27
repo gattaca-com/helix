@@ -249,7 +249,7 @@ impl<A: Api> ProposerApi<A> {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             return Ok(MergingTaskState::RetryFetch);
         };
-        let slot = next_duty.slot.into();
+        let slot = next_duty.slot;
         // TODO:
         // let best_header_opt = self.shared_best_header.load_any(slot);
         let best_header_opt: Option<(BuilderBid, BlockMergingPreferences)> = None;
@@ -265,27 +265,30 @@ impl<A: Api> ProposerApi<A> {
         };
         let registration_data = next_duty.entry.registration.message;
         let block_hash = best_bid.header.block_hash;
-        // Try to fetch the best bid's block.
-        let payload = self
-            .get_execution_payload(slot, &registration_data.pubkey, &block_hash, true)
-            .await
-            .inspect_err(|err| warn!(%err, "failed to fetch base block"))?;
 
-        let parent_beacon_block_root = self
-            .curr_slot_info
-            .payload_attributes(payload.execution_payload.parent_hash, slot.into())
-            .and_then(|payload_attrs_update| {
-                payload_attrs_update.payload_attributes.parent_beacon_block_root
-            });
+        todo!()
 
-        // Found the base block, we can now start with the merging process.
-        Ok(MergingTaskState::new_base_block(
-            slot,
-            parent_beacon_block_root,
-            best_bid,
-            registration_data,
-            payload,
-        ))
+        // // Try to fetch the best bid's block.
+        // let payload = self
+        //     .get_execution_payload(slot, &registration_data.pubkey, &block_hash, true)
+        //     .await
+        //     .inspect_err(|err| warn!(%err, "failed to fetch base block"))?;
+
+        // let parent_beacon_block_root = self
+        //     .curr_slot_info
+        //     .payload_attributes(payload.execution_payload.parent_hash, slot.into())
+        //     .and_then(|payload_attrs_update| {
+        //         payload_attrs_update.payload_attributes.parent_beacon_block_root
+        //     });
+
+        // // Found the base block, we can now start with the merging process.
+        // Ok(MergingTaskState::new_base_block(
+        //     slot,
+        //     parent_beacon_block_root,
+        //     best_bid,
+        //     registration_data,
+        //     payload,
+        // ))
     }
 
     fn store_merged_payload(

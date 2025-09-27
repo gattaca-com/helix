@@ -1,12 +1,11 @@
 use std::{sync::Arc, time::Duration};
 
-use alloy_primitives::B256;
 use axum::{http::HeaderMap, response::IntoResponse, Extension};
 use helix_beacon::types::BroadcastValidation;
 use helix_common::{
     chain_info::ChainInfo,
     task,
-    utils::{extract_request_id, utcnow_ms, utcnow_ns},
+    utils::{extract_request_id, utcnow_ns},
     GetPayloadTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
@@ -208,101 +207,6 @@ impl<A: Api> ProposerApi<A> {
             }
         }
         Ok(())
-    }
-
-    /// Fetches the execution payload associated with a given slot, public key, and block hash.
-    ///
-    /// The function will retry until the slot cutoff is reached.
-    pub(crate) async fn get_execution_payload(
-        &self,
-        slot: u64,
-        pub_key: &BlsPublicKeyBytes,
-        block_hash: &B256,
-        request_missing_payload: bool,
-    ) -> Result<PayloadAndBlobs, ProposerApiError> {
-        const RETRY_DELAY: Duration = Duration::from_millis(20);
-
-        let slot_time =
-            self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot());
-        let slot_cutoff_millis = (slot_time * 1000) + GET_PAYLOAD_REQUEST_CUTOFF_MS as u64;
-
-        // let mut is_v3 = false;
-        // let mut builder_pub_key = None;
-
-        // if let Some((builder_pubkey, payload_address)) =
-        // self.auctioneer.get_payload_url(block_hash) {
-        //     // Fetch v3 optimistic payload from builder. This will complete asynchronously.
-        //     info!(
-        //         ?builder_pubkey,
-        //         payload_address = String::from_utf8_lossy(&payload_address).as_ref(),
-        //         "Requesting v3 payload from builder"
-        //     );
-        //     if let Err(e) = self
-        //         .v3_payload_request
-        //         .send((slot, *block_hash, builder_pubkey, payload_address))
-        //         .await
-        //     {
-        //         error!("Failed to send v3 payload request: {e:?}");
-        //     }
-
-        //     is_v3 = true;
-        //     builder_pub_key = Some(builder_pubkey);
-        // }
-
-        let mut retry = 0; // Try at least once to cover case where get_payload is called too late.
-                           // while retry == 0 || utcnow_ms() < slot_cutoff_millis {
-                           //     match self.auctioneer.get_execution_payload(
-                           //         slot,
-                           //         pub_key,
-                           //         block_hash,
-                           //         self.chain_info.current_fork_name(),
-                           //     ) {
-                           //         Some(versioned_payload) => return Ok(versioned_payload),
-                           //         None => {
-                           //             if retry % 10 == 0 {
-                           //                 // 10 * RETRY_DELAY = 200ms
-                           //                 warn!("execution payload not found");
-                           //             }
-                           //             if retry == 0 && request_missing_payload {
-                           //                 let proposer_pubkey_clone = *pub_key;
-                           //                 let gossiper = self.gossiper.clone();
-                           //                 let block_hash = *block_hash;
-
-        //                 task::spawn(
-        //                     file!(),
-        //                     line!(),
-        //                     async move {
-        //                         gossiper
-        //                             .request_payload(RequestPayloadParams {
-        //                                 slot,
-        //                                 proposer_pub_key: proposer_pubkey_clone,
-        //                                 block_hash,
-        //                             })
-        //                             .await
-        //                     }
-        //                     .in_current_span(),
-        //                 );
-        //             }
-        //         }
-        //     }
-
-        //     retry += 1;
-        //     sleep(RETRY_DELAY).await;
-        // }
-
-        // if is_v3 && self.auctioneer.has_header_been_served(block_hash) {
-        //     warn!("v3 payload request was made, but no payload found. The builder may have failed
-        // to deliver the payload in time.");     self.demote_builder(
-        //         slot,
-        //         &builder_pub_key.expect("builder pubkey must be set if is_v3 is true"),
-        //         block_hash,
-        //         "v3 header served but no payload found",
-        //     )
-        //     .await;
-        // }
-
-        error!("max retries reached trying to fetch execution payload");
-        Err(ProposerApiError::NoExecutionPayloadFound)
     }
 
     async fn save_delivered_payload_info(

@@ -1,16 +1,11 @@
 use std::sync::Arc;
 
 use helix_common::{task, utils::utcnow_ns, GetPayloadTrace};
-use helix_types::PayloadAndBlobsRef;
 use tokio::sync::mpsc;
-use tracing::{debug, error};
-use uuid::Uuid;
+use tracing::debug;
 
 use crate::{
-    builder::api::BuilderApi,
-    gossiper::types::{BroadcastPayloadParams, GossipedMessage},
-    proposer::ProposerApi,
-    Api,
+    builder::api::BuilderApi, gossiper::types::GossipedMessage, proposer::ProposerApi, Api,
 };
 
 pub async fn process_gossip_messages<A: Api>(
@@ -37,38 +32,6 @@ pub async fn process_gossip_messages<A: Api>(
                     //         error!(request_id = %payload.request_id, %err, "error processing
                     // gossiped payload");     }
                     // }
-                });
-            }
-            GossipedMessage::RequestPayload(payload) => {
-                let proposer = proposer_api.clone();
-                task::spawn(file!(), line!(), async move {
-                    let request_id = Uuid::new_v4();
-                    debug!(request_id = %request_id, "processing gossiped payload request");
-                    let payload_result = proposer
-                        .get_execution_payload(
-                            payload.slot,
-                            &payload.proposer_pub_key,
-                            &payload.block_hash,
-                            false,
-                        )
-                        .await;
-
-                    match payload_result {
-                        Ok(execution_payload) => {
-                            proposer
-                                .gossiper
-                                .broadcast_payload(BroadcastPayloadParams::to_proto(
-                                    PayloadAndBlobsRef::from(&execution_payload),
-                                    payload.slot,
-                                    &payload.proposer_pub_key,
-                                    proposer.chain_info.current_fork_name(),
-                                ))
-                                .await
-                        }
-                        Err(err) => {
-                            error!(%request_id, %err, "error fetching execution payload");
-                        }
-                    }
                 });
             }
 

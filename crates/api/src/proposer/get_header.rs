@@ -20,7 +20,6 @@ use tracing::{debug, error, info, warn, Instrument};
 use super::ProposerApi;
 use crate::{
     builder::simulator_2::Event,
-    gossiper::types::RequestPayloadParams,
     proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
     router::Terminating,
     Api,
@@ -198,26 +197,9 @@ impl<A: Api> ProposerApi<A> {
         )
         .await;
 
-        let proposer_pubkey_clone = params.pubkey;
-
         let fork = proposer_api.chain_info.current_fork_name();
 
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
-
-        // TODO: this is useless, delete
-        if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
-            // Request payload in the background
-            task::spawn(file!(), line!(), async move {
-                proposer_api
-                    .gossiper
-                    .request_payload(RequestPayloadParams {
-                        slot: params.slot,
-                        proposer_pub_key: proposer_pubkey_clone,
-                        block_hash: bid_block_hash,
-                    })
-                    .await
-            });
-        }
 
         let signed_bid = serde_json::to_value(signed_bid)?;
         info!(block_hash =% bid_block_hash, "delivering bid");

@@ -13,10 +13,7 @@ use tracing::error;
 use crate::{
     gossiper::{
         error::GossipError,
-        types::{
-            BroadcastGetPayloadParams, BroadcastPayloadParams, GossipedMessage,
-            RequestPayloadParams,
-        },
+        types::{BroadcastGetPayloadParams, BroadcastPayloadParams, GossipedMessage},
     },
     grpc::{
         self,
@@ -27,7 +24,6 @@ use crate::{
 
 const PAYLOAD_ID: &str = "payload";
 const GET_PAYLOAD_ID: &str = "get_payload";
-const REQUEST_PAYLOAD_ID: &str = "request_payload";
 
 #[derive(Clone)]
 pub struct GrpcGossiperClient {
@@ -146,41 +142,6 @@ impl GrpcGossiperClient {
             Err(GossipError::ClientNotConnected)
         }
     }
-
-    pub async fn request_payload(
-        &self,
-        request: grpc::RequestPayloadParams,
-    ) -> Result<(), GossipError> {
-        let _timer = GossipMetrics::out_timer(REQUEST_PAYLOAD_ID);
-        let size = request.encoded_len();
-        GossipMetrics::out_size(REQUEST_PAYLOAD_ID, size);
-
-        let request = Request::new(request);
-
-        if let Some(mut client) = self.client() {
-            let result =
-                tokio::time::timeout(Duration::from_secs(5), client.request_payload(request)).await;
-            match result {
-                Ok(Ok(_)) => {
-                    GossipMetrics::out_count(REQUEST_PAYLOAD_ID, true);
-                    Ok(())
-                }
-                Ok(Err(err)) => {
-                    error!(%err, "Client call failed.");
-                    GossipMetrics::out_count(REQUEST_PAYLOAD_ID, false);
-                    Err(GossipError::BroadcastError(err.into()))
-                }
-                Err(_) => {
-                    error!("Client call timed out.");
-                    GossipMetrics::out_count(REQUEST_PAYLOAD_ID, false);
-                    Err(GossipError::TimeoutError)
-                }
-            }
-        } else {
-            GossipMetrics::out_count(REQUEST_PAYLOAD_ID, false);
-            Err(GossipError::ClientNotConnected)
-        }
-    }
 }
 
 /// `GrpcGossiperClientManager` manages multiple gRPC connections used for gossiping new bids
@@ -257,20 +218,6 @@ impl GrpcGossiperClientManager {
             });
         }
     }
-
-    pub async fn request_payload(&self, request: RequestPayloadParams) {
-        let request = request.to_proto();
-
-        for client in self.clients.iter() {
-            let client = client.clone();
-            let request = request.clone();
-            task::spawn(file!(), line!(), async move {
-                if let Err(err) = client.request_payload(request).await {
-                    error!(%err, "failed to request payload");
-                }
-            });
-        }
-    }
 }
 
 /// `GrpcGossiperService` listens to incoming requests from the other geo-distributed instances
@@ -325,30 +272,6 @@ impl GossipService for GrpcGossiperService {
             self.gossip_sender.send(GossipedMessage::GetPayload(Box::new(request))).await
         {
             error!(%err, "failed to send get payload to builder");
-        }
-        Ok(Response::new(()))
-    }
-
-    async fn request_payload(
-        &self,
-        request: Request<grpc::RequestPayloadParams>,
-    ) -> Result<Response<()>, Status> {
-        GossipMetrics::in_count(REQUEST_PAYLOAD_ID);
-        let inner = request.into_inner();
-        let size = inner.encoded_len();
-        GossipMetrics::in_size(REQUEST_PAYLOAD_ID, size);
-
-        let request = match RequestPayloadParams::from_proto(inner) {
-            Ok(request) => request,
-            Err(err) => {
-                error!(%err, "failed to decode request payload");
-                return Ok(Response::new(()));
-            }
-        };
-        if let Err(err) =
-            self.gossip_sender.send(GossipedMessage::RequestPayload(Box::new(request))).await
-        {
-            error!(%err, "failed to send payload to builder");
         }
         Ok(Response::new(()))
     }
