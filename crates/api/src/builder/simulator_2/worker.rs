@@ -5,8 +5,8 @@ use helix_common::{
     metadata_provider::MetadataProvider, GetPayloadTrace, RelayConfig, SubmissionTrace,
 };
 use helix_types::{
-    BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission, ExecPayload,
-    ForkName, GetPayloadResponse, SigError, SignedBidSubmission,
+    BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission,
+    ExecPayload, ForkName, GetPayloadResponse, SigError, SignedBidSubmission,
     SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock, VersionedSignedProposal,
 };
 use http::{HeaderMap, HeaderValue};
@@ -24,18 +24,17 @@ use crate::{
 };
 
 // TODO: spans
-struct Worker<A: Api> {
+struct Worker {
     rx: crossbeam_channel::Receiver<WorkerJob>,
     tx: crossbeam_channel::Sender<Event>,
-    // TODO: move merging to main loop
+    // TODO: move this to auctioneer
     merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
     cache: LocalCache,
     chain_info: ChainInfo,
-    metadata_provider: A::MetadataProvider,
     relay_config: RelayConfig,
 }
 
-impl<A: Api> Worker<A> {
+impl Worker {
     fn run(mut self) {
         loop {
             let Ok(task) = self.rx.try_recv() else {
@@ -50,41 +49,47 @@ impl<A: Api> Worker<A> {
         match task {
             WorkerJob::BlockSubmission { headers, body, mut trace, res_tx } => {
                 match self.handle_block_submission(headers, body, &mut trace) {
-                    Ok((submission, sequence, merging_data)) => {
-                        let evt = Event::Submission {
+                    Ok((submission, withdrawals_root, sequence, merging_data)) => {
+                        let message = Event::Submission {
                             submission: submission.clone(),
+                            withdrawals_root,
                             sequence,
                             trace,
                             res_tx,
                         };
 
-                        let _ = self.tx.try_send(evt);
+                        if let Err(err) = self.tx.try_send(message) {
+                            error!("failed sending submisison to auctioneer");
+                        }
 
+                        // TODO: move this to auctioneer
                         if self.relay_config.block_merging_config.is_enabled {
                             if let Some(merging_data) = merging_data {
                                 let Submission::Full(payload) = submission else {
                                     return;
                                 };
 
-                                let mergeable_orders = get_mergeable_orders(&payload, merging_data)
-                                    .inspect_err(|e| warn!(%e, "failed to get mergeable orders"))
-                                    .ok();
+                                let mergeable_orders =
+                                    match get_mergeable_orders(&payload, merging_data) {
+                                        Ok(orders) => orders,
+                                        Err(err) => {
+                                            warn!(%err, "failed to get mergeable orders");
+                                            return;
+                                        }
+                                    };
 
-                                if mergeable_orders.as_ref().is_some_and(|o| !o.orders.is_empty()) {
-                                    let orders = mergeable_orders.unwrap();
-                                    let message = MergingPoolMessage::new(&payload, orders);
-                                    // We only log the error if this fails
-                                    let _ =
-                                        self.merge_pool_tx.try_send(message).inspect_err(|err| {
-                                            error!(
-                                                ?err,
-                                                "failed to send mergeable orders to merging pool"
-                                            );
-                                        });
+                                if mergeable_orders.orders.is_empty() {
+                                    return;
                                 }
+
+                                let message = MergingPoolMessage::new(&payload, mergeable_orders);
+                                if let Err(err) = self.merge_pool_tx.try_send(message) {
+                                    error!(?err, "failed to send mergeable orders to merging pool");
+                                };
                             }
                         }
                     }
+
                     Err(err) => {
                         let _ = res_tx.send(Err(err));
                     }
@@ -115,8 +120,7 @@ impl<A: Api> Worker<A> {
         headers: http::HeaderMap,
         body: bytes::Bytes,
         trace: &mut SubmissionTrace,
-    ) -> Result<(Submission, Option<u64>, Option<BlockMergingData>), BuilderApiError> {
-        trace.metadata = self.metadata_provider.get_metadata(&headers);
+    ) -> Result<(Submission, B256, Option<u64>, Option<BlockMergingData>), BuilderApiError> {
         let mut decoder = SubmissionDecoder::from_headers(&headers);
         let body = decoder.decompress(body)?;
         let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref())?;
@@ -140,14 +144,14 @@ impl<A: Api> Worker<A> {
             }
 
             let payload: DehydratedBidSubmission = decoder.decode(body)?;
-
             (Submission::Dehydrated(payload), None)
         } else {
             let (payload, merging_data) = if has_mergeable_data {
                 let payload: SignedBidSubmissionWithMergingData = decoder.decode(body)?;
                 (payload.submission, Some(payload.merging_data))
             } else {
-                (decoder.decode(body)?, None)
+                let payload: SignedBidSubmission = decoder.decode(body)?;
+                (payload, None)
             };
 
             if !skip_sigverify {
@@ -155,11 +159,12 @@ impl<A: Api> Worker<A> {
             }
 
             payload.validate_payload_ssz_lengths()?;
-
             (Submission::Full(payload), merging_data)
         };
 
-        Ok((submission, sequence, merging_data))
+        let withdrawals_root = submission.withdrawal_root();
+
+        Ok((submission, withdrawals_root, sequence, merging_data))
     }
 
     fn handle_get_payload(
@@ -193,6 +198,8 @@ impl<A: Api> Worker<A> {
 }
 
 pub type SubmissionResult = Result<(), BuilderApiError>;
+pub type GetHeaderResult = Result<BuilderBid, ProposerApiError>;
+
 pub struct GetPayloadResultData {
     pub to_proposer: GetPayloadResponse,
     pub to_publish: VersionedSignedProposal,
@@ -215,6 +222,13 @@ impl Submission {
         match self {
             Submission::Full(s) => s.slot().as_u64(),
             Submission::Dehydrated(s) => s.slot(),
+        }
+    }
+
+    fn withdrawal_root(&self) -> B256 {
+        match self {
+            Submission::Full(s) => s.withdrawals_root(),
+            Submission::Dehydrated(s) => s.withdrawal_root(),
         }
     }
 }

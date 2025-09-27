@@ -23,73 +23,57 @@ use parking_lot::RwLock;
 use ssz::Encode;
 use tracing::info;
 
-// ignoring warning because submissions variant will be 99% of messages
-#[allow(clippy::large_enum_variant)]
-pub enum BidSorterMessage {
-    /// Pre-validated submissions ready to be processed. Submissions could come from:
-    /// - V1 submissions, either optimistic, or non-optimistic after simulation
-    /// - V2/V3 submissions
-    Submission {
-        bid: Bid,
-        builder_pubkey: BlsPublicKeyBytes,
-        slot: u64,
-        header: BuilderBid,
-        /// Preferences related to block merging.
-        merging_preferences: BlockMergingPreferences,
-        simulation_time_ns: u64,
-        before_sorter_ns: u64,
-    },
+/// Pre-validated submissions ready to be processed. Submissions could come from:
+/// - V1 submissions, either optimistic, or non-optimistic after simulation
+/// - V2/V3 submissions
+pub struct BidSorterMessage {
+    bid: Bid,
+    builder_pubkey: BlsPublicKeyBytes,
+    slot: u64,
+    header: BuilderBid,
+    simulation_time_ns: u64,
+    before_sorter_ns: u64,
 }
 
 impl BidSorterMessage {
     pub fn new_from_block_submission(
         submission: &SignedBidSubmission,
         trace: &SubmissionTrace,
-        optimistic_version: OptimisticVersion,
-        merging_preferences: BlockMergingPreferences,
         before_sorter_ns: u64,
+        simulation_time_ns: u64,
         withdrawals_root: B256,
     ) -> Self {
         let bid_trace = submission.bid_trace();
         let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
-        let simulation_time_ns = if optimistic_version.is_optimistic() {
-            0
-        } else {
-            // this removes also the optimistic check overhead
-            trace.simulation.saturating_sub(trace.signature)
-        };
-
         let header = bid_submission_to_builder_bid_unsigned(submission, withdrawals_root);
-        Self::Submission {
+        Self {
             bid,
             builder_pubkey: bid_trace.builder_pubkey,
             slot: bid_trace.slot,
             header,
-            merging_preferences,
             simulation_time_ns,
             before_sorter_ns,
         }
     }
 
-    pub fn new_from_header_submission(
-        submission: &SignedHeaderSubmission,
-        on_receive_ns: u64,
-        before_sorter_ns: u64,
-    ) -> Self {
-        let bid_trace = submission.bid_trace();
-        let bid = Bid { value: bid_trace.value, on_receive_ns };
+    // pub fn new_from_header_submission(
+    //     submission: &SignedHeaderSubmission,
+    //     on_receive_ns: u64,
+    //     before_sorter_ns: u64,
+    // ) -> Self {
+    //     let bid_trace = submission.bid_trace();
+    //     let bid = Bid { value: bid_trace.value, on_receive_ns };
 
-        let header = header_submission_to_builder_bid_unsigned(submission);
-        Self::Submission {
-            bid,
-            builder_pubkey: bid_trace.builder_pubkey,
-            slot: bid_trace.slot,
-            header,
-            merging_preferences: BlockMergingPreferences::default(),
-            simulation_time_ns: 0,
-            before_sorter_ns,
-        }
-    }
+    //     let header = header_submission_to_builder_bid_unsigned(submission);
+    //     Self::Submission {
+    //         bid,
+    //         builder_pubkey: bid_trace.builder_pubkey,
+    //         slot: bid_trace.slot,
+    //         header,
+    //         simulation_time_ns: 0,
+    //         before_sorter_ns,
+    //     }
+    // }
 }
 
 /// Latest cancellable bid
@@ -142,8 +126,8 @@ pub struct BidSorter {
     /// All bid entries for the current slot, used for sorting
     bids: HashMap<BlsPublicKeyBytes, BidEntry>,
     /// All headers received for this slot
-    /// on_receive_ns -> (header, merging_preferences)
-    headers: HashMap<u64, (BuilderBid, BlockMergingPreferences)>,
+    /// on_receive_ns -> header
+    headers: HashMap<u64, BuilderBid>,
     /// Demoted builders in this slot for live demotions
     demotions: HashSet<BlsPublicKeyBytes>,
     /// Current best bid
@@ -166,13 +150,14 @@ impl BidSorter {
 
     pub fn sort(
         &mut self,
-        bid: Bid,
-        builder_pubkey: BlsPublicKeyBytes,
-        slot: u64,
-        header: BuilderBid,
-        merging_preferences: BlockMergingPreferences,
-        simulation_time_ns: u64,
-        before_sorter_ns: u64,
+        BidSorterMessage {
+            bid,
+            builder_pubkey,
+            slot,
+            header,
+            simulation_time_ns,
+            before_sorter_ns,
+        }: BidSorterMessage,
     ) {
         let recv_ns = utcnow_ns();
 
@@ -188,7 +173,7 @@ impl BidSorter {
             return;
         }
 
-        self.headers.insert(bid.on_receive_ns, (header, merging_preferences));
+        self.headers.insert(bid.on_receive_ns, header);
         self.process_header(builder_pubkey, bid);
 
         // telemetry
@@ -316,7 +301,7 @@ impl BidSorter {
     }
 
     fn update_top_bid(&mut self, builder_pubkey: BlsPublicKeyBytes, bid: Bid) {
-        let Some((h, merging_preferences)) = self.headers.get(&bid.on_receive_ns) else {
+        let Some(h) = self.headers.get(&bid.on_receive_ns) else {
             // this should never happen
             return;
         };

@@ -15,8 +15,6 @@ pub struct RelayConfig {
     #[serde(default)]
     pub website: WebsiteConfig,
     pub postgres: PostgresConfig,
-    #[serde(default)]
-    pub broadcasters: Vec<BroadcasterConfig>,
     pub simulators: Vec<SimulatorConfig>,
     #[serde(default)]
     pub beacon_clients: Vec<BeaconClientConfig>,
@@ -181,11 +179,6 @@ pub const fn default_u64<const D: u64>() -> u64 {
 pub struct AlertsConfig {
     pub telegram_bot_token: String,
     pub chat_id: i64,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum BroadcasterConfig {
-    BeaconClient(BeaconClientConfig),
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -504,9 +497,6 @@ fn test_config() {
     config
         .beacon_clients
         .push(BeaconClientConfig { url: Url::parse("http://localhost:8080").unwrap() });
-    config.broadcasters.push(BroadcasterConfig::BeaconClient(BeaconClientConfig {
-        url: Url::parse("http://localhost:8080").unwrap(),
-    }));
     config.network_config = NetworkConfig::Custom {
         dir_path: "test".to_string(),
         genesis_validator_root: Default::default(),

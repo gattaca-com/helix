@@ -10,7 +10,6 @@ use eyre::eyre;
 use helix_api::{start_admin_service, start_api_service, Api};
 use helix_beacon::start_beacon_client;
 use helix_common::{
-    bid_sorter::{start_bid_sorter, BestGetHeader, BidSorterMessage},
     load_config, load_keypair,
     local_cache::LocalCache,
     metadata_provider::DefaultMetadataProvider,
@@ -83,20 +82,15 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     let chain_info = Arc::new(config.network_config.to_chain_info());
     let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info.clone()));
 
-    let (sorter_tx, sorter_rx) = crossbeam_channel::bounded(10_000);
-
     let known_validators_loaded = Arc::new(AtomicBool::default());
 
     let beacon_client = start_beacon_client(&config);
     let db = start_db_service(&config, known_validators_loaded.clone()).await?;
-    let auctioneer = start_auctioneer(sorter_tx.clone(), db.clone()).await?;
+    let auctioneer = start_auctioneer(db.clone()).await?;
 
     let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
-    let shared_best_header = BestGetHeader::new();
 
-    if config.router_config.validate_bid_sorter()? {
-        start_bid_sorter(sorter_rx, top_bid_tx.clone(), shared_best_header.clone());
-    }
+    if config.router_config.validate_bid_sorter()? {}
 
     let current_slot_info = start_housekeeper(
         db.clone(),
@@ -104,7 +98,6 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         &config,
         beacon_client.clone(),
         chain_info.clone(),
-        sorter_tx.clone(),
     )
     .await
     .map_err(|e| eyre!("housekeeper init: {e}"))?;
@@ -124,9 +117,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         current_slot_info,
         known_validators_loaded,
         terminating.clone(),
-        sorter_tx,
         top_bid_tx,
-        shared_best_header,
     );
 
     let termination_grace_period = config.router_config.shutdown_delay_ms;
@@ -156,11 +147,8 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     Ok(())
 }
 
-pub async fn start_auctioneer(
-    sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
-    db: Arc<PostgresDatabaseService>,
-) -> eyre::Result<Arc<LocalCache>> {
-    let auctioneer = Arc::new(LocalCache::new(sorter_tx));
+pub async fn start_auctioneer(db: Arc<PostgresDatabaseService>) -> eyre::Result<Arc<LocalCache>> {
+    let auctioneer = Arc::new(LocalCache::new());
     let auctioneer_clone = auctioneer.clone();
     tokio::spawn(async move {
         let builder_infos = db.get_all_builder_infos().await.expect("failed to load builder infos");

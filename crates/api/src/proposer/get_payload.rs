@@ -10,17 +10,14 @@ use helix_common::{
     GetPayloadTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
-use helix_types::{
-    BlsPublicKeyBytes, GetPayloadResponse, PayloadAndBlobs, Slot, SlotClockTrait,
-    VersionedSignedProposal,
-};
+use helix_types::{BlsPublicKeyBytes, GetPayloadResponse, PayloadAndBlobs, Slot, SlotClockTrait};
 use tokio::{sync::oneshot, time::sleep};
-use tracing::{error, info, warn, Instrument};
+use tracing::{error, info, warn};
 
 use super::ProposerApi;
 use crate::{
     builder::simulator_2::worker::GetPayloadResultData, constants::GET_PAYLOAD_REQUEST_CUTOFF_MS,
-    gossiper::types::RequestPayloadParams, proposer::error::ProposerApiError, Api,
+    proposer::error::ProposerApiError, Api,
 };
 
 impl<A: Api> ProposerApi<A> {
@@ -37,7 +34,7 @@ impl<A: Api> ProposerApi<A> {
 
         let trace = GetPayloadTrace::init_from_timings(timings);
 
-        // TODO: l
+        // TODO: do this
         let slot = 0;
         let block_hash = Default::default();
         let proposer_pubkey = BlsPublicKeyBytes::default();
@@ -105,6 +102,12 @@ impl<A: Api> ProposerApi<A> {
             fork,
         }: GetPayloadResultData,
     ) -> Result<GetPayloadResponse, ProposerApiError> {
+        // TODO: this serializes the proto, and spawns some tasks so needs a runtime
+        // ctx.gossiper.broadcast_get_payload(BroadcastGetPayloadParams {
+        //     signed_blinded_beacon_block: blinded.clone(),
+        //     request_id: Default::default(),
+        // });
+
         let user_agent = None;
         let is_trusted_proposer = self.auctioneer.is_trusted_proposer(&proposer_pubkey);
 
@@ -247,45 +250,45 @@ impl<A: Api> ProposerApi<A> {
         // }
 
         let mut retry = 0; // Try at least once to cover case where get_payload is called too late.
-        while retry == 0 || utcnow_ms() < slot_cutoff_millis {
-            match self.auctioneer.get_execution_payload(
-                slot,
-                pub_key,
-                block_hash,
-                self.chain_info.current_fork_name(),
-            ) {
-                Some(versioned_payload) => return Ok(versioned_payload),
-                None => {
-                    if retry % 10 == 0 {
-                        // 10 * RETRY_DELAY = 200ms
-                        warn!("execution payload not found");
-                    }
-                    if retry == 0 && request_missing_payload {
-                        let proposer_pubkey_clone = *pub_key;
-                        let gossiper = self.gossiper.clone();
-                        let block_hash = *block_hash;
+                           // while retry == 0 || utcnow_ms() < slot_cutoff_millis {
+                           //     match self.auctioneer.get_execution_payload(
+                           //         slot,
+                           //         pub_key,
+                           //         block_hash,
+                           //         self.chain_info.current_fork_name(),
+                           //     ) {
+                           //         Some(versioned_payload) => return Ok(versioned_payload),
+                           //         None => {
+                           //             if retry % 10 == 0 {
+                           //                 // 10 * RETRY_DELAY = 200ms
+                           //                 warn!("execution payload not found");
+                           //             }
+                           //             if retry == 0 && request_missing_payload {
+                           //                 let proposer_pubkey_clone = *pub_key;
+                           //                 let gossiper = self.gossiper.clone();
+                           //                 let block_hash = *block_hash;
 
-                        task::spawn(
-                            file!(),
-                            line!(),
-                            async move {
-                                gossiper
-                                    .request_payload(RequestPayloadParams {
-                                        slot,
-                                        proposer_pub_key: proposer_pubkey_clone,
-                                        block_hash,
-                                    })
-                                    .await
-                            }
-                            .in_current_span(),
-                        );
-                    }
-                }
-            }
+        //                 task::spawn(
+        //                     file!(),
+        //                     line!(),
+        //                     async move {
+        //                         gossiper
+        //                             .request_payload(RequestPayloadParams {
+        //                                 slot,
+        //                                 proposer_pub_key: proposer_pubkey_clone,
+        //                                 block_hash,
+        //                             })
+        //                             .await
+        //                     }
+        //                     .in_current_span(),
+        //                 );
+        //             }
+        //         }
+        //     }
 
-            retry += 1;
-            sleep(RETRY_DELAY).await;
-        }
+        //     retry += 1;
+        //     sleep(RETRY_DELAY).await;
+        // }
 
         // if is_v3 && self.auctioneer.has_header_been_served(block_hash) {
         //     warn!("v3 payload request was made, but no payload found. The builder may have failed
@@ -318,60 +321,6 @@ impl<A: Api> ProposerApi<A> {
                 error!(%err, "error saving payload to database");
             }
         });
-    }
-
-    // async fn demote_builder(
-    //     &self,
-    //     slot: u64,
-    //     builder: &BlsPublicKeyBytes,
-    //     block_hash: &B256,
-    //     reason: &str,
-    // ) {
-    //     if let Err(err) = self.auctioneer.demote_builder(builder) {
-    //         error!(%err, %builder, "failed to demote builder in auctioneer");
-    //     }
-
-    //     if let Err(err) =
-    //         self.db.db_demote_builder(slot, builder, block_hash, reason.to_string()).await
-    //     {
-    //         error!(%err,  %builder, "Failed to demote builder in database");
-    //     }
-    // }
-
-    /// `broadcast_signed_block` sends the provided signed block to all registered broadcasters
-    fn broadcast_signed_block(
-        &self,
-        signed_block: Arc<VersionedSignedProposal>,
-        broadcast_validation: Option<BroadcastValidation>,
-    ) {
-        info!("broadcasting signed block");
-
-        if self.broadcasters.is_empty() {
-            warn!("no broadcasters registered");
-            return;
-        }
-
-        for broadcaster in self.broadcasters.iter() {
-            let broadcaster: Arc<helix_beacon::BlockBroadcaster> = broadcaster.clone();
-            let block = signed_block.clone();
-            let broadcast_validation = broadcast_validation.clone();
-
-            let fork_name = block.signed_block.fork_name_unchecked();
-
-            task::spawn(file!(), line!(), async move {
-                info!(broadcaster = %broadcaster.identifier(), "broadcast_signed_block");
-
-                if let Err(err) =
-                    broadcaster.broadcast_block(block, broadcast_validation, fork_name).await
-                {
-                    warn!(
-                        broadcaster = broadcaster.identifier(),
-                        %err,
-                        "error broadcasting signed block",
-                    );
-                }
-            });
-        }
     }
 }
 

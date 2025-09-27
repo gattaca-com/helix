@@ -216,7 +216,6 @@ impl ChainEventUpdater {
         let update = SlotUpdate { slot: slot.into(), new_duties: Some(new_duties), next_duty };
 
         self.curr_slot_info.handle_new_slot(update, &self.chain_info);
-        self.auctioneer.process_slot(slot);
     }
 
     // Handles a new payload attributes event

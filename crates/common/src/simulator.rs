@@ -76,6 +76,10 @@ impl BlockSimError {
             _ => false,
         }
     }
+
+    pub fn is_demotable(&self) -> bool {
+        !self.is_already_known() && !self.is_temporary() && !self.is_too_old()
+    }
 }
 
 #[cfg(test)]

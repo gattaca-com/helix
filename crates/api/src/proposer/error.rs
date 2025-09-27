@@ -178,6 +178,12 @@ pub enum ProposerApiError {
 
     #[error(transparent)]
     SigError(#[from] SigError),
+
+    #[error("already delivering payload")]
+    DeliveringPayload,
+
+    #[error("duplicate payload request")]
+    GetPayloadAlreadyReceived,
 }
 
 impl IntoResponse for ProposerApiError {
@@ -234,7 +240,9 @@ impl IntoResponse for ProposerApiError {
             ProposerApiError::ParentHashUnknownForSlot { .. } |
             ProposerApiError::BlobKzgCommitmentsMismatch |
             ProposerApiError::SszError(_) |
-            ProposerApiError::SigError(_) => StatusCode::BAD_REQUEST,
+            ProposerApiError::SigError(_) |
+            ProposerApiError::DeliveringPayload |
+            ProposerApiError::GetPayloadAlreadyReceived => StatusCode::BAD_REQUEST,
 
             ProposerApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
 

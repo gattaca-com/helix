@@ -40,6 +40,7 @@ pub struct BuilderApi<A: Api> {
     /// Failsafe: if we fail don't have any synced client we pause all optimistic submissions
     pub accept_optimistic: Arc<AtomicBool>,
     pub worker_tx: crossbeam_channel::Sender<WorkerJob>,
+    pub metadata_provider: Arc<A::MetadataProvider>,
 }
 
 impl<A: Api> BuilderApi<A> {
@@ -53,6 +54,7 @@ impl<A: Api> BuilderApi<A> {
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
         accept_optimistic: Arc<AtomicBool>,
         worker_tx: crossbeam_channel::Sender<WorkerJob>,
+        metadata_provider: Arc<A::MetadataProvider>,
     ) -> Self {
         // let tx_root_cache = DashMap::with_capacity(1000);
 
@@ -87,6 +89,7 @@ impl<A: Api> BuilderApi<A> {
             failsafe_triggered: Arc::new(false.into()),
             accept_optimistic,
             worker_tx,
+            metadata_provider,
         }
     }
 

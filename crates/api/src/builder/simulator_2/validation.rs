@@ -22,6 +22,7 @@ impl SortingData {
     pub fn validate_submission(
         &mut self,
         payload: &SignedBidSubmission,
+        withdrawals_root: &B256,
         sequence: Option<u64>,
         builder_info: &BuilderInfo,
     ) -> Result<(), BuilderApiError> {
@@ -42,8 +43,7 @@ impl SortingData {
         self.check_duplicate_submission(*payload.block_hash())?;
 
         // TODO: last slot delivered in get_payload state
-        // TODO: compute withdrwals root in the worker
-        self.validate_submission_data(payload, &payload.withdrawals_root())?;
+        self.validate_submission_data(payload, &withdrawals_root)?;
 
         // trusted builder
         if self.check_if_trusted_builder(payload, builder_info) {

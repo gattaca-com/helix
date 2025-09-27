@@ -6,9 +6,10 @@ use alloy_primitives::{
 };
 use helix_common::{bid_submission::BidSubmission, simulator::BlockSimError, utils::utcnow_ms};
 use helix_types::{
-    mock_public_key_bytes, BlobWithMetadata, BlobsBundle, BlsPublicKeyBytes, BuilderBid,
-    ExecutionPayloadHeader, KzgCommitments, MergeableOrder, MergeableOrderWithOrigin,
-    MergeableOrders, PayloadAndBlobs, SignedBidSubmission, ValidatorRegistrationData,
+    mock_public_key_bytes, BlobWithMetadata, BlobsBundle, BlockMergingPreferences,
+    BlsPublicKeyBytes, BuilderBid, ExecutionPayloadHeader, KzgCommitments, MergeableOrder,
+    MergeableOrderWithOrigin, MergeableOrders, PayloadAndBlobs, SignedBidSubmission,
+    ValidatorRegistrationData,
 };
 use parking_lot::RwLock;
 use tokio::{
@@ -249,7 +250,9 @@ impl<A: Api> ProposerApi<A> {
             return Ok(MergingTaskState::RetryFetch);
         };
         let slot = next_duty.slot.into();
-        let best_header_opt = self.shared_best_header.load_any(slot);
+        // TODO:
+        // let best_header_opt = self.shared_best_header.load_any(slot);
+        let best_header_opt: Option<(BuilderBid, BlockMergingPreferences)> = None;
         // If there are no bids, wait for a moment to avoid busy waiting.
         let Some((best_bid, merging_preferences)) = best_header_opt else {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -317,12 +320,14 @@ impl<A: Api> ProposerApi<A> {
             execution_payload: response.execution_payload,
             blobs_bundle: merged_blobs_bundle,
         };
-        self.auctioneer.save_execution_payload(
-            slot,
-            &proposer_pubkey,
-            &block_hash,
-            payload_and_blobs,
-        );
+
+        // TODO: send payload to auctioneer
+        // self.auctioneer.save_execution_payload(
+        //     slot,
+        //     &proposer_pubkey,
+        //     &block_hash,
+        //     payload_and_blobs,
+        // );
 
         // Update best merged block
         let parent_block_hash = new_bid.header.parent_hash;

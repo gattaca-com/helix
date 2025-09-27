@@ -1,9 +1,11 @@
 use std::{hash::Hasher, sync::Arc};
 
 use alloy_eips::eip7691::MAX_BLOBS_PER_BLOCK_ELECTRA;
+use alloy_primitives::B256;
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
+use tree_hash::TreeHash;
 
 use crate::{
     bid_submission,
@@ -27,6 +29,12 @@ impl DehydratedBidSubmission {
     pub fn builder_pubkey(&self) -> &BlsPublicKeyBytes {
         match self {
             DehydratedBidSubmission::Electra(s) => &s.message.builder_pubkey,
+        }
+    }
+
+    pub fn withdrawal_root(&self) -> B256 {
+        match self {
+            DehydratedBidSubmission::Electra(s) => s.execution_payload.withdrawals.tree_hash_root(),
         }
     }
 

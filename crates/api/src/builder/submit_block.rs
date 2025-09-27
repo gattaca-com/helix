@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use axum::Extension;
-use helix_common::{self, utils::extract_request_id, RequestTimings, SubmissionTrace};
+use helix_common::{
+    self, metadata_provider::MetadataProvider, utils::extract_request_id, RequestTimings,
+    SubmissionTrace,
+};
 use http::HeaderMap;
 use tokio::sync::oneshot;
 use tracing::error;
@@ -27,7 +30,8 @@ impl<A: Api> BuilderApi<A> {
         headers: HeaderMap,
         body: bytes::Bytes,
     ) -> Result<(), BuilderApiError> {
-        let trace = SubmissionTrace::init_from_timings(timings);
+        let mut trace = SubmissionTrace::init_from_timings(timings);
+        trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         let (res_tx, res_rx) = oneshot::channel();
         let worker_job = WorkerJob::BlockSubmission { headers, body, trace, res_tx };

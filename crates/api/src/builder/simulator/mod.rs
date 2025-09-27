@@ -16,6 +16,7 @@ pub mod client;
 
 use crate::builder::simulator_2::worker::SubmissionResult;
 
+// TODO: refactor this in a SignedBidSubmission + extra fields
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockSimRequest {
     #[serde(with = "serde_utils::quoted_u64")]
@@ -144,6 +145,7 @@ pub struct SimulatorRequest {
     pub on_receive_ns: u64,
     pub is_top_bid: bool,
     pub is_optimistic: bool,
+    pub submission: SignedBidSubmission,
     pub res_tx: Option<oneshot::Sender<SubmissionResult>>,
 }
 

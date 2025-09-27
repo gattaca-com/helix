@@ -16,7 +16,7 @@ use std::sync::{
 use axum::{response::IntoResponse, Extension};
 pub use block_merging::MergingPoolMessage;
 pub use error::*;
-use helix_beacon::{multi_beacon_client::MultiBeaconClient, BlockBroadcaster};
+use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
     alerts::AlertManager, chain_info::ChainInfo, local_cache::LocalCache,
     signing::RelaySigningContext, RelayConfig, ValidatorPreferences,
@@ -42,7 +42,6 @@ pub struct ProposerApi<A: Api> {
     pub auctioneer: Arc<LocalCache>,
     pub db: Arc<A::DatabaseService>,
     pub gossiper: Arc<GrpcGossiperClientManager>,
-    pub broadcasters: Vec<Arc<BlockBroadcaster>>,
     pub multi_beacon_client: Arc<MultiBeaconClient>,
     pub metadata_provider: Arc<A::MetadataProvider>,
     pub signing_context: Arc<RelaySigningContext>,
@@ -73,7 +72,6 @@ impl<A: Api> ProposerApi<A> {
         gossiper: Arc<GrpcGossiperClientManager>,
         metadata_provider: Arc<A::MetadataProvider>,
         signing_context: Arc<RelaySigningContext>,
-        broadcasters: Vec<Arc<BlockBroadcaster>>,
         multi_beacon_client: Arc<MultiBeaconClient>,
         chain_info: Arc<ChainInfo>,
         validator_preferences: Arc<ValidatorPreferences>,
@@ -88,7 +86,6 @@ impl<A: Api> ProposerApi<A> {
             auctioneer,
             db,
             gossiper,
-            broadcasters,
             signing_context,
             multi_beacon_client,
             chain_info,

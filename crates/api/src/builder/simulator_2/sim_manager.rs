@@ -8,8 +8,11 @@ use std::{
 };
 
 use alloy_primitives::B256;
-use helix_common::{metrics::SimulatorMetrics, simulator::BlockSimError, SimulatorConfig};
-use helix_types::BlsPublicKeyBytes;
+use helix_common::{
+    bid_submission::BidSubmission, metrics::SimulatorMetrics, simulator::BlockSimError,
+    SimulatorConfig,
+};
+use helix_types::{BlsPublicKeyBytes, SignedBidSubmission};
 use tokio::{
     sync::{mpsc, oneshot},
     task::JoinSet,
@@ -47,8 +50,13 @@ pub struct SimulationResult {
     pub id: usize,
     // TODO: move up
     pub paused_until: Option<Instant>,
-    pub block_hash: B256,
-    pub builder_pubkey: BlsPublicKeyBytes,
+    pub submission: SignedBidSubmission,
+}
+
+impl SimulationResult {
+    pub fn was_optimistic_sim(&self) -> bool {
+        self.res_tx.is_none()
+    }
 }
 
 // TODO:
@@ -189,8 +197,7 @@ impl SimulatorManager {
         let tx = self.sim_result_tx.clone();
         // TODO: pass a runtime to spawn on
         tokio::spawn(async move {
-            let block_hash = req.request.message.block_hash;
-            let builder_pubkey = *req.builder_pubkey();
+            let block_hash = req.submission.block_hash();
             debug!(%block_hash, "sending simulation request");
 
             SimulatorMetrics::sim_count(req.is_optimistic);
@@ -216,8 +223,7 @@ impl SimulatorManager {
                 paused_until,
                 id,
                 res_tx: req.res_tx,
-                block_hash,
-                builder_pubkey,
+                submission: req.submission,
             };
 
             let _ = tx.try_send(Event::SimResult(result));

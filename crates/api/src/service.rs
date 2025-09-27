@@ -8,12 +8,9 @@ use std::{
 };
 
 use bytes::Bytes;
-use helix_beacon::{
-    beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient, BlockBroadcaster,
-};
+use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
-    chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
-    BroadcasterConfig, RelayConfig,
+    chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext, RelayConfig,
 };
 use helix_housekeeper::CurrentSlotInfo;
 use moka::sync::Cache;
@@ -46,8 +43,6 @@ pub async fn run_api_service<A: Api>(
     terminating: Arc<AtomicBool>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
 ) {
-    let broadcasters = init_broadcasters(&config).await;
-
     let gossiper = Arc::new(
         GrpcGossiperClientManager::new(config.relays.iter().map(|cfg| cfg.url.clone()).collect())
             .await
@@ -60,7 +55,7 @@ pub async fn run_api_service<A: Api>(
     let (merge_pool_tx, pool_rx) = tokio::sync::mpsc::channel(10_000);
     let (merge_requests_tx, merge_requests_rx) = mpsc::channel(10_000);
 
-    let (worker_tx, woker_rx) = crossbeam_channel::bounded(10_000);
+    let (worker_tx, worker_rx) = crossbeam_channel::bounded(10_000);
     let (auctioneer_tx, auctioneer_rx) = crossbeam_channel::bounded(10_000);
 
     let accept_optimistic = Arc::new(AtomicBool::new(true));
@@ -75,6 +70,7 @@ pub async fn run_api_service<A: Api>(
         top_bid_tx,
         accept_optimistic,
         worker_tx.clone(),
+        metadata_provider.clone(),
     );
     let builder_api = Arc::new(builder_api);
 
@@ -101,7 +97,6 @@ pub async fn run_api_service<A: Api>(
         gossiper.clone(),
         metadata_provider.clone(),
         relay_signing_context,
-        broadcasters,
         multi_beacon_client,
         chain_info.clone(),
         validator_preferences.clone(),
@@ -150,18 +145,4 @@ pub async fn run_api_service<A: Api>(
         Ok(_) => info!("Server exited successfully"),
         Err(e) => error!("Server exited with error: {e}"),
     }
-}
-
-async fn init_broadcasters(config: &RelayConfig) -> Vec<Arc<BlockBroadcaster>> {
-    let mut broadcasters = vec![];
-    for cfg in &config.broadcasters {
-        match cfg {
-            BroadcasterConfig::BeaconClient(cfg) => {
-                broadcasters.push(Arc::new(BlockBroadcaster::BeaconClient(
-                    BeaconClient::from_config(cfg.clone()),
-                )));
-            }
-        }
-    }
-    broadcasters
 }
