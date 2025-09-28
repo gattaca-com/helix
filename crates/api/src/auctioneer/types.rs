@@ -2,9 +2,7 @@ use std::time::Instant;
 
 use alloy_primitives::B256;
 use helix_common::{
-    api::builder_api::{
-        BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
-    },
+    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     bid_submission::BidSubmission,
     GetPayloadTrace, SubmissionTrace,
 };
@@ -73,7 +71,7 @@ pub enum WorkerJob {
     },
 }
 
-// do we need coordinates here
+#[derive(Clone)]
 pub struct SlotData {
     /// Head slot + 1, builders are bidding to build this slot
     pub bid_slot: Slot,
@@ -104,6 +102,17 @@ impl SlotData {
 }
 
 pub enum Event {
+    // Assume this data is already validate, ie valid this bid_slot
+    SlotData {
+        /// Head slot + 1, builders are bidding to build this slot
+        bid_slot: Slot,
+        /// Data about the validator registration
+        registration_data: Option<BuilderGetValidatorsResponseEntry>,
+        /// Payload attributes for the incoming blocks
+        payload_attributes: Option<PayloadAttributesUpdate>,
+        /// Inclusion list
+        il: Option<InclusionListWithMetadata>,
+    },
     Submission {
         submission: Submission,
         withdrawals_root: B256,
@@ -125,16 +134,6 @@ pub enum Event {
         res_tx: oneshot::Sender<GetPayloadResult>,
     },
     GossipPayload(BroadcastPayloadParams),
-    SlotData {
-        /// Head slot + 1, builders are bidding to build this slot
-        bid_slot: Slot,
-        /// Data about the validator registration
-        registration_data: Option<BuilderGetValidatorsResponseEntry>,
-        /// Payload attributes for the incoming blocks
-        payload_attributes: Option<PayloadAttributesUpdate>,
-        /// Inclusion list
-        il: Option<InclusionListWithKey>,
-    },
     SimResult(SimulationResult),
     SimulatorSync {
         id: usize,

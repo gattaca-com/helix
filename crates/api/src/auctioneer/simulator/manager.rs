@@ -126,12 +126,7 @@ impl SimulatorManager {
     }
 
     pub fn handle_sim_request(&mut self, req: SimulatorRequest) {
-        if req.bid_slot() > self.last_bid_slot {
-            self.handle_new_slot(req.bid_slot());
-        } else if req.bid_slot() < self.last_bid_slot {
-            self.local_telemetry.stale_sim_reqs += 1;
-            return;
-        }
+        assert_eq!(req.bid_slot(), self.last_bid_slot);
 
         self.local_telemetry.sims_reqs += 1;
         if let Some(id) = self.next_sim_client() {
@@ -244,8 +239,7 @@ impl SimulatorManager {
             .map(|(i, _)| i)
     }
 
-    // TODO: local telemetry
-    fn handle_new_slot(&mut self, bid_slot: u64) {
+    pub fn on_new_slot(&mut self, bid_slot: u64) {
         self.report();
         self.last_bid_slot = bid_slot;
         self.requests.clear(bid_slot);

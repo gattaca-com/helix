@@ -10,12 +10,12 @@ mod types;
 mod validation;
 mod worker;
 
-use std::sync::Arc;
+use std::{cmp::Ordering, sync::Arc};
 
 use alloy_primitives::B256;
 pub use handle::AuctioneerHandle;
 use helix_common::{
-    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithKey},
+    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
     local_cache::LocalCache,
     RelayConfig,
@@ -111,10 +111,10 @@ enum State {
     /// - Next proposer is not registered
     /// - Waiting for housekeeper to send all slot data to start sorting
     Slot {
-        slot: Slot,
+        bid_slot: Slot,
         registration_data: Option<BuilderGetValidatorsResponseEntry>,
         payload_attributes: Option<PayloadAttributesUpdate>,
-        il: Option<InclusionListWithKey>,
+        il: Option<InclusionListWithMetadata>,
     },
 
     /// Next proposer is registered and we are processing builder bids
@@ -127,7 +127,7 @@ enum State {
 impl Default for State {
     fn default() -> Self {
         Self::Slot {
-            slot: Slot::new(0),
+            bid_slot: Slot::new(0),
             registration_data: None,
             payload_attributes: None,
             il: None,
@@ -138,33 +138,90 @@ impl Default for State {
 impl State {
     // TODO: state transitions
     fn step<A: Api>(&mut self, event: Event, ctx: &mut Context<A>) {
-        match (self, event) {
+        match (&self, event) {
             ///////////// LIFECYCLE EVENTS (ALWAYS VALID) /////////////
 
-            // new slot
-            (_, Event::SlotData { bid_slot, registration_data, payload_attributes, il }) => {
-                // if bid_slot < ctx.last_bid_slot {
-                //     return;
-                // }
+            // new slot data
+            (
+                State::Slot {
+                    bid_slot: curr_slot,
+                    registration_data: curr_reg,
+                    payload_attributes: curr_att,
+                    il: curr_il,
+                },
+                Event::SlotData { bid_slot, registration_data, payload_attributes, il },
+            ) => {
+                let (reg, att, il) = match bid_slot.cmp(curr_slot) {
+                    Ordering::Less => return,
+                    Ordering::Equal => {
+                        // more data for current slot, maybe we can start sorting
+                        // assume we can't receive different data for the same slot
+                        let registration_data = curr_reg.clone().or(registration_data);
+                        let payload_attributes = curr_att.clone().or(payload_attributes);
+                        let il = curr_il.clone().or(il);
 
-                // if bid_slot > ctx.last_bid_slot {
-                // ctx.on_new_slot(Default::default());
-                // match (registration_data, payload_attributes) {
-                //     (Some(registration_data), Some(payload_attributes)) => {
-                //         let state = SortingData {
-                //             slot: bid_slot,
-                //             sort: todo!(),
-                //             seen_block_hashes: todo!(),
-                //             sequence: todo!(),
-                //             hydration_cache: todo!(),
-                //             payloads: todo!(),
-                //             inclusion_list: todo!(),
-                //         };
-                //         *self = State::Sorting(())
-                //     }
-                // }
-                // }
+                        (registration_data, payload_attributes, il)
+                    }
+                    Ordering::Greater => {
+                        info!(%bid_slot, "received new slot data");
+                        ctx.on_new_slot(bid_slot);
+
+                        (registration_data, payload_attributes, il)
+                    }
+                };
+
+                *self = Self::process_slot_data(bid_slot, reg, att, il, &ctx.chain_info);
             }
+
+            // new slot, either IL or slot was delivered by another relay
+            (
+                State::Sorting(slot_data),
+                Event::SlotData { bid_slot, registration_data, payload_attributes, il },
+            ) => match bid_slot.cmp(&slot_data.bid_slot) {
+                Ordering::Less => return,
+                Ordering::Equal => {
+                    // add inclusion list
+                    if slot_data.il.is_none() && il.is_some() {
+                        // received new IL
+                        // ugly clone but should be relatively rare
+                        let slot_data = SlotData { il, ..slot_data.clone() };
+                        *self = State::Sorting(slot_data);
+                    }
+                }
+                Ordering::Greater => {
+                    // another relay delivered the payload
+                    *self = Self::process_slot_data(
+                        bid_slot,
+                        registration_data,
+                        payload_attributes,
+                        il,
+                        &ctx.chain_info,
+                    );
+                }
+            },
+
+            // new slot, maybe delivered by us
+            (
+                State::Broadcasting { slot_data, block_hash },
+                Event::SlotData { bid_slot, registration_data, payload_attributes, il },
+            ) => match bid_slot.cmp(&slot_data.bid_slot) {
+                Ordering::Less | Ordering::Equal => return,
+                Ordering::Greater => {
+                    if let Some(attributes) = &payload_attributes {
+                        if &attributes.parent_hash != block_hash {
+                            warn!(maybe_missed_slot =% slot_data.bid_slot, parent_hash =% attributes.parent_hash, broadcasting_hash =% block_hash, "new slot while broacasting different block, was the slot missed?");
+                        }
+
+                        *self = Self::process_slot_data(
+                            bid_slot,
+                            registration_data,
+                            payload_attributes,
+                            il,
+                            &ctx.chain_info,
+                        );
+                    }
+                }
+            },
 
             // simulator sync status
             (_, Event::SimulatorSync { id, is_synced }) => {
@@ -288,8 +345,8 @@ impl State {
             }
 
             // gossip payload unregistered
-            (State::Slot { slot, .. }, Event::GossipPayload(payload)) => {
-                warn!(curr =% slot, gossip_slot = payload.slot, "received early or late gossip payload");
+            (State::Slot { bid_slot, .. }, Event::GossipPayload(payload)) => {
+                warn!(curr =% bid_slot, gossip_slot = payload.slot, "received early or late gossip payload");
             }
         }
     }
@@ -297,5 +354,43 @@ impl State {
     fn tick(&mut self) {
         // DO we actually need a tick, could check on each gossip / submission instead
         // TODO: check pending payloads
+    }
+
+    fn process_slot_data(
+        bid_slot: Slot,
+        registration_data: Option<BuilderGetValidatorsResponseEntry>,
+        payload_attributes: Option<PayloadAttributesUpdate>,
+        il: Option<InclusionListWithMetadata>,
+        chain_info: &ChainInfo,
+    ) -> Self {
+        match (registration_data, payload_attributes) {
+            (Some(registration_data), Some(payload_attributes)) => {
+                let current_fork = chain_info.fork_at_slot(bid_slot);
+
+                let slot_data =
+                    SlotData { bid_slot, registration_data, payload_attributes, current_fork, il };
+
+                info!(%bid_slot, proposer = %slot_data.proposer_pubkey(),  "start sorting for slot");
+                State::Sorting(slot_data)
+            }
+
+            (Some(registration_data), None) => State::Slot {
+                bid_slot,
+                registration_data: Some(registration_data),
+                payload_attributes: None,
+                il,
+            },
+
+            (None, Some(payload_attributes)) => State::Slot {
+                bid_slot,
+                registration_data: None,
+                payload_attributes: Some(payload_attributes),
+                il,
+            },
+
+            (None, None) => {
+                State::Slot { bid_slot, registration_data: None, payload_attributes: None, il }
+            }
+        }
     }
 }

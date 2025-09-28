@@ -39,14 +39,11 @@ pub struct ProposerApi<A: Api> {
     pub multi_beacon_client: Arc<MultiBeaconClient>,
     pub metadata_provider: Arc<A::MetadataProvider>,
     pub signing_context: Arc<RelaySigningContext>,
-
     /// Information about the current head slot and next proposer duty
     pub curr_slot_info: CurrentSlotInfo,
     pub chain_info: Arc<ChainInfo>,
     pub validator_preferences: Arc<ValidatorPreferences>,
     pub relay_config: RelayConfig,
-    // /// Channel on which to send v3 payload fetch requests.
-    // pub v3_payload_request: Sender<(u64, B256, BlsPublicKeyBytes, Vec<u8>)>,
     /// Set in the block merging process
     pub shared_best_merged: BestMergedBlock,
     /// Send simulation requests

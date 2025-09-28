@@ -22,11 +22,10 @@ use crate::{
     Api,
 };
 
-// This is context that is only valid for a given slot, could also be in SortingData but keeping it
-// here lets us avoid reallocating memory each slot
+// Context that is only valid for a given slot
+// could also be in SortingData but keeping it here lets us avoid reallocating memory each slot
 pub struct SlotContext {
     pub bid_slot: Slot,
-    // TODO: on transition to new slot, send ProposerApiError::NoExecutionPayloadFound for this
     pub pending_payload: Option<PendingPayload>,
     pub bid_sorter: BidSorter,
     pub seen_block_hashes: FxHashSet<B256>,
@@ -38,7 +37,7 @@ pub struct SlotContext {
 
 pub struct Context<A: Api> {
     pub chain_info: ChainInfo,
-    pub config: RelayConfig,
+    pub _config: RelayConfig,
     pub cache: LocalCache,
     pub unknown_builder_info: BuilderInfo,
     pub db: Arc<A::DatabaseService>,
@@ -85,7 +84,7 @@ impl<A: Api> Context<A> {
             slot_context,
             can_process_optimistic: true,
             db,
-            config,
+            _config: config,
         }
     }
 
@@ -127,7 +126,20 @@ impl<A: Api> Context<A> {
         }
     }
 
-    pub fn on_new_slot(&mut self, _slot: Slot) {}
+    pub fn on_new_slot(&mut self, bid_slot: Slot) {
+        self.bid_slot = bid_slot;
+        if let Some(pending) = self.pending_payload.take() {
+            let _ = pending
+                .res_tx
+                .send(Err(crate::proposer::ProposerApiError::NoExecutionPayloadFound));
+        }
+        self.bid_sorter.process_slot(bid_slot.as_u64());
+        self.seen_block_hashes.clear();
+        self.sequence.clear();
+        self.hydration_cache.clear();
+        self.payloads.clear();
+        self.sim_manager.on_new_slot(bid_slot.as_u64());
+    }
 }
 
 impl<A: Api> Deref for Context<A> {
