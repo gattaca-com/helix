@@ -134,7 +134,6 @@ impl Default for State {
 }
 
 impl State {
-    // TODO: state transitions
     fn step<A: Api>(&mut self, event: Event, ctx: &mut Context<A>) {
         match (&self, event) {
             ///////////// LIFECYCLE EVENTS (ALWAYS VALID) /////////////
@@ -247,7 +246,9 @@ impl State {
                     &slot_data,
                 );
 
-                ctx.maybe_try_unblind(slot_data);
+                if let Some(state) = Self::maybe_start_broacasting(ctx, slot_data) {
+                    *self = state;
+                }
             }
 
             // get_header
@@ -261,7 +262,12 @@ impl State {
                 Event::GetPayload { blinded, block_hash, trace, res_tx },
             ) => {
                 if let Some(local) = ctx.payloads.get(&block_hash) {
-                    ctx.handle_get_payload(local.clone(), blinded, trace, res_tx, &slot_data);
+                    if let Some(block_hash) =
+                        ctx.handle_get_payload(local.clone(), blinded, trace, res_tx, &slot_data)
+                    {
+                        info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
+                        *self = State::Broadcasting { slot_data: slot_data.clone(), block_hash }
+                    }
                 } else {
                     // we may still receive the payload from builder / gossip later
                     ctx.pending_payload =
@@ -277,7 +283,9 @@ impl State {
 
             (State::Sorting(slot_data), Event::GossipPayload(payload)) => {
                 ctx.handle_gossip_payload(payload, &slot_data);
-                ctx.maybe_try_unblind(slot_data);
+                if let Some(state) = Self::maybe_start_broacasting(ctx, slot_data) {
+                    *self = state;
+                }
             }
 
             ///////////// INVALID STATES / EVENTS /////////////
@@ -396,5 +404,11 @@ impl State {
                 State::Slot { bid_slot, registration_data: None, payload_attributes: None, il }
             }
         }
+    }
+
+    fn maybe_start_broacasting<A: Api>(ctx: &mut Context<A>, slot_data: &SlotData) -> Option<Self> {
+        let block_hash = ctx.maybe_try_unblind(slot_data)?;
+        info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
+        Some(State::Broadcasting { slot_data: slot_data.clone(), block_hash })
     }
 }

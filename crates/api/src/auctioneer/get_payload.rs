@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use alloy_primitives::B256;
 use helix_common::GetPayloadTrace;
 use helix_types::{
     BeaconBlockBodyElectra, BeaconBlockElectra, GetPayloadResponse, PayloadAndBlobs,
@@ -40,6 +41,8 @@ impl<A: Api> Context<A> {
         );
     }
 
+    /// If we start broacasting, returns the block hash of the block
+    #[must_use]
     pub(super) fn handle_get_payload(
         &mut self,
         local: Arc<PayloadAndBlobs>,
@@ -47,34 +50,43 @@ impl<A: Api> Context<A> {
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
         slot_data: &SlotData,
-    ) {
-        let res = self.get_payload(blinded, local, trace, slot_data).map(
-            |(to_proposer, to_publish, trace)| {
+    ) -> Option<B256> {
+        let (res, maybe_block_hash) = match self.get_payload(blinded, local, trace, slot_data) {
+            Ok((to_proposer, to_publish, trace)) => {
+                let block_hash = to_proposer.data.execution_payload.block_hash;
                 let proposer_pubkey = *slot_data.proposer_pubkey();
+                (
+                    Ok(GetPayloadResultData {
+                        to_proposer,
+                        to_publish,
+                        trace,
+                        proposer_pubkey,
+                        fork: slot_data.current_fork,
+                    }),
+                    Some(block_hash),
+                )
+            }
 
-                GetPayloadResultData {
-                    to_proposer,
-                    to_publish,
-                    trace,
-                    proposer_pubkey,
-                    fork: slot_data.current_fork,
-                }
-            },
-        );
+            Err(err) => (Err(err), None),
+        };
 
         let _ = res_tx.send(res);
+
+        maybe_block_hash
     }
 
     /// This should be called only on new submissions / gossiped payloads
-    pub(super) fn maybe_try_unblind(&mut self, slot_data: &SlotData) {
-        if let Some(pending) = self.pending_payload.take() {
-            if let Some(local) = self.payloads.get(&pending.block_hash) {
-                info!("found payload for pending get_payload");
-                let PendingPayload { blinded, res_tx, trace, .. } = pending;
-                self.handle_get_payload(local.clone(), blinded, trace, res_tx, &slot_data);
-            } else {
-                self.pending_payload = Some(pending);
-            }
+    #[must_use]
+    pub(super) fn maybe_try_unblind(&mut self, slot_data: &SlotData) -> Option<B256> {
+        let pending = self.pending_payload.take()?;
+
+        if let Some(local) = self.payloads.get(&pending.block_hash) {
+            info!("found payload for pending get_payload");
+            let PendingPayload { blinded, res_tx, trace, .. } = pending;
+            self.handle_get_payload(local.clone(), blinded, trace, res_tx, &slot_data)
+        } else {
+            self.pending_payload = Some(pending);
+            None
         }
     }
 
