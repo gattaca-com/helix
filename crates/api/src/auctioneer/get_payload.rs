@@ -1,16 +1,12 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::sync::Arc;
 
-use alloy_primitives::B256;
 use helix_common::GetPayloadTrace;
 use helix_types::{
     BeaconBlockBodyElectra, BeaconBlockElectra, GetPayloadResponse, PayloadAndBlobs,
     SignedBeaconBlock, SignedBeaconBlockElectra, SignedBlindedBeaconBlock, VersionedSignedProposal,
 };
 use tokio::sync::oneshot;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     auctioneer::{
@@ -46,65 +42,100 @@ impl<A: Api> Context<A> {
 
     pub(super) fn handle_get_payload(
         &mut self,
-        block_hash: B256,
+        local: Arc<PayloadAndBlobs>,
         blinded: SignedBlindedBeaconBlock,
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
         slot_data: &SlotData,
     ) {
-        if let Some(payload) = self.payloads.get(&block_hash) {
-            let res = self._get_payload(blinded, payload, trace, slot_data).map(
-                |(to_proposer, to_publish, trace)| {
-                    let proposer_pubkey = *slot_data.proposer_pubkey();
+        let res = self.get_payload(blinded, local, trace, slot_data).map(
+            |(to_proposer, to_publish, trace)| {
+                let proposer_pubkey = *slot_data.proposer_pubkey();
 
-                    GetPayloadResultData {
-                        to_proposer,
-                        to_publish,
-                        trace,
-                        proposer_pubkey,
-                        fork: slot_data.current_fork,
-                    }
-                },
-            );
+                GetPayloadResultData {
+                    to_proposer,
+                    to_publish,
+                    trace,
+                    proposer_pubkey,
+                    fork: slot_data.current_fork,
+                }
+            },
+        );
 
-            let _ = res_tx.send(res);
-        } else {
-            // we may still receive the payload from builder / gossip, save request for
-            // later
-            self.pending_payload = Some(PendingPayload {
-                block_hash,
-                blinded,
-                res_tx,
-                retry_at: Instant::now() + Duration::from_millis(20),
-            });
+        let _ = res_tx.send(res);
+    }
+
+    /// This should be called only on new submissions / gossiped payloads
+    pub(super) fn maybe_try_unblind(&mut self, slot_data: &SlotData) {
+        if let Some(pending) = self.pending_payload.take() {
+            if let Some(local) = self.payloads.get(&pending.block_hash) {
+                info!("found payload for pending get_payload");
+                let PendingPayload { blinded, res_tx, trace, .. } = pending;
+                self.handle_get_payload(local.clone(), blinded, trace, res_tx, &slot_data);
+            } else {
+                self.pending_payload = Some(pending);
+            }
         }
     }
 
-    fn _get_payload(
+    fn get_payload(
         &self,
         blinded: SignedBlindedBeaconBlock,
-        local: &Arc<PayloadAndBlobs>,
+        local: Arc<PayloadAndBlobs>,
         trace: GetPayloadTrace,
         slot_data: &SlotData,
     ) -> Result<(GetPayloadResponse, VersionedSignedProposal, GetPayloadTrace), ProposerApiError>
     {
         // TODO: use trace
-        let (to_proposer, to_publish) = self.validate_and_unblind(blinded, local, slot_data)?;
-        Ok((to_proposer, to_publish, trace))
-    }
-
-    pub fn validate_and_unblind(
-        &self,
-        blinded: SignedBlindedBeaconBlock,
-        local: &Arc<PayloadAndBlobs>,
-        slot_data: &SlotData,
-    ) -> Result<(GetPayloadResponse, VersionedSignedProposal), ProposerApiError> {
         self.validate_proposal_coordinate(&blinded, slot_data)?;
 
         if blinded.fork_name_unchecked() != slot_data.current_fork {
             return Err(ProposerApiError::UnsupportedBeaconChainVersion);
         }
 
+        let (to_proposer, to_publish) = self.unblind(blinded, local, slot_data)?;
+        Ok((to_proposer, to_publish, trace))
+    }
+
+    fn validate_proposal_coordinate(
+        &self,
+        blinded: &SignedBlindedBeaconBlock,
+        slot_data: &SlotData,
+    ) -> Result<(), ProposerApiError> {
+        let slot_duty = &slot_data.registration_data;
+        let actual_index = blinded.message().proposer_index();
+        let expected_index = slot_duty.validator_index;
+
+        if expected_index != actual_index {
+            return Err(ProposerApiError::UnexpectedProposerIndex {
+                expected: expected_index,
+                actual: actual_index,
+            });
+        }
+
+        if self.bid_slot != slot_duty.slot {
+            return Err(ProposerApiError::InternalSlotMismatchesWithSlotDuty {
+                internal_slot: self.bid_slot,
+                slot_duty_slot: slot_duty.slot,
+            });
+        }
+
+        if slot_duty.slot != blinded.message().slot() {
+            return Err(ProposerApiError::InvalidBlindedBlockSlot {
+                internal_slot: slot_duty.slot,
+                blinded_block_slot: blinded.message().slot(),
+            });
+        }
+
+        Ok(())
+    }
+
+    pub fn unblind(
+        &self,
+        blinded: SignedBlindedBeaconBlock,
+        local: Arc<PayloadAndBlobs>,
+        slot_data: &SlotData,
+    ) -> Result<(GetPayloadResponse, VersionedSignedProposal), ProposerApiError> {
         match blinded {
             SignedBlindedBeaconBlock::Altair(_) |
             SignedBlindedBeaconBlock::Base(_) |
@@ -186,44 +217,11 @@ impl<A: Api> Context<A> {
                 let to_proposer = GetPayloadResponse {
                     version: slot_data.current_fork,
                     metadata: Default::default(),
-                    data: local.clone(),
+                    data: local,
                 };
 
                 Ok((to_proposer, to_broadcast))
             }
         }
-    }
-
-    fn validate_proposal_coordinate(
-        &self,
-        blinded: &SignedBlindedBeaconBlock,
-        slot_data: &SlotData,
-    ) -> Result<(), ProposerApiError> {
-        let slot_duty = &slot_data.registration_data;
-        let actual_index = blinded.message().proposer_index();
-        let expected_index = slot_duty.validator_index;
-
-        if expected_index != actual_index {
-            return Err(ProposerApiError::UnexpectedProposerIndex {
-                expected: expected_index,
-                actual: actual_index,
-            });
-        }
-
-        if self.bid_slot != slot_duty.slot {
-            return Err(ProposerApiError::InternalSlotMismatchesWithSlotDuty {
-                internal_slot: self.bid_slot,
-                slot_duty_slot: slot_duty.slot,
-            });
-        }
-
-        if slot_duty.slot != blinded.message().slot() {
-            return Err(ProposerApiError::InvalidBlindedBlockSlot {
-                internal_slot: slot_duty.slot,
-                blinded_block_slot: blinded.message().slot(),
-            });
-        }
-
-        Ok(())
     }
 }

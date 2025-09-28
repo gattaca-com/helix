@@ -44,7 +44,6 @@ pub struct Context<A: Api> {
 
     // failsafe_triggered + accept_optimistic
     pub can_process_optimistic: bool,
-
     pub slot_context: SlotContext,
 }
 

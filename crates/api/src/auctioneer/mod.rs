@@ -32,7 +32,7 @@ use crate::{
         bid_sorter::BidSorter,
         context::Context,
         manager::SimulatorManager,
-        types::{Event, SlotData},
+        types::{Event, PendingPayload, SlotData},
         worker::Worker,
     },
     builder::error::BuilderApiError,
@@ -100,8 +100,6 @@ impl<A: Api> Auctioneer<A> {
             for evt in rx.try_iter() {
                 self.state.step(evt, &mut self.ctx);
             }
-
-            self.state.tick();
         }
     }
 }
@@ -239,26 +237,36 @@ impl State {
             (
                 State::Sorting(slot_data),
                 Event::Submission { submission, withdrawals_root, sequence, trace, res_tx },
-            ) => ctx.handle_submission(
-                submission,
-                withdrawals_root,
-                sequence,
-                trace,
-                res_tx,
-                &slot_data,
-            ),
+            ) => {
+                ctx.handle_submission(
+                    submission,
+                    withdrawals_root,
+                    sequence,
+                    trace,
+                    res_tx,
+                    &slot_data,
+                );
+
+                ctx.maybe_try_unblind(slot_data);
+            }
 
             // get_header
             (State::Sorting(_), Event::GetHeader { params, res_tx }) => {
                 ctx.handle_get_header(params, res_tx)
             }
 
-            // get_paylaod
+            // get_payload
             (
                 State::Sorting(slot_data),
                 Event::GetPayload { blinded, block_hash, trace, res_tx },
             ) => {
-                ctx.handle_get_payload(block_hash, blinded, trace, res_tx, &slot_data);
+                if let Some(local) = ctx.payloads.get(&block_hash) {
+                    ctx.handle_get_payload(local.clone(), blinded, trace, res_tx, &slot_data);
+                } else {
+                    // we may still receive the payload from builder / gossip later
+                    ctx.pending_payload =
+                        Some(PendingPayload { block_hash, blinded, trace, res_tx });
+                }
             }
 
             // sim result
@@ -269,6 +277,7 @@ impl State {
 
             (State::Sorting(slot_data), Event::GossipPayload(payload)) => {
                 ctx.handle_gossip_payload(payload, &slot_data);
+                ctx.maybe_try_unblind(slot_data);
             }
 
             ///////////// INVALID STATES / EVENTS /////////////
@@ -349,11 +358,6 @@ impl State {
                 warn!(curr =% bid_slot, gossip_slot = payload.slot, "received early or late gossip payload");
             }
         }
-    }
-
-    fn tick(&mut self) {
-        // DO we actually need a tick, could check on each gossip / submission instead
-        // TODO: check pending payloads
     }
 
     fn process_slot_data(

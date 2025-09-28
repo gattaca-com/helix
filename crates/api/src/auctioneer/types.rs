@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use alloy_primitives::B256;
 use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
@@ -91,8 +89,8 @@ pub struct SlotData {
 pub struct PendingPayload {
     pub block_hash: B256,
     pub blinded: SignedBlindedBeaconBlock,
+    pub trace: GetPayloadTrace,
     pub res_tx: oneshot::Sender<GetPayloadResult>,
-    pub retry_at: Instant,
 }
 
 impl SlotData {
