@@ -6,22 +6,41 @@ use std::{
 use alloy_primitives::B256;
 use helix_common::GetPayloadTrace;
 use helix_types::{
-    BeaconBlockBodyElectra, BeaconBlockElectra, GetPayloadResponse, PayloadAndBlobs,
-    SignedBeaconBlock, SignedBeaconBlockElectra, SignedBidSubmission, SignedBlindedBeaconBlock,
-    VersionedSignedProposal,
+    BeaconBlockBodyElectra, BeaconBlockElectra, ExecutionPayload, GetPayloadResponse,
+    PayloadAndBlobs, SignedBeaconBlock, SignedBeaconBlockElectra, SignedBidSubmission,
+    SignedBlindedBeaconBlock, VersionedSignedProposal,
 };
 use tokio::sync::oneshot;
+use tracing::warn;
 
 use crate::{
     builder::simulator_2::{
         worker::{GetPayloadResult, GetPayloadResultData},
         Context, PendingPayload, SortingData,
     },
+    gossiper::types::BroadcastPayloadParams,
     proposer::ProposerApiError,
     Api,
 };
 
 impl SortingData {
+    pub(super) fn handle_gossip_payload(&mut self, payload: BroadcastPayloadParams) {
+        if self.slot.bid_slot != payload.slot {
+            warn!(curr =% self.slot.bid_slot, received =% payload.slot, "received gossiped payload for wrong slot");
+            return
+        }
+
+        if self.slot.proposer_pubkey() != &payload.proposer_pub_key {
+            warn!(curr =% self.slot.proposer_pubkey(), received =% payload.proposer_pub_key, "received gossiped payload for wrong proposer");
+            return
+        }
+
+        self.payloads.insert(
+            payload.execution_payload.execution_payload.block_hash,
+            Arc::new(payload.execution_payload),
+        );
+    }
+
     pub(super) fn handle_get_payload<A: Api>(
         &mut self,
         block_hash: B256,
@@ -62,7 +81,7 @@ impl SortingData {
     fn _get_payload(
         &self,
         blinded: SignedBlindedBeaconBlock,
-        local: &SignedBidSubmission,
+        local: &Arc<PayloadAndBlobs>,
         trace: GetPayloadTrace,
     ) -> Result<(GetPayloadResponse, VersionedSignedProposal, GetPayloadTrace), ProposerApiError>
     {
@@ -74,7 +93,7 @@ impl SortingData {
     pub fn validate_and_unblind(
         &self,
         blinded: SignedBlindedBeaconBlock,
-        local: &SignedBidSubmission,
+        local: &Arc<PayloadAndBlobs>,
     ) -> Result<(GetPayloadResponse, VersionedSignedProposal), ProposerApiError> {
         self.validate_proposal_coordinate(&blinded)?;
 
@@ -96,8 +115,8 @@ impl SortingData {
                 // validate
                 // TODO: we should already have the header, as we served it in "get_header"
                 // NOTE: not if it comes via gossip, just implement the check manually
-                let local_header = local
-                    .execution_payload_ref()
+                let local_execution_payload_header = local
+                    .execution_payload
                     .to_header(None)
                     .to_lighthouse_electra_header()
                     .map_err(ProposerApiError::SszError)?;
@@ -106,11 +125,11 @@ impl SortingData {
                 let body = &block.body;
                 let provided_header = &body.execution_payload.execution_payload_header;
 
-                if &local_header != provided_header {
+                if &local_execution_payload_header != provided_header {
                     return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
                 }
 
-                let local_kzg_commitments = &local.blobs_bundle().commitments;
+                let local_kzg_commitments = &local.blobs_bundle.commitments;
 
                 if !local_kzg_commitments.iter().eq(body.blob_kzg_commitments.iter().map(|p| p.0)) {
                     return Err(ProposerApiError::BlobKzgCommitmentsMismatch);
@@ -119,16 +138,14 @@ impl SortingData {
                 // unblind
                 let signature = blinded_block.signature.clone();
 
-                let execution_payload = local
-                    .execution_payload_ref()
-                    .to_lighthouse_electra_paylaod()
-                    .map_err(ProposerApiError::SszError)?;
-
-                let blobs_bundle = local.blobs_bundle();
-
-                if body.blob_kzg_commitments.len() != blobs_bundle.blobs.len() {
+                if body.blob_kzg_commitments.len() != local.blobs_bundle.blobs.len() {
                     return Err(ProposerApiError::BlindedBlobsBundleLengthMismatch);
                 }
+
+                let local_execution_payload = local
+                    .execution_payload
+                    .to_lighthouse_electra_payload()
+                    .map_err(ProposerApiError::SszError)?;
 
                 let inner = SignedBeaconBlockElectra {
                     message: BeaconBlockElectra {
@@ -146,7 +163,7 @@ impl SortingData {
                             deposits: body.deposits.clone(),
                             voluntary_exits: body.voluntary_exits.clone(),
                             sync_aggregate: body.sync_aggregate.clone(),
-                            execution_payload: execution_payload.into(),
+                            execution_payload: local_execution_payload.into(),
                             bls_to_execution_changes: body.bls_to_execution_changes.clone(),
                             blob_kzg_commitments: body.blob_kzg_commitments.clone(),
                             execution_requests: body.execution_requests.clone(),
@@ -159,16 +176,13 @@ impl SortingData {
                 let signed_block = SignedBeaconBlock::Electra(inner).into();
                 let to_broadcast = VersionedSignedProposal {
                     signed_block,
-                    kzg_proofs: blobs_bundle.proofs.clone(),
-                    blobs: blobs_bundle.blobs.clone(),
+                    kzg_proofs: local.blobs_bundle.proofs.clone(),
+                    blobs: local.blobs_bundle.blobs.clone(),
                 };
                 let to_proposer = GetPayloadResponse {
                     version: self.slot.current_fork,
                     metadata: Default::default(),
-                    data: Arc::new(PayloadAndBlobs {
-                        execution_payload: local.execution_payload_ref().clone(),
-                        blobs_bundle: Arc::unwrap_or_clone(blobs_bundle),
-                    }),
+                    data: local.clone(),
                 };
 
                 Ok((to_proposer, to_broadcast))

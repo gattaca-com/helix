@@ -11,8 +11,8 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_types::{
-    BlsPublicKeyBytes, ExecPayload, GetPayloadResponse, PayloadAndBlobs, SignedBlindedBeaconBlock,
-    Slot, SlotClockTrait,
+    BlsPublicKeyBytes, ExecPayload, ForkName, GetPayloadResponse, PayloadAndBlobs,
+    PayloadAndBlobsRef, SignedBlindedBeaconBlock, Slot, SlotClockTrait,
 };
 use tokio::time::sleep;
 use tracing::{error, info, warn};
@@ -21,7 +21,7 @@ use super::ProposerApi;
 use crate::{
     builder::simulator_2::worker::{GetPayloadResultData, WorkerJob},
     constants::GET_PAYLOAD_REQUEST_CUTOFF_MS,
-    gossiper::types::BroadcastGetPayloadParams,
+    gossiper::types::{BroadcastGetPayloadParams, BroadcastPayloadParams},
     proposer::error::ProposerApiError,
     Api,
 };
@@ -168,6 +168,13 @@ impl<A: Api> ProposerApi<A> {
             return Err(err);
         }
 
+        self.gossip_payload(
+            to_publish.signed_block.slot(),
+            &proposer_public_key,
+            to_proposer.data.as_ref().into(),
+            fork,
+        );
+
         let is_trusted_proposer = self.auctioneer.is_trusted_proposer(&proposer_public_key);
 
         let self_clone = self.clone();
@@ -287,6 +294,22 @@ impl<A: Api> ProposerApi<A> {
                 error!(%err, "error saving payload to database");
             }
         });
+    }
+
+    pub(crate) async fn gossip_payload(
+        &self,
+        bid_slot: Slot,
+        proposer_public_key: &BlsPublicKeyBytes,
+        execution_payload: PayloadAndBlobsRef<'_>,
+        fork_name: ForkName,
+    ) {
+        let params = BroadcastPayloadParams::to_proto(
+            execution_payload,
+            bid_slot.as_u64(),
+            proposer_public_key,
+            fork_name,
+        );
+        self.gossiper.broadcast_payload(params).await
     }
 }
 

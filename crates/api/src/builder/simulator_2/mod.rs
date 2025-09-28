@@ -32,12 +32,12 @@ use helix_database::DatabaseService;
 use helix_housekeeper::PayloadAttributesUpdate;
 use helix_types::{
     BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ForkName, GetPayloadResponse,
-    HydrationCache, SignedBidSubmission, SignedBlindedBeaconBlock, SignedBuilderBid, Slot,
-    VersionedSignedProposal,
+    HydrationCache, PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock,
+    SignedBuilderBid, Slot, VersionedSignedProposal,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::oneshot;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     builder::{
@@ -52,7 +52,10 @@ use crate::{
         },
         BlockSimRequest, SimReponse, SimulatorRequest,
     },
-    gossiper::{grpc_gossiper::GrpcGossiperClientManager, types::BroadcastGetPayloadParams},
+    gossiper::{
+        grpc_gossiper::GrpcGossiperClientManager,
+        types::{BroadcastGetPayloadParams, BroadcastPayloadParams},
+    },
     proposer::{GetHeaderParams, ProposerApiError},
     Api,
 };
@@ -79,8 +82,7 @@ struct Context<A: Api> {
     builder_info: FxHashMap<BlsPublicKeyBytes, BuilderInfo>,
     unknown_builder_info: BuilderInfo,
     simulator_manager: SimulatorManager,
-    // on transition to new slot, send ProposerApiError::NoExecutionPayloadFound for this
-    // TODO: check for which hash they sent the request to avoid duplicates
+    // TODO: on transition to new slot, send ProposerApiError::NoExecutionPayloadFound for this
     pending_payloads: Option<PendingPayload>,
     // flags
     // failsafe_triggered + accept_optimistic
@@ -145,8 +147,14 @@ struct SortingData {
     seen_block_hashes: FxHashSet<B256>,
     sequence: FxHashMap<BlsPublicKeyBytes, u64>,
     hydration_cache: HydrationCache,
-    payloads: FxHashMap<B256, SignedBidSubmission>,
+    payloads: FxHashMap<B256, Arc<PayloadAndBlobs>>,
     inclusion_list: Option<InclusionListWithMetadata>,
+}
+
+impl SlotContext {
+    pub fn proposer_pubkey(&self) -> &BlsPublicKeyBytes {
+        &self.registration_data.entry.registration.message.pubkey
+    }
 }
 
 enum State {
@@ -179,6 +187,7 @@ pub enum Event {
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
     },
+    GossipPayload(BroadcastPayloadParams),
     NewSlot,
     SimResult(SimulationResult),
     SimulatorSync {
@@ -239,6 +248,10 @@ impl State {
                 ctx.handle_simulation_result(result);
             }
 
+            (State::Sorting(sorting), Event::GossipPayload(payload)) => {
+                sorting.handle_gossip_payload(payload);
+            }
+
             ///////////// INVALID STATES / EVENTS /////////////
 
             // late submission
@@ -259,10 +272,10 @@ impl State {
 
             // duplicate get_payload, proposer equivocating?
             (
-                State::Broadcasting { block_hash, .. },
-                Event::GetPayload { block_hash: new_block_hash, res_tx, .. },
+                State::Broadcasting { slot_ctx, block_hash },
+                Event::GetPayload { blinded, block_hash: new_block_hash, res_tx, .. },
             ) => {
-                if *block_hash == new_block_hash {
+                if slot_ctx.bid_slot == blinded.slot() || *block_hash == new_block_hash {
                     let _ = res_tx.send(Err(ProposerApiError::DeliveringPayload));
                 } else {
                     warn!(
@@ -271,6 +284,26 @@ impl State {
                         "received multiple get_payload requests"
                     );
                     let _ = res_tx.send(Err(ProposerApiError::GetPayloadAlreadyReceived));
+                }
+            }
+
+            // gossip payload
+            (State::Broadcasting { block_hash, slot_ctx }, Event::GossipPayload(payload)) => {
+                if *block_hash == payload.execution_payload.execution_payload.block_hash &&
+                    slot_ctx.bid_slot == payload.slot &&
+                    slot_ctx.proposer_pubkey() == &payload.proposer_pub_key
+                {
+                    debug!("already broadcasting gossip payload");
+                } else {
+                    // is the proposer equivocating across regions?
+                    warn!(
+                        have.block_hash =% block_hash,
+                        have.slot =% slot_ctx.bid_slot,
+                        have.pubkey =%  slot_ctx.proposer_pubkey(),
+                        got.block_hash =% payload.execution_payload.execution_payload.block_hash,
+                        got.slot = payload.slot,
+                        got.pubkey =% &payload.proposer_pub_key,
+                        "mismatch in broadcasting / gossip payload")
                 }
             }
 
@@ -287,6 +320,11 @@ impl State {
             // get_payload unregistered
             (State::Slot { .. }, Event::GetPayload { res_tx, .. }) => {
                 let _ = res_tx.send(Err(ProposerApiError::ProposerNotRegistered));
+            }
+
+            // gossip payload unregistered
+            (State::Slot { slot }, Event::GossipPayload(payload)) => {
+                warn!(curr =% slot, gossip_slot = payload.slot, "received late gossip payload");
             }
         }
     }

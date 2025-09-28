@@ -70,6 +70,7 @@ pub async fn run_api_service<A: Api>(
         top_bid_tx,
         accept_optimistic,
         worker_tx.clone(),
+        auctioneer_tx.clone(),
         metadata_provider.clone(),
     );
     let builder_api = Arc::new(builder_api);

@@ -17,7 +17,8 @@ use helix_types::{
 use tracing::error;
 
 use crate::{
-    builder::simulator_2::worker::WorkerJob, gossiper::grpc_gossiper::GrpcGossiperClientManager,
+    builder::simulator_2::{worker::WorkerJob, Event},
+    gossiper::grpc_gossiper::GrpcGossiperClientManager,
     Api,
 };
 
@@ -39,6 +40,7 @@ pub struct BuilderApi<A: Api> {
     pub failsafe_triggered: Arc<AtomicBool>,
     /// Failsafe: if we fail don't have any synced client we pause all optimistic submissions
     pub accept_optimistic: Arc<AtomicBool>,
+    pub auctioneer_tx: crossbeam_channel::Sender<Event>,
     pub worker_tx: crossbeam_channel::Sender<WorkerJob>,
     pub metadata_provider: Arc<A::MetadataProvider>,
 }
@@ -54,41 +56,21 @@ impl<A: Api> BuilderApi<A> {
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
         accept_optimistic: Arc<AtomicBool>,
         worker_tx: crossbeam_channel::Sender<WorkerJob>,
+        auctioneer_tx: crossbeam_channel::Sender<Event>,
         metadata_provider: Arc<A::MetadataProvider>,
     ) -> Self {
-        // let tx_root_cache = DashMap::with_capacity(1000);
-
-        // let cache = tx_root_cache.clone();
-        // let info = chain_info.clone();
-        // tokio::spawn(async move {
-        //     // cleanup cache, keep only last 2 slots worth of roots
-        //     let mut last_cleared_slot = 0;
-
-        //     loop {
-        //         tokio::time::sleep(Duration::from_secs(3)).await;
-        //         let curr_slot = info.current_slot().as_u64();
-
-        //         if curr_slot > last_cleared_slot {
-        //             last_cleared_slot = curr_slot;
-        //             cache.retain(|_, (slot, _)| curr_slot.saturating_sub(*slot) <= 2);
-        //         }
-        //     }
-        // });
-
         Self {
             auctioneer,
             db,
             chain_info,
             gossiper,
             relay_config: Arc::new(relay_config),
-
             curr_slot_info,
             top_bid_tx,
-
-            // tx_root_cache,
             failsafe_triggered: Arc::new(false.into()),
             accept_optimistic,
             worker_tx,
+            auctioneer_tx,
             metadata_provider,
         }
     }

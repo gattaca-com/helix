@@ -183,7 +183,8 @@ impl SortingData {
         };
         ctx.simulator_manager.handle_sim_request(req);
 
-        self.payloads.insert(*submission.block_hash(), submission.clone());
+        let payload_and_blobs = Arc::new(submission.payload_and_blobs_ref().to_owned());
+        self.payloads.insert(*submission.block_hash(), payload_and_blobs);
 
         let db = ctx.db.clone();
         tokio::spawn(async move {
