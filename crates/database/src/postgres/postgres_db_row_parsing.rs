@@ -124,6 +124,21 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
     }
 }
 
+impl FromRow for ValidatorPreferences {
+    fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError> {
+        Ok(ValidatorPreferences {
+            //TODO: change to filtering after migration
+            filtering: parse_i16_to_filtering(row.get::<&str, i16>("filtering"))?,
+            trusted_builders: row.get::<&str, Option<Vec<&str>>>("trusted_builders").map(
+                |trusted_builders| trusted_builders.into_iter().map(|b| b.to_string()).collect(),
+            ),
+            header_delay: row.get::<&str, bool>("header_delay"),
+            delay_ms: parse_i64_to_u64(row.get::<&str, i64>("delay_ms")).ok(),
+            disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
+        })
+    }
+}
+
 impl FromRow for BuilderInfoDocument {
     fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError>
     where

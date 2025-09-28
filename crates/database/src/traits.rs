@@ -46,6 +46,22 @@ pub trait DatabaseService: Send + Sync + Clone {
         pub_keys: &[&BlsPublicKeyBytes],
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError>;
 
+    async fn get_validator_preferences(
+        &self,
+        pub_key: &BlsPublicKeyBytes,
+    ) -> Result<Option<ValidatorPreferences>, DatabaseError>;
+
+    async fn update_validator_preferences(
+        &self,
+        pub_key: &BlsPublicKeyBytes,
+        preferences: &ValidatorPreferences,
+    ) -> Result<(), DatabaseError>;
+
+    async fn get_pool_validators(
+        &self,
+        pool_name: &str,
+    ) -> Result<Vec<BlsPublicKeyBytes>, DatabaseError>;
+
     async fn set_proposer_duties(
         &self,
         proposer_duties: Vec<BuilderGetValidatorsResponseEntry>,

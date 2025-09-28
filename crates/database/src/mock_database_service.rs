@@ -81,6 +81,26 @@ impl DatabaseService for MockDatabaseService {
             user_agent: None,
         })
     }
+    async fn update_validator_preferences(
+        &self,
+        _pub_key: &BlsPublicKeyBytes,
+        _preferences: &ValidatorPreferences,
+    ) -> Result<(), DatabaseError> {
+        Ok(())
+    }
+    async fn get_validator_preferences(
+        &self,
+        _pub_key: &BlsPublicKeyBytes,
+    ) -> Result<Option<ValidatorPreferences>, DatabaseError> {
+        Ok(Some(ValidatorPreferences::default()))
+    }
+    async fn get_pool_validators(
+        &self,
+        _pool_name: &str,
+    ) -> Result<Vec<BlsPublicKeyBytes>, DatabaseError> {
+        let validator = BlsPublicKeyBytes::random();
+        Ok(vec![validator])
+    }
     async fn get_validator_registrations_for_pub_keys(
         &self,
         pubkeys: &[&BlsPublicKeyBytes],
