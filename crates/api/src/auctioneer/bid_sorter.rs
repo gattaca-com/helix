@@ -168,8 +168,9 @@ impl BidSorter {
         BID_SORTER_QUEUE_LATENCY_US.observe(queue_latency_ns as f64 / 1000.);
     }
 
+    // TODO: return this from .sort instead
     pub fn is_top_bid(&self, sub: &SignedBidSubmission) -> bool {
-        todo!()
+        self.curr_bid.as_ref().is_some_and(|c| c.2.header.block_hash == sub.message().block_hash)
     }
 
     pub fn demote(&mut self, demoted: BlsPublicKeyBytes) {
