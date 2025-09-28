@@ -23,7 +23,7 @@ use crate::{
 };
 
 // Context that is only valid for a given slot
-// could also be in SortingData but keeping it here lets us avoid reallocating memory each slot
+// could also be in State::Sorting but keeping it here lets us avoid reallocating memory each slot
 pub struct SlotContext {
     pub bid_slot: Slot,
     pub pending_payload: Option<PendingPayload>,
