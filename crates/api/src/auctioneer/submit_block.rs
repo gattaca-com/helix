@@ -18,28 +18,28 @@ use crate::{
         bid_sorter::BidSorterMessage,
         context::Context,
         simulator::{manager::SimulationResult, BlockSimRequest, SimulatorRequest},
-        types::{SortingData, Submission, SubmissionResult},
+        types::{SlotContext, Submission, SubmissionResult},
     },
     builder::error::BuilderApiError,
     Api,
 };
 
-impl SortingData {
-    pub(super) fn handle_submission<A: Api>(
+impl<A: Api> Context<A> {
+    pub(super) fn handle_submission(
         &mut self,
         submission: Submission,
         withdrawals_root: B256,
         sequence: Option<u64>,
         mut trace: SubmissionTrace,
-        ctx: &mut Context<A>,
         res_tx: oneshot::Sender<SubmissionResult>,
+        slot_data: &SlotContext,
     ) {
         match self.validate_and_sort_submission(
             submission,
             withdrawals_root,
             sequence,
             &mut trace,
-            ctx,
+            slot_data,
         ) {
             Ok((submission, optimistic_version)) => {
                 let res_tx = if optimistic_version.is_optimistic() {
@@ -48,7 +48,7 @@ impl SortingData {
                 } else {
                     Some(res_tx)
                 };
-                self.handle_2(submission, trace, optimistic_version, ctx, res_tx);
+                self.handle_2(submission, trace, optimistic_version, res_tx, slot_data);
             }
 
             Err(err) => {
@@ -57,10 +57,10 @@ impl SortingData {
         }
     }
 
-    pub(super) fn handle_simulated_submission(&mut self, result: &SimulationResult) {
+    pub(super) fn sort_simulation_result(&mut self, result: &SimulationResult) {
         match &result.result {
             Err(err) if err.is_demotable() => {
-                self.sort.demote(*result.submission.builder_public_key());
+                self.bid_sorter.demote(*result.submission.builder_public_key());
             }
 
             Ok(_) | Err(_) => {
@@ -74,19 +74,19 @@ impl SortingData {
                         result.submission.withdrawals_root(),
                     );
 
-                    self.sort.sort(msg);
+                    self.bid_sorter.sort(msg);
                 }
             }
         }
     }
 
-    fn validate_and_sort_submission<A: Api>(
+    fn validate_and_sort_submission(
         &mut self,
         submission: Submission,
         withdrawals_root: B256,
         sequence: Option<u64>,
         trace: &mut SubmissionTrace,
-        ctx: &Context<A>,
+        slot_data: &SlotContext,
     ) -> Result<(SignedBidSubmission, OptimisticVersion), BuilderApiError> {
         let submission = match submission {
             Submission::Full(full) => full,
@@ -104,15 +104,18 @@ impl SortingData {
             }
         };
 
-        let builder_info = ctx
-            .builder_infos
-            .get(submission.builder_public_key())
-            .unwrap_or(&ctx.unknown_builder_info);
+        let builder_info = self.builder_info(submission.builder_public_key());
 
-        self.validate_submission(&submission, &withdrawals_root, sequence, builder_info)?;
+        self.validate_submission(
+            &submission,
+            &withdrawals_root,
+            sequence,
+            &builder_info,
+            slot_data,
+        )?;
 
-        let optimistic_version = if ctx.can_process_optimistic &&
-            self.should_process_optimistically(&submission, builder_info)
+        let optimistic_version = if self.can_process_optimistic &&
+            self.should_process_optimistically(&submission, &builder_info, slot_data)
         {
             // TODO: tidy this up, we store the submission not the header
             let msg = BidSorterMessage::new_from_block_submission(
@@ -122,7 +125,7 @@ impl SortingData {
                 0,
                 withdrawals_root,
             );
-            self.sort.sort(msg);
+            self.bid_sorter.sort(msg);
             OptimisticVersion::V1
         } else {
             OptimisticVersion::NotOptimistic
@@ -131,23 +134,23 @@ impl SortingData {
         Ok((submission, optimistic_version))
     }
 
-    fn handle_2<A: Api>(
+    fn handle_2(
         &mut self,
         submission: SignedBidSubmission,
         submission_trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,
-        ctx: &mut Context<A>,
         res_tx: Option<oneshot::Sender<SubmissionResult>>,
+        slot_data: &SlotContext,
     ) {
         // TODO: pass this from previous step
-        let is_top_bid = self.sort.is_top_bid(&submission);
-        let inclusion_list = self.inclusion_list.clone();
+        let is_top_bid = self.bid_sorter.is_top_bid(&submission);
+        let inclusion_list = slot_data.il.clone();
 
         let request = BlockSimRequest::new(
-            self.slot.registration_data.entry.registration.message.gas_limit,
+            slot_data.registration_data.entry.registration.message.gas_limit,
             &submission,
-            self.slot.registration_data.entry.preferences.clone(),
-            self.slot.payload_attributes.payload_attributes.parent_beacon_block_root,
+            slot_data.registration_data.entry.preferences.clone(),
+            slot_data.payload_attributes.payload_attributes.parent_beacon_block_root,
             inclusion_list,
         );
 
@@ -160,12 +163,12 @@ impl SortingData {
             res_tx,
             submission: submission.clone(),
         };
-        ctx.sim_manager.handle_sim_request(req);
+        self.sim_manager.handle_sim_request(req);
 
         let payload_and_blobs = Arc::new(submission.payload_and_blobs_ref().to_owned());
         self.payloads.insert(*submission.block_hash(), payload_and_blobs);
 
-        let db = ctx.db.clone();
+        let db = self.db.clone();
         tokio::spawn(async move {
             if let Err(err) =
                 db.store_block_submission(submission, submission_trace, optimistic_version).await
@@ -179,9 +182,10 @@ impl SortingData {
         &self,
         submission: &SignedBidSubmission,
         builder_info: &BuilderInfo,
+        slot_data: &SlotContext,
     ) -> bool {
         if builder_info.is_optimistic && submission.message().value <= builder_info.collateral {
-            if self.slot.registration_data.entry.preferences.filtering.is_regional() &&
+            if slot_data.registration_data.entry.preferences.filtering.is_regional() &&
                 !builder_info.can_process_regional_slot_optimistically()
             {
                 return false;

@@ -15,23 +15,26 @@ use tracing::warn;
 use crate::{
     auctioneer::{
         context::Context,
-        types::{GetPayloadResult, GetPayloadResultData, PendingPayload},
-        SortingData,
+        types::{GetPayloadResult, GetPayloadResultData, PendingPayload, SlotContext},
     },
     gossiper::types::BroadcastPayloadParams,
     proposer::ProposerApiError,
     Api,
 };
 
-impl SortingData {
-    pub(super) fn handle_gossip_payload(&mut self, payload: BroadcastPayloadParams) {
-        if self.slot.bid_slot != payload.slot {
-            warn!(curr =% self.slot.bid_slot, received =% payload.slot, "received gossiped payload for wrong slot");
+impl<A: Api> Context<A> {
+    pub(super) fn handle_gossip_payload(
+        &mut self,
+        payload: BroadcastPayloadParams,
+        slot_data: &SlotContext,
+    ) {
+        if self.bid_slot != payload.slot {
+            warn!(curr =% self.bid_slot, received =% payload.slot, "received gossiped payload for wrong slot");
             return
         }
 
-        if self.slot.proposer_pubkey() != &payload.proposer_pub_key {
-            warn!(curr =% self.slot.proposer_pubkey(), received =% payload.proposer_pub_key, "received gossiped payload for wrong proposer");
+        if slot_data.proposer_pubkey() != &payload.proposer_pub_key {
+            warn!(curr =% slot_data.proposer_pubkey(), received =% payload.proposer_pub_key, "received gossiped payload for wrong proposer");
             return
         }
 
@@ -41,26 +44,25 @@ impl SortingData {
         );
     }
 
-    pub(super) fn handle_get_payload<A: Api>(
+    pub(super) fn handle_get_payload(
         &mut self,
         block_hash: B256,
         blinded: SignedBlindedBeaconBlock,
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
-        ctx: &mut Context<A>,
+        slot_data: &SlotContext,
     ) {
         if let Some(payload) = self.payloads.get(&block_hash) {
-            let res = self._get_payload(blinded, payload, trace).map(
+            let res = self._get_payload(blinded, payload, trace, slot_data).map(
                 |(to_proposer, to_publish, trace)| {
-                    let proposer_pubkey =
-                        self.slot.registration_data.entry.registration.message.pubkey;
+                    let proposer_pubkey = *slot_data.proposer_pubkey();
 
                     GetPayloadResultData {
                         to_proposer,
                         to_publish,
                         trace,
                         proposer_pubkey,
-                        fork: self.slot.current_fork,
+                        fork: slot_data.current_fork,
                     }
                 },
             );
@@ -69,7 +71,7 @@ impl SortingData {
         } else {
             // we may still receive the payload from builder / gossip, save request for
             // later
-            ctx.pending_payload = Some(PendingPayload {
+            self.pending_payload = Some(PendingPayload {
                 block_hash,
                 blinded,
                 res_tx,
@@ -83,10 +85,11 @@ impl SortingData {
         blinded: SignedBlindedBeaconBlock,
         local: &Arc<PayloadAndBlobs>,
         trace: GetPayloadTrace,
+        slot_data: &SlotContext,
     ) -> Result<(GetPayloadResponse, VersionedSignedProposal, GetPayloadTrace), ProposerApiError>
     {
         // TODO: use trace
-        let (to_proposer, to_publish) = self.validate_and_unblind(blinded, local)?;
+        let (to_proposer, to_publish) = self.validate_and_unblind(blinded, local, slot_data)?;
         Ok((to_proposer, to_publish, trace))
     }
 
@@ -94,10 +97,11 @@ impl SortingData {
         &self,
         blinded: SignedBlindedBeaconBlock,
         local: &Arc<PayloadAndBlobs>,
+        slot_data: &SlotContext,
     ) -> Result<(GetPayloadResponse, VersionedSignedProposal), ProposerApiError> {
-        self.validate_proposal_coordinate(&blinded)?;
+        self.validate_proposal_coordinate(&blinded, slot_data)?;
 
-        if blinded.fork_name_unchecked() != self.slot.current_fork {
+        if blinded.fork_name_unchecked() != slot_data.current_fork {
             return Err(ProposerApiError::UnsupportedBeaconChainVersion);
         }
 
@@ -180,7 +184,7 @@ impl SortingData {
                     blobs: local.blobs_bundle.blobs.clone(),
                 };
                 let to_proposer = GetPayloadResponse {
-                    version: self.slot.current_fork,
+                    version: slot_data.current_fork,
                     metadata: Default::default(),
                     data: local.clone(),
                 };
@@ -193,8 +197,9 @@ impl SortingData {
     fn validate_proposal_coordinate(
         &self,
         blinded: &SignedBlindedBeaconBlock,
+        slot_data: &SlotContext,
     ) -> Result<(), ProposerApiError> {
-        let slot_duty = &self.slot.registration_data;
+        let slot_duty = &slot_data.registration_data;
         let actual_index = blinded.message().proposer_index();
         let expected_index = slot_duty.validator_index;
 
@@ -205,9 +210,9 @@ impl SortingData {
             });
         }
 
-        if self.slot.bid_slot != slot_duty.slot {
+        if self.bid_slot != slot_duty.slot {
             return Err(ProposerApiError::InternalSlotMismatchesWithSlotDuty {
-                internal_slot: self.slot.bid_slot,
+                internal_slot: self.bid_slot,
                 slot_duty_slot: slot_duty.slot,
             });
         }

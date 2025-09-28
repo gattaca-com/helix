@@ -11,7 +11,7 @@ use dashmap::{DashMap, DashSet};
 use helix_types::{BlsPublicKeyBytes, CryptoError};
 use http::HeaderValue;
 use parking_lot::RwLock;
-use tracing::{error, instrument, warn};
+use tracing::error;
 
 use crate::{
     api::builder_api::{
@@ -127,28 +127,34 @@ impl Default for LocalCache {
 }
 
 impl LocalCache {
-    #[instrument(skip_all)]
-    pub fn get_builder_info(
-        &self,
-        builder_pub_key: &BlsPublicKeyBytes,
-    ) -> Result<BuilderInfo, AuctioneerError> {
-        match self.builder_info_cache.get(builder_pub_key) {
-            Some(cached) => Ok(cached.clone()),
-            None => Err(AuctioneerError::BuilderNotFound { pub_key: *builder_pub_key }),
-        }
+    pub fn get_builder_info(&self, builder_pub_key: &BlsPublicKeyBytes) -> Option<BuilderInfo> {
+        Some(self.builder_info_cache.get(builder_pub_key)?.clone())
     }
 
-    #[instrument(skip_all)]
     pub fn contains_api_key(&self, api_key: &HeaderValue) -> bool {
         self.api_key_cache.contains_key(api_key)
     }
 
-    #[instrument(skip_all)]
     pub fn validate_api_key(&self, api_key: &HeaderValue, pubkey: &BlsPublicKeyBytes) -> bool {
         self.api_key_cache.get(api_key).is_some_and(|p| p.value().contains(pubkey))
     }
 
-    #[instrument(skip_all)]
+    /// Returns whether builder was optimistic before the demotion
+    pub fn demote_builder(&self, builder_pub_key: &BlsPublicKeyBytes) -> bool {
+        let Some(mut builder_info) = self.builder_info_cache.get_mut(builder_pub_key) else {
+            return false;
+        };
+
+        if !builder_info.is_optimistic {
+            return false;
+        }
+
+        builder_info.is_optimistic = false;
+        builder_info.is_optimistic_for_regional_filtering = false;
+
+        true
+    }
+
     pub fn update_builder_infos(&self, builder_infos: &[BuilderConfig], clear_api_cache: bool) {
         if clear_api_cache {
             self.api_key_cache.clear();
@@ -166,19 +172,16 @@ impl LocalCache {
         }
     }
 
-    #[instrument(skip_all)]
     pub fn update_trusted_proposers(&self, proposer_whitelist: Vec<ProposerInfo>) {
         for proposer in &proposer_whitelist {
             self.trusted_proposers.insert(proposer.pubkey, proposer.clone());
         }
     }
 
-    #[instrument(skip_all)]
     pub fn is_trusted_proposer(&self, proposer_pub_key: &BlsPublicKeyBytes) -> bool {
         self.trusted_proposers.contains_key(proposer_pub_key)
     }
 
-    #[instrument(skip_all)]
     pub fn update_primev_proposers(&self, primev_proposers: &[BlsPublicKeyBytes]) {
         self.primev_proposers.clear();
         for proposer in primev_proposers {
@@ -186,7 +189,6 @@ impl LocalCache {
         }
     }
 
-    #[instrument(skip_all)]
     pub fn is_primev_proposer(&self, proposer_pub_key: &BlsPublicKeyBytes) -> bool {
         self.primev_proposers.contains(proposer_pub_key)
     }
@@ -203,7 +205,6 @@ impl LocalCache {
         self.kill_switch.store(false, Ordering::Relaxed);
     }
 
-    #[instrument(skip_all)]
     pub fn update_current_inclusion_list(
         &self,
         inclusion_list: InclusionListWithMetadata,
@@ -213,12 +214,10 @@ impl LocalCache {
         self.inclusion_list.write().replace(new_list);
     }
 
-    #[instrument(skip_all)]
     pub fn update_proposer_duties(&self, duties: Vec<BuilderGetValidatorsResponseEntry>) {
         *self.proposer_duties.write() = duties;
     }
 
-    #[instrument(skip_all)]
     pub fn get_proposer_duties(&self) -> Vec<BuilderGetValidatorsResponseEntry> {
         self.proposer_duties.read().clone()
     }
@@ -255,7 +254,7 @@ mod tests {
         cache.update_builder_infos(&[builder_info_doc], false);
 
         let get_result = cache.get_builder_info(&builder_pub_key);
-        assert!(get_result.is_ok(), "Failed to get builder info");
+        assert!(get_result.is_some(), "Failed to get builder info");
         assert_eq!(
             get_result.unwrap().collateral,
             builder_info.collateral,
@@ -264,11 +263,7 @@ mod tests {
 
         // Test case 2: Builder doesn't exist
         let result = cache.get_builder_info(&unknown_builder_pub_key);
-        assert!(result.is_err(), "Fetched builder info for unknown builder");
-        assert!(
-            matches!(result.unwrap_err(), AuctioneerError::BuilderNotFound { .. }),
-            "Incorrect get builder info error"
-        );
+        assert!(result.is_none(), "Fetched builder info for unknown builder");
     }
 
     #[tokio::test]

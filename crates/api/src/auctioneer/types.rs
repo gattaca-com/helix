@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::time::Instant;
 
 use alloy_primitives::B256;
 use helix_common::{
@@ -11,14 +11,12 @@ use helix_common::{
 use helix_housekeeper::PayloadAttributesUpdate;
 use helix_types::{
     BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ForkName, GetPayloadResponse,
-    HydrationCache, PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock, Slot,
-    VersionedSignedProposal,
+    SignedBidSubmission, SignedBlindedBeaconBlock, Slot, VersionedSignedProposal,
 };
-use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::oneshot;
 
 use crate::{
-    auctioneer::{bid_sorter::BidSorter, simulator::manager::SimulationResult},
+    auctioneer::simulator::manager::SimulationResult,
     builder::error::BuilderApiError,
     gossiper::types::BroadcastPayloadParams,
     proposer::{GetHeaderParams, ProposerApiError},
@@ -85,17 +83,7 @@ pub struct SlotContext {
     pub payload_attributes: PayloadAttributesUpdate,
     /// Current fork
     pub current_fork: ForkName,
-    pub il: Option<InclusionListWithKey>,
-}
-
-impl SlotContext {
-    fn validate(&self) {
-        assert_eq!(self.bid_slot, self.registration_data.slot);
-        assert_eq!(self.bid_slot, self.payload_attributes.slot);
-        if let Some(il) = self.il.as_ref() {
-            assert_eq!(self.bid_slot, il.key.0)
-        }
-    }
+    pub il: Option<InclusionListWithMetadata>,
 }
 
 // cpu "intensive" stuff is:
@@ -111,11 +99,6 @@ pub struct PendingPayload {
 
 pub struct SortingData {
     pub slot: SlotContext,
-    pub sort: BidSorter,
-    pub seen_block_hashes: FxHashSet<B256>,
-    pub sequence: FxHashMap<BlsPublicKeyBytes, u64>,
-    pub hydration_cache: HydrationCache,
-    pub payloads: FxHashMap<B256, Arc<PayloadAndBlobs>>,
     pub inclusion_list: Option<InclusionListWithMetadata>,
 }
 
@@ -147,7 +130,16 @@ pub enum Event {
         res_tx: oneshot::Sender<GetPayloadResult>,
     },
     GossipPayload(BroadcastPayloadParams),
-    NewSlot,
+    SlotData {
+        /// Head slot + 1, builders are bidding to build this slot
+        bid_slot: Slot,
+        /// Data about the validator registration
+        registration_data: Option<BuilderGetValidatorsResponseEntry>,
+        /// Payload attributes for the incoming blocks
+        payload_attributes: Option<PayloadAttributesUpdate>,
+        /// Inclusion list
+        il: Option<InclusionListWithKey>,
+    },
     SimResult(SimulationResult),
     SimulatorSync {
         id: usize,

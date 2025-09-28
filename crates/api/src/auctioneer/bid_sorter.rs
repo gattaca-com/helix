@@ -189,10 +189,6 @@ impl BidSorter {
             Duration::from_nanos(utcnow_ns().saturating_sub(recv_ns));
     }
 
-    pub fn update_slot(&mut self, head_slot: u64) {
-        self.process_slot(head_slot)
-    }
-
     pub fn get_header(&self) -> Option<BuilderBid> {
         self.curr_bid.as_ref().map(|b| b.2.clone())
     }
@@ -266,10 +262,10 @@ impl BidSorter {
         }
     }
 
-    fn process_slot(&mut self, head_slot: u64) {
+    pub(super) fn process_slot(&mut self, bid_slot: u64) {
         self.report();
 
-        self.curr_bid_slot = head_slot + 1;
+        self.curr_bid_slot = bid_slot;
         self.bids.clear();
         self.headers.clear();
         self.demotions.clear();

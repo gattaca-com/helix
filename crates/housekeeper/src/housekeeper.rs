@@ -445,7 +445,7 @@ impl<DB: DatabaseService> Housekeeper<DB> {
         let mut primev_builders_config: Vec<BuilderConfig> = Vec::new();
 
         for builder_pubkey in primev_builders {
-            match auctioneer.get_builder_info(&builder_pubkey).ok() {
+            match auctioneer.get_builder_info(&builder_pubkey) {
                 Some(builder_info) => {
                     if builder_info.builder_id == Some("PrimevBuilder".to_string()) ||
                         builder_info

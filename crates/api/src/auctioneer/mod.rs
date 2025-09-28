@@ -14,7 +14,13 @@ use std::sync::Arc;
 
 use alloy_primitives::B256;
 pub use handle::AuctioneerHandle;
-use helix_common::{chain_info::ChainInfo, local_cache::LocalCache, RelayConfig};
+use helix_common::{
+    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithKey},
+    chain_info::ChainInfo,
+    local_cache::LocalCache,
+    RelayConfig,
+};
+use helix_housekeeper::PayloadAttributesUpdate;
 use helix_types::Slot;
 pub use simulator::*;
 use tokio::runtime;
@@ -23,6 +29,7 @@ pub use types::GetPayloadResultData;
 
 use crate::{
     auctioneer::{
+        bid_sorter::BidSorter,
         context::Context,
         manager::SimulatorManager,
         types::{Event, SlotContext, SortingData},
@@ -40,6 +47,7 @@ pub fn spawn_auctioneer<A: Api>(
     db: Arc<A::DatabaseService>,
     merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
     cache: LocalCache,
+    top_bid_tx: tokio::sync::broadcast::Sender<bytes::Bytes>,
 ) -> AuctioneerHandle {
     let (worker_tx, worker_rx) = crossbeam_channel::bounded(10_000);
     let (event_tx, event_rx) = crossbeam_channel::bounded(10_000);
@@ -65,9 +73,10 @@ pub fn spawn_auctioneer<A: Api>(
             .unwrap();
     }
 
+    let bid_sorter = BidSorter::new(top_bid_tx);
     let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone(), runtime);
-    let ctx = Context::new(chain_info, config, sim_manager, db);
-    let auctioneer = Auctioneer::<A> { ctx, state: State::Slot { slot: Default::default() } };
+    let ctx = Context::new(chain_info, config, sim_manager, db, bid_sorter, cache);
+    let auctioneer = Auctioneer::<A> { ctx, state: State::default() };
 
     std::thread::Builder::new()
         .name("auctioneer".to_string())
@@ -98,12 +107,32 @@ impl<A: Api> Auctioneer<A> {
 }
 
 enum State {
+    /// Two cases:
+    /// - Next proposer is not registered
+    /// - Waiting for housekeeper to send all data to start sorting
+    Slot {
+        slot: Slot,
+        registration_data: Option<BuilderGetValidatorsResponseEntry>,
+        payload_attributes: Option<PayloadAttributesUpdate>,
+        il: Option<InclusionListWithKey>,
+    },
+
     /// Next proposer is registered and we are processing builder bids
     Sorting(SortingData),
+
     /// Processing get_payload, broadcasting block
     Broadcasting { slot_ctx: SlotContext, block_hash: B256 },
-    /// Next proposer is not registered, reject most calls
-    Slot { slot: Slot },
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self::Slot {
+            slot: Slot::new(0),
+            registration_data: None,
+            payload_attributes: None,
+            il: None,
+        }
+    }
 }
 
 impl State {
@@ -113,8 +142,28 @@ impl State {
             ///////////// LIFECYCLE EVENTS (ALWAYS VALID) /////////////
 
             // new slot
-            (_, Event::NewSlot) => {
-                ctx.clear();
+            (_, Event::SlotData { bid_slot, registration_data, payload_attributes, il }) => {
+                // if bid_slot < ctx.last_bid_slot {
+                //     return;
+                // }
+
+                // if bid_slot > ctx.last_bid_slot {
+                // ctx.on_new_slot(Default::default());
+                // match (registration_data, payload_attributes) {
+                //     (Some(registration_data), Some(payload_attributes)) => {
+                //         let state = SortingData {
+                //             slot: bid_slot,
+                //             sort: todo!(),
+                //             seen_block_hashes: todo!(),
+                //             sequence: todo!(),
+                //             hydration_cache: todo!(),
+                //             payloads: todo!(),
+                //             inclusion_list: todo!(),
+                //         };
+                //         *self = State::Sorting(())
+                //     }
+                // }
+                // }
             }
 
             // simulator sync status
@@ -122,7 +171,7 @@ impl State {
                 ctx.sim_manager.handle_sync_status(id, is_synced);
             }
 
-            // late sim results
+            // late sim result
             (State::Broadcasting { .. } | State::Slot { .. }, Event::SimResult(result)) => {
                 ctx.handle_simulation_result(result);
             }
@@ -133,33 +182,33 @@ impl State {
             (
                 State::Sorting(sorting),
                 Event::Submission { submission, withdrawals_root, sequence, trace, res_tx },
-            ) => sorting.handle_submission(
+            ) => ctx.handle_submission(
                 submission,
                 withdrawals_root,
                 sequence,
                 trace,
-                ctx,
                 res_tx,
+                &sorting.slot,
             ),
 
             // get_header
             (State::Sorting(sorting), Event::GetHeader { params, res_tx }) => {
-                sorting.handle_get_header(params, res_tx)
+                ctx.handle_get_header(params, res_tx)
             }
 
             // get_paylaod
             (State::Sorting(sorting), Event::GetPayload { blinded, block_hash, trace, res_tx }) => {
-                sorting.handle_get_payload(block_hash, blinded, trace, res_tx, ctx);
+                ctx.handle_get_payload(block_hash, blinded, trace, res_tx, &sorting.slot);
             }
 
             // sim result
             (State::Sorting(sorting), Event::SimResult(result)) => {
-                sorting.handle_simulated_submission(&result);
+                ctx.sort_simulation_result(&result);
                 ctx.handle_simulation_result(result);
             }
 
             (State::Sorting(sorting), Event::GossipPayload(payload)) => {
-                sorting.handle_gossip_payload(payload);
+                ctx.handle_gossip_payload(payload, &sorting.slot);
             }
 
             ///////////// INVALID STATES / EVENTS /////////////
@@ -233,8 +282,8 @@ impl State {
             }
 
             // gossip payload unregistered
-            (State::Slot { slot }, Event::GossipPayload(payload)) => {
-                warn!(curr =% slot, gossip_slot = payload.slot, "received late gossip payload");
+            (State::Slot { slot, .. }, Event::GossipPayload(payload)) => {
+                warn!(curr =% slot, gossip_slot = payload.slot, "received early or late gossip payload");
             }
         }
     }

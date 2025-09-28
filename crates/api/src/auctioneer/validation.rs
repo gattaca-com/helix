@@ -2,21 +2,26 @@ use alloy_primitives::B256;
 use helix_common::{bid_submission::BidSubmission, BuilderInfo};
 use helix_types::{BlsPublicKeyBytes, SignedBidSubmission};
 
-use crate::{auctioneer::types::SortingData, builder::error::BuilderApiError};
+use crate::{
+    auctioneer::{context::Context, types::SlotContext},
+    builder::error::BuilderApiError,
+    Api,
+};
 
 // TODO: metadata
 
-impl SortingData {
+impl<A: Api> Context<A> {
     pub fn validate_submission(
         &mut self,
         payload: &SignedBidSubmission,
         withdrawals_root: &B256,
         sequence: Option<u64>,
         builder_info: &BuilderInfo,
+        slot_data: &SlotContext,
     ) -> Result<(), BuilderApiError> {
-        if payload.slot() != self.slot.bid_slot {
+        if payload.slot() != self.bid_slot {
             return Err(BuilderApiError::SubmissionForWrongSlot {
-                expected: self.slot.bid_slot,
+                expected: self.bid_slot,
                 got: payload.slot(),
             });
         }
@@ -26,8 +31,8 @@ impl SortingData {
         }
 
         self.check_duplicate_submission(*payload.block_hash())?;
-        self.validate_submission_data(payload, &withdrawals_root)?;
-        self.check_if_trusted_builder(builder_info)?;
+        self.validate_submission_data(payload, &withdrawals_root, slot_data)?;
+        self.check_if_trusted_builder(builder_info, slot_data)?;
 
         Ok(())
     }
@@ -36,22 +41,23 @@ impl SortingData {
         &self,
         payload: &impl BidSubmission,
         withdrawals_root: &B256,
+        slot_data: &SlotContext,
     ) -> Result<(), BuilderApiError> {
-        if self.slot.current_fork != payload.fork_name() {
-            return Err(BuilderApiError::InvalidPayloadType { fork_name: self.slot.current_fork });
+        if slot_data.current_fork != payload.fork_name() {
+            return Err(BuilderApiError::InvalidPayloadType { fork_name: slot_data.current_fork });
         }
 
         // checks internal consistency of the payload
         payload.validate()?;
 
-        if self.slot.payload_attributes.payload_attributes.timestamp != payload.timestamp() {
+        if slot_data.payload_attributes.payload_attributes.timestamp != payload.timestamp() {
             return Err(BuilderApiError::IncorrectTimestamp {
                 got: payload.timestamp(),
-                expected: self.slot.payload_attributes.payload_attributes.timestamp,
+                expected: slot_data.payload_attributes.payload_attributes.timestamp,
             });
         }
 
-        let registration = &self.slot.registration_data.entry.registration.message;
+        let registration = &slot_data.registration_data.entry.registration.message;
         if registration.fee_recipient != *payload.proposer_fee_recipient() {
             return Err(BuilderApiError::FeeRecipientMismatch {
                 got: *payload.proposer_fee_recipient(),
@@ -67,7 +73,7 @@ impl SortingData {
             });
         }
 
-        let payload_attributes = &self.slot.payload_attributes;
+        let payload_attributes = &slot_data.payload_attributes;
         if *payload.prev_randao() != payload_attributes.prev_randao {
             return Err(BuilderApiError::PrevRandaoMismatch {
                 got: *payload.prev_randao(),
@@ -113,9 +119,13 @@ impl SortingData {
         Ok(())
     }
 
-    fn check_if_trusted_builder(&self, builder_info: &BuilderInfo) -> Result<(), BuilderApiError> {
+    fn check_if_trusted_builder(
+        &self,
+        builder_info: &BuilderInfo,
+        slot_data: &SlotContext,
+    ) -> Result<(), BuilderApiError> {
         if let Some(trusted_builders) =
-            &self.slot.registration_data.entry.preferences.trusted_builders
+            &slot_data.registration_data.entry.preferences.trusted_builders
         {
             // Handle case where proposer specifies an empty list.
             if trusted_builders.is_empty() {

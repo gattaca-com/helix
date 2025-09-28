@@ -1,43 +1,62 @@
-use std::sync::Arc;
+use std::{
+    ops::{Deref, DerefMut},
+    sync::Arc,
+};
 
-use alloy_primitives::U256;
+use alloy_primitives::{B256, U256};
 use helix_common::{
-    bid_submission::BidSubmission, chain_info::ChainInfo, metrics::SimulatorMetrics, BuilderInfo,
-    RelayConfig,
+    bid_submission::BidSubmission, chain_info::ChainInfo, local_cache::LocalCache,
+    metrics::SimulatorMetrics, BuilderInfo, RelayConfig,
 };
 use helix_database::DatabaseService;
-use helix_types::BlsPublicKeyBytes;
-use rustc_hash::FxHashMap;
+use helix_types::{BlsPublicKeyBytes, HydrationCache, PayloadAndBlobs, Slot};
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{error, warn};
 
 use crate::{
     auctioneer::{
+        bid_sorter::BidSorter,
         simulator::manager::{SimulationResult, SimulatorManager},
         types::PendingPayload,
     },
     Api,
 };
 
+// This is context that is only valid for a given slot, could also be in SortingData but keeping it
+// here lets us avoid reallocating memory each slot
+pub struct SlotContext {
+    pub bid_slot: Slot,
+    // TODO: on transition to new slot, send ProposerApiError::NoExecutionPayloadFound for this
+    pub pending_payload: Option<PendingPayload>,
+    pub bid_sorter: BidSorter,
+    pub seen_block_hashes: FxHashSet<B256>,
+    pub sequence: FxHashMap<BlsPublicKeyBytes, u64>,
+    pub hydration_cache: HydrationCache,
+    pub payloads: FxHashMap<B256, Arc<PayloadAndBlobs>>,
+    pub sim_manager: SimulatorManager,
+}
+
 pub struct Context<A: Api> {
     pub chain_info: ChainInfo,
-    pub builder_infos: FxHashMap<BlsPublicKeyBytes, BuilderInfo>,
+    pub config: RelayConfig,
+    pub cache: LocalCache,
     pub unknown_builder_info: BuilderInfo,
-    pub sim_manager: SimulatorManager,
-    // TODO: on transition to new slot, send ProposerApiError::NoExecutionPayloadFound for this
-    // TODO: move to sorting data
-    pub pending_payload: Option<PendingPayload>,
-    // flags
+    pub db: Arc<A::DatabaseService>,
+
     // failsafe_triggered + accept_optimistic
     pub can_process_optimistic: bool,
-    pub db: Arc<A::DatabaseService>,
-    pub config: RelayConfig,
+
+    pub slot_context: SlotContext,
 }
+
 impl<A: Api> Context<A> {
     pub fn new(
         chain_info: ChainInfo,
         config: RelayConfig,
         sim_manager: SimulatorManager,
         db: Arc<A::DatabaseService>,
+        bid_sorter: BidSorter,
+        cache: LocalCache,
     ) -> Self {
         let unknown_builder_info = BuilderInfo {
             collateral: U256::ZERO,
@@ -48,19 +67,30 @@ impl<A: Api> Context<A> {
             api_key: None,
         };
 
-        // TODO: sync this from housekeeper
-        let builder_infos = FxHashMap::with_capacity_and_hasher(200, Default::default());
+        let slot_context = SlotContext {
+            sim_manager,
+            bid_slot: Slot::new(0),
+            pending_payload: None,
+            bid_sorter,
+            seen_block_hashes: FxHashSet::with_capacity_and_hasher(2000, Default::default()),
+            sequence: FxHashMap::with_capacity_and_hasher(200, Default::default()),
+            hydration_cache: HydrationCache::new(),
+            payloads: FxHashMap::with_capacity_and_hasher(2000, Default::default()),
+        };
 
         Self {
             chain_info,
-            builder_infos,
+            cache,
             unknown_builder_info,
-            sim_manager,
-            pending_payload: None,
+            slot_context,
             can_process_optimistic: true,
             db,
             config,
         }
+    }
+
+    pub fn builder_info(&self, builder: &BlsPublicKeyBytes) -> BuilderInfo {
+        self.cache.get_builder_info(builder).unwrap_or_else(|| self.unknown_builder_info.clone())
     }
 
     pub fn handle_simulation_result(&mut self, result: SimulationResult) {
@@ -70,21 +100,17 @@ impl<A: Api> Context<A> {
         let block_hash = *result.submission.block_hash();
 
         if let Err(err) = result.result.as_ref() {
-            if let Some(builder_info) = self.builder_infos.get_mut(&builder) {
-                if builder_info.is_optimistic {
-                    if err.is_demotable() {
-                        warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
+            if err.is_demotable() {
+                if self.cache.demote_builder(&builder) {
+                    warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
 
-                        SimulatorMetrics::demotion_count();
+                    SimulatorMetrics::demotion_count();
 
-                        builder_info.is_optimistic = false;
-                        builder_info.is_optimistic_for_regional_filtering = false;
+                    let db = self.db.clone();
+                    let reason = err.to_string();
+                    let bid_slot = result.submission.slot();
 
-                        let db = self.db.clone();
-                        let reason = err.to_string();
-                        let bid_slot = result.submission.slot();
-
-                        tokio::spawn(async move {
+                    self.sim_manager.runtime.spawn(async move {
                             if let Err(err) = db
                                 .db_demote_builder(bid_slot.as_u64(), &builder, &block_hash, reason)
                                 .await
@@ -94,13 +120,26 @@ impl<A: Api> Context<A> {
                                 error!(%builder, %err, %block_hash, "failed to demote builder in database");
                             }
                         });
-                    } else {
-                        warn!(%err, %builder, %block_hash, "failed simulation with known error, skipping demotion");
-                    }
+                } else {
+                    warn!(%err, %builder, %block_hash, "failed simulation with known error, skipping demotion");
                 }
             };
         }
     }
 
-    pub fn clear(&mut self) {}
+    pub fn on_new_slot(&mut self, _slot: Slot) {}
+}
+
+impl<A: Api> Deref for Context<A> {
+    type Target = SlotContext;
+
+    fn deref(&self) -> &Self::Target {
+        &self.slot_context
+    }
+}
+
+impl<A: Api> DerefMut for Context<A> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.slot_context
+    }
 }

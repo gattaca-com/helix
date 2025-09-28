@@ -62,6 +62,7 @@ pub async fn run_api_service<A: Api>(
         db.clone(),
         merge_pool_tx,
         Arc::unwrap_or_clone(local_cache.clone()),
+        top_bid_tx.clone(),
     );
 
     let accept_optimistic = Arc::new(AtomicBool::new(true));

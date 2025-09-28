@@ -63,7 +63,7 @@ pub struct SimulatorManager {
     // TODO: Use this:
     accept_optimistic: bool,
     sim_result_tx: crossbeam_channel::Sender<Event>,
-    runtime: Handle,
+    pub runtime: Handle,
 }
 
 impl SimulatorManager {
