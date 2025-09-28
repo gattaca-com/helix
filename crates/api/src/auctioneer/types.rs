@@ -74,7 +74,7 @@ pub enum WorkerJob {
 }
 
 // do we need coordinates here
-pub struct SlotContext {
+pub struct SlotData {
     /// Head slot + 1, builders are bidding to build this slot
     pub bid_slot: Slot,
     /// Data about the validator registration
@@ -97,12 +97,7 @@ pub struct PendingPayload {
     pub retry_at: Instant,
 }
 
-pub struct SortingData {
-    pub slot: SlotContext,
-    pub inclusion_list: Option<InclusionListWithMetadata>,
-}
-
-impl SlotContext {
+impl SlotData {
     pub fn proposer_pubkey(&self) -> &BlsPublicKeyBytes {
         &self.registration_data.entry.registration.message.pubkey
     }

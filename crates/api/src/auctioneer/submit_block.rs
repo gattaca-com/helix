@@ -18,7 +18,7 @@ use crate::{
         bid_sorter::BidSorterMessage,
         context::Context,
         simulator::{manager::SimulationResult, BlockSimRequest, SimulatorRequest},
-        types::{SlotContext, Submission, SubmissionResult},
+        types::{SlotData, Submission, SubmissionResult},
     },
     builder::error::BuilderApiError,
     Api,
@@ -32,7 +32,7 @@ impl<A: Api> Context<A> {
         sequence: Option<u64>,
         mut trace: SubmissionTrace,
         res_tx: oneshot::Sender<SubmissionResult>,
-        slot_data: &SlotContext,
+        slot_data: &SlotData,
     ) {
         match self.validate_and_sort_submission(
             submission,
@@ -86,7 +86,7 @@ impl<A: Api> Context<A> {
         withdrawals_root: B256,
         sequence: Option<u64>,
         trace: &mut SubmissionTrace,
-        slot_data: &SlotContext,
+        slot_data: &SlotData,
     ) -> Result<(SignedBidSubmission, OptimisticVersion), BuilderApiError> {
         let submission = match submission {
             Submission::Full(full) => full,
@@ -140,7 +140,7 @@ impl<A: Api> Context<A> {
         submission_trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,
         res_tx: Option<oneshot::Sender<SubmissionResult>>,
-        slot_data: &SlotContext,
+        slot_data: &SlotData,
     ) {
         // TODO: pass this from previous step
         let is_top_bid = self.bid_sorter.is_top_bid(&submission);
@@ -182,7 +182,7 @@ impl<A: Api> Context<A> {
         &self,
         submission: &SignedBidSubmission,
         builder_info: &BuilderInfo,
-        slot_data: &SlotContext,
+        slot_data: &SlotData,
     ) -> bool {
         if builder_info.is_optimistic && submission.message().value <= builder_info.collateral {
             if slot_data.registration_data.entry.preferences.filtering.is_regional() &&

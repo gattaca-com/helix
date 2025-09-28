@@ -15,7 +15,7 @@ use tracing::warn;
 use crate::{
     auctioneer::{
         context::Context,
-        types::{GetPayloadResult, GetPayloadResultData, PendingPayload, SlotContext},
+        types::{GetPayloadResult, GetPayloadResultData, PendingPayload, SlotData},
     },
     gossiper::types::BroadcastPayloadParams,
     proposer::ProposerApiError,
@@ -26,7 +26,7 @@ impl<A: Api> Context<A> {
     pub(super) fn handle_gossip_payload(
         &mut self,
         payload: BroadcastPayloadParams,
-        slot_data: &SlotContext,
+        slot_data: &SlotData,
     ) {
         if self.bid_slot != payload.slot {
             warn!(curr =% self.bid_slot, received =% payload.slot, "received gossiped payload for wrong slot");
@@ -50,7 +50,7 @@ impl<A: Api> Context<A> {
         blinded: SignedBlindedBeaconBlock,
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
-        slot_data: &SlotContext,
+        slot_data: &SlotData,
     ) {
         if let Some(payload) = self.payloads.get(&block_hash) {
             let res = self._get_payload(blinded, payload, trace, slot_data).map(
@@ -85,7 +85,7 @@ impl<A: Api> Context<A> {
         blinded: SignedBlindedBeaconBlock,
         local: &Arc<PayloadAndBlobs>,
         trace: GetPayloadTrace,
-        slot_data: &SlotContext,
+        slot_data: &SlotData,
     ) -> Result<(GetPayloadResponse, VersionedSignedProposal, GetPayloadTrace), ProposerApiError>
     {
         // TODO: use trace
@@ -97,7 +97,7 @@ impl<A: Api> Context<A> {
         &self,
         blinded: SignedBlindedBeaconBlock,
         local: &Arc<PayloadAndBlobs>,
-        slot_data: &SlotContext,
+        slot_data: &SlotData,
     ) -> Result<(GetPayloadResponse, VersionedSignedProposal), ProposerApiError> {
         self.validate_proposal_coordinate(&blinded, slot_data)?;
 
@@ -197,7 +197,7 @@ impl<A: Api> Context<A> {
     fn validate_proposal_coordinate(
         &self,
         blinded: &SignedBlindedBeaconBlock,
-        slot_data: &SlotContext,
+        slot_data: &SlotData,
     ) -> Result<(), ProposerApiError> {
         let slot_duty = &slot_data.registration_data;
         let actual_index = blinded.message().proposer_index();

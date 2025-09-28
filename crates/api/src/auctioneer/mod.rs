@@ -32,7 +32,7 @@ use crate::{
         bid_sorter::BidSorter,
         context::Context,
         manager::SimulatorManager,
-        types::{Event, SlotContext, SortingData},
+        types::{Event, SlotData},
         worker::Worker,
     },
     builder::error::BuilderApiError,
@@ -109,7 +109,7 @@ impl<A: Api> Auctioneer<A> {
 enum State {
     /// Two cases:
     /// - Next proposer is not registered
-    /// - Waiting for housekeeper to send all data to start sorting
+    /// - Waiting for housekeeper to send all slot data to start sorting
     Slot {
         slot: Slot,
         registration_data: Option<BuilderGetValidatorsResponseEntry>,
@@ -118,10 +118,10 @@ enum State {
     },
 
     /// Next proposer is registered and we are processing builder bids
-    Sorting(SortingData),
+    Sorting(SlotData),
 
     /// Processing get_payload, broadcasting block
-    Broadcasting { slot_ctx: SlotContext, block_hash: B256 },
+    Broadcasting { slot_data: SlotData, block_hash: B256 },
 }
 
 impl Default for State {
@@ -180,7 +180,7 @@ impl State {
 
             // submission
             (
-                State::Sorting(sorting),
+                State::Sorting(slot_data),
                 Event::Submission { submission, withdrawals_root, sequence, trace, res_tx },
             ) => ctx.handle_submission(
                 submission,
@@ -188,34 +188,37 @@ impl State {
                 sequence,
                 trace,
                 res_tx,
-                &sorting.slot,
+                &slot_data,
             ),
 
             // get_header
-            (State::Sorting(sorting), Event::GetHeader { params, res_tx }) => {
+            (State::Sorting(_), Event::GetHeader { params, res_tx }) => {
                 ctx.handle_get_header(params, res_tx)
             }
 
             // get_paylaod
-            (State::Sorting(sorting), Event::GetPayload { blinded, block_hash, trace, res_tx }) => {
-                ctx.handle_get_payload(block_hash, blinded, trace, res_tx, &sorting.slot);
+            (
+                State::Sorting(slot_data),
+                Event::GetPayload { blinded, block_hash, trace, res_tx },
+            ) => {
+                ctx.handle_get_payload(block_hash, blinded, trace, res_tx, &slot_data);
             }
 
             // sim result
-            (State::Sorting(sorting), Event::SimResult(result)) => {
+            (State::Sorting(_), Event::SimResult(result)) => {
                 ctx.sort_simulation_result(&result);
                 ctx.handle_simulation_result(result);
             }
 
-            (State::Sorting(sorting), Event::GossipPayload(payload)) => {
-                ctx.handle_gossip_payload(payload, &sorting.slot);
+            (State::Sorting(slot_data), Event::GossipPayload(payload)) => {
+                ctx.handle_gossip_payload(payload, &slot_data);
             }
 
             ///////////// INVALID STATES / EVENTS /////////////
 
             // late submission
             (
-                State::Broadcasting { slot_ctx, .. },
+                State::Broadcasting { slot_data: slot_ctx, .. },
                 Event::Submission { submission, res_tx, .. },
             ) => {
                 let _ = res_tx.send(Err(BuilderApiError::DeliveringPayload {
@@ -231,7 +234,7 @@ impl State {
 
             // duplicate get_payload, proposer equivocating?
             (
-                State::Broadcasting { slot_ctx, block_hash },
+                State::Broadcasting { slot_data: slot_ctx, block_hash },
                 Event::GetPayload { blinded, block_hash: new_block_hash, res_tx, .. },
             ) => {
                 if slot_ctx.bid_slot == blinded.slot() || *block_hash == new_block_hash {
@@ -247,7 +250,10 @@ impl State {
             }
 
             // gossip payload
-            (State::Broadcasting { block_hash, slot_ctx }, Event::GossipPayload(payload)) => {
+            (
+                State::Broadcasting { block_hash, slot_data: slot_ctx },
+                Event::GossipPayload(payload),
+            ) => {
                 if *block_hash == payload.execution_payload.execution_payload.block_hash &&
                     slot_ctx.bid_slot == payload.slot &&
                     slot_ctx.proposer_pubkey() == &payload.proposer_pub_key

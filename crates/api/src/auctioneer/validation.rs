@@ -3,7 +3,7 @@ use helix_common::{bid_submission::BidSubmission, BuilderInfo};
 use helix_types::{BlsPublicKeyBytes, SignedBidSubmission};
 
 use crate::{
-    auctioneer::{context::Context, types::SlotContext},
+    auctioneer::{context::Context, types::SlotData},
     builder::error::BuilderApiError,
     Api,
 };
@@ -17,7 +17,7 @@ impl<A: Api> Context<A> {
         withdrawals_root: &B256,
         sequence: Option<u64>,
         builder_info: &BuilderInfo,
-        slot_data: &SlotContext,
+        slot_data: &SlotData,
     ) -> Result<(), BuilderApiError> {
         if payload.slot() != self.bid_slot {
             return Err(BuilderApiError::SubmissionForWrongSlot {
@@ -41,7 +41,7 @@ impl<A: Api> Context<A> {
         &self,
         payload: &impl BidSubmission,
         withdrawals_root: &B256,
-        slot_data: &SlotContext,
+        slot_data: &SlotData,
     ) -> Result<(), BuilderApiError> {
         if slot_data.current_fork != payload.fork_name() {
             return Err(BuilderApiError::InvalidPayloadType { fork_name: slot_data.current_fork });
@@ -122,7 +122,7 @@ impl<A: Api> Context<A> {
     fn check_if_trusted_builder(
         &self,
         builder_info: &BuilderInfo,
-        slot_data: &SlotContext,
+        slot_data: &SlotData,
     ) -> Result<(), BuilderApiError> {
         if let Some(trusted_builders) =
             &slot_data.registration_data.entry.preferences.trusted_builders
