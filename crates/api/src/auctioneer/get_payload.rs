@@ -6,17 +6,17 @@ use std::{
 use alloy_primitives::B256;
 use helix_common::GetPayloadTrace;
 use helix_types::{
-    BeaconBlockBodyElectra, BeaconBlockElectra, ExecutionPayload, GetPayloadResponse,
-    PayloadAndBlobs, SignedBeaconBlock, SignedBeaconBlockElectra, SignedBidSubmission,
-    SignedBlindedBeaconBlock, VersionedSignedProposal,
+    BeaconBlockBodyElectra, BeaconBlockElectra, GetPayloadResponse, PayloadAndBlobs,
+    SignedBeaconBlock, SignedBeaconBlockElectra, SignedBlindedBeaconBlock, VersionedSignedProposal,
 };
 use tokio::sync::oneshot;
 use tracing::warn;
 
 use crate::{
-    builder::simulator_2::{
-        worker::{GetPayloadResult, GetPayloadResultData},
-        Context, PendingPayload, SortingData,
+    auctioneer::{
+        context::Context,
+        types::{GetPayloadResult, GetPayloadResultData, PendingPayload},
+        SortingData,
     },
     gossiper::types::BroadcastPayloadParams,
     proposer::ProposerApiError,
@@ -69,7 +69,7 @@ impl SortingData {
         } else {
             // we may still receive the payload from builder / gossip, save request for
             // later
-            ctx.pending_payloads = Some(PendingPayload {
+            ctx.pending_payload = Some(PendingPayload {
                 block_hash,
                 blinded,
                 res_tx,

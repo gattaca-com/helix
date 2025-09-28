@@ -86,7 +86,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
 
     let beacon_client = start_beacon_client(&config);
     let db = start_db_service(&config, known_validators_loaded.clone()).await?;
-    let auctioneer = start_auctioneer(db.clone()).await?;
+    let local_cache = start_auctioneer(db.clone()).await?;
 
     let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
 
@@ -94,7 +94,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
 
     let current_slot_info = start_housekeeper(
         db.clone(),
-        auctioneer.clone(),
+        local_cache.clone(),
         &config,
         beacon_client.clone(),
         chain_info.clone(),
@@ -104,12 +104,12 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
 
     let terminating = Arc::new(AtomicBool::default());
 
-    start_admin_service(auctioneer.clone(), &config);
+    start_admin_service(local_cache.clone(), &config);
 
     start_api_service::<ApiProd>(
         config.clone(),
         db.clone(),
-        auctioneer,
+        local_cache,
         chain_info,
         relay_signing_context,
         beacon_client,

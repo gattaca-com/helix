@@ -19,7 +19,7 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    builder::{simulator::BlockMergeResponse, BlockMergeRequest},
+    auctioneer::{BlockMergeRequest, BlockMergeResponse},
     proposer::{error::ProposerApiError, ProposerApi},
     Api,
 };

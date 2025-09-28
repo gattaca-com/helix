@@ -4,7 +4,7 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 use super::api::BuilderApi;
-use crate::{builder::simulator_2::Event, gossiper::types::BroadcastPayloadParams, Api};
+use crate::{gossiper::types::BroadcastPayloadParams, Api};
 
 // Handle Gossiped Payloads
 impl<A: Api> BuilderApi<A> {
@@ -16,7 +16,7 @@ impl<A: Api> BuilderApi<A> {
 
         let trace = GossipedPayloadTrace { receive: utcnow_ns(), ..Default::default() };
 
-        if let Err(err) = self.auctioneer_tx.send(Event::GossipPayload(req)) {
+        if let Err(err) = self.auctioneer_handle.gossip_payload(req) {
             error!(%err, "failed sending gossip payload to auctioneer");
         }
 

@@ -1,20 +1,8 @@
-use std::sync::Arc;
-
 use alloy_primitives::B256;
 use helix_common::{bid_submission::BidSubmission, BuilderInfo};
-use helix_types::{
-    BeaconBlockBodyElectra, BeaconBlockElectra, BlindedPayloadRef, BlsPublicKeyBytes,
-    GetPayloadResponse, PayloadAndBlobs, SignedBeaconBlock, SignedBeaconBlockElectra,
-    SignedBidSubmission, SignedBlindedBeaconBlock, VersionedSignedProposal,
-};
+use helix_types::{BlsPublicKeyBytes, SignedBidSubmission};
 
-use crate::{
-    builder::{
-        error::BuilderApiError,
-        simulator_2::{SlotContext, SortingData},
-    },
-    proposer::ProposerApiError,
-};
+use crate::{auctioneer::types::SortingData, builder::error::BuilderApiError};
 
 // TODO: metadata
 
@@ -26,7 +14,6 @@ impl SortingData {
         sequence: Option<u64>,
         builder_info: &BuilderInfo,
     ) -> Result<(), BuilderApiError> {
-        // slot
         if payload.slot() != self.slot.bid_slot {
             return Err(BuilderApiError::SubmissionForWrongSlot {
                 expected: self.slot.bid_slot,
@@ -34,23 +21,13 @@ impl SortingData {
             });
         }
 
-        // sequence
         if let Some(seq) = sequence {
             self.check_and_update_sequence_number(payload.builder_public_key(), seq)?;
         }
 
-        // duplicates
         self.check_duplicate_submission(*payload.block_hash())?;
-
-        // TODO: last slot delivered in get_payload state
         self.validate_submission_data(payload, &withdrawals_root)?;
-
-        // trusted builder
-        if self.check_if_trusted_builder(payload, builder_info) {
-            return Err(BuilderApiError::BuilderNotInProposersTrustedList {
-                proposer_trusted_builders: vec![], // TODO
-            })
-        }
+        self.check_if_trusted_builder(builder_info)?;
 
         Ok(())
     }
@@ -121,7 +98,7 @@ impl SortingData {
         builder: &BlsPublicKeyBytes,
         new_seq: u64,
     ) -> Result<(), BuilderApiError> {
-        if let Some(mut old_seq) = self.sequence.get_mut(builder) {
+        if let Some(old_seq) = self.sequence.get_mut(builder) {
             if new_seq > *old_seq {
                 // higher sequence number, update
                 *old_seq = new_seq;
@@ -136,28 +113,38 @@ impl SortingData {
         Ok(())
     }
 
-    fn check_if_trusted_builder(
-        &self,
-        submission: &SignedBidSubmission,
-        builder_info: &BuilderInfo,
-    ) -> bool {
+    fn check_if_trusted_builder(&self, builder_info: &BuilderInfo) -> Result<(), BuilderApiError> {
         if let Some(trusted_builders) =
             &self.slot.registration_data.entry.preferences.trusted_builders
         {
             // Handle case where proposer specifies an empty list.
             if trusted_builders.is_empty() {
-                return true;
+                return Ok(());
             }
 
             if let Some(builder_id) = &builder_info.builder_id {
-                trusted_builders.contains(builder_id)
+                if trusted_builders.contains(builder_id) {
+                    Ok(())
+                } else {
+                    return Err(BuilderApiError::BuilderNotInProposersTrustedList {
+                        proposer_trusted_builders: trusted_builders.clone(),
+                    })
+                }
             } else if let Some(ids) = &builder_info.builder_ids {
-                ids.iter().any(|id| trusted_builders.contains(id))
+                if ids.iter().any(|id| trusted_builders.contains(id)) {
+                    Ok(())
+                } else {
+                    return Err(BuilderApiError::BuilderNotInProposersTrustedList {
+                        proposer_trusted_builders: trusted_builders.clone(),
+                    })
+                }
             } else {
-                false
+                return Err(BuilderApiError::BuilderNotInProposersTrustedList {
+                    proposer_trusted_builders: trusted_builders.clone(),
+                })
             }
         } else {
-            true
+            Ok(())
         }
     }
 }

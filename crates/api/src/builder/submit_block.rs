@@ -6,14 +6,10 @@ use helix_common::{
     SubmissionTrace,
 };
 use http::HeaderMap;
-use tokio::sync::oneshot;
 use tracing::error;
 
 use super::api::BuilderApi;
-use crate::{
-    builder::{error::BuilderApiError, simulator_2::worker::WorkerJob},
-    Api,
-};
+use crate::{builder::error::BuilderApiError, Api};
 
 impl<A: Api> BuilderApi<A> {
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
@@ -33,15 +29,12 @@ impl<A: Api> BuilderApi<A> {
         let mut trace = SubmissionTrace::init_from_timings(timings);
         trace.metadata = api.metadata_provider.get_metadata(&headers);
 
-        let (res_tx, res_rx) = oneshot::channel();
-        let worker_job = WorkerJob::BlockSubmission { headers, body, trace, res_tx };
-
-        if api.worker_tx.try_send(worker_job).is_err() {
+        let Ok(rx) = api.auctioneer_handle.block_submission(headers, body, trace) else {
             error!("failed sending request to worker");
             return Err(BuilderApiError::InternalError)
-        }
+        };
 
-        match res_rx.await {
+        match rx.await {
             Ok(res) => res,
             Err(_) => Err(BuilderApiError::RequestTimeout),
         }

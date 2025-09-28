@@ -94,7 +94,6 @@ pub struct LocalCache {
     proposer_duties: Arc<RwLock<Vec<BuilderGetValidatorsResponseEntry>>>,
 }
 
-#[allow(dead_code)]
 impl LocalCache {
     pub fn new() -> Self {
         let builder_info_cache =
@@ -117,6 +116,12 @@ impl LocalCache {
     }
 
     pub fn new_test() -> Self {
+        Self::new()
+    }
+}
+
+impl Default for LocalCache {
+    fn default() -> Self {
         Self::new()
     }
 }

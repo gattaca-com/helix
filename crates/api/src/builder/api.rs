@@ -17,16 +17,14 @@ use helix_types::{
 use tracing::error;
 
 use crate::{
-    builder::simulator_2::{worker::WorkerJob, Event},
-    gossiper::grpc_gossiper::GrpcGossiperClientManager,
-    Api,
+    auctioneer::AuctioneerHandle, gossiper::grpc_gossiper::GrpcGossiperClientManager, Api,
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB
 
 #[derive(Clone)]
 pub struct BuilderApi<A: Api> {
-    pub auctioneer: Arc<LocalCache>,
+    pub local_cache: Arc<LocalCache>,
     pub db: Arc<A::DatabaseService>,
     pub chain_info: Arc<ChainInfo>,
     pub gossiper: Arc<GrpcGossiperClientManager>,
@@ -40,14 +38,13 @@ pub struct BuilderApi<A: Api> {
     pub failsafe_triggered: Arc<AtomicBool>,
     /// Failsafe: if we fail don't have any synced client we pause all optimistic submissions
     pub accept_optimistic: Arc<AtomicBool>,
-    pub auctioneer_tx: crossbeam_channel::Sender<Event>,
-    pub worker_tx: crossbeam_channel::Sender<WorkerJob>,
+    pub auctioneer_handle: AuctioneerHandle,
     pub metadata_provider: Arc<A::MetadataProvider>,
 }
 
 impl<A: Api> BuilderApi<A> {
     pub fn new(
-        auctioneer: Arc<LocalCache>,
+        local_cache: Arc<LocalCache>,
         db: Arc<A::DatabaseService>,
         chain_info: Arc<ChainInfo>,
         gossiper: Arc<GrpcGossiperClientManager>,
@@ -55,12 +52,11 @@ impl<A: Api> BuilderApi<A> {
         curr_slot_info: CurrentSlotInfo,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
         accept_optimistic: Arc<AtomicBool>,
-        worker_tx: crossbeam_channel::Sender<WorkerJob>,
-        auctioneer_tx: crossbeam_channel::Sender<Event>,
+        auctioneer_handle: AuctioneerHandle,
         metadata_provider: Arc<A::MetadataProvider>,
     ) -> Self {
         Self {
-            auctioneer,
+            local_cache,
             db,
             chain_info,
             gossiper,
@@ -69,8 +65,7 @@ impl<A: Api> BuilderApi<A> {
             top_bid_tx,
             failsafe_triggered: Arc::new(false.into()),
             accept_optimistic,
-            worker_tx,
-            auctioneer_tx,
+            auctioneer_handle,
             metadata_provider,
         }
     }

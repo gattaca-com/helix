@@ -50,6 +50,7 @@ impl std::fmt::Display for Network {
 }
 
 /// Runtime config with all chain specific information
+#[derive(Clone)]
 pub struct ChainInfo {
     pub network: Network,
     pub genesis_validators_root: B256,

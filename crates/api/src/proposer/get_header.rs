@@ -15,12 +15,10 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_types::BlsPublicKeyBytes;
-use tokio::sync::oneshot;
 use tracing::{debug, error, info, warn, Instrument};
 
 use super::ProposerApi;
 use crate::{
-    builder::simulator_2::Event,
     proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
     router::Terminating,
     Api, HEADER_TIMEOUT_MS,
@@ -45,7 +43,7 @@ impl<A: Api> ProposerApi<A> {
         headers: HeaderMap,
         Path(params): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
-        if terminating.load(Ordering::Relaxed) || proposer_api.auctioneer.kill_switch_enabled() {
+        if terminating.load(Ordering::Relaxed) || proposer_api.local_cache.kill_switch_enabled() {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
 
@@ -146,11 +144,8 @@ impl<A: Api> ProposerApi<A> {
             get_header_metric.record();
         }
 
-        let (tx, rx) = oneshot::channel();
-        if let Err(err) =
-            proposer_api.auctioneer_tx.try_send(Event::GetHeader { params, res_tx: tx })
-        {
-            error!(%err, "failed to send get_header to auctioneer");
+        let Ok(rx) = proposer_api.auctioneer_handle.get_header(params) else {
+            error!("failed to send get_header to auctioneer");
             return Err(ProposerApiError::ServiceUnavailableError)
         };
 

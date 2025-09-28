@@ -1,4 +1,4 @@
-use std::{collections::hash_map::Entry, sync::Arc, time::Duration};
+use std::{collections::hash_map::Entry, time::Duration};
 
 use alloy_primitives::{
     map::foldhash::{HashMap, HashMapExt, HashSet, HashSetExt},
@@ -7,10 +7,8 @@ use alloy_primitives::{
 use bytes::Bytes;
 use helix_common::{
     api::builder_api::TopBidUpdate,
-    bid_submission::{
-        v2::header_submission::SignedHeaderSubmission, BidSubmission, OptimisticVersion,
-    },
-    bid_submission_to_builder_bid_unsigned, header_submission_to_builder_bid_unsigned,
+    bid_submission::BidSubmission,
+    bid_submission_to_builder_bid_unsigned,
     metrics::{
         TopBidMetrics, BID_SORTER_PROCESS_LATENCY_US, BID_SORTER_QUEUE_LATENCY_US,
         BID_SORTER_RECV_LATENCY_US,
@@ -18,14 +16,12 @@ use helix_common::{
     utils::{avg_duration, utcnow_ms, utcnow_ns},
     SubmissionTrace,
 };
-use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
-use parking_lot::RwLock;
+use helix_types::{BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
 use ssz::Encode;
 use tracing::info;
 
 /// Pre-validated submissions ready to be processed. Submissions could come from:
 /// - V1 submissions, either optimistic, or non-optimistic after simulation
-/// - V2/V3 submissions
 pub struct BidSorterMessage {
     bid: Bid,
     builder_pubkey: BlsPublicKeyBytes,
@@ -55,25 +51,6 @@ impl BidSorterMessage {
             before_sorter_ns,
         }
     }
-
-    // pub fn new_from_header_submission(
-    //     submission: &SignedHeaderSubmission,
-    //     on_receive_ns: u64,
-    //     before_sorter_ns: u64,
-    // ) -> Self {
-    //     let bid_trace = submission.bid_trace();
-    //     let bid = Bid { value: bid_trace.value, on_receive_ns };
-
-    //     let header = header_submission_to_builder_bid_unsigned(submission);
-    //     Self::Submission {
-    //         bid,
-    //         builder_pubkey: bid_trace.builder_pubkey,
-    //         slot: bid_trace.slot,
-    //         header,
-    //         simulation_time_ns: 0,
-    //         before_sorter_ns,
-    //     }
-    // }
 }
 
 /// Latest cancellable bid
@@ -326,7 +303,7 @@ impl BidSorter {
         TopBidMetrics::top_bid_update_count();
     }
 
-    fn report(&mut self) {
+    pub(super) fn report(&mut self) {
         let tel = std::mem::take(&mut self.local_telemetry);
 
         let total_subs = tel.valid_subs + tel.past_subs + tel.demoted_subs;

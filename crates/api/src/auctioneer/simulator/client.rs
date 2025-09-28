@@ -8,9 +8,8 @@ use reqwest::{
 use serde_json::{json, Value};
 use tracing::debug;
 
-use crate::builder::{
-    simulator::{BlockMergeResponse, BlockSimRpcResponse, RpcResult},
-    BlockMergeRequest, BlockSimRequest,
+use crate::auctioneer::simulator::{
+    BlockMergeRequest, BlockMergeResponse, BlockSimRequest, BlockSimRpcResponse, RpcResult,
 };
 
 #[derive(Clone)]

@@ -1,41 +1,38 @@
 use alloy_primitives::B256;
-use bytes::Bytes;
 use helix_common::{
-    bid_submission::BidSubmission, chain_info::ChainInfo, local_cache::LocalCache,
-    metadata_provider::MetadataProvider, GetPayloadTrace, RelayConfig, SubmissionTrace,
+    chain_info::ChainInfo, local_cache::LocalCache, GetPayloadTrace, RelayConfig, SubmissionTrace,
 };
 use helix_types::{
-    BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission,
-    ExecPayload, ForkName, GetPayloadResponse, SigError, SignedBidSubmission,
-    SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock, VersionedSignedProposal,
+    BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission, ExecPayload,
+    SigError, SignedBidSubmission, SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock,
 };
-use http::{HeaderMap, HeaderValue};
-use moka::ops::compute::Op;
-use tokio::sync::oneshot;
+use http::HeaderValue;
 use tracing::{error, warn};
 
 use crate::{
-    builder::{
-        api::get_mergeable_orders, decoder::SubmissionDecoder, error::BuilderApiError,
-        simulator_2::Event,
+    auctioneer::{
+        decoder::SubmissionDecoder,
+        types::{Submission, WorkerJob},
+        Event,
     },
+    builder::{api::get_mergeable_orders, error::BuilderApiError},
     proposer::{MergingPoolMessage, ProposerApiError},
-    Api, HEADER_API_KEY, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_SEQUENCE,
+    HEADER_API_KEY, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_SEQUENCE,
 };
 
 // TODO: spans
-struct Worker {
-    rx: crossbeam_channel::Receiver<WorkerJob>,
-    tx: crossbeam_channel::Sender<Event>,
+pub(super) struct Worker {
+    pub(super) rx: crossbeam_channel::Receiver<WorkerJob>,
+    pub(super) tx: crossbeam_channel::Sender<Event>,
     // TODO: move this to auctioneer
-    merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
-    cache: LocalCache,
-    chain_info: ChainInfo,
-    relay_config: RelayConfig,
+    pub(super) merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
+    pub(super) cache: LocalCache,
+    pub(super) chain_info: ChainInfo,
+    pub(super) config: RelayConfig,
 }
 
 impl Worker {
-    fn run(mut self) {
+    pub(super) fn run(self) {
         loop {
             let Ok(task) = self.rx.try_recv() else {
                 continue;
@@ -58,12 +55,12 @@ impl Worker {
                             res_tx,
                         };
 
-                        if let Err(err) = self.tx.try_send(message) {
+                        if self.tx.try_send(message).is_err() {
                             error!("failed sending submisison to auctioneer");
                         }
 
                         // TODO: move this to auctioneer, avoid clones
-                        if self.relay_config.block_merging_config.is_enabled {
+                        if self.config.block_merging_config.is_enabled {
                             if let Some(merging_data) = merging_data {
                                 let Submission::Full(payload) = submission else {
                                     return;
@@ -119,13 +116,12 @@ impl Worker {
         &self,
         headers: http::HeaderMap,
         body: bytes::Bytes,
-        trace: &mut SubmissionTrace,
+        _trace: &mut SubmissionTrace,
     ) -> Result<(Submission, B256, Option<u64>, Option<BlockMergingData>), BuilderApiError> {
         let mut decoder = SubmissionDecoder::from_headers(&headers);
         let body = decoder.decompress(body)?;
         let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref())?;
 
-        let should_hydrate = headers.get(HEADER_HYDRATE).is_some();
         let skip_sigverify = headers
             .get(HEADER_API_KEY)
             .is_some_and(|key| self.cache.validate_api_key(key, &builder_pubkey));
@@ -170,7 +166,7 @@ impl Worker {
     fn handle_get_payload(
         &self,
         blinded_block: SignedBlindedBeaconBlock,
-        trace: &mut GetPayloadTrace,
+        _trace: &mut GetPayloadTrace,
     ) -> Result<(SignedBlindedBeaconBlock, B256), ProposerApiError> {
         // TODO: we need to get this from the slot duty
         // we could also just compute the object root and verify the signature
@@ -188,66 +184,6 @@ impl Worker {
             .0;
 
         Ok((blinded_block, block_hash))
-    }
-}
-
-pub type SubmissionResult = Result<(), BuilderApiError>;
-pub type GetHeaderResult = Result<BuilderBid, ProposerApiError>;
-pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
-pub struct GetPayloadResultData {
-    pub to_proposer: GetPayloadResponse,
-    pub to_publish: VersionedSignedProposal,
-    pub trace: GetPayloadTrace,
-    pub proposer_pubkey: BlsPublicKeyBytes,
-    pub fork: ForkName,
-}
-
-#[derive(Clone)]
-pub enum Submission {
-    // received after sigverify
-    Full(SignedBidSubmission),
-    // need to validate do the validate_payload_ssz_lengths
-    Dehydrated(DehydratedBidSubmission),
-}
-
-impl Submission {
-    pub fn bid_slot(&self) -> u64 {
-        match self {
-            Submission::Full(s) => s.slot().as_u64(),
-            Submission::Dehydrated(s) => s.slot(),
-        }
-    }
-
-    fn withdrawal_root(&self) -> B256 {
-        match self {
-            Submission::Full(s) => s.withdrawals_root(),
-            Submission::Dehydrated(s) => s.withdrawal_root(),
-        }
-    }
-}
-
-pub enum WorkerJob {
-    BlockSubmission {
-        headers: http::HeaderMap,
-        body: bytes::Bytes,
-        trace: SubmissionTrace, // TODO: replace this with better tracing
-        res_tx: oneshot::Sender<SubmissionResult>,
-    },
-
-    GetPayload {
-        blinded_block: SignedBlindedBeaconBlock,
-        trace: GetPayloadTrace,
-        res_tx: oneshot::Sender<GetPayloadResult>,
-    },
-}
-
-impl WorkerJob {
-    pub fn new_get_payload(
-        blinded_block: SignedBlindedBeaconBlock,
-        trace: GetPayloadTrace,
-    ) -> (Self, oneshot::Receiver<GetPayloadResult>) {
-        let (tx, rx) = oneshot::channel();
-        (Self::GetPayload { blinded_block, trace, res_tx: tx }, rx)
     }
 }
 

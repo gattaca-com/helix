@@ -19,7 +19,7 @@ use tracing::{error, info, warn};
 
 use super::ProposerApi;
 use crate::{
-    builder::simulator_2::worker::{GetPayloadResultData, WorkerJob},
+    auctioneer::GetPayloadResultData,
     constants::GET_PAYLOAD_REQUEST_CUTOFF_MS,
     gossiper::types::{BroadcastGetPayloadParams, BroadcastPayloadParams},
     proposer::error::ProposerApiError,
@@ -121,11 +121,10 @@ impl<A: Api> ProposerApi<A> {
             });
         }
 
-        let (msg, rx) = WorkerJob::new_get_payload(signed_blinded_block, *trace);
-        if let Err(err) = self.worker_tx.try_send(msg) {
-            error!(%err, "failed sending request to worker");
+        let Ok(rx) = self.auctioneer_handle.get_payload(signed_blinded_block, *trace) else {
+            error!("failed sending request to worker");
             return Err(ProposerApiError::InternalServerError)
-        }
+        };
 
         let GetPayloadResultData {
             to_proposer,
@@ -176,7 +175,7 @@ impl<A: Api> ProposerApi<A> {
         )
         .await;
 
-        let is_trusted_proposer = self.auctioneer.is_trusted_proposer(&proposer_public_key);
+        let is_trusted_proposer = self.local_cache.is_trusted_proposer(&proposer_public_key);
 
         let self_clone = self.clone();
         let mut trace_clone = *trace;

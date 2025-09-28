@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::{
+    auctioneer::spawn_auctioneer,
     builder::api::BuilderApi,
     gossip::{self},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
@@ -30,7 +31,7 @@ pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 pub async fn run_api_service<A: Api>(
     mut config: RelayConfig,
     db: Arc<A::DatabaseService>,
-    auctioneer: Arc<LocalCache>,
+    local_cache: Arc<LocalCache>,
     current_slot_info: CurrentSlotInfo,
     chain_info: Arc<ChainInfo>,
     relay_signing_context: Arc<RelaySigningContext>,
@@ -50,15 +51,22 @@ pub async fn run_api_service<A: Api>(
 
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
     let (merge_pool_tx, pool_rx) = tokio::sync::mpsc::channel(10_000);
-    let (merge_requests_tx, merge_requests_rx) = mpsc::channel(10_000);
+    // TODO: move this to an EVENT
+    let (merge_requests_tx, _merge_requests_rx) = mpsc::channel(10_000);
 
-    let (worker_tx, worker_rx) = crossbeam_channel::bounded(10_000);
-    let (auctioneer_tx, auctioneer_rx) = crossbeam_channel::bounded(10_000);
+    // spawn auctioneer
+    let handle = spawn_auctioneer::<A>(
+        Arc::unwrap_or_clone(chain_info.clone()),
+        config.clone(),
+        tokio::runtime::Handle::current(),
+        db.clone(),
+        merge_pool_tx,
+        Arc::unwrap_or_clone(local_cache.clone()),
+    );
 
     let accept_optimistic = Arc::new(AtomicBool::new(true));
-
     let builder_api = BuilderApi::<A>::new(
-        auctioneer.clone(),
+        local_cache.clone(),
         db.clone(),
         chain_info.clone(),
         gossiper.clone(),
@@ -66,8 +74,7 @@ pub async fn run_api_service<A: Api>(
         current_slot_info.clone(),
         top_bid_tx,
         accept_optimistic,
-        worker_tx.clone(),
-        auctioneer_tx.clone(),
+        handle.clone(),
         metadata_provider.clone(),
     );
     let builder_api = Arc::new(builder_api);
@@ -75,7 +82,7 @@ pub async fn run_api_service<A: Api>(
     gossiper.start_server(gossip_sender).await;
 
     let proposer_api = Arc::new(ProposerApi::<A>::new(
-        auctioneer.clone(),
+        local_cache,
         db.clone(),
         gossiper.clone(),
         metadata_provider.clone(),
@@ -86,8 +93,7 @@ pub async fn run_api_service<A: Api>(
         config.clone(),
         current_slot_info,
         merge_requests_tx,
-        auctioneer_tx,
-        worker_tx,
+        handle,
     ));
 
     tokio::spawn(gossip::process_gossip_messages(

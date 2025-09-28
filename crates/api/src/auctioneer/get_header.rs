@@ -1,9 +1,8 @@
 use alloy_primitives::U256;
-use helix_types::BuilderBid;
 use tokio::sync::oneshot;
 
 use crate::{
-    builder::simulator_2::{worker::GetHeaderResult, SortingData},
+    auctioneer::{types::GetHeaderResult, SortingData},
     proposer::{GetHeaderParams, ProposerApiError},
 };
 

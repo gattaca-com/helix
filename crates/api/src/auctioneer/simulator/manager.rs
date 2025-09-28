@@ -1,30 +1,21 @@
 use std::{
     self,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
     time::{Duration, Instant},
 };
 
-use alloy_primitives::B256;
 use helix_common::{
     bid_submission::BidSubmission, metrics::SimulatorMetrics, simulator::BlockSimError,
     SimulatorConfig,
 };
 use helix_types::{BlsPublicKeyBytes, SignedBidSubmission};
-use tokio::{
-    sync::{mpsc, oneshot},
-    task::JoinSet,
-};
-use tracing::{debug, error, info, warn};
+use tokio::{runtime::Handle, sync::oneshot, task::JoinSet};
+use tracing::{debug, info, warn};
 
 use crate::{
-    builder::{
-        client::SimulatorClient,
-        simulator::SimulatorRequest,
-        simulator_2::{worker::SubmissionResult, Event},
-        BlockMergeRequest, SimReponse,
+    auctioneer::{
+        simulator::{client::SimulatorClient, BlockMergeRequest, SimReponse, SimulatorRequest},
+        types::SubmissionResult,
+        Event,
     },
     service::SIMULATOR_REQUEST_TIMEOUT,
 };
@@ -69,15 +60,17 @@ pub struct SimulatorManager {
     join_set: JoinSet<SimReponse>,
     last_bid_slot: u64,
     local_telemetry: LocalTelemetry,
-    // Use this:
+    // TODO: Use this:
     accept_optimistic: bool,
     sim_result_tx: crossbeam_channel::Sender<Event>,
+    runtime: Handle,
 }
 
 impl SimulatorManager {
     pub fn new(
         configs: Vec<SimulatorConfig>,
         sim_result_tx: crossbeam_channel::Sender<Event>,
+        runtime: Handle,
     ) -> Self {
         let client =
             reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
@@ -98,6 +91,7 @@ impl SimulatorManager {
             local_telemetry: LocalTelemetry::default(),
             accept_optimistic: true,
             sim_result_tx,
+            runtime,
         }
     }
 
@@ -158,15 +152,18 @@ impl SimulatorManager {
             self.local_telemetry.max_in_flight =
                 self.local_telemetry.max_in_flight.max(client.pending);
             let timer = SimulatorMetrics::block_merge_timer(client.endpoint());
-            self.join_set.spawn(async move {
-                debug!(block_hash =% req.block_hash, "sending merge request");
-                let res = SimulatorClient::do_merge_request(to_send).await;
-                timer.stop_and_record();
-                SimulatorMetrics::block_merge_status(res.is_ok());
+            self.join_set.spawn_on(
+                async move {
+                    debug!(block_hash =% req.block_hash, "sending merge request");
+                    let res = SimulatorClient::do_merge_request(to_send).await;
+                    timer.stop_and_record();
+                    SimulatorMetrics::block_merge_status(res.is_ok());
 
-                let _ = req.res_tx.send(res);
-                (id, None)
-            });
+                    let _ = req.res_tx.send(res);
+                    (id, None)
+                },
+                &self.runtime,
+            );
         } else {
             self.local_telemetry.dropped_merge_reqs += 1;
             warn!("no client available for merging! Dropping request");
@@ -195,8 +192,7 @@ impl SimulatorManager {
         self.local_telemetry.max_in_flight = self.local_telemetry.max_in_flight.max(client.pending);
         let timer = SimulatorMetrics::timer(client.endpoint());
         let tx = self.sim_result_tx.clone();
-        // TODO: pass a runtime to spawn on
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             let block_hash = req.submission.block_hash();
             debug!(%block_hash, "sending simulation request");
 

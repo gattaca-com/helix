@@ -24,10 +24,7 @@ use tokio::sync::mpsc::{self};
 pub use types::*;
 
 use crate::{
-    builder::{
-        simulator_2::{worker::WorkerJob, Event},
-        BlockMergeRequest,
-    },
+    auctioneer::{AuctioneerHandle, BlockMergeRequest},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::block_merging::BestMergedBlock,
     router::Terminating,
@@ -36,7 +33,7 @@ use crate::{
 
 #[derive(Clone)]
 pub struct ProposerApi<A: Api> {
-    pub auctioneer: Arc<LocalCache>,
+    pub local_cache: Arc<LocalCache>,
     pub db: Arc<A::DatabaseService>,
     pub gossiper: Arc<GrpcGossiperClientManager>,
     pub multi_beacon_client: Arc<MultiBeaconClient>,
@@ -55,13 +52,12 @@ pub struct ProposerApi<A: Api> {
     /// Send simulation requests
     pub merge_requests_tx: mpsc::Sender<BlockMergeRequest>,
     pub alert_manager: AlertManager,
-    pub auctioneer_tx: crossbeam_channel::Sender<Event>,
-    pub worker_tx: crossbeam_channel::Sender<WorkerJob>,
+    pub auctioneer_handle: AuctioneerHandle,
 }
 
 impl<A: Api> ProposerApi<A> {
     pub fn new(
-        auctioneer: Arc<LocalCache>,
+        local_cache: Arc<LocalCache>,
         db: Arc<A::DatabaseService>,
         gossiper: Arc<GrpcGossiperClientManager>,
         metadata_provider: Arc<A::MetadataProvider>,
@@ -72,11 +68,10 @@ impl<A: Api> ProposerApi<A> {
         relay_config: RelayConfig,
         curr_slot_info: CurrentSlotInfo,
         merge_requests_tx: mpsc::Sender<BlockMergeRequest>,
-        auctioneer_tx: crossbeam_channel::Sender<Event>,
-        worker_tx: crossbeam_channel::Sender<WorkerJob>,
+        auctioneer_handle: AuctioneerHandle,
     ) -> Self {
         Self {
-            auctioneer,
+            local_cache,
             db,
             gossiper,
             signing_context,
@@ -89,8 +84,7 @@ impl<A: Api> ProposerApi<A> {
             shared_best_merged: BestMergedBlock::new(),
             alert_manager: AlertManager::from_relay_config(&relay_config),
             merge_requests_tx,
-            auctioneer_tx,
-            worker_tx,
+            auctioneer_handle,
         }
     }
 }

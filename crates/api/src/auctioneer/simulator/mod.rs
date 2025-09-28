@@ -12,9 +12,10 @@ use helix_types::{
 use serde_json::json;
 use tokio::sync::oneshot;
 
-pub mod client;
+use crate::auctioneer::types::SubmissionResult;
 
-use crate::builder::simulator_2::worker::SubmissionResult;
+pub mod client;
+pub mod manager;
 
 // TODO: refactor this in a SignedBidSubmission + extra fields
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

@@ -13,6 +13,7 @@ use helix_housekeeper::CurrentSlotInfo;
 use service::run_api_service;
 
 pub mod admin_service;
+pub mod auctioneer;
 pub mod builder;
 pub mod constants;
 pub mod gossip;
@@ -22,7 +23,7 @@ pub mod middleware;
 pub mod proposer;
 pub mod relay_data;
 pub mod router;
-pub mod service;
+pub mod service; // TODO: move to separate crate, need to refactor some types
 
 mod grpc {
     include!(concat!(env!("OUT_DIR"), "/gossip.rs"));
@@ -31,7 +32,7 @@ mod grpc {
 pub fn start_api_service<A: Api>(
     config: RelayConfig,
     db: Arc<A::DatabaseService>,
-    auctioneer: Arc<LocalCache>,
+    local_cache: Arc<LocalCache>,
     chain_info: Arc<ChainInfo>,
     relay_signing_context: Arc<RelaySigningContext>,
     multi_beacon_client: Arc<MultiBeaconClient>,
@@ -44,7 +45,7 @@ pub fn start_api_service<A: Api>(
     tokio::spawn(run_api_service::<A>(
         config.clone(),
         db,
-        auctioneer,
+        local_cache,
         current_slot_info,
         chain_info,
         relay_signing_context,

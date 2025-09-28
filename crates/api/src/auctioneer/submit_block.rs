@@ -1,47 +1,26 @@
-use std::{
-    collections::BTreeMap,
-    ops::Deref,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::sync::Arc;
 
-use alloy_primitives::{B256, U256};
-use helix_beacon::{multi_beacon_client::MultiBeaconClient, types::BroadcastValidation};
+use alloy_primitives::B256;
 use helix_common::{
-    api::builder_api::{
-        BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
-    },
+    self,
     bid_submission::{BidSubmission, OptimisticVersion},
-    chain_info::ChainInfo,
-    metrics::{SimulatorMetrics, HYDRATION_CACHE_HITS},
-    simulator::BlockSimError,
+    metrics::HYDRATION_CACHE_HITS,
     utils::utcnow_ns,
-    BuilderInfo, GetPayloadTrace, RelayConfig, SubmissionTrace,
+    BuilderInfo, SubmissionTrace,
 };
 use helix_database::DatabaseService;
-use helix_housekeeper::PayloadAttributesUpdate;
-use helix_types::{
-    BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ForkName, GetPayloadResponse,
-    HydrationCache, SignedBidSubmission, SignedBlindedBeaconBlock, SignedBuilderBid, Slot,
-    VersionedSignedProposal,
-};
-use rustc_hash::{FxHashMap, FxHashSet};
+use helix_types::SignedBidSubmission;
 use tokio::sync::oneshot;
-use tracing::{error, info, warn};
+use tracing::error;
 
 use crate::{
-    builder::{
-        error::BuilderApiError,
-        simulator_2::{
-            bid_sorter::{BidSorter, BidSorterMessage},
-            sim_manager::{SimulationResult, SimulatorManager},
-            worker::{GetPayloadResult, GetPayloadResultData, Submission, SubmissionResult},
-            Context, SortingData,
-        },
-        BlockSimRequest, SimReponse, SimulatorRequest,
+    auctioneer::{
+        bid_sorter::BidSorterMessage,
+        context::Context,
+        simulator::{manager::SimulationResult, BlockSimRequest, SimulatorRequest},
+        types::{SortingData, Submission, SubmissionResult},
     },
-    gossiper::{grpc_gossiper::GrpcGossiperClientManager, types::BroadcastGetPayloadParams},
-    proposer::{GetHeaderParams, ProposerApiError},
+    builder::error::BuilderApiError,
     Api,
 };
 
@@ -126,7 +105,7 @@ impl SortingData {
         };
 
         let builder_info = ctx
-            .builder_info
+            .builder_infos
             .get(submission.builder_public_key())
             .unwrap_or(&ctx.unknown_builder_info);
 
@@ -181,7 +160,7 @@ impl SortingData {
             res_tx,
             submission: submission.clone(),
         };
-        ctx.simulator_manager.handle_sim_request(req);
+        ctx.sim_manager.handle_sim_request(req);
 
         let payload_and_blobs = Arc::new(submission.payload_and_blobs_ref().to_owned());
         self.payloads.insert(*submission.block_hash(), payload_and_blobs);
