@@ -184,6 +184,9 @@ pub enum ProposerApiError {
 
     #[error("duplicate payload request")]
     GetPayloadAlreadyReceived,
+
+    #[error("request for past slot. request slot: {request_slot}, head slot: {head_slot}")]
+    RequestForPastSlot { request_slot: Slot, head_slot: Slot },
 }
 
 impl IntoResponse for ProposerApiError {
@@ -242,7 +245,8 @@ impl IntoResponse for ProposerApiError {
             ProposerApiError::SszError(_) |
             ProposerApiError::SigError(_) |
             ProposerApiError::DeliveringPayload |
-            ProposerApiError::GetPayloadAlreadyReceived => StatusCode::BAD_REQUEST,
+            ProposerApiError::GetPayloadAlreadyReceived |
+            ProposerApiError::RequestForPastSlot { .. } => StatusCode::BAD_REQUEST,
 
             ProposerApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
 

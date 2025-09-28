@@ -267,10 +267,10 @@ fn validate_bid_request_time(
     Ok(ms_into_slot.max(0) as u64)
 }
 
-pub fn is_mev_boost_client(client_name: &str) -> bool {
-    let keywords = ["Kiln", "mev-boost", "commit-boost", "Vouch"];
-    keywords.iter().any(|&keyword| client_name.contains(keyword))
-}
+// pub fn is_mev_boost_client(client_name: &str) -> bool {
+//     let keywords = ["Kiln", "mev-boost", "commit-boost", "Vouch"];
+//     keywords.iter().any(|&keyword| client_name.contains(keyword))
+// }
 
 /// Fetches the timestamp set by the mev-boost client when initialising the `get_header` request.
 fn get_x_mev_boost_header_start_ms(header_map: &HeaderMap) -> Option<u64> {

@@ -4,22 +4,39 @@ use axum::{http::HeaderMap, response::IntoResponse, Extension};
 use helix_beacon::types::BroadcastValidation;
 use helix_common::{
     chain_info::ChainInfo,
+    metadata_provider::MetadataProvider,
     task,
     utils::{extract_request_id, utcnow_ns},
     GetPayloadTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
-use helix_types::{BlsPublicKeyBytes, GetPayloadResponse, PayloadAndBlobs, Slot, SlotClockTrait};
-use tokio::{sync::oneshot, time::sleep};
+use helix_types::{
+    BlsPublicKeyBytes, ExecPayload, GetPayloadResponse, PayloadAndBlobs, SignedBlindedBeaconBlock,
+    Slot, SlotClockTrait,
+};
+use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use super::ProposerApi;
 use crate::{
-    builder::simulator_2::worker::GetPayloadResultData, constants::GET_PAYLOAD_REQUEST_CUTOFF_MS,
-    proposer::error::ProposerApiError, Api,
+    builder::simulator_2::worker::{GetPayloadResultData, WorkerJob},
+    constants::GET_PAYLOAD_REQUEST_CUTOFF_MS,
+    gossiper::types::BroadcastGetPayloadParams,
+    proposer::error::ProposerApiError,
+    Api,
 };
 
 impl<A: Api> ProposerApi<A> {
+    /// Retrieves the execution payload for a given blinded beacon block.
+    ///
+    /// This function accepts a `SignedBlindedBeaconBlock` as input and performs several steps:
+    /// 1. Validates the proposer index and verifies the block's signature.
+    /// 2. Retrieves the corresponding execution payload from the auctioneer.
+    /// 3. Validates the payload and publishes it to the multi-beacon client.
+    /// 4. Optionally broadcasts the payload to `broadcasters`
+    /// 5. Stores the delivered payload information to database.
+    /// 6. Returns the unblinded payload to proposer.
+    ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlock>
     #[tracing::instrument(skip_all, fields(id), err)]
     pub async fn get_payload(
@@ -31,56 +48,42 @@ impl<A: Api> ProposerApi<A> {
         let request_id = extract_request_id(&headers);
         tracing::Span::current().record("id", request_id.to_string());
 
-        let trace = GetPayloadTrace::init_from_timings(timings);
+        let mut trace = GetPayloadTrace::init_from_timings(timings);
 
-        // TODO: do this
-        let slot = 0;
-        let block_hash = Default::default();
-        let proposer_pubkey = BlsPublicKeyBytes::default();
+        let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
 
-        // Handle early/late requests
-        if let Err(err) = proposer_api.await_and_validate_slot_start_time(slot, trace.receive).await
-        {
-            warn!(error = %err, "get_payload was sent too late");
+        // TODO: move decoding to worker
+        let signed_blinded_block: SignedBlindedBeaconBlock = serde_json::from_slice(&body)
+            .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
 
-            // Save too late request to db for debugging
-            if let Err(err) = proposer_api
-                .db
-                .save_too_late_get_payload(
-                    slot,
-                    &proposer_pubkey,
-                    &block_hash,
-                    trace.receive,
-                    trace.payload_fetched,
-                )
-                .await
-            {
-                error!(%err, "failed to save too late get payload");
-            }
+        trace.decode = utcnow_ns();
 
-            return Err(err);
-        }
+        let block_hash = signed_blinded_block
+            .message()
+            .body()
+            .execution_payload()
+            .map_err(|_| ProposerApiError::InvalidFork)? // this should never happen as post altair there's always an execution payload
+            .block_hash()
+            .0;
 
-        // TODO: let user_agent = self.metadata_provider.get_metadata(&headers);
-        let (tx, rx) = oneshot::channel();
+        let slot = signed_blinded_block.message().slot();
+
+        // Broadcast get payload request
         proposer_api
-            .worker_tx
-            .try_send(crate::builder::simulator_2::worker::WorkerJob::GetPayload {
-                body,
-                trace,
-                res_tx: tx,
+            .gossiper
+            .broadcast_get_payload(BroadcastGetPayloadParams {
+                signed_blinded_beacon_block: signed_blinded_block.clone(),
+                request_id,
             })
-            .expect("handle me");
+            .await;
 
-        let res = rx.await.expect("handle me")?;
-
-        match proposer_api._get_payload(res).await {
+        match proposer_api._get_payload(signed_blinded_block, &mut trace, user_agent).await {
             Ok(get_payload_response) => Ok(axum::Json(get_payload_response)),
             Err(err) => {
                 // Save error to DB
                 if let Err(err) = proposer_api
                     .db
-                    .save_failed_get_payload(slot, block_hash, err.to_string(), trace)
+                    .save_failed_get_payload(slot.into(), block_hash, err.to_string(), trace)
                     .await
                 {
                     error!(err = ?err, "error saving failed get payload");
@@ -93,32 +96,91 @@ impl<A: Api> ProposerApi<A> {
 
     pub async fn _get_payload(
         &self,
-        GetPayloadResultData {
+        signed_blinded_block: SignedBlindedBeaconBlock,
+        trace: &mut GetPayloadTrace,
+        user_agent: Option<String>,
+    ) -> Result<GetPayloadResponse, ProposerApiError> {
+        let block_hash = signed_blinded_block
+            .message()
+            .body()
+            .execution_payload()
+            .map_err(|_| ProposerApiError::InvalidFork)?
+            .block_hash()
+            .0;
+
+        let (head_slot, _) = self.curr_slot_info.slot_info();
+
+        info!(%head_slot, request_ts = trace.receive, %block_hash);
+
+        // Verify that the request is for the current slot
+        if signed_blinded_block.message().slot() <= head_slot {
+            warn!("request for past slot");
+            return Err(ProposerApiError::RequestForPastSlot {
+                request_slot: signed_blinded_block.message().slot(),
+                head_slot,
+            });
+        }
+
+        let (msg, rx) = WorkerJob::new_get_payload(signed_blinded_block, *trace);
+        if let Err(err) = self.worker_tx.try_send(msg) {
+            error!(%err, "failed sending request to worker");
+            return Err(ProposerApiError::InternalServerError)
+        }
+
+        let GetPayloadResultData {
             to_proposer,
             to_publish,
-            mut trace,
-            proposer_pubkey,
+            trace: new_trace,
+            proposer_pubkey: proposer_public_key,
             fork,
-        }: GetPayloadResultData,
-    ) -> Result<GetPayloadResponse, ProposerApiError> {
-        // TODO: this serializes the proto, and spawns some tasks so needs a runtime
-        // ctx.gossiper.broadcast_get_payload(BroadcastGetPayloadParams {
-        //     signed_blinded_beacon_block: blinded.clone(),
-        //     request_id: Default::default(),
-        // });
+        } = rx
+            .await
+            .inspect_err(|err| {
+                error!(%err, "failed to receive payload response from auctioneer");
+            })
+            .map_err(|_| ProposerApiError::InternalServerError)??;
 
-        let user_agent = None;
-        let is_trusted_proposer = self.auctioneer.is_trusted_proposer(&proposer_pubkey);
+        *trace = new_trace;
+        info!("found payload for blinded signed block");
+        trace.payload_fetched = utcnow_ns();
+
+        // Handle early/late requests
+        if let Err(err) =
+            self.await_and_validate_slot_start_time(head_slot + 1, trace.receive).await
+        {
+            warn!(error = %err, "get_payload was sent too late");
+
+            // Save too late request to db for debugging
+            if let Err(err) = self
+                .db
+                .save_too_late_get_payload(
+                    (head_slot + 1).into(),
+                    &proposer_public_key,
+                    &block_hash,
+                    trace.receive,
+                    trace.payload_fetched,
+                )
+                .await
+            {
+                error!(%err, "failed to save too late get payload");
+            }
+
+            return Err(err);
+        }
+
+        let is_trusted_proposer = self.auctioneer.is_trusted_proposer(&proposer_public_key);
 
         let self_clone = self.clone();
-        let get_payload_response = to_proposer.clone();
+        let mut trace_clone = *trace;
+        let payload_clone = to_proposer.data.clone();
+
         let handle = task::spawn(file!(), line!(), async move {
             let mut failed_publishing = false;
 
             if let Err(err) = self_clone
                 .multi_beacon_client
                 .publish_block(
-                    Arc::new(to_publish), // TODO: dont arc here
+                    Arc::new(to_publish),
                     Some(BroadcastValidation::ConsensusAndEquivocation),
                     fork,
                 )
@@ -128,28 +190,29 @@ impl<A: Api> ProposerApi<A> {
                 failed_publishing = true;
             };
 
-            trace.beacon_client_broadcast = utcnow_ns();
+            trace_clone.beacon_client_broadcast = utcnow_ns();
 
-            // // Broadcast payload to all broadcasters
-            // self_clone.broadcast_signed_block(
-            //     unblinded_payload_clone.clone(),
-            //     Some(BroadcastValidation::Gossip),
-            // );
-            trace.broadcaster_block_broadcast = utcnow_ns();
+            trace_clone.broadcaster_block_broadcast = utcnow_ns();
 
             // While we wait for the block to propagate, we also store the payload information
-            trace.on_deliver_payload = utcnow_ns();
+            trace_clone.on_deliver_payload = utcnow_ns();
             self_clone
-                .save_delivered_payload_info(to_proposer.data, proposer_pubkey, &trace, user_agent)
+                .save_delivered_payload_info(
+                    payload_clone,
+                    proposer_public_key,
+                    &trace_clone,
+                    user_agent,
+                )
                 .await;
 
-            (trace, failed_publishing)
+            (trace_clone, failed_publishing)
         });
 
         if !is_trusted_proposer {
-            let Ok((trace, failed_publishing)) = handle.await else {
+            let Ok((new_trace, failed_publishing)) = handle.await else {
                 return Err(ProposerApiError::InternalServerError);
             };
+            *trace = new_trace;
 
             if failed_publishing {
                 error!("failed to publish payload to beacon client");
@@ -171,27 +234,26 @@ impl<A: Api> ProposerApi<A> {
             if remaining_sleep_ms > 0 {
                 sleep(Duration::from_millis(remaining_sleep_ms)).await;
             }
-
-            // Return response
-            info!(?trace, timestamp = utcnow_ns(), "delivering payload to untrusted proposer");
-        } else {
-            // Return response
-            info!(timestamp = utcnow_ns(), "delivering payload to trusted proposer");
         }
 
-        Ok(get_payload_response)
+        // Return response
+        info!(?trace, timestamp = utcnow_ns(), "delivering payload");
+        Ok(to_proposer)
     }
 
-    // TODO: tidy this up
     async fn await_and_validate_slot_start_time(
         &self,
-        slot: u64,
+        slot: Slot,
         request_time_ns: u64,
     ) -> Result<(), ProposerApiError> {
         let Some((since_slot_start, until_slot_start)) =
-            calculate_slot_time_info(&self.chain_info, slot.into(), request_time_ns)
+            calculate_slot_time_info(&self.chain_info, slot, request_time_ns)
         else {
-            error!(request_time_ns, slot, "slot time info not found");
+            error!(
+                request_time_ns,
+                %slot,
+                "slot time info not found"
+            );
             return Err(ProposerApiError::SlotTooNew);
         };
 

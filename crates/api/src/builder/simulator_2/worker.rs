@@ -62,7 +62,7 @@ impl Worker {
                             error!("failed sending submisison to auctioneer");
                         }
 
-                        // TODO: move this to auctioneer
+                        // TODO: move this to auctioneer, avoid clones
                         if self.relay_config.block_merging_config.is_enabled {
                             if let Some(merging_data) = merging_data {
                                 let Submission::Full(payload) = submission else {
@@ -96,8 +96,8 @@ impl Worker {
                 }
             }
 
-            WorkerJob::GetPayload { body, mut trace, res_tx } => {
-                match self.handle_get_payload(body, &mut trace) {
+            WorkerJob::GetPayload { blinded_block, mut trace, res_tx } => {
+                match self.handle_get_payload(blinded_block, &mut trace) {
                     Ok((blinded, block_hash)) => {
                         let _ = self.tx.try_send(Event::GetPayload {
                             block_hash,
@@ -169,23 +169,17 @@ impl Worker {
 
     fn handle_get_payload(
         &self,
-        body: bytes::Bytes,
+        blinded_block: SignedBlindedBeaconBlock,
         trace: &mut GetPayloadTrace,
     ) -> Result<(SignedBlindedBeaconBlock, B256), ProposerApiError> {
-        let signed_blinded_block: SignedBlindedBeaconBlock = serde_json::from_slice(&body)?;
-
         // TODO: we need to get this from the slot duty
         // we could also just compute the object root and verify the signature
         // starves the main loop for a few ms
         let proposer_pubkey = BlsPublicKeyBytes::default();
 
-        verify_signed_blinded_block_signature(
-            &self.chain_info,
-            &signed_blinded_block,
-            &proposer_pubkey,
-        )?;
+        verify_signed_blinded_block_signature(&self.chain_info, &blinded_block, &proposer_pubkey)?;
 
-        let block_hash = signed_blinded_block
+        let block_hash = blinded_block
             .message()
             .body()
             .execution_payload()
@@ -193,13 +187,13 @@ impl Worker {
             .block_hash()
             .0;
 
-        Ok((signed_blinded_block, block_hash))
+        Ok((blinded_block, block_hash))
     }
 }
 
 pub type SubmissionResult = Result<(), BuilderApiError>;
 pub type GetHeaderResult = Result<BuilderBid, ProposerApiError>;
-
+pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
 pub struct GetPayloadResultData {
     pub to_proposer: GetPayloadResponse,
     pub to_publish: VersionedSignedProposal,
@@ -207,7 +201,6 @@ pub struct GetPayloadResultData {
     pub proposer_pubkey: BlsPublicKeyBytes,
     pub fork: ForkName,
 }
-pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
 
 #[derive(Clone)]
 pub enum Submission {
@@ -242,10 +235,20 @@ pub enum WorkerJob {
     },
 
     GetPayload {
-        body: bytes::Bytes,
+        blinded_block: SignedBlindedBeaconBlock,
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
     },
+}
+
+impl WorkerJob {
+    pub fn new_get_payload(
+        blinded_block: SignedBlindedBeaconBlock,
+        trace: GetPayloadTrace,
+    ) -> (Self, oneshot::Receiver<GetPayloadResult>) {
+        let (tx, rx) = oneshot::channel();
+        (Self::GetPayload { blinded_block, trace, res_tx: tx }, rx)
+    }
 }
 
 fn verify_signed_blinded_block_signature(
