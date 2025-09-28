@@ -7,6 +7,7 @@ mod get_header;
 mod get_payload;
 mod register;
 mod types;
+mod update;
 
 use std::sync::{atomic::Ordering, Arc};
 

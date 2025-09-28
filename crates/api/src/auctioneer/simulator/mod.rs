@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
@@ -7,7 +7,8 @@ use helix_common::{
 };
 use helix_types::{
     BidTrace, BlobsBundle, BlockMergingPreferences, BlsPublicKeyBytes, BlsSignatureBytes,
-    ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin, SignedBidSubmission,
+    BuilderInclusionResult, ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin,
+    SignedBidSubmission,
 };
 use serde_json::json;
 use tokio::sync::oneshot;
@@ -134,6 +135,7 @@ pub struct BlockMergeResponse {
     pub appended_blobs: Vec<B256>,
     /// Total value for the proposer
     pub proposer_value: U256,
+    pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
 }
 
 pub type SimResult = Result<(), BlockSimError>;

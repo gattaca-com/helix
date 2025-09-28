@@ -5,6 +5,9 @@ use helix_types::{BlsKeypair, BlsPublicKeyBytes, BlsSignature, SignedRoot};
 
 use crate::chain_info::ChainInfo;
 
+// Arbitrary domain for signing relay messages
+pub const RELAY_DOMAIN: &[u8; 32] = b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0relay";
+
 #[derive(Clone)]
 pub struct RelaySigningContext {
     pub keypair: BlsKeypair,
@@ -24,6 +27,11 @@ impl RelaySigningContext {
     pub fn sign_builder_message(&self, msg: &impl SignedRoot) -> BlsSignature {
         let domain = self.context.builder_domain;
         let root = msg.signing_root(domain);
+        self.sign(root)
+    }
+
+    pub fn sign_relay_message(&self, msg: &impl SignedRoot) -> BlsSignature {
+        let root = msg.signing_root(RELAY_DOMAIN.into());
         self.sign(root)
     }
 

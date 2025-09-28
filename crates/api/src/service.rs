@@ -10,6 +10,7 @@ use helix_common::{
     chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext, RelayConfig,
 };
 use helix_housekeeper::{chain_event_updater::SlotData, CurrentSlotInfo};
+use helix_network::api::RelayNetworkApi;
 use moka::sync::Cache;
 use tokio::sync::mpsc;
 use tracing::{error, info};
@@ -41,6 +42,7 @@ pub async fn run_api_service<A: Api>(
     terminating: Arc<AtomicBool>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     slot_data_rx: crossbeam_channel::Receiver<SlotData>,
+    relay_network_api: RelayNetworkApi,
 ) {
     let gossiper = Arc::new(
         GrpcGossiperClientManager::new(config.relays.iter().map(|cfg| cfg.url.clone()).collect())
@@ -124,6 +126,7 @@ pub async fn run_api_service<A: Api>(
         builder_api,
         proposer_api,
         data_api,
+        relay_network_api,
         bids_cache,
         delivered_payloads_cache,
         known_validators_loaded,

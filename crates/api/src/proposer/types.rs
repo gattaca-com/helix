@@ -29,3 +29,36 @@ pub struct PreferencesHeader {
     /// headers or not.
     pub header_delay: Option<bool>,
 }
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+pub struct UpdateValidatorPreferencesParams {
+    pub validators: Vec<UpdateValidatorPreferencesPayload>,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+pub struct UpdateValidatorPreferencesPayload {
+    pub pubkey: BlsPublicKeyBytes,
+
+    pub preferences: ValidatorPreferenceUpdate,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+pub struct ValidatorPreferenceUpdate {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filtering: Option<Filtering>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trusted_builders: Option<Vec<String>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub header_delay: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delay_ms: Option<u64>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gossip_blobs: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disable_inclusion_lists: Option<bool>,
+}

@@ -246,6 +246,10 @@ impl<A: Api> ProposerApi<A> {
             }
         }
 
+        if let Some(merged_block) = self.local_cache.get_merged_block(&block_hash) {
+            self.alert_manager.send(&merged_block.to_alert_message());
+        }
+
         // Return response
         info!(?trace, timestamp = utcnow_ns(), "delivering payload");
         Ok(to_proposer)

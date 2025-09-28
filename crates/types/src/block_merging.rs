@@ -1,6 +1,6 @@
 use std::{collections::HashMap, hash::Hash};
 
-use alloy_primitives::{bytes::Bytes, Address, B256};
+use alloy_primitives::{bytes::Bytes, Address, B256, U256};
 use lh_test_random::TestRandom;
 use lh_types::test_utils::TestRandom;
 use rand::Rng;
@@ -181,5 +181,64 @@ pub struct MergeableOrderWithOrigin {
 impl MergeableOrderWithOrigin {
     pub fn new(origin: Address, order: MergeableOrder) -> Self {
         Self { origin, order }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BuilderInclusionResult {
+    pub revenue: U256,
+    pub tx_count: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MergedBlock {
+    pub slot: u64,
+    pub block_number: u64,
+    pub block_hash: B256,
+    pub original_value: U256,
+    pub merged_value: U256,
+    pub original_tx_count: usize,
+    pub merged_tx_count: usize,
+    pub original_blob_count: usize,
+    pub merged_blob_count: usize,
+    pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
+}
+
+impl MergedBlock {
+    pub fn block_hash(&self) -> B256 {
+        self.block_hash
+    }
+
+    pub fn to_alert_message(&self) -> String {
+        let builder_inclusions = self
+            .builder_inclusions
+            .iter()
+            .map(|(address, res)| format!("*{}*: {}", res.tx_count, address,))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "📦 *Merged Block Delivered*\n\
+                \n\
+                *Slot:* `{}`\n\
+                *Block Number:* `{}`\n\
+                *Block Hash:* `{}`\n\
+                *Value:* `{}` → `{}`\n\
+                *Transactions:* `{}` → `{}`\n\
+                *Blobs:* `{}` → `{}`\n\
+                \n\
+                ━━━━━━━━━━━━━━━\n\
+                *Merged txs by builder:*\n{}\n\
+                ━━━━━━━━━━━━━━━\n",
+            self.slot,
+            self.block_number,
+            self.block_hash,
+            self.original_value,
+            self.merged_value,
+            self.original_tx_count,
+            self.merged_tx_count,
+            self.original_blob_count,
+            self.merged_blob_count,
+            builder_inclusions
+        )
     }
 }

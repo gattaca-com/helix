@@ -8,7 +8,7 @@ use helix_common::{bid_submission::BidSubmission, simulator::BlockSimError, util
 use helix_types::{
     mock_public_key_bytes, BlobWithMetadata, BlobsBundle, BlsPublicKeyBytes, BuilderBid,
     ExecutionPayloadHeader, KzgCommitments, MergeableOrder, MergeableOrderWithOrigin,
-    MergeableOrders, PayloadAndBlobs, SignedBidSubmission, ValidatorRegistrationData,
+    MergeableOrders, MergedBlock, PayloadAndBlobs, SignedBidSubmission, ValidatorRegistrationData,
 };
 use parking_lot::RwLock;
 use tokio::{
@@ -153,23 +153,21 @@ impl<A: Api> ProposerApi<A> {
                 original_payload,
                 response,
             } => {
-                *last_base_block_hash = original_payload.execution_payload.block_hash;
                 // If we are past the slot for the block, skip storing it
                 if let Some((_, blobs)) = best_orders.load(bid_slot) {
-                    self.alert_manager.send(&format!(
-                        "📦 *Merged block*\n\
-                        • Slot: `{}`\n\
-                        • Value: {} → {}\n\
-                        • Transactions: {} → {}\n\
-                        • Blobs: {} → {}",
-                        bid_slot,
-                        base_bid_value,
-                        response.proposer_value,
-                        original_payload.execution_payload.transactions.len(),
-                        response.execution_payload.transactions.len(),
-                        original_payload.blobs_bundle.blobs.len(),
-                        original_payload.blobs_bundle.blobs.len() + response.appended_blobs.len()
-                    ));
+                    self.local_cache.save_merged_block(MergedBlock {
+                        slot: bid_slot,
+                        block_number: response.execution_payload.block_number,
+                        block_hash: response.execution_payload.block_hash,
+                        original_value: base_bid_value,
+                        merged_value: response.proposer_value,
+                        original_tx_count: original_payload.execution_payload.transactions.len(),
+                        merged_tx_count: response.execution_payload.transactions.len(),
+                        original_blob_count: original_payload.blobs_bundle.blobs.len(),
+                        merged_blob_count: original_payload.blobs_bundle.blobs.len() +
+                            response.appended_blobs.len(),
+                        builder_inclusions: response.builder_inclusions.clone(),
+                    });
                     let _ = self
                         .store_merged_payload(
                             bid_slot,

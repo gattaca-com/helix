@@ -3,15 +3,16 @@ use std::sync::{
     Arc,
 };
 
+use alloy_primitives::B256;
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
 use dashmap::{DashMap, DashSet};
-use helix_types::{BlsPublicKeyBytes, CryptoError};
+use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock};
 use http::HeaderValue;
 use parking_lot::RwLock;
-use tracing::error;
+use tracing::{error, info};
 
 use crate::{
     api::builder_api::{
@@ -92,6 +93,7 @@ pub struct LocalCache {
     primev_proposers: Arc<DashSet<BlsPublicKeyBytes>>,
     kill_switch: Arc<AtomicBool>,
     proposer_duties: Arc<RwLock<Vec<BuilderGetValidatorsResponseEntry>>>,
+    merged_blocks: Arc<DashMap<B256, MergedBlock>>,
 }
 
 impl LocalCache {
@@ -103,6 +105,7 @@ impl LocalCache {
         let primev_proposers = Arc::new(DashSet::with_capacity(MAX_PRIMEV_PROPOSERS));
         let kill_switch = Arc::new(AtomicBool::new(false));
         let proposer_duties = Arc::new(RwLock::new(Vec::new()));
+        let merged_blocks = Arc::new(DashMap::with_capacity(100));
 
         Self {
             inclusion_list: Default::default(),
@@ -112,6 +115,7 @@ impl LocalCache {
             primev_proposers,
             kill_switch,
             proposer_duties,
+            merged_blocks,
         }
     }
 
@@ -220,6 +224,19 @@ impl LocalCache {
 
     pub fn get_proposer_duties(&self) -> Vec<BuilderGetValidatorsResponseEntry> {
         self.proposer_duties.read().clone()
+    }
+
+    pub fn process_slot(&self, head_slot: u64) {
+        info!(head_slot, "Processing new slot in local cache, clearing old data");
+        self.merged_blocks.clear();
+    }
+
+    pub fn save_merged_block(&self, merged_block: MergedBlock) {
+        self.merged_blocks.insert(merged_block.block_hash(), merged_block);
+    }
+
+    pub fn get_merged_block(&self, block_hash: &B256) -> Option<MergedBlock> {
+        self.merged_blocks.get(block_hash).map(|b| b.value().clone())
     }
 }
 

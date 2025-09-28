@@ -6,6 +6,7 @@ const MISSING_TRIE_NODE: &str = "missing trie node";
 const BLOCK_ALREADY_KNOWN: &str = "block already known";
 const BLOCK_TOO_OLD: &str = "block is too old, outside validation window";
 const BLOCK_REQ_REORG: &str = "block requires a reorg";
+const PARENT_BLOCK_NOT_FOUND: &str = "could not find parent block: parent block not found";
 
 #[derive(Debug, Error)]
 pub enum BlockSimError {
@@ -34,6 +35,7 @@ impl BlockSimError {
             BlockSimError::BlockValidationFailed(reason) => match reason.to_lowercase().as_str() {
                 UNKNOWN_ANCESTOR => false,
                 PARENT_NOT_FOUND => false,
+                PARENT_BLOCK_NOT_FOUND => false,
                 BLOCK_ALREADY_KNOWN => false,
                 BLOCK_REQ_REORG => false,
                 r if r.starts_with(MISSING_TRIE_NODE) => false,
@@ -48,6 +50,7 @@ impl BlockSimError {
             BlockSimError::BlockValidationFailed(reason) => match reason.to_lowercase().as_str() {
                 UNKNOWN_ANCESTOR => true,
                 PARENT_NOT_FOUND => true,
+                PARENT_BLOCK_NOT_FOUND => true,
                 BLOCK_REQ_REORG => true,
                 r if r.starts_with(MISSING_TRIE_NODE) => true,
                 _ => false,
@@ -85,6 +88,14 @@ impl BlockSimError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_temporary() {
+        let s = String::from("could not find parent block: parent block not found");
+        let err = BlockSimError::BlockValidationFailed(s);
+
+        assert!(err.is_temporary())
+    }
 
     #[test]
     fn test_is_severe() {
