@@ -1,9 +1,6 @@
 use std::{
     net::SocketAddr,
-    sync::{
-        atomic::{AtomicBool, AtomicU64},
-        Arc,
-    },
+    sync::{atomic::AtomicBool, Arc},
     time::Duration,
 };
 
@@ -77,21 +74,6 @@ pub async fn run_api_service<A: Api>(
 
     gossiper.start_server(gossip_sender).await;
 
-    // let (v3_payload_request_send, v3_payload_request_recv) = mpsc::channel(32);
-    // if let Some(v3_port) = config.v3_port {
-    //     // v3 tcp optimistic configured
-    //     tokio::spawn(builder::v3::tcp::run_api(v3_port, builder_api.clone()));
-    // }
-
-    // // Start builder block fetcher
-    // tokio::spawn(builder::v3::payload::fetch_builder_blocks(
-    //     builder_api.clone(),
-    //     v3_payload_request_recv,
-    //     relay_signing_context.clone(),
-    // ));
-
-    let bid_slot = Arc::new(AtomicU64::default());
-
     let proposer_api = Arc::new(ProposerApi::<A>::new(
         auctioneer.clone(),
         db.clone(),
@@ -104,7 +86,6 @@ pub async fn run_api_service<A: Api>(
         config.clone(),
         current_slot_info,
         merge_requests_tx,
-        bid_slot,
         auctioneer_tx,
         worker_tx,
     ));

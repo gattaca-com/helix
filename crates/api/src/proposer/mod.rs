@@ -8,10 +8,7 @@ mod get_payload;
 mod register;
 mod types;
 
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    Arc,
-};
+use std::sync::{atomic::Ordering, Arc};
 
 use axum::{response::IntoResponse, Extension};
 pub use block_merging::MergingPoolMessage;
@@ -58,9 +55,6 @@ pub struct ProposerApi<A: Api> {
     /// Send simulation requests
     pub merge_requests_tx: mpsc::Sender<BlockMergeRequest>,
     pub alert_manager: AlertManager,
-    // TODO: set this
-    pub bid_slot: Arc<AtomicU64>,
-
     pub auctioneer_tx: crossbeam_channel::Sender<Event>,
     pub worker_tx: crossbeam_channel::Sender<WorkerJob>,
 }
@@ -78,7 +72,6 @@ impl<A: Api> ProposerApi<A> {
         relay_config: RelayConfig,
         curr_slot_info: CurrentSlotInfo,
         merge_requests_tx: mpsc::Sender<BlockMergeRequest>,
-        bid_slot: Arc<AtomicU64>,
         auctioneer_tx: crossbeam_channel::Sender<Event>,
         worker_tx: crossbeam_channel::Sender<WorkerJob>,
     ) -> Self {
@@ -96,7 +89,6 @@ impl<A: Api> ProposerApi<A> {
             shared_best_merged: BestMergedBlock::new(),
             alert_manager: AlertManager::from_relay_config(&relay_config),
             merge_requests_tx,
-            bid_slot,
             auctioneer_tx,
             worker_tx,
         }

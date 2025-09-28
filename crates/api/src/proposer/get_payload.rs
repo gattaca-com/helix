@@ -173,7 +173,8 @@ impl<A: Api> ProposerApi<A> {
             &proposer_public_key,
             to_proposer.data.as_ref().into(),
             fork,
-        );
+        )
+        .await;
 
         let is_trusted_proposer = self.auctioneer.is_trusted_proposer(&proposer_public_key);
 

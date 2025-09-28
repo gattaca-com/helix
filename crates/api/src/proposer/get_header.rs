@@ -8,6 +8,7 @@ use axum::{extract::Path, http::HeaderMap, response::IntoResponse, Extension};
 use helix_common::{
     chain_info::ChainInfo,
     metadata_provider::MetadataProvider,
+    metrics::GetHeaderMetric,
     resign_builder_bid, task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
     GetHeaderTrace, RequestTimings,
@@ -22,7 +23,7 @@ use crate::{
     builder::simulator_2::Event,
     proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
     router::Terminating,
-    Api,
+    Api, HEADER_TIMEOUT_MS,
 };
 
 impl<A: Api> ProposerApi<A> {
@@ -50,14 +51,21 @@ impl<A: Api> ProposerApi<A> {
 
         let mut trace = GetHeaderTrace { receive: timings.on_receive_ns, ..Default::default() };
 
-        let bid_slot = proposer_api.bid_slot.load(Ordering::Relaxed);
+        let (head_slot, duty) = proposer_api.curr_slot_info.slot_info();
+        let bid_slot = head_slot.as_u64() + 1;
 
         if params.slot != bid_slot {
             debug!("request for past slot");
             return Err(ProposerApiError::RequestWrongSlot { request_slot: params.slot, bid_slot });
         }
 
-        let _ms_into_slot = match validate_bid_request_time(&proposer_api.chain_info, &params) {
+        // Only return a bid if there is a proposer connected this slot.
+        let Some(duty) = duty else {
+            debug!("proposer duty not found");
+            return Err(ProposerApiError::ProposerNotRegistered);
+        };
+
+        let ms_into_slot = match validate_bid_request_time(&proposer_api.chain_info, &params) {
             Ok(ms_into_slot) => ms_into_slot,
             Err(err) => {
                 warn!(%err, "invalid bid request time");
@@ -82,63 +90,61 @@ impl<A: Api> ProposerApi<A> {
 
         info!(client_latency_ms, mev_boost, "request latency");
 
-        // let client_timeout_ms = headers
-        //     .get(HEADER_TIMEOUT_MS)
-        //     .and_then(|h| h.to_str().ok())
-        //     .and_then(|h| match h.parse::<u64>() {
-        //         Ok(delay) => {
-        //             // TODO: move to debug at some point
-        //             info!("header timeout ms: {}", delay);
-        //             Some(delay)
-        //         }
-        //         Err(err) => {
-        //             warn!(%err, "invalid header timeout ms");
-        //             None
-        //         }
-        //     });
+        let client_timeout_ms = headers
+            .get(HEADER_TIMEOUT_MS)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|h| match h.parse::<u64>() {
+                Ok(delay) => {
+                    // TODO: move to debug at some point
+                    info!("header timeout ms: {}", delay);
+                    Some(delay)
+                }
+                Err(err) => {
+                    warn!(%err, "invalid header timeout ms");
+                    None
+                }
+            });
 
-        // TODO: timing games
-        // // If timing games are enabled for the proposer then we sleep a fixed amount before
-        // // returning the header
-        // if duty.entry.preferences.header_delay || client_timeout_ms.is_some() {
-        //     let max_sleep_time = proposer_api
-        //         .relay_config
-        //         .timing_game_config
-        //         .latest_header_delay_ms_in_slot
-        //         .saturating_sub(ms_into_slot);
+        // If timing games are enabled for the proposer then we sleep a fixed amount before
+        // returning the header
+        if duty.entry.preferences.header_delay || client_timeout_ms.is_some() {
+            let max_sleep_time = proposer_api
+                .relay_config
+                .timing_game_config
+                .latest_header_delay_ms_in_slot
+                .saturating_sub(ms_into_slot);
 
-        //     let target_sleep_time = match client_timeout_ms {
-        //         Some(timeout_ms) => timeout_ms.saturating_sub(client_latency_ms),
-        //         None => {
-        //             // TODO: convert this to a timeout instead of a delay
-        //             duty.entry
-        //                 .preferences
-        //                 .delay_ms
-        //
-        // .unwrap_or(proposer_api.relay_config.timing_game_config.max_header_delay_ms)
-        //         }
-        //     };
+            let target_sleep_time = match client_timeout_ms {
+                Some(timeout_ms) => timeout_ms.saturating_sub(client_latency_ms),
+                None => {
+                    // TODO: convert this to a timeout instead of a delay
+                    duty.entry
+                        .preferences
+                        .delay_ms
+                        .unwrap_or(proposer_api.relay_config.timing_game_config.max_header_delay_ms)
+                }
+            };
 
-        //     let sleep_time_ms = std::cmp::min(max_sleep_time, target_sleep_time);
+            let sleep_time_ms = std::cmp::min(max_sleep_time, target_sleep_time);
 
-        //     let sleep_time = Duration::from_millis(sleep_time_ms);
-        //     let mut get_header_metric = GetHeaderMetric::new(sleep_time);
+            let sleep_time = Duration::from_millis(sleep_time_ms);
+            let mut get_header_metric = GetHeaderMetric::new(sleep_time);
 
-        //     debug!(target: "timing_games",
-        //         ?sleep_time,
-        //         %ms_into_slot,
-        //         target_sleep_time,
-        //         max_sleep_time,
-        //         slot = params.slot,
-        //         pubkey = ?params.pubkey,
-        //         "timing game sleep");
+            debug!(target: "timing_games",
+                ?sleep_time,
+                %ms_into_slot,
+                target_sleep_time,
+                max_sleep_time,
+                slot = params.slot,
+                pubkey = ?params.pubkey,
+                "timing game sleep");
 
-        //     if sleep_time > Duration::ZERO {
-        //         sleep(sleep_time).await;
-        //     }
+            if sleep_time > Duration::ZERO {
+                tokio::time::sleep(sleep_time).await;
+            }
 
-        //     get_header_metric.record();
-        // }
+            get_header_metric.record();
+        }
 
         let (tx, rx) = oneshot::channel();
         if let Err(err) =
@@ -149,7 +155,7 @@ impl<A: Api> ProposerApi<A> {
         };
 
         // TODO: refactor errors
-        let bid = rx.await.map_err(|_| ProposerApiError::BidValueZero)??;
+        let bid = rx.await.map_err(|_| ProposerApiError::NoBidPrepared)??;
 
         let now_ns = utcnow_ns();
         trace.best_bid_fetched = now_ns;
