@@ -20,7 +20,7 @@ use helix_common::{
     local_cache::LocalCache,
     RelayConfig,
 };
-use helix_housekeeper::PayloadAttributesUpdate;
+use helix_housekeeper::{chain_event_updater::SlotData as HkSlotData, PayloadAttributesUpdate};
 use helix_types::Slot;
 pub use simulator::*;
 use tokio::runtime;
@@ -48,6 +48,7 @@ pub fn spawn_auctioneer<A: Api>(
     merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
     cache: LocalCache,
     top_bid_tx: tokio::sync::broadcast::Sender<bytes::Bytes>,
+    slot_data_rx: crossbeam_channel::Receiver<HkSlotData>,
 ) -> AuctioneerHandle {
     let (worker_tx, worker_rx) = crossbeam_channel::bounded(10_000);
     let (event_tx, event_rx) = crossbeam_channel::bounded(10_000);
@@ -82,7 +83,7 @@ pub fn spawn_auctioneer<A: Api>(
         .name("auctioneer".to_string())
         .spawn(move || {
             info!("starting auctioneer");
-            auctioneer.run(event_rx)
+            auctioneer.run(event_rx, slot_data_rx)
         })
         .unwrap();
 
@@ -95,9 +96,19 @@ struct Auctioneer<A: Api> {
 }
 
 impl<A: Api> Auctioneer<A> {
-    fn run(mut self, rx: crossbeam_channel::Receiver<Event>) {
+    fn run(
+        mut self,
+        rx: crossbeam_channel::Receiver<Event>,
+        slot_data_rx: crossbeam_channel::Receiver<HkSlotData>,
+    ) {
         loop {
             for evt in rx.try_iter() {
+                self.state.step(evt, &mut self.ctx);
+            }
+
+            if let Ok(slot_data) = slot_data_rx.try_recv() {
+                let HkSlotData { bid_slot, registration_data, payload_attributes, il } = slot_data;
+                let evt = Event::SlotData { bid_slot, registration_data, payload_attributes, il };
                 self.state.step(evt, &mut self.ctx);
             }
         }

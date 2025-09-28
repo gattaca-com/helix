@@ -19,6 +19,8 @@ pub use primev_service::EthereumPrimevService;
 pub use slot_info::CurrentSlotInfo;
 use tokio::sync::broadcast;
 
+use crate::chain_event_updater::SlotData;
+
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PAYLOAD_ATTRIBUTE_CHANNEL_SIZE: usize = 300;
 
@@ -29,6 +31,7 @@ pub async fn start_housekeeper(
     config: &RelayConfig,
     beacon_client: Arc<MultiBeaconClient>,
     chain_info: Arc<ChainInfo>,
+    auctioneer_handle: crossbeam_channel::Sender<SlotData>,
 ) -> eyre::Result<CurrentSlotInfo> {
     let (head_event_sender, head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
     beacon_client.subscribe_to_head_events(head_event_sender).await;
@@ -44,12 +47,14 @@ pub async fn start_housekeeper(
             auctioneer.clone(),
             config,
             chain_info.clone(),
+            auctioneer_handle.clone(),
         );
         housekeeper.start(head_event_receiver.resubscribe()).await?;
     }
 
     let curr_slot_info = CurrentSlotInfo::new();
-    let chain_updater = ChainEventUpdater::new(auctioneer, chain_info, curr_slot_info.clone());
+    let chain_updater =
+        ChainEventUpdater::new(auctioneer, chain_info, curr_slot_info.clone(), auctioneer_handle);
     tokio::spawn(chain_updater.start(head_event_receiver, payload_attribute_receiver));
 
     Ok(curr_slot_info)

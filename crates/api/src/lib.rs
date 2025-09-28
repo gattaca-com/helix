@@ -9,7 +9,7 @@ use helix_common::{
     signing::RelaySigningContext, RelayConfig,
 };
 use helix_database::DatabaseService;
-use helix_housekeeper::CurrentSlotInfo;
+use helix_housekeeper::{chain_event_updater::SlotData, CurrentSlotInfo};
 use service::run_api_service;
 
 pub mod admin_service;
@@ -41,6 +41,7 @@ pub fn start_api_service<A: Api>(
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
+    slot_data_rx: crossbeam_channel::Receiver<SlotData>,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),
@@ -54,6 +55,7 @@ pub fn start_api_service<A: Api>(
         known_validators_loaded,
         terminating,
         top_bid_tx,
+        slot_data_rx,
     ));
 }
 

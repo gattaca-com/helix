@@ -42,6 +42,7 @@ fn get_housekeeper() -> HelperVars {
         Arc::new(auctioneer),
         &RelayConfig::default(),
         Arc::new(ChainInfo::for_mainnet()),
+        crossbeam_channel::unbounded().0,
     );
 
     HelperVars {

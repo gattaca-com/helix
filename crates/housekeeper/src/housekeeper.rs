@@ -24,7 +24,10 @@ use helix_types::{BlsPublicKeyBytes, Epoch, Slot, SlotClockTrait};
 use tokio::sync::{broadcast, Mutex};
 use tracing::{debug, error, info, warn, Instrument};
 
-use crate::{error::HousekeeperError, inclusion_list::InclusionListService, EthereumPrimevService};
+use crate::{
+    chain_event_updater::SlotData, error::HousekeeperError, inclusion_list::InclusionListService,
+    EthereumPrimevService,
+};
 
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 1;
 
@@ -102,12 +105,19 @@ impl<DB: DatabaseService> Housekeeper<DB> {
         auctioneer: Arc<LocalCache>,
         config: &RelayConfig,
         chain_info: Arc<ChainInfo>,
+        auctioneer_handle: crossbeam_channel::Sender<SlotData>,
     ) -> Self {
         let primev_service =
             config.primev_config.clone().map(|p| EthereumPrimevService::new(p).unwrap());
 
         let inclusion_list_service = config.inclusion_list.clone().map(|config| {
-            InclusionListService::new(db.clone(), auctioneer.clone(), config, chain_info.clone())
+            InclusionListService::new(
+                db.clone(),
+                auctioneer.clone(),
+                config,
+                chain_info.clone(),
+                auctioneer_handle,
+            )
         });
 
         Self {

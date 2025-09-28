@@ -88,6 +88,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     let db = start_db_service(&config, known_validators_loaded.clone()).await?;
     let local_cache = start_auctioneer(db.clone()).await?;
 
+    let (slot_data_tx, slot_data_rx) = crossbeam_channel::bounded(100);
     let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
 
     if config.router_config.validate_bid_sorter()? {}
@@ -98,6 +99,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         &config,
         beacon_client.clone(),
         chain_info.clone(),
+        slot_data_tx,
     )
     .await
     .map_err(|e| eyre!("housekeeper init: {e}"))?;
@@ -118,6 +120,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         known_validators_loaded,
         terminating.clone(),
         top_bid_tx,
+        slot_data_rx,
     );
 
     let termination_grace_period = config.router_config.shutdown_delay_ms;

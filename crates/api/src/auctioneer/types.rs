@@ -79,6 +79,7 @@ pub struct SlotData {
     pub payload_attributes: PayloadAttributesUpdate,
     /// Current fork
     pub current_fork: ForkName,
+    /// Inclusion list
     pub il: Option<InclusionListWithMetadata>,
 }
 

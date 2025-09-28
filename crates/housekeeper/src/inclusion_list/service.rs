@@ -11,28 +11,32 @@ use helix_database::DatabaseService;
 use helix_types::{BlsPublicKeyBytes, Slot};
 use tracing::{error, info, warn};
 
-use crate::inclusion_list::http_fetcher::HttpInclusionListFetcher;
+use crate::{
+    chain_event_updater::SlotData, inclusion_list::http_fetcher::HttpInclusionListFetcher,
+};
 
 const MISSING_INCLUSION_LIST_CUTOFF: Duration = Duration::from_secs(6);
 
 #[derive(Clone)]
 pub struct InclusionListService<DB: DatabaseService> {
     db: Arc<DB>,
-    auctioneer: Arc<LocalCache>,
+    local_cache: Arc<LocalCache>,
     http_il_fetcher: HttpInclusionListFetcher,
     chain_info: Arc<ChainInfo>,
+    auctioneer_handle: crossbeam_channel::Sender<SlotData>,
 }
 
 impl<DB: DatabaseService> InclusionListService<DB> {
     pub fn new(
         db: Arc<DB>,
-        auctioneer: Arc<LocalCache>,
+        local_cache: Arc<LocalCache>,
         config: InclusionListConfig,
         chain_info: Arc<ChainInfo>,
+        auctioneer_handle: crossbeam_channel::Sender<SlotData>,
     ) -> Self {
         let http_il_fetcher = HttpInclusionListFetcher::new(config);
 
-        Self { db, auctioneer, http_il_fetcher, chain_info }
+        Self { db, local_cache, http_il_fetcher, chain_info, auctioneer_handle }
     }
 
     /// Fetch and persist inclusion list for this slot.
@@ -40,35 +44,48 @@ impl<DB: DatabaseService> InclusionListService<DB> {
         &self,
         parent_hash: Option<B256>,
         pub_key: BlsPublicKeyBytes,
-        slot: u64,
+        head_slot: u64,
     ) {
         let Some(parent_hash) = parent_hash else {
             info!("No inclusion list for this slot because we missed the new slot head event and have no block hash");
             return;
         };
 
-        let Some(inclusion_list) = self.fetch_inclusion_list_or_timeout(slot).await else {
+        let Some(inclusion_list) = self.fetch_inclusion_list_or_timeout(head_slot).await else {
             return;
         };
 
         let inclusion_list = match InclusionListWithMetadata::try_from(inclusion_list) {
             Ok(list) => list,
             Err(err) => {
-                warn!(head_slot = slot, "Could not decode inclusion list RLP bytes. Error:{}", err);
+                warn!(
+                    head_slot = head_slot,
+                    "Could not decode inclusion list RLP bytes. Error:{}", err
+                );
                 return;
             }
         };
 
-        self.auctioneer
-            .update_current_inclusion_list(inclusion_list.clone(), (slot, pub_key, parent_hash));
+        self.local_cache.update_current_inclusion_list(
+            inclusion_list.clone(),
+            (head_slot, pub_key, parent_hash),
+        );
 
-        match self.db.save_inclusion_list(&inclusion_list, slot, &parent_hash, &pub_key).await {
+        let _ = self.auctioneer_handle.try_send(SlotData {
+            bid_slot: (head_slot + 1).into(),
+            registration_data: None,
+            payload_attributes: None,
+            il: Some(inclusion_list.clone()),
+        });
+
+        match self.db.save_inclusion_list(&inclusion_list, head_slot, &parent_hash, &pub_key).await
+        {
             Ok(_) => {
-                info!(head_slot = slot, "Saved inclusion list to postgres");
+                info!(head_slot = head_slot, "Saved inclusion list to postgres");
             }
             Err(err) => {
                 error!(
-                    head_slot = slot,
+                    head_slot = head_slot,
                     "Could not save inclusion list to postgres. Error: {:?}", err
                 );
             }
