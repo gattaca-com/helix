@@ -3,8 +3,9 @@ use helix_common::{
     chain_info::ChainInfo, local_cache::LocalCache, GetPayloadTrace, RelayConfig, SubmissionTrace,
 };
 use helix_types::{
-    BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission, ExecPayload,
-    SigError, SignedBidSubmission, SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock,
+    BlockMergingData, BlockMergingPreferences, BlsPublicKey, BlsPublicKeyBytes,
+    DehydratedBidSubmission, ExecPayload, SigError, SignedBidSubmission,
+    SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock,
 };
 use http::HeaderValue;
 use tracing::{error, warn};
@@ -47,8 +48,15 @@ impl Worker {
             WorkerJob::BlockSubmission { headers, body, mut trace, res_tx } => {
                 match self.handle_block_submission(headers, body, &mut trace) {
                     Ok((submission, withdrawals_root, sequence, merging_data)) => {
+                        let merging_preferences = merging_data
+                            .as_ref()
+                            .map(|m| BlockMergingPreferences { allow_appending: m.allow_appending })
+                            .unwrap_or_default();
+
                         let message = Event::Submission {
+                            // TODO: move this to auctioneer, avoid clones
                             submission: submission.clone(),
+                            merging_preferences,
                             withdrawals_root,
                             sequence,
                             trace,
@@ -59,7 +67,6 @@ impl Worker {
                             error!("failed sending submisison to auctioneer");
                         }
 
-                        // TODO: move this to auctioneer, avoid clones
                         if self.config.block_merging_config.is_enabled {
                             if let Some(merging_data) = merging_data {
                                 let Submission::Full(payload) = submission else {

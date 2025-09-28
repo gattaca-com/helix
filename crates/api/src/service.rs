@@ -52,7 +52,6 @@ pub async fn run_api_service<A: Api>(
 
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
     let (merge_pool_tx, pool_rx) = tokio::sync::mpsc::channel(10_000);
-    // TODO: move this to an EVENT
     let (merge_requests_tx, _merge_requests_rx) = mpsc::channel(10_000);
 
     // spawn auctioneer

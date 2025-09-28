@@ -9,7 +9,7 @@ use helix_common::{
     BuilderInfo, SubmissionTrace,
 };
 use helix_database::DatabaseService;
-use helix_types::SignedBidSubmission;
+use helix_types::{BlockMergingPreferences, SignedBidSubmission};
 use tokio::sync::oneshot;
 use tracing::error;
 
@@ -28,18 +28,20 @@ impl<A: Api> Context<A> {
     pub(super) fn handle_submission(
         &mut self,
         submission: Submission,
+        merging_preferences: BlockMergingPreferences,
         withdrawals_root: B256,
         sequence: Option<u64>,
         mut trace: SubmissionTrace,
         res_tx: oneshot::Sender<SubmissionResult>,
         slot_data: &SlotData,
     ) {
-        match self.validate_and_sort_submission(
+        match self.validate_and_sort(
             submission,
             withdrawals_root,
             sequence,
             &mut trace,
             slot_data,
+            merging_preferences,
         ) {
             Ok((submission, optimistic_version)) => {
                 let res_tx = if optimistic_version.is_optimistic() {
@@ -48,7 +50,15 @@ impl<A: Api> Context<A> {
                 } else {
                     Some(res_tx)
                 };
-                self.handle_2(submission, trace, optimistic_version, res_tx, slot_data);
+
+                self.simulate_and_store(
+                    submission,
+                    trace,
+                    optimistic_version,
+                    res_tx,
+                    slot_data,
+                    merging_preferences,
+                );
             }
 
             Err(err) => {
@@ -72,6 +82,7 @@ impl<A: Api> Context<A> {
                         utcnow_ns(),
                         100,
                         result.submission.withdrawals_root(),
+                        result.merging_preferences,
                     );
 
                     self.bid_sorter.sort(msg);
@@ -80,13 +91,14 @@ impl<A: Api> Context<A> {
         }
     }
 
-    fn validate_and_sort_submission(
+    fn validate_and_sort(
         &mut self,
         submission: Submission,
         withdrawals_root: B256,
         sequence: Option<u64>,
         trace: &mut SubmissionTrace,
         slot_data: &SlotData,
+        merging_preferences: BlockMergingPreferences,
     ) -> Result<(SignedBidSubmission, OptimisticVersion), BuilderApiError> {
         let submission = match submission {
             Submission::Full(full) => full,
@@ -124,6 +136,7 @@ impl<A: Api> Context<A> {
                 utcnow_ns(),
                 0,
                 withdrawals_root,
+                merging_preferences,
             );
             self.bid_sorter.sort(msg);
             OptimisticVersion::V1
@@ -134,13 +147,14 @@ impl<A: Api> Context<A> {
         Ok((submission, optimistic_version))
     }
 
-    fn handle_2(
+    fn simulate_and_store(
         &mut self,
         submission: SignedBidSubmission,
         submission_trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,
         res_tx: Option<oneshot::Sender<SubmissionResult>>,
         slot_data: &SlotData,
+        merging_preferences: BlockMergingPreferences,
     ) {
         // TODO: pass this from previous step
         let is_top_bid = self.bid_sorter.is_top_bid(&submission);
@@ -162,6 +176,7 @@ impl<A: Api> Context<A> {
             is_optimistic: optimistic_version.is_optimistic(),
             res_tx,
             submission: submission.clone(),
+            merging_preferences,
         };
         self.sim_manager.handle_sim_request(req);
 

@@ -1,10 +1,12 @@
 use helix_common::{GetPayloadTrace, SubmissionTrace};
-use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock};
+use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, Slot};
 use http::HeaderMap;
 use tokio::sync::oneshot;
 
 use crate::{
-    auctioneer::types::{Event, GetHeaderResult, GetPayloadResult, SubmissionResult, WorkerJob},
+    auctioneer::types::{
+        BestMergeablePayload, Event, GetHeaderResult, GetPayloadResult, SubmissionResult, WorkerJob,
+    },
     gossiper::types::BroadcastPayloadParams,
     proposer::GetHeaderParams,
 };
@@ -64,5 +66,18 @@ impl AuctioneerHandle {
     #[allow(clippy::result_unit_err)]
     pub fn gossip_payload(&self, req: BroadcastPayloadParams) -> Result<(), ()> {
         self.auctioneer.try_send(Event::GossipPayload(req)).map_err(|_| ())
+    }
+
+    #[allow(clippy::result_unit_err)]
+    pub fn best_mergeable(
+        &self,
+        bid_slot: Slot,
+    ) -> Result<oneshot::Receiver<BestMergeablePayload>, ()> {
+        let (tx, rx) = oneshot::channel();
+        self.auctioneer
+            .try_send(Event::GetBestPayloadForMerging { bid_slot, res_tx: tx })
+            .map_err(|_| ())?;
+
+        Ok(rx)
     }
 }

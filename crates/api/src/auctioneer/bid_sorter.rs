@@ -16,7 +16,7 @@ use helix_common::{
     utils::{avg_duration, utcnow_ms, utcnow_ns},
     SubmissionTrace,
 };
-use helix_types::{BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
+use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
 use ssz::Encode;
 use tracing::info;
 
@@ -29,6 +29,7 @@ pub struct BidSorterMessage {
     header: BuilderBid,
     simulation_time_ns: u64,
     before_sorter_ns: u64,
+    merging_preferences: BlockMergingPreferences,
 }
 
 impl BidSorterMessage {
@@ -38,6 +39,7 @@ impl BidSorterMessage {
         before_sorter_ns: u64,
         simulation_time_ns: u64,
         withdrawals_root: B256,
+        merging_preferences: BlockMergingPreferences,
     ) -> Self {
         let bid_trace = submission.bid_trace();
         let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
@@ -49,6 +51,7 @@ impl BidSorterMessage {
             header,
             simulation_time_ns,
             before_sorter_ns,
+            merging_preferences,
         }
     }
 }
@@ -103,8 +106,8 @@ pub struct BidSorter {
     /// All bid entries for the current slot, used for sorting
     bids: HashMap<BlsPublicKeyBytes, BidEntry>,
     /// All headers received for this slot
-    /// on_receive_ns -> header
-    headers: HashMap<u64, BuilderBid>,
+    /// on_receive_ns -> (header, merging_preferences)
+    headers: HashMap<u64, (BuilderBid, BlockMergingPreferences)>,
     /// Demoted builders in this slot for live demotions
     demotions: HashSet<BlsPublicKeyBytes>,
     /// Current best bid
@@ -134,6 +137,7 @@ impl BidSorter {
             header,
             simulation_time_ns,
             before_sorter_ns,
+            merging_preferences,
         }: BidSorterMessage,
     ) {
         let recv_ns = utcnow_ns();
@@ -150,7 +154,7 @@ impl BidSorter {
             return;
         }
 
-        self.headers.insert(bid.on_receive_ns, header);
+        self.headers.insert(bid.on_receive_ns, (header, merging_preferences));
         self.process_header(builder_pubkey, bid);
 
         // telemetry
@@ -171,6 +175,17 @@ impl BidSorter {
     // TODO: return this from .sort instead
     pub fn is_top_bid(&self, sub: &SignedBidSubmission) -> bool {
         self.curr_bid.as_ref().is_some_and(|c| c.2.header.block_hash == sub.message().block_hash)
+    }
+
+    pub fn best_mergeable(&self) -> Option<BuilderBid> {
+        let curr = self.curr_bid.as_ref()?;
+        let (_, preferences) = self.headers.get(&curr.1.on_receive_ns)?;
+
+        if preferences.allow_appending {
+            Some(curr.2.clone())
+        } else {
+            None
+        }
     }
 
     pub fn demote(&mut self, demoted: BlsPublicKeyBytes) {
@@ -275,7 +290,7 @@ impl BidSorter {
     }
 
     fn update_top_bid(&mut self, builder_pubkey: BlsPublicKeyBytes, bid: Bid) {
-        let Some(h) = self.headers.get(&bid.on_receive_ns) else {
+        let Some((h, _)) = self.headers.get(&bid.on_receive_ns) else {
             // this should never happen
             return;
         };

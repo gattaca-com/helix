@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use alloy_primitives::B256;
 use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
@@ -6,8 +8,9 @@ use helix_common::{
 };
 use helix_housekeeper::PayloadAttributesUpdate;
 use helix_types::{
-    BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ForkName, GetPayloadResponse,
-    SignedBidSubmission, SignedBlindedBeaconBlock, Slot, VersionedSignedProposal,
+    BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ForkName,
+    GetPayloadResponse, PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock, Slot,
+    VersionedSignedProposal,
 };
 use tokio::sync::oneshot;
 
@@ -21,6 +24,7 @@ use crate::{
 pub type SubmissionResult = Result<(), BuilderApiError>;
 pub type GetHeaderResult = Result<BuilderBid, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
+pub type BestMergeablePayload = Option<(BuilderBid, Arc<PayloadAndBlobs>)>;
 
 pub struct GetPayloadResultData {
     pub to_proposer: GetPayloadResponse,
@@ -114,6 +118,7 @@ pub enum Event {
     },
     Submission {
         submission: Submission,
+        merging_preferences: BlockMergingPreferences,
         withdrawals_root: B256,
         sequence: Option<u64>,
         trace: SubmissionTrace,
@@ -137,5 +142,10 @@ pub enum Event {
     SimulatorSync {
         id: usize,
         is_synced: bool,
+    },
+    // TODO: remove once we move merging to auctioneer
+    GetBestPayloadForMerging {
+        bid_slot: Slot,
+        res_tx: oneshot::Sender<BestMergeablePayload>,
     },
 }

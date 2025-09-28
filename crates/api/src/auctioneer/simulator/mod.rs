@@ -6,8 +6,8 @@ use helix_common::{
     simulator::BlockSimError, ValidatorPreferences,
 };
 use helix_types::{
-    BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload,
-    ExecutionRequests, MergeableOrderWithOrigin, SignedBidSubmission,
+    BidTrace, BlobsBundle, BlockMergingPreferences, BlsPublicKeyBytes, BlsSignatureBytes,
+    ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin, SignedBidSubmission,
 };
 use serde_json::json;
 use tokio::sync::oneshot;
@@ -148,6 +148,7 @@ pub struct SimulatorRequest {
     pub is_optimistic: bool,
     pub submission: SignedBidSubmission,
     pub res_tx: Option<oneshot::Sender<SubmissionResult>>,
+    pub merging_preferences: BlockMergingPreferences,
 }
 
 impl SimulatorRequest {

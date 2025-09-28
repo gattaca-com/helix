@@ -4,6 +4,7 @@ mod decoder;
 mod get_header;
 mod get_payload;
 mod handle;
+mod merging;
 mod simulator;
 mod submit_block;
 mod types;
@@ -246,10 +247,18 @@ impl State {
             // submission
             (
                 State::Sorting(slot_data),
-                Event::Submission { submission, withdrawals_root, sequence, trace, res_tx },
+                Event::Submission {
+                    submission,
+                    merging_preferences,
+                    withdrawals_root,
+                    sequence,
+                    trace,
+                    res_tx,
+                },
             ) => {
                 ctx.handle_submission(
                     submission,
+                    merging_preferences,
                     withdrawals_root,
                     sequence,
                     trace,
@@ -292,11 +301,23 @@ impl State {
                 ctx.handle_simulation_result(result);
             }
 
+            // gossiped payload
             (State::Sorting(slot_data), Event::GossipPayload(payload)) => {
                 ctx.handle_gossip_payload(payload, slot_data);
                 if let Some(state) = Self::maybe_start_broacasting(ctx, slot_data) {
                     *self = state;
                 }
+            }
+
+            // merging request
+            (State::Sorting(slot_data), Event::GetBestPayloadForMerging { bid_slot, res_tx }) => {
+                let maybe_payload = if slot_data.bid_slot == bid_slot {
+                    ctx.get_best_mergeable_payload()
+                } else {
+                    None
+                };
+
+                let _ = res_tx.send(maybe_payload);
             }
 
             ///////////// INVALID STATES / EVENTS /////////////
@@ -334,7 +355,7 @@ impl State {
                 }
             }
 
-            // gossip payload
+            // gossiped payload, proposer equivocating?
             (
                 State::Broadcasting { block_hash, slot_data: slot_ctx },
                 Event::GossipPayload(payload),
@@ -375,6 +396,14 @@ impl State {
             // gossip payload unregistered
             (State::Slot { bid_slot, .. }, Event::GossipPayload(payload)) => {
                 warn!(curr =% bid_slot, gossip_slot = payload.slot, "received early or late gossip payload");
+            }
+
+            // merging
+            (
+                State::Slot { .. } | State::Broadcasting { .. },
+                Event::GetBestPayloadForMerging { res_tx, .. },
+            ) => {
+                let _ = res_tx.send(None);
             }
         }
     }

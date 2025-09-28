@@ -7,7 +7,7 @@ use helix_common::{
     bid_submission::BidSubmission, metrics::SimulatorMetrics, simulator::BlockSimError,
     SimulatorConfig,
 };
-use helix_types::{BlsPublicKeyBytes, SignedBidSubmission};
+use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission};
 use tokio::{runtime::Handle, sync::oneshot, task::JoinSet};
 use tracing::{debug, info, warn};
 
@@ -42,6 +42,7 @@ pub struct SimulationResult {
     // TODO: move up
     pub paused_until: Option<Instant>,
     pub submission: SignedBidSubmission,
+    pub merging_preferences: BlockMergingPreferences,
 }
 
 impl SimulationResult {
@@ -215,6 +216,7 @@ impl SimulatorManager {
                 id,
                 res_tx: req.res_tx,
                 submission: req.submission,
+                merging_preferences: req.merging_preferences,
             };
 
             let _ = tx.try_send(Event::SimResult(result));
