@@ -26,7 +26,6 @@ pub struct GetPayloadResultData {
     pub to_proposer: GetPayloadResponse,
     pub to_publish: VersionedSignedProposal,
     pub trace: GetPayloadTrace,
-    pub proposer_pubkey: BlsPublicKeyBytes,
     pub fork: ForkName,
 }
 
@@ -64,6 +63,7 @@ pub enum WorkerJob {
 
     GetPayload {
         blinded_block: SignedBlindedBeaconBlock,
+        proposer_pubkey: BlsPublicKeyBytes,
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
     },

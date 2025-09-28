@@ -93,8 +93,8 @@ impl Worker {
                 }
             }
 
-            WorkerJob::GetPayload { blinded_block, mut trace, res_tx } => {
-                match self.handle_get_payload(blinded_block, &mut trace) {
+            WorkerJob::GetPayload { blinded_block, proposer_pubkey, mut trace, res_tx } => {
+                match self.handle_get_payload(&proposer_pubkey, blinded_block, &mut trace) {
                     Ok((blinded, block_hash)) => {
                         let _ = self.tx.try_send(Event::GetPayload {
                             block_hash,
@@ -165,15 +165,11 @@ impl Worker {
 
     fn handle_get_payload(
         &self,
+        proposer_pubkey: &BlsPublicKeyBytes,
         blinded_block: SignedBlindedBeaconBlock,
         _trace: &mut GetPayloadTrace,
     ) -> Result<(SignedBlindedBeaconBlock, B256), ProposerApiError> {
-        // TODO: we need to get this from the slot duty
-        // we could also just compute the object root and verify the signature
-        // starves the main loop for a few ms
-        let proposer_pubkey = BlsPublicKeyBytes::default();
-
-        verify_signed_blinded_block_signature(&self.chain_info, &blinded_block, &proposer_pubkey)?;
+        verify_signed_blinded_block_signature(&self.chain_info, &blinded_block, proposer_pubkey)?;
 
         let block_hash = blinded_block
             .message()

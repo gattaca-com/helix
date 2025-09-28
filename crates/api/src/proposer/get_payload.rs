@@ -108,7 +108,14 @@ impl<A: Api> ProposerApi<A> {
             .block_hash()
             .0;
 
-        let (head_slot, _) = self.curr_slot_info.slot_info();
+        let (head_slot, slot_duty) = self.curr_slot_info.slot_info();
+        // Verify that we have a proposer connected for the current proposal
+        let Some(slot_duty) = slot_duty else {
+            warn!("no slot proposer duty");
+            return Err(ProposerApiError::ProposerNotRegistered);
+        };
+
+        let proposer_public_key = slot_duty.entry.registration.message.pubkey;
 
         info!(%head_slot, request_ts = trace.receive, %block_hash);
 
@@ -121,18 +128,14 @@ impl<A: Api> ProposerApi<A> {
             });
         }
 
-        let Ok(rx) = self.auctioneer_handle.get_payload(signed_blinded_block, *trace) else {
+        let Ok(rx) =
+            self.auctioneer_handle.get_payload(proposer_public_key, signed_blinded_block, *trace)
+        else {
             error!("failed sending request to worker");
             return Err(ProposerApiError::InternalServerError)
         };
 
-        let GetPayloadResultData {
-            to_proposer,
-            to_publish,
-            trace: new_trace,
-            proposer_pubkey: proposer_public_key,
-            fork,
-        } = rx
+        let GetPayloadResultData { to_proposer, to_publish, trace: new_trace, fork } = rx
             .await
             .inspect_err(|err| {
                 error!(%err, "failed to receive payload response from auctioneer");

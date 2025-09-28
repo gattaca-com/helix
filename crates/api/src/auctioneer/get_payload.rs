@@ -54,13 +54,11 @@ impl<A: Api> Context<A> {
         let (res, maybe_block_hash) = match self.get_payload(blinded, local, trace, slot_data) {
             Ok((to_proposer, to_publish, trace)) => {
                 let block_hash = to_proposer.data.execution_payload.block_hash;
-                let proposer_pubkey = *slot_data.proposer_pubkey();
                 (
                     Ok(GetPayloadResultData {
                         to_proposer,
                         to_publish,
                         trace,
-                        proposer_pubkey,
                         fork: slot_data.current_fork,
                     }),
                     Some(block_hash),

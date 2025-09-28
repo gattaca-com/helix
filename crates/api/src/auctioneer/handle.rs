@@ -1,5 +1,5 @@
 use helix_common::{GetPayloadTrace, SubmissionTrace};
-use helix_types::SignedBlindedBeaconBlock;
+use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock};
 use http::HeaderMap;
 use tokio::sync::oneshot;
 
@@ -50,12 +50,13 @@ impl AuctioneerHandle {
     #[allow(clippy::result_unit_err)]
     pub fn get_payload(
         &self,
+        proposer_pubkey: BlsPublicKeyBytes,
         blinded_block: SignedBlindedBeaconBlock,
         trace: GetPayloadTrace,
     ) -> Result<oneshot::Receiver<GetPayloadResult>, ()> {
         let (tx, rx) = oneshot::channel();
         self.worker
-            .try_send(WorkerJob::GetPayload { blinded_block, trace, res_tx: tx })
+            .try_send(WorkerJob::GetPayload { proposer_pubkey, blinded_block, trace, res_tx: tx })
             .map_err(|_| ())?;
         Ok(rx)
     }

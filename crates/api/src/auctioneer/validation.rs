@@ -8,8 +8,6 @@ use crate::{
     Api,
 };
 
-// TODO: metadata
-
 impl<A: Api> Context<A> {
     pub fn validate_submission(
         &mut self,
