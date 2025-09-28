@@ -31,7 +31,7 @@ impl<A: Api> Context<A> {
         }
 
         self.check_duplicate_submission(*payload.block_hash())?;
-        self.validate_submission_data(payload, &withdrawals_root, slot_data)?;
+        self.validate_submission_data(payload, withdrawals_root, slot_data)?;
         self.check_if_trusted_builder(builder_info, slot_data)?;
 
         Ok(())
@@ -136,7 +136,7 @@ impl<A: Api> Context<A> {
                 if trusted_builders.contains(builder_id) {
                     Ok(())
                 } else {
-                    return Err(BuilderApiError::BuilderNotInProposersTrustedList {
+                    Err(BuilderApiError::BuilderNotInProposersTrustedList {
                         proposer_trusted_builders: trusted_builders.clone(),
                     })
                 }
@@ -144,12 +144,12 @@ impl<A: Api> Context<A> {
                 if ids.iter().any(|id| trusted_builders.contains(id)) {
                     Ok(())
                 } else {
-                    return Err(BuilderApiError::BuilderNotInProposersTrustedList {
+                    Err(BuilderApiError::BuilderNotInProposersTrustedList {
                         proposer_trusted_builders: trusted_builders.clone(),
                     })
                 }
             } else {
-                return Err(BuilderApiError::BuilderNotInProposersTrustedList {
+                Err(BuilderApiError::BuilderNotInProposersTrustedList {
                     proposer_trusted_builders: trusted_builders.clone(),
                 })
             }

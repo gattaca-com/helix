@@ -186,7 +186,7 @@ impl State {
                 State::Sorting(slot_data),
                 Event::SlotData { bid_slot, registration_data, payload_attributes, il },
             ) => match bid_slot.cmp(&slot_data.bid_slot) {
-                Ordering::Less => return,
+                Ordering::Less => (),
                 Ordering::Equal => {
                     // add inclusion list
                     if slot_data.il.is_none() && il.is_some() {
@@ -213,7 +213,7 @@ impl State {
                 State::Broadcasting { slot_data, block_hash },
                 Event::SlotData { bid_slot, registration_data, payload_attributes, il },
             ) => match bid_slot.cmp(&slot_data.bid_slot) {
-                Ordering::Less | Ordering::Equal => return,
+                Ordering::Less | Ordering::Equal => (),
                 Ordering::Greater => {
                     if let Some(attributes) = &payload_attributes {
                         if &attributes.parent_hash != block_hash {
@@ -254,7 +254,7 @@ impl State {
                     sequence,
                     trace,
                     res_tx,
-                    &slot_data,
+                    slot_data,
                 );
 
                 if let Some(state) = Self::maybe_start_broacasting(ctx, slot_data) {
@@ -274,7 +274,7 @@ impl State {
             ) => {
                 if let Some(local) = ctx.payloads.get(&block_hash) {
                     if let Some(block_hash) =
-                        ctx.handle_get_payload(local.clone(), blinded, trace, res_tx, &slot_data)
+                        ctx.handle_get_payload(local.clone(), blinded, trace, res_tx, slot_data)
                     {
                         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
                         *self = State::Broadcasting { slot_data: slot_data.clone(), block_hash }
@@ -293,7 +293,7 @@ impl State {
             }
 
             (State::Sorting(slot_data), Event::GossipPayload(payload)) => {
-                ctx.handle_gossip_payload(payload, &slot_data);
+                ctx.handle_gossip_payload(payload, slot_data);
                 if let Some(state) = Self::maybe_start_broacasting(ctx, slot_data) {
                     *self = state;
                 }

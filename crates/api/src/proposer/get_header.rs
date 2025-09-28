@@ -159,7 +159,7 @@ impl<A: Api> ProposerApi<A> {
         // Try to fetch a merged block if block merging is enabled
         let bid = if proposer_api.relay_config.block_merging_config.is_enabled {
             let merged_block_bid =
-                proposer_api.shared_best_merged.load(params.slot.into(), &params.parent_hash);
+                proposer_api.shared_best_merged.load(params.slot, &params.parent_hash);
             let max_merged_bid_age_ms =
                 proposer_api.relay_config.block_merging_config.max_merged_bid_age_ms;
 

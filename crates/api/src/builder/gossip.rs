@@ -16,8 +16,8 @@ impl<A: Api> BuilderApi<A> {
 
         let trace = GossipedPayloadTrace { receive: utcnow_ns(), ..Default::default() };
 
-        if let Err(err) = self.auctioneer_handle.gossip_payload(req) {
-            error!(%err, "failed sending gossip payload to auctioneer");
+        if self.auctioneer_handle.gossip_payload(req).is_err() {
+            error!("failed sending gossip payload to auctioneer");
         }
 
         // Save gossiped payload trace to db

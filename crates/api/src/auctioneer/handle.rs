@@ -1,4 +1,3 @@
-use crossbeam_channel::TrySendError;
 use helix_common::{GetPayloadTrace, SubmissionTrace};
 use helix_types::SignedBlindedBeaconBlock;
 use http::HeaderMap;
@@ -24,37 +23,45 @@ impl AuctioneerHandle {
         Self { worker, auctioneer }
     }
 
+    #[allow(clippy::result_unit_err)]
     pub fn block_submission(
         &self,
         headers: HeaderMap,
         body: bytes::Bytes,
         trace: SubmissionTrace,
-    ) -> Result<oneshot::Receiver<SubmissionResult>, TrySendError<WorkerJob>> {
+    ) -> Result<oneshot::Receiver<SubmissionResult>, ()> {
         let (tx, rx) = oneshot::channel();
-        self.worker.try_send(WorkerJob::BlockSubmission { headers, body, trace, res_tx: tx })?;
+        self.worker
+            .try_send(WorkerJob::BlockSubmission { headers, body, trace, res_tx: tx })
+            .map_err(|_| ())?;
         Ok(rx)
     }
 
+    #[allow(clippy::result_unit_err)]
     pub fn get_header(
         &self,
         params: GetHeaderParams,
-    ) -> Result<oneshot::Receiver<GetHeaderResult>, TrySendError<Event>> {
+    ) -> Result<oneshot::Receiver<GetHeaderResult>, ()> {
         let (tx, rx) = oneshot::channel();
-        self.auctioneer.try_send(Event::GetHeader { params, res_tx: tx })?;
+        self.auctioneer.try_send(Event::GetHeader { params, res_tx: tx }).map_err(|_| ())?;
         Ok(rx)
     }
 
+    #[allow(clippy::result_unit_err)]
     pub fn get_payload(
         &self,
         blinded_block: SignedBlindedBeaconBlock,
         trace: GetPayloadTrace,
-    ) -> Result<oneshot::Receiver<GetPayloadResult>, TrySendError<WorkerJob>> {
+    ) -> Result<oneshot::Receiver<GetPayloadResult>, ()> {
         let (tx, rx) = oneshot::channel();
-        self.worker.try_send(WorkerJob::GetPayload { blinded_block, trace, res_tx: tx })?;
+        self.worker
+            .try_send(WorkerJob::GetPayload { blinded_block, trace, res_tx: tx })
+            .map_err(|_| ())?;
         Ok(rx)
     }
 
-    pub fn gossip_payload(&self, req: BroadcastPayloadParams) -> Result<(), TrySendError<Event>> {
-        self.auctioneer.try_send(Event::GossipPayload(req))
+    #[allow(clippy::result_unit_err)]
+    pub fn gossip_payload(&self, req: BroadcastPayloadParams) -> Result<(), ()> {
+        self.auctioneer.try_send(Event::GossipPayload(req)).map_err(|_| ())
     }
 }

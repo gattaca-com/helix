@@ -83,7 +83,7 @@ impl<A: Api> Context<A> {
         if let Some(local) = self.payloads.get(&pending.block_hash) {
             info!("found payload for pending get_payload");
             let PendingPayload { blinded, res_tx, trace, .. } = pending;
-            self.handle_get_payload(local.clone(), blinded, trace, res_tx, &slot_data)
+            self.handle_get_payload(local.clone(), blinded, trace, res_tx, slot_data)
         } else {
             self.pending_payload = Some(pending);
             None
