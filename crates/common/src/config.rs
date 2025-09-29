@@ -10,6 +10,12 @@ use tracing::error;
 
 use crate::{api::*, chain_info::ChainInfo, BuilderInfo, ValidatorPreferences};
 
+static mut LOCAL_DEV: bool = false;
+
+pub fn is_local_dev() -> bool {
+    unsafe { LOCAL_DEV }
+}
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RelayConfig {
     pub instance_id: Option<String>,
@@ -57,7 +63,7 @@ pub struct RelayConfig {
     pub housekeeper: bool,
     pub admin_token: String,
     #[serde(default)]
-    pub is_local_dev: bool,
+    is_local_dev: bool,
     #[serde(default)]
     pub auctioneer: AuctioneerConfig,
 }
@@ -122,6 +128,10 @@ pub fn load_config() -> RelayConfig {
         .unwrap_or_else(|_| panic!("unable to find config file: '{}'", start_config.config));
 
     let config: RelayConfig = serde_yaml::from_reader(file).expect("failed to parse config file");
+
+    unsafe {
+        LOCAL_DEV = config.is_local_dev;
+    }
 
     config
 }

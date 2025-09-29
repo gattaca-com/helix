@@ -127,10 +127,10 @@ enum State {
         il: Option<InclusionListWithMetadata>,
     },
 
-    /// Next proposer is registered and we are processing builder bids
+    /// Next proposer is registered and we are processing builder bids / serving headers
     Sorting(SlotData),
 
-    /// Processing get_payload, broadcasting block
+    /// Received get_payload, broadcasting block
     Broadcasting { slot_data: SlotData, block_hash: B256 },
 }
 
@@ -171,15 +171,10 @@ impl State {
 
                         (registration_data, payload_attributes, il)
                     }
-                    Ordering::Greater => {
-                        info!(%bid_slot, "received new slot data");
-                        ctx.on_new_slot(bid_slot);
-
-                        (registration_data, payload_attributes, il)
-                    }
+                    Ordering::Greater => (registration_data, payload_attributes, il),
                 };
 
-                *self = Self::process_slot_data(bid_slot, reg, att, il, &ctx.chain_info);
+                *self = Self::process_slot_data(bid_slot, reg, att, il, ctx);
             }
 
             // new slot, either IL or slot was delivered by another relay
@@ -194,6 +189,8 @@ impl State {
                         // received new IL
                         // ugly clone but should be relatively rare
                         let slot_data = SlotData { il, ..slot_data.clone() };
+                        info!(%bid_slot, "received all slot data, start sorting");
+                        ctx.on_new_slot(bid_slot);
                         *self = State::Sorting(slot_data);
                     }
                 }
@@ -204,7 +201,7 @@ impl State {
                         registration_data,
                         payload_attributes,
                         il,
-                        &ctx.chain_info,
+                        ctx,
                     );
                 }
             },
@@ -226,7 +223,7 @@ impl State {
                             registration_data,
                             payload_attributes,
                             il,
-                            &ctx.chain_info,
+                            ctx,
                         );
                     }
                 }
@@ -408,21 +405,22 @@ impl State {
         }
     }
 
-    fn process_slot_data(
+    fn process_slot_data<A: Api>(
         bid_slot: Slot,
         registration_data: Option<BuilderGetValidatorsResponseEntry>,
         payload_attributes: Option<PayloadAttributesUpdate>,
         il: Option<InclusionListWithMetadata>,
-        chain_info: &ChainInfo,
+        ctx: &mut Context<A>,
     ) -> Self {
         match (registration_data, payload_attributes) {
             (Some(registration_data), Some(payload_attributes)) => {
-                let current_fork = chain_info.fork_at_slot(bid_slot);
+                let current_fork = ctx.chain_info.fork_at_slot(bid_slot);
 
                 let slot_data =
                     SlotData { bid_slot, registration_data, payload_attributes, current_fork, il };
 
-                info!(%bid_slot, proposer = %slot_data.proposer_pubkey(),  "start sorting for slot");
+                info!(%bid_slot, "received all slot data, start sorting");
+                ctx.on_new_slot(bid_slot);
                 State::Sorting(slot_data)
             }
 

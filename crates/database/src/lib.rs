@@ -9,7 +9,7 @@ use std::sync::{
     Arc,
 };
 
-use helix_common::RelayConfig;
+use helix_common::{is_local_dev, RelayConfig};
 use postgres::postgres_db_service::PostgresDatabaseService;
 pub use traits::*;
 pub use types::*;
@@ -20,7 +20,7 @@ pub async fn start_db_service(
 ) -> eyre::Result<Arc<PostgresDatabaseService>> {
     let mut postgres_db = PostgresDatabaseService::from_relay_config(config).await;
 
-    if !config.is_local_dev {
+    if !is_local_dev() {
         postgres_db.init_forever().await;
 
         postgres_db.init_region(&config.postgres).await;

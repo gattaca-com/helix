@@ -8,8 +8,8 @@ use std::{
 };
 
 use helix_common::{
-    bid_submission::BidSubmission, metrics::SimulatorMetrics, simulator::BlockSimError,
-    SimulatorConfig,
+    bid_submission::BidSubmission, is_local_dev, metrics::SimulatorMetrics,
+    simulator::BlockSimError, SimulatorConfig,
 };
 use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission};
 use tokio::{runtime::Handle, sync::oneshot, task::JoinSet};
@@ -90,23 +90,25 @@ impl SimulatorManager {
         let requests = PendingRquests::with_capacity(200);
         let join_set = JoinSet::new();
 
-        runtime.spawn({
-            let sync_tx = sim_result_tx.clone();
-            let simulators = simulators.clone();
-            async move {
-                loop {
-                    for (id, simulator) in simulators.iter().enumerate() {
-                        let is_synced = simulator.is_synced().await.unwrap_or(false);
-                        if sync_tx.try_send(Event::SimulatorSync { id, is_synced }).is_err() {
-                            error!("failed to send sync result to sim manager");
+        if !is_local_dev() {
+            runtime.spawn({
+                let sync_tx = sim_result_tx.clone();
+                let simulators = simulators.clone();
+                async move {
+                    loop {
+                        for (id, simulator) in simulators.iter().enumerate() {
+                            let is_synced = simulator.is_synced().await.unwrap_or(false);
+                            if sync_tx.try_send(Event::SimulatorSync { id, is_synced }).is_err() {
+                                error!("failed to send sync result to sim manager");
+                            }
+                            SimulatorMetrics::simulator_sync(simulator.endpoint(), is_synced);
                         }
-                        SimulatorMetrics::simulator_sync(simulator.endpoint(), is_synced);
-                    }
 
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
                 }
-            }
-        });
+            });
+        }
 
         Self {
             simulators,

@@ -93,9 +93,6 @@ struct BidSorterTelemetry {
     subs_process_time: Duration,
     top_bids: u32,
     new_demotions: u32,
-    duplicate_demotions: u32,
-    /// Internal demotion processing time of the sorter
-    demotions_process_time: Duration,
 }
 
 pub struct BidSorter {
@@ -189,11 +186,9 @@ impl BidSorter {
     }
 
     pub fn demote(&mut self, demoted: BlsPublicKeyBytes) {
-        let recv_ns = utcnow_ns();
-
         if !self.demotions.insert(demoted) {
             // already demoted
-            self.local_telemetry.duplicate_demotions += 1;
+
             return;
         }
 
@@ -201,8 +196,6 @@ impl BidSorter {
 
         // telemetry
         self.local_telemetry.new_demotions += 1;
-        self.local_telemetry.demotions_process_time +=
-            Duration::from_nanos(utcnow_ns().saturating_sub(recv_ns));
     }
 
     pub fn get_header(&self) -> Option<BuilderBid> {
@@ -322,7 +315,6 @@ impl BidSorter {
         let avg_sub_recv = avg_duration(tel.subs_recv_time, total_subs);
         let avg_sub_process = avg_duration(tel.subs_process_time, tel.valid_subs);
         let avg_sub_queue = avg_duration(tel.subs_queue_time, tel.valid_subs);
-        let avg_demotion_process = avg_duration(tel.demotions_process_time, tel.new_demotions);
 
         info!(
             slot = self.curr_bid_slot,
@@ -334,8 +326,6 @@ impl BidSorter {
             ?avg_sub_queue,
             top_bids = tel.top_bids,
             new_demotions = tel.new_demotions,
-            duplicate_demotions = tel.duplicate_demotions,
-            ?avg_demotion_process,
             "bid sorter telemetry"
         )
     }
