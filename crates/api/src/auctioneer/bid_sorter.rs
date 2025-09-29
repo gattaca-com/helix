@@ -178,11 +178,7 @@ impl BidSorter {
         let curr = self.curr_bid.as_ref()?;
         let (_, preferences) = self.headers.get(&curr.1.on_receive_ns)?;
 
-        if preferences.allow_appending {
-            Some(curr.2.clone())
-        } else {
-            None
-        }
+        preferences.allow_appending.then(|| curr.2.clone())
     }
 
     pub fn demote(&mut self, demoted: BlsPublicKeyBytes) {
