@@ -158,7 +158,9 @@ pub enum ProposerApiError {
     )]
     InvalidBlindedBlockSlot { internal_slot: Slot, blinded_block_slot: Slot },
 
-    #[error("expected parent hash: {expected_parent_hash:?} does not match blinded block parent hash: {blinded_block_parent_hash:?}")]
+    #[error(
+        "expected parent hash: {expected_parent_hash:?} does not match blinded block parent hash: {blinded_block_parent_hash:?}"
+    )]
     InvalidBlindedBlockParentHash { expected_parent_hash: B256, blinded_block_parent_hash: B256 },
 
     #[error("parent hash unknown for slot: {slot}")]

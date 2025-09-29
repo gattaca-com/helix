@@ -112,9 +112,7 @@ impl RelayNetworkManager {
 }
 
 fn url_to_client_event(url: &str) -> axum::http::Request<()> {
-    let request = url
-        .into_client_request()
+    url.into_client_request()
         .inspect_err(|e| error!(err=?e, %url, "invalid peer URL"))
-        .expect("peer URL in config should be valid");
-    request
+        .expect("peer URL in config should be valid")
 }

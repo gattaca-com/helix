@@ -71,7 +71,9 @@ pub enum BuilderApiError {
     #[error("payload attributes not yet known")]
     PayloadAttributesNotYetKnown,
 
-    #[error("payload slot mismatches with current payload attributes slot. got: {got}, expected: {expected}")]
+    #[error(
+        "payload slot mismatches with current payload attributes slot. got: {got}, expected: {expected}"
+    )]
     PayloadSlotMismatchWithPayloadAttributes { got: Slot, expected: Slot },
 
     #[error("{0}")]

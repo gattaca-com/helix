@@ -52,8 +52,7 @@ fn decode_ssz_payload_and_blobs(
         return PayloadAndBlobs::from_ssz_bytes_by_fork(bytes, fork_name);
     }
 
-    if let Ok(payload_and_blobs) = PayloadAndBlobs::from_ssz_bytes_by_fork(bytes, ForkName::Electra)
-    {
+    if let Ok(payload_and_blobs) = PayloadAndBlobs::from_ssz_bytes_by_fork(bytes, ForkName::Fulu) {
         Ok(payload_and_blobs)
     } else {
         Err(ssz::DecodeError::NoMatchingVariant)

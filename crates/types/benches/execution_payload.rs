@@ -16,6 +16,7 @@ fn benchmark_serde(c: &mut Criterion) {
     let submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
     let payload = match submission {
         SignedBidSubmission::Electra(ref submission) => &submission.execution_payload,
+        SignedBidSubmission::Fulu(ref submission) => &submission.execution_payload,
     };
     let lh_payload = payload.to_lighthouse_electra_paylaod().unwrap();
     let alloy_payload = AlloyExecutionPayload::from_ssz_bytes(&payload.as_ssz_bytes()).unwrap();
@@ -78,6 +79,7 @@ fn benchmark_ssz(c: &mut Criterion) {
     let submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
     let payload = match submission {
         SignedBidSubmission::Electra(ref submission) => &submission.execution_payload,
+        SignedBidSubmission::Fulu(ref submission) => &submission.execution_payload,
     };
     let lh_payload = payload.to_lighthouse_electra_paylaod().unwrap();
     let alloy_payload = AlloyExecutionPayload::from_ssz_bytes(&payload.as_ssz_bytes()).unwrap();
@@ -135,6 +137,7 @@ fn benchmark_transaction_root(c: &mut Criterion) {
     let submission: SignedBidSubmission = serde_json::from_slice(data_json).unwrap();
     let payload = match submission {
         SignedBidSubmission::Electra(ref submission) => &submission.execution_payload,
+        SignedBidSubmission::Fulu(ref submission) => &submission.execution_payload,
     };
     let lh_payload = payload.to_lighthouse_electra_paylaod().unwrap();
 

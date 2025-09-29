@@ -7,7 +7,10 @@ use tracing::error;
 pub type HydrationMessage =
     (u64, DehydratedBidSubmission, oneshot::Sender<Result<SignedBidSubmission, HydrationError>>);
 
-pub fn spawn_hydration_task(mut hydration_tx: tokio::sync::mpsc::Receiver<HydrationMessage>) {
+pub fn spawn_hydration_task(
+    mut hydration_tx: tokio::sync::mpsc::Receiver<HydrationMessage>,
+    max_blobs_per_block: usize,
+) {
     tokio::spawn(async move {
         let mut last_slot = 0;
         let mut cache = HydrationCache::new();
@@ -18,7 +21,7 @@ pub fn spawn_hydration_task(mut hydration_tx: tokio::sync::mpsc::Receiver<Hydrat
                 cache.clear();
             }
 
-            let result = match dehydrated_bid_submission.hydrate(&mut cache) {
+            let result = match dehydrated_bid_submission.hydrate(&mut cache, max_blobs_per_block) {
                 Ok((result, tx_cache_hits, blob_cache_hits)) => {
                     HYDRATION_CACHE_HITS
                         .with_label_values(&["transaction"])

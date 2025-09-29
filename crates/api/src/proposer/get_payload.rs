@@ -18,6 +18,7 @@ use helix_types::{
     PayloadAndBlobs, SigError, SignedBlindedBeaconBlock, Slot, SlotClockTrait,
     VersionedSignedProposal,
 };
+use http::StatusCode;
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
 
@@ -28,6 +29,11 @@ use crate::{
     proposer::{error::ProposerApiError, unblind_beacon_block},
     Api,
 };
+
+pub enum ProposerApiVersion {
+    V1,
+    V2,
+}
 
 impl<A: Api> ProposerApi<A> {
     /// Retrieves the execution payload for a given blinded beacon block.
@@ -79,8 +85,80 @@ impl<A: Api> ProposerApi<A> {
             })
             .await;
 
-        match proposer_api._get_payload(signed_blinded_block, &mut trace, user_agent).await {
+        match proposer_api
+            ._get_payload(signed_blinded_block, &mut trace, user_agent, ProposerApiVersion::V1)
+            .await
+        {
             Ok(get_payload_response) => Ok(axum::Json(get_payload_response)),
+            Err(err) => {
+                // Save error to DB
+                if let Err(err) = proposer_api
+                    .db
+                    .save_failed_get_payload(slot.into(), block_hash, err.to_string(), trace)
+                    .await
+                {
+                    error!(err = ?err, "error saving failed get payload");
+                }
+
+                Err(err)
+            }
+        }
+    }
+
+    /// Retrieves the execution payload for a given blinded beacon block.
+    ///
+    /// This function accepts a `SignedBlindedBeaconBlock` as input and performs several steps:
+    /// 1. Validates the proposer index and verifies the block's signature.
+    /// 2. Retrieves the corresponding execution payload from the auctioneer.
+    /// 3. Validates the payload and publishes it to the multi-beacon client.
+    /// 4. Optionally broadcasts the payload to `broadcasters`
+    /// 5. Stores the delivered payload information to database.
+    /// 6. Returns the unblinded payload to proposer.
+    ///
+    /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlockV2>
+    #[tracing::instrument(skip_all, fields(id), err)]
+    pub async fn get_payload_v2(
+        Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
+        Extension(timings): Extension<RequestTimings>,
+        headers: HeaderMap,
+        body: bytes::Bytes,
+    ) -> Result<StatusCode, ProposerApiError> {
+        let request_id = extract_request_id(&headers);
+        tracing::Span::current().record("id", request_id.to_string());
+
+        let mut trace = GetPayloadTrace::init_from_timings(timings);
+
+        let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
+
+        let signed_blinded_block: SignedBlindedBeaconBlock = serde_json::from_slice(&body)
+            .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
+
+        trace.decode = utcnow_ns();
+
+        let block_hash = signed_blinded_block
+            .message()
+            .body()
+            .execution_payload()
+            .map_err(|_| ProposerApiError::InvalidFork)? // this should never happen as post altair there's always an execution payload
+            .block_hash()
+            .0;
+
+        let slot = signed_blinded_block.message().slot();
+
+        // Broadcast get payload request
+        proposer_api
+            .gossiper
+            .broadcast_get_payload(BroadcastGetPayloadParams {
+                signed_blinded_beacon_block: signed_blinded_block.clone(),
+                request_id,
+            })
+            .await;
+
+        match proposer_api
+            ._get_payload(signed_blinded_block, &mut trace, user_agent, ProposerApiVersion::V2)
+            .await
+        {
+            Ok(_get_payload_response) => Ok(StatusCode::ACCEPTED),
             Err(err) => {
                 // Save error to DB
                 if let Err(err) = proposer_api
@@ -101,6 +179,7 @@ impl<A: Api> ProposerApi<A> {
         mut signed_blinded_block: SignedBlindedBeaconBlock,
         trace: &mut GetPayloadTrace,
         user_agent: Option<String>,
+        api_version: ProposerApiVersion,
     ) -> Result<GetPayloadResponse, ProposerApiError> {
         let block_hash = signed_blinded_block
             .message()
@@ -294,7 +373,7 @@ impl<A: Api> ProposerApi<A> {
             (trace_clone, failed_publishing)
         });
 
-        if !is_trusted_proposer {
+        if !is_trusted_proposer && matches!(api_version, ProposerApiVersion::V1) {
             let Ok((new_trace, failed_publishing)) = handle.await else {
                 return Err(ProposerApiError::InternalServerError);
             };
@@ -447,7 +526,9 @@ impl<A: Api> ProposerApi<A> {
         }
 
         if is_v3 && self.auctioneer.has_header_been_served(block_hash) {
-            warn!("v3 payload request was made, but no payload found. The builder may have failed to deliver the payload in time.");
+            warn!(
+                "v3 payload request was made, but no payload found. The builder may have failed to deliver the payload in time."
+            );
             self.demote_builder(
                 slot,
                 &builder_pub_key.expect("builder pubkey must be set if is_v3 is true"),
@@ -597,7 +678,6 @@ fn validate_block_equality(
         BlindedPayloadRef::Bellatrix(_) |
         BlindedPayloadRef::Capella(_) |
         BlindedPayloadRef::Deneb(_) |
-        BlindedPayloadRef::Fulu(_) |
         BlindedPayloadRef::Gloas(_) => return Err(ProposerApiError::UnsupportedBeaconChainVersion),
         BlindedPayloadRef::Electra(blinded_payload) => {
             debug!(
@@ -611,6 +691,35 @@ fn validate_block_equality(
             let local_header = local_payload
                 .to_header(None)
                 .to_lighthouse_electra_header()
+                .map_err(ProposerApiError::SszError)?;
+
+            let provided_header = &blinded_payload.execution_payload_header;
+
+            if &local_header != provided_header {
+                return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
+            }
+
+            let local_kzg_commitments = &local_versioned_payload.blobs_bundle.commitments;
+
+            let provided_kzg_commitments = body
+                .blob_kzg_commitments()
+                .map_err(|_| ProposerApiError::BlobKzgCommitmentsMismatch)?;
+
+            if !local_kzg_commitments.iter().eq(provided_kzg_commitments.iter().map(|p| p.0)) {
+                return Err(ProposerApiError::BlobKzgCommitmentsMismatch);
+            }
+        }
+        BlindedPayloadRef::Fulu(blinded_payload) => {
+            info!(
+                local_header = ?local_payload,
+                provided_header = ?blinded_payload,
+                provided_version = %provided_signed_blinded_block.fork_name_unchecked(),
+                "validating block equality",
+            );
+
+            let local_header = local_payload
+                .to_header(None)
+                .to_lighthouse_fulu_header()
                 .map_err(ProposerApiError::SszError)?;
 
             let provided_header = &blinded_payload.execution_payload_header;

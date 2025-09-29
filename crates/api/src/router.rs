@@ -76,7 +76,10 @@ pub fn build_router<A: Api>(
             Route::GetInclusionList => get(BuilderApi::<A>::get_inclusion_list),
             Route::RelayNetwork => any(RelayNetworkApi::connect),
             Route::All | Route::BuilderApi | Route::ProposerApi | Route::DataApi => {
-                panic!("Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!", route_info.route);
+                panic!(
+                    "Route not implemented: {:?}, please add handling if there are new routes or resolve condensed routes before!",
+                    route_info.route
+                );
             }
         };
 

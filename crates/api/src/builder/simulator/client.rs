@@ -17,7 +17,8 @@ use crate::builder::{
 pub struct SimulatorClient {
     pub client: reqwest::Client,
     pub config: SimulatorConfig,
-    pub sim_method: String,
+    pub sim_method_v4: String,
+    pub sim_method_v5: String,
     pub is_synced: bool,
     /// For certain errors we pause sims for some time to allow time for the node to recover
     // TODO: can we get these errors even if the node is reporting that it's synced?
@@ -28,8 +29,17 @@ pub struct SimulatorClient {
 
 impl SimulatorClient {
     pub fn new(client: reqwest::Client, config: SimulatorConfig) -> Self {
-        let sim_method = format!("{}_validateBuilderSubmissionV4", config.namespace);
-        Self { client, config, sim_method, is_synced: false, paused_until: None, pending: 0 }
+        let sim_method_v4 = format!("{}_validateBuilderSubmissionV4", config.namespace);
+        let sim_method_v5 = format!("{}_validateBuilderSubmissionV5", config.namespace);
+        Self {
+            client,
+            config,
+            sim_method_v4,
+            sim_method_v5,
+            is_synced: false,
+            paused_until: None,
+            pending: 0,
+        }
     }
 
     pub fn endpoint(&self) -> &str {
@@ -64,10 +74,19 @@ impl SimulatorClient {
             headers.insert("X-High-Priority", HeaderValue::from_static("true"));
         };
 
+        let mut sim_method = &self.sim_method_v4;
+
+        if request.blobs_bundle.is_some() &&
+            request.blobs_bundle.as_ref().unwrap().proofs.len() >
+                request.blobs_bundle.as_ref().unwrap().commitments.len()
+        {
+            sim_method = &self.sim_method_v5;
+        }
+
         let rpc_payload = json!({
             "jsonrpc": "2.0",
             "id": "1",
-            "method": &self.sim_method,
+            "method": sim_method,
             "params": [request]
         });
 

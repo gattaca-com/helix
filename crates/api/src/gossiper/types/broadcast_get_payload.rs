@@ -44,7 +44,7 @@ fn decode_ssz_signed_blinded_beacon_block(
     }
 
     if let Ok(signed_blinded_beacon_block) =
-        SignedBlindedBeaconBlock::from_ssz_bytes_by_fork(bytes, ForkName::Electra)
+        SignedBlindedBeaconBlock::from_ssz_bytes_by_fork(bytes, ForkName::Fulu)
     {
         Ok(signed_blinded_beacon_block)
     } else {
