@@ -168,7 +168,6 @@ impl<A: Api> Context<A> {
             inclusion_list,
         );
 
-        // send to sim_manager queue, use another oneshot or simply the sim results?
         let req = SimulatorRequest {
             request,
             on_receive_ns: submission_trace.receive,

@@ -261,7 +261,9 @@ impl BidSorter {
     }
 
     pub(super) fn process_slot(&mut self, bid_slot: u64) {
-        self.report();
+        if self.curr_bid_slot > 0 {
+            self.report();
+        }
 
         self.curr_bid_slot = bid_slot;
         self.bids.clear();

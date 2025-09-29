@@ -19,6 +19,8 @@ use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
     local_cache::LocalCache,
+    task::RelayCores,
+    utils::pin_thread_to_core,
     RelayConfig,
 };
 use helix_housekeeper::{chain_event_updater::SlotData as HkSlotData, PayloadAttributesUpdate};
@@ -50,14 +52,15 @@ pub fn spawn_auctioneer<A: Api>(
     cache: LocalCache,
     top_bid_tx: tokio::sync::broadcast::Sender<bytes::Bytes>,
     slot_data_rx: crossbeam_channel::Receiver<HkSlotData>,
+    cores: Option<RelayCores>,
 ) -> AuctioneerHandle {
     let (worker_tx, worker_rx) = crossbeam_channel::bounded(10_000);
     let (event_tx, event_rx) = crossbeam_channel::bounded(10_000);
 
-    assert!(config.worker_threads > 0, "need at least 1 worker thread");
+    let (core, worker_cores) = cores.unwrap();
+    assert!(worker_cores.len() > 0, "need at least 1 worker thread");
 
-    for id in 0..config.worker_threads {
-        // TODO: affinity
+    for core in worker_cores {
         let worker = Worker {
             rx: worker_rx.clone(),
             tx: event_tx.clone(),
@@ -67,9 +70,10 @@ pub fn spawn_auctioneer<A: Api>(
             config: config.clone(),
         };
         std::thread::Builder::new()
-            .name(format!("worker-{id}"))
+            .name(format!("worker-{core}"))
             .spawn(move || {
-                info!(id, "starting worker thread");
+                info!(core, "starting worker thread");
+                pin_thread_to_core(core);
                 worker.run()
             })
             .unwrap();
@@ -83,7 +87,8 @@ pub fn spawn_auctioneer<A: Api>(
     std::thread::Builder::new()
         .name("auctioneer".to_string())
         .spawn(move || {
-            info!("starting auctioneer");
+            info!(core, "starting auctioneer");
+            pin_thread_to_core(core);
             auctioneer.run(event_rx, slot_data_rx)
         })
         .unwrap();
@@ -147,6 +152,7 @@ impl Default for State {
 
 impl State {
     fn step<A: Api>(&mut self, event: Event, ctx: &mut Context<A>) {
+        info!("processing event: {} while in state: {}", event.as_str(), self.as_str());
         match (&self, event) {
             ///////////// LIFECYCLE EVENTS (ALWAYS VALID) /////////////
 
@@ -171,7 +177,10 @@ impl State {
 
                         (registration_data, payload_attributes, il)
                     }
-                    Ordering::Greater => (registration_data, payload_attributes, il),
+                    Ordering::Greater => {
+                        ctx.on_new_slot(bid_slot);
+                        (registration_data, payload_attributes, il)
+                    }
                 };
 
                 *self = Self::process_slot_data(bid_slot, reg, att, il, ctx);
@@ -193,6 +202,7 @@ impl State {
                     }
                 }
                 Ordering::Greater => {
+                    ctx.on_new_slot(bid_slot);
                     // another relay delivered the payload
                     *self = Self::process_slot_data(
                         bid_slot,
@@ -417,26 +427,32 @@ impl State {
                 let slot_data =
                     SlotData { bid_slot, registration_data, payload_attributes, current_fork, il };
 
-                info!(%bid_slot, "received all slot data, start sorting");
-                ctx.on_new_slot(bid_slot);
+                info!(%bid_slot, "processed slot data, start sorting");
                 State::Sorting(slot_data)
             }
 
-            (Some(registration_data), None) => State::Slot {
-                bid_slot,
-                registration_data: Some(registration_data),
-                payload_attributes: None,
-                il,
-            },
+            (Some(registration_data), None) => {
+                info!(%bid_slot, registration = true, attributes = false, il = il.is_some(), "processed slot data");
+                State::Slot {
+                    bid_slot,
+                    registration_data: Some(registration_data),
+                    payload_attributes: None,
+                    il,
+                }
+            }
 
-            (None, Some(payload_attributes)) => State::Slot {
-                bid_slot,
-                registration_data: None,
-                payload_attributes: Some(payload_attributes),
-                il,
-            },
+            (None, Some(payload_attributes)) => {
+                info!(%bid_slot, registration = false, attributes = true, il = il.is_some(), "processed slot data");
+                State::Slot {
+                    bid_slot,
+                    registration_data: None,
+                    payload_attributes: Some(payload_attributes),
+                    il,
+                }
+            }
 
             (None, None) => {
+                info!(%bid_slot, registration = false, attributes = false, il = il.is_some(), "processed slot data");
                 State::Slot { bid_slot, registration_data: None, payload_attributes: None, il }
             }
         }
@@ -448,5 +464,30 @@ impl State {
         let block_hash = ctx.maybe_try_unblind(slot_data)?;
         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
         Some(State::Broadcasting { slot_data: slot_data.clone(), block_hash })
+    }
+}
+
+impl Event {
+    fn as_str(&self) -> &'static str {
+        match &self {
+            Event::SlotData { .. } => "SlotData",
+            Event::Submission { .. } => "Submission",
+            Event::GetHeader { .. } => "GetHeader",
+            Event::GetPayload { .. } => "GetPayload",
+            Event::GossipPayload(_) => "GossipPayload",
+            Event::SimResult(_) => "SimResult",
+            Event::SimulatorSync { .. } => "SimulatorSync",
+            Event::GetBestPayloadForMerging { .. } => "GetBestPayloadForMerging",
+        }
+    }
+}
+
+impl State {
+    fn as_str(&self) -> &'static str {
+        match &self {
+            State::Slot { .. } => "Slot",
+            State::Sorting(_) => "Sorting",
+            State::Broadcasting { .. } => "Broadcasting",
+        }
     }
 }

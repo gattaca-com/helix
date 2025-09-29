@@ -60,12 +60,15 @@ pub struct RelayConfig {
     #[serde(default)]
     pub v3_port: Option<u16>,
     pub inclusion_list: Option<InclusionListConfig>,
-    pub housekeeper: bool,
+    /// False could mean either a registration or data instance
+    #[serde(alias = "housekeeper")]
+    pub is_submission_instance: bool,
     pub admin_token: String,
     #[serde(default)]
     is_local_dev: bool,
+    /// Number of cores to user for workers, unused cores will be used for tokio
     #[serde(default = "default_usize::<8>")]
-    pub worker_threads: usize,
+    pub worker_cores: usize,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

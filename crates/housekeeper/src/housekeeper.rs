@@ -324,14 +324,10 @@ impl<DB: DatabaseService> Housekeeper<DB> {
             return;
         }
 
-        if is_local_dev() {
-            warn!("skipping proposer duty update in db");
-        } else {
-            if let Err(err) =
-                self.update_proposer_duties_in_db(&proposer_duties, &validator_registrations).await
-            {
-                error!(%err, "failed to update proposer duties");
-            }
+        if let Err(err) =
+            self.update_proposer_duties_in_db(&proposer_duties, &validator_registrations).await
+        {
+            error!(%err, "failed to update proposer duties");
         }
 
         self.slots.update_proposer_duties(head_slot);
@@ -433,7 +429,11 @@ impl<DB: DatabaseService> Housekeeper<DB> {
 
         self.auctioneer.update_proposer_duties(formatted_proposer_duties.clone());
 
-        self.db.set_proposer_duties(formatted_proposer_duties).await?;
+        if is_local_dev() {
+            warn!("skipping proposer duty update in db");
+        } else {
+            self.db.set_proposer_duties(formatted_proposer_duties).await?;
+        }
 
         Ok(())
     }

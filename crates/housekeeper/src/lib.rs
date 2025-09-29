@@ -42,7 +42,7 @@ pub async fn start_housekeeper(
         broadcast::channel(PAYLOAD_ATTRIBUTE_CHANNEL_SIZE);
     beacon_client.subscribe_to_payload_attributes_events(payload_attribute_sender).await;
 
-    if config.housekeeper {
+    if config.is_submission_instance {
         let housekeeper = Housekeeper::new(
             db.clone(),
             beacon_client,

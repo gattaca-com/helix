@@ -15,6 +15,7 @@ use helix_common::{
     metadata_provider::DefaultMetadataProvider,
     metrics::start_metrics_server,
     signing::RelaySigningContext,
+    task::{init_runtime, RelayCores},
     utils::{init_panic_hook, init_tracing_log},
     RelayConfig,
 };
@@ -40,8 +41,7 @@ impl Api for ApiProd {
     type MetadataProvider = DefaultMetadataProvider;
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let config = load_config();
     let keypair = load_keypair();
 
@@ -52,6 +52,7 @@ async fn main() {
             config.postgres.region_name
         )
     });
+
     let _guard =
         init_tracing_log(&config.logging, &config.postgres.region_name, instance_id.clone());
 
@@ -60,7 +61,6 @@ async fn main() {
         config.discord_webhook_url.clone(),
         config.logging.dir_path(),
     );
-    start_metrics_server(&config);
 
     info!(
         instance_id,
@@ -70,7 +70,9 @@ async fn main() {
         "starting relay"
     );
 
-    match run(config, keypair).await {
+    let (runtime, cores) = init_runtime(config.is_submission_instance, config.worker_cores);
+    runtime.block_on(start_metrics_server(&config));
+    match runtime.block_on(run(config, keypair, cores)) {
         Ok(_) => info!("relay exited"),
         Err(err) => {
             error!(%err, "relay exited with error");
@@ -79,7 +81,11 @@ async fn main() {
     }
 }
 
-async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
+async fn run(
+    config: RelayConfig,
+    keypair: BlsKeypair,
+    cores: Option<RelayCores>,
+) -> eyre::Result<()> {
     let chain_info = Arc::new(config.network_config.to_chain_info());
     let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info.clone()));
 
@@ -127,6 +133,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         top_bid_tx,
         slot_data_rx,
         relay_network_api.api(),
+        cores,
     );
 
     let termination_grace_period = config.router_config.shutdown_delay_ms;

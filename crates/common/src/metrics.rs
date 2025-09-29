@@ -20,7 +20,7 @@ use tracing::{error, info};
 
 use crate::RelayConfig;
 
-pub fn start_metrics_server(config: &RelayConfig) {
+pub async fn start_metrics_server(config: &RelayConfig) {
     let port =
         std::env::var("METRICS_PORT").map(|s| s.parse().expect("invalid port")).unwrap_or(9500);
     tokio::spawn(MetricsProvider::new(port).run());

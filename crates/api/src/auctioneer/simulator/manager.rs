@@ -254,7 +254,10 @@ impl SimulatorManager {
     }
 
     pub fn on_new_slot(&mut self, bid_slot: u64) {
-        self.report();
+        if self.last_bid_slot > 0 {
+            self.report();
+        }
+
         self.last_bid_slot = bid_slot;
         self.requests.clear(bid_slot);
         let now = Instant::now();
