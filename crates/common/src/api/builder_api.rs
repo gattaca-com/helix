@@ -5,6 +5,7 @@ use helix_types::{
     BlsPublicKeyBytes, SignedValidatorRegistration, Slot, Transaction, Transactions,
 };
 use serde::{Deserialize, Serialize};
+use ssz::Encode;
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
@@ -48,6 +49,16 @@ pub struct TopBidUpdate {
     pub builder_pubkey: BlsPublicKeyBytes,
     pub fee_recipient: Address,
     pub value: U256,
+}
+
+impl TopBidUpdate {
+    const SSZ_SIZE: usize = 188;
+
+    pub fn as_ssz_bytes_fast(&self) -> Vec<u8> {
+        let mut vec = Vec::with_capacity(Self::SSZ_SIZE);
+        self.ssz_append(&mut vec);
+        vec
+    }
 }
 
 pub type SlotCoordinate = (u64, BlsPublicKeyBytes, B256);
@@ -108,10 +119,10 @@ impl From<&InclusionListWithMetadata> for InclusionList {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{Bytes, B256};
+    use alloy_primitives::{Bytes, B256, U256};
     use helix_types::Transaction;
 
-    use super::{InclusionList, InclusionListWithMetadata};
+    use super::*;
     use crate::api::builder_api::InclusionListTxWithMetadata;
 
     #[test]
@@ -131,5 +142,25 @@ mod tests {
                 .unwrap(),
             bytes: Transaction("0x02f87582426801850221646a70850221646a7082520894acabf6c2d38973a5f2ebab6b5e85623db1005a4e880ddf2f839aa3d97080c080a0088ae2635655e314949dae343ac296c3fb6ac56802e1024639f9603c61e253669f2bf33fe18ce70520abc6a662794c1ef5bb310248b7b7c4acc6be93e7885d62".parse::<Bytes>().unwrap())
         });
+    }
+
+    #[test]
+    fn top_bid_ssz_fast_path() {
+        let x = TopBidUpdate {
+            timestamp: u64::MAX,
+            slot: u64::MAX,
+            block_number: u64::MAX,
+            block_hash: B256::random(),
+            parent_hash: B256::random(),
+            builder_pubkey: BlsPublicKeyBytes::random(),
+            fee_recipient: Address::random(),
+            value: U256::ZERO,
+        };
+
+        let ssz = x.as_ssz_bytes();
+        let ssz_check = x.as_ssz_bytes_fast();
+
+        assert_eq!(ssz, ssz_check);
+        assert_eq!(ssz.len(), TopBidUpdate::SSZ_SIZE);
     }
 }

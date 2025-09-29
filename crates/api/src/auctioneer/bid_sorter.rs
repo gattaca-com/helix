@@ -17,7 +17,6 @@ use helix_common::{
     SubmissionTrace,
 };
 use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
-use ssz::Encode;
 use tracing::info;
 
 /// Pre-validated submissions ready to be processed. Submissions could come from:
@@ -294,7 +293,7 @@ impl BidSorter {
             fee_recipient: h.header.fee_recipient,
             value: bid.value,
         }
-        .as_ssz_bytes()
+        .as_ssz_bytes_fast()
         .into();
         let _ = self.top_bid_tx.send(top_bid_update);
 
