@@ -189,8 +189,6 @@ impl State {
                         // received new IL
                         // ugly clone but should be relatively rare
                         let slot_data = SlotData { il, ..slot_data.clone() };
-                        info!(%bid_slot, "received all slot data, start sorting");
-                        ctx.on_new_slot(bid_slot);
                         *self = State::Sorting(slot_data);
                     }
                 }
