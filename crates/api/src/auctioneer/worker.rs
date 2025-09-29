@@ -53,21 +53,21 @@ impl Worker {
                             .map(|m| BlockMergingPreferences { allow_appending: m.allow_appending })
                             .unwrap_or_default();
 
-                        let message = Event::Submission {
-                            // TODO: move this to auctioneer, avoid clones
-                            submission: submission.clone(),
-                            merging_preferences,
-                            withdrawals_root,
-                            sequence,
-                            trace,
-                            res_tx,
-                        };
-
-                        if self.tx.try_send(message).is_err() {
-                            error!("failed sending submisison to auctioneer");
-                        }
-
                         if self.config.block_merging_config.is_enabled {
+                            let message = Event::Submission {
+                                // TODO: move this to auctioneer, avoid clones
+                                submission: submission.clone(),
+                                merging_preferences,
+                                withdrawals_root,
+                                sequence,
+                                trace,
+                                res_tx,
+                            };
+
+                            if self.tx.try_send(message).is_err() {
+                                error!("failed sending submisison to auctioneer");
+                            }
+
                             if let Some(merging_data) = merging_data {
                                 let Submission::Full(payload) = submission else {
                                     return;
@@ -90,6 +90,19 @@ impl Worker {
                                 if let Err(err) = self.merge_pool_tx.try_send(message) {
                                     error!(?err, "failed to send mergeable orders to merging pool");
                                 };
+                            }
+                        } else {
+                            let message = Event::Submission {
+                                submission,
+                                merging_preferences,
+                                withdrawals_root,
+                                sequence,
+                                trace,
+                                res_tx,
+                            };
+
+                            if self.tx.try_send(message).is_err() {
+                                error!("failed sending submisison to auctioneer");
                             }
                         }
                     }
