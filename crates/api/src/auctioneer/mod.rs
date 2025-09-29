@@ -446,6 +446,8 @@ impl State {
         }
     }
 
+    /// Note that we may still fail to actually broacast the block after we change State, eg. if the
+    /// request came to late, or if we fail to broadcast the block
     fn maybe_start_broacasting<A: Api>(ctx: &mut Context<A>, slot_data: &SlotData) -> Option<Self> {
         let block_hash = ctx.maybe_try_unblind(slot_data)?;
         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");

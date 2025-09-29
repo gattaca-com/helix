@@ -1,6 +1,6 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::Arc,
+    sync::{atomic::Ordering, Arc},
 };
 
 use alloy_primitives::{B256, U256};
@@ -41,9 +41,6 @@ pub struct Context<A: Api> {
     pub cache: LocalCache,
     pub unknown_builder_info: BuilderInfo,
     pub db: Arc<A::DatabaseService>,
-
-    // failsafe_triggered + accept_optimistic
-    pub can_process_optimistic: bool,
     pub slot_context: SlotContext,
 }
 
@@ -76,15 +73,7 @@ impl<A: Api> Context<A> {
             payloads: FxHashMap::with_capacity_and_hasher(2000, Default::default()),
         };
 
-        Self {
-            chain_info,
-            cache,
-            unknown_builder_info,
-            slot_context,
-            can_process_optimistic: true,
-            db,
-            _config: config,
-        }
+        Self { chain_info, cache, unknown_builder_info, slot_context, db, _config: config }
     }
 
     pub fn builder_info(&self, builder: &BlsPublicKeyBytes) -> BuilderInfo {
@@ -107,15 +96,16 @@ impl<A: Api> Context<A> {
                     let db = self.db.clone();
                     let reason = err.to_string();
                     let bid_slot = result.submission.slot();
+                    let failsafe_triggered = self.sim_manager.failsafe_triggered.clone();
 
                     self.sim_manager.runtime.spawn(async move {
                             if let Err(err) = db
                                 .db_demote_builder(bid_slot.as_u64(), &builder, &block_hash, reason)
                                 .await
                             {
-                                // TODO:
-                                // self.failsafe_triggered.store(true, Ordering::Relaxed);
-                                error!(%builder, %err, %block_hash, "failed to demote builder in database");
+
+                                failsafe_triggered.store(true, Ordering::Relaxed);
+                                error!(%builder, %err, %block_hash, "failed to demote builder in database! Pausing all optmistic submissions");
                             }
                         });
                 } else {

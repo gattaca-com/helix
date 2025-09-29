@@ -1,5 +1,9 @@
 use std::{
     self,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -61,10 +65,12 @@ pub struct SimulatorManager {
     join_set: JoinSet<SimReponse>,
     last_bid_slot: u64,
     local_telemetry: LocalTelemetry,
-    // TODO: Use this:
-    accept_optimistic: bool,
     sim_result_tx: crossbeam_channel::Sender<Event>,
     pub runtime: Handle,
+    /// If we have any synced simulator
+    accept_optimistic: bool,
+    /// If we failed to demote a builder in the DB
+    pub failsafe_triggered: Arc<AtomicBool>,
 }
 
 impl SimulatorManager {
@@ -108,10 +114,16 @@ impl SimulatorManager {
             join_set,
             last_bid_slot: 0,
             local_telemetry: LocalTelemetry::default(),
-            accept_optimistic: true,
             sim_result_tx,
             runtime,
+
+            accept_optimistic: true,
+            failsafe_triggered: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    pub fn can_process_optimistic_submission(&self) -> bool {
+        self.accept_optimistic && !self.failsafe_triggered.load(Ordering::Relaxed)
     }
 
     pub fn handle_sync_status(&mut self, id: usize, is_synced: bool) {
@@ -119,7 +131,7 @@ impl SimulatorManager {
         let new = self.simulators.iter().any(|s| s.can_simulate_light());
         let prev = self.accept_optimistic;
         if new != prev {
-            warn!(prev, new, "changing optimistic simulation status");
+            warn!(prev, new, "changing accept_optimistic simulation status");
         }
         self.accept_optimistic = new;
     }

@@ -126,7 +126,7 @@ impl<A: Api> Context<A> {
             slot_data,
         )?;
 
-        let optimistic_version = if self.can_process_optimistic &&
+        let optimistic_version = if self.sim_manager.can_process_optimistic_submission() &&
             self.should_process_optimistically(&submission, &builder_info, slot_data)
         {
             // TODO: tidy this up, we store the submission not the header
