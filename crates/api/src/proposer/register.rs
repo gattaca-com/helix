@@ -121,7 +121,7 @@ impl<A: Api> ProposerApi<A> {
         let known_pub_keys = proposer_api.db.check_known_validators(registration_pub_keys).await?;
 
         // Check each registration
-        let mut valid_registrations = Vec::with_capacity(known_pub_keys.len());
+        let mut registrations_to_save = Vec::with_capacity(known_pub_keys.len());
 
         let mut handles = Vec::with_capacity(registrations.len());
 
@@ -141,7 +141,6 @@ impl<A: Api> ProposerApi<A> {
 
             if !proposer_api_clone.db.is_registration_update_required(&registration).await? {
                 update_not_required += 1;
-                valid_registrations.push(registration);
                 continue;
             }
 
@@ -165,18 +164,48 @@ impl<A: Api> ProposerApi<A> {
         for handle in handles {
             let reg = handle.await.map_err(|_| ProposerApiError::InternalServerError)?;
             if let Some(reg) = reg {
-                valid_registrations.push(reg);
+                registrations_to_save.push(reg);
             }
         }
 
-        let successful_registrations = valid_registrations.len();
+        let successful_registrations = registrations_to_save.len();
+
+        if successful_registrations == 0 {
+            if unknown_registrations == num_registrations {
+                debug!(
+                    duration = ?start.elapsed(),
+                    unknown_registrations = unknown_registrations,
+                    "all registrations were unknown"
+                );
+                return Err(ProposerApiError::NoValidatorsCouldBeRegistered);
+            }
+
+            if update_not_required == num_registrations {
+                debug!(
+                    duration = ?start.elapsed(),
+                    update_not_required = update_not_required,
+                    "registrations already up to date"
+                );
+                return Ok(StatusCode::OK);
+            }
+
+            debug!(
+                duration = ?start.elapsed(),
+                unknown_registrations = unknown_registrations,
+                update_not_required = update_not_required,
+                failed_registrations = num_registrations,
+                "no registrations were accepted"
+            );
+            return Err(ProposerApiError::NoValidatorsCouldBeRegistered);
+        }
 
         // Bulk write registrations to db
+        let registrations_to_save_task = registrations_to_save;
         task::spawn(file!(), line!(), async move {
             // Add validator preferences to each registration
             let mut valid_registrations_infos = Vec::new();
 
-            for reg in valid_registrations {
+            for reg in registrations_to_save_task {
                 let preferences = validator_preferences.clone();
                 valid_registrations_infos
                     .push(ValidatorRegistrationInfo { registration: reg, preferences });
@@ -241,4 +270,124 @@ fn validate_registration_time(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{atomic::AtomicBool, Arc};
+
+    use axum::{http::HeaderMap, response::IntoResponse, Extension};
+    use helix_beacon::multi_beacon_client::MultiBeaconClient;
+    use helix_common::{
+        bid_sorter::BestGetHeader, chain_info::ChainInfo, local_cache::LocalCache,
+        metadata_provider::DefaultMetadataProvider, signing::RelaySigningContext,
+        utils::utcnow_sec, RelayConfig, ValidatorPreferences,
+    };
+    use helix_database::mock_database_service::MockDatabaseService;
+    use helix_housekeeper::CurrentSlotInfo;
+    use helix_types::{
+        BlsPublicKeyBytes, BlsSignatureBytes, SignedValidatorRegistration,
+        ValidatorRegistrationData,
+    };
+    use http_body_util::BodyExt;
+    use hyper::StatusCode;
+    use tokio::sync::mpsc::channel;
+
+    use super::*;
+    use crate::{
+        gossiper::grpc_gossiper::GrpcGossiperClientManager, proposer::ProposerApi,
+        router::KnownValidatorsLoaded, test_utils::MockApi,
+    };
+
+    fn build_signed_registration() -> SignedValidatorRegistration {
+        let registration = ValidatorRegistrationData {
+            fee_recipient: Default::default(),
+            gas_limit: 123456,
+            timestamp: utcnow_sec(),
+            pubkey: BlsPublicKeyBytes::random(),
+        };
+
+        SignedValidatorRegistration {
+            message: registration,
+            signature: BlsSignatureBytes::random(),
+        }
+    }
+
+    #[tokio::test]
+    async fn all_unknown_registrations_return_bad_request() {
+        let db = Arc::new(MockDatabaseService {
+            treat_all_pubkeys_as_known: false,
+            registration_update_required: true,
+            ..Default::default()
+        });
+
+        let proposer_api = Arc::new(ProposerApi::<MockApi>::new(
+            Arc::new(LocalCache::new_test()),
+            db,
+            GrpcGossiperClientManager::mock().into(),
+            Arc::new(DefaultMetadataProvider),
+            Arc::new(RelaySigningContext::default()),
+            Vec::new(),
+            Arc::new(MultiBeaconClient::new(vec![])),
+            Arc::new(ChainInfo::for_mainnet()),
+            Arc::new(ValidatorPreferences::default()),
+            RelayConfig::default(),
+            channel(32).0,
+            CurrentSlotInfo::new(),
+            BestGetHeader::new(),
+            channel(32).0,
+        ));
+
+        let result = ProposerApi::<MockApi>::register_validators(
+            Extension(proposer_api),
+            Extension(KnownValidatorsLoaded(Arc::new(AtomicBool::new(true)))),
+            HeaderMap::new(),
+            Json(vec![build_signed_registration()]),
+        )
+        .await;
+
+        let err = result.expect_err("expected unknown registrations to fail");
+        let response = err.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let body_bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8(body_bytes.to_vec()).unwrap();
+        assert_eq!(body, "no validators could be registered");
+    }
+
+    #[tokio::test]
+    async fn up_to_date_registrations_return_ok() {
+        let db = Arc::new(MockDatabaseService {
+            registration_update_required: false,
+            ..Default::default()
+        });
+
+        let proposer_api = Arc::new(ProposerApi::<MockApi>::new(
+            Arc::new(LocalCache::new_test()),
+            db,
+            GrpcGossiperClientManager::mock().into(),
+            Arc::new(DefaultMetadataProvider),
+            Arc::new(RelaySigningContext::default()),
+            Vec::new(),
+            Arc::new(MultiBeaconClient::new(vec![])),
+            Arc::new(ChainInfo::for_mainnet()),
+            Arc::new(ValidatorPreferences::default()),
+            RelayConfig::default(),
+            channel(32).0,
+            CurrentSlotInfo::new(),
+            BestGetHeader::new(),
+            channel(32).0,
+        ));
+
+        let result = ProposerApi::<MockApi>::register_validators(
+            Extension(proposer_api),
+            Extension(KnownValidatorsLoaded(Arc::new(AtomicBool::new(true)))),
+            HeaderMap::new(),
+            Json(vec![build_signed_registration()]),
+        )
+        .await
+        .expect("expected registrations to succeed");
+
+        assert_eq!(result, StatusCode::OK);
+    }
 }

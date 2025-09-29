@@ -26,10 +26,12 @@ use crate::{
     DeliveredPayloadDocument,
 };
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct MockDatabaseService {
     pub known_validators: Arc<Mutex<Vec<ValidatorSummary>>>,
     pub proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>>,
+    pub treat_all_pubkeys_as_known: bool,
+    pub registration_update_required: bool,
 }
 
 impl MockDatabaseService {
@@ -37,7 +39,23 @@ impl MockDatabaseService {
         known_validators: Arc<Mutex<Vec<ValidatorSummary>>>,
         proposer_duties: Arc<Mutex<Vec<BuilderGetValidatorsResponseEntry>>>,
     ) -> Self {
-        Self { known_validators, proposer_duties }
+        Self {
+            known_validators,
+            proposer_duties,
+            treat_all_pubkeys_as_known: true,
+            registration_update_required: true,
+        }
+    }
+}
+
+impl Default for MockDatabaseService {
+    fn default() -> Self {
+        Self {
+            known_validators: Arc::new(Mutex::new(Vec::new())),
+            proposer_duties: Arc::new(Mutex::new(Vec::new())),
+            treat_all_pubkeys_as_known: true,
+            registration_update_required: true,
+        }
     }
 }
 
@@ -55,7 +73,7 @@ impl DatabaseService for MockDatabaseService {
         &self,
         _registration: &SignedValidatorRegistration,
     ) -> Result<bool, DatabaseError> {
-        Ok(true)
+        Ok(self.registration_update_required)
     }
     async fn get_validator_registration(
         &self,
@@ -143,7 +161,16 @@ impl DatabaseService for MockDatabaseService {
         &self,
         public_keys: Vec<BlsPublicKeyBytes>,
     ) -> Result<HashSet<BlsPublicKeyBytes>, DatabaseError> {
-        Ok(public_keys.into_iter().collect())
+        if self.treat_all_pubkeys_as_known {
+            return Ok(public_keys.into_iter().collect());
+        }
+
+        let known_validators = self.known_validators.lock().unwrap();
+        let known_pubkeys: HashSet<_> =
+            known_validators.iter().map(|validator| validator.validator.pubkey).collect();
+        drop(known_validators);
+
+        Ok(public_keys.into_iter().filter(|pubkey| known_pubkeys.contains(pubkey)).collect())
     }
 
     async fn save_too_late_get_payload(
