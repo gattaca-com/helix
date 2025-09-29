@@ -1,4 +1,3 @@
-use alloy_primitives::U256;
 use tokio::sync::oneshot;
 
 use crate::{
@@ -28,11 +27,6 @@ impl<A: Api> Context<A> {
         let Some(bid) = self.bid_sorter.get_header() else {
             return Err(ProposerApiError::NoBidPrepared);
         };
-
-        // TODO: this check is proably useless
-        if bid.value == U256::ZERO {
-            return Err(ProposerApiError::BidValueZero);
-        }
 
         Ok(bid)
     }
