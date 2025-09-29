@@ -25,59 +25,58 @@ impl AuctioneerHandle {
         Self { worker, auctioneer }
     }
 
-    #[allow(clippy::result_unit_err)]
     pub fn block_submission(
         &self,
         headers: HeaderMap,
         body: bytes::Bytes,
         trace: SubmissionTrace,
-    ) -> Result<oneshot::Receiver<SubmissionResult>, ()> {
+    ) -> Result<oneshot::Receiver<SubmissionResult>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
         self.worker
             .try_send(WorkerJob::BlockSubmission { headers, body, trace, res_tx: tx })
-            .map_err(|_| ())?;
+            .map_err(|_| ChannelFull)?;
         Ok(rx)
     }
 
-    #[allow(clippy::result_unit_err)]
     pub fn get_header(
         &self,
         params: GetHeaderParams,
-    ) -> Result<oneshot::Receiver<GetHeaderResult>, ()> {
+    ) -> Result<oneshot::Receiver<GetHeaderResult>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
-        self.auctioneer.try_send(Event::GetHeader { params, res_tx: tx }).map_err(|_| ())?;
+        self.auctioneer
+            .try_send(Event::GetHeader { params, res_tx: tx })
+            .map_err(|_| ChannelFull)?;
         Ok(rx)
     }
 
-    #[allow(clippy::result_unit_err)]
     pub fn get_payload(
         &self,
         proposer_pubkey: BlsPublicKeyBytes,
         blinded_block: SignedBlindedBeaconBlock,
         trace: GetPayloadTrace,
-    ) -> Result<oneshot::Receiver<GetPayloadResult>, ()> {
+    ) -> Result<oneshot::Receiver<GetPayloadResult>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
         self.worker
             .try_send(WorkerJob::GetPayload { proposer_pubkey, blinded_block, trace, res_tx: tx })
-            .map_err(|_| ())?;
+            .map_err(|_| ChannelFull)?;
         Ok(rx)
     }
 
-    #[allow(clippy::result_unit_err)]
-    pub fn gossip_payload(&self, req: BroadcastPayloadParams) -> Result<(), ()> {
-        self.auctioneer.try_send(Event::GossipPayload(req)).map_err(|_| ())
+    pub fn gossip_payload(&self, req: BroadcastPayloadParams) -> Result<(), ChannelFull> {
+        self.auctioneer.try_send(Event::GossipPayload(req)).map_err(|_| ChannelFull)
     }
 
-    #[allow(clippy::result_unit_err)]
     pub fn best_mergeable(
         &self,
         bid_slot: Slot,
-    ) -> Result<oneshot::Receiver<BestMergeablePayload>, ()> {
+    ) -> Result<oneshot::Receiver<BestMergeablePayload>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
         self.auctioneer
             .try_send(Event::GetBestPayloadForMerging { bid_slot, res_tx: tx })
-            .map_err(|_| ())?;
+            .map_err(|_| ChannelFull)?;
 
         Ok(rx)
     }
 }
+
+pub struct ChannelFull;
