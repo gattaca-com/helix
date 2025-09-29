@@ -144,12 +144,6 @@ impl BidSorter {
             return;
         }
 
-        // move this out
-        if self.demotions.contains(&builder_pubkey) {
-            self.local_telemetry.demoted_subs += 1;
-            return;
-        }
-
         self.headers.insert(bid.on_receive_ns, (header, merging_preferences));
         self.process_header(builder_pubkey, bid);
 
