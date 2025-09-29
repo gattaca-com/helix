@@ -87,10 +87,7 @@ impl<DB: DatabaseService> InclusionListService<DB> {
                 info!(head_slot = head_slot, "Saved inclusion list to postgres");
             }
             Err(err) => {
-                error!(
-                    head_slot,
-                    "Could not save inclusion list to postgres. Error: {:?}", err
-                );
+                error!(head_slot, "Could not save inclusion list to postgres. Error: {:?}", err);
             }
         }
     }
