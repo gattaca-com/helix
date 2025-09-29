@@ -9,7 +9,7 @@ use helix_common::{
 };
 use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission};
 use tokio::{runtime::Handle, sync::oneshot, task::JoinSet};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     auctioneer::{
@@ -76,13 +76,31 @@ impl SimulatorManager {
         let client =
             reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
 
-        let simulators = configs
+        let simulators: Vec<_> = configs
             .into_iter()
             .map(|config| SimulatorClient::new(client.clone(), config))
             .collect();
 
         let requests = PendingRquests::with_capacity(200);
         let join_set = JoinSet::new();
+
+        runtime.spawn({
+            let sync_tx = sim_result_tx.clone();
+            let simulators = simulators.clone();
+            async move {
+                loop {
+                    for (id, simulator) in simulators.iter().enumerate() {
+                        let is_synced = simulator.is_synced().await.unwrap_or(false);
+                        if sync_tx.try_send(Event::SimulatorSync { id, is_synced }).is_err() {
+                            error!("failed to send sync result to sim manager");
+                        }
+                        SimulatorMetrics::simulator_sync(simulator.endpoint(), is_synced);
+                    }
+
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        });
 
         Self {
             simulators,
@@ -95,26 +113,6 @@ impl SimulatorManager {
             runtime,
         }
     }
-
-    // pub async fn start_sync_monitor(&self, is_local_dev: bool) {
-    //     // sync monitor
-    //     if !is_local_dev {
-    //         let simulators = self.simulators.clone();
-    //         tokio::spawn(async move {
-    //             loop {
-    //                 for (i, simulator) in simulators.iter().enumerate() {
-    //                     let is_synced = simulator.is_synced().await.unwrap_or(false);
-    //                     if sync_tx.send((i, is_synced)).await.is_err() {
-    //                         error!("failed to send sync result to sim manager");
-    //                     }
-    //                     SimulatorMetrics::simulator_sync(simulator.endpoint(), is_synced);
-    //                 }
-
-    //                 tokio::time::sleep(Duration::from_secs(1)).await;
-    //             }
-    //         });
-    //     }
-    // }
 
     pub fn handle_sync_status(&mut self, id: usize, is_synced: bool) {
         self.simulators[id].is_synced = is_synced;
