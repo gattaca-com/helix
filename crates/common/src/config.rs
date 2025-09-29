@@ -64,20 +64,8 @@ pub struct RelayConfig {
     pub admin_token: String,
     #[serde(default)]
     is_local_dev: bool,
-    #[serde(default)]
-    pub auctioneer: AuctioneerConfig,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct AuctioneerConfig {
     #[serde(default = "default_usize::<8>")]
     pub worker_threads: usize,
-}
-
-impl Default for AuctioneerConfig {
-    fn default() -> Self {
-        Self { worker_threads: default_usize::<8>() }
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]

@@ -54,9 +54,9 @@ pub fn spawn_auctioneer<A: Api>(
     let (worker_tx, worker_rx) = crossbeam_channel::bounded(10_000);
     let (event_tx, event_rx) = crossbeam_channel::bounded(10_000);
 
-    assert!(config.auctioneer.worker_threads > 0, "need at least 1 worker thread");
+    assert!(config.worker_threads > 0, "need at least 1 worker thread");
 
-    for id in 0..config.auctioneer.worker_threads {
+    for id in 0..config.worker_threads {
         // TODO: affinity
         let worker = Worker {
             rx: worker_rx.clone(),
