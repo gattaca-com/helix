@@ -338,7 +338,7 @@ impl State {
                 State::Broadcasting { slot_data: slot_ctx, block_hash },
                 Event::GetPayload { blinded, block_hash: new_block_hash, res_tx, .. },
             ) => {
-                if slot_ctx.bid_slot == blinded.slot() || *block_hash == new_block_hash {
+                if slot_ctx.bid_slot == blinded.slot() && *block_hash == new_block_hash {
                     let _ = res_tx.send(Err(ProposerApiError::DeliveringPayload));
                 } else {
                     warn!(
