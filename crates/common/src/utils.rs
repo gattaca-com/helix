@@ -200,3 +200,7 @@ pub fn avg_duration(duration: Duration, count: u32) -> Option<Duration> {
         None
     }
 }
+
+pub fn pin_thread_to_core(core: usize) -> bool {
+    core_affinity::set_for_current(core_affinity::CoreId { id: core })
+}

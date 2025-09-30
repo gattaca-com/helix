@@ -66,9 +66,9 @@ pub struct RelayConfig {
     pub admin_token: String,
     #[serde(default)]
     is_local_dev: bool,
-    /// Number of cores to user for workers, unused cores will be used for tokio
-    #[serde(default = "default_usize::<8>")]
-    pub worker_cores: usize,
+    /// Cores configuration, recommended to be set for production use
+    #[serde(default)]
+    pub cores: CoresConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -93,6 +93,27 @@ pub struct WebsiteConfig {
     pub link_etherscan: String,
     #[serde(default)]
     pub link_data_api: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct CoresConfig {
+    pub auctioneer: usize,
+    pub tokio: Vec<usize>,
+    pub workers: Vec<usize>,
+    pub tokio_blocking: usize,
+}
+
+impl Default for CoresConfig {
+    fn default() -> Self {
+        let num_cpus = num_cpus::get_physical();
+        assert!(num_cpus > 3, "need at least 3 cores");
+
+        let tokio: Vec<_> = (0..num_cpus - 2).collect();
+        let auctioneer = num_cpus - 1;
+        let workers = vec![num_cpus];
+
+        Self { tokio_blocking: tokio.len(), auctioneer, tokio, workers }
+    }
 }
 
 impl Default for WebsiteConfig {

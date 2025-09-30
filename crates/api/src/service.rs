@@ -7,8 +7,7 @@ use std::{
 use bytes::Bytes;
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
-    chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext, task::RelayCores,
-    RelayConfig,
+    chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext, RelayConfig,
 };
 use helix_housekeeper::{chain_event_updater::SlotData, CurrentSlotInfo};
 use helix_network::api::RelayNetworkApi;
@@ -44,7 +43,6 @@ pub async fn run_api_service<A: Api>(
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     slot_data_rx: crossbeam_channel::Receiver<SlotData>,
     relay_network_api: RelayNetworkApi,
-    cores: Option<RelayCores>,
 ) {
     let gossiper = Arc::new(
         GrpcGossiperClientManager::new(config.relays.iter().map(|cfg| cfg.url.clone()).collect())
@@ -62,13 +60,11 @@ pub async fn run_api_service<A: Api>(
     let handle = spawn_auctioneer::<A>(
         Arc::unwrap_or_clone(chain_info.clone()),
         config.clone(),
-        tokio::runtime::Handle::current(),
         db.clone(),
         merge_pool_tx,
         Arc::unwrap_or_clone(local_cache.clone()),
         top_bid_tx.clone(),
         slot_data_rx,
-        cores,
     );
 
     let accept_optimistic = Arc::new(AtomicBool::new(true));

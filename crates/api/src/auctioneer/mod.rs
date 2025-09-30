@@ -19,14 +19,12 @@ use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
     local_cache::LocalCache,
-    task::RelayCores,
     utils::pin_thread_to_core,
     RelayConfig,
 };
 use helix_housekeeper::{chain_event_updater::SlotData as HkSlotData, PayloadAttributesUpdate};
 use helix_types::Slot;
 pub use simulator::*;
-use tokio::runtime;
 use tracing::{debug, info, warn};
 pub use types::GetPayloadResultData;
 
@@ -46,21 +44,16 @@ use crate::{
 pub fn spawn_auctioneer<A: Api>(
     chain_info: ChainInfo,
     config: RelayConfig,
-    runtime: runtime::Handle,
     db: Arc<A::DatabaseService>,
     merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
     cache: LocalCache,
     top_bid_tx: tokio::sync::broadcast::Sender<bytes::Bytes>,
     slot_data_rx: crossbeam_channel::Receiver<HkSlotData>,
-    cores: Option<RelayCores>,
 ) -> AuctioneerHandle {
     let (worker_tx, worker_rx) = crossbeam_channel::bounded(10_000);
     let (event_tx, event_rx) = crossbeam_channel::bounded(10_000);
 
-    let (core, worker_cores) = cores.unwrap();
-    assert!(worker_cores.len() > 0, "need at least 1 worker thread");
-
-    for core in worker_cores {
+    for core in config.cores.workers.clone() {
         let worker = Worker {
             rx: worker_rx.clone(),
             tx: event_tx.clone(),
@@ -79,16 +72,18 @@ pub fn spawn_auctioneer<A: Api>(
             .unwrap();
     }
 
+    let auctioneer_core = config.cores.auctioneer;
+
     let bid_sorter = BidSorter::new(top_bid_tx);
-    let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone(), runtime);
+    let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
     let ctx = Context::new(chain_info, config, sim_manager, db, bid_sorter, cache);
     let auctioneer = Auctioneer::<A> { ctx, state: State::default() };
 
     std::thread::Builder::new()
         .name("auctioneer".to_string())
         .spawn(move || {
-            info!(core, "starting auctioneer");
-            pin_thread_to_core(core);
+            info!(core = auctioneer_core, "starting auctioneer");
+            pin_thread_to_core(auctioneer_core);
             auctioneer.run(event_rx, slot_data_rx)
         })
         .unwrap();

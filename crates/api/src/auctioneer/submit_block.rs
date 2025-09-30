@@ -5,6 +5,7 @@ use helix_common::{
     self,
     bid_submission::{BidSubmission, OptimisticVersion},
     metrics::HYDRATION_CACHE_HITS,
+    spawn_tracked,
     utils::utcnow_ns,
     BuilderInfo, SubmissionTrace,
 };
@@ -68,6 +69,10 @@ impl<A: Api> Context<A> {
     }
 
     pub(super) fn sort_simulation_result(&mut self, result: &SimulationResult) {
+        let Some(result) = result.1.as_ref() else {
+            return;
+        };
+
         match &result.result {
             Err(err) if err.is_demotable() => {
                 self.bid_sorter.demote(*result.submission.builder_public_key());
@@ -183,7 +188,7 @@ impl<A: Api> Context<A> {
         self.payloads.insert(*submission.block_hash(), payload_and_blobs);
 
         let db = self.db.clone();
-        tokio::spawn(async move {
+        spawn_tracked!(async move {
             if let Err(err) =
                 db.store_block_submission(submission, submission_trace, optimistic_version).await
             {

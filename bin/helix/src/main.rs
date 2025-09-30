@@ -15,7 +15,7 @@ use helix_common::{
     metadata_provider::DefaultMetadataProvider,
     metrics::start_metrics_server,
     signing::RelaySigningContext,
-    task::{init_runtime, RelayCores},
+    task::{block_on, init_runtime},
     utils::{init_panic_hook, init_tracing_log},
     RelayConfig,
 };
@@ -70,9 +70,9 @@ fn main() {
         "starting relay"
     );
 
-    let (runtime, cores) = init_runtime(config.is_submission_instance, config.worker_cores);
-    runtime.block_on(start_metrics_server(&config));
-    match runtime.block_on(run(config, keypair, cores)) {
+    init_runtime(&config.cores);
+    block_on(start_metrics_server(&config));
+    match block_on(run(config, keypair)) {
         Ok(_) => info!("relay exited"),
         Err(err) => {
             error!(%err, "relay exited with error");
@@ -81,11 +81,7 @@ fn main() {
     }
 }
 
-async fn run(
-    config: RelayConfig,
-    keypair: BlsKeypair,
-    cores: Option<RelayCores>,
-) -> eyre::Result<()> {
+async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
     let chain_info = Arc::new(config.network_config.to_chain_info());
     let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info.clone()));
 
@@ -133,7 +129,6 @@ async fn run(
         top_bid_tx,
         slot_data_rx,
         relay_network_api.api(),
-        cores,
     );
 
     let termination_grace_period = config.router_config.shutdown_delay_ms;

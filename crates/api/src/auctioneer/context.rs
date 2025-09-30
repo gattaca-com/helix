@@ -6,7 +6,7 @@ use std::{
 use alloy_primitives::{B256, U256};
 use helix_common::{
     bid_submission::BidSubmission, chain_info::ChainInfo, local_cache::LocalCache,
-    metrics::SimulatorMetrics, BuilderInfo, RelayConfig,
+    metrics::SimulatorMetrics, spawn_tracked, BuilderInfo, RelayConfig,
 };
 use helix_database::DatabaseService;
 use helix_types::{BlsPublicKeyBytes, HydrationCache, PayloadAndBlobs, Slot};
@@ -81,7 +81,14 @@ impl<A: Api> Context<A> {
     }
 
     pub fn handle_simulation_result(&mut self, result: SimulationResult) {
-        self.sim_manager.handle_task_response(result.id, result.paused_until);
+        let (id, result) = result;
+
+        let paused_until = result.as_ref().and_then(|r| r.paused_until.clone());
+        self.sim_manager.handle_task_response(id, paused_until);
+
+        let Some(result) = result else {
+            return;
+        };
 
         let builder = *result.submission.builder_public_key();
         let block_hash = *result.submission.block_hash();
@@ -98,16 +105,15 @@ impl<A: Api> Context<A> {
                     let bid_slot = result.submission.slot();
                     let failsafe_triggered = self.sim_manager.failsafe_triggered.clone();
 
-                    self.sim_manager.runtime.spawn(async move {
-                            if let Err(err) = db
-                                .db_demote_builder(bid_slot.as_u64(), &builder, &block_hash, reason)
-                                .await
-                            {
-
-                                failsafe_triggered.store(true, Ordering::Relaxed);
-                                error!(%builder, %err, %block_hash, "failed to demote builder in database! Pausing all optmistic submissions");
-                            }
-                        });
+                    spawn_tracked!(async move {
+                        if let Err(err) = db
+                            .db_demote_builder(bid_slot.as_u64(), &builder, &block_hash, reason)
+                            .await
+                        {
+                            failsafe_triggered.store(true, Ordering::Relaxed);
+                            error!(%builder, %err, %block_hash, "failed to demote builder in database! Pausing all optmistic submissions");
+                        }
+                    });
                 } else {
                     warn!(%err, %builder, %block_hash, "failed simulation with known error, skipping demotion");
                 }

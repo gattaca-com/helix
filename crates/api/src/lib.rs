@@ -6,7 +6,7 @@ use bytes::Bytes;
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
     chain_info::ChainInfo, local_cache::LocalCache, metadata_provider::MetadataProvider,
-    signing::RelaySigningContext, task::RelayCores, RelayConfig,
+    signing::RelaySigningContext, RelayConfig,
 };
 use helix_database::DatabaseService;
 use helix_housekeeper::{chain_event_updater::SlotData, CurrentSlotInfo};
@@ -44,7 +44,6 @@ pub fn start_api_service<A: Api>(
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     slot_data_rx: crossbeam_channel::Receiver<SlotData>,
     relay_network_api: RelayNetworkApi,
-    cores: Option<RelayCores>,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),
@@ -60,7 +59,6 @@ pub fn start_api_service<A: Api>(
         top_bid_tx,
         slot_data_rx,
         relay_network_api,
-        cores,
     ));
 }
 

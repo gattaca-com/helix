@@ -44,3 +44,8 @@ logging: !File
   dir_path: /app/logs
   file_name: titan_relay.log
   otlp_server: http://localhost:4317
+cores:
+  auctioneer: 1
+  workers: [2, 3, 4, 5]
+  tokio: [6, 7, 8, 9, 10]
+  tokio_blocking: 1
