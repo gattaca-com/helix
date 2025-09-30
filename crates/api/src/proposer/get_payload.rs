@@ -294,6 +294,10 @@ impl<A: Api> ProposerApi<A> {
             (trace_clone, failed_publishing)
         });
 
+        if let Some(merged_block) = self.auctioneer.get_merged_block(&block_hash) {
+            self.alert_manager.send(&merged_block.to_alert_message());
+        }
+
         if !is_trusted_proposer {
             let Ok((new_trace, failed_publishing)) = handle.await else {
                 return Err(ProposerApiError::InternalServerError);
@@ -324,10 +328,6 @@ impl<A: Api> ProposerApi<A> {
 
         let get_payload_response =
             GetPayloadResponse { version: fork, metadata: Default::default(), data: payload };
-
-        if let Some(merged_block) = self.auctioneer.get_merged_block(&block_hash) {
-            self.alert_manager.send(&merged_block.to_alert_message());
-        }
 
         // Return response
         info!(?trace, timestamp = utcnow_ns(), "delivering payload");
