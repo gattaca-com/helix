@@ -132,7 +132,7 @@ impl<A: Api> ProposerApi<A> {
             self.auctioneer_handle.get_payload(proposer_public_key, signed_blinded_block, *trace)
         else {
             error!("failed sending request to worker");
-            return Err(ProposerApiError::InternalServerError)
+            return Err(ProposerApiError::InternalServerError);
         };
 
         let GetPayloadResultData { to_proposer, to_publish, trace: new_trace, fork } = rx
@@ -218,6 +218,10 @@ impl<A: Api> ProposerApi<A> {
             (trace_clone, failed_publishing)
         });
 
+        if let Some(merged_block) = self.local_cache.get_merged_block(&block_hash) {
+            self.alert_manager.send(&merged_block.to_alert_message());
+        }
+
         if !is_trusted_proposer {
             let Ok((new_trace, failed_publishing)) = handle.await else {
                 return Err(ProposerApiError::InternalServerError);
@@ -244,10 +248,6 @@ impl<A: Api> ProposerApi<A> {
             if remaining_sleep_ms > 0 {
                 sleep(Duration::from_millis(remaining_sleep_ms)).await;
             }
-        }
-
-        if let Some(merged_block) = self.local_cache.get_merged_block(&block_hash) {
-            self.alert_manager.send(&merged_block.to_alert_message());
         }
 
         // Return response
