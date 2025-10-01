@@ -232,3 +232,45 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
         None
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::hex::FromHex;
+
+    use super::*;
+
+    #[test]
+    fn test_get_builder_pubkey() {
+        let expected = BlsPublicKeyBytes::from_hex("0xa1885d66bef164889a2e35845c3b626545d7b0e513efe335e97c3a45e534013fa3bc38c3b7e6143695aecc4872ac52c4").unwrap();
+
+        let data_json =
+            include_bytes!("../../../types/src/testdata/signed-bid-submission-electra-2.json");
+        let decoder = SubmissionDecoder {
+            compression: Compression::Gzip,
+            encoding: Encoding::Json,
+            bytes_before_decompress: 0,
+            bytes_after_decompress: 0,
+            estimated_decompress: 0,
+            decompress_latency: Default::default(),
+            decode_latency: Default::default(),
+        };
+
+        let pubkey = decoder.extract_builder_pubkey(data_json).unwrap();
+        assert_eq!(pubkey, expected);
+
+        let data_ssz =
+            include_bytes!("../../../types/src/testdata/signed-bid-submission-electra-2.bin");
+        let decoder = SubmissionDecoder {
+            compression: Compression::Gzip,
+            encoding: Encoding::Ssz,
+            bytes_before_decompress: 0,
+            bytes_after_decompress: 0,
+            estimated_decompress: 0,
+            decompress_latency: Default::default(),
+            decode_latency: Default::default(),
+        };
+
+        let pubkey = decoder.extract_builder_pubkey(data_ssz).unwrap();
+        assert_eq!(pubkey, expected);
+    }
+}

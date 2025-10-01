@@ -453,11 +453,15 @@ impl State {
         }
     }
 
-    /// Note that we may still fail to actually broacast the block after we change State, eg. if the
-    /// request came to late, or if we fail to broadcast the block
+    /// Check whether we received the payload we were waiting for the pending get_payload, this
+    /// makes sense to be called only when we add a new payload ie. when receiving a new submission
+    /// or from gossip
     fn maybe_start_broacasting<A: Api>(ctx: &mut Context<A>, slot_data: &SlotData) -> Option<Self> {
         let block_hash = ctx.maybe_try_unblind(slot_data)?;
         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
+
+        // Note that we may still fail to actually broacast the block after we change State, eg. if
+        // the request came to late, or if we fail to broadcast the block
         Some(State::Broadcasting { slot_data: slot_data.clone(), block_hash })
     }
 }
