@@ -25,7 +25,7 @@ use helix_common::{
 use helix_housekeeper::{chain_event_updater::SlotData as HkSlotData, PayloadAttributesUpdate};
 use helix_types::Slot;
 pub use simulator::*;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, info_span, warn};
 pub use types::GetPayloadResultData;
 
 use crate::{
@@ -65,9 +65,8 @@ pub fn spawn_auctioneer<A: Api>(
         std::thread::Builder::new()
             .name(format!("worker-{core}"))
             .spawn(move || {
-                info!(core, "starting worker thread");
                 pin_thread_to_core(core);
-                worker.run()
+                worker.run(core)
             })
             .unwrap();
     }
@@ -82,7 +81,6 @@ pub fn spawn_auctioneer<A: Api>(
     std::thread::Builder::new()
         .name("auctioneer".to_string())
         .spawn(move || {
-            info!(core = auctioneer_core, "starting auctioneer");
             pin_thread_to_core(auctioneer_core);
             auctioneer.run(event_rx, slot_data_rx)
         })
@@ -102,6 +100,9 @@ impl<A: Api> Auctioneer<A> {
         rx: crossbeam_channel::Receiver<Event>,
         slot_data_rx: crossbeam_channel::Receiver<HkSlotData>,
     ) {
+        let _span = info_span!("auctioneer").entered();
+        info!("starting");
+
         loop {
             for evt in rx.try_iter() {
                 self.state.step(evt, &mut self.ctx);
@@ -147,7 +148,7 @@ impl Default for State {
 
 impl State {
     fn step<A: Api>(&mut self, event: Event, ctx: &mut Context<A>) {
-        info!("processing event: {} while in state: {}", event.as_str(), self.as_str());
+        // info!("processing event: {} while in state: {}", event.as_str(), self.as_str());
         match (&self, event) {
             ///////////// LIFECYCLE EVENTS (ALWAYS VALID) /////////////
 
@@ -254,8 +255,11 @@ impl State {
                     sequence,
                     trace,
                     res_tx,
+                    span,
                 },
             ) => {
+                let _guard = span.enter();
+
                 ctx.handle_submission(
                     submission,
                     merging_preferences,
@@ -265,6 +269,8 @@ impl State {
                     res_tx,
                     slot_data,
                 );
+
+                drop(_guard);
 
                 if let Some(state) = Self::maybe_start_broacasting(ctx, slot_data) {
                     *self = state;
@@ -296,8 +302,8 @@ impl State {
             }
 
             // sim result
-            (State::Sorting(_), Event::SimResult(result)) => {
-                ctx.sort_simulation_result(&result);
+            (State::Sorting(_), Event::SimResult(mut result)) => {
+                ctx.sort_simulation_result(&mut result);
                 ctx.handle_simulation_result(result);
             }
 
@@ -466,27 +472,27 @@ impl State {
     }
 }
 
-impl Event {
-    fn as_str(&self) -> &'static str {
-        match &self {
-            Event::SlotData { .. } => "SlotData",
-            Event::Submission { .. } => "Submission",
-            Event::GetHeader { .. } => "GetHeader",
-            Event::GetPayload { .. } => "GetPayload",
-            Event::GossipPayload(_) => "GossipPayload",
-            Event::SimResult(_) => "SimResult",
-            Event::SimulatorSync { .. } => "SimulatorSync",
-            Event::GetBestPayloadForMerging { .. } => "GetBestPayloadForMerging",
-        }
-    }
-}
+// impl Event {
+//     fn as_str(&self) -> &'static str {
+//         match &self {
+//             Event::SlotData { .. } => "SlotData",
+//             Event::Submission { .. } => "Submission",
+//             Event::GetHeader { .. } => "GetHeader",
+//             Event::GetPayload { .. } => "GetPayload",
+//             Event::GossipPayload(_) => "GossipPayload",
+//             Event::SimResult(_) => "SimResult",
+//             Event::SimulatorSync { .. } => "SimulatorSync",
+//             Event::GetBestPayloadForMerging { .. } => "GetBestPayloadForMerging",
+//         }
+//     }
+// }
 
-impl State {
-    fn as_str(&self) -> &'static str {
-        match &self {
-            State::Slot { .. } => "Slot",
-            State::Sorting(_) => "Sorting",
-            State::Broadcasting { .. } => "Broadcasting",
-        }
-    }
-}
+// impl State {
+//     fn as_str(&self) -> &'static str {
+//         match &self {
+//             State::Slot { .. } => "Slot",
+//             State::Sorting(_) => "Sorting",
+//             State::Broadcasting { .. } => "Broadcasting",
+//         }
+//     }
+// }

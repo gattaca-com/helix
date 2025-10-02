@@ -80,6 +80,9 @@ impl<A: Api> Context<A> {
         self.cache.get_builder_info(builder).unwrap_or_else(|| self.unknown_builder_info.clone())
     }
 
+    /// 1. Check whether we should demote the builder, this is processed even if the result comes
+    ///    after the slot has finished
+    /// 2. Store simulation to DB
     pub fn handle_simulation_result(&mut self, result: SimulationResult) {
         let (id, result) = result;
 
@@ -93,6 +96,8 @@ impl<A: Api> Context<A> {
         let builder = *result.submission.builder_public_key();
         let block_hash = *result.submission.block_hash();
 
+        let db = self.db.clone();
+
         if let Err(err) = result.result.as_ref() {
             if err.is_demotable() {
                 if self.cache.demote_builder(&builder) {
@@ -100,11 +105,11 @@ impl<A: Api> Context<A> {
 
                     SimulatorMetrics::demotion_count();
 
-                    let db = self.db.clone();
                     let reason = err.to_string();
                     let bid_slot = result.submission.slot();
                     let failsafe_triggered = self.sim_manager.failsafe_triggered.clone();
 
+                    let db = db.clone();
                     spawn_tracked!(async move {
                         if let Err(err) = db
                             .db_demote_builder(bid_slot.as_u64(), &builder, &block_hash, reason)
@@ -119,6 +124,15 @@ impl<A: Api> Context<A> {
                 }
             };
         }
+
+        spawn_tracked!(async move {
+            if let Err(err) = db
+                .store_block_submission(result.submission, result.trace, result.optimistic_version)
+                .await
+            {
+                error!(%err, "failed to store block submission")
+            }
+        });
     }
 
     pub fn on_new_slot(&mut self, bid_slot: Slot) {

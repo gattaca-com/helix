@@ -100,7 +100,7 @@ pub struct CoresConfig {
     pub auctioneer: usize,
     pub tokio: Vec<usize>,
     pub workers: Vec<usize>,
-    pub tokio_blocking: usize,
+    pub n_tokio_blocking: usize,
 }
 
 impl Default for CoresConfig {
@@ -112,7 +112,7 @@ impl Default for CoresConfig {
         let auctioneer = num_cpus - 1;
         let workers = vec![num_cpus];
 
-        Self { tokio_blocking: tokio.len(), auctioneer, tokio, workers }
+        Self { n_tokio_blocking: tokio.len(), auctioneer, tokio, workers }
     }
 }
 

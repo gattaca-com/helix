@@ -64,13 +64,13 @@ where
 pub fn init_runtime(config: &CoresConfig) {
     assert!(config.workers.len() > 0, "need at least 1 worker core");
     assert!(config.tokio.len() > 0, "need at least 1 tokio core");
-    assert!(config.tokio_blocking > 0, "need at least 1 blocking tokio thread");
+    assert!(config.n_tokio_blocking > 0, "need at least 1 blocking tokio thread");
 
     if config == &CoresConfig::default() {
         warn!("initializing default cores config, this is not recommended for production");
     }
 
-    info!(cores = ?config.tokio, blocking_threads = config.tokio_blocking, "initializing tokio runtime");
+    info!(cores = ?config.tokio, blocking_threads = config.n_tokio_blocking, "initializing tokio runtime");
 
     let cores_a = Arc::new(Mutex::new(Cores::new(config.tokio.clone())));
     let cores_b = cores_a.clone();
@@ -82,7 +82,7 @@ pub fn init_runtime(config: &CoresConfig) {
         })
         .enable_all()
         .worker_threads(config.tokio.len())
-        .max_blocking_threads(config.tokio_blocking)
+        .max_blocking_threads(config.n_tokio_blocking)
         .on_thread_start(move || {
             let thread_id = thread::current().id();
             let (core, _count) = cores_a.lock().add(thread_id);

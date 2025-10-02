@@ -8,8 +8,13 @@ use std::{
 };
 
 use helix_common::{
-    bid_submission::BidSubmission, is_local_dev, metrics::SimulatorMetrics,
-    simulator::BlockSimError, spawn_tracked, SimulatorConfig,
+    bid_submission::{BidSubmission, OptimisticVersion},
+    is_local_dev,
+    metrics::SimulatorMetrics,
+    simulator::BlockSimError,
+    spawn_tracked,
+    utils::utcnow_ns,
+    SimulatorConfig, SubmissionTrace,
 };
 use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission};
 use tokio::sync::oneshot;
@@ -48,6 +53,8 @@ pub struct SimulationResultInner {
     pub paused_until: Option<Instant>,
     pub submission: SignedBidSubmission,
     pub merging_preferences: BlockMergingPreferences,
+    pub trace: SubmissionTrace,
+    pub optimistic_version: OptimisticVersion,
 }
 
 impl SimulationResultInner {
@@ -186,7 +193,7 @@ impl SimulatorManager {
         }
     }
 
-    pub fn spawn_sim(&mut self, id: usize, req: SimulatorRequest) {
+    pub fn spawn_sim(&mut self, id: usize, mut req: SimulatorRequest) {
         const PAUSE_DURATION: Duration = Duration::from_secs(60);
 
         let client = &mut self.simulators[id];
@@ -200,7 +207,8 @@ impl SimulatorManager {
             let block_hash = req.submission.block_hash();
             debug!(%block_hash, "sending simulation request");
 
-            SimulatorMetrics::sim_count(req.is_optimistic);
+            let optimistic_version = req.optimistic_version();
+            SimulatorMetrics::sim_count(optimistic_version.is_optimistic());
             let res = SimulatorClient::do_sim_request(to_send).await;
             let time = timer.stop_and_record();
 
@@ -218,6 +226,7 @@ impl SimulatorManager {
                 None
             };
 
+            req.trace.simulation = utcnow_ns();
             let result = (
                 id,
                 Some(SimulationResultInner {
@@ -226,6 +235,8 @@ impl SimulatorManager {
                     res_tx: req.res_tx,
                     submission: req.submission,
                     merging_preferences: req.merging_preferences,
+                    trace: req.trace,
+                    optimistic_version,
                 }),
             );
 
@@ -312,7 +323,7 @@ impl PendingRquests {
         if let Some((i, _)) =
             self.builder_pubkeys.iter_mut().enumerate().find(|(_, r)| **r == *req.builder_pubkey())
         {
-            if req.on_receive_ns > self.map[i].on_receive_ns {
+            if req.on_receive_ns() > self.map[i].on_receive_ns() {
                 self.sort_keys[i] = req.sort_key();
                 self.builder_pubkeys[i] = *req.builder_pubkey();
                 self.map[i] = req;
@@ -336,6 +347,8 @@ impl PendingRquests {
         Some(self.map.swap_remove(i))
     }
 
+    /// Clear backlog of simulations from the previous bid slot, this closes all optimistic
+    /// submissions and non-optimistic ones which have timed out
     fn clear(&mut self, bid_slot: u64) {
         let mut i = 0;
 

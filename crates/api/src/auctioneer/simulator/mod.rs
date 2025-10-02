@@ -2,8 +2,10 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
-    api::builder_api::InclusionListWithMetadata, bid_submission::BidSubmission,
-    simulator::BlockSimError, ValidatorPreferences,
+    api::builder_api::InclusionListWithMetadata,
+    bid_submission::{BidSubmission, OptimisticVersion},
+    simulator::BlockSimError,
+    SubmissionTrace, ValidatorPreferences,
 };
 use helix_types::{
     BidTrace, BlobsBundle, BlockMergingPreferences, BlsPublicKeyBytes, BlsSignatureBytes,
@@ -144,25 +146,28 @@ pub type SimReponse = (usize, Option<Instant>);
 
 pub struct SimulatorRequest {
     pub request: BlockSimRequest,
-    /// when submission was received in ns
-    pub on_receive_ns: u64,
     pub is_top_bid: bool,
-    pub is_optimistic: bool,
     pub submission: SignedBidSubmission,
+    /// None if optimistic
     pub res_tx: Option<oneshot::Sender<SubmissionResult>>,
     pub merging_preferences: BlockMergingPreferences,
+    pub trace: SubmissionTrace,
 }
 
 impl SimulatorRequest {
+    pub fn on_receive_ns(&self) -> u64 {
+        self.trace.receive
+    }
+
     // TODO: use a "score" eg how close to top bid even if below
     pub fn sort_key(&self) -> (u8, u8, u64) {
         let open = if self.is_closed() { 0 } else { 1 };
         let top = if self.is_top_bid { 1 } else { 0 };
-        (open, top, u64::MAX - self.on_receive_ns)
+        (open, top, u64::MAX - self.on_receive_ns())
     }
 
     pub fn is_closed(&self) -> bool {
-        !self.is_optimistic && self.res_tx.as_ref().is_some_and(|r| r.is_closed())
+        self.res_tx.as_ref().is_some_and(|r| r.is_closed())
     }
 
     pub fn bid_slot(&self) -> u64 {
@@ -171,5 +176,13 @@ impl SimulatorRequest {
 
     pub fn builder_pubkey(&self) -> &BlsPublicKeyBytes {
         &self.request.message.builder_pubkey
+    }
+
+    pub fn optimistic_version(&self) -> OptimisticVersion {
+        if self.res_tx.is_some() {
+            OptimisticVersion::NotOptimistic
+        } else {
+            OptimisticVersion::V1
+        }
     }
 }

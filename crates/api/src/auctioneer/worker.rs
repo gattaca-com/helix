@@ -1,6 +1,7 @@
 use alloy_primitives::B256;
 use helix_common::{
-    chain_info::ChainInfo, local_cache::LocalCache, GetPayloadTrace, RelayConfig, SubmissionTrace,
+    chain_info::ChainInfo, local_cache::LocalCache, utils::utcnow_ns, GetPayloadTrace, RelayConfig,
+    SubmissionTrace,
 };
 use helix_types::{
     BlockMergingData, BlockMergingPreferences, BlsPublicKey, BlsPublicKeyBytes,
@@ -8,7 +9,7 @@ use helix_types::{
     SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock,
 };
 use http::HeaderValue;
-use tracing::{error, warn};
+use tracing::{error, info, info_span, trace, warn};
 
 use crate::{
     auctioneer::{
@@ -33,25 +34,38 @@ pub(super) struct Worker {
 }
 
 impl Worker {
-    pub(super) fn run(self) {
-        loop {
-            let Ok(task) = self.rx.try_recv() else {
-                continue;
-            };
+    pub(super) fn run(self, id: usize) {
+        let _span = info_span!("worker", %id).entered();
+        info!("starting");
 
-            self.handle_task(task);
+        loop {
+            for task in self.rx.try_iter() {
+                self.handle_task(task);
+            }
         }
     }
 
     fn handle_task(&self, task: WorkerJob) {
         match task {
-            WorkerJob::BlockSubmission { headers, body, mut trace, res_tx } => {
+            WorkerJob::BlockSubmission { headers, body, mut trace, res_tx, span } => {
+                let guard = span.enter();
                 match self.handle_block_submission(headers, body, &mut trace) {
                     Ok((submission, withdrawals_root, sequence, merging_data)) => {
                         let merging_preferences = merging_data
                             .as_ref()
                             .map(|m| BlockMergingPreferences { allow_appending: m.allow_appending })
                             .unwrap_or_default();
+
+                        tracing::Span::current()
+                            .record("bid_slot", tracing::field::display(submission.bid_slot()));
+                        tracing::Span::current()
+                            .record("block_hash", tracing::field::display(submission.block_hash()));
+                        tracing::Span::current().record(
+                            "builder_pubkey",
+                            tracing::field::display(submission.builder_pubkey()),
+                        );
+
+                        drop(guard);
 
                         if self.config.block_merging_config.is_enabled {
                             let message = Event::Submission {
@@ -62,6 +76,7 @@ impl Worker {
                                 sequence,
                                 trace,
                                 res_tx,
+                                span,
                             };
 
                             if self.tx.try_send(message).is_err() {
@@ -99,6 +114,7 @@ impl Worker {
                                 sequence,
                                 trace,
                                 res_tx,
+                                span,
                             };
 
                             if self.tx.try_send(message).is_err() {
@@ -136,8 +152,10 @@ impl Worker {
         &self,
         headers: http::HeaderMap,
         body: bytes::Bytes,
-        _trace: &mut SubmissionTrace,
+        trace: &mut SubmissionTrace,
     ) -> Result<(Submission, B256, Option<u64>, Option<BlockMergingData>), BuilderApiError> {
+        trace!("handling block submission");
+
         let mut decoder = SubmissionDecoder::from_headers(&headers);
         let body = decoder.decompress(body)?;
         let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref())?;
@@ -160,6 +178,8 @@ impl Worker {
             }
 
             let payload: DehydratedBidSubmission = decoder.decode(body)?;
+
+            trace.decode = utcnow_ns();
             (Submission::Dehydrated(payload), None)
         } else {
             let (payload, merging_data) = if has_mergeable_data {
@@ -170,8 +190,10 @@ impl Worker {
                 (payload, None)
             };
 
+            trace.decode = utcnow_ns();
             if !skip_sigverify {
                 payload.verify_signature(self.chain_info.builder_domain)?;
+                trace.signature = Some(utcnow_ns());
             }
 
             payload.validate_payload_ssz_lengths()?;

@@ -26,6 +26,13 @@ impl DehydratedBidSubmission {
             DehydratedBidSubmission::Electra(s) => s.message.slot,
         }
     }
+
+    pub fn block_hash(&self) -> &B256 {
+        match self {
+            DehydratedBidSubmission::Electra(s) => &s.message.block_hash,
+        }
+    }
+
     pub fn builder_pubkey(&self) -> &BlsPublicKeyBytes {
         match self {
             DehydratedBidSubmission::Electra(s) => &s.message.builder_pubkey,

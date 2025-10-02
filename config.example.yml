@@ -48,4 +48,4 @@ cores:
   auctioneer: 1
   workers: [2, 3, 4, 5]
   tokio: [6, 7, 8, 9, 10]
-  tokio_blocking: 1
+  n_tokio_blocking: 1

@@ -1,4 +1,4 @@
-use helix_common::{GetPayloadTrace, SubmissionTrace};
+use helix_common::{utils::utcnow_ns, GetPayloadTrace, SubmissionTrace};
 use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, Slot};
 use http::HeaderMap;
 use tokio::sync::oneshot;
@@ -29,11 +29,18 @@ impl AuctioneerHandle {
         &self,
         headers: HeaderMap,
         body: bytes::Bytes,
-        trace: SubmissionTrace,
+        mut trace: SubmissionTrace,
     ) -> Result<oneshot::Receiver<SubmissionResult>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
+        trace.sent_worker = utcnow_ns();
         self.worker
-            .try_send(WorkerJob::BlockSubmission { headers, body, trace, res_tx: tx })
+            .try_send(WorkerJob::BlockSubmission {
+                headers,
+                body,
+                trace,
+                res_tx: tx,
+                span: tracing::Span::current(),
+            })
             .map_err(|_| ChannelFull)?;
         Ok(rx)
     }

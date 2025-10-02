@@ -49,6 +49,20 @@ impl Submission {
         }
     }
 
+    pub fn builder_pubkey(&self) -> &BlsPublicKeyBytes {
+        match self {
+            Submission::Full(s) => &s.message().builder_pubkey,
+            Submission::Dehydrated(s) => s.builder_pubkey(),
+        }
+    }
+
+    pub fn block_hash(&self) -> &B256 {
+        match self {
+            Submission::Full(s) => &s.message().block_hash,
+            Submission::Dehydrated(s) => s.block_hash(),
+        }
+    }
+
     pub fn withdrawal_root(&self) -> B256 {
         match self {
             Submission::Full(s) => s.withdrawals_root(),
@@ -63,6 +77,7 @@ pub enum WorkerJob {
         body: bytes::Bytes,
         trace: SubmissionTrace, // TODO: replace this with better tracing
         res_tx: oneshot::Sender<SubmissionResult>,
+        span: tracing::Span,
     },
 
     GetPayload {
@@ -123,6 +138,7 @@ pub enum Event {
         sequence: Option<u64>,
         trace: SubmissionTrace,
         res_tx: oneshot::Sender<SubmissionResult>,
+        span: tracing::Span,
     },
     /// Assume already some validation (so we don't have to wait here)
     /// timing games already done

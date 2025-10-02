@@ -5,14 +5,12 @@ use helix_common::{
     self,
     bid_submission::{BidSubmission, OptimisticVersion},
     metrics::HYDRATION_CACHE_HITS,
-    spawn_tracked,
     utils::utcnow_ns,
     BuilderInfo, SubmissionTrace,
 };
-use helix_database::DatabaseService;
 use helix_types::{BlockMergingPreferences, SignedBidSubmission};
 use tokio::sync::oneshot;
-use tracing::error;
+use tracing::trace;
 
 use crate::{
     auctioneer::{
@@ -52,14 +50,7 @@ impl<A: Api> Context<A> {
                     Some(res_tx)
                 };
 
-                self.simulate_and_store(
-                    submission,
-                    trace,
-                    optimistic_version,
-                    res_tx,
-                    slot_data,
-                    merging_preferences,
-                );
+                self.simulate_and_store(submission, trace, res_tx, slot_data, merging_preferences);
             }
 
             Err(err) => {
@@ -68,8 +59,9 @@ impl<A: Api> Context<A> {
         }
     }
 
-    pub(super) fn sort_simulation_result(&mut self, result: &SimulationResult) {
-        let Some(result) = result.1.as_ref() else {
+    /// Sort the simulation result if it wasn't optimistic
+    pub(super) fn sort_simulation_result(&mut self, result: &mut SimulationResult) {
+        let Some(result) = &mut result.1 else {
             return;
         };
 
@@ -94,6 +86,8 @@ impl<A: Api> Context<A> {
                 }
             }
         }
+
+        result.trace.sorted = utcnow_ns();
     }
 
     fn validate_and_sort(
@@ -105,6 +99,8 @@ impl<A: Api> Context<A> {
         slot_data: &SlotData,
         merging_preferences: BlockMergingPreferences,
     ) -> Result<(SignedBidSubmission, OptimisticVersion), BuilderApiError> {
+        trace!("validating submission");
+
         let submission = match submission {
             Submission::Full(full) => full,
             Submission::Dehydrated(dehydrated) => {
@@ -122,6 +118,8 @@ impl<A: Api> Context<A> {
         };
 
         let builder_info = self.builder_info(submission.builder_public_key());
+        tracing::Span::current()
+            .record("builder_id", tracing::field::display(builder_info.builder_id()));
 
         self.validate_submission(
             &submission,
@@ -130,6 +128,8 @@ impl<A: Api> Context<A> {
             &builder_info,
             slot_data,
         )?;
+
+        trace!("validated");
 
         let optimistic_version = if self.sim_manager.can_process_optimistic_submission() &&
             self.should_process_optimistically(&submission, &builder_info, slot_data)
@@ -144,6 +144,7 @@ impl<A: Api> Context<A> {
                 merging_preferences,
             );
             self.bid_sorter.sort(msg);
+            trace.sorted = utcnow_ns();
             OptimisticVersion::V1
         } else {
             OptimisticVersion::NotOptimistic
@@ -155,8 +156,7 @@ impl<A: Api> Context<A> {
     fn simulate_and_store(
         &mut self,
         submission: SignedBidSubmission,
-        submission_trace: SubmissionTrace,
-        optimistic_version: OptimisticVersion,
+        trace: SubmissionTrace,
         res_tx: Option<oneshot::Sender<SubmissionResult>>,
         slot_data: &SlotData,
         merging_preferences: BlockMergingPreferences,
@@ -175,26 +175,16 @@ impl<A: Api> Context<A> {
 
         let req = SimulatorRequest {
             request,
-            on_receive_ns: submission_trace.receive,
             is_top_bid,
-            is_optimistic: optimistic_version.is_optimistic(),
             res_tx,
             submission: submission.clone(),
             merging_preferences,
+            trace,
         };
         self.sim_manager.handle_sim_request(req);
 
         let payload_and_blobs = Arc::new(submission.payload_and_blobs_ref().to_owned());
         self.payloads.insert(*submission.block_hash(), payload_and_blobs);
-
-        let db = self.db.clone();
-        spawn_tracked!(async move {
-            if let Err(err) =
-                db.store_block_submission(submission, submission_trace, optimistic_version).await
-            {
-                error!(%err, "failed to store block submission")
-            }
-        });
     }
 
     fn should_process_optimistically(
