@@ -2,10 +2,7 @@ use std::sync::Arc;
 
 use alloy_primitives::B256;
 use helix_common::{
-    self,
-    bid_submission::{BidSubmission, OptimisticVersion},
-    metrics::HYDRATION_CACHE_HITS,
-    utils::utcnow_ns,
+    self, bid_submission::OptimisticVersion, metrics::HYDRATION_CACHE_HITS, utils::utcnow_ns,
     BuilderInfo, SubmissionTrace,
 };
 use helix_types::{BlockMergingPreferences, SignedBidSubmission};

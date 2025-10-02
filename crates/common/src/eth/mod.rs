@@ -7,10 +7,7 @@ use helix_types::{
 };
 use tracing::debug;
 
-use crate::{
-    bid_submission::v2::header_submission::SignedHeaderSubmission, metrics::BID_SIGNING_LATENCY,
-    signing::RelaySigningContext,
-};
+use crate::{metrics::BID_SIGNING_LATENCY, signing::RelaySigningContext};
 
 /// Signs the builder bid with the relay key. This is necessary because the relay is the "builder"
 /// from the proposer point of view
@@ -63,33 +60,6 @@ pub fn bid_submission_to_builder_bid_unsigned(
                 value: bid.message.value,
                 execution_requests,
                 pubkey: mock_public_key_bytes(), // this will be replaced when signing the header
-            }
-        }
-    }
-}
-
-pub fn header_submission_to_builder_bid_unsigned(
-    submission: &SignedHeaderSubmission,
-) -> BuilderBid {
-    match submission {
-        SignedHeaderSubmission::Electra(bid) => {
-            let header = bid.message.execution_payload_header.clone();
-            BuilderBid {
-                header,
-                blob_kzg_commitments: bid.message.commitments.clone(),
-                value: bid.message.bid_trace.value,
-                execution_requests: bid.message.execution_requests.clone(),
-                pubkey: mock_public_key_bytes(), // this will replaced when signing the header
-            }
-        }
-        SignedHeaderSubmission::Fulu(bid) => {
-            let header = bid.message.execution_payload_header.clone();
-            BuilderBid {
-                header,
-                blob_kzg_commitments: bid.message.commitments.clone(),
-                value: bid.message.bid_trace.value,
-                execution_requests: bid.message.execution_requests.clone(),
-                pubkey: mock_public_key_bytes(), // this will replaced when signing the header
             }
         }
     }

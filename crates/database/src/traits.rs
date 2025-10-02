@@ -8,9 +8,9 @@ use helix_common::{
         data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
-    bid_submission::{v2::header_submission::SignedHeaderSubmission, OptimisticVersion},
+    bid_submission::OptimisticVersion,
     builder_info::BuilderInfo,
-    GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, HeaderSubmissionTrace, ProposerInfo,
+    GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, ProposerInfo,
     SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
 };
 use helix_types::{
@@ -160,13 +160,6 @@ pub trait DatabaseService: Send + Sync + Clone {
         block_hash: B256,
         error: String,
         trace: GetPayloadTrace,
-    ) -> Result<(), DatabaseError>;
-
-    async fn store_header_submission(
-        &self,
-        submission: Arc<SignedHeaderSubmission>,
-        trace: HeaderSubmissionTrace,
-        tx_count: u32,
     ) -> Result<(), DatabaseError>;
 
     async fn save_gossiped_payload_trace(

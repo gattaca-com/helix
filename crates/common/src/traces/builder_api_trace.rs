@@ -2,9 +2,7 @@ use std::sync::atomic::Ordering;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    bid_submission::OptimisticVersion, metrics::SUB_TRACE_LATENCY, utils::utcnow_ns, RequestTimings,
-};
+use crate::{metrics::SUB_TRACE_LATENCY, utils::utcnow_ns, RequestTimings};
 
 // all timestamps are in nanoseconds
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -48,12 +46,7 @@ impl SubmissionTrace {
         }
     }
 
-    pub fn record_metrics(&self, optimistic_version: OptimisticVersion) {
-        if matches!(optimistic_version, OptimisticVersion::V3) {
-            // ignore v3 as the traces come from the payload only
-            return;
-        }
-
+    pub fn record_metrics(&self) {
         record("scheduled_at", self.receive, self.scheduled_at);
         record("read_body", self.scheduled_at, self.read_body);
         record("start_handler", self.read_body, self.start_handler);
@@ -95,23 +88,6 @@ fn record(label: &str, start: u64, end: u64) {
     if end > start {
         let value = (end - start) as f64 / 1000.;
         SUB_TRACE_LATENCY.with_label_values(&[label]).observe(value);
-    }
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct HeaderSubmissionTrace {
-    pub receive: u64,
-    pub decode: u64,
-    pub pre_checks: u64,
-    pub signature: u64,
-    pub auctioneer_update: u64,
-    pub request_finish: u64,
-    pub metadata: Option<String>,
-}
-
-impl HeaderSubmissionTrace {
-    pub fn init_from_timings(timings: RequestTimings) -> Self {
-        Self { receive: timings.on_receive_ns, ..Default::default() }
     }
 }
 

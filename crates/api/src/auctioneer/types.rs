@@ -3,7 +3,6 @@ use std::sync::Arc;
 use alloy_primitives::B256;
 use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
-    bid_submission::BidSubmission,
     GetPayloadTrace, SubmissionTrace,
 };
 use helix_housekeeper::PayloadAttributesUpdate;

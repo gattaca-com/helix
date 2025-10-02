@@ -15,14 +15,11 @@ use helix_common::{
         },
         proposer_api::ValidatorRegistrationInfo,
     },
-    bid_submission::{
-        v2::header_submission::{SignedHeaderSubmission, SignedHeaderSubmissionDeneb},
-        BidSubmission,
-    },
+    bid_submission::BidSubmission,
     chain_info::ChainInfo,
     metadata_provider::DefaultMetadataProvider,
     request_encoding::Encoding,
-    HeaderSubmissionTrace, Route, SubmissionTrace, ValidatorPreferences,
+    Route, SubmissionTrace, ValidatorPreferences,
 };
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_datastore::MockAuctioneer;

@@ -1541,15 +1541,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
-name = "cbor4ii"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db05e2e8488783316fbab37891db4ab5b31124dab16bb2161da145c03dd0de70"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "cc"
 version = "1.2.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3799,11 +3790,8 @@ dependencies = [
  "alloy-consensus",
  "alloy-primitives",
  "async-trait",
- "auto_impl",
  "axum 0.8.5",
  "bytes",
- "cbor4ii",
- "core_affinity",
  "crossbeam-channel",
  "dashmap 5.5.3",
  "ethereum_serde_utils",
@@ -3852,7 +3840,6 @@ name = "helix-beacon"
 version = "0.0.1"
 dependencies = [
  "alloy-primitives",
- "auto_impl",
  "axum 0.8.5",
  "ethereum_serde_utils",
  "ethereum_ssz",
@@ -3879,14 +3866,11 @@ dependencies = [
  "alloy-consensus",
  "alloy-primitives",
  "alloy-rlp",
- "auto_impl",
  "axum 0.8.5",
  "backtrace",
- "bitflags 2.9.4",
  "bytes",
  "clap",
  "core_affinity",
- "crossbeam-channel",
  "dashmap 5.5.3",
  "ethereum_serde_utils",
  "ethereum_ssz",

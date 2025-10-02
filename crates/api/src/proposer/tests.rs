@@ -39,15 +39,24 @@ mod proposer_api_tests {
     use helix_common::{
         api::{
             builder_api::BuilderGetValidatorsResponseEntry,
-            proposer_api::ValidatorRegistrationInfo, PATH_GET_PAYLOAD, PATH_PROPOSER_API,
-            PATH_REGISTER_VALIDATORS, PATH_UPDATE_VALIDATOR_PREFERENCES, PATH_GET_VALIDATOR_PREFERENCES
-        }, chain_info::ChainInfo, metadata_provider::DefaultMetadataProvider, utils::utcnow_ns, Filtering, ValidatorPreferences
+            proposer_api::ValidatorRegistrationInfo, PATH_GET_PAYLOAD,
+            PATH_GET_VALIDATOR_PREFERENCES, PATH_PROPOSER_API, PATH_REGISTER_VALIDATORS,
+            PATH_UPDATE_VALIDATOR_PREFERENCES,
+        },
+        chain_info::ChainInfo,
+        metadata_provider::DefaultMetadataProvider,
+        utils::utcnow_ns,
+        Filtering, ValidatorPreferences,
     };
     use helix_database::mock_database_service::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate, SlotUpdate};
     use helix_types::{
-        get_fixed_pubkey, get_fixed_secret, get_payload_deneb, BlobsBundle, BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BuilderBidDeneb, ExecutionPayloadDeneb, ExecutionPayloadElectra, ForkName, PayloadAndBlobs, SignedBlindedBeaconBlock, SignedBlindedBeaconBlockDeneb, SignedBuilderBid, SignedBuilderBidInner, SignedRoot, SignedValidatorRegistration, TestRandomSeed, ValidatorRegistration
+        get_fixed_pubkey, get_fixed_secret, get_payload_deneb, BlobsBundle, BlsPublicKey,
+        BlsPublicKeyBytes, BlsSignature, BuilderBidDeneb, ExecutionPayloadDeneb,
+        ExecutionPayloadElectra, ForkName, PayloadAndBlobs, SignedBlindedBeaconBlock,
+        SignedBlindedBeaconBlockDeneb, SignedBuilderBid, SignedBuilderBidInner, SignedRoot,
+        SignedValidatorRegistration, TestRandomSeed, ValidatorRegistration,
     };
     use reqwest::StatusCode;
     use tokio::{
@@ -57,7 +66,10 @@ mod proposer_api_tests {
 
     use crate::{
         gossiper::{mock_gossiper::MockGossiper, types::GossipedMessage},
-        proposer::{api::ProposerApi, tests::gen_signed_vr, UpdateValidatorPreferencesParams, UpdateValidatorPreferencesPayload, ValidatorPreferenceUpdate},
+        proposer::{
+            api::ProposerApi, tests::gen_signed_vr, UpdateValidatorPreferencesParams,
+            UpdateValidatorPreferencesPayload, ValidatorPreferenceUpdate,
+        },
         test_utils::proposer_api_app,
     };
 
@@ -227,10 +239,13 @@ mod proposer_api_tests {
     }
 
     fn get_signed_builder_bid(value: U256) -> SignedBuilderBid {
-        SignedBuilderBid::new_no_metadata(Some(ForkName::Deneb), SignedBuilderBidInner {
-            message: BuilderBidDeneb { value, ..BuilderBidDeneb::test_random() }.into(),
-            signature: BlsSignature::test_random(),
-        })
+        SignedBuilderBid::new_no_metadata(
+            Some(ForkName::Deneb),
+            SignedBuilderBidInner {
+                message: BuilderBidDeneb { value, ..BuilderBidDeneb::test_random() }.into(),
+                signature: BlsSignature::test_random(),
+            },
+        )
     }
 
     fn get_blinded_beacon_block(slot: u64, proposer_index: usize) -> SignedBlindedBeaconBlock {
@@ -917,7 +932,6 @@ mod proposer_api_tests {
     #[tokio::test]
     async fn test_validate_registration() {
         let (_gossip_sender, gossip_receiver) = channel::<GossipedMessage>(32);
-        let (v3_sender, _v3_receiver) = channel(32);
         let auctioneer = Arc::new(MockAuctioneer::default());
 
         let prop_api = ProposerApi::<
@@ -936,7 +950,6 @@ mod proposer_api_tests {
             Arc::new(ValidatorPreferences::default()),
             gossip_receiver,
             Default::default(),
-            v3_sender,
             Default::default(),
         );
 
@@ -1005,7 +1018,10 @@ mod proposer_api_tests {
             disable_inclusion_lists: Some(true),
         };
 
-        let request = create_test_validator_preferences_request(vec![(pk1, preferences1), (pk2, preferences2)]);
+        let request = create_test_validator_preferences_request(vec![
+            (pk1, preferences1),
+            (pk2, preferences2),
+        ]);
 
         let req_url = format!(
             "{}{}{}",
@@ -1043,7 +1059,8 @@ mod proposer_api_tests {
             disable_inclusion_lists: None,
         };
 
-        let request = create_test_validator_preferences_request(vec![(validator_pubkey, preferences)]);
+        let request =
+            create_test_validator_preferences_request(vec![(validator_pubkey, preferences)]);
 
         let req_url = format!(
             "{}{}{}",
@@ -1082,7 +1099,8 @@ mod proposer_api_tests {
             disable_inclusion_lists: None,
         };
 
-        let request = create_test_validator_preferences_request(vec![(validator_pubkey, preferences)]);
+        let request =
+            create_test_validator_preferences_request(vec![(validator_pubkey, preferences)]);
 
         let req_url = format!(
             "{}{}{}",
@@ -1131,7 +1149,7 @@ mod proposer_api_tests {
 
         let body = resp.text().await.unwrap();
         let preferences: ValidatorPreferences = serde_json::from_str(&body).unwrap();
-        
+
         assert!(preferences.header_delay);
         assert!(preferences.trusted_builders.is_none());
 

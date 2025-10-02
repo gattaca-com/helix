@@ -1,19 +1,14 @@
-use core::convert::Infallible;
-
 use alloy_primitives::{Address, B256, U256};
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use helix_common::{
-    bid_submission::BidValidationError, local_cache::AuctioneerError, simulator::BlockSimError,
-};
+use helix_common::{local_cache::AuctioneerError, simulator::BlockSimError};
 use helix_database::error::DatabaseError;
 use helix_types::{
-    BlsPublicKey, BlsPublicKeyBytes, ForkName, HydrationError, SigError, Slot, ValidationError,
+    BidValidationError, BlsPublicKey, BlsPublicKeyBytes, ForkName, HydrationError, SigError, Slot,
+    ValidationError,
 };
-
-// use super::v3::V3Error;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuilderApiError {
@@ -32,19 +27,11 @@ pub enum BuilderApiError {
     #[error("failed to decode payload")]
     PayloadDecode,
 
-    // #[error("payload error: {0}")]
-    // PayloadError(#[from] V3Error),
     #[error("ssz serialize error")]
     SszSerializeError,
 
     #[error("failed to deserialize ssz: {0}")]
     SszDeserializeError(String),
-
-    #[error("failed to deserialize cbor: {0}")]
-    CborDeserializeError(#[from] cbor4ii::serde::DecodeError<Infallible>),
-
-    #[error("failed to decode header-submission")]
-    FailedToDecodeHeaderSubmission,
 
     #[error("payload too large. max size: {max_size}, size: {size}")]
     PayloadTooLarge { max_size: usize, size: usize },
@@ -200,8 +187,6 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::IOError(_) |
             BuilderApiError::SszSerializeError |
             BuilderApiError::SszDeserializeError(_) |
-            BuilderApiError::CborDeserializeError(_) |
-            BuilderApiError::FailedToDecodeHeaderSubmission |
             BuilderApiError::HyperError(_) |
             BuilderApiError::AxumError(_) |
             BuilderApiError::PayloadTooLarge { .. } |

@@ -2,10 +2,8 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
-    api::builder_api::InclusionListWithMetadata,
-    bid_submission::{BidSubmission, OptimisticVersion},
-    simulator::BlockSimError,
-    SubmissionTrace, ValidatorPreferences,
+    api::builder_api::InclusionListWithMetadata, bid_submission::OptimisticVersion,
+    simulator::BlockSimError, SubmissionTrace, ValidatorPreferences,
 };
 use helix_types::{
     BidTrace, BlobsBundle, BlockMergingPreferences, BlsPublicKeyBytes, BlsSignatureBytes,

@@ -8,13 +8,8 @@ use std::{
 };
 
 use helix_common::{
-    bid_submission::{BidSubmission, OptimisticVersion},
-    is_local_dev,
-    metrics::SimulatorMetrics,
-    simulator::BlockSimError,
-    spawn_tracked,
-    utils::utcnow_ns,
-    SimulatorConfig, SubmissionTrace,
+    bid_submission::OptimisticVersion, is_local_dev, metrics::SimulatorMetrics,
+    simulator::BlockSimError, spawn_tracked, utils::utcnow_ns, SimulatorConfig, SubmissionTrace,
 };
 use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission};
 use tokio::sync::oneshot;
