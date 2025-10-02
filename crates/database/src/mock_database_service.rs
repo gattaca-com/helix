@@ -1,7 +1,4 @@
-use std::{
-    collections::HashSet,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 use alloy_primitives::{Address, B256, U256};
 use async_trait::async_trait;
@@ -19,6 +16,8 @@ use helix_types::{
     BlsPublicKeyBytes, BlsSignatureBytes, PayloadAndBlobs, SignedBidSubmission,
     SignedValidatorRegistration, TestRandomSeed, ValidatorRegistrationData,
 };
+use parking_lot::RwLock;
+use rustc_hash::FxHashSet;
 
 use crate::{
     error::DatabaseError, BidSubmissionDocument, BuilderInfoDocument, DatabaseService,
@@ -42,19 +41,16 @@ impl MockDatabaseService {
 
 #[async_trait]
 impl DatabaseService for MockDatabaseService {
-    async fn save_validator_registrations(
+    fn save_validator_registrations(
         &self,
-        _entries: Vec<ValidatorRegistrationInfo>,
+        _entries: impl Iterator<Item = ValidatorRegistrationInfo>,
         _pool_name: Option<String>,
         _user_agent: Option<String>,
-    ) -> Result<(), DatabaseError> {
-        Ok(())
+    ) {
     }
-    async fn is_registration_update_required(
-        &self,
-        _registration: &SignedValidatorRegistration,
-    ) -> Result<bool, DatabaseError> {
-        Ok(true)
+
+    fn is_registration_update_required(&self, _registration: &SignedValidatorRegistration) -> bool {
+        true
     }
     async fn get_validator_registration(
         &self,
@@ -138,11 +134,8 @@ impl DatabaseService for MockDatabaseService {
         Ok(())
     }
 
-    async fn check_known_validators(
-        &self,
-        public_keys: Vec<BlsPublicKeyBytes>,
-    ) -> Result<HashSet<BlsPublicKeyBytes>, DatabaseError> {
-        Ok(public_keys.into_iter().collect())
+    fn known_validators_cache(&self) -> &Arc<RwLock<FxHashSet<BlsPublicKeyBytes>>> {
+        unimplemented!()
     }
 
     async fn save_too_late_get_payload(

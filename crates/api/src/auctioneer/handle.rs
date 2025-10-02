@@ -1,11 +1,14 @@
+use std::{ops::Range, sync::Arc};
+
 use helix_common::{utils::utcnow_ns, GetPayloadTrace, SubmissionTrace};
-use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, Slot};
+use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot};
 use http::HeaderMap;
 use tokio::sync::oneshot;
 
 use crate::{
     auctioneer::types::{
-        BestMergeablePayload, Event, GetHeaderResult, GetPayloadResult, SubmissionResult, WorkerJob,
+        BestMergeablePayload, Event, GetHeaderResult, GetPayloadResult, RegWorkerJob, SubWorkerJob,
+        SubmissionResult,
     },
     gossiper::types::BroadcastPayloadParams,
     proposer::GetHeaderParams,
@@ -13,13 +16,13 @@ use crate::{
 
 #[derive(Clone)]
 pub struct AuctioneerHandle {
-    worker: crossbeam_channel::Sender<WorkerJob>,
+    worker: crossbeam_channel::Sender<SubWorkerJob>,
     auctioneer: crossbeam_channel::Sender<Event>,
 }
 
 impl AuctioneerHandle {
     pub fn new(
-        worker: crossbeam_channel::Sender<WorkerJob>,
+        worker: crossbeam_channel::Sender<SubWorkerJob>,
         auctioneer: crossbeam_channel::Sender<Event>,
     ) -> Self {
         Self { worker, auctioneer }
@@ -34,7 +37,7 @@ impl AuctioneerHandle {
         let (tx, rx) = oneshot::channel();
         trace.sent_worker = utcnow_ns();
         self.worker
-            .try_send(WorkerJob::BlockSubmission {
+            .try_send(SubWorkerJob::BlockSubmission {
                 headers,
                 body,
                 trace,
@@ -64,7 +67,12 @@ impl AuctioneerHandle {
     ) -> Result<oneshot::Receiver<GetPayloadResult>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
         self.worker
-            .try_send(WorkerJob::GetPayload { proposer_pubkey, blinded_block, trace, res_tx: tx })
+            .try_send(SubWorkerJob::GetPayload {
+                proposer_pubkey,
+                blinded_block,
+                trace,
+                res_tx: tx,
+            })
             .map_err(|_| ChannelFull)?;
         Ok(rx)
     }
@@ -87,3 +95,25 @@ impl AuctioneerHandle {
 }
 
 pub struct ChannelFull;
+
+#[derive(Clone)]
+pub struct RegWorkerHandle {
+    worker: crossbeam_channel::Sender<RegWorkerJob>,
+}
+
+impl RegWorkerHandle {
+    pub fn new(worker: crossbeam_channel::Sender<RegWorkerJob>) -> Self {
+        Self { worker }
+    }
+
+    pub fn send(
+        &self,
+        regs: Arc<Vec<SignedValidatorRegistration>>,
+        range: Range<usize>,
+    ) -> Result<oneshot::Receiver<Vec<(usize, bool)>>, ChannelFull> {
+        let (tx, rx) = oneshot::channel();
+        self.worker.try_send(RegWorkerJob { regs, range, res_tx: tx }).map_err(|_| ChannelFull)?;
+
+        Ok(rx)
+    }
+}

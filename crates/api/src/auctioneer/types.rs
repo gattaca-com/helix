@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
 use alloy_primitives::B256;
 use helix_common::{
@@ -8,8 +8,8 @@ use helix_common::{
 use helix_housekeeper::PayloadAttributesUpdate;
 use helix_types::{
     BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ForkName,
-    GetPayloadResponse, PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock, Slot,
-    VersionedSignedProposal,
+    GetPayloadResponse, PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock,
+    SignedValidatorRegistration, Slot, VersionedSignedProposal,
 };
 use tokio::sync::oneshot;
 
@@ -70,7 +70,7 @@ impl Submission {
     }
 }
 
-pub enum WorkerJob {
+pub enum SubWorkerJob {
     BlockSubmission {
         headers: http::HeaderMap,
         body: bytes::Bytes,
@@ -85,6 +85,13 @@ pub enum WorkerJob {
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
     },
+}
+
+pub struct RegWorkerJob {
+    pub regs: Arc<Vec<SignedValidatorRegistration>>,
+    pub range: Range<usize>,
+    /// (Index in regs, has passed verification)
+    pub res_tx: oneshot::Sender<Vec<(usize, bool)>>,
 }
 
 #[derive(Clone)]

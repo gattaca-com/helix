@@ -58,9 +58,8 @@ pub struct RelayConfig {
     #[serde(default)]
     pub header_gossip_enabled: bool,
     pub inclusion_list: Option<InclusionListConfig>,
-    /// False could mean either a registration or data instance
-    #[serde(alias = "housekeeper")]
     pub is_submission_instance: bool,
+    pub is_registration_instance: bool,
     pub admin_token: String,
     #[serde(default)]
     is_local_dev: bool,
@@ -97,20 +96,23 @@ pub struct WebsiteConfig {
 pub struct CoresConfig {
     pub auctioneer: usize,
     pub tokio: Vec<usize>,
-    pub workers: Vec<usize>,
-    pub n_tokio_blocking: usize,
+    /// Submissions / GetPayload
+    pub sub_workers: Vec<usize>,
+    /// Registrations
+    pub reg_workers: Vec<usize>,
 }
 
 impl Default for CoresConfig {
     fn default() -> Self {
         let num_cpus = num_cpus::get_physical();
-        assert!(num_cpus > 3, "need at least 3 cores");
+        assert!(num_cpus > 4, "need at least 4 cores");
 
-        let tokio: Vec<_> = (0..num_cpus - 2).collect();
-        let auctioneer = num_cpus - 1;
-        let workers = vec![num_cpus];
+        let tokio: Vec<_> = (0..num_cpus - 3).collect();
+        let auctioneer = num_cpus - 3;
+        let sub_workers = vec![num_cpus - 2];
+        let reg_workers = vec![num_cpus - 1];
 
-        Self { n_tokio_blocking: tokio.len(), auctioneer, tokio, workers }
+        Self { auctioneer, tokio, sub_workers, reg_workers }
     }
 }
 
@@ -547,8 +549,6 @@ pub enum Route {
     BuilderBidsReceived,
     ValidatorRegistration,
     GetInclusionList,
-    UpdateValidatorPreferences,
-    GetValidatorPreferences,
     RelayNetwork,
 }
 
@@ -572,12 +572,6 @@ impl Route {
             Route::BuilderApi => panic!("BuilderApi is not a real route"),
             Route::ProposerApi => panic!("ProposerApi is not a real route"),
             Route::DataApi => panic!("DataApi is not a real route"),
-            Route::UpdateValidatorPreferences => {
-                format!("{PATH_PROPOSER_API}{PATH_UPDATE_VALIDATOR_PREFERENCES}")
-            }
-            Route::GetValidatorPreferences => {
-                format!("{PATH_PROPOSER_API}{PATH_GET_VALIDATOR_PREFERENCES}")
-            }
             Route::RelayNetwork => PATH_RELAY_NETWORK.to_string(),
         }
     }

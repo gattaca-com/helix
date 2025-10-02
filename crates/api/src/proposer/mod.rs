@@ -7,7 +7,6 @@ mod get_header;
 pub(crate) mod get_payload;
 mod register;
 mod types;
-mod update;
 
 use std::sync::{atomic::Ordering, Arc};
 
@@ -25,7 +24,7 @@ use tokio::sync::mpsc::{self};
 pub use types::*;
 
 use crate::{
-    auctioneer::{AuctioneerHandle, BlockMergeRequest},
+    auctioneer::{AuctioneerHandle, BlockMergeRequest, RegWorkerHandle},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::block_merging::BestMergedBlock,
     router::Terminating,
@@ -51,6 +50,7 @@ pub struct ProposerApi<A: Api> {
     pub merge_requests_tx: mpsc::Sender<BlockMergeRequest>,
     pub alert_manager: AlertManager,
     pub auctioneer_handle: AuctioneerHandle,
+    pub reg_handle: RegWorkerHandle,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -67,6 +67,7 @@ impl<A: Api> ProposerApi<A> {
         curr_slot_info: CurrentSlotInfo,
         merge_requests_tx: mpsc::Sender<BlockMergeRequest>,
         auctioneer_handle: AuctioneerHandle,
+        reg_handle: RegWorkerHandle,
     ) -> Self {
         Self {
             local_cache,
@@ -83,6 +84,7 @@ impl<A: Api> ProposerApi<A> {
             alert_manager: AlertManager::from_relay_config(&relay_config),
             merge_requests_tx,
             auctioneer_handle,
+            reg_handle,
         }
     }
 }

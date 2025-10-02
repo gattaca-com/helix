@@ -6,16 +6,12 @@ use axum::{
     Extension,
 };
 use helix_common::{
-    api::proposer_api::ValidatorRegistrationInfo,
-    chain_info::ChainInfo,
-    metadata_provider::MetadataProvider,
-    task,
-    utils::{extract_request_id, utcnow_sec},
-    Filtering, ValidatorPreferences,
+    api::proposer_api::ValidatorRegistrationInfo, metadata_provider::MetadataProvider,
+    utils::extract_request_id, Filtering, ValidatorPreferences,
 };
 use helix_database::DatabaseService;
 use helix_types::SignedValidatorRegistration;
-use tokio::time::Instant;
+use tokio::{task::JoinSet, time::Instant};
 use tracing::{debug, error, trace, warn};
 
 use super::ProposerApi;
@@ -116,129 +112,98 @@ impl<A: Api> ProposerApi<A> {
         let num_registrations = registrations.len();
         trace!(%head_slot, num_registrations,);
 
-        // Bulk check if the validators are known
-        let registration_pub_keys = registrations.iter().map(|r| r.message.pubkey).collect();
-        let known_pub_keys = proposer_api.db.check_known_validators(registration_pub_keys).await?;
-
-        // Check each registration
-        let mut valid_registrations = Vec::with_capacity(known_pub_keys.len());
-
-        let mut handles = Vec::with_capacity(registrations.len());
-
         let mut unknown_registrations = 0;
         let mut update_not_required = 0;
 
-        for registration in registrations {
-            let proposer_api_clone = proposer_api.clone();
-            let start_time = Instant::now();
-
-            let pub_key = registration.message.pubkey;
-
-            if !known_pub_keys.contains(&pub_key) {
-                unknown_registrations += 1;
-                continue;
-            }
-
-            if !proposer_api_clone.db.is_registration_update_required(&registration).await? {
-                update_not_required += 1;
-                valid_registrations.push(registration);
-                continue;
-            }
-
-            let handle = tokio::task::spawn_blocking(move || {
-                let res = match validate_registration(&proposer_api_clone.chain_info, &registration)
-                {
-                    Ok(_) => Some(registration),
-                    Err(err) => {
-                        warn!(%err, ?pub_key, "Failed to register validator");
-                        None
+        let registrations_to_check: Vec<_> = {
+            let known_validators_guard = proposer_api.db.known_validators_cache().read();
+            registrations
+                .into_iter()
+                .filter(|reg| {
+                    if known_validators_guard.contains(&reg.message.pubkey) {
+                        true
+                    } else {
+                        unknown_registrations += 1;
+                        false
                     }
-                };
+                })
+                .filter(|reg| {
+                    if proposer_api.db.is_registration_update_required(&reg) {
+                        true
+                    } else {
+                        update_not_required += 1;
+                        false
+                    }
+                })
+                .collect()
+        };
 
-                trace!(?pub_key, elapsed_time = %start_time.elapsed().as_nanos(),);
+        if registrations_to_check.is_empty() {
+            return Ok(StatusCode::OK);
+        }
 
-                res
+        // create smaller batches than n workers to allow for jitter in verification time of a
+        // single batch
+        let batch_size =
+            (registrations_to_check.len() / proposer_api.relay_config.cores.reg_workers.len() / 8)
+                .max(1);
+
+        let registrations_to_check = Arc::new(registrations_to_check);
+        let mut join_set = JoinSet::new();
+        for (i, batch) in registrations_to_check.chunks(batch_size).enumerate() {
+            let r = i * batch_size..i * batch_size + batch.len();
+            let Ok(rx) = proposer_api.reg_handle.send(registrations_to_check.clone(), r) else {
+                error!("failed sending registration batch to worker");
+                return Err(ProposerApiError::InternalServerError);
+            };
+
+            join_set.spawn(rx);
+        }
+
+        let mut to_process = Vec::with_capacity(registrations_to_check.len());
+        let mut successful_registrations = 0;
+
+        while let Some(res) = join_set.join_next().await {
+            let Ok(Ok(res)) = res else {
+                return Err(ProposerApiError::InternalServerError);
+            };
+
+            for (i, is_valid) in res {
+                to_process[i] = is_valid;
+                if is_valid {
+                    successful_registrations += 1;
+                }
+            }
+        }
+
+        if successful_registrations == 0 {
+            return Err(ProposerApiError::NoValidatorsCouldBeRegistered);
+        }
+
+        let registrations_to_save = Arc::unwrap_or_clone(registrations_to_check)
+            .into_iter()
+            .zip(to_process.iter())
+            .filter_map(|(reg, to_process)| {
+                if *to_process {
+                    Some(ValidatorRegistrationInfo {
+                        registration: reg,
+                        preferences: validator_preferences.clone(),
+                    })
+                } else {
+                    None
+                }
             });
-            handles.push(handle);
-        }
 
-        for handle in handles {
-            let reg = handle.await.map_err(|_| ProposerApiError::InternalServerError)?;
-            if let Some(reg) = reg {
-                valid_registrations.push(reg);
-            }
-        }
-
-        let successful_registrations = valid_registrations.len();
-
-        // Bulk write registrations to db
-        task::spawn(file!(), line!(), async move {
-            // Add validator preferences to each registration
-            let mut valid_registrations_infos = Vec::new();
-
-            for reg in valid_registrations {
-                let preferences = validator_preferences.clone();
-                valid_registrations_infos
-                    .push(ValidatorRegistrationInfo { registration: reg, preferences });
-            }
-
-            if let Err(err) = proposer_api
-                .db
-                .save_validator_registrations(valid_registrations_infos, pool_name, user_agent)
-                .await
-            {
-                error!(
-                    %err,
-                    "failed to save validator registrations",
-                );
-            }
-        });
+        proposer_api.db.save_validator_registrations(registrations_to_save, pool_name, user_agent);
 
         debug!(
             duration = ?start.elapsed(),
-            unknown_registrations = unknown_registrations,
-            update_not_required = update_not_required,
+            unknown_registrations,
+            update_not_required,
             successful_registrations = successful_registrations,
-            failed_registrations = num_registrations - successful_registrations,
+            invalid_registrations = num_registrations - successful_registrations,
         );
 
         Ok(StatusCode::OK)
     }
-}
-
-/// Validate a single registration.
-pub fn validate_registration(
-    chain_info: &ChainInfo,
-    registration: &SignedValidatorRegistration,
-) -> Result<(), ProposerApiError> {
-    validate_registration_time(chain_info, registration)?;
-    registration.verify_signature(chain_info.builder_domain)?;
-
-    Ok(())
-}
-
-/// Validates the timestamp in a `SignedValidatorRegistration` message.
-///
-/// - Ensures the timestamp is not too early (before genesis time)
-/// - Ensures the timestamp is not too far in the future (current time + 10 seconds).
-fn validate_registration_time(
-    chain_info: &ChainInfo,
-    registration: &SignedValidatorRegistration,
-) -> Result<(), ProposerApiError> {
-    let registration_timestamp = registration.message.timestamp;
-    let registration_timestamp_upper_bound = utcnow_sec() + 10;
-
-    if registration_timestamp < chain_info.genesis_time_in_secs {
-        return Err(ProposerApiError::TimestampTooEarly {
-            timestamp: registration_timestamp,
-            min_timestamp: chain_info.genesis_time_in_secs,
-        });
-    } else if registration_timestamp > registration_timestamp_upper_bound {
-        return Err(ProposerApiError::TimestampTooFarInTheFuture {
-            timestamp: registration_timestamp,
-            max_timestamp: registration_timestamp_upper_bound,
-        });
-    }
-
-    Ok(())
 }

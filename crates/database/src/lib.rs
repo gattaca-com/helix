@@ -4,9 +4,12 @@ pub mod postgres;
 pub mod traits;
 pub mod types;
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
 };
 
 use helix_common::{is_local_dev, RelayConfig};
@@ -29,12 +32,25 @@ pub async fn start_db_service(
             .await
             .expect("failed to store builders info from config");
 
+        // housekeeper already runs in the submission instance so no need to refresh there
+        let should_refresh_cache = !config.is_submission_instance;
         tokio::spawn({
             let known_validators_loaded = known_validators_loaded.clone();
             let postgres_db = postgres_db.clone();
             async move {
                 postgres_db.load_known_validators().await;
                 known_validators_loaded.store(true, Ordering::Relaxed);
+
+                if should_refresh_cache {
+                    // refresh cache ~ every epoch
+                    let mut tick = tokio::time::interval(Duration::from_secs(5 * 60));
+                    tick.tick().await;
+
+                    loop {
+                        tick.tick().await;
+                        postgres_db.load_known_validators().await;
+                    }
+                }
             }
         });
     }
