@@ -4,7 +4,7 @@
 mod block_merging;
 mod error;
 mod get_header;
-mod get_payload;
+pub(crate) mod get_payload;
 mod register;
 mod types;
 mod update;

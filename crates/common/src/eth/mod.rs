@@ -53,6 +53,18 @@ pub fn bid_submission_to_builder_bid_unsigned(
                 pubkey: mock_public_key_bytes(), // this will be replaced when signing the header
             }
         }
+        SignedBidSubmission::Fulu(bid) => {
+            let header = bid.execution_payload.to_header(Some(withdrawals_root));
+            let execution_requests = bid.execution_requests.clone();
+
+            BuilderBid {
+                header,
+                blob_kzg_commitments: bid.blobs_bundle.commitments.clone(),
+                value: bid.message.value,
+                execution_requests,
+                pubkey: mock_public_key_bytes(), // this will be replaced when signing the header
+            }
+        }
     }
 }
 
@@ -61,6 +73,16 @@ pub fn header_submission_to_builder_bid_unsigned(
 ) -> BuilderBid {
     match submission {
         SignedHeaderSubmission::Electra(bid) => {
+            let header = bid.message.execution_payload_header.clone();
+            BuilderBid {
+                header,
+                blob_kzg_commitments: bid.message.commitments.clone(),
+                value: bid.message.bid_trace.value,
+                execution_requests: bid.message.execution_requests.clone(),
+                pubkey: mock_public_key_bytes(), // this will replaced when signing the header
+            }
+        }
+        SignedHeaderSubmission::Fulu(bid) => {
             let header = bid.message.execution_payload_header.clone();
             BuilderBid {
                 header,

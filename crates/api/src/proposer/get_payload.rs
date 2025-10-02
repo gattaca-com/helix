@@ -14,6 +14,7 @@ use helix_types::{
     BlsPublicKeyBytes, ExecPayload, ForkName, GetPayloadResponse, PayloadAndBlobs,
     PayloadAndBlobsRef, SignedBlindedBeaconBlock, Slot, SlotClockTrait,
 };
+use http::StatusCode;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
@@ -25,6 +26,11 @@ use crate::{
     proposer::error::ProposerApiError,
     Api,
 };
+
+pub enum ProposerApiVersion {
+    V1,
+    V2,
+}
 
 impl<A: Api> ProposerApi<A> {
     /// Retrieves the execution payload for a given blinded beacon block.
@@ -77,8 +83,80 @@ impl<A: Api> ProposerApi<A> {
             })
             .await;
 
-        match proposer_api._get_payload(signed_blinded_block, &mut trace, user_agent).await {
+        match proposer_api
+            ._get_payload(signed_blinded_block, &mut trace, user_agent, ProposerApiVersion::V1)
+            .await
+        {
             Ok(get_payload_response) => Ok(axum::Json(get_payload_response)),
+            Err(err) => {
+                // Save error to DB
+                if let Err(err) = proposer_api
+                    .db
+                    .save_failed_get_payload(slot.into(), block_hash, err.to_string(), trace)
+                    .await
+                {
+                    error!(err = ?err, "error saving failed get payload");
+                }
+
+                Err(err)
+            }
+        }
+    }
+
+    /// Retrieves the execution payload for a given blinded beacon block.
+    ///
+    /// This function accepts a `SignedBlindedBeaconBlock` as input and performs several steps:
+    /// 1. Validates the proposer index and verifies the block's signature.
+    /// 2. Retrieves the corresponding execution payload from the auctioneer.
+    /// 3. Validates the payload and publishes it to the multi-beacon client.
+    /// 4. Optionally broadcasts the payload to `broadcasters`
+    /// 5. Stores the delivered payload information to database.
+    /// 6. Returns the unblinded payload to proposer.
+    ///
+    /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlockV2>
+    #[tracing::instrument(skip_all, fields(id), err)]
+    pub async fn get_payload_v2(
+        Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
+        Extension(timings): Extension<RequestTimings>,
+        headers: HeaderMap,
+        body: bytes::Bytes,
+    ) -> Result<StatusCode, ProposerApiError> {
+        let request_id = extract_request_id(&headers);
+        tracing::Span::current().record("id", request_id.to_string());
+
+        let mut trace = GetPayloadTrace::init_from_timings(timings);
+
+        let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
+
+        let signed_blinded_block: SignedBlindedBeaconBlock = serde_json::from_slice(&body)
+            .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
+
+        trace.decode = utcnow_ns();
+
+        let block_hash = signed_blinded_block
+            .message()
+            .body()
+            .execution_payload()
+            .map_err(|_| ProposerApiError::InvalidFork)? // this should never happen as post altair there's always an execution payload
+            .block_hash()
+            .0;
+
+        let slot = signed_blinded_block.message().slot();
+
+        // Broadcast get payload request
+        proposer_api
+            .gossiper
+            .broadcast_get_payload(BroadcastGetPayloadParams {
+                signed_blinded_beacon_block: signed_blinded_block.clone(),
+                request_id,
+            })
+            .await;
+
+        match proposer_api
+            ._get_payload(signed_blinded_block, &mut trace, user_agent, ProposerApiVersion::V2)
+            .await
+        {
+            Ok(_get_payload_response) => Ok(StatusCode::ACCEPTED),
             Err(err) => {
                 // Save error to DB
                 if let Err(err) = proposer_api
@@ -99,6 +177,7 @@ impl<A: Api> ProposerApi<A> {
         signed_blinded_block: SignedBlindedBeaconBlock,
         trace: &mut GetPayloadTrace,
         user_agent: Option<String>,
+        api_version: ProposerApiVersion,
     ) -> Result<GetPayloadResponse, ProposerApiError> {
         let block_hash = signed_blinded_block
             .message()
@@ -222,7 +301,7 @@ impl<A: Api> ProposerApi<A> {
             self.alert_manager.send(&merged_block.to_alert_message());
         }
 
-        if !is_trusted_proposer {
+        if !is_trusted_proposer && matches!(api_version, ProposerApiVersion::V1) {
             let Ok((new_trace, failed_publishing)) = handle.await else {
                 return Err(ProposerApiError::InternalServerError);
             };

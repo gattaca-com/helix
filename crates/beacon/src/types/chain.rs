@@ -65,7 +65,9 @@ impl std::str::FromStr for StateId {
                         Ok(Self::Root(root))
                     }
                     Err(err) => {
-                        let err = format!("could not parse state identifier by root from the provided argument {s}: {err}");
+                        let err = format!(
+                            "could not parse state identifier by root from the provided argument {s}: {err}"
+                        );
                         Err(err)
                     }
                 },

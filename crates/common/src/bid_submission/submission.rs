@@ -11,18 +11,23 @@ impl BidSubmission for SignedBidSubmission {
     fn bid_trace(&self) -> &BidTrace {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => &signed_bid_submission.message,
+            SignedBidSubmission::Fulu(signed_bid_submission) => &signed_bid_submission.message,
         }
     }
 
     fn signature(&self) -> &BlsSignatureBytes {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => &signed_bid_submission.signature,
+            SignedBidSubmission::Fulu(signed_bid_submission) => &signed_bid_submission.signature,
         }
     }
 
     fn slot(&self) -> Slot {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
+                signed_bid_submission.message.slot()
+            }
+            SignedBidSubmission::Fulu(signed_bid_submission) => {
                 signed_bid_submission.message.slot()
             }
         }
@@ -33,12 +38,18 @@ impl BidSubmission for SignedBidSubmission {
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 &signed_bid_submission.message.parent_hash
             }
+            SignedBidSubmission::Fulu(signed_bid_submission) => {
+                &signed_bid_submission.message.parent_hash
+            }
         }
     }
 
     fn block_hash(&self) -> &B256 {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
+                &signed_bid_submission.message.block_hash
+            }
+            SignedBidSubmission::Fulu(signed_bid_submission) => {
                 &signed_bid_submission.message.block_hash
             }
         }
@@ -49,12 +60,18 @@ impl BidSubmission for SignedBidSubmission {
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 &signed_bid_submission.message.builder_pubkey
             }
+            SignedBidSubmission::Fulu(signed_bid_submission) => {
+                &signed_bid_submission.message.builder_pubkey
+            }
         }
     }
 
     fn proposer_public_key(&self) -> &BlsPublicKeyBytes {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
+                &signed_bid_submission.message.proposer_pubkey
+            }
+            SignedBidSubmission::Fulu(signed_bid_submission) => {
                 &signed_bid_submission.message.proposer_pubkey
             }
         }
@@ -65,12 +82,18 @@ impl BidSubmission for SignedBidSubmission {
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 &signed_bid_submission.message.proposer_fee_recipient
             }
+            SignedBidSubmission::Fulu(signed_bid_submission) => {
+                &signed_bid_submission.message.proposer_fee_recipient
+            }
         }
     }
 
     fn gas_limit(&self) -> u64 {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
+                signed_bid_submission.message.gas_limit
+            }
+            SignedBidSubmission::Fulu(signed_bid_submission) => {
                 signed_bid_submission.message.gas_limit
             }
         }
@@ -81,6 +104,9 @@ impl BidSubmission for SignedBidSubmission {
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 signed_bid_submission.message.gas_used
             }
+            SignedBidSubmission::Fulu(signed_bid_submission) => {
+                signed_bid_submission.message.gas_used
+            }
         }
     }
 
@@ -89,72 +115,84 @@ impl BidSubmission for SignedBidSubmission {
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 signed_bid_submission.message.value
             }
+            SignedBidSubmission::Fulu(signed_bid_submission) => signed_bid_submission.message.value,
         }
     }
 
     fn fee_recipient(&self) -> Address {
         match self {
             SignedBidSubmission::Electra(bid) => bid.execution_payload.fee_recipient,
+            SignedBidSubmission::Fulu(bid) => bid.execution_payload.fee_recipient,
         }
     }
 
     fn state_root(&self) -> &B256 {
         match self {
             SignedBidSubmission::Electra(bid) => &bid.execution_payload.state_root,
+            SignedBidSubmission::Fulu(bid) => &bid.execution_payload.state_root,
         }
     }
 
     fn receipts_root(&self) -> &B256 {
         match self {
             SignedBidSubmission::Electra(bid) => &bid.execution_payload.receipts_root,
+            SignedBidSubmission::Fulu(bid) => &bid.execution_payload.receipts_root,
         }
     }
 
     fn logs_bloom(&self) -> &Bloom {
         match self {
             SignedBidSubmission::Electra(bid) => &bid.execution_payload.logs_bloom,
+            SignedBidSubmission::Fulu(bid) => &bid.execution_payload.logs_bloom,
         }
     }
 
     fn prev_randao(&self) -> &B256 {
         match self {
             SignedBidSubmission::Electra(bid) => &bid.execution_payload.prev_randao,
+            SignedBidSubmission::Fulu(bid) => &bid.execution_payload.prev_randao,
         }
     }
 
     fn block_number(&self) -> u64 {
         match self {
             SignedBidSubmission::Electra(bid) => bid.execution_payload.block_number,
+            SignedBidSubmission::Fulu(bid) => bid.execution_payload.block_number,
         }
     }
 
     fn timestamp(&self) -> u64 {
         match self {
             SignedBidSubmission::Electra(bid) => bid.execution_payload.timestamp,
+            SignedBidSubmission::Fulu(bid) => bid.execution_payload.timestamp,
         }
     }
 
     fn extra_data(&self) -> &ExtraData {
         match self {
             SignedBidSubmission::Electra(bid) => &bid.execution_payload.extra_data,
+            SignedBidSubmission::Fulu(bid) => &bid.execution_payload.extra_data,
         }
     }
 
     fn base_fee_per_gas(&self) -> U256 {
         match self {
             SignedBidSubmission::Electra(bid) => bid.execution_payload.base_fee_per_gas,
+            SignedBidSubmission::Fulu(bid) => bid.execution_payload.base_fee_per_gas,
         }
     }
 
     fn withdrawals_root(&self) -> B256 {
         match self {
             SignedBidSubmission::Electra(bid) => bid.execution_payload.withdrawals.tree_hash_root(),
+            SignedBidSubmission::Fulu(bid) => bid.execution_payload.withdrawals.tree_hash_root(),
         }
     }
 
     fn transactions_root(&self) -> B256 {
         match self {
             SignedBidSubmission::Electra(bid) => bid.execution_payload.transaction_root(),
+            SignedBidSubmission::Fulu(bid) => bid.execution_payload.transaction_root(),
         }
     }
 
@@ -200,6 +238,7 @@ impl BidSubmission for SignedBidSubmission {
     fn fork_name(&self) -> helix_types::ForkName {
         match self {
             SignedBidSubmission::Electra(_) => helix_types::ForkName::Electra,
+            SignedBidSubmission::Fulu(_) => helix_types::ForkName::Fulu,
         }
     }
 }

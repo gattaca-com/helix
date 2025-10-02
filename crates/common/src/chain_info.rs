@@ -166,4 +166,9 @@ impl ChainInfo {
         // safe since we're past genesis slot and UNIX_EPOCH
         self.clock.now().unwrap()
     }
+
+    pub fn max_blobs_per_block(&self) -> usize {
+        let epoch = self.current_slot().epoch(self.slots_per_epoch());
+        self.context.max_blobs_per_block(epoch) as usize
+    }
 }

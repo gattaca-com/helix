@@ -341,7 +341,9 @@ impl<A: Api> ProposerApi<A> {
 enum PayloadMergingError {
     #[error("could not fetch original payload: {_0}")]
     CouldNotFetchOriginalPayload(#[from] ProposerApiError),
-    #[error("merged payload value is lower or equal to original bid. original: {original}, merged: {merged}")]
+    #[error(
+        "merged payload value is lower or equal to original bid. original: {original}, merged: {merged}"
+    )]
     MergedPayloadNotValuable { original: U256, merged: U256 },
     #[error("blob not found")]
     BlobNotFound,

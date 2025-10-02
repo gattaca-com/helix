@@ -80,42 +80,6 @@ impl<A: Api> BuilderApi<A> {
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
-
-    // /// Checks if the builder has enough collateral to submit an optimistic bid.
-    // /// Or if the builder is not optimistic.
-    // ///
-    // /// This function compares the builder's collateral with the block value for a bid
-    // submission. /// If the builder's collateral is less than the required value, it returns
-    // an error. pub(crate) fn check_builder_collateral(
-    //     payload: &impl BidSubmission,
-    //     builder_info: &BuilderInfo,
-    // ) -> Result<(), BuilderApiError> {
-    //     if !builder_info.is_optimistic {
-    //         warn!(
-    //             builder=%payload.builder_public_key(),
-    //             "builder is not optimistic"
-    //         );
-    //         return Err(BuilderApiError::BuilderNotOptimistic {
-    //             builder_pub_key: *payload.builder_public_key(),
-    //         });
-    //     } else if builder_info.collateral < payload.value() {
-    //         warn!(
-    //             builder=?payload.builder_public_key(),
-    //             collateral=%builder_info.collateral,
-    //             collateral_required=%payload.value(),
-    //             "builder does not have enough collateral"
-    //         );
-    //         return Err(BuilderApiError::NotEnoughOptimisticCollateral {
-    //             builder_pub_key: *payload.builder_public_key(),
-    //             collateral: builder_info.collateral,
-    //             collateral_required: payload.value(),
-    //             is_optimistic: builder_info.is_optimistic,
-    //         });
-    //     }
-
-    //     // Builder has enough collateral
-    //     Ok(())
-    // }
 }
 
 #[derive(thiserror::Error, Debug)]

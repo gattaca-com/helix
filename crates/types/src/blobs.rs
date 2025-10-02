@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use alloy_eips::eip7691::MAX_BLOBS_PER_BLOCK_ELECTRA;
+use alloy_eips::eip7594::CELLS_PER_EXT_BLOB;
 use lh_types::{test_utils::TestRandom, ForkName, ForkVersionDecode};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -38,7 +38,7 @@ pub struct BlobsBundleV1 {
 
 impl TestRandom for BlobsBundleV1 {
     fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
-        let n = rng.random_range(0..=MAX_BLOBS_PER_BLOCK_ELECTRA) as usize;
+        let n = rng.random_range(0..=6) as usize;
 
         let mut bundle = Self::with_capacity(n);
 
@@ -55,14 +55,16 @@ impl TestRandom for BlobsBundleV1 {
 impl BlobsBundleV1 {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            commitments: KzgCommitments::new(Vec::with_capacity(capacity)).unwrap(),
+            commitments: KzgCommitments::new(Vec::with_capacity(capacity * CELLS_PER_EXT_BLOB))
+                .unwrap(),
             proofs: Vec::with_capacity(capacity),
             blobs: Vec::with_capacity(capacity),
         }
     }
 
-    pub fn validate_ssz_lengths(&self) -> Result<(), ValidationError> {
-        if self.commitments.len() != self.proofs.len() || self.proofs.len() != self.blobs.len() {
+    pub fn validate_ssz_lengths(&self, max_blobs_per_block: usize) -> Result<(), ValidationError> {
+        // Proofs are not the same length as commitments and blobs for fulu
+        if self.commitments.len() != self.blobs.len() {
             return Err(ValidationError::BlobsError(BlobsError::BundleMismatch {
                 proofs: self.proofs.len(),
                 commitments: self.commitments.len(),
@@ -70,10 +72,10 @@ impl BlobsBundleV1 {
             }));
         }
 
-        if self.commitments.len() > MAX_BLOBS_PER_BLOCK_ELECTRA as usize {
+        if self.commitments.len() > max_blobs_per_block {
             return Err(ValidationError::BlobsError(BlobsError::BundleTooLarge {
                 got: self.commitments.len(),
-                max: MAX_BLOBS_PER_BLOCK_ELECTRA as usize,
+                max: max_blobs_per_block,
             }));
         }
 
@@ -111,6 +113,10 @@ impl ForkVersionDecode for PayloadAndBlobs {
     }
 }
 
+// BlobsBundleV2 used in fulu is the same as V1 except the number of proofs is much larger
+// as each proof is for a cell in the blob, not one per blob.
+// But as we use a Vec, we can use the same struct here and just validate the lengths differently if
+// needed.
 #[derive(Clone, PartialEq, Debug, Serialize, Encode)]
 pub struct PayloadAndBlobsRef<'a> {
     pub execution_payload: &'a ExecutionPayload,

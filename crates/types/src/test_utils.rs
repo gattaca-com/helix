@@ -56,8 +56,7 @@ pub fn get_fixed_secret(i: usize) -> BlsSecretKey {
     ];
 
     let key = KEYS[i];
-    let key = BlsSecretKey::deserialize(key.as_slice()).unwrap();
-    key
+    BlsSecretKey::deserialize(key.as_slice()).unwrap()
 }
 
 pub fn initialize_test_tracing() {

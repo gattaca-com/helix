@@ -25,7 +25,9 @@ impl BuilderInfo {
 
 impl core::fmt::Debug for BuilderInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "BuilderInfo {{ collateral: {:?}, is_optimistic: {:?}, is_optimistic_for_regional_filtering: {:?}, builder_id: {:?}, builder_ids: {:?}, api_key: *** }}",
+        write!(
+            f,
+            "BuilderInfo {{ collateral: {:?}, is_optimistic: {:?}, is_optimistic_for_regional_filtering: {:?}, builder_id: {:?}, builder_ids: {:?}, api_key: *** }}",
             self.collateral,
             self.is_optimistic,
             self.is_optimistic_for_regional_filtering,

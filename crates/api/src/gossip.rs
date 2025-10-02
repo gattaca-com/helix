@@ -5,7 +5,10 @@ use tokio::sync::mpsc;
 use tracing::{debug, error};
 
 use crate::{
-    builder::api::BuilderApi, gossiper::types::GossipedMessage, proposer::ProposerApi, Api,
+    builder::api::BuilderApi,
+    gossiper::types::GossipedMessage,
+    proposer::{get_payload::ProposerApiVersion, ProposerApi},
+    Api,
 };
 
 pub async fn process_gossip_messages<A: Api>(
@@ -21,7 +24,12 @@ pub async fn process_gossip_messages<A: Api>(
                     let mut trace = GetPayloadTrace { receive: utcnow_ns(), ..Default::default() };
                     debug!(request_id = %payload.request_id, "processing gossiped payload");
                     match proposer
-                        ._get_payload(payload.signed_blinded_beacon_block, &mut trace, None)
+                        ._get_payload(
+                            payload.signed_blinded_beacon_block,
+                            &mut trace,
+                            None,
+                            ProposerApiVersion::V1,
+                        )
                         .await
                     {
                         Ok(_) => {

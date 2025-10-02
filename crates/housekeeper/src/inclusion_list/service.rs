@@ -50,7 +50,9 @@ impl<DB: DatabaseService> InclusionListService<DB> {
         head_slot: u64,
     ) {
         let Some(parent_hash) = parent_hash else {
-            info!("No inclusion list for this slot because we missed the new slot head event and have no block hash");
+            info!(
+                "No inclusion list for this slot because we missed the new slot head event and have no block hash"
+            );
             return;
         };
 

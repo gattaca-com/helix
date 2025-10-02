@@ -417,7 +417,9 @@ impl PostgresDatabaseService {
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
-            let mut sql = String::from("INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at, user_agent) VALUES ");
+            let mut sql = String::from(
+                "INSERT INTO validator_registrations (fee_recipient, gas_limit, timestamp, public_key, signature, inserted_at, user_agent) VALUES ",
+            );
             let num_params_per_row = 7;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
@@ -449,8 +451,9 @@ impl PostgresDatabaseService {
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
-            let mut sql =
-                String::from("INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay, disable_inclusion_lists) VALUES ");
+            let mut sql = String::from(
+                "INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay, disable_inclusion_lists) VALUES ",
+            );
             let num_params_per_row = 5;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
@@ -581,7 +584,7 @@ impl PostgresDatabaseService {
         // Build and execute INSERT for block_submission
         let num_cols = BLOCK_SUBMISSION_FIELD_COUNT;
         let mut sql = String::from(
-            "INSERT INTO block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen) VALUES "
+            "INSERT INTO block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen) VALUES ",
         );
         let clauses: Vec<String> = (0..structured_blocks.len())
             .map(|i| {
@@ -650,7 +653,7 @@ impl PostgresDatabaseService {
         // Build and execute INSERT for submission_trace
         let trace_cols = 12;
         let mut ts_sql = String::from(
-            "INSERT INTO submission_trace (block_hash, region_id, optimistic_version, receive, decode, pre_checks, signature, floor_bid_checks, simulation, auctioneer_update, request_finish, metadata) VALUES "
+            "INSERT INTO submission_trace (block_hash, region_id, optimistic_version, receive, decode, pre_checks, signature, floor_bid_checks, simulation, auctioneer_update, request_finish, metadata) VALUES ",
         );
         let ts_clauses: Vec<String> = (0..structured_traces.len())
             .map(|i| {
@@ -684,7 +687,7 @@ impl PostgresDatabaseService {
 
             // Build and execute a single INSERT...SELECT
             let mut vp_sql = String::from(
-                "INSERT INTO slot_preferences (slot_number, proposer_pubkey, filtering, trusted_builders, header_delay) "
+                "INSERT INTO slot_preferences (slot_number, proposer_pubkey, filtering, trusted_builders, header_delay) ",
             );
             vp_sql.push_str("SELECT r.slot_number, r.proposer_pubkey, vp.filtering, vp.trusted_builders, vp.header_delay FROM (VALUES ");
             let val_clauses: Vec<String> = (0..new_rows.len())
@@ -775,7 +778,7 @@ impl PostgresDatabaseService {
         // Build and execute INSERT for header_submission
         let cols = HEADER_SUBMISSION_FIELD_COUNT;
         let mut sql = String::from(
-            "INSERT INTO header_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, timestamp, first_seen, tx_count) VALUES "
+            "INSERT INTO header_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, timestamp, first_seen, tx_count) VALUES ",
         );
         let clauses: Vec<String> = (0..structured_headers.len())
             .map(|i| {
@@ -837,7 +840,7 @@ impl PostgresDatabaseService {
         // Build and execute INSERT for header_submission_trace
         let trace_cols = 10;
         let mut tsql = String::from(
-            "INSERT INTO header_submission_trace (block_hash, region_id, receive, decode, pre_checks, signature, floor_bid_checks, auctioneer_update, request_finish, metadata) VALUES "
+            "INSERT INTO header_submission_trace (block_hash, region_id, receive, decode, pre_checks, signature, floor_bid_checks, auctioneer_update, request_finish, metadata) VALUES ",
         );
         let tclauses: Vec<String> = (0..structured_htraces.len())
             .map(|i| {

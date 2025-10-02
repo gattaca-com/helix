@@ -60,7 +60,9 @@ impl HttpInclusionListFetcher {
             StatusCode::OK => response.json::<InclusionListResponse>().await?.into(),
             status => Err(InclusionListError::HttpResponse(format!(
                 "Invalid status in response from inclusion list node. Expected 200 but got {}. Headers: {:?}. Response: {:?}",
-                status, response.headers(), response
+                status,
+                response.headers(),
+                response
             )))?,
         };
 

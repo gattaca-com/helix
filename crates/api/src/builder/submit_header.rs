@@ -121,7 +121,9 @@ impl<A: Api> BuilderApi<A> {
         if next_duty.entry.preferences.filtering.is_regional() &&
             !builder_info.can_process_regional_slot_optimistically()
         {
-            warn!("proposer has regional filtering and builder is not optimistic for regional filtering, discarding optimistic v2 submission");
+            warn!(
+                "proposer has regional filtering and builder is not optimistic for regional filtering, discarding optimistic v2 submission"
+            );
             return Err(BuilderApiError::BuilderNotOptimistic {
                 builder_pub_key: *payload.builder_public_key(),
             });
