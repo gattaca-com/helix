@@ -15,17 +15,23 @@ pub struct SubmissionTrace {
     pub scheduled_at: u64,
     // when body finished being read
     pub read_body: u64,
-    // when handler started
+    // when tokio request handler started
     pub start_handler: u64,
+    // when handler sent to worker
+    pub sent_worker: u64,
+    /// when worker received
+    pub received_worker: u64,
     pub decode: u64,
-    pub pre_checks: u64,
-    pub signature: u64,
+    /// None if skip_sigverify
+    pub signature: Option<u64>,
+    pub validated: u64,
+    /// Can either before (optimistic) or after simulation
+    pub sorted: u64,
     pub simulation: u64,
-    pub auctioneer_update: u64,
-    pub request_finish: u64,
     pub metadata: Option<String>,
-
-    pub skip_sigverify: bool,
+    /// When a _newly processed submission_ triggered a top bid update (new top bid or cancel)
+    /// ts in nanos, is_cancel
+    pub top_bid_at: Option<(u64, bool)>,
 }
 
 impl SubmissionTrace {
@@ -51,21 +57,37 @@ impl SubmissionTrace {
         record("scheduled_at", self.receive, self.scheduled_at);
         record("read_body", self.scheduled_at, self.read_body);
         record("start_handler", self.read_body, self.start_handler);
-        record("decode", self.start_handler, self.decode);
-        record("pre_checks", self.decode, self.pre_checks);
-
-        if !self.skip_sigverify {
-            record("signature", self.pre_checks, self.signature);
-        }
-
-        if optimistic_version.is_optimistic() {
-            record("sim_optimistic", self.signature, self.simulation);
+        record("sent_worker", self.start_handler, self.sent_worker);
+        record("received_worker", self.sent_worker, self.received_worker);
+        record("decode", self.received_worker, self.decode);
+        if let Some(signature) = self.signature {
+            record("signature", self.decode, signature);
+            record("validated", signature, self.validated);
         } else {
-            record("sim_non_optimistic", self.signature, self.simulation);
+            record("validated", self.decode, self.validated);
         }
 
-        record("auctioneer_update", self.simulation, self.auctioneer_update);
-        record("finish", self.auctioneer_update, self.request_finish);
+        if self.sorted < self.simulation {
+            // optimistic
+            record("sorted", self.validated, self.sorted);
+            record("simulation", self.sorted, self.simulation);
+        } else {
+            // non optimistic
+            record("simulation", self.validated, self.simulation);
+            record("sorted", self.simulation, self.sorted);
+        }
+
+        if let Some((top_bid_at, is_cancel)) = self.top_bid_at {
+            if is_cancel {
+                // this is our "tick to trade" but may be confounded if builder is sending slowly
+                record("recv_top_bid_cancel", self.receive, top_bid_at);
+                // internal overhead
+                record("read_body_top_bid_cancel", self.read_body, top_bid_at);
+            } else {
+                record("recv_top_bid", self.receive, top_bid_at);
+                record("read_body_top_bid", self.read_body, top_bid_at);
+            }
+        }
     }
 }
 

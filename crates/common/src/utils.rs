@@ -105,6 +105,9 @@ fn get_crate_filter(crates_level: tracing::Level) -> EnvFilter {
             env_filter.add_directive(format!("helix_{crate_name}={crates_level}").parse().unwrap())
     }
 
+    // env_filter =
+    // env_filter.add_directive(format!("helix_api::auctioneer=trace").parse().unwrap());
+
     env_filter
 }
 
@@ -199,4 +202,8 @@ pub fn avg_duration(duration: Duration, count: u32) -> Option<Duration> {
     } else {
         None
     }
+}
+
+pub fn pin_thread_to_core(core: usize) -> bool {
+    core_affinity::set_for_current(core_affinity::CoreId { id: core })
 }

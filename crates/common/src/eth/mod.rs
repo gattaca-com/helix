@@ -2,8 +2,8 @@ use std::time::Instant;
 
 use alloy_primitives::B256;
 use helix_types::{
-    mock_public_key_bytes, BlsPublicKeyBytes, BuilderBid, ForkName, SignedBidSubmission,
-    SignedBuilderBid, SignedBuilderBidInner, Slot,
+    mock_public_key_bytes, BuilderBid, ForkName, SignedBidSubmission, SignedBuilderBid,
+    SignedBuilderBidInner,
 };
 use tracing::debug;
 
@@ -11,13 +11,6 @@ use crate::{
     bid_submission::v2::header_submission::SignedHeaderSubmission, metrics::BID_SIGNING_LATENCY,
     signing::RelaySigningContext,
 };
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub struct BidRequest {
-    pub slot: Slot,
-    pub parent_hash: B256,
-    pub pubkey: BlsPublicKeyBytes,
-}
 
 /// Signs the builder bid with the relay key. This is necessary because the relay is the "builder"
 /// from the proposer point of view

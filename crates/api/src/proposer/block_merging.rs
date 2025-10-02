@@ -18,7 +18,8 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    builder::{simulator::BlockMergeResponse, BlockMergeRequest},
+    auctioneer::{BlockMergeRequest, BlockMergeResponse},
+    gossiper::types::BroadcastPayloadParams,
     proposer::{error::ProposerApiError, ProposerApi},
     Api,
 };
@@ -116,7 +117,7 @@ impl<A: Api> ProposerApi<A> {
             MergingTaskState::RetryFetch => self.spawn_base_block_fetch_task(),
             // We fetched the base block, so we start a merging task.
             MergingTaskState::FetchedBaseBlock {
-                slot,
+                bid_slot,
                 parent_beacon_block_root,
                 best_bid,
                 registration_data,
@@ -129,10 +130,9 @@ impl<A: Api> ProposerApi<A> {
                     return self.spawn_base_block_fetch_task();
                 }
                 // If we have no mergeable orders, we go back to fetching the base block.
-                if let Some((mergeable_orders, _)) = best_orders.load(slot) {
-                    *last_base_block_hash = base_block_hash;
+                if let Some((mergeable_orders, _)) = best_orders.load(bid_slot) {
                     self.spawn_merging_task(
-                        slot,
+                        bid_slot,
                         best_bid,
                         registration_data,
                         payload,
@@ -146,7 +146,7 @@ impl<A: Api> ProposerApi<A> {
             // We received a merged block from the simulator.
             // Store it, and go back to fetching the base block again.
             MergingTaskState::GotMergedBlock {
-                slot,
+                bid_slot,
                 base_bid_value,
                 base_block_time_ms,
                 proposer_pubkey,
@@ -154,9 +154,9 @@ impl<A: Api> ProposerApi<A> {
                 response,
             } => {
                 // If we are past the slot for the block, skip storing it
-                if let Some((_, blobs)) = best_orders.load(slot) {
-                    self.auctioneer.save_merged_block(MergedBlock {
-                        slot,
+                if let Some((_, blobs)) = best_orders.load(bid_slot) {
+                    self.local_cache.save_merged_block(MergedBlock {
+                        slot: bid_slot,
                         block_number: response.execution_payload.block_number,
                         block_hash: response.execution_payload.block_hash,
                         original_value: base_bid_value,
@@ -170,7 +170,7 @@ impl<A: Api> ProposerApi<A> {
                     });
                     let _ = self
                         .store_merged_payload(
-                            slot,
+                            bid_slot,
                             base_block_time_ms,
                             proposer_pubkey,
                             original_payload,
@@ -194,7 +194,7 @@ impl<A: Api> ProposerApi<A> {
 
     fn spawn_merging_task(
         self: &Arc<Self>,
-        slot: u64,
+        bid_slot: u64,
         base_bid: BuilderBid,
         registration_data: ValidatorRegistrationData,
         payload: PayloadAndBlobs,
@@ -230,7 +230,7 @@ impl<A: Api> ProposerApi<A> {
             }
 
             Ok(MergingTaskState::new_merged_block(
-                slot,
+                bid_slot,
                 base_bid.value,
                 base_block_time_ms,
                 proposer_pubkey,
@@ -241,46 +241,47 @@ impl<A: Api> ProposerApi<A> {
     }
 
     async fn fetch_base_block(&self) -> MergingTaskResult {
-        let (_head_slot, duty) = self.curr_slot_info.slot_info();
+        let (head_slot, duty) = self.curr_slot_info.slot_info();
         // If there's no proposer duty next, sleep for a while before continuing.
         let Some(next_duty) = duty else {
             tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             return Ok(MergingTaskState::RetryFetch);
         };
-        let slot = next_duty.slot.into();
-        let best_header_opt = self.shared_best_header.load_any(slot);
-        // If there are no bids, wait for a moment to avoid busy waiting.
-        let Some((best_bid, merging_preferences)) = best_header_opt else {
+        let bid_slot = head_slot + 1;
+
+        let Ok(rx) = self.auctioneer_handle.best_mergeable(bid_slot) else {
+            warn!("failed sending mergeable request to auctioneer");
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             return Ok(MergingTaskState::RetryFetch);
         };
+
+        let Ok(maybe_payload) = rx.await else {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            return Ok(MergingTaskState::RetryFetch);
+        };
+
         // If the current best bid doesn't allow appending, wait a bit before checking again.
-        if !merging_preferences.allow_appending {
+        let Some((best_bid, payload)) = maybe_payload else {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             return Ok(MergingTaskState::RetryFetch);
         };
+
         let registration_data = next_duty.entry.registration.message;
-        let block_hash = best_bid.header.block_hash;
-        // Try to fetch the best bid's block.
-        let payload = self
-            .get_execution_payload(slot, &registration_data.pubkey, &block_hash, true)
-            .await
-            .inspect_err(|err| warn!(%err, "failed to fetch base block"))?;
 
         let parent_beacon_block_root = self
             .curr_slot_info
-            .payload_attributes(payload.execution_payload.parent_hash, slot.into())
+            .payload_attributes(payload.execution_payload.parent_hash, bid_slot.into())
             .and_then(|payload_attrs_update| {
                 payload_attrs_update.payload_attributes.parent_beacon_block_root
             });
 
         // Found the base block, we can now start with the merging process.
         Ok(MergingTaskState::new_base_block(
-            slot,
+            bid_slot.into(),
             parent_beacon_block_root,
             best_bid,
             registration_data,
-            payload,
+            Arc::unwrap_or_clone(payload),
         ))
     }
 
@@ -301,7 +302,6 @@ impl<A: Api> ProposerApi<A> {
         let blob_kzg_commitments =
             KzgCommitments::new(merged_blobs_bundle.commitments.iter().copied().collect())
                 .map_err(|_| PayloadMergingError::MaxBlobCountReached)?;
-        let block_hash = response.execution_payload.block_hash;
 
         let new_bid = BuilderBid {
             header,
@@ -316,12 +316,18 @@ impl<A: Api> ProposerApi<A> {
             execution_payload: response.execution_payload,
             blobs_bundle: merged_blobs_bundle,
         };
-        self.auctioneer.save_execution_payload(
-            slot,
-            &proposer_pubkey,
-            &block_hash,
-            payload_and_blobs,
-        );
+
+        if self
+            .auctioneer_handle
+            .gossip_payload(BroadcastPayloadParams {
+                execution_payload: payload_and_blobs,
+                slot,
+                proposer_pub_key: proposer_pubkey,
+            })
+            .is_err()
+        {
+            error!("failed sending merged payload to auctioneer");
+        };
 
         // Update best merged block
         let parent_block_hash = new_bid.header.parent_hash;
@@ -388,7 +394,7 @@ enum MergingTaskState {
     /// Base block has been fetched successfully.
     /// We can send a request to the simulator to start appending orders.
     FetchedBaseBlock {
-        slot: u64,
+        bid_slot: u64,
         parent_beacon_block_root: Option<B256>,
         best_bid: BuilderBid,
         registration_data: ValidatorRegistrationData,
@@ -397,7 +403,7 @@ enum MergingTaskState {
     /// A merged block has been received from the simulator.
     /// We can now start the process again after updating the best merged block.
     GotMergedBlock {
-        slot: u64,
+        bid_slot: u64,
         base_bid_value: U256,
         base_block_time_ms: u64,
         proposer_pubkey: BlsPublicKeyBytes,
@@ -408,14 +414,14 @@ enum MergingTaskState {
 
 impl MergingTaskState {
     fn new_base_block(
-        slot: u64,
+        bid_slot: u64,
         parent_beacon_block_root: Option<B256>,
         best_bid: BuilderBid,
         registration_data: ValidatorRegistrationData,
         payload: PayloadAndBlobs,
     ) -> MergingTaskState {
         MergingTaskState::FetchedBaseBlock {
-            slot,
+            bid_slot,
             parent_beacon_block_root,
             best_bid,
             registration_data,
@@ -424,7 +430,7 @@ impl MergingTaskState {
     }
 
     fn new_merged_block(
-        slot: u64,
+        bid_slot: u64,
         base_bid_value: U256,
         base_block_time_ms: u64,
         proposer_pubkey: BlsPublicKeyBytes,
@@ -432,7 +438,7 @@ impl MergingTaskState {
         response: BlockMergeResponse,
     ) -> MergingTaskState {
         MergingTaskState::GotMergedBlock {
-            slot,
+            bid_slot,
             base_bid_value,
             proposer_pubkey,
             base_block_time_ms,

@@ -15,7 +15,7 @@ use helix_beacon::{
     types::{HeadEventData, StateId},
 };
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
+    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, is_local_dev,
     local_cache::LocalCache, task, utils::utcnow_dur, BuilderConfig, BuilderInfo, ProposerDuty,
     RelayConfig, SignedValidatorRegistrationEntry,
 };
@@ -25,7 +25,10 @@ use helix_types::{BlsPublicKeyBytes, Epoch, Slot, SlotClockTrait};
 use tokio::sync::{broadcast, Mutex};
 use tracing::{debug, error, info, warn, Instrument};
 
-use crate::{error::HousekeeperError, inclusion_list::InclusionListService, EthereumPrimevService};
+use crate::{
+    chain_event_updater::SlotData, error::HousekeeperError, inclusion_list::InclusionListService,
+    EthereumPrimevService,
+};
 
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 1;
 
@@ -93,7 +96,6 @@ pub struct Housekeeper<DB: DatabaseService + 'static> {
     slots: HousekeeperSlots,
     inclusion_list_service: Option<InclusionListService<DB>>,
     local_builders: Vec<BuilderConfig>,
-    is_local_dev: bool,
 }
 
 impl<DB: DatabaseService> Housekeeper<DB> {
@@ -103,6 +105,7 @@ impl<DB: DatabaseService> Housekeeper<DB> {
         auctioneer: Arc<LocalCache>,
         config: &RelayConfig,
         chain_info: Arc<ChainInfo>,
+        auctioneer_handle: crossbeam_channel::Sender<SlotData>,
         relay_network_api: Arc<RelayNetworkManager>,
     ) -> Self {
         let primev_service =
@@ -114,6 +117,7 @@ impl<DB: DatabaseService> Housekeeper<DB> {
                 auctioneer.clone(),
                 config,
                 chain_info.clone(),
+                auctioneer_handle,
                 relay_network_api,
             )
         });
@@ -127,7 +131,6 @@ impl<DB: DatabaseService> Housekeeper<DB> {
             slots: HousekeeperSlots::default(),
             inclusion_list_service,
             local_builders: config.builders.clone(),
-            is_local_dev: config.is_local_dev,
         }
     }
 
@@ -207,7 +210,7 @@ impl<DB: DatabaseService> Housekeeper<DB> {
 
         // known validators
         if self.should_refresh_known_validators(head_slot.as_u64()) {
-            if self.is_local_dev {
+            if is_local_dev() {
                 warn!("skipping refresh of known validators")
             } else {
                 let housekeeper = self.clone();
@@ -254,7 +257,7 @@ impl<DB: DatabaseService> Housekeeper<DB> {
 
         // trusted proposers
         if self.should_update_trusted_proposers(head_slot.as_u64()) {
-            if self.is_local_dev {
+            if is_local_dev() {
                 warn!("skipping refresh of trusted proposers")
             } else {
                 let housekeeper = self.clone();
@@ -365,7 +368,7 @@ impl<DB: DatabaseService> Housekeeper<DB> {
         let mut builder_infos = self.db.get_all_builder_infos().await?;
         debug!(builder_infos = builder_infos.len(), "updating builder infos");
 
-        if self.is_local_dev {
+        if is_local_dev() {
             builder_infos.extend_from_slice(self.local_builders.as_slice());
         }
 
@@ -426,7 +429,11 @@ impl<DB: DatabaseService> Housekeeper<DB> {
 
         self.auctioneer.update_proposer_duties(formatted_proposer_duties.clone());
 
-        self.db.set_proposer_duties(formatted_proposer_duties).await?;
+        if is_local_dev() {
+            warn!("skipping proposer duty update in db");
+        } else {
+            self.db.set_proposer_duties(formatted_proposer_duties).await?;
+        }
 
         Ok(())
     }
@@ -453,7 +460,7 @@ impl<DB: DatabaseService> Housekeeper<DB> {
         let mut primev_builders_config: Vec<BuilderConfig> = Vec::new();
 
         for builder_pubkey in primev_builders {
-            match auctioneer.get_builder_info(&builder_pubkey).ok() {
+            match auctioneer.get_builder_info(&builder_pubkey) {
                 Some(builder_info) => {
                     if builder_info.builder_id == Some("PrimevBuilder".to_string()) ||
                         builder_info

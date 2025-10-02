@@ -7,15 +7,24 @@ use std::{
     time::{Duration, Instant},
 };
 
-use helix_common::{metrics::SimulatorMetrics, SimulatorConfig};
-use helix_types::BlsPublicKeyBytes;
-use tokio::{sync::mpsc, task::JoinSet};
+use helix_common::{
+    bid_submission::{BidSubmission, OptimisticVersion},
+    is_local_dev,
+    metrics::SimulatorMetrics,
+    simulator::BlockSimError,
+    spawn_tracked,
+    utils::utcnow_ns,
+    SimulatorConfig, SubmissionTrace,
+};
+use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission};
+use tokio::sync::oneshot;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    builder::{
-        simulator::{client::SimulatorClient, SimulatorRequest},
-        BlockMergeRequest, SimReponse,
+    auctioneer::{
+        simulator::{client::SimulatorClient, BlockMergeRequest, SimulatorRequest},
+        types::SubmissionResult,
+        Event,
     },
     service::SIMULATOR_REQUEST_TIMEOUT,
 };
@@ -34,6 +43,26 @@ struct LocalTelemetry {
     dropped_merge_reqs: usize,
 }
 
+// Sim id / Simulation Result, so we can use this for merging requests
+pub type SimulationResult = (usize, Option<SimulationResultInner>);
+pub struct SimulationResultInner {
+    pub result: Result<(), BlockSimError>,
+    // Some if not optimistic
+    pub res_tx: Option<oneshot::Sender<SubmissionResult>>,
+    // TODO: move up
+    pub paused_until: Option<Instant>,
+    pub submission: SignedBidSubmission,
+    pub merging_preferences: BlockMergingPreferences,
+    pub trace: SubmissionTrace,
+    pub optimistic_version: OptimisticVersion,
+}
+
+impl SimulationResultInner {
+    pub fn was_optimistic_sim(&self) -> bool {
+        self.res_tx.is_none()
+    }
+}
+
 // TODO:
 // - avoid sending blobs, and validate them here on a blocking task
 // - send only block deltas
@@ -41,88 +70,79 @@ struct LocalTelemetry {
 pub struct SimulatorManager {
     simulators: Vec<SimulatorClient>,
     requests: PendingRquests,
-    join_set: JoinSet<SimReponse>,
     last_bid_slot: u64,
     local_telemetry: LocalTelemetry,
-    accept_optimistic: Arc<AtomicBool>,
+    sim_result_tx: crossbeam_channel::Sender<Event>,
+    /// If we have any synced simulator
+    accept_optimistic: bool,
+    /// If we failed to demote a builder in the DB
+    pub failsafe_triggered: Arc<AtomicBool>,
 }
 
 impl SimulatorManager {
-    pub fn new(configs: Vec<SimulatorConfig>, accept_optimistic: Arc<AtomicBool>) -> Self {
+    pub fn new(
+        configs: Vec<SimulatorConfig>,
+        sim_result_tx: crossbeam_channel::Sender<Event>,
+    ) -> Self {
         let client =
             reqwest::ClientBuilder::new().timeout(SIMULATOR_REQUEST_TIMEOUT).build().unwrap();
 
-        let simulators = configs
+        let simulators: Vec<_> = configs
             .into_iter()
             .map(|config| SimulatorClient::new(client.clone(), config))
             .collect();
 
         let requests = PendingRquests::with_capacity(200);
-        let join_set = JoinSet::new();
 
-        Self {
-            simulators,
-            requests,
-            join_set,
-            last_bid_slot: 0,
-            local_telemetry: LocalTelemetry::default(),
-            accept_optimistic,
-        }
-    }
-
-    pub async fn run(
-        mut self,
-        mut sim_requests_rx: mpsc::Receiver<SimulatorRequest>,
-        mut merge_requests_rx: mpsc::Receiver<BlockMergeRequest>,
-        is_local_dev: bool,
-    ) {
-        let (sync_tx, mut sync_rx) = mpsc::channel(1000);
-
-        // sync monitor
-        if !is_local_dev {
-            let simulators = self.simulators.clone();
-            tokio::spawn(async move {
-                loop {
-                    for (i, simulator) in simulators.iter().enumerate() {
-                        let is_synced = simulator.is_synced().await.unwrap_or(false);
-                        if sync_tx.send((i, is_synced)).await.is_err() {
-                            error!("failed to send sync result to sim manager");
+        if !is_local_dev() {
+            spawn_tracked!({
+                let sync_tx = sim_result_tx.clone();
+                let simulators = simulators.clone();
+                async move {
+                    loop {
+                        for (id, simulator) in simulators.iter().enumerate() {
+                            let is_synced = simulator.is_synced().await.unwrap_or(false);
+                            if sync_tx.try_send(Event::SimulatorSync { id, is_synced }).is_err() {
+                                error!("failed to send sync result to sim manager");
+                            }
+                            SimulatorMetrics::simulator_sync(simulator.endpoint(), is_synced);
                         }
-                        SimulatorMetrics::simulator_sync(simulator.endpoint(), is_synced);
-                    }
 
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
                 }
             });
         }
 
-        loop {
-            tokio::select! {
-                Some(req) = sim_requests_rx.recv() => self.handle_sim_request(req),
-                Some(req) = merge_requests_rx.recv() => self.handle_merge_request(req),
-                Some(Ok(resp)) = self.join_set.join_next(), if !self.join_set.is_empty()  => self.handle_task_response(resp),
-                Some((id, is_synced)) = sync_rx.recv() => {
-                    self.simulators[id].is_synced = is_synced;
-                    if !is_local_dev {
-                        let new = self.simulators.iter().any(|s|s.can_simulate_light());
-                        let prev = self.accept_optimistic.swap(new, Ordering::Relaxed);
-                        if new != prev {
-                            warn!(prev, new, "changing optimistic simulation status");
-                        }
-                    }
+        Self {
+            simulators,
+            requests,
 
-                },
-            }
+            last_bid_slot: 0,
+            local_telemetry: LocalTelemetry::default(),
+            sim_result_tx,
+
+            accept_optimistic: true,
+            failsafe_triggered: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    fn handle_sim_request(&mut self, req: SimulatorRequest) {
-        if req.bid_slot() > self.last_bid_slot {
-            self.handle_new_slot(req.bid_slot());
-        } else if req.bid_slot() < self.last_bid_slot {
-            self.local_telemetry.stale_sim_reqs += 1;
-            return;
+    pub fn can_process_optimistic_submission(&self) -> bool {
+        self.accept_optimistic && !self.failsafe_triggered.load(Ordering::Relaxed)
+    }
+
+    pub fn handle_sync_status(&mut self, id: usize, is_synced: bool) {
+        self.simulators[id].is_synced = is_synced;
+        let new = self.simulators.iter().any(|s| s.can_simulate_light());
+        let prev = self.accept_optimistic;
+        if new != prev {
+            warn!(prev, new, "changing accept_optimistic simulation status");
         }
+        self.accept_optimistic = new;
+    }
+
+    pub fn handle_sim_request(&mut self, req: SimulatorRequest) {
+        assert_eq!(req.bid_slot(), self.last_bid_slot);
 
         self.local_telemetry.sims_reqs += 1;
         if let Some(id) = self.next_sim_client() {
@@ -133,7 +153,7 @@ impl SimulatorManager {
         }
     }
 
-    fn handle_merge_request(&mut self, req: BlockMergeRequest) {
+    pub fn handle_merge_request(&mut self, req: BlockMergeRequest) {
         self.local_telemetry.merge_reqs += 1;
         if let Some(id) = self.next_merge_client() {
             let client = &mut self.simulators[id];
@@ -143,14 +163,17 @@ impl SimulatorManager {
             self.local_telemetry.max_in_flight =
                 self.local_telemetry.max_in_flight.max(client.pending);
             let timer = SimulatorMetrics::block_merge_timer(client.endpoint());
-            self.join_set.spawn(async move {
+            let tx = self.sim_result_tx.clone();
+            spawn_tracked!(async move {
                 debug!(block_hash =% req.block_hash, "sending merge request");
                 let res = SimulatorClient::do_merge_request(to_send).await;
                 timer.stop_and_record();
                 SimulatorMetrics::block_merge_status(res.is_ok());
 
                 let _ = req.res_tx.send(res);
-                (id, None)
+                let result = (id, None);
+
+                let _ = tx.try_send(Event::SimResult(result));
             });
         } else {
             self.local_telemetry.dropped_merge_reqs += 1;
@@ -158,7 +181,7 @@ impl SimulatorManager {
         }
     }
 
-    fn handle_task_response(&mut self, (id, paused_until): SimReponse) {
+    pub fn handle_task_response(&mut self, id: usize, paused_until: Option<Instant>) {
         let sim = &mut self.simulators[id];
         sim.pending = sim.pending.saturating_sub(1);
         sim.paused_until = sim.paused_until.max(paused_until); // keep highest pause
@@ -170,7 +193,7 @@ impl SimulatorManager {
         }
     }
 
-    fn spawn_sim(&mut self, id: usize, req: SimulatorRequest) {
+    pub fn spawn_sim(&mut self, id: usize, mut req: SimulatorRequest) {
         const PAUSE_DURATION: Duration = Duration::from_secs(60);
 
         let client = &mut self.simulators[id];
@@ -179,11 +202,13 @@ impl SimulatorManager {
 
         self.local_telemetry.max_in_flight = self.local_telemetry.max_in_flight.max(client.pending);
         let timer = SimulatorMetrics::timer(client.endpoint());
-        self.join_set.spawn(async move {
-            let block_hash = req.request.message.block_hash;
+        let tx = self.sim_result_tx.clone();
+        spawn_tracked!(async move {
+            let block_hash = req.submission.block_hash();
             debug!(%block_hash, "sending simulation request");
 
-            SimulatorMetrics::sim_count(req.is_optimistic);
+            let optimistic_version = req.optimistic_version();
+            SimulatorMetrics::sim_count(optimistic_version.is_optimistic());
             let res = SimulatorClient::do_sim_request(to_send).await;
             let time = timer.stop_and_record();
 
@@ -201,9 +226,21 @@ impl SimulatorManager {
                 None
             };
 
-            // ignore error if non-optimistic request timed out while being simulated
-            let _ = req.res_tx.send(res);
-            (id, paused_until)
+            req.trace.simulation = utcnow_ns();
+            let result = (
+                id,
+                Some(SimulationResultInner {
+                    result: res,
+                    paused_until,
+                    res_tx: req.res_tx,
+                    submission: req.submission,
+                    merging_preferences: req.merging_preferences,
+                    trace: req.trace,
+                    optimistic_version,
+                }),
+            );
+
+            let _ = tx.try_send(Event::SimResult(result));
         });
     }
 
@@ -225,9 +262,11 @@ impl SimulatorManager {
             .map(|(i, _)| i)
     }
 
-    // TODO: local telemetry
-    fn handle_new_slot(&mut self, bid_slot: u64) {
-        self.report();
+    pub fn on_new_slot(&mut self, bid_slot: u64) {
+        if self.last_bid_slot > 0 {
+            self.report();
+        }
+
         self.last_bid_slot = bid_slot;
         self.requests.clear(bid_slot);
         let now = Instant::now();
@@ -284,7 +323,7 @@ impl PendingRquests {
         if let Some((i, _)) =
             self.builder_pubkeys.iter_mut().enumerate().find(|(_, r)| **r == *req.builder_pubkey())
         {
-            if req.on_receive_ns > self.map[i].on_receive_ns {
+            if req.on_receive_ns() > self.map[i].on_receive_ns() {
                 self.sort_keys[i] = req.sort_key();
                 self.builder_pubkeys[i] = *req.builder_pubkey();
                 self.map[i] = req;
@@ -308,6 +347,8 @@ impl PendingRquests {
         Some(self.map.swap_remove(i))
     }
 
+    /// Clear backlog of simulations from the previous bid slot, this closes all optimistic
+    /// submissions and non-optimistic ones which have timed out
     fn clear(&mut self, bid_slot: u64) {
         let mut i = 0;
 

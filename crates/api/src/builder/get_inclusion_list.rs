@@ -24,7 +24,7 @@ impl<A: Api> BuilderApi<A> {
     ) -> Result<impl IntoResponse, BuilderApiError> {
         debug!("New request for inclusion list.");
 
-        let list_with_key = api.current_inclusion_list.read();
+        let list_with_key = api.local_cache.inclusion_list.read();
 
         let Some(list_with_key) = list_with_key.as_ref() else {
             debug!(inclusion_lists_enabled = %api.relay_config.inclusion_list.is_some(),

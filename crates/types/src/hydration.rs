@@ -1,9 +1,11 @@
 use std::{hash::Hasher, sync::Arc};
 
 use alloy_eips::eip7691::MAX_BLOBS_PER_BLOCK_ELECTRA;
+use alloy_primitives::B256;
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
+use tree_hash::TreeHash;
 
 use crate::{
     bid_submission,
@@ -20,14 +22,31 @@ pub enum DehydratedBidSubmission {
     Fulu(DehydratedBidSubmissionFulu),
 }
 impl DehydratedBidSubmission {
+    pub fn slot(&self) -> u64 {
+        match self {
+            DehydratedBidSubmission::Electra(s) => s.message.slot,
+            DehydratedBidSubmission::Fulu(s) => s.message.slot,
+        }
+    }
+
+    pub fn block_hash(&self) -> &B256 {
+        match self {
+            DehydratedBidSubmission::Electra(s) => &s.message.block_hash,
+            DehydratedBidSubmission::Fulu(s) => &s.message.block_hash,
+        }
+    }
+
     pub fn builder_pubkey(&self) -> &BlsPublicKeyBytes {
         match self {
-            DehydratedBidSubmission::Electra(dehydrated_bid_submission_electra) => {
-                &dehydrated_bid_submission_electra.message.builder_pubkey
-            }
-            DehydratedBidSubmission::Fulu(dehydrated_bid_submission_fulu) => {
-                &dehydrated_bid_submission_fulu.message.builder_pubkey
-            }
+            DehydratedBidSubmission::Electra(s) => &s.message.builder_pubkey,
+            DehydratedBidSubmission::Fulu(s) => &s.message.builder_pubkey,
+        }
+    }
+
+    pub fn withdrawal_root(&self) -> B256 {
+        match self {
+            DehydratedBidSubmission::Electra(s) => s.execution_payload.withdrawals.tree_hash_root(),
+            DehydratedBidSubmission::Fulu(s) => s.execution_payload.withdrawals.tree_hash_root(),
         }
     }
 

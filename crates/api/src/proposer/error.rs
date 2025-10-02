@@ -96,8 +96,8 @@ pub enum ProposerApiError {
     #[error("registration timestamp too old")]
     RegistrationTimestampTooOld,
 
-    #[error("request for past slot. request slot: {request_slot}, head slot: {head_slot}")]
-    RequestForPastSlot { request_slot: Slot, head_slot: Slot },
+    #[error("request for wrong slot. request slot: {request_slot}, bid slot: {bid_slot}")]
+    RequestWrongSlot { request_slot: u64, bid_slot: u64 },
 
     #[error("slot is too new")]
     SlotTooNew,
@@ -181,6 +181,15 @@ pub enum ProposerApiError {
     #[error(transparent)]
     SigError(#[from] SigError),
 
+    #[error("already delivering payload")]
+    DeliveringPayload,
+
+    #[error("duplicate payload request")]
+    GetPayloadAlreadyReceived,
+
+    #[error("request for past slot. request slot: {request_slot}, head slot: {head_slot}")]
+    RequestForPastSlot { request_slot: Slot, head_slot: Slot },
+
     #[error("failed to deserialize validator public key: {0:?}")]
     InvalidPublicKey(Vec<u8>),
 }
@@ -219,7 +228,7 @@ impl IntoResponse for ProposerApiError {
             ProposerApiError::TimestampTooFarInTheFuture { .. } |
             ProposerApiError::NoPreviousRegistrationTimestamp |
             ProposerApiError::RegistrationTimestampTooOld |
-            ProposerApiError::RequestForPastSlot { .. } |
+            ProposerApiError::RequestWrongSlot { .. } |
             ProposerApiError::SlotTooNew |
             ProposerApiError::InvalidPayloadSignature |
             ProposerApiError::GetPayloadRequestTooLate { .. } |
@@ -240,6 +249,9 @@ impl IntoResponse for ProposerApiError {
             ProposerApiError::BlobKzgCommitmentsMismatch |
             ProposerApiError::SszError(_) |
             ProposerApiError::SigError(_) |
+            ProposerApiError::DeliveringPayload |
+            ProposerApiError::GetPayloadAlreadyReceived |
+            ProposerApiError::RequestForPastSlot { .. } => StatusCode::BAD_REQUEST,
             ProposerApiError::InvalidPublicKey(_) => StatusCode::BAD_REQUEST,
 
             ProposerApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,

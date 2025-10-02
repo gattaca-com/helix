@@ -10,6 +10,7 @@ use helix_common::metrics::{
     SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
     SUBMISSION_DECOMPRESSED_BYTES,
 };
+use helix_types::BlsPublicKeyBytes;
 use http::{
     header::{CONTENT_ENCODING, CONTENT_TYPE},
     HeaderMap, HeaderValue,
@@ -79,11 +80,46 @@ impl SubmissionDecoder {
         }
     }
 
-    // TODO: pass a buffer pool to avoid allocations
-    pub fn decode<T: Decode + DeserializeOwned>(
-        mut self,
-        body: Bytes,
-    ) -> Result<T, BuilderApiError> {
+    // TODO: we could also just extract the bid trace and send that through before the rest is
+    // decoded after some light validation
+    /// Assume buf is already decompressed
+    pub fn extract_builder_pubkey(&self, buf: &[u8]) -> Result<BlsPublicKeyBytes, BuilderApiError> {
+        match self.encoding {
+            Encoding::Json => {
+                #[derive(serde::Deserialize)]
+                struct Bid {
+                    message: Message,
+                }
+                #[derive(serde::Deserialize)]
+                struct Message {
+                    builder_pubkey: BlsPublicKeyBytes,
+                }
+
+                let bid: Bid = serde_json::from_slice(buf)?;
+
+                Ok(bid.message.builder_pubkey)
+            }
+            Encoding::Ssz => {
+                const BUILDER_PUBKEY_OFFSET: usize = 8 + /* slot */
+                32 + /* parent_hash */
+                32; /* block_hash */
+
+                if buf.len() < BUILDER_PUBKEY_OFFSET + BlsPublicKeyBytes::len_bytes() {
+                    return Err(BuilderApiError::PayloadDecode);
+                }
+
+                let pubkey = unsafe {
+                    core::ptr::read_unaligned(
+                        buf.as_ptr().add(BUILDER_PUBKEY_OFFSET) as *const BlsPublicKeyBytes
+                    )
+                };
+
+                Ok(pubkey)
+            }
+        }
+    }
+
+    pub fn decompress(&mut self, body: Bytes) -> Result<Bytes, BuilderApiError> {
         let start = Instant::now();
         self.bytes_before_decompress = body.len();
         let decompressed = match self.compression {
@@ -118,10 +154,19 @@ impl SubmissionDecoder {
             "decompressed payload"
         );
 
+        Ok(decompressed)
+    }
+
+    // TODO: pass a buffer pool to avoid allocations
+    pub fn decode<T: Decode + DeserializeOwned>(
+        mut self,
+        body: Bytes,
+    ) -> Result<T, BuilderApiError> {
+        let start = Instant::now();
         let payload: T = match self.encoding {
-            Encoding::Ssz => T::from_ssz_bytes(&decompressed)
+            Encoding::Ssz => T::from_ssz_bytes(&body)
                 .map_err(|err| BuilderApiError::SszDeserializeError(format!("{err:?}")))?,
-            Encoding::Json => serde_json::from_slice(&decompressed)?,
+            Encoding::Json => serde_json::from_slice(&body)?,
         };
 
         self.decode_latency = start.elapsed().saturating_sub(self.decompress_latency);
@@ -185,5 +230,47 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
         Some((isize as usize).min(MAX_PAYLOAD_LENGTH))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::hex::FromHex;
+
+    use super::*;
+
+    #[test]
+    fn test_get_builder_pubkey() {
+        let expected = BlsPublicKeyBytes::from_hex("0xa1885d66bef164889a2e35845c3b626545d7b0e513efe335e97c3a45e534013fa3bc38c3b7e6143695aecc4872ac52c4").unwrap();
+
+        let data_json =
+            include_bytes!("../../../types/src/testdata/signed-bid-submission-electra-2.json");
+        let decoder = SubmissionDecoder {
+            compression: Compression::Gzip,
+            encoding: Encoding::Json,
+            bytes_before_decompress: 0,
+            bytes_after_decompress: 0,
+            estimated_decompress: 0,
+            decompress_latency: Default::default(),
+            decode_latency: Default::default(),
+        };
+
+        let pubkey = decoder.extract_builder_pubkey(data_json).unwrap();
+        assert_eq!(pubkey, expected);
+
+        let data_ssz =
+            include_bytes!("../../../types/src/testdata/signed-bid-submission-electra-2.bin");
+        let decoder = SubmissionDecoder {
+            compression: Compression::Gzip,
+            encoding: Encoding::Ssz,
+            bytes_before_decompress: 0,
+            bytes_after_decompress: 0,
+            estimated_decompress: 0,
+            decompress_latency: Default::default(),
+            decode_latency: Default::default(),
+        };
+
+        let pubkey = decoder.extract_builder_pubkey(data_ssz).unwrap();
+        assert_eq!(pubkey, expected);
     }
 }

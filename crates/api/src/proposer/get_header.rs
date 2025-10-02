@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use alloy_primitives::{B256, U256};
+use alloy_primitives::B256;
 use axum::{extract::Path, http::HeaderMap, response::IntoResponse, Extension};
 use helix_common::{
     chain_info::ChainInfo,
@@ -11,16 +11,14 @@ use helix_common::{
     metrics::GetHeaderMetric,
     resign_builder_bid, task,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
-    BidRequest, GetHeaderTrace, RequestTimings,
+    GetHeaderTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
 use helix_types::BlsPublicKeyBytes;
-use tokio::time::sleep;
 use tracing::{debug, error, info, warn, Instrument};
 
 use super::ProposerApi;
 use crate::{
-    gossiper::types::RequestPayloadParams,
     proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
     router::Terminating,
     Api, HEADER_TIMEOUT_MS,
@@ -43,32 +41,20 @@ impl<A: Api> ProposerApi<A> {
         Extension(timings): Extension<RequestTimings>,
         Extension(Terminating(terminating)): Extension<Terminating>,
         headers: HeaderMap,
-        Path(GetHeaderParams { slot, parent_hash, pubkey }): Path<GetHeaderParams>,
+        Path(params): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
-        if terminating.load(Ordering::Relaxed) || proposer_api.auctioneer.kill_switch_enabled() {
+        if terminating.load(Ordering::Relaxed) || proposer_api.local_cache.kill_switch_enabled() {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
 
         let mut trace = GetHeaderTrace { receive: timings.on_receive_ns, ..Default::default() };
 
         let (head_slot, duty) = proposer_api.curr_slot_info.slot_info();
-        debug!(
-            %head_slot,
-            request_ts = trace.receive,
-            %slot,
-            %parent_hash,
-            %pubkey,
-        );
+        let bid_slot = head_slot.as_u64() + 1;
 
-        let bid_request = BidRequest { slot: slot.into(), parent_hash, pubkey };
-
-        // Dont allow requests for past slots
-        if bid_request.slot < head_slot {
+        if params.slot != bid_slot {
             debug!("request for past slot");
-            return Err(ProposerApiError::RequestForPastSlot {
-                request_slot: bid_request.slot,
-                head_slot,
-            });
+            return Err(ProposerApiError::RequestWrongSlot { request_slot: params.slot, bid_slot });
         }
 
         // Only return a bid if there is a proposer connected this slot.
@@ -77,7 +63,7 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::ProposerNotRegistered);
         };
 
-        let ms_into_slot = match validate_bid_request_time(&proposer_api.chain_info, &bid_request) {
+        let ms_into_slot = match validate_bid_request_time(&proposer_api.chain_info, &params) {
             Ok(ms_into_slot) => ms_into_slot,
             Err(err) => {
                 warn!(%err, "invalid bid request time");
@@ -142,46 +128,38 @@ impl<A: Api> ProposerApi<A> {
             let sleep_time = Duration::from_millis(sleep_time_ms);
             let mut get_header_metric = GetHeaderMetric::new(sleep_time);
 
-            debug!(target: "timing_games", 
+            debug!(target: "timing_games",
                 ?sleep_time,
                 %ms_into_slot,
                 target_sleep_time,
                 max_sleep_time,
-                slot,
-                pubkey = ?bid_request.pubkey,
+                slot = params.slot,
+                pubkey = ?params.pubkey,
                 "timing game sleep");
 
             if sleep_time > Duration::ZERO {
-                sleep(sleep_time).await;
+                tokio::time::sleep(sleep_time).await;
             }
 
             get_header_metric.record();
         }
 
-        let get_best_bid_res = proposer_api.shared_best_header.load(
-            bid_request.slot.into(),
-            &bid_request.parent_hash,
-            &bid_request.pubkey,
-        );
+        let Ok(rx) = proposer_api.auctioneer_handle.get_header(params) else {
+            error!("failed to send get_header to auctioneer");
+            return Err(ProposerApiError::ServiceUnavailableError)
+        };
+
+        // TODO: refactor errors
+        let bid = rx.await.map_err(|_| ProposerApiError::NoBidPrepared)??;
 
         let now_ns = utcnow_ns();
         trace.best_bid_fetched = now_ns;
         debug!(trace = ?trace, "best bid fetched");
 
-        let Some(bid) = get_best_bid_res else {
-            warn!("no bid found");
-            return Err(ProposerApiError::NoBidPrepared);
-        };
-        if bid.value == U256::ZERO {
-            warn!("best bid value is 0");
-            return Err(ProposerApiError::BidValueZero);
-        }
-
         // Try to fetch a merged block if block merging is enabled
         let bid = if proposer_api.relay_config.block_merging_config.is_enabled {
-            let merged_block_bid = proposer_api
-                .shared_best_merged
-                .load(bid_request.slot.into(), &bid_request.parent_hash);
+            let merged_block_bid =
+                proposer_api.shared_best_merged.load(params.slot, &params.parent_hash);
             let max_merged_bid_age_ms =
                 proposer_api.relay_config.block_merging_config.max_merged_bid_age_ms;
 
@@ -241,9 +219,9 @@ impl<A: Api> ProposerApi<A> {
         // Save trace to DB
         save_get_header_call(
             proposer_api.db.clone(),
-            slot,
-            bid_request.parent_hash,
-            bid_request.pubkey,
+            params.slot,
+            params.parent_hash,
+            params.pubkey,
             bid_block_hash,
             trace,
             mev_boost,
@@ -251,26 +229,9 @@ impl<A: Api> ProposerApi<A> {
         )
         .await;
 
-        let proposer_pubkey_clone = bid_request.pubkey;
-
         let fork = proposer_api.chain_info.current_fork_name();
 
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
-        proposer_api.auctioneer.mark_header_served(&bid_block_hash);
-
-        if user_agent.is_some() && is_mev_boost_client(&user_agent.unwrap()) {
-            // Request payload in the background
-            task::spawn(file!(), line!(), async move {
-                proposer_api
-                    .gossiper
-                    .request_payload(RequestPayloadParams {
-                        slot,
-                        proposer_pub_key: proposer_pubkey_clone,
-                        block_hash: bid_block_hash,
-                    })
-                    .await
-            });
-        }
 
         let signed_bid = serde_json::to_value(signed_bid)?;
         info!(block_hash =% bid_block_hash, "delivering bid");
@@ -319,11 +280,11 @@ async fn save_get_header_call<DB: DatabaseService + 'static>(
 /// Returns how many ms we are into the slot if ok.
 fn validate_bid_request_time(
     chain_info: &ChainInfo,
-    bid_request: &BidRequest,
+    bid_request: &GetHeaderParams,
 ) -> Result<u64, ProposerApiError> {
     let curr_timestamp_ms = utcnow_ms() as i64;
-    let slot_start_timestamp = chain_info.genesis_time_in_secs +
-        (bid_request.slot.as_u64() * chain_info.seconds_per_slot());
+    let slot_start_timestamp =
+        chain_info.genesis_time_in_secs + (bid_request.slot * chain_info.seconds_per_slot());
     let ms_into_slot = curr_timestamp_ms.saturating_sub((slot_start_timestamp * 1000) as i64);
 
     if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {
@@ -338,10 +299,10 @@ fn validate_bid_request_time(
     Ok(ms_into_slot.max(0) as u64)
 }
 
-pub fn is_mev_boost_client(client_name: &str) -> bool {
-    let keywords = ["Kiln", "mev-boost", "commit-boost", "Vouch"];
-    keywords.iter().any(|&keyword| client_name.contains(keyword))
-}
+// pub fn is_mev_boost_client(client_name: &str) -> bool {
+//     let keywords = ["Kiln", "mev-boost", "commit-boost", "Vouch"];
+//     keywords.iter().any(|&keyword| client_name.contains(keyword))
+// }
 
 /// Fetches the timestamp set by the mev-boost client when initialising the `get_header` request.
 fn get_x_mev_boost_header_start_ms(header_map: &HeaderMap) -> Option<u64> {

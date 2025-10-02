@@ -1,11 +1,13 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, ops::Deref, sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
 use futures::FutureExt;
 use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, bid_sorter::BidSorterMessage,
-    chain_info::ChainInfo, local_cache::LocalCache, utils::utcnow_sec,
+    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
+    chain_info::ChainInfo,
+    local_cache::LocalCache,
+    utils::utcnow_sec,
 };
 use helix_types::{Slot, SlotClockTrait};
 use tokio::{
@@ -30,6 +32,14 @@ pub struct PayloadAttributesUpdate {
     pub payload_attributes: PayloadAttributes,
 }
 
+impl Deref for PayloadAttributesUpdate {
+    type Target = PayloadAttributes;
+
+    fn deref(&self) -> &Self::Target {
+        &self.payload_attributes
+    }
+}
+
 /// Payload for head event updates sent to subscribers.
 #[derive(Clone, Debug, Default)]
 pub struct SlotUpdate {
@@ -38,18 +48,24 @@ pub struct SlotUpdate {
     pub new_duties: Option<Vec<BuilderGetValidatorsResponseEntry>>,
 }
 
+// Ugly workaround to avoid dependency on helix-api, remove when moving
+// auctioneer to its own crate
+pub struct SlotData {
+    pub bid_slot: Slot,
+    pub registration_data: Option<BuilderGetValidatorsResponseEntry>,
+    pub payload_attributes: Option<PayloadAttributesUpdate>,
+    pub il: Option<InclusionListWithMetadata>,
+}
+
 /// Manages the update of head slots and the fetching of new proposer duties.
 pub struct ChainEventUpdater {
     head_slot: u64,
     known_payload_attributes: HashMap<(B256, Slot), PayloadAttributesEvent>,
-
     proposer_duties: Vec<BuilderGetValidatorsResponseEntry>,
-
-    auctioneer: Arc<LocalCache>,
+    local_cache: Arc<LocalCache>,
     chain_info: Arc<ChainInfo>,
     curr_slot_info: CurrentSlotInfo,
-
-    sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
+    auctioneer_handle: crossbeam_channel::Sender<SlotData>,
 }
 
 impl ChainEventUpdater {
@@ -57,16 +73,16 @@ impl ChainEventUpdater {
         auctioneer: Arc<LocalCache>,
         chain_info: Arc<ChainInfo>,
         curr_slot_info: CurrentSlotInfo,
-        sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
+        auctioneer_handle: crossbeam_channel::Sender<SlotData>,
     ) -> Self {
         Self {
             head_slot: 0,
             known_payload_attributes: Default::default(),
-            auctioneer,
+            local_cache: auctioneer,
             proposer_duties: Vec::new(),
             chain_info,
             curr_slot_info,
-            sorter_tx,
+            auctioneer_handle,
         }
     }
 
@@ -186,7 +202,7 @@ impl ChainEventUpdater {
 
         sleep(Duration::from_secs(1)).await;
 
-        let mut new_duties = self.auctioneer.get_proposer_duties();
+        let mut new_duties = self.local_cache.get_proposer_duties();
         info!(
             head_slot = slot,
             new_duties = new_duties.len(),
@@ -195,7 +211,7 @@ impl ChainEventUpdater {
 
         for duty in new_duties.iter_mut() {
             let pubkey = &duty.entry.registration.message.pubkey;
-            if self.auctioneer.is_primev_proposer(pubkey) {
+            if self.local_cache.is_primev_proposer(pubkey) {
                 info!(head_slot = slot, pubkey = %pubkey, "Primev proposer duty found");
                 let tb = duty.entry.preferences.trusted_builders.get_or_insert_with(Vec::new);
                 if !tb.iter().any(|b| b == "PrimevBuilder") {
@@ -209,11 +225,17 @@ impl ChainEventUpdater {
         // Get the next proposer duty for the new slot.
         let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
 
+        let _ = self.auctioneer_handle.try_send(SlotData {
+            bid_slot: (slot + 1).into(),
+            registration_data: next_duty.clone(),
+            payload_attributes: None,
+            il: None,
+        });
+
         let update = SlotUpdate { slot: slot.into(), new_duties: Some(new_duties), next_duty };
 
         self.curr_slot_info.handle_new_slot(update, &self.chain_info);
-        self.auctioneer.process_slot(slot);
-        let _ = self.sorter_tx.try_send(BidSorterMessage::Slot(slot));
+        self.local_cache.process_slot(slot);
     }
 
     // Handles a new payload attributes event
@@ -250,6 +272,13 @@ impl ChainEventUpdater {
             withdrawals_root,
             payload_attributes: event.data.payload_attributes,
         };
+
+        let _ = self.auctioneer_handle.try_send(SlotData {
+            bid_slot: event.data.proposal_slot,
+            registration_data: None,
+            payload_attributes: Some(update.clone()),
+            il: None,
+        });
 
         self.curr_slot_info.handle_new_payload_attributes(update);
     }

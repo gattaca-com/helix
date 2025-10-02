@@ -1,6 +1,5 @@
 pub mod alerts;
 pub mod api;
-pub mod bid_sorter;
 pub mod bid_submission;
 pub mod builder_info;
 pub mod chain_info;

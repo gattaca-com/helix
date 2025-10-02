@@ -10,14 +10,18 @@ use tracing::error;
 
 use crate::{api::*, chain_info::ChainInfo, BuilderInfo, ValidatorPreferences};
 
+static mut LOCAL_DEV: bool = false;
+
+pub fn is_local_dev() -> bool {
+    unsafe { LOCAL_DEV }
+}
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct RelayConfig {
     pub instance_id: Option<String>,
     #[serde(default)]
     pub website: WebsiteConfig,
     pub postgres: PostgresConfig,
-    #[serde(default)]
-    pub broadcasters: Vec<BroadcasterConfig>,
     pub simulators: Vec<SimulatorConfig>,
     #[serde(default)]
     pub beacon_clients: Vec<BeaconClientConfig>,
@@ -56,10 +60,15 @@ pub struct RelayConfig {
     #[serde(default)]
     pub v3_port: Option<u16>,
     pub inclusion_list: Option<InclusionListConfig>,
-    pub housekeeper: bool,
+    /// False could mean either a registration or data instance
+    #[serde(alias = "housekeeper")]
+    pub is_submission_instance: bool,
     pub admin_token: String,
     #[serde(default)]
-    pub is_local_dev: bool,
+    is_local_dev: bool,
+    /// Cores configuration, recommended to be set for production use
+    #[serde(default)]
+    pub cores: CoresConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -86,6 +95,27 @@ pub struct WebsiteConfig {
     pub link_data_api: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct CoresConfig {
+    pub auctioneer: usize,
+    pub tokio: Vec<usize>,
+    pub workers: Vec<usize>,
+    pub n_tokio_blocking: usize,
+}
+
+impl Default for CoresConfig {
+    fn default() -> Self {
+        let num_cpus = num_cpus::get_physical();
+        assert!(num_cpus > 3, "need at least 3 cores");
+
+        let tokio: Vec<_> = (0..num_cpus - 2).collect();
+        let auctioneer = num_cpus - 1;
+        let workers = vec![num_cpus];
+
+        Self { n_tokio_blocking: tokio.len(), auctioneer, tokio, workers }
+    }
+}
+
 impl Default for WebsiteConfig {
     fn default() -> Self {
         Self {
@@ -110,6 +140,10 @@ pub fn load_config() -> RelayConfig {
         .unwrap_or_else(|_| panic!("unable to find config file: '{}'", start_config.config));
 
     let config: RelayConfig = serde_yaml::from_reader(file).expect("failed to parse config file");
+
+    unsafe {
+        LOCAL_DEV = config.is_local_dev;
+    }
 
     config
 }
@@ -184,11 +218,6 @@ pub const fn default_u64<const D: u64>() -> u64 {
 pub struct AlertsConfig {
     pub telegram_bot_token: String,
     pub chat_id: i64,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum BroadcasterConfig {
-    BeaconClient(BeaconClientConfig),
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -404,7 +433,7 @@ impl RouterConfig {
             Route::SubmitBlock,
             Route::GetTopBid,
             Route::GetInclusionList,
-            Route::SubmitHeaderV3,
+            // Route::SubmitHeaderV3,
         ]);
 
         self.replace_condensed_with_real(Route::ProposerApi, &[
@@ -458,9 +487,9 @@ impl RouterConfig {
 
         let is_get_header_instance =
             routes.contains(&Route::ProposerApi) || routes.contains(&Route::GetHeader);
-        let is_submission_instance = routes.contains(&Route::BuilderApi) ||
-            routes.contains(&Route::SubmitBlock) ||
-            routes.contains(&Route::SubmitHeaderV3);
+        let is_submission_instance =
+            routes.contains(&Route::BuilderApi) || routes.contains(&Route::SubmitBlock);
+        // routes.contains(&Route::SubmitHeaderV3);
 
         if is_get_header_instance {
             ensure!(
@@ -521,7 +550,7 @@ pub enum Route {
     ProposerPayloadDelivered,
     BuilderBidsReceived,
     ValidatorRegistration,
-    SubmitHeaderV3,
+    // SubmitHeaderV3,
     GetInclusionList,
     UpdateValidatorPreferences,
     GetValidatorPreferences,
@@ -548,7 +577,7 @@ impl Route {
             Route::BuilderApi => panic!("BuilderApi is not a real route"),
             Route::ProposerApi => panic!("ProposerApi is not a real route"),
             Route::DataApi => panic!("DataApi is not a real route"),
-            Route::SubmitHeaderV3 => format!("{PATH_BUILDER_API_V3}{PATH_SUBMIT_HEADER}"),
+            // Route::SubmitHeaderV3 => format!("{PATH_BUILDER_API_V3}{PATH_SUBMIT_HEADER}"),
             Route::UpdateValidatorPreferences => {
                 format!("{PATH_PROPOSER_API}{PATH_UPDATE_VALIDATOR_PREFERENCES}")
             }
@@ -587,9 +616,6 @@ fn test_config() {
     config
         .beacon_clients
         .push(BeaconClientConfig { url: Url::parse("http://localhost:8080").unwrap() });
-    config.broadcasters.push(BroadcasterConfig::BeaconClient(BeaconClientConfig {
-        url: Url::parse("http://localhost:8080").unwrap(),
-    }));
     config.network_config = NetworkConfig::Custom {
         dir_path: "test".to_string(),
         genesis_validator_root: Default::default(),
@@ -720,15 +746,16 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("routes should have get_top_bid enabled"));
     }
 
-    #[test]
-    fn test_validate_bid_sorter_valid_v3_routes() {
-        let config =
-            create_router_config(vec![Route::SubmitHeaderV3, Route::GetHeader, Route::BuilderApi]);
+    // #[test]
+    // fn test_validate_bid_sorter_valid_v3_routes() {
+    //     let config =
+    //         create_router_config(vec![Route::SubmitHeaderV3, Route::GetHeader,
+    // Route::BuilderApi]);
 
-        let result = config.validate_bid_sorter();
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-    }
+    //     let result = config.validate_bid_sorter();
+    //     assert!(result.is_ok());
+    //     assert!(result.unwrap());
+    // }
 
     #[test]
     fn test_validate_bid_sorter_data_api_only() {

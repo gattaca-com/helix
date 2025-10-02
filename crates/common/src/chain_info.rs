@@ -50,6 +50,7 @@ impl std::fmt::Display for Network {
 }
 
 /// Runtime config with all chain specific information
+#[derive(Clone)]
 pub struct ChainInfo {
     pub network: Network,
     pub genesis_validators_root: B256,
@@ -133,9 +134,13 @@ impl ChainInfo {
         }
     }
 
+    pub fn fork_at_slot(&self, slot: Slot) -> ForkName {
+        self.context.fork_name_at_slot::<MainnetEthSpec>(slot)
+    }
+
     pub fn current_fork_name(&self) -> ForkName {
         let current_slot = self.clock.now().unwrap();
-        self.context.fork_name_at_slot::<MainnetEthSpec>(current_slot)
+        self.fork_at_slot(current_slot)
     }
 
     pub fn seconds_per_slot(&self) -> u64 {

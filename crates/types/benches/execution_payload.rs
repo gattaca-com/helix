@@ -18,7 +18,7 @@ fn benchmark_serde(c: &mut Criterion) {
         SignedBidSubmission::Electra(ref submission) => &submission.execution_payload,
         SignedBidSubmission::Fulu(ref submission) => &submission.execution_payload,
     };
-    let lh_payload = payload.to_lighthouse_electra_paylaod().unwrap();
+    let lh_payload = payload.to_lighthouse_electra_payload().unwrap();
     let alloy_payload = AlloyExecutionPayload::from_ssz_bytes(&payload.as_ssz_bytes()).unwrap();
 
     group.bench_function("custom_serialize", |b| {
@@ -81,7 +81,7 @@ fn benchmark_ssz(c: &mut Criterion) {
         SignedBidSubmission::Electra(ref submission) => &submission.execution_payload,
         SignedBidSubmission::Fulu(ref submission) => &submission.execution_payload,
     };
-    let lh_payload = payload.to_lighthouse_electra_paylaod().unwrap();
+    let lh_payload = payload.to_lighthouse_electra_payload().unwrap();
     let alloy_payload = AlloyExecutionPayload::from_ssz_bytes(&payload.as_ssz_bytes()).unwrap();
 
     group.bench_function("custom_encode", |b| {
@@ -139,7 +139,7 @@ fn benchmark_transaction_root(c: &mut Criterion) {
         SignedBidSubmission::Electra(ref submission) => &submission.execution_payload,
         SignedBidSubmission::Fulu(ref submission) => &submission.execution_payload,
     };
-    let lh_payload = payload.to_lighthouse_electra_paylaod().unwrap();
+    let lh_payload = payload.to_lighthouse_electra_payload().unwrap();
 
     group.bench_function("custom_transaction_root", |b| {
         b.iter(|| {

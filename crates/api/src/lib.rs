@@ -5,19 +5,16 @@ use std::sync::{atomic::AtomicBool, Arc};
 use bytes::Bytes;
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
-    bid_sorter::{BestGetHeader, BidSorterMessage},
-    chain_info::ChainInfo,
-    local_cache::LocalCache,
-    metadata_provider::MetadataProvider,
-    signing::RelaySigningContext,
-    RelayConfig,
+    chain_info::ChainInfo, local_cache::LocalCache, metadata_provider::MetadataProvider,
+    signing::RelaySigningContext, RelayConfig,
 };
 use helix_database::DatabaseService;
-use helix_housekeeper::CurrentSlotInfo;
+use helix_housekeeper::{chain_event_updater::SlotData, CurrentSlotInfo};
 use helix_network::api::RelayNetworkApi;
 use service::run_api_service;
 
 pub mod admin_service;
+pub mod auctioneer;
 pub mod builder;
 pub mod constants;
 pub mod gossip;
@@ -27,10 +24,7 @@ pub mod middleware;
 pub mod proposer;
 pub mod relay_data;
 pub mod router;
-pub mod service;
-
-#[cfg(test)]
-pub mod test_utils;
+pub mod service; // TODO: move to separate crate, need to refactor some types
 
 mod grpc {
     include!(concat!(env!("OUT_DIR"), "/gossip.rs"));
@@ -39,7 +33,7 @@ mod grpc {
 pub fn start_api_service<A: Api>(
     config: RelayConfig,
     db: Arc<A::DatabaseService>,
-    auctioneer: Arc<LocalCache>,
+    local_cache: Arc<LocalCache>,
     chain_info: Arc<ChainInfo>,
     relay_signing_context: Arc<RelaySigningContext>,
     multi_beacon_client: Arc<MultiBeaconClient>,
@@ -47,15 +41,14 @@ pub fn start_api_service<A: Api>(
     current_slot_info: CurrentSlotInfo,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
-    sorter_tx: crossbeam_channel::Sender<BidSorterMessage>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-    shared_best_header: BestGetHeader,
+    slot_data_rx: crossbeam_channel::Receiver<SlotData>,
     relay_network_api: RelayNetworkApi,
 ) {
     tokio::spawn(run_api_service::<A>(
         config.clone(),
         db,
-        auctioneer,
+        local_cache,
         current_slot_info,
         chain_info,
         relay_signing_context,
@@ -63,9 +56,8 @@ pub fn start_api_service<A: Api>(
         metadata_provider,
         known_validators_loaded,
         terminating,
-        sorter_tx,
         top_bid_tx,
-        shared_best_header,
+        slot_data_rx,
         relay_network_api,
     ));
 }
@@ -84,3 +76,4 @@ pub const HEADER_TIMEOUT_MS: &str = "x-timeout-ms";
 pub const HEADER_API_KEY: &str = "x-api-key";
 pub const HEADER_SEQUENCE: &str = "x-sequence";
 pub const HEADER_HYDRATE: &str = "x-hydrate";
+pub const HEADER_IS_MERGEABLE: &str = "x-mergeable";

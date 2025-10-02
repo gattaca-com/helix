@@ -615,6 +615,7 @@ impl PostgresDatabaseService {
         }
 
         let mut structured_traces: Vec<TraceParams> = Vec::with_capacity(batch.len());
+        // TODO: refactor tracing
         for item in batch {
             structured_traces.push(TraceParams {
                 block_hash: item.submission.block_hash().as_slice().to_vec(),
@@ -622,12 +623,12 @@ impl PostgresDatabaseService {
                 optimistic_version: item.optimistic_version as i16,
                 receive: item.trace.receive as i64,
                 decode: item.trace.decode as i64,
-                pre_checks: item.trace.pre_checks as i64,
-                signature: item.trace.signature as i64,
-                floor_bid_checks: item.trace.signature as i64, // TODO: remove this column
-                simulation: item.trace.simulation as i64,
-                auctioneer_update: item.trace.auctioneer_update as i64,
-                request_finish: item.trace.request_finish as i64,
+                pre_checks: 0,
+                signature: 0,
+                floor_bid_checks: 0,
+                simulation: 0,
+                auctioneer_update: 0,
+                request_finish: 0,
                 metadata: item.trace.metadata.clone(),
             });
         }

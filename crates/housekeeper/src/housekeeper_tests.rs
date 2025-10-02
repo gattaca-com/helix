@@ -36,14 +36,14 @@ fn get_housekeeper() -> HelperVars {
     //     proposer_duties_has_been_read.clone(),
     // );
 
-    let sorter_tx = crossbeam_channel::unbounded().0;
-    let auctioneer = LocalCache::new(sorter_tx);
+    let auctioneer = LocalCache::new();
     let housekeeper = Housekeeper::new(
         Arc::new(db),
         beacon_client.clone().into(),
         Arc::new(auctioneer),
         &RelayConfig::default(),
         Arc::new(ChainInfo::for_mainnet()),
+        crossbeam_channel::unbounded().0,
         RelayNetworkManager::new(Default::default(), Default::default()),
     );
 

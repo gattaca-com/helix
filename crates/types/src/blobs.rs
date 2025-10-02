@@ -84,6 +84,7 @@ impl BlobsBundleV1 {
 }
 
 /// Similar to lighthouse but using our BlobsBundleV1
+// TODO: arc the fields
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize, Encode)]
 pub struct PayloadAndBlobs {
     pub execution_payload: ExecutionPayload,

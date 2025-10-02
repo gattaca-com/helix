@@ -7,8 +7,7 @@ import "google/protobuf/empty.proto";
 service GossipService {
   rpc BroadcastPayload (BroadcastPayloadParams) returns (google.protobuf.Empty);
   rpc BroadcastGetPayload (BroadcastGetPayloadParams) returns (google.protobuf.Empty);
-  rpc RequestPayload (RequestPayloadParams) returns (google.protobuf.Empty);
-}
+  }
 
 message BroadcastPayloadParams {
   bytes execution_payload = 1;
@@ -21,10 +20,4 @@ message BroadcastGetPayloadParams {
   bytes signed_blinded_beacon_block = 1;
   bytes request_id = 2;
   optional string fork_name = 3;
-}
-
-message RequestPayloadParams {
-  uint64 slot = 1;
-  bytes proposer_pub_key = 2;
-  bytes block_hash = 3;
 }

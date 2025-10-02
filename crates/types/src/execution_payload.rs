@@ -124,7 +124,7 @@ impl ExecutionPayload {
         self.transactions.tree_hash_root()
     }
 
-    pub fn to_lighthouse_electra_paylaod(
+    pub fn to_lighthouse_electra_payload(
         &self,
     ) -> Result<lh_types::ExecutionPayloadElectra<MainnetEthSpec>, SszError> {
         Ok(lh_types::ExecutionPayloadElectra {

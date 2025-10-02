@@ -23,11 +23,10 @@ impl BroadcastGetPayloadParams {
 
         Ok(Self { signed_blinded_beacon_block, request_id })
     }
+
     pub fn to_proto(&self) -> grpc::BroadcastGetPayloadParams {
         grpc::BroadcastGetPayloadParams {
-            signed_blinded_beacon_block: SignedBlindedBeaconBlock::as_ssz_bytes(
-                &self.signed_blinded_beacon_block,
-            ),
+            signed_blinded_beacon_block: self.signed_blinded_beacon_block.as_ssz_bytes(),
             request_id: self.request_id.as_bytes().to_vec(),
             fork_name: Some(self.signed_blinded_beacon_block.fork_name_unchecked().to_string()),
         }
