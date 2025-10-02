@@ -21,11 +21,12 @@ use tracing::{error, info, warn};
 use super::ProposerApi;
 use crate::{
     auctioneer::GetPayloadResultData,
-    constants::GET_PAYLOAD_REQUEST_CUTOFF_MS,
     gossiper::types::{BroadcastGetPayloadParams, BroadcastPayloadParams},
     proposer::error::ProposerApiError,
     Api,
 };
+
+const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
 
 pub enum ProposerApiVersion {
     V1,

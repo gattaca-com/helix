@@ -16,7 +16,6 @@ use service::run_api_service;
 pub mod admin_service;
 pub mod auctioneer;
 pub mod builder;
-pub mod constants;
 pub mod gossip;
 pub mod gossiper;
 pub mod integration_tests;

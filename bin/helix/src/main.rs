@@ -17,7 +17,7 @@ use helix_common::{
     signing::RelaySigningContext,
     task::{block_on, init_runtime},
     utils::{init_panic_hook, init_tracing_log},
-    RelayConfig,
+    CoresConfig, RelayConfig,
 };
 use helix_database::{
     postgres::postgres_db_service::PostgresDatabaseService, start_db_service, DatabaseService,
@@ -28,7 +28,7 @@ use helix_types::BlsKeypair;
 use helix_website::website_service::WebsiteService;
 use tikv_jemallocator::Jemalloc;
 use tokio::signal::unix::SignalKind;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
@@ -43,6 +43,8 @@ impl Api for ApiProd {
 
 fn main() {
     let config = load_config();
+    init_runtime(&config.cores);
+
     let keypair = load_keypair();
 
     let instance_id = config.instance_id.clone().unwrap_or_else(|| {
@@ -53,8 +55,11 @@ fn main() {
         )
     });
 
-    let _guard =
-        init_tracing_log(&config.logging, &config.postgres.region_name, instance_id.clone());
+    let _guard = block_on(init_tracing_log(
+        &config.logging,
+        &config.postgres.region_name,
+        instance_id.clone(),
+    ));
 
     init_panic_hook(
         config.postgres.region_name.clone(),
@@ -70,7 +75,11 @@ fn main() {
         "starting relay"
     );
 
-    init_runtime(&config.cores);
+    if config.cores == CoresConfig::default() {
+        warn!("using default cores config, this is not recommended for production");
+    }
+    info!(cores = ?config.cores, "cores config");
+
     block_on(start_metrics_server(&config));
     match block_on(run(config, keypair)) {
         Ok(_) => info!("relay exited"),

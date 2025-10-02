@@ -1,1 +1,0 @@
-pub const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;

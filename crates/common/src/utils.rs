@@ -20,7 +20,12 @@ use uuid::Uuid;
 
 use crate::LoggingConfig;
 
-pub fn init_tracing_log(config: &LoggingConfig, region: &str, instance_id: String) -> WorkerGuard {
+// Async because OTEL exporter spawns a task
+pub async fn init_tracing_log(
+    config: &LoggingConfig,
+    region: &str,
+    instance_id: String,
+) -> WorkerGuard {
     let format = tracing_subscriber::fmt::format()
         .with_level(true)
         .with_thread_ids(false)

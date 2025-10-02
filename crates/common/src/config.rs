@@ -93,7 +93,7 @@ pub struct WebsiteConfig {
     pub link_data_api: String,
 }
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct CoresConfig {
     pub auctioneer: usize,
     pub tokio: Vec<usize>,

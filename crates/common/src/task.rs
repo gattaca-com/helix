@@ -13,7 +13,7 @@ use tokio::{
     runtime::{self},
     task::JoinHandle,
 };
-use tracing::{info, warn, Instrument};
+use tracing::Instrument;
 
 use crate::{utils::pin_thread_to_core, CoresConfig};
 
@@ -65,12 +65,6 @@ pub fn init_runtime(config: &CoresConfig) {
     assert!(config.workers.len() > 0, "need at least 1 worker core");
     assert!(config.tokio.len() > 0, "need at least 1 tokio core");
     assert!(config.n_tokio_blocking > 0, "need at least 1 blocking tokio thread");
-
-    if config == &CoresConfig::default() {
-        warn!("initializing default cores config, this is not recommended for production");
-    }
-
-    info!(cores = ?config.tokio, blocking_threads = config.n_tokio_blocking, "initializing tokio runtime");
 
     let cores_a = Arc::new(Mutex::new(Cores::new(config.tokio.clone())));
     let cores_b = cores_a.clone();
