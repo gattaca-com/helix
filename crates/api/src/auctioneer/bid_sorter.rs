@@ -1,4 +1,7 @@
-use std::{collections::hash_map::Entry, time::Duration};
+use std::{
+    collections::hash_map::Entry,
+    time::{Duration, Instant},
+};
 
 use alloy_primitives::{
     map::foldhash::{HashMap, HashMapExt, HashSet, HashSetExt},
@@ -9,51 +12,12 @@ use helix_common::{
     api::builder_api::TopBidUpdate,
     bid_submission::BidSubmission,
     bid_submission_to_builder_bid_unsigned,
-    metrics::{
-        TopBidMetrics, BID_SORTER_PROCESS_LATENCY_US, BID_SORTER_QUEUE_LATENCY_US,
-        BID_SORTER_RECV_LATENCY_US,
-    },
-    utils::{avg_duration, utcnow_ms, utcnow_ns},
+    metrics::{TopBidMetrics, BID_SORTER_PROCESS_LATENCY_US},
+    utils::{avg_duration, utcnow_ns},
     SubmissionTrace,
 };
 use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
 use tracing::info;
-
-/// Pre-validated submissions ready to be processed. Submissions could come from:
-/// - V1 submissions, either optimistic, or non-optimistic after simulation
-pub struct BidSorterMessage {
-    bid: Bid,
-    builder_pubkey: BlsPublicKeyBytes,
-    slot: u64,
-    header: BuilderBid,
-    simulation_time_ns: u64,
-    before_sorter_ns: u64,
-    merging_preferences: BlockMergingPreferences,
-}
-
-impl BidSorterMessage {
-    pub fn new_from_block_submission(
-        submission: &SignedBidSubmission,
-        trace: &SubmissionTrace,
-        before_sorter_ns: u64,
-        simulation_time_ns: u64,
-        withdrawals_root: B256,
-        merging_preferences: BlockMergingPreferences,
-    ) -> Self {
-        let bid_trace = submission.bid_trace();
-        let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
-        let header = bid_submission_to_builder_bid_unsigned(submission, withdrawals_root);
-        Self {
-            bid,
-            builder_pubkey: bid_trace.builder_pubkey,
-            slot: bid_trace.slot,
-            header,
-            simulation_time_ns,
-            before_sorter_ns,
-            merging_preferences,
-        }
-    }
-}
 
 /// Latest cancellable bid
 #[derive(Clone, Copy)]
@@ -81,17 +45,12 @@ pub struct Bid {
 
 #[derive(Default)]
 struct BidSorterTelemetry {
-    valid_subs: u32,
-    past_subs: u32,
-    demoted_subs: u32,
-    /// Time when bid was first received to when it arrived in the sorter
-    subs_recv_time: Duration,
-    /// Time when the bid spent in the queue awaiting processing
-    subs_queue_time: Duration,
+    subs: u32,
+    top_bids: u32,
+    /// Latency to created builder bid struct (tx root)
+    subs_create_time: Duration,
     /// Internal bid processing time of the sorter
     subs_process_time: Duration,
-    top_bids: u32,
-    new_demotions: u32,
 }
 
 pub struct BidSorter {
@@ -126,40 +85,32 @@ impl BidSorter {
 
     pub fn sort(
         &mut self,
-        BidSorterMessage {
-            bid,
-            builder_pubkey,
-            slot,
-            header,
-            simulation_time_ns,
-            before_sorter_ns,
-            merging_preferences,
-        }: BidSorterMessage,
+        submission: &SignedBidSubmission,
+        trace: &mut SubmissionTrace,
+        withdrawals_root: B256,
+        merging_preferences: BlockMergingPreferences,
     ) {
-        let recv_ns = utcnow_ns();
+        let start = Instant::now();
+        let bid_trace = submission.bid_trace();
+        assert_eq!(bid_trace.slot, self.curr_bid_slot);
 
-        // move this out
-        if self.curr_bid_slot != slot {
-            self.local_telemetry.past_subs += 1;
-            return;
-        }
+        let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
+        // TODO: this takes 1-5 ms!
+        let header = bid_submission_to_builder_bid_unsigned(submission, withdrawals_root);
+        let builder_pubkey = bid_trace.builder_pubkey;
+        self.local_telemetry.subs_create_time += start.elapsed();
 
+        let start = Instant::now();
         self.headers.insert(bid.on_receive_ns, (header, merging_preferences));
-        self.process_header(builder_pubkey, bid);
+        self.process_header(builder_pubkey, bid, trace);
+
+        let process_latency = start.elapsed();
+        trace.sorted = utcnow_ns();
 
         // telemetry
-        let recv_latency_ns = recv_ns.saturating_sub(bid.on_receive_ns + simulation_time_ns);
-        let process_latency_ns = utcnow_ns().saturating_sub(recv_ns);
-        let queue_latency_ns = recv_ns.saturating_sub(before_sorter_ns);
-
-        self.local_telemetry.valid_subs += 1;
-        self.local_telemetry.subs_recv_time += Duration::from_nanos(recv_latency_ns);
-        self.local_telemetry.subs_process_time += Duration::from_nanos(process_latency_ns);
-        self.local_telemetry.subs_queue_time += Duration::from_nanos(queue_latency_ns);
-
-        BID_SORTER_RECV_LATENCY_US.observe(recv_latency_ns as f64 / 1000.);
-        BID_SORTER_PROCESS_LATENCY_US.observe(process_latency_ns as f64 / 1000.);
-        BID_SORTER_QUEUE_LATENCY_US.observe(queue_latency_ns as f64 / 1000.);
+        self.local_telemetry.subs += 1;
+        self.local_telemetry.subs_process_time += process_latency;
+        BID_SORTER_PROCESS_LATENCY_US.observe(process_latency.as_micros() as f64);
     }
 
     // TODO: return this from .sort instead
@@ -177,21 +128,21 @@ impl BidSorter {
     pub fn demote(&mut self, demoted: BlsPublicKeyBytes) {
         if !self.demotions.insert(demoted) {
             // already demoted
-
             return;
         }
-
         self.process_demotion(demoted);
-
-        // telemetry
-        self.local_telemetry.new_demotions += 1;
     }
 
     pub fn get_header(&self) -> Option<BuilderBid> {
         self.curr_bid.as_ref().map(|b| b.2.clone())
     }
 
-    fn process_header(&mut self, new_pubkey: BlsPublicKeyBytes, new_bid: Bid) {
+    fn process_header(
+        &mut self,
+        new_pubkey: BlsPublicKeyBytes,
+        new_bid: Bid,
+        trace: &mut SubmissionTrace,
+    ) {
         match self.bids.entry(new_pubkey) {
             Entry::Occupied(mut entry) => {
                 let entry = entry.get_mut();
@@ -209,15 +160,15 @@ impl BidSorter {
         match &self.curr_bid {
             Some((curr_pubkey, curr_bid, _)) => {
                 if new_bid.value > curr_bid.value {
-                    self.update_top_bid(new_pubkey, new_bid);
+                    self.update_top_bid(new_pubkey, new_bid, Some(trace), false);
                 } else if new_pubkey == *curr_pubkey {
                     // this was a cancel, need to check all other bids
-                    self.traverse_update_top_bid();
+                    self.traverse_update_top_bid(Some(trace));
                 }
             }
 
             None => {
-                self.update_top_bid(new_pubkey, new_bid);
+                self.update_top_bid(new_pubkey, new_bid, Some(trace), false);
             }
         }
     }
@@ -232,12 +183,12 @@ impl BidSorter {
 
         if let Some((curr, _, _)) = &self.curr_bid {
             if *curr == demoted {
-                self.traverse_update_top_bid();
+                self.traverse_update_top_bid(None);
             }
         }
     }
 
-    fn traverse_update_top_bid(&mut self) {
+    fn traverse_update_top_bid(&mut self, trace: Option<&mut SubmissionTrace>) {
         let mut best = None;
 
         for (pk, entry) in self.bids.iter() {
@@ -254,7 +205,7 @@ impl BidSorter {
         }
 
         if let Some((best_pk, best_bid)) = best {
-            self.update_top_bid(best_pk, best_bid);
+            self.update_top_bid(best_pk, best_bid, trace, true);
         } else {
             self.curr_bid = None;
         }
@@ -273,14 +224,22 @@ impl BidSorter {
         self.curr_bid = None;
     }
 
-    fn update_top_bid(&mut self, builder_pubkey: BlsPublicKeyBytes, bid: Bid) {
+    fn update_top_bid(
+        &mut self,
+        builder_pubkey: BlsPublicKeyBytes,
+        bid: Bid,
+        trace: Option<&mut SubmissionTrace>,
+        is_cancel: bool,
+    ) {
         let Some((h, _)) = self.headers.get(&bid.on_receive_ns) else {
             // this should never happen
             return;
         };
 
+        let now_ns = utcnow_ns();
+
         let top_bid_update = TopBidUpdate {
-            timestamp: utcnow_ms(),
+            timestamp: now_ns / 1_000_000,
             slot: self.curr_bid_slot,
             block_number: h.header.block_number,
             block_hash: h.header.block_hash,
@@ -295,6 +254,9 @@ impl BidSorter {
 
         self.curr_bid = Some((builder_pubkey, bid, h.clone()));
 
+        if let Some(trace) = trace {
+            trace.top_bid_at = Some((now_ns, is_cancel));
+        }
         self.local_telemetry.top_bids += 1;
         TopBidMetrics::top_bid_update_count();
     }
@@ -302,21 +264,15 @@ impl BidSorter {
     pub(super) fn report(&mut self) {
         let tel = std::mem::take(&mut self.local_telemetry);
 
-        let total_subs = tel.valid_subs + tel.past_subs + tel.demoted_subs;
-        let avg_sub_recv = avg_duration(tel.subs_recv_time, total_subs);
-        let avg_sub_process = avg_duration(tel.subs_process_time, tel.valid_subs);
-        let avg_sub_queue = avg_duration(tel.subs_queue_time, tel.valid_subs);
+        let avg_sub_create = avg_duration(tel.subs_create_time, tel.subs);
+        let avg_sub_process = avg_duration(tel.subs_process_time, tel.subs);
 
         info!(
             slot = self.curr_bid_slot,
-            valid_subs = tel.valid_subs,
-            past_subs = tel.past_subs,
-            demoted_subs = tel.demoted_subs,
+            valid_subs = tel.subs,
+            ?avg_sub_create,
             ?avg_sub_process,
-            ?avg_sub_recv,
-            ?avg_sub_queue,
             top_bids = tel.top_bids,
-            new_demotions = tel.new_demotions,
             "bid sorter telemetry"
         )
     }

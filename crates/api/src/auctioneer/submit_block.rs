@@ -14,7 +14,6 @@ use tracing::trace;
 
 use crate::{
     auctioneer::{
-        bid_sorter::BidSorterMessage,
         context::Context,
         simulator::{manager::SimulationResult, BlockSimRequest, SimulatorRequest},
         types::{SlotData, Submission, SubmissionResult},
@@ -72,17 +71,12 @@ impl<A: Api> Context<A> {
 
             Ok(_) | Err(_) => {
                 if !result.was_optimistic_sim() {
-                    // TODO: tidy this up, we store the submission not the header
-                    let msg = BidSorterMessage::new_from_block_submission(
+                    self.bid_sorter.sort(
                         &result.submission,
-                        &Default::default(),
-                        utcnow_ns(),
-                        100,
+                        &mut result.trace,
                         result.submission.withdrawals_root(),
                         result.merging_preferences,
                     );
-
-                    self.bid_sorter.sort(msg);
                 }
             }
         }
@@ -134,17 +128,7 @@ impl<A: Api> Context<A> {
         let optimistic_version = if self.sim_manager.can_process_optimistic_submission() &&
             self.should_process_optimistically(&submission, &builder_info, slot_data)
         {
-            // TODO: tidy this up, we store the submission not the header
-            let msg = BidSorterMessage::new_from_block_submission(
-                &submission,
-                trace,
-                utcnow_ns(),
-                0,
-                withdrawals_root,
-                merging_preferences,
-            );
-            self.bid_sorter.sort(msg);
-            trace.sorted = utcnow_ns();
+            self.bid_sorter.sort(&submission, trace, withdrawals_root, merging_preferences);
             OptimisticVersion::V1
         } else {
             OptimisticVersion::NotOptimistic

@@ -29,6 +29,9 @@ pub struct SubmissionTrace {
     pub sorted: u64,
     pub simulation: u64,
     pub metadata: Option<String>,
+    /// When a _newly processed submission_ triggered a top bid update (new top bid or cancel)
+    /// ts in nanos, is_cancel
+    pub top_bid_at: Option<(u64, bool)>,
 }
 
 impl SubmissionTrace {
@@ -72,6 +75,18 @@ impl SubmissionTrace {
             // non optimistic
             record("simulation", self.validated, self.simulation);
             record("sorted", self.simulation, self.sorted);
+        }
+
+        if let Some((top_bid_at, is_cancel)) = self.top_bid_at {
+            if is_cancel {
+                // this is our "tick to trade" but may be confounded if builder is sending slowly
+                record("recv_top_bid_cancel", self.receive, top_bid_at);
+                // internal overhead
+                record("read_body_top_bid_cancel", self.read_body, top_bid_at);
+            } else {
+                record("recv_top_bid", self.receive, top_bid_at);
+                record("read_body_top_bid", self.read_body, top_bid_at);
+            }
         }
     }
 }

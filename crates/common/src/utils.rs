@@ -105,6 +105,9 @@ fn get_crate_filter(crates_level: tracing::Level) -> EnvFilter {
             env_filter.add_directive(format!("helix_{crate_name}={crates_level}").parse().unwrap())
     }
 
+    // env_filter =
+    // env_filter.add_directive(format!("helix_api::auctioneer=trace").parse().unwrap());
+
     env_filter
 }
 
