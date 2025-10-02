@@ -10,7 +10,6 @@ use alloy_primitives::{
 use bytes::Bytes;
 use helix_common::{
     api::builder_api::TopBidUpdate,
-    bid_submission::BidSubmission,
     bid_submission_to_builder_bid_unsigned,
     metrics::{TopBidMetrics, BID_SORTER_PROCESS_LATENCY_US},
     utils::{avg_duration, utcnow_ns},

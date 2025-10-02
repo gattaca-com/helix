@@ -1,5 +1,5 @@
 use alloy_primitives::B256;
-use helix_common::{bid_submission::BidSubmission, BuilderInfo};
+use helix_common::BuilderInfo;
 use helix_types::{BlsPublicKeyBytes, SignedBidSubmission};
 
 use crate::{
@@ -37,7 +37,7 @@ impl<A: Api> Context<A> {
 
     fn validate_submission_data(
         &self,
-        payload: &impl BidSubmission,
+        payload: &SignedBidSubmission,
         withdrawals_root: &B256,
         slot_data: &SlotData,
     ) -> Result<(), BuilderApiError> {
@@ -91,7 +91,7 @@ impl<A: Api> Context<A> {
 
     fn check_duplicate_submission(&mut self, block_hash: B256) -> Result<(), BuilderApiError> {
         if !self.seen_block_hashes.insert(block_hash) {
-            return Err(BuilderApiError::DuplicateBlockHash { block_hash })
+            return Err(BuilderApiError::DuplicateBlockHash { block_hash });
         }
 
         Ok(())

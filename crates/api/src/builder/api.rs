@@ -32,8 +32,6 @@ pub struct BuilderApi<A: Api> {
     pub relay_config: Arc<RelayConfig>,
     /// Subscriber for TopBid updates, SSZ encoded
     pub top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-    // /// Cache of tx roots for v3 submissions
-    // pub tx_root_cache: DashMap<B256, (u64, B256)>,
     /// Failsafe: if we fail to demote we pause all optimistic submissions
     pub failsafe_triggered: Arc<AtomicBool>,
     /// Failsafe: if we fail don't have any synced client we pause all optimistic submissions

@@ -8,7 +8,6 @@ version.workspace = true
 
 [dependencies]
 alloy-primitives.workspace = true
-auto_impl.workspace = true
 axum.workspace = true
 ethereum_serde_utils.workspace = true
 ethereum_ssz.workspace = true

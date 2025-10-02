@@ -72,7 +72,6 @@ pub fn build_router<A: Api>(
             Route::ProposerPayloadDelivered => get(DataApi::<A>::proposer_payload_delivered),
             Route::BuilderBidsReceived => get(DataApi::<A>::builder_bids_received),
             Route::ValidatorRegistration => get(DataApi::<A>::validator_registration),
-            // Route::SubmitHeaderV3 => post(BuilderApi::<A>::submit_header_v3),
             Route::GetInclusionList => get(BuilderApi::<A>::get_inclusion_list),
             Route::RelayNetwork => any(RelayNetworkApi::connect),
             Route::All | Route::BuilderApi | Route::ProposerApi | Route::DataApi => {

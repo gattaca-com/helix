@@ -11,10 +11,9 @@ use helix_common::{
         data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
-    bid_submission::{v2::header_submission::SignedHeaderSubmission, OptimisticVersion},
-    BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, HeaderSubmissionTrace,
-    ProposerInfo, SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences,
-    ValidatorSummary,
+    bid_submission::OptimisticVersion,
+    BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, ProposerInfo,
+    SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
 };
 use helix_types::{
     BlsPublicKeyBytes, BlsSignatureBytes, PayloadAndBlobs, SignedBidSubmission,
@@ -258,14 +257,6 @@ impl DatabaseService for MockDatabaseService {
         _block_hash: B256,
         _error: String,
         _trace: GetPayloadTrace,
-    ) -> Result<(), DatabaseError> {
-        Ok(())
-    }
-    async fn store_header_submission(
-        &self,
-        _submission: Arc<SignedHeaderSubmission>,
-        _trace: HeaderSubmissionTrace,
-        _tx_count: u32,
     ) -> Result<(), DatabaseError> {
         Ok(())
     }

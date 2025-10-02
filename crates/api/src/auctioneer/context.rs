@@ -5,8 +5,8 @@ use std::{
 
 use alloy_primitives::{B256, U256};
 use helix_common::{
-    bid_submission::BidSubmission, chain_info::ChainInfo, local_cache::LocalCache,
-    metrics::SimulatorMetrics, spawn_tracked, BuilderInfo, RelayConfig,
+    chain_info::ChainInfo, local_cache::LocalCache, metrics::SimulatorMetrics, spawn_tracked,
+    BuilderInfo, RelayConfig,
 };
 use helix_database::DatabaseService;
 use helix_types::{BlsPublicKeyBytes, HydrationCache, PayloadAndBlobs, Slot};

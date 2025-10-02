@@ -8,20 +8,15 @@ mod tests {
         api::{
             builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
         },
-        bid_submission::{
-            v2::header_submission::{HeaderSubmissionElectra, SignedHeaderSubmission},
-            OptimisticVersion,
-        },
+        bid_submission::OptimisticVersion,
         utils::{utcnow_ns, utcnow_sec},
         validator_preferences::ValidatorPreferences,
-        Filtering, GetPayloadTrace, HeaderSubmissionTrace, PostgresConfig, SubmissionTrace,
-        ValidatorSummary,
+        Filtering, GetPayloadTrace, PostgresConfig, SubmissionTrace, ValidatorSummary,
     };
     use helix_types::{
         BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey,
         BlsSignatureBytes, ExecutionPayload, PayloadAndBlobs, SignedBidSubmissionElectra,
-        SignedMessage, SignedValidatorRegistration, TestRandomSeed, Validator,
-        ValidatorRegistration, Withdrawal,
+        SignedValidatorRegistration, TestRandomSeed, Validator, ValidatorRegistration, Withdrawal,
     };
     use rand::{rng, seq::SliceRandom, Rng};
     use tokio::{sync::OnceCell, time::sleep};
@@ -560,27 +555,6 @@ mod tests {
             .save_failed_get_payload(1, Default::default(), "error".to_string(), Default::default())
             .await?;
 
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_store_header_submission() -> Result<(), Box<dyn std::error::Error>> {
-        run_setup().await;
-
-        let db_service = PostgresDatabaseService::new(&test_config(), 1)?;
-
-        let bid_submission = HeaderSubmissionElectra::test_random();
-        let signed =
-            SignedMessage { message: bid_submission, signature: BlsSignatureBytes::random() };
-        let signed_bid_submission = SignedHeaderSubmission::Electra(signed);
-
-        db_service
-            .store_header_submission(
-                Arc::new(signed_bid_submission),
-                HeaderSubmissionTrace::default(),
-                0,
-            )
-            .await?;
         Ok(())
     }
 
