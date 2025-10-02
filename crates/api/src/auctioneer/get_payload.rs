@@ -3,8 +3,9 @@ use std::sync::Arc;
 use alloy_primitives::B256;
 use helix_common::GetPayloadTrace;
 use helix_types::{
-    BeaconBlockBodyElectra, BeaconBlockElectra, GetPayloadResponse, PayloadAndBlobs,
-    SignedBeaconBlock, SignedBeaconBlockElectra, SignedBlindedBeaconBlock, VersionedSignedProposal,
+    BeaconBlockBodyElectra, BeaconBlockBodyFulu, BeaconBlockElectra, BeaconBlockFulu,
+    GetPayloadResponse, PayloadAndBlobs, SignedBeaconBlock, SignedBeaconBlockElectra,
+    SignedBeaconBlockFulu, SignedBlindedBeaconBlock, VersionedSignedProposal,
 };
 use tokio::sync::oneshot;
 use tracing::{info, warn};
@@ -27,12 +28,12 @@ impl<A: Api> Context<A> {
     ) {
         if self.bid_slot != payload.slot {
             warn!(curr =% self.bid_slot, received =% payload.slot, "received gossiped payload for wrong slot");
-            return
+            return;
         }
 
         if slot_data.proposer_pubkey() != &payload.proposer_pub_key {
             warn!(curr =% slot_data.proposer_pubkey(), received =% payload.proposer_pub_key, "received gossiped payload for wrong proposer");
-            return
+            return;
         }
 
         self.payloads.insert(
@@ -152,7 +153,6 @@ impl<A: Api> Context<A> {
             SignedBlindedBeaconBlock::Bellatrix(_) |
             SignedBlindedBeaconBlock::Capella(_) |
             SignedBlindedBeaconBlock::Deneb(_) |
-            SignedBlindedBeaconBlock::Fulu(_) |
             SignedBlindedBeaconBlock::Gloas(_) => {
                 Err(ProposerApiError::UnsupportedBeaconChainVersion)
             }
@@ -219,6 +219,83 @@ impl<A: Api> Context<A> {
 
                 // TODO: avoid this endless cloning
                 let signed_block = SignedBeaconBlock::Electra(inner).into();
+                let to_broadcast = VersionedSignedProposal {
+                    signed_block,
+                    kzg_proofs: local.blobs_bundle.proofs.clone(),
+                    blobs: local.blobs_bundle.blobs.clone(),
+                };
+                let to_proposer = GetPayloadResponse {
+                    version: slot_data.current_fork,
+                    metadata: Default::default(),
+                    data: local,
+                };
+
+                Ok((to_proposer, to_broadcast))
+            }
+            SignedBlindedBeaconBlock::Fulu(blinded_block) => {
+                // validate
+                // TODO: we should already have the header, as we served it in "get_header"
+                // NOTE: not if it comes via gossip, just implement the check manually
+                let local_execution_payload_header = local
+                    .execution_payload
+                    .to_header(None)
+                    .to_lighthouse_fulu_header()
+                    .map_err(ProposerApiError::SszError)?;
+
+                let block = &blinded_block.message;
+                let body = &block.body;
+                let provided_header = &body.execution_payload.execution_payload_header;
+
+                if &local_execution_payload_header != provided_header {
+                    return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
+                }
+
+                let local_kzg_commitments = &local.blobs_bundle.commitments;
+
+                if !local_kzg_commitments.iter().eq(body.blob_kzg_commitments.iter().map(|p| p.0)) {
+                    return Err(ProposerApiError::BlobKzgCommitmentsMismatch);
+                }
+
+                // unblind
+
+                let signature = blinded_block.signature.clone();
+
+                if body.blob_kzg_commitments.len() != local.blobs_bundle.blobs.len() {
+                    return Err(ProposerApiError::BlindedBlobsBundleLengthMismatch);
+                }
+
+                let local_execution_payload = local
+                    .execution_payload
+                    .to_lighthouse_fulu_payload()
+                    .map_err(ProposerApiError::SszError)?;
+
+                let inner = SignedBeaconBlockFulu {
+                    message: BeaconBlockFulu {
+                        slot: block.slot,
+                        proposer_index: block.proposer_index,
+                        parent_root: block.parent_root,
+                        state_root: block.state_root,
+                        body: BeaconBlockBodyFulu {
+                            randao_reveal: body.randao_reveal.clone(),
+                            eth1_data: body.eth1_data.clone(),
+                            graffiti: body.graffiti,
+                            proposer_slashings: body.proposer_slashings.clone(),
+                            attester_slashings: body.attester_slashings.clone(),
+                            attestations: body.attestations.clone(),
+                            deposits: body.deposits.clone(),
+                            voluntary_exits: body.voluntary_exits.clone(),
+                            sync_aggregate: body.sync_aggregate.clone(),
+                            execution_payload: local_execution_payload.into(),
+                            bls_to_execution_changes: body.bls_to_execution_changes.clone(),
+                            blob_kzg_commitments: body.blob_kzg_commitments.clone(),
+                            execution_requests: body.execution_requests.clone(),
+                        },
+                    },
+                    signature,
+                };
+
+                let signed_block = SignedBeaconBlock::Fulu(inner).into();
+
                 let to_broadcast = VersionedSignedProposal {
                     signed_block,
                     kzg_proofs: local.blobs_bundle.proofs.clone(),

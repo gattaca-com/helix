@@ -196,7 +196,7 @@ impl Worker {
                 trace.signature = Some(utcnow_ns());
             }
 
-            payload.validate_payload_ssz_lengths()?;
+            payload.validate_payload_ssz_lengths(self.chain_info.max_blobs_per_block())?;
             (Submission::Full(payload), merging_data)
         };
 

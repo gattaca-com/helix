@@ -98,15 +98,16 @@ impl<A: Api> Context<A> {
         let submission = match submission {
             Submission::Full(full) => full,
             Submission::Dehydrated(dehydrated) => {
+                let max_blobs_per_block = self.chain_info.max_blobs_per_block();
                 let (payload, tx_cache_hits, blob_cache_hits) =
-                    dehydrated.hydrate(&mut self.hydration_cache)?;
+                    dehydrated.hydrate(&mut self.hydration_cache, max_blobs_per_block)?;
 
                 HYDRATION_CACHE_HITS
                     .with_label_values(&["transaction"])
                     .inc_by(tx_cache_hits as u64);
                 HYDRATION_CACHE_HITS.with_label_values(&["blob"]).inc_by(blob_cache_hits as u64);
 
-                payload.validate_payload_ssz_lengths()?;
+                payload.validate_payload_ssz_lengths(max_blobs_per_block)?;
                 payload
             }
         };
