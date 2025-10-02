@@ -83,9 +83,18 @@ impl SubmissionDecoder {
     // TODO: we could also just extract the bid trace and send that through before the rest is
     // decoded after some light validation
     /// Assume buf is already decompressed
-    pub fn extract_builder_pubkey(&self, buf: &[u8]) -> Result<BlsPublicKeyBytes, BuilderApiError> {
+    pub fn extract_builder_pubkey(
+        &self,
+        buf: &[u8],
+        has_mergeable_data: bool,
+    ) -> Result<BlsPublicKeyBytes, BuilderApiError> {
         match self.encoding {
             Encoding::Json => {
+                #[derive(serde::Deserialize)]
+                struct Outer {
+                    submission: Bid,
+                }
+
                 #[derive(serde::Deserialize)]
                 struct Bid {
                     message: Message,
@@ -95,7 +104,11 @@ impl SubmissionDecoder {
                     builder_pubkey: BlsPublicKeyBytes,
                 }
 
-                let bid: Bid = serde_json::from_slice(buf)?;
+                let bid: Bid = if has_mergeable_data {
+                    serde_json::from_slice::<Outer>(buf)?.submission
+                } else {
+                    serde_json::from_slice(buf)?
+                };
 
                 Ok(bid.message.builder_pubkey)
             }
@@ -236,6 +249,11 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use alloy_primitives::hex::FromHex;
+    use helix_types::{
+        SignedBidSubmission, SignedBidSubmissionElectra, SignedBidSubmissionWithMergingData,
+        TestRandomSeed,
+    };
+    use ssz::Encode;
 
     use super::*;
 
@@ -255,7 +273,7 @@ mod tests {
             decode_latency: Default::default(),
         };
 
-        let pubkey = decoder.extract_builder_pubkey(data_json).unwrap();
+        let pubkey = decoder.extract_builder_pubkey(data_json, false).unwrap();
         assert_eq!(pubkey, expected);
 
         let data_ssz =
@@ -270,7 +288,45 @@ mod tests {
             decode_latency: Default::default(),
         };
 
-        let pubkey = decoder.extract_builder_pubkey(data_ssz).unwrap();
+        let pubkey = decoder.extract_builder_pubkey(data_ssz, false).unwrap();
         assert_eq!(pubkey, expected);
+    }
+
+    #[test]
+    fn test_get_builder_pubkey_merging() {
+        let sub = SignedBidSubmissionElectra::test_random();
+        let sub = SignedBidSubmission::Electra(sub);
+        let sub = SignedBidSubmissionWithMergingData {
+            submission: sub,
+            merging_data: Default::default(),
+        };
+
+        let data_json = serde_json::to_vec(&sub).unwrap();
+        let decoder = SubmissionDecoder {
+            compression: Compression::Gzip,
+            encoding: Encoding::Json,
+            bytes_before_decompress: 0,
+            bytes_after_decompress: 0,
+            estimated_decompress: 0,
+            decompress_latency: Default::default(),
+            decode_latency: Default::default(),
+        };
+
+        let pubkey_json = decoder.extract_builder_pubkey(data_json.as_slice(), true).unwrap();
+
+        let data_ssz = sub.as_ssz_bytes();
+        let decoder = SubmissionDecoder {
+            compression: Compression::Gzip,
+            encoding: Encoding::Ssz,
+            bytes_before_decompress: 0,
+            bytes_after_decompress: 0,
+            estimated_decompress: 0,
+            decompress_latency: Default::default(),
+            decode_latency: Default::default(),
+        };
+
+        let pubkey_ssz = decoder.extract_builder_pubkey(data_ssz.as_slice(), true).unwrap();
+
+        assert_eq!(pubkey_json, pubkey_ssz)
     }
 }

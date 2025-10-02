@@ -160,13 +160,13 @@ impl SubWorker {
 
         let mut decoder = SubmissionDecoder::from_headers(&headers);
         let body = decoder.decompress(body)?;
-        let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref())?;
+        let has_mergeable_data = matches!(headers.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"));
+        let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref(), has_mergeable_data)?;
 
         let skip_sigverify = headers
             .get(HEADER_API_KEY)
             .is_some_and(|key| self.cache.validate_api_key(key, &builder_pubkey));
         let should_hydrate = headers.get(HEADER_HYDRATE).is_some();
-        let has_mergeable_data = matches!(headers.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"));
         let sequence = headers
             .get(HEADER_SEQUENCE)
             .and_then(|seq| seq.to_str().ok())
