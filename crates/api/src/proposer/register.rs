@@ -12,7 +12,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_types::SignedValidatorRegistration;
 use tokio::{task::JoinSet, time::Instant};
-use tracing::{debug, error, trace, warn};
+use tracing::{error, info, trace, warn};
 
 use super::ProposerApi;
 use crate::{
@@ -48,8 +48,6 @@ impl<A: Api> ProposerApi<A> {
         if !known_validators_loaded.load(Ordering::Relaxed) {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
-
-        let start = Instant::now();
 
         // Get optional api key from headers
         let api_key = headers.get(HEADER_API_KEY).and_then(|key| key.to_str().ok());
@@ -150,6 +148,7 @@ impl<A: Api> ProposerApi<A> {
 
         let registrations_to_check = Arc::new(registrations_to_check);
         let mut join_set = JoinSet::new();
+        let start = Instant::now();
         for (i, batch) in registrations_to_check.chunks(batch_size).enumerate() {
             let r = i * batch_size..i * batch_size + batch.len();
             let Ok(rx) = proposer_api.reg_handle.send(registrations_to_check.clone(), r) else {
@@ -160,7 +159,7 @@ impl<A: Api> ProposerApi<A> {
             join_set.spawn(rx);
         }
 
-        let mut to_process = Vec::with_capacity(registrations_to_check.len());
+        let mut to_process = vec![false; registrations_to_check.len()];
         let mut successful_registrations = 0;
 
         while let Some(res) = join_set.join_next().await {
@@ -175,6 +174,8 @@ impl<A: Api> ProposerApi<A> {
                 }
             }
         }
+
+        let process_time = start.elapsed();
 
         if successful_registrations == 0 {
             return Err(ProposerApiError::NoValidatorsCouldBeRegistered);
@@ -196,8 +197,8 @@ impl<A: Api> ProposerApi<A> {
 
         proposer_api.db.save_validator_registrations(registrations_to_save, pool_name, user_agent);
 
-        debug!(
-            duration = ?start.elapsed(),
+        info!(
+            ?process_time,
             unknown_registrations,
             update_not_required,
             successful_registrations = successful_registrations,
