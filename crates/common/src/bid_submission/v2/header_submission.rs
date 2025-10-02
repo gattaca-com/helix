@@ -29,25 +29,48 @@ impl TestRandom for HeaderSubmissionElectra {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Encode, Decode)]
+pub struct HeaderSubmissionFulu {
+    pub bid_trace: BidTrace,
+    pub execution_payload_header: ExecutionPayloadHeader,
+    pub execution_requests: Arc<ExecutionRequests>,
+    pub commitments: KzgCommitments,
+}
+
+impl TestRandom for HeaderSubmissionFulu {
+    fn random_for_test(rng: &mut impl rand::RngCore) -> Self {
+        Self {
+            bid_trace: BidTrace::random_for_test(rng),
+            execution_payload_header: ExecutionPayloadHeader::random_for_test(rng),
+            execution_requests: Arc::new(ExecutionRequests::random_for_test(rng)),
+            commitments: KzgCommitments::default(),
+        }
+    }
+}
+
 pub type SignedHeaderSubmissionElectra = SignedMessage<HeaderSubmissionElectra>;
+pub type SignedHeaderSubmissionFulu = SignedMessage<HeaderSubmissionFulu>;
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, Encode, Decode)]
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]
 pub enum SignedHeaderSubmission {
     Electra(SignedHeaderSubmissionElectra),
+    Fulu(SignedHeaderSubmissionFulu),
 }
 
 impl BidSubmission for SignedHeaderSubmission {
     fn bid_trace(&self) -> &BidTrace {
         match self {
             Self::Electra(signed_header_submission) => &signed_header_submission.message.bid_trace,
+            Self::Fulu(signed_header_submission) => &signed_header_submission.message.bid_trace,
         }
     }
 
     fn signature(&self) -> &BlsSignatureBytes {
         match self {
             Self::Electra(signed_header_submission) => &signed_header_submission.signature,
+            Self::Fulu(signed_header_submission) => &signed_header_submission.signature,
         }
     }
 
@@ -92,12 +115,18 @@ impl BidSubmission for SignedHeaderSubmission {
             Self::Electra(signed_header_submission) => {
                 signed_header_submission.message.execution_payload_header.fee_recipient
             }
+            Self::Fulu(signed_header_submission) => {
+                signed_header_submission.message.execution_payload_header.fee_recipient
+            }
         }
     }
 
     fn state_root(&self) -> &B256 {
         match self {
             Self::Electra(signed_header_submission) => {
+                &signed_header_submission.message.execution_payload_header.state_root
+            }
+            Self::Fulu(signed_header_submission) => {
                 &signed_header_submission.message.execution_payload_header.state_root
             }
         }
@@ -108,12 +137,18 @@ impl BidSubmission for SignedHeaderSubmission {
             Self::Electra(signed_header_submission) => {
                 &signed_header_submission.message.execution_payload_header.receipts_root
             }
+            Self::Fulu(signed_header_submission) => {
+                &signed_header_submission.message.execution_payload_header.receipts_root
+            }
         }
     }
 
     fn logs_bloom(&self) -> &Bloom {
         match self {
             Self::Electra(signed_header_submission) => {
+                &signed_header_submission.message.execution_payload_header.logs_bloom
+            }
+            Self::Fulu(signed_header_submission) => {
                 &signed_header_submission.message.execution_payload_header.logs_bloom
             }
         }
@@ -124,12 +159,18 @@ impl BidSubmission for SignedHeaderSubmission {
             Self::Electra(signed_header_submission) => {
                 &signed_header_submission.message.execution_payload_header.prev_randao
             }
+            Self::Fulu(signed_header_submission) => {
+                &signed_header_submission.message.execution_payload_header.prev_randao
+            }
         }
     }
 
     fn block_number(&self) -> u64 {
         match self {
             Self::Electra(signed_header_submission) => {
+                signed_header_submission.message.execution_payload_header.block_number
+            }
+            Self::Fulu(signed_header_submission) => {
                 signed_header_submission.message.execution_payload_header.block_number
             }
         }
@@ -140,12 +181,18 @@ impl BidSubmission for SignedHeaderSubmission {
             Self::Electra(signed_header_submission) => {
                 signed_header_submission.message.execution_payload_header.timestamp
             }
+            Self::Fulu(signed_header_submission) => {
+                signed_header_submission.message.execution_payload_header.timestamp
+            }
         }
     }
 
     fn extra_data(&self) -> &ExtraData {
         match self {
             Self::Electra(signed_header_submission) => {
+                &signed_header_submission.message.execution_payload_header.extra_data
+            }
+            Self::Fulu(signed_header_submission) => {
                 &signed_header_submission.message.execution_payload_header.extra_data
             }
         }
@@ -156,6 +203,9 @@ impl BidSubmission for SignedHeaderSubmission {
             Self::Electra(signed_header_submission) => {
                 signed_header_submission.message.execution_payload_header.base_fee_per_gas
             }
+            Self::Fulu(signed_header_submission) => {
+                signed_header_submission.message.execution_payload_header.base_fee_per_gas
+            }
         }
     }
 
@@ -164,12 +214,18 @@ impl BidSubmission for SignedHeaderSubmission {
             Self::Electra(signed_header_submission) => {
                 signed_header_submission.message.execution_payload_header.withdrawals_root
             }
+            Self::Fulu(signed_header_submission) => {
+                signed_header_submission.message.execution_payload_header.withdrawals_root
+            }
         }
     }
 
     fn transactions_root(&self) -> B256 {
         match self {
             Self::Electra(signed_header_submission) => {
+                signed_header_submission.message.execution_payload_header.transactions_root
+            }
+            Self::Fulu(signed_header_submission) => {
                 signed_header_submission.message.execution_payload_header.transactions_root
             }
         }
@@ -218,6 +274,7 @@ impl BidSubmission for SignedHeaderSubmission {
     fn fork_name(&self) -> helix_types::ForkName {
         match self {
             Self::Electra(_) => helix_types::ForkName::Electra,
+            Self::Fulu(_) => helix_types::ForkName::Fulu,
         }
     }
 }
@@ -226,6 +283,15 @@ impl SignedHeaderSubmission {
     pub fn verify_signature(&self, builder_domain: B256) -> Result<(), SigError> {
         let valid = match self {
             SignedHeaderSubmission::Electra(bid) => {
+                let message = bid.message.bid_trace.signing_root(builder_domain);
+                let uncompressed_builder_pubkey =
+                    BlsPublicKey::deserialize(bid.message.bid_trace.builder_pubkey.as_slice())
+                        .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
+                let uncompressed_signature = BlsSignature::deserialize(bid.signature.as_slice())
+                    .map_err(|_| SigError::InvalidBlsSignatureBytes)?;
+                uncompressed_signature.verify(&uncompressed_builder_pubkey, message)
+            }
+            SignedHeaderSubmission::Fulu(bid) => {
                 let message = bid.message.bid_trace.signing_root(builder_domain);
                 let uncompressed_builder_pubkey =
                     BlsPublicKey::deserialize(bid.message.bid_trace.builder_pubkey.as_slice())
@@ -248,6 +314,9 @@ impl SignedHeaderSubmission {
             SignedHeaderSubmission::Electra(bid) => {
                 bid.message.execution_payload_header.validate_ssz_lengths()?;
             }
+            SignedHeaderSubmission::Fulu(bid) => {
+                bid.message.execution_payload_header.validate_ssz_lengths()?;
+            }
         }
 
         Ok(())
@@ -258,6 +327,9 @@ impl SignedHeaderSubmission {
             Self::Electra(signed_header_submission) => {
                 &signed_header_submission.message.execution_payload_header
             }
+            Self::Fulu(signed_header_submission) => {
+                &signed_header_submission.message.execution_payload_header
+            }
         }
     }
 
@@ -266,18 +338,23 @@ impl SignedHeaderSubmission {
             Self::Electra(signed_header_submission) => {
                 &signed_header_submission.message.commitments
             }
+            Self::Fulu(signed_header_submission) => &signed_header_submission.message.commitments,
         }
     }
 
     pub fn bid_trace(&self) -> &BidTrace {
         match self {
             Self::Electra(signed_header_submission) => &signed_header_submission.message.bid_trace,
+            Self::Fulu(signed_header_submission) => &signed_header_submission.message.bid_trace,
         }
     }
 
     pub fn execution_requests(&self) -> Option<&ExecutionRequests> {
         match self {
             Self::Electra(signed_header_submission) => {
+                Some(&signed_header_submission.message.execution_requests)
+            }
+            Self::Fulu(signed_header_submission) => {
                 Some(&signed_header_submission.message.execution_requests)
             }
         }

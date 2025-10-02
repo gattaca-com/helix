@@ -308,7 +308,7 @@ impl NetworkConfig {
             NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
             NetworkConfig::Holesky => ChainInfo::for_holesky(),
             NetworkConfig::Hoodi => ChainInfo::for_hoodi(),
-            NetworkConfig::Custom { ref dir_path, ref genesis_validator_root, genesis_time } => {
+            NetworkConfig::Custom { dir_path, genesis_validator_root, genesis_time } => {
                 ChainInfo::for_custom(dir_path.clone(), *genesis_validator_root, *genesis_time)
             }
         }
@@ -582,6 +582,8 @@ fn test_config() {
         is_merging_simulator: true,
         max_concurrent_tasks: 0,
     }];
+    config.block_merging_config =
+        BlockMergingConfig { is_enabled: true, max_merged_bid_age_ms: 250 };
     config
         .beacon_clients
         .push(BeaconClientConfig { url: Url::parse("http://localhost:8080").unwrap() });

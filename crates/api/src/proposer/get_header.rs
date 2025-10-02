@@ -197,12 +197,25 @@ impl<A: Api> ProposerApi<A> {
                 }
                 // If the current best bid has equal or higher value, we use that
                 Some((_, merged_bid)) if merged_bid.value <= bid.value => {
-                    debug!("merged bid {:?} with value {:?} is not higher than regular bid, using regular bid, value = {:?}, block_hash = {:?}", merged_bid.value, merged_bid.header.block_hash, bid.value, bid.header.block_hash);
+                    debug!(
+                        "merged bid {:?} with value {:?} is not higher than regular bid, using regular bid, value = {:?}, block_hash = {:?}",
+                        merged_bid.value,
+                        merged_bid.header.block_hash,
+                        bid.value,
+                        bid.header.block_hash
+                    );
                     bid
                 }
                 // If the merged bid is stale, we use the current best bid
                 Some((time, merged_bid)) if time < now_ms - max_merged_bid_age_ms => {
-                    debug!("merged bid {:?} with value {:?} is stale ({} ms old), using regular bid, value = {:?}, block_hash = {:?}", merged_bid.value, merged_bid.header.block_hash, now_ms - time, bid.value, bid.header.block_hash);
+                    debug!(
+                        "merged bid {:?} with value {:?} is stale ({} ms old), using regular bid, value = {:?}, block_hash = {:?}",
+                        merged_bid.value,
+                        merged_bid.header.block_hash,
+                        now_ms - time,
+                        bid.value,
+                        bid.header.block_hash
+                    );
                     bid
                 }
                 // Otherwise, we use the merged bid

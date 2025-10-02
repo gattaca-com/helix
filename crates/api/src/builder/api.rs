@@ -124,7 +124,7 @@ impl<A: Api> BuilderApi<A> {
         });
 
         let (hydration_tx, hydration_rx) = mpsc::channel(10_000);
-        hydration::spawn_hydration_task(hydration_rx);
+        hydration::spawn_hydration_task(hydration_rx, chain_info.clone());
 
         Self {
             auctioneer,
@@ -685,7 +685,7 @@ pub async fn decode_payload<A: Api>(
 
     let payload = &payload_with_merging_data.submission;
 
-    payload.validate_payload_ssz_lengths()?;
+    payload.validate_payload_ssz_lengths(api.chain_info.max_blobs_per_block())?;
 
     trace.decode = utcnow_ns();
     debug!(

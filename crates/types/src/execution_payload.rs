@@ -148,6 +148,30 @@ impl ExecutionPayload {
         })
     }
 
+    pub fn to_lighthouse_fulu_payload(
+        &self,
+    ) -> Result<lh_types::ExecutionPayloadFulu<MainnetEthSpec>, SszError> {
+        Ok(lh_types::ExecutionPayloadFulu {
+            parent_hash: self.parent_hash.into(),
+            fee_recipient: self.fee_recipient,
+            state_root: self.state_root,
+            receipts_root: self.receipts_root,
+            logs_bloom: convert_bloom_to_lighthouse(&self.logs_bloom),
+            prev_randao: self.prev_randao,
+            block_number: self.block_number,
+            gas_limit: self.gas_limit,
+            gas_used: self.gas_used,
+            timestamp: self.timestamp,
+            extra_data: self.extra_data.to_ssz_type()?,
+            base_fee_per_gas: self.base_fee_per_gas,
+            block_hash: self.block_hash.into(),
+            transactions: convert_transactions_to_lighthouse(&self.transactions)?,
+            withdrawals: self.withdrawals.clone(),
+            blob_gas_used: self.blob_gas_used,
+            excess_blob_gas: self.excess_blob_gas,
+        })
+    }
+
     // only used for testing
     pub fn from_lighthouse_electra_payload_unsafe(
         value: lh_types::ExecutionPayloadElectra<MainnetEthSpec>,
@@ -251,6 +275,30 @@ impl ExecutionPayloadHeader {
         &self,
     ) -> Result<lh_types::ExecutionPayloadHeaderElectra<MainnetEthSpec>, SszError> {
         Ok(lh_types::ExecutionPayloadHeaderElectra {
+            parent_hash: self.parent_hash.into(),
+            fee_recipient: self.fee_recipient,
+            state_root: self.state_root,
+            receipts_root: self.receipts_root,
+            logs_bloom: convert_bloom_to_lighthouse(&self.logs_bloom),
+            prev_randao: self.prev_randao,
+            block_number: self.block_number,
+            gas_limit: self.gas_limit,
+            gas_used: self.gas_used,
+            timestamp: self.timestamp,
+            extra_data: self.extra_data.to_ssz_type()?,
+            base_fee_per_gas: self.base_fee_per_gas,
+            block_hash: self.block_hash.into(),
+            transactions_root: self.transactions_root,
+            withdrawals_root: self.withdrawals_root,
+            blob_gas_used: self.blob_gas_used,
+            excess_blob_gas: self.excess_blob_gas,
+        })
+    }
+
+    pub fn to_lighthouse_fulu_header(
+        &self,
+    ) -> Result<lh_types::ExecutionPayloadHeaderFulu<MainnetEthSpec>, SszError> {
+        Ok(lh_types::ExecutionPayloadHeaderFulu {
             parent_hash: self.parent_hash.into(),
             fee_recipient: self.fee_recipient,
             state_root: self.state_root,

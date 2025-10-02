@@ -43,11 +43,5 @@ fn decode_ssz_signed_blinded_beacon_block(
         return SignedBlindedBeaconBlock::from_ssz_bytes_by_fork(bytes, fork_name);
     }
 
-    if let Ok(signed_blinded_beacon_block) =
-        SignedBlindedBeaconBlock::from_ssz_bytes_by_fork(bytes, ForkName::Electra)
-    {
-        Ok(signed_blinded_beacon_block)
-    } else {
-        Err(ssz::DecodeError::NoMatchingVariant)
-    }
+    Err(ssz::DecodeError::NoMatchingVariant)
 }

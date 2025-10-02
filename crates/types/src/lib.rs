@@ -56,11 +56,15 @@ pub type VersionedSignedProposal = SignedBlockContents;
 pub type SignedBeaconBlock = lh_types::signed_beacon_block::SignedBeaconBlock<MainnetEthSpec>;
 pub type SignedBeaconBlockElectra =
     lh_types::signed_beacon_block::SignedBeaconBlockElectra<MainnetEthSpec>;
+pub type SignedBeaconBlockFulu =
+    lh_types::signed_beacon_block::SignedBeaconBlockFulu<MainnetEthSpec>;
 
 // Beacon block
 pub type BeaconBlockElectra = lh_types::beacon_block::BeaconBlockElectra<MainnetEthSpec>;
 pub type BeaconBlockBodyElectra =
     lh_types::beacon_block_body::BeaconBlockBodyElectra<MainnetEthSpec>;
+pub type BeaconBlockFulu = lh_types::beacon_block::BeaconBlockFulu<MainnetEthSpec>;
+pub type BeaconBlockBodyFulu = lh_types::beacon_block_body::BeaconBlockBodyFulu<MainnetEthSpec>;
 
 // Get header
 pub type SignedBuilderBidInner = crate::builder_bid::SignedBuilderBid;
