@@ -710,7 +710,7 @@ fn validate_block_equality(
             }
         }
         BlindedPayloadRef::Fulu(blinded_payload) => {
-            info!(
+            debug!(
                 local_header = ?local_payload,
                 provided_header = ?blinded_payload,
                 provided_version = %provided_signed_blinded_block.fork_name_unchecked(),

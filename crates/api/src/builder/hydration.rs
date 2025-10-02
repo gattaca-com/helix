@@ -1,4 +1,6 @@
-use helix_common::metrics::HYDRATION_CACHE_HITS;
+use std::sync::Arc;
+
+use helix_common::{chain_info::ChainInfo, metrics::HYDRATION_CACHE_HITS};
 use helix_types::{DehydratedBidSubmission, HydrationCache, HydrationError, SignedBidSubmission};
 use tokio::sync::oneshot;
 use tracing::error;
@@ -9,15 +11,18 @@ pub type HydrationMessage =
 
 pub fn spawn_hydration_task(
     mut hydration_tx: tokio::sync::mpsc::Receiver<HydrationMessage>,
-    max_blobs_per_block: usize,
+    chain_info: Arc<ChainInfo>,
 ) {
     tokio::spawn(async move {
         let mut last_slot = 0;
         let mut cache = HydrationCache::new();
+        let chain_info = chain_info;
+        let mut max_blobs_per_block = chain_info.max_blobs_per_block();
 
         while let Some((slot, dehydrated_bid_submission, sender)) = hydration_tx.recv().await {
             if slot > last_slot {
                 last_slot = slot;
+                max_blobs_per_block = chain_info.max_blobs_per_block();
                 cache.clear();
             }
 
