@@ -3989,6 +3989,7 @@ dependencies = [
  "alloy-primitives",
  "alloy-rpc-types",
  "bls",
+ "blst",
  "criterion",
  "eth2",
  "ethereum_serde_utils",

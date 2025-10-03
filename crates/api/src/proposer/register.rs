@@ -7,7 +7,8 @@ use axum::{
 };
 use helix_common::{
     api::proposer_api::ValidatorRegistrationInfo, metadata_provider::MetadataProvider,
-    utils::extract_request_id, Filtering, ValidatorPreferences,
+    metrics::REGISTRATIONS_TO_CHECK_COUNT, utils::extract_request_id, Filtering,
+    ValidatorPreferences,
 };
 use helix_database::DatabaseService;
 use helix_types::SignedValidatorRegistration;
@@ -158,6 +159,8 @@ impl<A: Api> ProposerApi<A> {
 
             join_set.spawn(rx);
         }
+
+        REGISTRATIONS_TO_CHECK_COUNT.inc_by(registrations_to_check.len() as u64);
 
         let mut to_process = vec![false; registrations_to_check.len()];
         let mut successful_registrations = 0;
