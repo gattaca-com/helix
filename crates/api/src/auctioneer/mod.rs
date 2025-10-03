@@ -14,7 +14,7 @@ mod worker;
 use std::{cmp::Ordering, sync::Arc};
 
 use alloy_primitives::B256;
-pub use handle::AuctioneerHandle;
+pub use handle::{AuctioneerHandle, RegWorkerHandle};
 use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
@@ -34,14 +34,15 @@ use crate::{
         context::Context,
         manager::SimulatorManager,
         types::{Event, PendingPayload, SlotData},
-        worker::Worker,
+        worker::{RegWorker, SubWorker},
     },
     builder::error::BuilderApiError,
     proposer::{MergingPoolMessage, ProposerApiError},
     Api,
 };
 
-pub fn spawn_auctioneer<A: Api>(
+// TODO: tidy up builder and proposer api state, and spawn in a separate function
+pub fn spawn_workers<A: Api>(
     chain_info: ChainInfo,
     config: RelayConfig,
     db: Arc<A::DatabaseService>,
@@ -49,44 +50,60 @@ pub fn spawn_auctioneer<A: Api>(
     cache: LocalCache,
     top_bid_tx: tokio::sync::broadcast::Sender<bytes::Bytes>,
     slot_data_rx: crossbeam_channel::Receiver<HkSlotData>,
-) -> AuctioneerHandle {
-    let (worker_tx, worker_rx) = crossbeam_channel::bounded(10_000);
+) -> (AuctioneerHandle, RegWorkerHandle) {
+    let (sub_worker_tx, sub_worker_rx) = crossbeam_channel::bounded(10_000);
+    let (reg_worker_tx, reg_worker_rx) = crossbeam_channel::bounded(10_000);
     let (event_tx, event_rx) = crossbeam_channel::bounded(10_000);
 
-    for core in config.cores.workers.clone() {
-        let worker = Worker {
-            rx: worker_rx.clone(),
-            tx: event_tx.clone(),
-            merge_pool_tx: merge_pool_tx.clone(),
-            cache: cache.clone(),
-            chain_info: chain_info.clone(),
-            config: config.clone(),
-        };
+    if config.is_registration_instance {
+        for core in config.cores.reg_workers.clone() {
+            let worker = RegWorker { rx: reg_worker_rx.clone(), chain_info: chain_info.clone() };
+            std::thread::Builder::new()
+                .name(format!("worker-{core}"))
+                .spawn(move || {
+                    pin_thread_to_core(core);
+                    worker.run(core)
+                })
+                .unwrap();
+        }
+    }
+
+    if config.is_submission_instance {
+        for core in config.cores.sub_workers.clone() {
+            let worker = SubWorker {
+                rx: sub_worker_rx.clone(),
+                tx: event_tx.clone(),
+                merge_pool_tx: merge_pool_tx.clone(),
+                cache: cache.clone(),
+                chain_info: chain_info.clone(),
+                config: config.clone(),
+            };
+            std::thread::Builder::new()
+                .name(format!("worker-{core}"))
+                .spawn(move || {
+                    pin_thread_to_core(core);
+                    worker.run(core)
+                })
+                .unwrap();
+        }
+
+        let auctioneer_core = config.cores.auctioneer;
+
+        let bid_sorter = BidSorter::new(top_bid_tx);
+        let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
+        let ctx = Context::new(chain_info, config, sim_manager, db, bid_sorter, cache);
+        let auctioneer = Auctioneer::<A> { ctx, state: State::default() };
+
         std::thread::Builder::new()
-            .name(format!("worker-{core}"))
+            .name("auctioneer".to_string())
             .spawn(move || {
-                pin_thread_to_core(core);
-                worker.run(core)
+                pin_thread_to_core(auctioneer_core);
+                auctioneer.run(event_rx, slot_data_rx)
             })
             .unwrap();
     }
 
-    let auctioneer_core = config.cores.auctioneer;
-
-    let bid_sorter = BidSorter::new(top_bid_tx);
-    let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
-    let ctx = Context::new(chain_info, config, sim_manager, db, bid_sorter, cache);
-    let auctioneer = Auctioneer::<A> { ctx, state: State::default() };
-
-    std::thread::Builder::new()
-        .name("auctioneer".to_string())
-        .spawn(move || {
-            pin_thread_to_core(auctioneer_core);
-            auctioneer.run(event_rx, slot_data_rx)
-        })
-        .unwrap();
-
-    AuctioneerHandle::new(worker_tx, event_tx)
+    (AuctioneerHandle::new(sub_worker_tx, event_tx), RegWorkerHandle::new(reg_worker_tx))
 }
 
 struct Auctioneer<A: Api> {

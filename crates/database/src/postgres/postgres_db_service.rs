@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     ops::DerefMut,
     sync::Arc,
     time::{Duration, SystemTime},
@@ -25,6 +24,8 @@ use helix_common::{
 use helix_types::{
     BlsPublicKeyBytes, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
 };
+use parking_lot::RwLock;
+use rustc_hash::FxHashSet;
 use tokio::sync::mpsc::Sender;
 use tokio_postgres::{types::ToSql, NoTls};
 use tracing::{error, info, instrument, warn};
@@ -48,6 +49,11 @@ struct PendingBlockSubmissionValue {
 }
 
 const BLOCK_SUBMISSION_FIELD_COUNT: usize = 13;
+const MAINNET_VALIDATOR_COUNT: usize = 1_100_000;
+
+fn new_validator_set() -> FxHashSet<BlsPublicKeyBytes> {
+    FxHashSet::with_capacity_and_hasher(MAINNET_VALIDATOR_COUNT, Default::default())
+}
 
 struct RegistrationParams<'a> {
     fee_recipient: &'a [u8],
@@ -77,7 +83,7 @@ pub struct PostgresDatabaseService {
     validator_registration_cache: Arc<DashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>>,
     pending_validator_registrations: Arc<DashSet<BlsPublicKeyBytes>>,
     block_submissions_sender: Option<Sender<PendingBlockSubmissionValue>>,
-    known_validators_cache: Arc<DashSet<BlsPublicKeyBytes>>,
+    known_validators_cache: Arc<RwLock<FxHashSet<BlsPublicKeyBytes>>>,
     validator_pool_cache: Arc<DashMap<String, String>>,
     region: i16,
     pub pool: Arc<Pool>,
@@ -92,7 +98,7 @@ impl PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
             block_submissions_sender: None,
-            known_validators_cache: Arc::new(DashSet::new()),
+            known_validators_cache: Arc::new(RwLock::new(new_validator_set())),
             validator_pool_cache: Arc::new(DashMap::new()),
             region,
             pool: Arc::new(pool),
@@ -133,7 +139,7 @@ impl PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
             block_submissions_sender: None,
-            known_validators_cache: Arc::new(DashSet::new()),
+            known_validators_cache: Arc::new(RwLock::new(new_validator_set())),
             validator_pool_cache: Arc::new(DashMap::new()),
             region: relay_config.postgres.region,
             pool: Arc::new(pool),
@@ -197,11 +203,14 @@ impl PostgresDatabaseService {
 
         let client = self.pool.get().await.unwrap();
         let rows = client.query("SELECT * FROM known_validators", &[]).await.unwrap();
+        let mut set = new_validator_set();
         for row in rows {
             let public_key: BlsPublicKeyBytes =
                 parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("public_key")).unwrap();
-            self.known_validators_cache.insert(public_key);
+            set.insert(public_key);
         }
+
+        *self.known_validators_cache.write() = set;
 
         record.record_success();
     }
@@ -688,7 +697,7 @@ impl Default for PostgresDatabaseService {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
             block_submissions_sender: None,
-            known_validators_cache: Arc::new(DashSet::new()),
+            known_validators_cache: Arc::new(RwLock::new(new_validator_set())),
             validator_pool_cache: Arc::new(DashMap::new()),
             region: 1,
             pool: Arc::new(pool),
@@ -699,29 +708,14 @@ impl Default for PostgresDatabaseService {
 
 #[async_trait]
 impl DatabaseService for PostgresDatabaseService {
-    #[instrument(skip_all)]
-    async fn save_validator_registrations(
+    /// Assume the entries are already validated
+    fn save_validator_registrations(
         &self,
-        mut entries: Vec<ValidatorRegistrationInfo>,
+        entries: impl Iterator<Item = ValidatorRegistrationInfo>,
         pool_name: Option<String>,
         user_agent: Option<String>,
-    ) -> Result<(), DatabaseError> {
-        let mut record = DbMetricRecord::new("save_validator_registrations");
-
-        entries.retain(|entry| {
-            if let Some(existing_entry) =
-                self.validator_registration_cache.get(&entry.registration.message.pubkey)
-            {
-                if existing_entry.registration_info.registration.message.timestamp >=
-                    entry.registration.message.timestamp
-                {
-                    return false;
-                }
-            }
-            true
-        });
-
-        for entry in entries.iter() {
+    ) {
+        for entry in entries {
             self.pending_validator_registrations.insert(entry.registration.message.pubkey);
             self.validator_registration_cache.insert(
                 entry.registration.message.pubkey,
@@ -732,26 +726,19 @@ impl DatabaseService for PostgresDatabaseService {
                 ),
             );
         }
-
-        record.record_success();
-        Ok(())
     }
 
-    #[instrument(skip_all)]
-    async fn is_registration_update_required(
-        &self,
-        registration: &SignedValidatorRegistration,
-    ) -> Result<bool, DatabaseError> {
+    fn is_registration_update_required(&self, registration: &SignedValidatorRegistration) -> bool {
         if let Some(existing_entry) =
             self.validator_registration_cache.get(&registration.message.pubkey)
         {
             if existing_entry.registration_info.registration.message.timestamp >=
                 registration.message.timestamp
             {
-                return Ok(false);
+                return false;
             }
         }
-        Ok(true)
+        true
     }
 
     #[instrument(skip_all)]
@@ -1099,43 +1086,39 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(validators)
     }
 
-    #[instrument(skip_all)]
     async fn set_known_validators(
         &self,
         known_validators: Vec<ValidatorSummary>,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("set_known_validators");
 
-        info!("Known validators: current cache size: {:?}", self.known_validators_cache.len());
-
-        let mut client = self.pool.get().await?;
-
-        let new_keys_set: HashSet<BlsPublicKeyBytes> =
+        let new_keys_set: FxHashSet<BlsPublicKeyBytes> =
             known_validators.iter().map(|validator| validator.validator.pubkey).collect();
 
-        let old_keys_hash_set: HashSet<BlsPublicKeyBytes> = self
-            .known_validators_cache
-            .iter()
-            .map(|ref_multi| *ref_multi.key()) // Access and clone the key from RefMulti
-            .collect();
+        let keys_to_add: Vec<BlsPublicKeyBytes>;
+        let keys_to_remove: Vec<BlsPublicKeyBytes>;
 
-        let keys_to_add: Vec<BlsPublicKeyBytes> =
-            new_keys_set.difference(&old_keys_hash_set).cloned().collect();
-        let keys_to_remove: Vec<BlsPublicKeyBytes> =
-            old_keys_hash_set.difference(&new_keys_set).cloned().collect();
+        {
+            let mut curr_known_guard = self.known_validators_cache.write();
+            info!("Known validators: current cache size: {:?}", curr_known_guard.len());
 
-        for key in &keys_to_add {
-            self.known_validators_cache.insert(*key);
+            keys_to_add = new_keys_set.difference(&curr_known_guard).cloned().collect();
+            keys_to_remove = curr_known_guard.difference(&new_keys_set).cloned().collect();
+
+            info!("Known validators: added: {:?}", keys_to_add.len());
+            info!("Known validators: removed: {:?}", keys_to_add.len());
+
+            for key in &keys_to_add {
+                curr_known_guard.insert(*key);
+            }
+            for key in &keys_to_remove {
+                curr_known_guard.remove(key);
+            }
+
+            info!("Known validators: updated cache size: {:?}", curr_known_guard.len());
         }
-        for key in &keys_to_remove {
-            self.known_validators_cache.remove(key);
-        }
 
-        info!("Known validators: added: {:?}", keys_to_add.len());
-        info!("Known validators: removed: {:?}", keys_to_add.len());
-
-        info!("Known validators: updated cache size: {:?}", self.known_validators_cache.len());
-
+        let mut client = self.pool.get().await?;
         let transaction = client.transaction().await?;
 
         // Perform batch deletion
@@ -1171,36 +1154,8 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(())
     }
 
-    #[instrument(skip_all)]
-    async fn check_known_validators(
-        &self,
-        public_keys: Vec<BlsPublicKeyBytes>,
-    ) -> Result<HashSet<BlsPublicKeyBytes>, DatabaseError> {
-        let mut record = DbMetricRecord::new("check_known_validators");
-
-        let client = self.high_priority_pool.get().await?;
-        let mut pub_keys = HashSet::new();
-
-        for public_key in public_keys.iter() {
-            if self.known_validators_cache.contains(public_key) {
-                pub_keys.insert(*public_key);
-            } else {
-                let rows = client
-                    .query("SELECT * FROM known_validators WHERE public_key = $1", &[
-                        &(public_key.to_vec())
-                    ])
-                    .await?;
-                for row in rows {
-                    let public_key: BlsPublicKeyBytes =
-                        parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("public_key"))?;
-                    self.known_validators_cache.insert(public_key);
-                    pub_keys.insert(public_key);
-                }
-            }
-        }
-
-        record.record_success();
-        Ok(pub_keys)
+    fn known_validators_cache(&self) -> &Arc<RwLock<FxHashSet<BlsPublicKeyBytes>>> {
+        &self.known_validators_cache
     }
 
     #[instrument(skip_all)]

@@ -159,6 +159,15 @@ lazy_static! {
     )
     .unwrap();
 
+    //////////////// REGISTRATION ////////////////
+    pub static ref REGISTRATIONS_TO_CHECK_COUNT: IntCounter = register_int_counter_with_registry!(
+        "registrations_to_check_count",
+        "Count of registrations to check",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+
     //////////////// SIMULATOR ////////////////
     static ref SIMULATOR_COUNTS: IntCounterVec = register_int_counter_vec_with_registry!(
         "simulator_count_total",
