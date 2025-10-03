@@ -174,7 +174,7 @@ impl<A: Api> Context<A> {
                     return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
                 }
 
-                let local_kzg_commitments = &local.blobs_bundle.commitments;
+                let local_kzg_commitments = &local.blobs_bundle.commitments();
 
                 if !local_kzg_commitments.iter().eq(body.blob_kzg_commitments.iter().map(|p| p.0)) {
                     return Err(ProposerApiError::BlobKzgCommitmentsMismatch);
@@ -183,7 +183,7 @@ impl<A: Api> Context<A> {
                 // unblind
                 let signature = blinded_block.signature.clone();
 
-                if body.blob_kzg_commitments.len() != local.blobs_bundle.blobs.len() {
+                if body.blob_kzg_commitments.len() != local.blobs_bundle.blobs().len() {
                     return Err(ProposerApiError::BlindedBlobsBundleLengthMismatch);
                 }
 
@@ -221,8 +221,8 @@ impl<A: Api> Context<A> {
                 let signed_block = SignedBeaconBlock::Electra(inner).into();
                 let to_broadcast = VersionedSignedProposal {
                     signed_block,
-                    kzg_proofs: local.blobs_bundle.proofs.clone(),
-                    blobs: local.blobs_bundle.blobs.clone(),
+                    kzg_proofs: local.blobs_bundle.proofs().clone(),
+                    blobs: local.blobs_bundle.blobs().clone(),
                 };
                 let to_proposer = GetPayloadResponse {
                     version: slot_data.current_fork,
@@ -250,7 +250,7 @@ impl<A: Api> Context<A> {
                     return Err(ProposerApiError::BlindedBlockAndPayloadHeaderMismatch);
                 }
 
-                let local_kzg_commitments = &local.blobs_bundle.commitments;
+                let local_kzg_commitments = &local.blobs_bundle.commitments();
 
                 if !local_kzg_commitments.iter().eq(body.blob_kzg_commitments.iter().map(|p| p.0)) {
                     return Err(ProposerApiError::BlobKzgCommitmentsMismatch);
@@ -260,7 +260,7 @@ impl<A: Api> Context<A> {
 
                 let signature = blinded_block.signature.clone();
 
-                if body.blob_kzg_commitments.len() != local.blobs_bundle.blobs.len() {
+                if body.blob_kzg_commitments.len() != local.blobs_bundle.blobs().len() {
                     return Err(ProposerApiError::BlindedBlobsBundleLengthMismatch);
                 }
 
@@ -298,8 +298,8 @@ impl<A: Api> Context<A> {
 
                 let to_broadcast = VersionedSignedProposal {
                     signed_block,
-                    kzg_proofs: local.blobs_bundle.proofs.clone(),
-                    blobs: local.blobs_bundle.blobs.clone(),
+                    kzg_proofs: local.blobs_bundle.proofs().clone(),
+                    blobs: local.blobs_bundle.blobs().clone(),
                 };
                 let to_proposer = GetPayloadResponse {
                     version: slot_data.current_fork,

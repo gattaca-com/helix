@@ -192,7 +192,8 @@ impl SimulatorManager {
         const PAUSE_DURATION: Duration = Duration::from_secs(60);
 
         let client = &mut self.simulators[id];
-        let to_send = client.sim_request_builder(&req.request, req.is_top_bid);
+        let to_send =
+            client.sim_request_builder(&req.request, req.is_top_bid, req.submission.fork_name());
         client.pending += 1;
 
         self.local_telemetry.max_in_flight = self.local_telemetry.max_in_flight.max(client.pending);

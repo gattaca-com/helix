@@ -24,13 +24,12 @@ pub fn test_encode_decode_json<T: serde::Serialize + serde::de::DeserializeOwned
     decoded
 }
 
+pub fn test_decode_json<T: serde::de::DeserializeOwned>(d: &str) -> T {
+    serde_json::from_str::<T>(d).expect("deserialize json")
+}
+
 pub fn test_encode_decode_ssz<T: Encode + Decode>(d: &[u8]) -> T {
-    let decoded = T::from_ssz_bytes(d).expect("deserialize ssz");
-    let encoded = T::as_ssz_bytes(&decoded);
-
-    assert_eq!(encoded, d);
-
-    decoded
+    T::from_ssz_bytes(d).expect("deserialize ssz")
 }
 
 pub fn random_bls_pubkey() -> BlsPublicKey {

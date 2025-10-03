@@ -1,6 +1,4 @@
-use helix_types::{
-    BlsPublicKeyBytes, ForkName, ForkVersionDecode, PayloadAndBlobs, PayloadAndBlobsRef,
-};
+use helix_types::{BlsPublicKeyBytes, ForkName, ForkVersionDecode, PayloadAndBlobs};
 use ssz::Encode;
 
 use crate::{gossiper::error::GossipError, grpc};
@@ -29,7 +27,7 @@ impl BroadcastPayloadParams {
     }
 
     pub fn to_proto(
-        execution_payload: PayloadAndBlobsRef,
+        execution_payload: &PayloadAndBlobs,
         slot: u64,
         proposer_pub_key: &BlsPublicKeyBytes,
         current_fork: ForkName,

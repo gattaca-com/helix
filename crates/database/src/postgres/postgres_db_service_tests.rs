@@ -14,7 +14,7 @@ mod tests {
         Filtering, GetPayloadTrace, PostgresConfig, SubmissionTrace, ValidatorSummary,
     };
     use helix_types::{
-        BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey,
+        BidTrace, BlobsBundleV1, BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey,
         BlsSignatureBytes, ExecutionPayload, PayloadAndBlobs, SignedBidSubmissionElectra,
         SignedValidatorRegistration, TestRandomSeed, Validator, ValidatorRegistration, Withdrawal,
     };
@@ -402,7 +402,7 @@ mod tests {
         let signed_bid_submission = SignedBidSubmissionElectra {
             message: bid_trace.clone(),
             execution_payload: ExecutionPayload::test_random().into(),
-            blobs_bundle: BlobsBundle::default().into(),
+            blobs_bundle: Arc::new(BlobsBundleV1::default()),
             signature: BlsSignatureBytes::random(),
             execution_requests: Default::default(),
         };

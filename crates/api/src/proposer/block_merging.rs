@@ -6,7 +6,7 @@ use alloy_primitives::{
 };
 use helix_common::{simulator::BlockSimError, utils::utcnow_ms};
 use helix_types::{
-    mock_public_key_bytes, BlobWithMetadata, BlobsBundle, BlsPublicKeyBytes, BuilderBid,
+    mock_public_key_bytes, BlobWithMetadata, BlobsBundleMut, BlsPublicKeyBytes, BuilderBid,
     ExecutionPayloadHeader, KzgCommitments, MergeableOrder, MergeableOrderWithOrigin,
     MergeableOrders, MergedBlock, PayloadAndBlobs, SignedBidSubmission, ValidatorRegistrationData,
 };
@@ -163,8 +163,8 @@ impl<A: Api> ProposerApi<A> {
                         merged_value: response.proposer_value,
                         original_tx_count: original_payload.execution_payload.transactions.len(),
                         merged_tx_count: response.execution_payload.transactions.len(),
-                        original_blob_count: original_payload.blobs_bundle.blobs.len(),
-                        merged_blob_count: original_payload.blobs_bundle.blobs.len() +
+                        original_blob_count: original_payload.blobs_bundle.blobs().len(),
+                        merged_blob_count: original_payload.blobs_bundle.blobs().len() +
                             response.appended_blobs.len(),
                         builder_inclusions: response.builder_inclusions.clone(),
                     });
@@ -296,11 +296,11 @@ impl<A: Api> ProposerApi<A> {
     ) -> Result<(), PayloadMergingError> {
         let header = ExecutionPayloadHeader::from(&response.execution_payload);
 
-        let merged_blobs_bundle =
-            append_merged_blobs(original_payload.blobs_bundle, blobs, &response)?;
+        let mut merged_blobs_bundle = BlobsBundleMut::from_bundle(original_payload.blobs_bundle);
+        append_merged_blobs(&mut merged_blobs_bundle, blobs, &response)?;
 
         let blob_kzg_commitments =
-            KzgCommitments::new(merged_blobs_bundle.commitments.iter().copied().collect())
+            KzgCommitments::new(merged_blobs_bundle.commitments().iter().copied().collect())
                 .map_err(|_| PayloadMergingError::MaxBlobCountReached)?;
 
         let new_bid = BuilderBid {
@@ -314,7 +314,7 @@ impl<A: Api> ProposerApi<A> {
         // Store the payload in the background
         let payload_and_blobs = PayloadAndBlobs {
             execution_payload: response.execution_payload,
-            blobs_bundle: merged_blobs_bundle,
+            blobs_bundle: merged_blobs_bundle.into_bundle(),
         };
 
         if self
@@ -359,30 +359,26 @@ enum PayloadMergingError {
 
 /// Appends the merged blobs to the original blobs bundle.
 fn append_merged_blobs(
-    original_blobs_bundle: BlobsBundle,
+    original_blobs_bundle: &mut BlobsBundleMut,
     blobs: &HashMap<B256, BlobWithMetadata>,
     response: &BlockMergeResponse,
-) -> Result<BlobsBundle, PayloadMergingError> {
-    let mut merged_blobs_bundle = original_blobs_bundle;
-
-    response.appended_blobs.iter().try_for_each(|vh| {
-        let blob_bundle = blobs.get(vh).ok_or(PayloadMergingError::BlobNotFound)?;
-        extend_bundle(&mut merged_blobs_bundle, blob_bundle.clone())?;
-        Ok::<(), PayloadMergingError>(())
-    })?;
-    Ok(merged_blobs_bundle)
-}
-
-fn extend_bundle(
-    bundle: &mut BlobsBundle,
-    other_bundle: BlobWithMetadata,
 ) -> Result<(), PayloadMergingError> {
-    bundle
-        .commitments
-        .push(other_bundle.commitment)
-        .map_err(|_| PayloadMergingError::MaxBlobCountReached)?;
-    bundle.proofs.push(other_bundle.proof);
-    bundle.blobs.push(other_bundle.blob);
+    for vh in &response.appended_blobs {
+        let blob_data = blobs.get(vh).ok_or(PayloadMergingError::BlobNotFound)?;
+        match blob_data {
+            BlobWithMetadata::V1(data) => {
+                original_blobs_bundle
+                    .push_blob(data.commitment, &vec![data.proof], data.blob.clone())
+                    .map_err(|_| PayloadMergingError::MaxBlobCountReached)?;
+            }
+            BlobWithMetadata::V2(data) => {
+                original_blobs_bundle
+                    .push_blob(data.commitment, &data.proofs, data.blob.clone())
+                    .map_err(|_| PayloadMergingError::MaxBlobCountReached)?;
+            }
+        }
+    }
+
     Ok(())
 }
 

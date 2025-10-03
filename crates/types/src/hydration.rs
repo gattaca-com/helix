@@ -10,7 +10,8 @@ use tree_hash::TreeHash;
 use crate::{
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
-    BidTrace, Blob, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload,
+    BidTrace, Blob, BlobsBundleV1, BlobsBundleV2, BlsPublicKeyBytes, BlsSignatureBytes,
+    ExecutionPayload,
 };
 
 /// A bid submission where transactions and blobs may be replaced by hashes instead of payload
@@ -18,8 +19,8 @@ use crate::{
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]
 pub enum DehydratedBidSubmission {
-    Electra(DehydratedBidSubmissionElectra),
     Fulu(DehydratedBidSubmissionFulu),
+    Electra(DehydratedBidSubmissionElectra),
 }
 impl DehydratedBidSubmission {
     pub fn slot(&self) -> u64 {
@@ -178,7 +179,7 @@ impl DehydratedBidSubmissionElectra {
 
         last_err?;
 
-        let mut sidecar = BlobsBundle::with_capacity(self.blobs_bundle.commitments.len());
+        let mut sidecar = BlobsBundleV1::with_capacity(self.blobs_bundle.commitments.len());
         for (index, commitment) in self.blobs_bundle.commitments.into_iter().enumerate() {
             let Some((proofs, blob)) = order_cache.blobs.get(&commitment) else {
                 return Err(HydrationError::UnknownBlobHash { commitment, index });
@@ -273,7 +274,7 @@ impl DehydratedBidSubmissionFulu {
 
         last_err?;
 
-        let mut sidecar = BlobsBundle::with_capacity(self.blobs_bundle.commitments.len());
+        let mut sidecar = BlobsBundleV2::with_capacity(self.blobs_bundle.commitments.len());
         for (index, commitment) in self.blobs_bundle.commitments.into_iter().enumerate() {
             let Some((proofs, blob)) = order_cache.blobs.get(&commitment) else {
                 return Err(HydrationError::UnknownBlobHash { commitment, index });

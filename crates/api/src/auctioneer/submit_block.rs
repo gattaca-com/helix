@@ -165,7 +165,7 @@ impl<A: Api> Context<A> {
         };
         self.sim_manager.handle_sim_request(req);
 
-        let payload_and_blobs = Arc::new(submission.payload_and_blobs_ref().to_owned());
+        let payload_and_blobs = Arc::new(submission.payload_and_blobs());
         self.payloads.insert(*submission.block_hash(), payload_and_blobs);
     }
 

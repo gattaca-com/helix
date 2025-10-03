@@ -143,9 +143,22 @@ pub struct MergeableBundle {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct BlobWithMetadata {
+pub enum BlobWithMetadata {
+    V1(BlobWithMetadataV1),
+    V2(BlobWithMetadataV2),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BlobWithMetadataV1 {
     pub commitment: KzgCommitment,
     pub proof: KzgProof,
+    pub blob: Blob,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BlobWithMetadataV2 {
+    pub commitment: KzgCommitment,
+    pub proofs: Vec<KzgProof>,
     pub blob: Blob,
 }
 
