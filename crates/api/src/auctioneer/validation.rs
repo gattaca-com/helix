@@ -16,6 +16,7 @@ impl<A: Api> Context<A> {
         sequence: Option<u64>,
         builder_info: &BuilderInfo,
         slot_data: &SlotData,
+        on_receive_ns: u64,
     ) -> Result<(), BuilderApiError> {
         if payload.slot() != self.bid_slot {
             return Err(BuilderApiError::SubmissionForWrongSlot {
@@ -24,10 +25,7 @@ impl<A: Api> Context<A> {
             });
         }
 
-        if let Some(seq) = sequence {
-            self.check_and_update_sequence_number(payload.builder_public_key(), seq)?;
-        }
-
+        self.staleness_check(payload.builder_public_key(), on_receive_ns, sequence)?;
         self.check_duplicate_submission(*payload.block_hash())?;
         self.validate_submission_data(payload, withdrawals_root, slot_data)?;
         self.check_if_trusted_builder(builder_info, slot_data)?;
@@ -97,21 +95,35 @@ impl<A: Api> Context<A> {
         Ok(())
     }
 
-    fn check_and_update_sequence_number(
+    fn staleness_check(
         &mut self,
         builder: &BlsPublicKeyBytes,
-        new_seq: u64,
+        new_receive_ns: u64,
+        new_seq: Option<u64>,
     ) -> Result<(), BuilderApiError> {
-        if let Some(old_seq) = self.sequence.get_mut(builder) {
-            if new_seq > *old_seq {
-                // higher sequence number, update
-                *old_seq = new_seq;
+        if let Some((old_receive_ns, maybe_old_seq)) = self.sequence.get_mut(builder) {
+            if new_receive_ns > *old_receive_ns {
+                *old_receive_ns = new_receive_ns
             } else {
-                // stale or duplicated sequence number
-                return Err(BuilderApiError::OutOfSequence { seen: *old_seq, this: new_seq });
+                return Err(BuilderApiError::AlreadyProcessingNewerPayload);
+            }
+
+            match (&maybe_old_seq, new_seq) {
+                (None, None) | (Some(_), None) => (),
+                (None, Some(new_seq)) => *maybe_old_seq = Some(new_seq),
+                (Some(old_seq), Some(new_seq)) => {
+                    if new_seq > *old_seq {
+                        *maybe_old_seq = Some(new_seq);
+                    } else {
+                        return Err(BuilderApiError::OutOfSequence {
+                            seen: *old_seq,
+                            this: new_seq,
+                        });
+                    }
+                }
             }
         } else {
-            self.sequence.insert(*builder, new_seq);
+            self.sequence.insert(*builder, (new_receive_ns, new_seq));
         }
 
         Ok(())
