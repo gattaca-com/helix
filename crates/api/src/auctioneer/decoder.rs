@@ -206,6 +206,7 @@ impl SubmissionDecoder {
             DECOMPRESSION_LATENCY
                 .with_label_values(&[compression_label])
                 .observe(self.decompress_latency.as_micros() as f64);
+
             if self.estimated_decompress > 0 {
                 let actual = self.bytes_after_decompress as f64;
                 let estimate = self.estimated_decompress as f64;

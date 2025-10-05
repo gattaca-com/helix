@@ -29,7 +29,6 @@ pin_project! {
     struct Timed<B> {
         #[pin] inner: B,
         stats: Arc<BodyTimings>,
-        has_set_start: bool,
         last_was_pending: bool,
         last_poll_at: Option<Instant>,
     }
@@ -37,7 +36,7 @@ pin_project! {
 
 impl<B> Timed<B> {
     fn new(inner: B, stats: Arc<BodyTimings>) -> Self {
-        Self { inner, stats, has_set_start: false, last_poll_at: None, last_was_pending: false }
+        Self { inner, stats, last_poll_at: None, last_was_pending: false }
     }
 }
 
@@ -54,11 +53,6 @@ where
         cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         let this = self.project();
-
-        if !*this.has_set_start {
-            this.stats.set_start();
-            *this.has_set_start = true;
-        }
 
         if let Some(since_last_poll) = this.last_poll_at.take().map(|t| t.elapsed()) {
             if *this.last_was_pending {

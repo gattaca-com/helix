@@ -3,43 +3,53 @@ use std::{
     time::{Duration, Instant},
 };
 
-use alloy_primitives::{
-    map::foldhash::{HashMap, HashMapExt, HashSet, HashSetExt},
-    B256, U256,
-};
+use alloy_primitives::{Address, B256, U256};
 use bytes::Bytes;
 use helix_common::{
     api::builder_api::TopBidUpdate,
-    bid_submission_to_builder_bid_unsigned,
     metrics::{TopBidMetrics, BID_SORTER_PROCESS_LATENCY_US},
+    record_submission_step_ns,
     utils::{avg_duration, utcnow_ns},
     SubmissionTrace,
 };
-use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, SignedBidSubmission};
+use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission};
+use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::info;
 
-/// Latest cancellable bid
 #[derive(Clone, Copy)]
-pub struct BidEntry(Bid);
-
-impl BidEntry {
-    /// Returns true if the bid triggered an update
-    fn maybe_update(&mut self, bid: Bid) -> bool {
-        if self.0.on_receive_ns >= bid.on_receive_ns {
-            return false;
-        }
-
-        self.0 = bid;
-
-        true
-    }
-}
-
-#[derive(Clone, Copy)]
-pub struct Bid {
-    value: U256,
+pub struct BidEntry {
     /// Timestamp in ns when the bid was received. Assume this is unique across all bids
     on_receive_ns: u64,
+    value: U256,
+
+    block_hash: B256,
+
+    block_number: u64,
+    parent_hash: B256,
+    fee_recipient: Address,
+
+    merging: BlockMergingPreferences,
+}
+
+impl BidEntry {
+    fn new(
+        on_receive_ns: u64,
+        submission: &SignedBidSubmission,
+        merging: BlockMergingPreferences,
+    ) -> Self {
+        let bid_trace = submission.bid_trace();
+        let payload = submission.execution_payload_ref();
+
+        Self {
+            on_receive_ns,
+            value: bid_trace.value,
+            block_hash: payload.block_hash,
+            block_number: payload.block_number,
+            parent_hash: payload.parent_hash,
+            fee_recipient: payload.fee_recipient,
+            merging,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -58,14 +68,11 @@ pub struct BidSorter {
     /// Head slot + 1
     curr_bid_slot: u64,
     /// All bid entries for the current slot, used for sorting
-    bids: HashMap<BlsPublicKeyBytes, BidEntry>,
-    /// All headers received for this slot
-    /// on_receive_ns -> (header, merging_preferences)
-    headers: HashMap<u64, (BuilderBid, BlockMergingPreferences)>,
+    bids: FxHashMap<BlsPublicKeyBytes, BidEntry>,
     /// Demoted builders in this slot for live demotions
-    demotions: HashSet<BlsPublicKeyBytes>,
+    demotions: FxHashSet<BlsPublicKeyBytes>,
     /// Current best bid
-    curr_bid: Option<(BlsPublicKeyBytes, Bid, BuilderBid)>,
+    curr_bid: Option<(BlsPublicKeyBytes, BidEntry)>,
     local_telemetry: BidSorterTelemetry,
 }
 
@@ -74,9 +81,8 @@ impl BidSorter {
         Self {
             top_bid_tx,
             curr_bid_slot: 0,
-            bids: HashMap::with_capacity(250),
-            headers: HashMap::with_capacity(2500),
-            demotions: HashSet::with_capacity(50),
+            bids: FxHashMap::with_capacity_and_hasher(250, Default::default()),
+            demotions: FxHashSet::with_capacity_and_hasher(50, Default::default()),
             curr_bid: None,
             local_telemetry: BidSorterTelemetry::default(),
         }
@@ -86,25 +92,19 @@ impl BidSorter {
         &mut self,
         submission: &SignedBidSubmission,
         trace: &mut SubmissionTrace,
-        withdrawals_root: B256,
         merging_preferences: BlockMergingPreferences,
+        is_optimistic: bool,
     ) {
         let start = Instant::now();
         let bid_trace = submission.bid_trace();
         assert_eq!(bid_trace.slot, self.curr_bid_slot);
-
-        let bid = Bid { value: bid_trace.value, on_receive_ns: trace.receive };
-        // TODO: this takes 1-5 ms!
-        let header = bid_submission_to_builder_bid_unsigned(submission, withdrawals_root);
+        let bid = BidEntry::new(trace.receive, submission, merging_preferences);
         let builder_pubkey = bid_trace.builder_pubkey;
         self.local_telemetry.subs_create_time += start.elapsed();
 
         let start = Instant::now();
-        self.headers.insert(bid.on_receive_ns, (header, merging_preferences));
-        self.process_header(builder_pubkey, bid, trace);
-
+        self.process_header(builder_pubkey, bid, trace, is_optimistic);
         let process_latency = start.elapsed();
-        trace.sorted = utcnow_ns();
 
         // telemetry
         self.local_telemetry.subs += 1;
@@ -114,14 +114,12 @@ impl BidSorter {
 
     // TODO: return this from .sort instead
     pub fn is_top_bid(&self, sub: &SignedBidSubmission) -> bool {
-        self.curr_bid.as_ref().is_some_and(|c| c.2.header.block_hash == sub.message().block_hash)
+        self.curr_bid.as_ref().is_some_and(|c| c.1.block_hash == sub.message().block_hash)
     }
 
-    pub fn best_mergeable(&self) -> Option<BuilderBid> {
+    pub fn best_mergeable(&self) -> Option<B256> {
         let curr = self.curr_bid.as_ref()?;
-        let (_, preferences) = self.headers.get(&curr.1.on_receive_ns)?;
-
-        preferences.allow_appending.then(|| curr.2.clone())
+        curr.1.merging.allow_appending.then(|| curr.1.block_hash)
     }
 
     pub fn demote(&mut self, demoted: BlsPublicKeyBytes) {
@@ -132,42 +130,45 @@ impl BidSorter {
         self.process_demotion(demoted);
     }
 
-    pub fn get_header(&self) -> Option<BuilderBid> {
-        self.curr_bid.as_ref().map(|b| b.2.clone())
+    pub fn get_header(&self) -> Option<B256> {
+        self.curr_bid.as_ref().map(|b| b.1.block_hash)
     }
 
     fn process_header(
         &mut self,
         new_pubkey: BlsPublicKeyBytes,
-        new_bid: Bid,
+        new_bid: BidEntry,
         trace: &mut SubmissionTrace,
+        is_optimistic: bool,
     ) {
         match self.bids.entry(new_pubkey) {
             Entry::Occupied(mut entry) => {
                 let entry = entry.get_mut();
-                if !entry.maybe_update(new_bid) {
-                    // bid was stale or too low
+                if entry.on_receive_ns >= new_bid.on_receive_ns {
+                    // stale
                     return;
-                };
+                } else {
+                    *entry = new_bid;
+                }
             }
 
             Entry::Vacant(entry) => {
-                entry.insert(BidEntry(new_bid));
+                entry.insert(new_bid);
             }
         };
 
         match &self.curr_bid {
-            Some((curr_pubkey, curr_bid, _)) => {
+            Some((curr_pubkey, curr_bid)) => {
                 if new_bid.value > curr_bid.value {
-                    self.update_top_bid(new_pubkey, new_bid, Some(trace), false);
+                    self.update_top_bid(new_pubkey, new_bid, Some(trace), is_optimistic);
                 } else if new_pubkey == *curr_pubkey {
                     // this was a cancel, need to check all other bids
-                    self.traverse_update_top_bid(Some(trace));
+                    self.traverse_update_top_bid(Some(trace), is_optimistic);
                 }
             }
 
             None => {
-                self.update_top_bid(new_pubkey, new_bid, Some(trace), false);
+                self.update_top_bid(new_pubkey, new_bid, Some(trace), is_optimistic);
             }
         }
     }
@@ -180,19 +181,21 @@ impl BidSorter {
             return;
         };
 
-        if let Some((curr, _, _)) = &self.curr_bid {
+        if let Some((curr, _)) = &self.curr_bid {
             if *curr == demoted {
-                self.traverse_update_top_bid(None);
+                self.traverse_update_top_bid(None, false);
             }
         }
     }
 
-    fn traverse_update_top_bid(&mut self, trace: Option<&mut SubmissionTrace>) {
+    fn traverse_update_top_bid(
+        &mut self,
+        trace: Option<&mut SubmissionTrace>,
+        is_optimistic: bool,
+    ) {
         let mut best = None;
 
-        for (pk, entry) in self.bids.iter() {
-            let bid = entry.0;
-
+        for (pk, bid) in self.bids.iter() {
             let Some(curr_best) = best else {
                 best = Some((*pk, bid));
                 continue;
@@ -204,7 +207,7 @@ impl BidSorter {
         }
 
         if let Some((best_pk, best_bid)) = best {
-            self.update_top_bid(best_pk, best_bid, trace, true);
+            self.update_top_bid(best_pk, *best_bid, trace, is_optimistic);
         } else {
             self.curr_bid = None;
         }
@@ -217,7 +220,6 @@ impl BidSorter {
 
         self.curr_bid_slot = bid_slot;
         self.bids.clear();
-        self.headers.clear();
         self.demotions.clear();
 
         self.curr_bid = None;
@@ -226,35 +228,35 @@ impl BidSorter {
     fn update_top_bid(
         &mut self,
         builder_pubkey: BlsPublicKeyBytes,
-        bid: Bid,
+        bid: BidEntry,
         trace: Option<&mut SubmissionTrace>,
-        is_cancel: bool,
+        is_optimistic: bool,
     ) {
-        let Some((h, _)) = self.headers.get(&bid.on_receive_ns) else {
-            // this should never happen
-            return;
-        };
-
         let now_ns = utcnow_ns();
 
         let top_bid_update = TopBidUpdate {
             timestamp: now_ns / 1_000_000,
             slot: self.curr_bid_slot,
-            block_number: h.header.block_number,
-            block_hash: h.header.block_hash,
-            parent_hash: h.header.parent_hash,
+            block_number: bid.block_number,
+            block_hash: bid.block_hash,
+            parent_hash: bid.parent_hash,
             builder_pubkey,
-            fee_recipient: h.header.fee_recipient,
+            fee_recipient: bid.fee_recipient,
             value: bid.value,
         }
         .as_ssz_bytes_fast()
         .into();
         let _ = self.top_bid_tx.send(top_bid_update);
 
-        self.curr_bid = Some((builder_pubkey, bid, h.clone()));
+        self.curr_bid = Some((builder_pubkey, bid));
 
         if let Some(trace) = trace {
-            trace.top_bid_at = Some((now_ns, is_cancel));
+            if is_optimistic {
+                // this is our "tick to trade" but may be confounded if builder is sending slowly
+                record_submission_step_ns("recv_top_bid", trace.receive, now_ns);
+                // internal overhead
+                record_submission_step_ns("read_body_top_bid", trace.read_body, now_ns);
+            }
         }
         self.local_telemetry.top_bids += 1;
         TopBidMetrics::top_bid_update_count();

@@ -21,8 +21,6 @@ pub struct GetHeaderTrace {
 pub struct GetPayloadTrace {
     // first packet
     pub receive: u64,
-    // when body started being read
-    pub scheduled_at: u64,
     // when body finished being read
     pub read_body: u64,
     // when handler started
@@ -40,12 +38,10 @@ pub struct GetPayloadTrace {
 
 impl GetPayloadTrace {
     pub fn init_from_timings(timings: RequestTimings) -> Self {
-        let scheduled_at = timings.stats.start_ns.load(Ordering::Relaxed);
         let read_body = timings.stats.finish_ns.load(Ordering::Relaxed);
 
         Self {
             receive: timings.on_receive_ns,
-            scheduled_at,
             read_body,
             start_handler: utcnow_ns(),
             ..Default::default()
@@ -53,8 +49,7 @@ impl GetPayloadTrace {
     }
 
     pub fn record_metrics(&self) {
-        record("scheduled_at", self.receive, self.scheduled_at);
-        record("read_body", self.scheduled_at, self.read_body);
+        record("read_body", self.receive, self.read_body);
         record("start_handler", self.read_body, self.start_handler);
         record("decode", self.start_handler, self.decode);
         record("proposer_index_validated", self.decode, self.proposer_index_validated);

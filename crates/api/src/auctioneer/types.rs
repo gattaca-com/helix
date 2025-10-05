@@ -1,15 +1,16 @@
-use std::{ops::Range, sync::Arc};
+use std::{ops::Range, sync::Arc, time::Instant};
 
-use alloy_primitives::B256;
+use alloy_primitives::{B256, U256};
 use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     GetPayloadTrace, SubmissionTrace,
 };
 use helix_housekeeper::PayloadAttributesUpdate;
 use helix_types::{
-    BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ForkName,
-    GetPayloadResponse, PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock,
-    SignedValidatorRegistration, Slot, VersionedSignedProposal,
+    mock_public_key_bytes, BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid,
+    DehydratedBidSubmission, ExecutionPayload, ExecutionRequests, ForkName, GetPayloadResponse,
+    PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock, SignedValidatorRegistration,
+    Slot, VersionedSignedProposal,
 };
 use tokio::sync::oneshot;
 
@@ -21,9 +22,9 @@ use crate::{
 };
 
 pub type SubmissionResult = Result<(), BuilderApiError>;
-pub type GetHeaderResult = Result<BuilderBid, ProposerApiError>;
+pub type GetHeaderResult = Result<PayloadHeaderData, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
-pub type BestMergeablePayload = Option<(BuilderBid, Arc<PayloadAndBlobs>)>;
+pub type BestMergeablePayload = Option<PayloadHeaderData>;
 
 pub struct GetPayloadResultData {
     pub to_proposer: GetPayloadResponse,
@@ -70,6 +71,84 @@ impl Submission {
     }
 }
 
+/// From a SignedBidSubmission, keep only the fields needed to serve get_header and get_payload,
+/// some fields are optional because payloads also arrive via gossip and we only gossip
+/// PayloadAndBlobs
+pub struct PayloadEntry {
+    /// Either from a submission or via gossip
+    pub payload_and_blobs: Arc<PayloadAndBlobs>,
+    /// Some only if we processed the submission locally
+    pub bid_data: Option<PayloadBidData>,
+}
+
+impl PayloadEntry {
+    pub fn new_submission(
+        signed_bid_submission: SignedBidSubmission,
+        withdrawals_root: B256,
+    ) -> Self {
+        Self {
+            payload_and_blobs: signed_bid_submission.payload_and_blobs_ref().to_owned().into(),
+            bid_data: Some(PayloadBidData {
+                withdrawals_root,
+                execution_requests: signed_bid_submission.execution_requests().clone(),
+                value: signed_bid_submission.value(),
+            }),
+        }
+    }
+
+    pub fn new_gossip(data: BroadcastPayloadParams) -> Self {
+        Self { payload_and_blobs: data.execution_payload, bid_data: None }
+    }
+
+    pub fn to_parts_for_get_header(&self) -> Option<PayloadHeaderData> {
+        let bid_data = self.bid_data.as_ref()?.clone();
+        Some(PayloadHeaderData { payload_and_blobs: self.payload_and_blobs.clone(), bid_data })
+    }
+}
+
+#[derive(Clone)]
+pub struct PayloadHeaderData {
+    pub payload_and_blobs: Arc<PayloadAndBlobs>,
+    pub bid_data: PayloadBidData,
+}
+
+impl PayloadHeaderData {
+    pub fn value(&self) -> &U256 {
+        &self.bid_data.value
+    }
+
+    pub fn execution_payload(&self) -> &ExecutionPayload {
+        &self.payload_and_blobs.execution_payload
+    }
+
+    pub fn block_hash(&self) -> &B256 {
+        &self.execution_payload().block_hash
+    }
+
+    /// This is expensive because of the tx root
+    pub fn to_builder_bid_slow(self) -> BuilderBid {
+        let header = self
+            .payload_and_blobs
+            .execution_payload
+            .to_header(Some(self.bid_data.withdrawals_root));
+
+        BuilderBid {
+            header,
+            blob_kzg_commitments: self.payload_and_blobs.blobs_bundle.commitments.clone(),
+            value: self.bid_data.value,
+            execution_requests: self.bid_data.execution_requests,
+            pubkey: mock_public_key_bytes(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct PayloadBidData {
+    pub withdrawals_root: B256,
+    pub execution_requests: Arc<ExecutionRequests>,
+    pub value: U256,
+}
+
 pub enum SubWorkerJob {
     BlockSubmission {
         headers: http::HeaderMap,
@@ -77,6 +156,7 @@ pub enum SubWorkerJob {
         trace: SubmissionTrace, // TODO: replace this with better tracing
         res_tx: oneshot::Sender<SubmissionResult>,
         span: tracing::Span,
+        sent_at: Instant,
     },
 
     GetPayload {
@@ -145,6 +225,7 @@ pub enum Event {
         trace: SubmissionTrace,
         res_tx: oneshot::Sender<SubmissionResult>,
         span: tracing::Span,
+        sent_at: Instant,
     },
     /// Assume already some validation (so we don't have to wait here)
     /// timing games already done
@@ -170,4 +251,19 @@ pub enum Event {
         bid_slot: Slot,
         res_tx: oneshot::Sender<BestMergeablePayload>,
     },
+}
+
+impl Event {
+    pub fn as_str(&self) -> &'static str {
+        match &self {
+            Event::SlotData { .. } => "SlotData",
+            Event::Submission { .. } => "Submission",
+            Event::GetHeader { .. } => "GetHeader",
+            Event::GetPayload { .. } => "GetPayload",
+            Event::GossipPayload(_) => "GossipPayload",
+            Event::SimResult(_) => "SimResult",
+            Event::SimulatorSync { .. } => "SimulatorSync",
+            Event::GetBestPayloadForMerging { .. } => "GetBestPayloadForMerging",
+        }
+    }
 }

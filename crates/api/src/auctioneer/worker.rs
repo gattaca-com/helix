@@ -1,9 +1,9 @@
+use std::time::Instant;
+
 use alloy_primitives::B256;
 use helix_common::{
-    chain_info::ChainInfo,
-    local_cache::LocalCache,
-    utils::{utcnow_ns, utcnow_sec},
-    GetPayloadTrace, RelayConfig, SubmissionTrace,
+    chain_info::ChainInfo, local_cache::LocalCache, record_submission_step, utils::utcnow_sec,
+    GetPayloadTrace, RelayConfig,
 };
 use helix_types::{
     BlockMergingData, BlockMergingPreferences, BlsPublicKey, BlsPublicKeyBytes,
@@ -49,9 +49,11 @@ impl SubWorker {
 
     fn handle_task(&self, task: SubWorkerJob) {
         match task {
-            SubWorkerJob::BlockSubmission { headers, body, mut trace, res_tx, span } => {
+            SubWorkerJob::BlockSubmission { headers, body, trace, res_tx, span, sent_at } => {
+                record_submission_step("worker_recv", sent_at.elapsed());
+
                 let guard = span.enter();
-                match self.handle_block_submission(headers, body, &mut trace) {
+                match self.handle_block_submission(headers, body) {
                     Ok((submission, withdrawals_root, sequence, merging_data)) => {
                         let merging_preferences = merging_data
                             .as_ref()
@@ -79,6 +81,7 @@ impl SubWorker {
                                 trace,
                                 res_tx,
                                 span,
+                                sent_at: Instant::now(),
                             };
 
                             if self.tx.try_send(message).is_err() {
@@ -117,6 +120,7 @@ impl SubWorker {
                                 trace,
                                 res_tx,
                                 span,
+                                sent_at: Instant::now(),
                             };
 
                             if self.tx.try_send(message).is_err() {
@@ -149,12 +153,10 @@ impl SubWorker {
         }
     }
 
-    // TODO: populate trace
     fn handle_block_submission(
         &self,
         headers: http::HeaderMap,
         body: bytes::Bytes,
-        trace: &mut SubmissionTrace,
     ) -> Result<(Submission, B256, Option<u64>, Option<BlockMergingData>), BuilderApiError> {
         trace!("handling block submission");
 
@@ -181,7 +183,6 @@ impl SubWorker {
 
             let payload: DehydratedBidSubmission = decoder.decode(body)?;
 
-            trace.decode = utcnow_ns();
             (Submission::Dehydrated(payload), None)
         } else {
             let (payload, merging_data) = if has_mergeable_data {
@@ -192,10 +193,10 @@ impl SubWorker {
                 (payload, None)
             };
 
-            trace.decode = utcnow_ns();
             if !skip_sigverify {
+                let start_sig = Instant::now();
                 payload.verify_signature(self.chain_info.builder_domain)?;
-                trace.signature = Some(utcnow_ns());
+                record_submission_step("signature", start_sig.elapsed());
             }
 
             payload.validate_payload_ssz_lengths(self.chain_info.max_blobs_per_block())?;
