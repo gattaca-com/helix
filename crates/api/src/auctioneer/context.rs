@@ -96,8 +96,6 @@ impl<A: Api> Context<A> {
         let builder = *result.submission.builder_public_key();
         let block_hash = *result.submission.block_hash();
 
-        let db = self.db.clone();
-
         if let Err(err) = result.result.as_ref() {
             if err.is_demotable() {
                 if self.cache.demote_builder(&builder) {
@@ -109,7 +107,7 @@ impl<A: Api> Context<A> {
                     let bid_slot = result.submission.slot();
                     let failsafe_triggered = self.sim_manager.failsafe_triggered.clone();
 
-                    let db = db.clone();
+                    let db = self.db.clone();
                     spawn_tracked!(async move {
                         if let Err(err) = db
                             .db_demote_builder(bid_slot.as_u64(), &builder, &block_hash, reason)
@@ -125,6 +123,7 @@ impl<A: Api> Context<A> {
             };
         }
 
+        let db = self.db.clone();
         spawn_tracked!(async move {
             if let Err(err) = db
                 .store_block_submission(result.submission, result.trace, result.optimistic_version)
