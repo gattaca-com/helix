@@ -9,7 +9,7 @@ use helix_common::{
     BuilderInfo, RelayConfig,
 };
 use helix_database::DatabaseService;
-use helix_types::{BlsPublicKeyBytes, HydrationCache, PayloadAndBlobs, Slot};
+use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{error, warn};
 
@@ -17,7 +17,7 @@ use crate::{
     auctioneer::{
         bid_sorter::BidSorter,
         simulator::manager::{SimulationResult, SimulatorManager},
-        types::PendingPayload,
+        types::{PayloadEntry, PendingPayload},
     },
     Api,
 };
@@ -31,7 +31,7 @@ pub struct SlotContext {
     pub seen_block_hashes: FxHashSet<B256>,
     pub sequence: FxHashMap<BlsPublicKeyBytes, u64>,
     pub hydration_cache: HydrationCache,
-    pub payloads: FxHashMap<B256, Arc<PayloadAndBlobs>>,
+    pub payloads: FxHashMap<B256, PayloadEntry>,
     pub sim_manager: SimulatorManager,
 }
 

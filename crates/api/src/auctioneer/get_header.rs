@@ -1,4 +1,5 @@
 use tokio::sync::oneshot;
+use tracing::error;
 
 use crate::{
     auctioneer::{context::Context, types::GetHeaderResult},
@@ -24,10 +25,20 @@ impl<A: Api> Context<A> {
             });
         }
 
-        let Some(bid) = self.bid_sorter.get_header() else {
+        let Some(best_block_hash) = self.bid_sorter.get_header() else {
             return Err(ProposerApiError::NoBidPrepared);
         };
 
-        Ok(bid)
+        let Some(entry) = self.payloads.get(&best_block_hash) else {
+            error!("failed to get payload from bid sorter best, this should never happen!");
+            return Err(ProposerApiError::NoBidPrepared);
+        };
+
+        let Some(data) = entry.to_header_data() else {
+            error!("failed to get header data from payload entry, this should never happen!");
+            return Err(ProposerApiError::NoBidPrepared);
+        };
+
+        Ok(data)
     }
 }

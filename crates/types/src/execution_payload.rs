@@ -114,7 +114,7 @@ impl ExecutionPayload {
             base_fee_per_gas: self.base_fee_per_gas,
             block_hash: self.block_hash,
             transactions_root: self.transaction_root(),
-            withdrawals_root: withdrawals_root.unwrap_or_else(|| self.withdrawals.tree_hash_root()),
+            withdrawals_root: withdrawals_root.unwrap_or_else(|| self.withdrawals_root()),
             blob_gas_used: self.blob_gas_used,
             excess_blob_gas: self.excess_blob_gas,
         }
@@ -122,6 +122,10 @@ impl ExecutionPayload {
 
     pub fn transaction_root(&self) -> B256 {
         self.transactions.tree_hash_root()
+    }
+
+    pub fn withdrawals_root(&self) -> B256 {
+        self.withdrawals.tree_hash_root()
     }
 
     pub fn to_lighthouse_electra_payload(

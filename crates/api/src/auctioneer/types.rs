@@ -100,7 +100,7 @@ impl PayloadEntry {
         Self { payload_and_blobs: data.execution_payload, bid_data: None }
     }
 
-    pub fn to_parts_for_get_header(&self) -> Option<PayloadHeaderData> {
+    pub fn to_header_data(&self) -> Option<PayloadHeaderData> {
         let bid_data = self.bid_data.as_ref()?.clone();
         Some(PayloadHeaderData { payload_and_blobs: self.payload_and_blobs.clone(), bid_data })
     }
