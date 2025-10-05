@@ -23,7 +23,7 @@ pub mod middleware;
 pub mod proposer;
 pub mod relay_data;
 pub mod router;
-pub mod service; // TODO: move to separate crate, need to refactor some types
+pub mod service;
 
 mod grpc {
     include!(concat!(env!("OUT_DIR"), "/gossip.rs"));

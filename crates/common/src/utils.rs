@@ -83,6 +83,7 @@ pub async fn init_tracing_log(
                         .tracer("helix_relay");
 
                     let otel_layer = OpenTelemetryLayer::new(tracer)
+                        .with_location(false)
                         .with_tracked_inactivity(false)
                         .with_threads(false)
                         .with_filter(get_crate_filter(tracing::Level::TRACE));

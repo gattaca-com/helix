@@ -4,6 +4,7 @@ use helix_common::{GetPayloadTrace, SubmissionTrace};
 use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot};
 use http::HeaderMap;
 use tokio::sync::oneshot;
+use tracing::trace;
 
 use crate::{
     auctioneer::types::{
@@ -35,6 +36,7 @@ impl AuctioneerHandle {
         trace: SubmissionTrace,
     ) -> Result<oneshot::Receiver<SubmissionResult>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
+        trace!("sending to worker");
         self.worker
             .try_send(SubWorkerJob::BlockSubmission {
                 headers,
@@ -53,6 +55,7 @@ impl AuctioneerHandle {
         params: GetHeaderParams,
     ) -> Result<oneshot::Receiver<GetHeaderResult>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
+        trace!("sending to auctioneer");
         self.auctioneer
             .try_send(Event::GetHeader { params, res_tx: tx })
             .map_err(|_| ChannelFull)?;
@@ -66,6 +69,7 @@ impl AuctioneerHandle {
         trace: GetPayloadTrace,
     ) -> Result<oneshot::Receiver<GetPayloadResult>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
+        trace!("sending to worker");
         self.worker
             .try_send(SubWorkerJob::GetPayload {
                 proposer_pubkey,
@@ -78,6 +82,7 @@ impl AuctioneerHandle {
     }
 
     pub fn gossip_payload(&self, req: BroadcastPayloadParams) -> Result<(), ChannelFull> {
+        trace!("sending to worker");
         self.auctioneer.try_send(Event::GossipPayload(req)).map_err(|_| ChannelFull)
     }
 
@@ -86,6 +91,7 @@ impl AuctioneerHandle {
         bid_slot: Slot,
     ) -> Result<oneshot::Receiver<BestMergeablePayload>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
+        trace!("sending to worker");
         self.auctioneer
             .try_send(Event::GetBestPayloadForMerging { bid_slot, res_tx: tx })
             .map_err(|_| ChannelFull)?;

@@ -95,16 +95,16 @@ impl<A: Api> Context<A> {
         slot_data: &SlotData,
         merging_preferences: BlockMergingPreferences,
     ) -> Result<(SignedBidSubmission, OptimisticVersion), BuilderApiError> {
-        trace!("validating submission");
-
         let submission = match submission {
             Submission::Full(full) => full,
             Submission::Dehydrated(dehydrated) => {
+                trace!("hydrating submission");
                 let start = Instant::now();
                 let max_blobs_per_block = self.chain_info.max_blobs_per_block();
                 let (payload, tx_cache_hits, blob_cache_hits) =
                     dehydrated.hydrate(&mut self.hydration_cache, max_blobs_per_block)?;
 
+                trace!(tx_cache_hits, blob_cache_hits, "hydration done");
                 record_submission_step("hydration", start.elapsed());
 
                 HYDRATION_CACHE_HITS
@@ -121,6 +121,7 @@ impl<A: Api> Context<A> {
         tracing::Span::current()
             .record("builder_id", tracing::field::display(builder_info.builder_id()));
 
+        trace!("validating submission");
         let start_val = Instant::now();
         self.validate_submission(
             &submission,

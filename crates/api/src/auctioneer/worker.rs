@@ -1,8 +1,12 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use alloy_primitives::B256;
 use helix_common::{
-    chain_info::ChainInfo, local_cache::LocalCache, record_submission_step, utils::utcnow_sec,
+    chain_info::ChainInfo,
+    local_cache::LocalCache,
+    metrics::{WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US, WORKER_UTIL},
+    record_submission_step,
+    utils::utcnow_sec,
     GetPayloadTrace, RelayConfig,
 };
 use helix_types::{
@@ -24,35 +28,118 @@ use crate::{
     HEADER_API_KEY, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_SEQUENCE,
 };
 
+pub struct Telemetry {
+    work: Duration,
+    spin: Duration,
+    next_record: Instant,
+    loop_start: Instant,
+    loop_worked: Duration,
+}
+
+impl Telemetry {
+    const REPORT_FREQ: Duration = Duration::from_millis(500);
+
+    fn telemetry(&mut self, id: &str) {
+        let loop_elapsed = self.loop_start.elapsed();
+        self.work += self.loop_worked;
+        self.spin += loop_elapsed.saturating_sub(self.loop_worked);
+
+        let now = Instant::now();
+        if self.next_record < now {
+            self.next_record = now + Self::REPORT_FREQ;
+            let spin = std::mem::take(&mut self.spin);
+            let work = std::mem::take(&mut self.work);
+
+            let total = spin + work;
+            let util = if total.is_zero() { 0.0 } else { work.as_secs_f64() / total.as_secs_f64() };
+
+            WORKER_UTIL.with_label_values(&[id]).observe(util);
+        }
+
+        // next loop
+        self.loop_start = now;
+        self.loop_worked = Duration::ZERO;
+    }
+}
+
+impl Default for Telemetry {
+    fn default() -> Self {
+        Self {
+            work: Default::default(),
+            spin: Default::default(),
+            next_record: Instant::now() + Self::REPORT_FREQ,
+            loop_start: Instant::now(),
+            loop_worked: Default::default(),
+        }
+    }
+}
+
 // TODO: spans
 pub(super) struct SubWorker {
-    pub(super) rx: crossbeam_channel::Receiver<SubWorkerJob>,
-    pub(super) tx: crossbeam_channel::Sender<Event>,
+    id: String,
+    tx: crossbeam_channel::Sender<Event>,
     // TODO: move this to auctioneer
-    pub(super) merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
-    pub(super) cache: LocalCache,
-    pub(super) chain_info: ChainInfo,
-    pub(super) config: RelayConfig,
+    merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
+    cache: LocalCache,
+    chain_info: ChainInfo,
+    config: RelayConfig,
+    tel: Telemetry,
 }
 
 impl SubWorker {
-    pub(super) fn run(self, id: usize) {
-        let _span = info_span!("worker", %id).entered();
-        info!("starting");
-
-        loop {
-            for task in self.rx.try_iter() {
-                self.handle_task(task);
-            }
+    pub fn new(
+        id: usize,
+        tx: crossbeam_channel::Sender<Event>,
+        merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
+        cache: LocalCache,
+        chain_info: ChainInfo,
+        config: RelayConfig,
+    ) -> Self {
+        Self {
+            id: id.to_string(),
+            tx,
+            merge_pool_tx,
+            cache,
+            chain_info,
+            config,
+            tel: Telemetry::default(),
         }
     }
 
-    fn handle_task(&self, task: SubWorkerJob) {
+    pub(super) fn run(mut self, rx: crossbeam_channel::Receiver<SubWorkerJob>) {
+        let _span = info_span!("worker", id =% self.id).entered();
+        info!("starting");
+
+        loop {
+            for task in rx.try_iter() {
+                self.handle_task(task);
+            }
+
+            self.tel.telemetry(&self.id);
+        }
+    }
+
+    fn handle_task(&mut self, task: SubWorkerJob) {
+        let start_task = Instant::now();
+        let task_name = task.as_str();
+
+        self._handle_task(task);
+
+        let task_dur = start_task.elapsed();
+        self.tel.loop_worked += task_dur;
+
+        WORKER_TASK_COUNT.with_label_values(&[task_name, &self.id]).inc();
+        WORKER_TASK_LATENCY_US
+            .with_label_values(&[task_name, &self.id])
+            .observe(task_dur.as_micros() as f64);
+    }
+
+    fn _handle_task(&self, task: SubWorkerJob) {
         match task {
             SubWorkerJob::BlockSubmission { headers, body, trace, res_tx, span, sent_at } => {
                 record_submission_step("worker_recv", sent_at.elapsed());
-
                 let guard = span.enter();
+                trace!("received by worker");
                 match self.handle_block_submission(headers, body) {
                     Ok((submission, withdrawals_root, sequence, merging_data)) => {
                         let merging_preferences = merging_data
@@ -158,8 +245,6 @@ impl SubWorker {
         headers: http::HeaderMap,
         body: bytes::Bytes,
     ) -> Result<(Submission, B256, Option<u64>, Option<BlockMergingData>), BuilderApiError> {
-        trace!("handling block submission");
-
         let mut decoder = SubmissionDecoder::from_headers(&headers);
         let body = decoder.decompress(body)?;
         let has_mergeable_data = matches!(headers.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"));
@@ -174,6 +259,7 @@ impl SubWorker {
             .and_then(|seq| seq.to_str().ok())
             .and_then(|seq| seq.parse::<u64>().ok());
 
+        trace!(?sequence, should_hydrate, skip_sigverify, has_mergeable_data, "processing payload");
         let (submission, merging_data) = if should_hydrate {
             // caches are per builder and the builder pubkey is still unvalidated so we rely on the
             // api key pubkey for safety
@@ -197,8 +283,10 @@ impl SubWorker {
             };
 
             if !skip_sigverify {
+                trace!("verifying signature");
                 let start_sig = Instant::now();
                 payload.verify_signature(self.chain_info.builder_domain)?;
+                trace!("signature ok");
                 record_submission_step("signature", start_sig.elapsed());
             }
 
@@ -206,7 +294,9 @@ impl SubWorker {
             (Submission::Full(payload), merging_data)
         };
 
+        trace!("computing withdrawals root");
         let withdrawals_root = submission.withdrawal_root();
+        trace!("withdrawals root done");
 
         Ok((submission, withdrawals_root, sequence, merging_data))
     }
