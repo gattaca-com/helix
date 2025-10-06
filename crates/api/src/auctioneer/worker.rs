@@ -4,9 +4,9 @@ use alloy_primitives::B256;
 use helix_common::{
     chain_info::ChainInfo,
     local_cache::LocalCache,
-    metrics::{WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US, WORKER_UTIL},
+    metrics::{WORKER_QUEUE_LEN, WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US, WORKER_UTIL},
     record_submission_step,
-    utils::utcnow_sec,
+    utils::{utcnow_ns, utcnow_sec},
     GetPayloadTrace, RelayConfig,
 };
 use helix_types::{
@@ -40,12 +40,18 @@ pub struct Telemetry {
 impl Telemetry {
     const REPORT_FREQ: Duration = Duration::from_millis(500);
 
-    fn telemetry(&mut self, id: &str) {
-        let loop_elapsed = self.loop_start.elapsed();
+    fn telemetry<T>(&mut self, id: &str, queue_type: &str, rx: &crossbeam_channel::Receiver<T>) {
+        let now = Instant::now();
+        let loop_elapsed = now.duration_since(self.loop_start);
+
         self.work += self.loop_worked;
         self.spin += loop_elapsed.saturating_sub(self.loop_worked);
 
-        let now = Instant::now();
+        if loop_elapsed > Duration::ZERO {
+            self.loop_start = now;
+        }
+        self.loop_worked = Duration::ZERO;
+
         if self.next_record < now {
             self.next_record = now + Self::REPORT_FREQ;
             let spin = std::mem::take(&mut self.spin);
@@ -55,11 +61,8 @@ impl Telemetry {
             let util = if total.is_zero() { 0.0 } else { work.as_secs_f64() / total.as_secs_f64() };
 
             WORKER_UTIL.with_label_values(&[id]).observe(util);
+            WORKER_QUEUE_LEN.with_label_values(&[queue_type]).observe(rx.len() as f64);
         }
-
-        // next loop
-        self.loop_start = now;
-        self.loop_worked = Duration::ZERO;
     }
 }
 
@@ -68,7 +71,9 @@ impl Default for Telemetry {
         Self {
             work: Default::default(),
             spin: Default::default(),
-            next_record: Instant::now() + Self::REPORT_FREQ,
+            next_record: Instant::now() +
+                Self::REPORT_FREQ +
+                Duration::from_millis(utcnow_ns() % 10 * 5), // to scatter worker reports
             loop_start: Instant::now(),
             loop_worked: Default::default(),
         }
@@ -116,7 +121,7 @@ impl SubWorker {
                 self.handle_task(task);
             }
 
-            self.tel.telemetry(&self.id);
+            self.tel.telemetry(&self.id, "submission", &rx);
         }
     }
 
@@ -343,7 +348,7 @@ impl RegWorker {
                 self.handle_task(task);
             }
 
-            self.tel.telemetry(&self.id);
+            self.tel.telemetry(&self.id, "registration", &rx);
         }
     }
 
