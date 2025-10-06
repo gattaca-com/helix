@@ -1,4 +1,4 @@
-use helix_common::{task, utils::utcnow_ns, GossipedPayloadTrace};
+use helix_common::{spawn_tracked, utils::utcnow_ns, GossipedPayloadTrace};
 use helix_database::DatabaseService;
 use tracing::{debug, error};
 use uuid::Uuid;
@@ -22,7 +22,7 @@ impl<A: Api> BuilderApi<A> {
 
         // Save gossiped payload trace to db
         let db = self.db.clone();
-        task::spawn(file!(), line!(), async move {
+        spawn_tracked!(async move {
             if let Err(err) = db.save_gossiped_payload_trace(block_hash, trace).await {
                 error!(%err, "failed to store gossiped payload trace")
             }

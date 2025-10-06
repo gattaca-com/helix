@@ -593,7 +593,7 @@ impl PostgresDatabaseService {
                 region_id: self.region,
                 optimistic_version: item.optimistic_version as i16,
                 receive: item.trace.receive as i64,
-                decode: item.trace.decode as i64,
+                decode: 0,
                 pre_checks: 0,
                 signature: 0,
                 floor_bid_checks: 0,
@@ -1414,7 +1414,6 @@ impl DatabaseService for PostgresDatabaseService {
         trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,
     ) -> Result<(), DatabaseError> {
-        trace.record_metrics();
         let mut record = DbMetricRecord::new("store_block_submission");
         if let Some(sender) = &self.block_submissions_sender {
             sender

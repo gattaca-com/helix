@@ -9,7 +9,8 @@ use std::{
 
 use helix_common::{
     bid_submission::OptimisticVersion, is_local_dev, metrics::SimulatorMetrics,
-    simulator::BlockSimError, spawn_tracked, utils::utcnow_ns, SimulatorConfig, SubmissionTrace,
+    record_submission_step, simulator::BlockSimError, spawn_tracked, SimulatorConfig,
+    SubmissionTrace,
 };
 use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission};
 use tokio::sync::oneshot;
@@ -188,7 +189,7 @@ impl SimulatorManager {
         }
     }
 
-    pub fn spawn_sim(&mut self, id: usize, mut req: SimulatorRequest) {
+    pub fn spawn_sim(&mut self, id: usize, req: SimulatorRequest) {
         const PAUSE_DURATION: Duration = Duration::from_secs(60);
 
         let client = &mut self.simulators[id];
@@ -200,6 +201,7 @@ impl SimulatorManager {
         let timer = SimulatorMetrics::timer(client.endpoint());
         let tx = self.sim_result_tx.clone();
         spawn_tracked!(async move {
+            let start_sim = Instant::now();
             let block_hash = req.submission.block_hash();
             debug!(%block_hash, "sending simulation request");
 
@@ -222,7 +224,8 @@ impl SimulatorManager {
                 None
             };
 
-            req.trace.simulation = utcnow_ns();
+            record_submission_step("simulation", start_sim.elapsed());
+
             let result = (
                 id,
                 Some(SimulationResultInner {

@@ -50,7 +50,7 @@ impl BlockSimRequest {
             apply_blacklist: proposer_preferences.filtering.is_regional(),
             proposer_preferences,
             blobs_bundle: Some(block.blobs_bundle().clone()),
-            execution_requests: block.execution_requests(),
+            execution_requests: Some(block.execution_requests()),
             parent_beacon_block_root,
             inclusion_list,
         }

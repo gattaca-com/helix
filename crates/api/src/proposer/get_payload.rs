@@ -5,7 +5,7 @@ use helix_beacon::types::BroadcastValidation;
 use helix_common::{
     chain_info::ChainInfo,
     metadata_provider::MetadataProvider,
-    task,
+    spawn_tracked,
     utils::{extract_request_id, utcnow_ns},
     GetPayloadTrace, RequestTimings,
 };
@@ -264,7 +264,7 @@ impl<A: Api> ProposerApi<A> {
         let mut trace_clone = *trace;
         let payload_clone = to_proposer.data.clone();
 
-        let handle = task::spawn(file!(), line!(), async move {
+        let handle = spawn_tracked!(async move {
             let mut failed_publishing = false;
 
             if let Err(err) = self_clone
@@ -374,7 +374,7 @@ impl<A: Api> ProposerApi<A> {
     ) {
         let db = self.db.clone();
         let trace = *trace;
-        task::spawn(file!(), line!(), async move {
+        spawn_tracked!(async move {
             if let Err(err) =
                 db.save_delivered_payload(proposer_public_key, payload, &trace, user_agent).await
             {

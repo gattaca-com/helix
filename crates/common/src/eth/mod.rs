@@ -1,10 +1,6 @@
 use std::time::Instant;
 
-use alloy_primitives::B256;
-use helix_types::{
-    mock_public_key_bytes, BuilderBid, ForkName, SignedBidSubmission, SignedBuilderBid,
-    SignedBuilderBidInner,
-};
+use helix_types::{BuilderBid, ForkName, SignedBuilderBid, SignedBuilderBidInner};
 use tracing::debug;
 
 use crate::{metrics::BID_SIGNING_LATENCY, signing::RelaySigningContext};
@@ -31,36 +27,4 @@ pub fn resign_builder_bid(
     debug!("re-signing builder bid took {:?}", start.elapsed());
 
     bid
-}
-
-pub fn bid_submission_to_builder_bid_unsigned(
-    submission: &SignedBidSubmission,
-    withdrawals_root: B256,
-) -> BuilderBid {
-    match submission {
-        SignedBidSubmission::Electra(bid) => {
-            let header = bid.execution_payload.to_header(Some(withdrawals_root));
-            let execution_requests = bid.execution_requests.clone();
-
-            BuilderBid {
-                header,
-                blob_kzg_commitments: bid.blobs_bundle.commitments().clone(),
-                value: bid.message.value,
-                execution_requests,
-                pubkey: mock_public_key_bytes(), // this will be replaced when signing the header
-            }
-        }
-        SignedBidSubmission::Fulu(bid) => {
-            let header = bid.execution_payload.to_header(Some(withdrawals_root));
-            let execution_requests = bid.execution_requests.clone();
-
-            BuilderBid {
-                header,
-                blob_kzg_commitments: bid.blobs_bundle.commitments().clone(),
-                value: bid.message.value,
-                execution_requests,
-                pubkey: mock_public_key_bytes(), // this will be replaced when signing the header
-            }
-        }
-    }
 }

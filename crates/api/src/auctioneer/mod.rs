@@ -11,7 +11,7 @@ mod types;
 mod validation;
 mod worker;
 
-use std::{cmp::Ordering, sync::Arc};
+use std::{cmp::Ordering, sync::Arc, time::Instant};
 
 use alloy_primitives::B256;
 pub use handle::{AuctioneerHandle, RegWorkerHandle};
@@ -19,6 +19,8 @@ use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
     local_cache::LocalCache,
+    metrics::STATE_TRANSITION_LATENCY,
+    record_submission_step,
     utils::pin_thread_to_core,
     RelayConfig,
 };
@@ -26,7 +28,7 @@ use helix_housekeeper::{chain_event_updater::SlotData as HkSlotData, PayloadAttr
 use helix_types::Slot;
 pub use simulator::*;
 use tracing::{debug, info, info_span, warn};
-pub use types::GetPayloadResultData;
+pub use types::{GetPayloadResultData, PayloadBidData, PayloadHeaderData};
 
 use crate::{
     auctioneer::{
@@ -163,9 +165,22 @@ impl Default for State {
     }
 }
 
+// TODO: worker utilization, tokio metrics, gauge queue length, worker tasks by id
+
 impl State {
     fn step<A: Api>(&mut self, event: Event, ctx: &mut Context<A>) {
-        // info!("processing event: {} while in state: {}", event.as_str(), self.as_str());
+        let start_state = self.as_str();
+        let event_tag = event.as_str();
+        let start = Instant::now();
+        self._step(event, ctx);
+        let end_state = self.as_str();
+
+        STATE_TRANSITION_LATENCY
+            .with_label_values(&[&format!("{start_state}+{event_tag}->{end_state}")])
+            .observe(start.elapsed().as_nanos() as f64 / 1000.);
+    }
+
+    fn _step<A: Api>(&mut self, event: Event, ctx: &mut Context<A>) {
         match (&self, event) {
             ///////////// LIFECYCLE EVENTS (ALWAYS VALID) /////////////
 
@@ -232,21 +247,22 @@ impl State {
                 State::Broadcasting { slot_data, block_hash },
                 Event::SlotData { bid_slot, registration_data, payload_attributes, il },
             ) => match bid_slot.cmp(&slot_data.bid_slot) {
-                Ordering::Less | Ordering::Equal => (),
+                Ordering::Less | Ordering::Equal => return,
                 Ordering::Greater => {
                     if let Some(attributes) = &payload_attributes {
                         if &attributes.parent_hash != block_hash {
                             warn!(maybe_missed_slot =% slot_data.bid_slot, parent_hash =% attributes.parent_hash, broadcasting_hash =% block_hash, "new slot while broacasting different block, was the slot missed?");
                         }
-
-                        *self = Self::process_slot_data(
-                            bid_slot,
-                            registration_data,
-                            payload_attributes,
-                            il,
-                            ctx,
-                        );
                     }
+
+                    ctx.on_new_slot(bid_slot);
+                    *self = Self::process_slot_data(
+                        bid_slot,
+                        registration_data,
+                        payload_attributes,
+                        il,
+                        ctx,
+                    );
                 }
             },
 
@@ -273,8 +289,11 @@ impl State {
                     trace,
                     res_tx,
                     span,
+                    sent_at,
                 },
             ) => {
+                record_submission_step("loop_recv", sent_at.elapsed());
+
                 let _guard = span.enter();
 
                 ctx.handle_submission(
@@ -305,9 +324,13 @@ impl State {
                 Event::GetPayload { blinded, block_hash, trace, res_tx },
             ) => {
                 if let Some(local) = ctx.payloads.get(&block_hash) {
-                    if let Some(block_hash) =
-                        ctx.handle_get_payload(local.clone(), blinded, trace, res_tx, slot_data)
-                    {
+                    if let Some(block_hash) = ctx.handle_get_payload(
+                        local.payload_and_blobs.clone(),
+                        blinded,
+                        trace,
+                        res_tx,
+                        slot_data,
+                    ) {
                         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
                         *self = State::Broadcasting { slot_data: slot_data.clone(), block_hash }
                     }
@@ -489,27 +512,12 @@ impl State {
     }
 }
 
-// impl Event {
-//     fn as_str(&self) -> &'static str {
-//         match &self {
-//             Event::SlotData { .. } => "SlotData",
-//             Event::Submission { .. } => "Submission",
-//             Event::GetHeader { .. } => "GetHeader",
-//             Event::GetPayload { .. } => "GetPayload",
-//             Event::GossipPayload(_) => "GossipPayload",
-//             Event::SimResult(_) => "SimResult",
-//             Event::SimulatorSync { .. } => "SimulatorSync",
-//             Event::GetBestPayloadForMerging { .. } => "GetBestPayloadForMerging",
-//         }
-//     }
-// }
-
-// impl State {
-//     fn as_str(&self) -> &'static str {
-//         match &self {
-//             State::Slot { .. } => "Slot",
-//             State::Sorting(_) => "Sorting",
-//             State::Broadcasting { .. } => "Broadcasting",
-//         }
-//     }
-// }
+impl State {
+    fn as_str(&self) -> &'static str {
+        match &self {
+            State::Slot { .. } => "Slot",
+            State::Sorting(_) => "Sorting",
+            State::Broadcasting { .. } => "Broadcasting",
+        }
+    }
+}

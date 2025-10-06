@@ -32,8 +32,6 @@ pub struct BodyTimings {
     pub read_ns: AtomicU64,
     // duration in ns spent between polls
     pub gap_ns: AtomicU64,
-    // timestamp in ns when the body was started reading
-    pub start_ns: AtomicU64,
     // timestamp in ns when the body was finished reading
     pub finish_ns: AtomicU64,
 }
@@ -53,10 +51,6 @@ impl BodyTimings {
 
     pub fn add_gap(&self, d: Duration) {
         self.gap_ns.fetch_add(d.as_nanos() as u64, Ordering::Relaxed);
-    }
-
-    pub fn set_start(&self) {
-        self.start_ns.store(utcnow_ns(), Ordering::Relaxed);
     }
 
     pub fn set_finish(&self) {
