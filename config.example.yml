@@ -40,12 +40,14 @@ block_merging_config:
 target_get_payload_propagation_duration_ms: 0
 primev_config: null
 discord_webhook_url: null
+is_submission_instance: true
+is_registration_instance: true
 logging: !File
   dir_path: /app/logs
   file_name: titan_relay.log
   otlp_server: http://localhost:4317
 cores:
   auctioneer: 1
-  workers: [2, 3, 4, 5]
-  tokio: [6, 7, 8, 9, 10]
-  n_tokio_blocking: 1
+  sub_workers: [2, 3, 4, 5]
+  reg_workers: [6, 7, 8, 9]
+  tokio: [10, 11, 12, 13]

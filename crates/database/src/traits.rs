@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use alloy_primitives::B256;
 use async_trait::async_trait;
@@ -16,6 +16,8 @@ use helix_common::{
 use helix_types::{
     BlsPublicKeyBytes, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
 };
+use parking_lot::RwLock;
+use rustc_hash::FxHashSet;
 
 use crate::{
     error::DatabaseError,
@@ -24,17 +26,14 @@ use crate::{
 
 #[async_trait]
 pub trait DatabaseService: Send + Sync + Clone {
-    async fn save_validator_registrations(
+    fn save_validator_registrations(
         &self,
-        entries: Vec<ValidatorRegistrationInfo>,
+        entries: impl Iterator<Item = ValidatorRegistrationInfo>,
         pool_name: Option<String>,
         user_agent: Option<String>,
-    ) -> Result<(), DatabaseError>;
+    );
 
-    async fn is_registration_update_required(
-        &self,
-        registration: &SignedValidatorRegistration,
-    ) -> Result<bool, DatabaseError>;
+    fn is_registration_update_required(&self, registration: &SignedValidatorRegistration) -> bool;
 
     async fn get_validator_registration(
         &self,
@@ -78,10 +77,7 @@ pub trait DatabaseService: Send + Sync + Clone {
 
     /// Given a list of public keys check if they are known.
     /// Return a list of all pub keys from the list that are known.
-    async fn check_known_validators(
-        &self,
-        public_keys: Vec<BlsPublicKeyBytes>,
-    ) -> Result<HashSet<BlsPublicKeyBytes>, DatabaseError>;
+    fn known_validators_cache(&self) -> &Arc<RwLock<FxHashSet<BlsPublicKeyBytes>>>;
 
     async fn save_too_late_get_payload(
         &self,

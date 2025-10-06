@@ -43,7 +43,7 @@ impl Api for ApiProd {
 
 fn main() {
     let config = load_config();
-    init_runtime(&config.cores);
+    init_runtime(&config);
 
     let keypair = load_keypair();
 

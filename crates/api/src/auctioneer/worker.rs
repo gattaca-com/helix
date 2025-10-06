@@ -1,12 +1,14 @@
 use alloy_primitives::B256;
 use helix_common::{
-    chain_info::ChainInfo, local_cache::LocalCache, utils::utcnow_ns, GetPayloadTrace, RelayConfig,
-    SubmissionTrace,
+    chain_info::ChainInfo,
+    local_cache::LocalCache,
+    utils::{utcnow_ns, utcnow_sec},
+    GetPayloadTrace, RelayConfig, SubmissionTrace,
 };
 use helix_types::{
     BlockMergingData, BlockMergingPreferences, BlsPublicKey, BlsPublicKeyBytes,
     DehydratedBidSubmission, ExecPayload, SigError, SignedBidSubmission,
-    SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock,
+    SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock, SignedValidatorRegistration,
 };
 use http::HeaderValue;
 use tracing::{error, info, info_span, trace, warn};
@@ -14,7 +16,7 @@ use tracing::{error, info, info_span, trace, warn};
 use crate::{
     auctioneer::{
         decoder::SubmissionDecoder,
-        types::{Submission, WorkerJob},
+        types::{RegWorkerJob, SubWorkerJob, Submission},
         Event,
     },
     builder::{api::get_mergeable_orders, error::BuilderApiError},
@@ -23,8 +25,8 @@ use crate::{
 };
 
 // TODO: spans
-pub(super) struct Worker {
-    pub(super) rx: crossbeam_channel::Receiver<WorkerJob>,
+pub(super) struct SubWorker {
+    pub(super) rx: crossbeam_channel::Receiver<SubWorkerJob>,
     pub(super) tx: crossbeam_channel::Sender<Event>,
     // TODO: move this to auctioneer
     pub(super) merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
@@ -33,7 +35,7 @@ pub(super) struct Worker {
     pub(super) config: RelayConfig,
 }
 
-impl Worker {
+impl SubWorker {
     pub(super) fn run(self, id: usize) {
         let _span = info_span!("worker", %id).entered();
         info!("starting");
@@ -45,9 +47,9 @@ impl Worker {
         }
     }
 
-    fn handle_task(&self, task: WorkerJob) {
+    fn handle_task(&self, task: SubWorkerJob) {
         match task {
-            WorkerJob::BlockSubmission { headers, body, mut trace, res_tx, span } => {
+            SubWorkerJob::BlockSubmission { headers, body, mut trace, res_tx, span } => {
                 let guard = span.enter();
                 match self.handle_block_submission(headers, body, &mut trace) {
                     Ok((submission, withdrawals_root, sequence, merging_data)) => {
@@ -129,7 +131,7 @@ impl Worker {
                 }
             }
 
-            WorkerJob::GetPayload { blinded_block, proposer_pubkey, mut trace, res_tx } => {
+            SubWorkerJob::GetPayload { blinded_block, proposer_pubkey, mut trace, res_tx } => {
                 match self.handle_get_payload(&proposer_pubkey, blinded_block, &mut trace) {
                     Ok((blinded, block_hash)) => {
                         let _ = self.tx.try_send(Event::GetPayload {
@@ -158,13 +160,13 @@ impl Worker {
 
         let mut decoder = SubmissionDecoder::from_headers(&headers);
         let body = decoder.decompress(body)?;
-        let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref())?;
+        let has_mergeable_data = matches!(headers.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"));
+        let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref(), has_mergeable_data)?;
 
         let skip_sigverify = headers
             .get(HEADER_API_KEY)
             .is_some_and(|key| self.cache.validate_api_key(key, &builder_pubkey));
         let should_hydrate = headers.get(HEADER_HYDRATE).is_some();
-        let has_mergeable_data = matches!(headers.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"));
         let sequence = headers
             .get(HEADER_SEQUENCE)
             .and_then(|seq| seq.to_str().ok())
@@ -225,6 +227,33 @@ impl Worker {
     }
 }
 
+/// Worker to process registrations verifications
+pub(super) struct RegWorker {
+    pub(super) rx: crossbeam_channel::Receiver<RegWorkerJob>,
+    pub(super) chain_info: ChainInfo,
+}
+
+impl RegWorker {
+    pub(super) fn run(self, id: usize) {
+        let _span = info_span!("worker", %id).entered();
+        info!("starting");
+
+        while let Ok(task) = self.rx.recv() {
+            self.handle_task(task);
+        }
+    }
+
+    fn handle_task(&self, RegWorkerJob { regs, range, res_tx }: RegWorkerJob) {
+        let mut res = Vec::with_capacity(range.len());
+        for i in range {
+            let valid = validate_registration(&self.chain_info, &regs[i]);
+            res.push((i, valid.is_ok()));
+        }
+
+        let _ = res_tx.send(res);
+    }
+}
+
 fn verify_signed_blinded_block_signature(
     chain_info: &ChainInfo,
     signed_blinded_beacon_block: &SignedBlindedBeaconBlock,
@@ -246,6 +275,43 @@ fn verify_signed_blinded_block_signature(
 
     if !valid {
         return Err(SigError::InvalidBlsSignature);
+    }
+
+    Ok(())
+}
+
+/// Validate a single registration.
+fn validate_registration(
+    chain_info: &ChainInfo,
+    registration: &SignedValidatorRegistration,
+) -> Result<(), ProposerApiError> {
+    validate_registration_time(chain_info, registration)?;
+    registration.verify_signature(chain_info.builder_domain)?;
+
+    Ok(())
+}
+
+/// Validates the timestamp in a `SignedValidatorRegistration` message.
+///
+/// - Ensures the timestamp is not too early (before genesis time)
+/// - Ensures the timestamp is not too far in the future (current time + 10 seconds).
+fn validate_registration_time(
+    chain_info: &ChainInfo,
+    registration: &SignedValidatorRegistration,
+) -> Result<(), ProposerApiError> {
+    let registration_timestamp = registration.message.timestamp;
+    let registration_timestamp_upper_bound = utcnow_sec() + 10;
+
+    if registration_timestamp < chain_info.genesis_time_in_secs {
+        return Err(ProposerApiError::TimestampTooEarly {
+            timestamp: registration_timestamp,
+            min_timestamp: chain_info.genesis_time_in_secs,
+        });
+    } else if registration_timestamp > registration_timestamp_upper_bound {
+        return Err(ProposerApiError::TimestampTooFarInTheFuture {
+            timestamp: registration_timestamp,
+            max_timestamp: registration_timestamp_upper_bound,
+        });
     }
 
     Ok(())

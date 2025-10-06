@@ -19,6 +19,7 @@ pub struct SignedBidSubmissionWithMergingData {
     pub merging_data: BlockMergingData,
 }
 
+// FIXME: panics at runtime
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]

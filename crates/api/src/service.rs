@@ -16,7 +16,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::{
-    auctioneer::spawn_auctioneer,
+    auctioneer::spawn_workers,
     builder::api::BuilderApi,
     gossip::{self},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
@@ -57,7 +57,7 @@ pub async fn run_api_service<A: Api>(
     let (merge_requests_tx, _merge_requests_rx) = mpsc::channel(10_000);
 
     // spawn auctioneer
-    let handle = spawn_auctioneer::<A>(
+    let (auctioneer_handle, registrations_handle) = spawn_workers::<A>(
         Arc::unwrap_or_clone(chain_info.clone()),
         config.clone(),
         db.clone(),
@@ -77,7 +77,7 @@ pub async fn run_api_service<A: Api>(
         current_slot_info.clone(),
         top_bid_tx,
         accept_optimistic,
-        handle.clone(),
+        auctioneer_handle.clone(),
         metadata_provider.clone(),
     );
     let builder_api = Arc::new(builder_api);
@@ -96,7 +96,8 @@ pub async fn run_api_service<A: Api>(
         config.clone(),
         current_slot_info,
         merge_requests_tx,
-        handle,
+        auctioneer_handle,
+        registrations_handle,
     ));
 
     tokio::spawn(gossip::process_gossip_messages(
