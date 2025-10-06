@@ -8,7 +8,7 @@ use std::{
 
 use alloy_primitives::B256;
 use futures::future::join_all;
-use helix_common::{metrics::BeaconMetrics, task, ProposerDuty, ValidatorSummary};
+use helix_common::{metrics::BeaconMetrics, spawn_tracked, ProposerDuty, ValidatorSummary};
 use helix_types::{ForkName, VersionedSignedProposal};
 use tokio::{sync::broadcast::Sender, time::sleep};
 use tracing::error;
@@ -73,7 +73,7 @@ impl MultiBeaconClient {
             .iter()
             .map(|client| {
                 let client = client.clone();
-                task::spawn(file!(), line!(), async move {
+                spawn_tracked!(async move {
                     let sync_status = client.sync_status().await;
                     let is_synced = sync_status.as_ref().is_ok_and(|s| !s.is_syncing);
                     BeaconMetrics::beacon_sync(client.endpoint(), is_synced);
@@ -116,7 +116,7 @@ impl MultiBeaconClient {
     pub async fn subscribe_to_head_events(&self, chan: Sender<HeadEventData>) {
         for client in self.beacon_clients_by_last_response() {
             let chan = chan.clone();
-            task::spawn(file!(), line!(), async move {
+            spawn_tracked!(async move {
                 if let Err(err) = client.subscribe_to_head_events(chan).await {
                     error!("Failed to subscribe to head events: {err:?}");
                 }
@@ -135,7 +135,7 @@ impl MultiBeaconClient {
     ) {
         for client in self.beacon_clients_by_last_response() {
             let chan = chan.clone();
-            task::spawn(file!(), line!(), async move {
+            spawn_tracked!(async move {
                 if let Err(err) = client.subscribe_to_payload_attributes_events(chan).await {
                     error!("Failed to subscribe to payload attributes events: {err:?}");
                 }
@@ -202,7 +202,7 @@ impl MultiBeaconClient {
                 let block = block.clone();
                 let broadcast_validation = broadcast_validation.clone();
 
-                task::spawn(file!(), line!(), async move {
+                spawn_tracked!(async move {
                     client.publish_block(block, broadcast_validation, fork).await
                 })
             })

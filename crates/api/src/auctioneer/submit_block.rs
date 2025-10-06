@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use std::time::Instant;
 
 use alloy_primitives::B256;
 use helix_common::{
-    self, bid_submission::OptimisticVersion, metrics::HYDRATION_CACHE_HITS, utils::utcnow_ns,
+    self, bid_submission::OptimisticVersion, metrics::HYDRATION_CACHE_HITS, record_submission_step,
     BuilderInfo, SubmissionTrace,
 };
 use helix_types::{BlockMergingPreferences, SignedBidSubmission};
@@ -13,7 +13,7 @@ use crate::{
     auctioneer::{
         context::Context,
         simulator::{manager::SimulationResult, BlockSimRequest, SimulatorRequest},
-        types::{SlotData, Submission, SubmissionResult},
+        types::{PayloadEntry, SlotData, Submission, SubmissionResult},
     },
     builder::error::BuilderApiError,
     Api,
@@ -46,7 +46,14 @@ impl<A: Api> Context<A> {
                     Some(res_tx)
                 };
 
-                self.simulate_and_store(submission, trace, res_tx, slot_data, merging_preferences);
+                self.simulate_and_store(
+                    submission,
+                    trace,
+                    res_tx,
+                    slot_data,
+                    merging_preferences,
+                    withdrawals_root,
+                );
             }
 
             Err(err) => {
@@ -71,14 +78,12 @@ impl<A: Api> Context<A> {
                     self.bid_sorter.sort(
                         &result.submission,
                         &mut result.trace,
-                        result.submission.withdrawals_root(),
                         result.merging_preferences,
+                        false,
                     );
                 }
             }
         }
-
-        result.trace.sorted = utcnow_ns();
     }
 
     fn validate_and_sort(
@@ -95,9 +100,12 @@ impl<A: Api> Context<A> {
         let submission = match submission {
             Submission::Full(full) => full,
             Submission::Dehydrated(dehydrated) => {
+                let start = Instant::now();
                 let max_blobs_per_block = self.chain_info.max_blobs_per_block();
                 let (payload, tx_cache_hits, blob_cache_hits) =
                     dehydrated.hydrate(&mut self.hydration_cache, max_blobs_per_block)?;
+
+                record_submission_step("hydration", start.elapsed());
 
                 HYDRATION_CACHE_HITS
                     .with_label_values(&["transaction"])
@@ -113,6 +121,7 @@ impl<A: Api> Context<A> {
         tracing::Span::current()
             .record("builder_id", tracing::field::display(builder_info.builder_id()));
 
+        let start_val = Instant::now();
         self.validate_submission(
             &submission,
             &withdrawals_root,
@@ -120,13 +129,13 @@ impl<A: Api> Context<A> {
             &builder_info,
             slot_data,
         )?;
-
+        record_submission_step("validated", start_val.elapsed());
         trace!("validated");
 
         let optimistic_version = if self.sim_manager.can_process_optimistic_submission() &&
             self.should_process_optimistically(&submission, &builder_info, slot_data)
         {
-            self.bid_sorter.sort(&submission, trace, withdrawals_root, merging_preferences);
+            self.bid_sorter.sort(&submission, trace, merging_preferences, true);
             OptimisticVersion::V1
         } else {
             OptimisticVersion::NotOptimistic
@@ -142,6 +151,7 @@ impl<A: Api> Context<A> {
         res_tx: Option<oneshot::Sender<SubmissionResult>>,
         slot_data: &SlotData,
         merging_preferences: BlockMergingPreferences,
+        withdrawals_root: B256,
     ) {
         // TODO: pass this from previous step
         let is_top_bid = self.bid_sorter.is_top_bid(&submission);
@@ -165,8 +175,9 @@ impl<A: Api> Context<A> {
         };
         self.sim_manager.handle_sim_request(req);
 
-        let payload_and_blobs = Arc::new(submission.payload_and_blobs_ref().to_owned());
-        self.payloads.insert(*submission.block_hash(), payload_and_blobs);
+        let block_hash = *submission.block_hash();
+        let entry = PayloadEntry::new_submission(submission, withdrawals_root);
+        self.payloads.insert(block_hash, entry);
     }
 
     fn should_process_optimistically(

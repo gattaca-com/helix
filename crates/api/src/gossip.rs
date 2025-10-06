@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use helix_common::{task, utils::utcnow_ns, GetPayloadTrace};
+use helix_common::{spawn_tracked, utils::utcnow_ns, GetPayloadTrace};
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 
@@ -20,7 +20,7 @@ pub async fn process_gossip_messages<A: Api>(
         match msg {
             GossipedMessage::GetPayload(payload) => {
                 let proposer = proposer_api.clone();
-                task::spawn(file!(), line!(), async move {
+                spawn_tracked!(async move {
                     let mut trace = GetPayloadTrace { receive: utcnow_ns(), ..Default::default() };
                     debug!(request_id = %payload.request_id, "processing gossiped payload");
                     match proposer
@@ -44,7 +44,7 @@ pub async fn process_gossip_messages<A: Api>(
 
             GossipedMessage::Payload(payload) => {
                 let builder = builder_api.clone();
-                task::spawn(file!(), line!(), async move {
+                spawn_tracked!(async move {
                     builder.process_gossiped_payload(*payload).await;
                 });
             }

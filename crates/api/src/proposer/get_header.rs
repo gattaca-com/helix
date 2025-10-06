@@ -125,7 +125,10 @@ impl<A: Api> ProposerApi<A> {
 
             let sleep_time_ms = std::cmp::min(max_sleep_time, target_sleep_time);
 
-            let sleep_time = Duration::from_millis(sleep_time_ms);
+            // leave additional time to resign the compute and sign the builder bid
+            let sleep_time_adj = sleep_time_ms.saturating_sub(5);
+
+            let sleep_time = Duration::from_millis(sleep_time_adj);
             let mut get_header_metric = GetHeaderMetric::new(sleep_time);
 
             debug!(target: "timing_games",
@@ -146,11 +149,11 @@ impl<A: Api> ProposerApi<A> {
 
         let Ok(rx) = proposer_api.auctioneer_handle.get_header(params) else {
             error!("failed to send get_header to auctioneer");
-            return Err(ProposerApiError::ServiceUnavailableError)
+            return Err(ProposerApiError::ServiceUnavailableError);
         };
 
         // TODO: refactor errors
-        let bid = rx.await.map_err(|_| ProposerApiError::NoBidPrepared)??;
+        let local_bid = rx.await.map_err(|_| ProposerApiError::NoBidPrepared)??;
 
         let now_ns = utcnow_ns();
         trace.best_bid_fetched = now_ns;
@@ -158,60 +161,61 @@ impl<A: Api> ProposerApi<A> {
 
         // Try to fetch a merged block if block merging is enabled
         let bid = if proposer_api.relay_config.block_merging_config.is_enabled {
-            let merged_block_bid =
-                proposer_api.shared_best_merged.load(params.slot, &params.parent_hash);
+            let merged_bid = proposer_api.shared_best_merged.load(params.slot, &params.parent_hash);
             let max_merged_bid_age_ms =
                 proposer_api.relay_config.block_merging_config.max_merged_bid_age_ms;
 
             let now_ms = Duration::from_nanos(now_ns).as_millis() as u64;
 
-            match merged_block_bid {
+            match merged_bid {
                 None => {
                     debug!(
                         "no merged bid found, using regular bid, value = {:?}, block_hash = {:?}",
-                        bid.value, bid.header.block_hash
+                        local_bid.value(),
+                        local_bid.block_hash()
                     );
-                    bid
+                    local_bid
                 }
                 // If the current best bid has equal or higher value, we use that
-                Some((_, merged_bid)) if merged_bid.value <= bid.value => {
+                Some((_, merged_bid)) if merged_bid.value() <= local_bid.value() => {
                     debug!(
                         "merged bid {:?} with value {:?} is not higher than regular bid, using regular bid, value = {:?}, block_hash = {:?}",
-                        merged_bid.value,
-                        merged_bid.header.block_hash,
-                        bid.value,
-                        bid.header.block_hash
+                        merged_bid.value(),
+                        merged_bid.block_hash(),
+                        local_bid.value(),
+                        local_bid.block_hash()
                     );
-                    bid
+                    local_bid
                 }
                 // If the merged bid is stale, we use the current best bid
                 Some((time, merged_bid)) if time < now_ms - max_merged_bid_age_ms => {
                     debug!(
                         "merged bid {:?} with value {:?} is stale ({} ms old), using regular bid, value = {:?}, block_hash = {:?}",
-                        merged_bid.value,
-                        merged_bid.header.block_hash,
+                        merged_bid.value(),
+                        merged_bid.block_hash(),
                         now_ms - time,
-                        bid.value,
-                        bid.header.block_hash
+                        local_bid.value(),
+                        local_bid.block_hash()
                     );
-                    bid
+                    local_bid
                 }
                 // Otherwise, we use the merged bid
                 Some((_, merged_bid)) => {
                     debug!(
                         "using merged bid, value = {:?}, block_hash = {:?}",
-                        merged_bid.value, merged_bid.header.block_hash
+                        merged_bid.value(),
+                        merged_bid.block_hash()
                     );
                     merged_bid
                 }
             }
         } else {
-            bid
+            local_bid
         };
 
-        let bid_block_hash = bid.header.block_hash;
+        let bid_block_hash = *bid.block_hash();
         debug!(
-            value = ?bid.value,
+            value = ?bid.value(),
             block_hash =% bid_block_hash,
             "delivering bid",
         );
@@ -231,6 +235,7 @@ impl<A: Api> ProposerApi<A> {
 
         let fork = proposer_api.chain_info.current_fork_name();
 
+        let bid = bid.to_builder_bid_slow();
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
 
         let signed_bid = serde_json::to_value(signed_bid)?;

@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use helix_common::{metrics::GossipMetrics, task};
+use helix_common::{metrics::GossipMetrics, spawn_tracked};
 use parking_lot::RwLock;
 use prost::Message;
 use tokio::{
@@ -39,7 +39,7 @@ impl GrpcGossiperClient {
     pub async fn connect(&self) {
         let endpoint = self.endpoint.clone();
         let client = self.client.clone();
-        task::spawn(file!(), line!(), async move {
+        spawn_tracked!(async move {
             let mut attempt = 1;
             let base_delay = Duration::from_secs(1);
             let max_delay = Duration::from_secs(60);
@@ -168,7 +168,7 @@ impl GrpcGossiperClientManager {
         let service = GrpcGossiperService { gossip_sender };
 
         let addr = "0.0.0.0:50051".parse().unwrap();
-        task::spawn(file!(), line!(), async move {
+        spawn_tracked!(async move {
             let srv = GossipServiceServer::new(service)
                 .accept_compressed(CompressionEncoding::Gzip)
                 .send_compressed(CompressionEncoding::Gzip);
@@ -194,7 +194,7 @@ impl GrpcGossiperClientManager {
         for client in self.clients.iter() {
             let client = client.clone();
             let request = request.clone();
-            task::spawn(file!(), line!(), async move {
+            spawn_tracked!(async move {
                 if let Err(err) = client.broadcast_payload(request).await {
                     error!(%err, "failed to broadcast payload");
                 }
@@ -211,7 +211,7 @@ impl GrpcGossiperClientManager {
         for client in self.clients.iter() {
             let client = client.clone();
             let request = request.clone();
-            task::spawn(file!(), line!(), async move {
+            spawn_tracked!(async move {
                 if let Err(err) = client.broadcast_get_payload(request).await {
                     error!( %err, "failed to broadcast get payload");
                 }

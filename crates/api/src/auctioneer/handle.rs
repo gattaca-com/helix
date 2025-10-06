@@ -1,6 +1,6 @@
-use std::{ops::Range, sync::Arc};
+use std::{ops::Range, sync::Arc, time::Instant};
 
-use helix_common::{utils::utcnow_ns, GetPayloadTrace, SubmissionTrace};
+use helix_common::{GetPayloadTrace, SubmissionTrace};
 use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot};
 use http::HeaderMap;
 use tokio::sync::oneshot;
@@ -32,10 +32,9 @@ impl AuctioneerHandle {
         &self,
         headers: HeaderMap,
         body: bytes::Bytes,
-        mut trace: SubmissionTrace,
+        trace: SubmissionTrace,
     ) -> Result<oneshot::Receiver<SubmissionResult>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
-        trace.sent_worker = utcnow_ns();
         self.worker
             .try_send(SubWorkerJob::BlockSubmission {
                 headers,
@@ -43,6 +42,7 @@ impl AuctioneerHandle {
                 trace,
                 res_tx: tx,
                 span: tracing::Span::current(),
+                sent_at: Instant::now(),
             })
             .map_err(|_| ChannelFull)?;
         Ok(rx)

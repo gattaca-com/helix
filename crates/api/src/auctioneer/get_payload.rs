@@ -13,7 +13,7 @@ use tracing::{info, warn};
 use crate::{
     auctioneer::{
         context::Context,
-        types::{GetPayloadResult, GetPayloadResultData, PendingPayload, SlotData},
+        types::{GetPayloadResult, GetPayloadResultData, PayloadEntry, PendingPayload, SlotData},
     },
     gossiper::types::BroadcastPayloadParams,
     proposer::ProposerApiError,
@@ -36,10 +36,18 @@ impl<A: Api> Context<A> {
             return;
         }
 
-        self.payloads.insert(
-            payload.execution_payload.execution_payload.block_hash,
-            Arc::new(payload.execution_payload),
-        );
+        let block_hash = payload.execution_payload.execution_payload.block_hash;
+        let entry = PayloadEntry::new_gossip(payload);
+
+        if let Some(curr) = self.payloads.get(&block_hash) {
+            if curr.bid_data.is_some() {
+                // we received this block both locally and via gossip, keep the local one so we can
+                // serve get_header on it
+                return;
+            }
+        }
+
+        self.payloads.insert(block_hash, entry);
     }
 
     /// If we start broacasting, returns the block hash of the block
@@ -82,7 +90,13 @@ impl<A: Api> Context<A> {
         if let Some(local) = self.payloads.get(&pending.block_hash) {
             info!("found payload for pending get_payload");
             let PendingPayload { blinded, res_tx, trace, .. } = pending;
-            self.handle_get_payload(local.clone(), blinded, trace, res_tx, slot_data)
+            self.handle_get_payload(
+                local.payload_and_blobs.clone(),
+                blinded,
+                trace,
+                res_tx,
+                slot_data,
+            )
         } else {
             self.pending_payload = Some(pending);
             None
