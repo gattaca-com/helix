@@ -88,8 +88,9 @@ impl<A: Api> ProposerApi<A> {
         let MergingPoolMessage { bid_value, orders } = msg;
         info!(?bid_value, "received new mergeable orders");
         let (head_slot, _) = self.curr_slot_info.slot_info();
+        let max_blobs_per_block = self.chain_info.max_blobs_per_block();
         let current_slot = (head_slot + 1).into();
-        best_orders.insert_orders(current_slot, bid_value, orders);
+        best_orders.insert_orders(current_slot, max_blobs_per_block, bid_value, orders);
     }
 
     async fn handle_merging_task_result(
@@ -145,6 +146,8 @@ impl<A: Api> ProposerApi<A> {
                 original_payload,
                 response,
             } => {
+                let max_blobs_per_block = best_orders.max_blobs_per_block;
+
                 // If we are past the slot for the block, skip storing it
                 if let Some((_, blobs)) = best_orders.load(bid_slot) {
                     self.local_cache.save_merged_block(MergedBlock {
@@ -163,6 +166,7 @@ impl<A: Api> ProposerApi<A> {
                     let _ = self
                         .store_merged_payload(
                             bid_slot,
+                            max_blobs_per_block,
                             base_block_time_ms,
                             proposer_pubkey,
                             original_payload,
@@ -281,6 +285,7 @@ impl<A: Api> ProposerApi<A> {
     fn store_merged_payload(
         &self,
         slot: u64,
+        max_blobs_per_block: usize,
         base_block_time_ms: u64,
         proposer_pubkey: BlsPublicKeyBytes,
         original_payload: Arc<PayloadAndBlobs>,
@@ -288,7 +293,7 @@ impl<A: Api> ProposerApi<A> {
         blobs: &HashMap<B256, BlobWithMetadata>,
     ) -> Result<(), PayloadMergingError> {
         let mut merged_blobs_bundle = Arc::unwrap_or_clone(original_payload).blobs_bundle;
-        append_merged_blobs(&mut merged_blobs_bundle, blobs, &response)?;
+        append_merged_blobs(&mut merged_blobs_bundle, blobs, &response, max_blobs_per_block)?;
 
         let withdrawals_root = response.execution_payload.withdrawals_root();
 
@@ -352,18 +357,29 @@ fn append_merged_blobs(
     original_blobs_bundle: &mut BlobsBundle,
     blobs: &HashMap<B256, BlobWithMetadata>,
     response: &BlockMergeResponse,
+    max_blobs_per_block: usize,
 ) -> Result<(), PayloadMergingError> {
     for vh in &response.appended_blobs {
         let blob_data = blobs.get(vh).ok_or(PayloadMergingError::BlobNotFound)?;
         match blob_data {
             BlobWithMetadata::V1(data) => {
                 original_blobs_bundle
-                    .push_blob(data.commitment, &vec![data.proof], data.blob.clone())
+                    .push_blob(
+                        data.commitment,
+                        &vec![data.proof],
+                        data.blob.clone(),
+                        max_blobs_per_block,
+                    )
                     .map_err(|_| PayloadMergingError::MaxBlobCountReached)?;
             }
             BlobWithMetadata::V2(data) => {
                 original_blobs_bundle
-                    .push_blob(data.commitment, &data.proofs, data.blob.clone())
+                    .push_blob(
+                        data.commitment,
+                        &data.proofs,
+                        data.blob.clone(),
+                        max_blobs_per_block,
+                    )
                     .map_err(|_| PayloadMergingError::MaxBlobCountReached)?;
             }
         }
@@ -441,6 +457,7 @@ struct OrderMetadata {
 #[derive(Debug, Clone)]
 pub struct BestMergeableOrders {
     current_slot: u64,
+    max_blobs_per_block: usize,
     order_map: HashMap<MergeableOrder, OrderMetadata>,
     best_orders: Vec<MergeableOrderWithOrigin>,
     mergeable_blob_bundles: HashMap<B256, BlobWithMetadata>,
@@ -457,6 +474,7 @@ impl BestMergeableOrders {
     pub fn new() -> Self {
         Self {
             current_slot: 0,
+            max_blobs_per_block: 0,
             order_map: HashMap::with_capacity(5000),
             mergeable_blob_bundles: HashMap::with_capacity(5000),
             best_orders: Vec::with_capacity(5000),
@@ -484,10 +502,16 @@ impl BestMergeableOrders {
     /// Inserts the orders into the merging pool.
     /// Any duplicates are discarded, unless the bid value is higher than the
     /// existing one, in which case they replace the old order.
-    pub fn insert_orders(&mut self, slot: u64, bid_value: U256, mergeable_orders: MergeableOrders) {
+    pub fn insert_orders(
+        &mut self,
+        slot: u64,
+        max_blobs_per_block: usize,
+        bid_value: U256,
+        mergeable_orders: MergeableOrders,
+    ) {
         // If the orders are for a newer slot, reset current state.
         if self.current_slot < slot {
-            self.reset(slot);
+            self.reset(slot, max_blobs_per_block);
         }
         let origin = mergeable_orders.origin;
         // Insert each order into the order map
@@ -519,8 +543,9 @@ impl BestMergeableOrders {
         self.mergeable_blob_bundles.extend(mergeable_orders.blobs);
     }
 
-    fn reset(&mut self, slot: u64) {
+    fn reset(&mut self, slot: u64, max_blobs_per_block: usize) {
         self.current_slot = slot;
+        self.max_blobs_per_block = max_blobs_per_block;
         self.order_map.clear();
         self.best_orders.clear();
         self.mergeable_blob_bundles.clear();

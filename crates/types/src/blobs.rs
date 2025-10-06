@@ -255,12 +255,13 @@ impl BlobsBundle {
         commitment: KzgCommitment,
         proofs: &[KzgProof],
         blob: Blob,
+        max_blobs_per_block: usize,
     ) -> Result<(), BlobsError> {
         match self {
             BlobsBundle::V2(bundle) => {
                 bundle.commitments.push(commitment).map_err(|_| BlobsError::BundleTooLarge {
                     got: bundle.blobs.len() + 1,
-                    max: 6,
+                    max: max_blobs_per_block,
                 })?;
                 bundle.proofs.extend_from_slice(proofs);
                 bundle.blobs.push(blob);
