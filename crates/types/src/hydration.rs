@@ -2,6 +2,7 @@ use std::{hash::Hasher, sync::Arc};
 
 use alloy_eips::eip7691::MAX_BLOBS_PER_BLOCK_ELECTRA;
 use alloy_primitives::B256;
+use lh_types::ForkName;
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
@@ -19,8 +20,8 @@ use crate::{
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]
 pub enum DehydratedBidSubmission {
-    Fulu(DehydratedBidSubmissionFulu),
     Electra(DehydratedBidSubmissionElectra),
+    Fulu(DehydratedBidSubmissionFulu),
 }
 impl DehydratedBidSubmission {
     pub fn slot(&self) -> u64 {
@@ -79,6 +80,24 @@ impl DehydratedBidSubmission {
                     },
                 )
             }
+        }
+    }
+
+    pub fn maybe_upgrade_to_fulu(self, current_fork: ForkName) -> DehydratedBidSubmission {
+        match self {
+            DehydratedBidSubmission::Electra(electra) => {
+                if current_fork != ForkName::Fulu {
+                    return DehydratedBidSubmission::Electra(electra);
+                }
+                DehydratedBidSubmission::Fulu(DehydratedBidSubmissionFulu {
+                    message: electra.message,
+                    execution_payload: electra.execution_payload,
+                    blobs_bundle: electra.blobs_bundle,
+                    execution_requests: electra.execution_requests,
+                    signature: electra.signature,
+                })
+            }
+            DehydratedBidSubmission::Fulu(fulu) => DehydratedBidSubmission::Fulu(fulu),
         }
     }
 }

@@ -22,9 +22,7 @@ pub enum BlobsBundleVersion {
 
 /// This includes all bundled blob related data of an executed payload.
 /// From [`alloy_rpc_types_engine::BlobsBundleV1`]
-#[derive(
-    Clone, Debug, Default, PartialEq, serde::Serialize, ssz_derive::Encode, ssz_derive::Decode,
-)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, ssz_derive::Encode)]
 pub struct BlobsBundleV1 {
     /// All commitments in the bundle.
     pub commitments: KzgCommitments,
@@ -59,6 +57,41 @@ impl<'de> serde::Deserialize<'de> for BlobsBundleV1 {
                 raw.proofs.len(),
                 raw.blobs.len()
             )))
+        }
+    }
+}
+
+impl ssz::Decode for BlobsBundleV1 {
+    fn is_ssz_fixed_len() -> bool {
+        false
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, ssz::DecodeError> {
+        #[derive(ssz_derive::Decode)]
+        struct BlobsBundleRaw {
+            commitments: KzgCommitments,
+            proofs: KzgProofs,
+            blobs: Blobs,
+        }
+
+        let raw = BlobsBundleRaw::from_ssz_bytes(bytes)?;
+
+        let proofs_valid = raw.commitments.len() == raw.proofs.len();
+        let blobs_valid = raw.proofs.len() == raw.blobs.len();
+
+        if proofs_valid && blobs_valid {
+            Ok(Self { commitments: raw.commitments, proofs: raw.proofs, blobs: raw.blobs })
+        } else {
+            Err(ssz::DecodeError::BytesInvalid(
+                format!(
+                    "Invalid BlobsBundleV2: expected {} proofs and {} commitments for {} blobs, got {} proofs and {} commitments",
+                    raw.blobs.len() * CELLS_PER_EXT_BLOB,
+                    raw.blobs.len(),
+                    raw.blobs.len(),
+                    raw.proofs.len(),
+                    raw.commitments.len()
+                )
+            ))
         }
     }
 }
@@ -238,15 +271,15 @@ impl BlobsBundleV2 {
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]
 pub enum BlobsBundle {
-    V2(BlobsBundleV2),
     V1(BlobsBundleV1),
+    V2(BlobsBundleV2),
 }
 
 impl BlobsBundle {
     pub fn validate_ssz_lengths(&self, max_blobs_per_block: usize) -> Result<(), ValidationError> {
         match self {
-            BlobsBundle::V2(bundle) => bundle.validate_ssz_lengths(max_blobs_per_block),
             BlobsBundle::V1(bundle) => bundle.validate_ssz_lengths(),
+            BlobsBundle::V2(bundle) => bundle.validate_ssz_lengths(max_blobs_per_block),
         }
     }
 
@@ -281,22 +314,22 @@ impl BlobsBundle {
 
     pub fn commitments(&self) -> &KzgCommitments {
         match self {
-            BlobsBundle::V2(bundle) => &bundle.commitments,
             BlobsBundle::V1(bundle) => &bundle.commitments,
+            BlobsBundle::V2(bundle) => &bundle.commitments,
         }
     }
 
     pub fn proofs(&self) -> &KzgProofs {
         match self {
-            BlobsBundle::V2(bundle) => &bundle.proofs,
             BlobsBundle::V1(bundle) => &bundle.proofs,
+            BlobsBundle::V2(bundle) => &bundle.proofs,
         }
     }
 
     pub fn blobs(&self) -> &Blobs {
         match self {
-            BlobsBundle::V2(bundle) => &bundle.blobs,
             BlobsBundle::V1(bundle) => &bundle.blobs,
+            BlobsBundle::V2(bundle) => &bundle.blobs,
         }
     }
 

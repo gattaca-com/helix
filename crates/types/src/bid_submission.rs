@@ -230,8 +230,8 @@ impl Decode for SignedBidSubmissionFulu {
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]
 pub enum SignedBidSubmission {
-    Fulu(SignedBidSubmissionFulu),
     Electra(SignedBidSubmissionElectra),
+    Fulu(SignedBidSubmissionFulu),
 }
 
 impl From<SignedBidSubmissionElectra> for SignedBidSubmission {
@@ -604,6 +604,33 @@ impl SignedBidSubmission {
             SignedBidSubmission::Fulu(_) => ForkName::Fulu,
         }
     }
+
+    pub fn maybe_upgrade_to_fulu(self, current_fork: ForkName) -> SignedBidSubmission {
+        match self {
+            SignedBidSubmission::Electra(electra) => {
+                if current_fork != ForkName::Fulu {
+                    return SignedBidSubmission::Electra(electra);
+                }
+                let blobs_bundle = match Arc::unwrap_or_clone(electra.blobs_bundle) {
+                    BlobsBundle::V2(current_blobs_bundle) => current_blobs_bundle,
+                    BlobsBundle::V1(current_blobs_bundle) => BlobsBundleV2 {
+                        blobs: current_blobs_bundle.blobs,
+                        commitments: current_blobs_bundle.commitments,
+                        proofs: current_blobs_bundle.proofs,
+                    },
+                };
+
+                SignedBidSubmission::Fulu(SignedBidSubmissionFulu {
+                    message: electra.message,
+                    execution_payload: electra.execution_payload,
+                    blobs_bundle: Arc::new(BlobsBundle::V2(blobs_bundle)),
+                    execution_requests: electra.execution_requests,
+                    signature: electra.signature,
+                })
+            }
+            SignedBidSubmission::Fulu(fulu) => SignedBidSubmission::Fulu(fulu),
+        }
+    }
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -658,7 +685,9 @@ mod tests {
 
         if blobs_empty {
             // When blobs are empty, we can't distinguish variants reliably
-            assert!(matches!(s, SignedBidSubmission::Electra(_) | SignedBidSubmission::Fulu(_)));
+            assert!(matches!(s, SignedBidSubmission::Electra(_)));
+            let s = s.maybe_upgrade_to_fulu(ForkName::Fulu);
+            assert!(matches!(s, SignedBidSubmission::Fulu(_)));
         } else {
             match &s {
                 SignedBidSubmission::Electra(_) => println!("Got Electra variant for JSON"),
@@ -670,10 +699,11 @@ mod tests {
         }
 
         let data_ssz = include_bytes!("testdata/signed-bid-submission-electra-2.bin");
-        let s = test_encode_decode_ssz::<SignedBidSubmission>(data_ssz);
+        let mut s = test_encode_decode_ssz::<SignedBidSubmission>(data_ssz);
         if blobs_empty {
-            // When blobs are empty, we can't distinguish variants reliably
-            assert!(matches!(s, SignedBidSubmission::Electra(_) | SignedBidSubmission::Fulu(_)));
+            assert!(matches!(s, SignedBidSubmission::Electra(_)));
+            s = s.maybe_upgrade_to_fulu(ForkName::Fulu);
+            assert!(matches!(s, SignedBidSubmission::Fulu(_)));
         } else {
             match &s {
                 SignedBidSubmission::Electra(_) => println!("Got Electra variant for JSON"),
