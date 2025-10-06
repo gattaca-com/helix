@@ -59,12 +59,14 @@ pub fn spawn_workers<A: Api>(
 
     if config.is_registration_instance {
         for core in config.cores.reg_workers.clone() {
-            let worker = RegWorker { rx: reg_worker_rx.clone(), chain_info: chain_info.clone() };
+            let worker = RegWorker::new(core, chain_info.clone());
+            let rx = reg_worker_rx.clone();
+
             std::thread::Builder::new()
                 .name(format!("worker-{core}"))
                 .spawn(move || {
                     pin_thread_to_core(core);
-                    worker.run(core)
+                    worker.run(rx)
                 })
                 .unwrap();
         }

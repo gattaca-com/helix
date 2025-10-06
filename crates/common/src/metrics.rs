@@ -514,8 +514,6 @@ lazy_static! {
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
-
-
 }
 
 pub struct ApiMetrics {

@@ -30,6 +30,7 @@ use crate::{
 
 pub struct Telemetry {
     work: Duration,
+    // spin or wait
     spin: Duration,
     next_record: Instant,
     loop_start: Instant,
@@ -96,7 +97,7 @@ impl SubWorker {
         config: RelayConfig,
     ) -> Self {
         Self {
-            id: id.to_string(),
+            id: format!("submission_{id}"),
             tx,
             merge_pool_tx,
             cache,
@@ -107,7 +108,7 @@ impl SubWorker {
     }
 
     pub(super) fn run(mut self, rx: crossbeam_channel::Receiver<SubWorkerJob>) {
-        let _span = info_span!("worker", id =% self.id).entered();
+        let _span = info_span!("worker", id = self.id).entered();
         info!("starting");
 
         loop {
@@ -323,27 +324,56 @@ impl SubWorker {
 
 /// Worker to process registrations verifications
 pub(super) struct RegWorker {
-    pub(super) rx: crossbeam_channel::Receiver<RegWorkerJob>,
-    pub(super) chain_info: ChainInfo,
+    id: String,
+    chain_info: ChainInfo,
+    tel: Telemetry,
 }
 
 impl RegWorker {
-    pub(super) fn run(self, id: usize) {
-        let _span = info_span!("worker", %id).entered();
+    pub(super) fn new(id: usize, chain_info: ChainInfo) -> Self {
+        Self { id: format!("registration_{id}"), chain_info, tel: Default::default() }
+    }
+
+    pub(super) fn run(mut self, rx: crossbeam_channel::Receiver<RegWorkerJob>) {
+        let _span = info_span!("worker", id = self.id).entered();
         info!("starting");
 
-        while let Ok(task) = self.rx.recv() {
-            self.handle_task(task);
+        loop {
+            if let Ok(task) = rx.recv_timeout(Duration::from_millis(50)) {
+                self.handle_task(task);
+            }
+
+            self.tel.telemetry(&self.id);
         }
     }
 
-    fn handle_task(&self, RegWorkerJob { regs, range, res_tx }: RegWorkerJob) {
+    fn handle_task(&mut self, task: RegWorkerJob) {
+        let start_task = Instant::now();
+
+        self._handle_task(task);
+
+        let task_dur = start_task.elapsed();
+        self.tel.loop_worked += task_dur;
+
+        WORKER_TASK_COUNT.with_label_values(&["RegistrationBatch", &self.id]).inc();
+        WORKER_TASK_LATENCY_US
+            .with_label_values(&["RegistrationBatch", &self.id])
+            .observe(task_dur.as_micros() as f64);
+    }
+
+    fn _handle_task(&self, RegWorkerJob { regs, range, res_tx }: RegWorkerJob) {
         let mut res = Vec::with_capacity(range.len());
         for i in range {
+            let start = Instant::now();
             let valid = validate_registration(&self.chain_info, &regs[i]);
             res.push((i, valid.is_ok()));
+
+            WORKER_TASK_LATENCY_US
+                .with_label_values(&["Registration", &self.id])
+                .observe(start.elapsed().as_micros() as f64);
         }
 
+        WORKER_TASK_COUNT.with_label_values(&["Registration", &self.id]).inc_by(res.len() as u64);
         let _ = res_tx.send(res);
     }
 }
