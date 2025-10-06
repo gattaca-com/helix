@@ -1,6 +1,7 @@
 use std::{
     ops::{Deref, DerefMut},
     sync::{atomic::Ordering, Arc},
+    time::Instant,
 };
 
 use alloy_primitives::{B256, U256};
@@ -11,7 +12,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot};
 use rustc_hash::{FxHashMap, FxHashSet};
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     auctioneer::{
@@ -45,6 +46,9 @@ pub struct Context<A: Api> {
     pub slot_context: SlotContext,
 }
 
+const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
+const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
+
 impl<A: Api> Context<A> {
     pub fn new(
         chain_info: ChainInfo,
@@ -68,10 +72,19 @@ impl<A: Api> Context<A> {
             bid_slot: Slot::new(0),
             pending_payload: None,
             bid_sorter,
-            seen_block_hashes: FxHashSet::with_capacity_and_hasher(2000, Default::default()),
-            sequence: FxHashMap::with_capacity_and_hasher(200, Default::default()),
+            seen_block_hashes: FxHashSet::with_capacity_and_hasher(
+                EXPECTED_PAYLOADS_PER_SLOT,
+                Default::default(),
+            ),
+            sequence: FxHashMap::with_capacity_and_hasher(
+                EXPECTED_BUILDERS_PER_SLOT,
+                Default::default(),
+            ),
             hydration_cache: HydrationCache::new(),
-            payloads: FxHashMap::with_capacity_and_hasher(2000, Default::default()),
+            payloads: FxHashMap::with_capacity_and_hasher(
+                EXPECTED_PAYLOADS_PER_SLOT,
+                Default::default(),
+            ),
         };
 
         Self { chain_info, cache, unknown_builder_info, slot_context, db, _config: config }
@@ -146,10 +159,24 @@ impl<A: Api> Context<A> {
         self.seen_block_hashes.clear();
         self.sequence.clear();
         self.hydration_cache.clear();
-        // TODO: clearing this can take a lot, since we're potentially deallocating 5-10k
-        // submissions at once an alternative could be to replace the map with a ring buffer
-        self.payloads.clear();
         self.sim_manager.on_new_slot(bid_slot.as_u64());
+
+        // here we need to deallocate a lot of data, taking more than 1s on busy slots
+        // this is not a big issue since it 's only at the beginning of the slot, but it blocks the
+        // full event loop, which is not ideal an alternative would be to use a buffer and
+        // overwrite the buffer slots, keeping only a block hash -> index map however that
+        // would require us to estimate a hard upper limit on payloads received, or risk causing a
+        // missed slot
+        let payloads_to_drop = std::mem::replace(
+            &mut self.payloads,
+            FxHashMap::with_capacity_and_hasher(EXPECTED_PAYLOADS_PER_SLOT, Default::default()),
+        );
+        std::thread::spawn(move || {
+            let to_drop = payloads_to_drop.len();
+            let start = Instant::now();
+            drop(payloads_to_drop);
+            info!("dropped {} payloads in {:?}", to_drop, start.elapsed())
+        });
     }
 }
 
