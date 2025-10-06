@@ -302,24 +302,6 @@ impl BlobsBundle {
         }
     }
 
-    /// Create a new empty bundle of the specified version
-    pub fn new_v1() -> Self {
-        BlobsBundle::V1(Arc::new(BlobsBundleV1::default()))
-    }
-
-    pub fn new_v2() -> Self {
-        BlobsBundle::V2(Arc::new(BlobsBundleV2::default()))
-    }
-
-    /// Create with pre-allocated capacity
-    pub fn with_capacity_v1(capacity: usize) -> Self {
-        BlobsBundle::V1(Arc::new(BlobsBundleV1::with_capacity(capacity)))
-    }
-
-    pub fn with_capacity_v2(capacity: usize) -> Self {
-        BlobsBundle::V2(Arc::new(BlobsBundleV2::with_capacity(capacity)))
-    }
-
     pub fn version(&self) -> BlobsBundleVersion {
         match self {
             BlobsBundle::V1(_) => BlobsBundleVersion::V1,
