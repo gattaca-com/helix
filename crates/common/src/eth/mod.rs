@@ -44,7 +44,7 @@ pub fn bid_submission_to_builder_bid_unsigned(
 
             BuilderBid {
                 header,
-                blob_kzg_commitments: bid.blobs_bundle.commitments.clone(),
+                blob_kzg_commitments: bid.blobs_bundle.commitments().clone(),
                 value: bid.message.value,
                 execution_requests,
                 pubkey: mock_public_key_bytes(), // this will be replaced when signing the header
@@ -56,7 +56,7 @@ pub fn bid_submission_to_builder_bid_unsigned(
 
             BuilderBid {
                 header,
-                blob_kzg_commitments: bid.blobs_bundle.commitments.clone(),
+                blob_kzg_commitments: bid.blobs_bundle.commitments().clone(),
                 value: bid.message.value,
                 execution_requests,
                 pubkey: mock_public_key_bytes(), // this will be replaced when signing the header

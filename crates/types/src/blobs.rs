@@ -238,8 +238,8 @@ impl BlobsBundleV2 {
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]
 pub enum BlobsBundle {
-    V2(Arc<BlobsBundleV2>),
-    V1(Arc<BlobsBundleV1>),
+    V2(BlobsBundleV2),
+    V1(BlobsBundleV1),
 }
 
 impl BlobsBundle {
@@ -247,6 +247,34 @@ impl BlobsBundle {
         match self {
             BlobsBundle::V2(bundle) => bundle.validate_ssz_lengths(max_blobs_per_block),
             BlobsBundle::V1(bundle) => bundle.validate_ssz_lengths(),
+        }
+    }
+
+    pub fn push_blob(
+        &mut self,
+        commitment: KzgCommitment,
+        proofs: &[KzgProof],
+        blob: Blob,
+    ) -> Result<(), BlobsError> {
+        match self {
+            BlobsBundle::V2(bundle) => {
+                bundle.commitments.push(commitment).map_err(|_| BlobsError::BundleTooLarge {
+                    got: bundle.blobs.len() + 1,
+                    max: 6,
+                })?;
+                bundle.proofs.extend_from_slice(proofs);
+                bundle.blobs.push(blob);
+                Ok(())
+            }
+            BlobsBundle::V1(bundle) => {
+                bundle.commitments.push(commitment).map_err(|_| BlobsError::BundleTooLarge {
+                    got: bundle.blobs.len() + 1,
+                    max: MAX_BLOBS_PER_BLOCK_ELECTRA as usize,
+                })?;
+                bundle.proofs.extend_from_slice(proofs);
+                bundle.blobs.push(blob);
+                Ok(())
+            }
         }
     }
 
@@ -312,67 +340,7 @@ impl BlobsBundle {
 
 impl Default for BlobsBundle {
     fn default() -> Self {
-        Self::V1(Arc::new(BlobsBundleV1::default()))
-    }
-}
-
-pub enum BlobsBundleMut {
-    V2(BlobsBundleV2),
-    V1(BlobsBundleV1),
-}
-
-impl BlobsBundleMut {
-    pub fn from_bundle(bundle: BlobsBundle) -> Self {
-        match bundle {
-            BlobsBundle::V1(b) => {
-                BlobsBundleMut::V1(Arc::try_unwrap(b).unwrap_or_else(|b| (*b).clone()))
-            }
-            BlobsBundle::V2(b) => {
-                BlobsBundleMut::V2(Arc::try_unwrap(b).unwrap_or_else(|b| (*b).clone()))
-            }
-        }
-    }
-
-    pub fn into_bundle(self) -> BlobsBundle {
-        match self {
-            BlobsBundleMut::V1(b) => BlobsBundle::V1(Arc::new(b)),
-            BlobsBundleMut::V2(b) => BlobsBundle::V2(Arc::new(b)),
-        }
-    }
-
-    pub fn commitments(&self) -> &KzgCommitments {
-        match self {
-            BlobsBundleMut::V2(bundle) => &bundle.commitments,
-            BlobsBundleMut::V1(bundle) => &bundle.commitments,
-        }
-    }
-
-    pub fn push_blob(
-        &mut self,
-        commitment: KzgCommitment,
-        proofs: &[KzgProof],
-        blob: Blob,
-    ) -> Result<(), BlobsError> {
-        match self {
-            BlobsBundleMut::V2(bundle) => {
-                bundle.commitments.push(commitment).map_err(|_| BlobsError::BundleTooLarge {
-                    got: bundle.blobs.len() + 1,
-                    max: 6,
-                })?;
-                bundle.proofs.extend_from_slice(proofs);
-                bundle.blobs.push(blob);
-                Ok(())
-            }
-            BlobsBundleMut::V1(bundle) => {
-                bundle.commitments.push(commitment).map_err(|_| BlobsError::BundleTooLarge {
-                    got: bundle.blobs.len() + 1,
-                    max: MAX_BLOBS_PER_BLOCK_ELECTRA as usize,
-                })?;
-                bundle.proofs.extend_from_slice(proofs);
-                bundle.blobs.push(blob);
-                Ok(())
-            }
-        }
+        Self::V1(BlobsBundleV1::default())
     }
 }
 

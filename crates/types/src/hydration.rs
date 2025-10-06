@@ -10,8 +10,8 @@ use tree_hash::TreeHash;
 use crate::{
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
-    BidTrace, Blob, BlobsBundleV1, BlobsBundleV2, BlsPublicKeyBytes, BlsSignatureBytes,
-    ExecutionPayload,
+    BidTrace, Blob, BlobsBundle, BlobsBundleV1, BlobsBundleV2, BlsPublicKeyBytes,
+    BlsSignatureBytes, ExecutionPayload,
 };
 
 /// A bid submission where transactions and blobs may be replaced by hashes instead of payload
@@ -200,7 +200,7 @@ impl DehydratedBidSubmissionElectra {
             bid_submission::SignedBidSubmissionElectra {
                 message: self.message,
                 execution_payload: Arc::new(self.execution_payload),
-                blobs_bundle: Arc::new(sidecar),
+                blobs_bundle: Arc::new(BlobsBundle::V1(sidecar)),
                 execution_requests: self.execution_requests,
                 signature: self.signature,
             },
@@ -295,7 +295,7 @@ impl DehydratedBidSubmissionFulu {
             bid_submission::SignedBidSubmissionFulu {
                 message: self.message,
                 execution_payload: Arc::new(self.execution_payload),
-                blobs_bundle: Arc::new(sidecar),
+                blobs_bundle: Arc::new(BlobsBundle::V2(sidecar)),
                 execution_requests: self.execution_requests,
                 signature: self.signature,
             },

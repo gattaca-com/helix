@@ -6,7 +6,7 @@ use alloy_primitives::{
 };
 use helix_common::{simulator::BlockSimError, utils::utcnow_ms};
 use helix_types::{
-    mock_public_key_bytes, BlobWithMetadata, BlobsBundleMut, BlsPublicKeyBytes, BuilderBid,
+    mock_public_key_bytes, BlobWithMetadata, BlobsBundle, BlsPublicKeyBytes, BuilderBid,
     ExecutionPayloadHeader, KzgCommitments, MergeableOrder, MergeableOrderWithOrigin,
     MergeableOrders, MergedBlock, PayloadAndBlobs, SignedBidSubmission, ValidatorRegistrationData,
 };
@@ -296,7 +296,7 @@ impl<A: Api> ProposerApi<A> {
     ) -> Result<(), PayloadMergingError> {
         let header = ExecutionPayloadHeader::from(&response.execution_payload);
 
-        let mut merged_blobs_bundle = BlobsBundleMut::from_bundle(original_payload.blobs_bundle);
+        let mut merged_blobs_bundle = original_payload.blobs_bundle;
         append_merged_blobs(&mut merged_blobs_bundle, blobs, &response)?;
 
         let blob_kzg_commitments =
@@ -314,7 +314,7 @@ impl<A: Api> ProposerApi<A> {
         // Store the payload in the background
         let payload_and_blobs = PayloadAndBlobs {
             execution_payload: response.execution_payload,
-            blobs_bundle: merged_blobs_bundle.into_bundle(),
+            blobs_bundle: merged_blobs_bundle,
         };
 
         if self
@@ -359,7 +359,7 @@ enum PayloadMergingError {
 
 /// Appends the merged blobs to the original blobs bundle.
 fn append_merged_blobs(
-    original_blobs_bundle: &mut BlobsBundleMut,
+    original_blobs_bundle: &mut BlobsBundle,
     blobs: &HashMap<B256, BlobWithMetadata>,
     response: &BlockMergeResponse,
 ) -> Result<(), PayloadMergingError> {
