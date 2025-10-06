@@ -163,7 +163,7 @@ impl<A: Api> Context<A> {
 
         // here we need to deallocate a lot of data, taking more than 1s on busy slots
         // this is not a big issue since it 's only at the beginning of the slot, but it blocks the
-        // full event loop, which is not ideal an alternative would be to use a buffer and
+        // full event loop, which is not ideal. An alternative would be to use a buffer and
         // overwrite the buffer slots, keeping only a block hash -> index map however that
         // would require us to estimate a hard upper limit on payloads received, or risk causing a
         // missed slot
