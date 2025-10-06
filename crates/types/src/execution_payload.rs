@@ -9,7 +9,7 @@ use tree_hash_derive::TreeHash;
 use crate::{
     convert_bloom_to_lighthouse, convert_transactions_to_lighthouse,
     fields::{Bloom, ExtraData, Transactions, Withdrawals},
-    SszError, ValidationError,
+    BlockValidationError, SszError,
 };
 
 // Both Electra and Fulu share the same ExecutionPayload,
@@ -71,9 +71,9 @@ impl TestRandom for ExecutionPayload {
 impl ExecutionPayload {
     /// Since the variable list types are now wrapped in Bytes, we need to validate that the fields
     /// are of the correct length
-    pub fn validate_ssz_lengths(&self) -> Result<(), ValidationError> {
+    pub fn validate_ssz_lengths(&self) -> Result<(), BlockValidationError> {
         if self.extra_data.len() > <MainnetEthSpec as EthSpec>::max_extra_data_bytes() {
-            return Err(ValidationError::SszError(SszError::InvalidByteCount {
+            return Err(BlockValidationError::SszError(SszError::InvalidByteCount {
                 given: self.extra_data.len(),
                 expected: <MainnetEthSpec as EthSpec>::max_extra_data_bytes(),
             }));
@@ -81,7 +81,7 @@ impl ExecutionPayload {
 
         for tx in self.transactions.iter() {
             if tx.len() > <MainnetEthSpec as EthSpec>::max_bytes_per_transaction() {
-                return Err(ValidationError::SszError(SszError::InvalidByteCount {
+                return Err(BlockValidationError::SszError(SszError::InvalidByteCount {
                     given: tx.len(),
                     expected: <MainnetEthSpec as EthSpec>::max_bytes_per_transaction(),
                 }));
@@ -89,7 +89,7 @@ impl ExecutionPayload {
         }
 
         if self.transactions.len() > <MainnetEthSpec as EthSpec>::max_transactions_per_payload() {
-            return Err(ValidationError::SszError(SszError::InvalidByteCount {
+            return Err(BlockValidationError::SszError(SszError::InvalidByteCount {
                 given: self.transactions.len(),
                 expected: <MainnetEthSpec as EthSpec>::max_transactions_per_payload(),
             }));
@@ -264,9 +264,9 @@ pub struct ExecutionPayloadHeader {
 impl ExecutionPayloadHeader {
     /// Since the variable list types are now wrapped in Bytes, we need to validate that the fields
     /// are of the correct length
-    pub fn validate_ssz_lengths(&self) -> Result<(), ValidationError> {
+    pub fn validate_ssz_lengths(&self) -> Result<(), BlockValidationError> {
         if self.extra_data.len() > <MainnetEthSpec as EthSpec>::max_extra_data_bytes() {
-            return Err(ValidationError::SszError(SszError::InvalidByteCount {
+            return Err(BlockValidationError::SszError(SszError::InvalidByteCount {
                 given: self.extra_data.len(),
                 expected: <MainnetEthSpec as EthSpec>::max_extra_data_bytes(),
             }));

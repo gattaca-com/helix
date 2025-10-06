@@ -170,8 +170,7 @@ impl SubmissionDecoder {
     ) -> Result<T, BuilderApiError> {
         let start = Instant::now();
         let payload: T = match self.encoding {
-            Encoding::Ssz => T::from_ssz_bytes(&body)
-                .map_err(|err| BuilderApiError::SszDeserializeError(format!("{err:?}")))?,
+            Encoding::Ssz => T::from_ssz_bytes(&body).map_err(BuilderApiError::SszDecode)?,
             Encoding::Json => serde_json::from_slice(&body)?,
         };
 

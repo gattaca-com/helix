@@ -1,10 +1,9 @@
 use alloy_primitives::B256;
 use helix_common::BuilderInfo;
-use helix_types::{BlsPublicKeyBytes, SignedBidSubmission};
+use helix_types::{BlockValidationError, BlsPublicKeyBytes, SignedBidSubmission};
 
 use crate::{
     auctioneer::{context::Context, types::SlotData},
-    builder::error::BuilderApiError,
     Api,
 };
 
@@ -17,9 +16,9 @@ impl<A: Api> Context<A> {
         builder_info: &BuilderInfo,
         slot_data: &SlotData,
         on_receive_ns: u64,
-    ) -> Result<(), BuilderApiError> {
+    ) -> Result<(), BlockValidationError> {
         if payload.slot() != self.bid_slot {
-            return Err(BuilderApiError::SubmissionForWrongSlot {
+            return Err(BlockValidationError::SubmissionForWrongSlot {
                 expected: self.bid_slot,
                 got: payload.slot(),
             });
@@ -38,16 +37,18 @@ impl<A: Api> Context<A> {
         payload: &SignedBidSubmission,
         withdrawals_root: &B256,
         slot_data: &SlotData,
-    ) -> Result<(), BuilderApiError> {
+    ) -> Result<(), BlockValidationError> {
         if slot_data.current_fork != payload.fork_name() {
-            return Err(BuilderApiError::InvalidPayloadType { fork_name: slot_data.current_fork });
+            return Err(BlockValidationError::InvalidPayloadType {
+                fork_name: slot_data.current_fork,
+            });
         }
 
         // checks internal consistency of the payload
         payload.validate()?;
 
         if slot_data.payload_attributes.payload_attributes.timestamp != payload.timestamp() {
-            return Err(BuilderApiError::IncorrectTimestamp {
+            return Err(BlockValidationError::IncorrectTimestamp {
                 got: payload.timestamp(),
                 expected: slot_data.payload_attributes.payload_attributes.timestamp,
             });
@@ -55,7 +56,7 @@ impl<A: Api> Context<A> {
 
         let registration = &slot_data.registration_data.entry.registration.message;
         if registration.fee_recipient != *payload.proposer_fee_recipient() {
-            return Err(BuilderApiError::FeeRecipientMismatch {
+            return Err(BlockValidationError::FeeRecipientMismatch {
                 got: *payload.proposer_fee_recipient(),
                 expected: registration.fee_recipient,
             });
@@ -63,7 +64,7 @@ impl<A: Api> Context<A> {
 
         let bid_trace = payload.bid_trace();
         if registration.pubkey != bid_trace.proposer_pubkey {
-            return Err(BuilderApiError::ProposerPublicKeyMismatch {
+            return Err(BlockValidationError::ProposerPublicKeyMismatch {
                 got: bid_trace.proposer_pubkey,
                 expected: registration.pubkey,
             });
@@ -71,14 +72,14 @@ impl<A: Api> Context<A> {
 
         let payload_attributes = &slot_data.payload_attributes;
         if *payload.prev_randao() != payload_attributes.prev_randao {
-            return Err(BuilderApiError::PrevRandaoMismatch {
+            return Err(BlockValidationError::PrevRandaoMismatch {
                 got: *payload.prev_randao(),
                 expected: payload_attributes.prev_randao,
             });
         }
 
         if *withdrawals_root != payload_attributes.withdrawals_root {
-            return Err(BuilderApiError::WithdrawalsRootMismatch {
+            return Err(BlockValidationError::WithdrawalsRootMismatch {
                 got: *withdrawals_root,
                 expected: payload_attributes.withdrawals_root,
             });
@@ -87,9 +88,9 @@ impl<A: Api> Context<A> {
         Ok(())
     }
 
-    fn check_duplicate_submission(&mut self, block_hash: B256) -> Result<(), BuilderApiError> {
+    fn check_duplicate_submission(&mut self, block_hash: B256) -> Result<(), BlockValidationError> {
         if !self.seen_block_hashes.insert(block_hash) {
-            return Err(BuilderApiError::DuplicateBlockHash { block_hash });
+            return Err(BlockValidationError::DuplicateBlockHash { block_hash });
         }
 
         Ok(())
@@ -100,7 +101,7 @@ impl<A: Api> Context<A> {
         builder: &BlsPublicKeyBytes,
         new_receive_ns: u64,
         new_seq: Option<u64>,
-    ) -> Result<(), BuilderApiError> {
+    ) -> Result<(), BlockValidationError> {
         if let Some((old_receive_ns, maybe_old_seq)) = self.sequence.get_mut(builder) {
             let mut check_timestamp = true;
 
@@ -112,7 +113,7 @@ impl<A: Api> Context<A> {
                         *maybe_old_seq = Some(new_seq);
                         check_timestamp = false;
                     } else {
-                        return Err(BuilderApiError::OutOfSequence {
+                        return Err(BlockValidationError::OutOfSequence {
                             seen: *old_seq,
                             this: new_seq,
                         });
@@ -124,7 +125,7 @@ impl<A: Api> Context<A> {
                 if new_receive_ns > *old_receive_ns {
                     *old_receive_ns = new_receive_ns
                 } else {
-                    return Err(BuilderApiError::AlreadyProcessingNewerPayload);
+                    return Err(BlockValidationError::AlreadyProcessingNewerPayload);
                 }
             }
         } else {
@@ -138,7 +139,7 @@ impl<A: Api> Context<A> {
         &self,
         builder_info: &BuilderInfo,
         slot_data: &SlotData,
-    ) -> Result<(), BuilderApiError> {
+    ) -> Result<(), BlockValidationError> {
         if let Some(trusted_builders) =
             &slot_data.registration_data.entry.preferences.trusted_builders
         {
@@ -151,7 +152,7 @@ impl<A: Api> Context<A> {
                 if trusted_builders.contains(builder_id) {
                     Ok(())
                 } else {
-                    Err(BuilderApiError::BuilderNotInProposersTrustedList {
+                    Err(BlockValidationError::BuilderNotInProposersTrustedList {
                         proposer_trusted_builders: trusted_builders.clone(),
                     })
                 }
@@ -159,12 +160,12 @@ impl<A: Api> Context<A> {
                 if ids.iter().any(|id| trusted_builders.contains(id)) {
                     Ok(())
                 } else {
-                    Err(BuilderApiError::BuilderNotInProposersTrustedList {
+                    Err(BlockValidationError::BuilderNotInProposersTrustedList {
                         proposer_trusted_builders: trusted_builders.clone(),
                     })
                 }
             } else {
-                Err(BuilderApiError::BuilderNotInProposersTrustedList {
+                Err(BlockValidationError::BuilderNotInProposersTrustedList {
                     proposer_trusted_builders: trusted_builders.clone(),
                 })
             }

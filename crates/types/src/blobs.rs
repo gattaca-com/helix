@@ -9,7 +9,7 @@ use ssz_derive::Encode;
 
 use crate::{
     fields::{KzgCommitment, KzgCommitments, KzgProof, KzgProofs},
-    BlobsError, ExecutionPayload, SignedBeaconBlock, ValidationError,
+    BlobsError, BlockValidationError, ExecutionPayload, SignedBeaconBlock,
 };
 
 pub type Blob = Arc<alloy_consensus::Blob>;
@@ -121,9 +121,9 @@ impl BlobsBundleV1 {
         }
     }
 
-    pub fn validate_ssz_lengths(&self) -> Result<(), ValidationError> {
+    pub fn validate_ssz_lengths(&self) -> Result<(), BlockValidationError> {
         if self.commitments.len() != self.proofs.len() || self.proofs.len() != self.blobs.len() {
-            return Err(ValidationError::BlobsError(BlobsError::BundleMismatch {
+            return Err(BlockValidationError::BlobsError(BlobsError::BundleMismatch {
                 proofs: self.proofs.len(),
                 commitments: self.commitments.len(),
                 blobs: self.blobs.len(),
@@ -131,7 +131,7 @@ impl BlobsBundleV1 {
         }
 
         if self.commitments.len() > MAX_BLOBS_PER_BLOCK_ELECTRA as usize {
-            return Err(ValidationError::BlobsError(BlobsError::BundleTooLarge {
+            return Err(BlockValidationError::BlobsError(BlobsError::BundleTooLarge {
                 got: self.commitments.len(),
                 max: MAX_BLOBS_PER_BLOCK_ELECTRA as usize,
             }));
@@ -237,11 +237,14 @@ impl BlobsBundleV2 {
         }
     }
 
-    pub fn validate_ssz_lengths(&self, max_blobs_per_block: usize) -> Result<(), ValidationError> {
+    pub fn validate_ssz_lengths(
+        &self,
+        max_blobs_per_block: usize,
+    ) -> Result<(), BlockValidationError> {
         if self.commitments.len() != self.blobs.len() ||
             self.proofs.len() != self.blobs.len() * CELLS_PER_EXT_BLOB
         {
-            return Err(ValidationError::BlobsError(BlobsError::BundleMismatch {
+            return Err(BlockValidationError::BlobsError(BlobsError::BundleMismatch {
                 proofs: self.proofs.len(),
                 commitments: self.commitments.len(),
                 blobs: self.blobs.len(),
@@ -249,7 +252,7 @@ impl BlobsBundleV2 {
         }
 
         if self.commitments.len() > max_blobs_per_block {
-            return Err(ValidationError::BlobsError(BlobsError::BundleTooLarge {
+            return Err(BlockValidationError::BlobsError(BlobsError::BundleTooLarge {
                 got: self.commitments.len(),
                 max: max_blobs_per_block,
             }));
@@ -276,7 +279,10 @@ pub enum BlobsBundle {
 }
 
 impl BlobsBundle {
-    pub fn validate_ssz_lengths(&self, max_blobs_per_block: usize) -> Result<(), ValidationError> {
+    pub fn validate_ssz_lengths(
+        &self,
+        max_blobs_per_block: usize,
+    ) -> Result<(), BlockValidationError> {
         match self {
             BlobsBundle::V1(bundle) => bundle.validate_ssz_lengths(),
             BlobsBundle::V2(bundle) => bundle.validate_ssz_lengths(max_blobs_per_block),
