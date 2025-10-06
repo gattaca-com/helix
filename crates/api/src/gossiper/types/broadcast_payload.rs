@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use helix_types::{
-    BlsPublicKeyBytes, ForkName, ForkVersionDecode, PayloadAndBlobs, PayloadAndBlobsRef,
-};
+use helix_types::{BlsPublicKeyBytes, ForkName, ForkVersionDecode, PayloadAndBlobs};
 use ssz::Encode;
 
 use crate::{gossiper::error::GossipError, grpc};

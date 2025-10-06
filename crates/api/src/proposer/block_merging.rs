@@ -287,10 +287,15 @@ impl<A: Api> ProposerApi<A> {
         response: BlockMergeResponse,
         blobs: &HashMap<B256, BlobWithMetadata>,
     ) -> Result<(), PayloadMergingError> {
-        let header = ExecutionPayloadHeader::from(&response.execution_payload);
-
-        let mut merged_blobs_bundle = original_payload.blobs_bundle;
+        let mut merged_blobs_bundle = Arc::unwrap_or_clone(original_payload).blobs_bundle;
         append_merged_blobs(&mut merged_blobs_bundle, blobs, &response)?;
+
+        let withdrawals_root = response.execution_payload.withdrawals_root();
+
+        let payload_and_blobs = Arc::new(PayloadAndBlobs {
+            execution_payload: response.execution_payload,
+            blobs_bundle: merged_blobs_bundle,
+        });
 
         let bid_data = PayloadBidData {
             withdrawals_root,

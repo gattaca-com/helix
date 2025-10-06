@@ -11,7 +11,7 @@ use tree_hash_derive::TreeHash;
 use crate::{
     error::SigError, fields::ExecutionRequests, BlobsBundle, BlobsBundleV1, BlobsBundleV2, Bloom,
     BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, ExecutionPayload, ExtraData,
-    PayloadAndBlobs, ValidationError,
+    PayloadAndBlobsRef, ValidationError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
@@ -345,15 +345,15 @@ impl SignedBidSubmission {
         }
     }
 
-    pub fn payload_and_blobs(&self) -> PayloadAndBlobs {
+    pub fn payload_and_blobs_ref(&self) -> PayloadAndBlobsRef {
         match self {
-            SignedBidSubmission::Electra(signed_bid_submission) => PayloadAndBlobs {
-                execution_payload: (*signed_bid_submission.execution_payload).clone(),
-                blobs_bundle: (*signed_bid_submission.blobs_bundle).clone(),
+            SignedBidSubmission::Electra(signed_bid_submission) => PayloadAndBlobsRef {
+                execution_payload: self.execution_payload_ref(),
+                blobs_bundle: &signed_bid_submission.blobs_bundle,
             },
-            SignedBidSubmission::Fulu(signed_bid_submission) => PayloadAndBlobs {
-                execution_payload: (*signed_bid_submission.execution_payload).clone(),
-                blobs_bundle: (*signed_bid_submission.blobs_bundle).clone(),
+            SignedBidSubmission::Fulu(signed_bid_submission) => PayloadAndBlobsRef {
+                execution_payload: self.execution_payload_ref(),
+                blobs_bundle: &signed_bid_submission.blobs_bundle,
             },
         }
     }

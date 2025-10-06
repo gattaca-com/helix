@@ -374,6 +374,34 @@ impl ForkVersionDecode for PayloadAndBlobs {
     }
 }
 
+// BlobsBundleV2 used in fulu is the same as V1 except the number of proofs is much larger
+// as each proof is for a cell in the blob, not one per blob.
+// But as we use a Vec, we can use the same struct here and just validate the lengths differently if
+// needed.
+#[derive(Clone, PartialEq, Debug, Serialize, Encode)]
+pub struct PayloadAndBlobsRef<'a> {
+    pub execution_payload: &'a ExecutionPayload,
+    pub blobs_bundle: &'a BlobsBundle,
+}
+
+impl<'a> From<&'a PayloadAndBlobs> for PayloadAndBlobsRef<'a> {
+    fn from(payload_and_blobs: &'a PayloadAndBlobs) -> Self {
+        PayloadAndBlobsRef {
+            execution_payload: &payload_and_blobs.execution_payload,
+            blobs_bundle: &payload_and_blobs.blobs_bundle,
+        }
+    }
+}
+
+impl PayloadAndBlobsRef<'_> {
+    /// Clone out an owned `PayloadAndBlobs`
+    pub fn to_owned(&self) -> PayloadAndBlobs {
+        let execution_payload = self.execution_payload.clone();
+        let blobs_bundle = self.blobs_bundle.clone();
+        PayloadAndBlobs { execution_payload, blobs_bundle }
+    }
+}
+
 // From lighthouse, replacing the blobs and kzg proofs
 #[derive(Debug, Clone, Serialize, Deserialize, Encode)]
 pub struct SignedBlockContents {
@@ -423,7 +451,7 @@ mod tests {
     fn test_payload_and_blobs_equivalence() {
         let data_json = include_str!("testdata/signed-bid-submission-electra.json");
         let signed_bid = test_encode_decode_json::<SignedBidSubmission>(data_json);
-        let ex = signed_bid.payload_and_blobs();
+        let ex = signed_bid.payload_and_blobs_ref().to_owned();
 
         let data_ssz = ex.as_ssz_bytes();
 
