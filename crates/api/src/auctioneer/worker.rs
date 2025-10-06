@@ -44,13 +44,16 @@ impl Telemetry {
         let now = Instant::now();
         let loop_elapsed = now.duration_since(self.loop_start);
 
-        self.work += self.loop_worked;
-        self.spin += loop_elapsed.saturating_sub(self.loop_worked);
-
-        if loop_elapsed > Duration::ZERO {
-            self.loop_start = now;
+        if loop_elapsed.is_zero() {
+            return;
         }
-        self.loop_worked = Duration::ZERO;
+
+        let worked = std::cmp::min(self.loop_worked, loop_elapsed);
+        self.work += worked;
+        self.spin += loop_elapsed - worked;
+
+        self.loop_worked -= worked;
+        self.loop_start = now;
 
         if self.next_record < now {
             self.next_record = now + Self::REPORT_FREQ;
