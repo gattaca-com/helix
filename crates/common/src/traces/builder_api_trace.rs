@@ -11,6 +11,8 @@ pub struct SubmissionTrace {
     pub receive: u64,
     // when body finished being read
     pub read_body: u64,
+    // when body finished being decoded
+    pub decoded: u64,
     pub metadata: Option<String>,
 }
 

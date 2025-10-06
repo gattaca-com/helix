@@ -8,7 +8,7 @@ const BLOCK_TOO_OLD: &str = "block is too old, outside validation window";
 const BLOCK_REQ_REORG: &str = "block requires a reorg";
 const PARENT_BLOCK_NOT_FOUND: &str = "could not find parent block: parent block not found";
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum BlockSimError {
     #[error("block validation failed. Reason: {0}")]
     BlockValidationFailed(String),
@@ -16,8 +16,8 @@ pub enum BlockSimError {
     #[error("validation request timeout")]
     Timeout,
 
-    #[error("rpc error. {0}")]
-    RpcError(#[from] reqwest::Error),
+    #[error("rpc error")]
+    RpcError,
 
     #[error("tokio::mpsc send error")]
     SendError,
@@ -56,7 +56,7 @@ impl BlockSimError {
                 _ => false,
             },
             BlockSimError::Timeout => true,
-            BlockSimError::RpcError(_) => true,
+            BlockSimError::RpcError => true,
             BlockSimError::NoSimulatorAvailable => true,
             _ => false,
         }

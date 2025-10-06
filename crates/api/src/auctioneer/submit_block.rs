@@ -68,20 +68,27 @@ impl<A: Api> Context<A> {
             return;
         };
 
+        let res_tx = result.res_tx.take();
+
         match &result.result {
             Err(err) if err.is_demotable() => {
                 self.bid_sorter.demote(*result.submission.builder_public_key());
+                if let Some(res_tx) = res_tx {
+                    let _ = res_tx.send(Err(BuilderApiError::BlockSimulation(err.clone())));
+                };
             }
 
             Ok(_) | Err(_) => {
-                if !result.was_optimistic_sim() {
+                if let Some(res_tx) = res_tx {
                     self.bid_sorter.sort(
                         &result.submission,
                         &mut result.trace,
                         result.merging_preferences,
                         false,
                     );
-                }
+
+                    let _ = res_tx.send(Ok(()));
+                };
             }
         }
     }

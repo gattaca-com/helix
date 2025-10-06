@@ -53,12 +53,6 @@ pub struct SimulationResultInner {
     pub optimistic_version: OptimisticVersion,
 }
 
-impl SimulationResultInner {
-    pub fn was_optimistic_sim(&self) -> bool {
-        self.res_tx.is_none()
-    }
-}
-
 // TODO:
 // - avoid sending blobs, and validate them here on a blocking task
 // - send only block deltas
