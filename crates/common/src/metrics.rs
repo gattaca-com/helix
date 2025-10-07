@@ -167,6 +167,27 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref REGISTRATIONS_UNKNOWN: IntCounter = register_int_counter_with_registry!(
+        "registrations_unknown_count",
+        "Count of unknown registrations",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+
+    pub static ref REGISTRATIONS_SKIPPED: IntCounter = register_int_counter_with_registry!(
+        "registrations_skipped_count",
+        "Count of registrations skipped",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref REGISTRATIONS_INVALID: IntCounter = register_int_counter_with_registry!(
+        "registrations_invalid_count",
+        "Count of invalid registrations",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 
     //////////////// SIMULATOR ////////////////
     static ref SIMULATOR_COUNTS: IntCounterVec = register_int_counter_vec_with_registry!(

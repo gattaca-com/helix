@@ -6,9 +6,14 @@ use axum::{
     Extension,
 };
 use helix_common::{
-    api::proposer_api::ValidatorRegistrationInfo, metadata_provider::MetadataProvider,
-    metrics::REGISTRATIONS_TO_CHECK_COUNT, utils::extract_request_id, Filtering,
-    ValidatorPreferences,
+    api::proposer_api::ValidatorRegistrationInfo,
+    metadata_provider::MetadataProvider,
+    metrics::{
+        REGISTRATIONS_INVALID, REGISTRATIONS_SKIPPED, REGISTRATIONS_TO_CHECK_COUNT,
+        REGISTRATIONS_UNKNOWN,
+    },
+    utils::extract_request_id,
+    Filtering, ValidatorPreferences,
 };
 use helix_database::DatabaseService;
 use helix_types::SignedValidatorRegistration;
@@ -112,7 +117,7 @@ impl<A: Api> ProposerApi<A> {
         trace!(%head_slot, num_registrations,);
 
         let mut unknown_registrations = 0;
-        let mut update_not_required = 0;
+        let mut skipped_registrations = 0;
 
         let registrations_to_check: Vec<_> = {
             let known_validators_guard = proposer_api.db.known_validators_cache().read();
@@ -130,12 +135,15 @@ impl<A: Api> ProposerApi<A> {
                     if proposer_api.db.is_registration_update_required(&reg) {
                         true
                     } else {
-                        update_not_required += 1;
+                        skipped_registrations += 1;
                         false
                     }
                 })
                 .collect()
         };
+
+        REGISTRATIONS_UNKNOWN.inc_by(unknown_registrations);
+        REGISTRATIONS_SKIPPED.inc_by(skipped_registrations);
 
         if registrations_to_check.is_empty() {
             return Ok(StatusCode::OK);
@@ -180,6 +188,9 @@ impl<A: Api> ProposerApi<A> {
 
         let process_time = start.elapsed();
 
+        let invalid_registrations = registrations_to_check.len() - successful_registrations;
+        REGISTRATIONS_INVALID.inc_by(invalid_registrations as u64);
+
         if successful_registrations == 0 {
             return Err(ProposerApiError::NoValidatorsCouldBeRegistered);
         }
@@ -202,10 +213,12 @@ impl<A: Api> ProposerApi<A> {
 
         info!(
             ?process_time,
+            num_registrations,
+            successful_registrations,
             unknown_registrations,
-            update_not_required,
-            successful_registrations = successful_registrations,
-            invalid_registrations = num_registrations - successful_registrations,
+            skipped_registrations,
+            invalid_registrations,
+            "processed registrations"
         );
 
         Ok(StatusCode::OK)
