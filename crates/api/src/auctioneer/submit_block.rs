@@ -128,6 +128,7 @@ impl<A: Api> Context<A> {
             sequence,
             &builder_info,
             slot_data,
+            trace.receive,
         )?;
         record_submission_step("validated", start_val.elapsed());
         trace!("validated");

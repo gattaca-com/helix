@@ -29,7 +29,8 @@ pub struct SlotContext {
     pub pending_payload: Option<PendingPayload>,
     pub bid_sorter: BidSorter,
     pub seen_block_hashes: FxHashSet<B256>,
-    pub sequence: FxHashMap<BlsPublicKeyBytes, u64>,
+    /// builder -> (last on_receive_ns, sequence number)
+    pub sequence: FxHashMap<BlsPublicKeyBytes, (u64, Option<u64>)>,
     pub hydration_cache: HydrationCache,
     pub payloads: FxHashMap<B256, PayloadEntry>,
     pub sim_manager: SimulatorManager,

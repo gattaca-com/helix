@@ -653,8 +653,6 @@ pub enum BidValidationError {
 
 #[cfg(test)]
 mod tests {
-
-    use alloy_consensus::Signed;
     use ssz::Encode;
 
     use super::*;
@@ -719,7 +717,7 @@ mod tests {
     #[test]
     fn electra_bid_submission_ssz() {
         let data_ssz = SignedBidSubmission::Electra(SignedBidSubmissionElectra::random_for_test(
-            &mut rand::thread_rng(),
+            &mut rand::rng(),
         ))
         .as_ssz_bytes();
         let s = test_encode_decode_ssz::<SignedBidSubmission>(&data_ssz);
