@@ -49,7 +49,7 @@ pub type BlsKeypair = lh_types::Keypair;
 
 // Blobs
 // pub type BlobsBundle = lh_eth2::types::BlobsBundle<MainnetEthSpec>;
-pub type BlobsBundle = crate::blobs::BlobsBundleV1;
+pub type BlobsBundle = crate::blobs::BlobsBundle;
 
 // Publish block
 pub type VersionedSignedProposal = SignedBlockContents;

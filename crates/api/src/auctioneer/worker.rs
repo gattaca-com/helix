@@ -182,14 +182,17 @@ impl SubWorker {
             }
 
             let payload: DehydratedBidSubmission = decoder.decode(body)?;
+            let payload = payload.maybe_upgrade_to_fulu(self.chain_info.current_fork_name());
 
             (Submission::Dehydrated(payload), None)
         } else {
             let (payload, merging_data) = if has_mergeable_data {
                 let payload: SignedBidSubmissionWithMergingData = decoder.decode(body)?;
+                let payload = payload.maybe_upgrade_to_fulu(self.chain_info.current_fork_name());
                 (payload.submission, Some(payload.merging_data))
             } else {
                 let payload: SignedBidSubmission = decoder.decode(body)?;
+                let payload = payload.maybe_upgrade_to_fulu(self.chain_info.current_fork_name());
                 (payload, None)
             };
 

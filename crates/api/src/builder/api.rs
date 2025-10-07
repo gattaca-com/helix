@@ -10,9 +10,9 @@ use bytes::Bytes;
 use helix_common::{chain_info::ChainInfo, local_cache::LocalCache, RelayConfig};
 use helix_housekeeper::CurrentSlotInfo;
 use helix_types::{
-    BlobWithMetadata, BlobsBundle, BlockMergingData, BundleOrder, KzgCommitment, MergeableBundle,
-    MergeableOrder, MergeableOrders, MergeableTransaction, Order, SignedBidSubmission,
-    Transactions,
+    BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
+    BlockMergingData, BundleOrder, KzgCommitment, MergeableBundle, MergeableOrder, MergeableOrders,
+    MergeableTransaction, Order, SignedBidSubmission, Transactions,
 };
 use tracing::error;
 
@@ -110,7 +110,7 @@ pub fn get_mergeable_orders(
     }
     let block_blobs_bundles = payload.blobs_bundle();
     let blob_versioned_hashes: Vec<_> =
-        block_blobs_bundles.commitments.iter().map(|c| calculate_versioned_hash(*c)).collect();
+        block_blobs_bundles.commitments().iter().map(|c| calculate_versioned_hash(*c)).collect();
     let txs = &execution_payload.transactions;
 
     // Expand all orders to include the tx's bytes, checking for missing blobs.
@@ -130,16 +130,27 @@ fn blobs_bundle_to_hashmap(
     blob_versioned_hashes: Vec<B256>,
     bundle: &BlobsBundle,
 ) -> HashMap<B256, BlobWithMetadata> {
+    let version = bundle.version();
     blob_versioned_hashes
         .into_iter()
-        .zip(bundle.commitments.iter())
-        .zip(bundle.proofs.iter())
-        .zip(bundle.blobs.iter())
-        .map(|(((versioned_hash, commitment), proof), blob)| {
-            let commitment = *commitment;
-            let proof = *proof;
-            let blob = blob.clone();
-            (versioned_hash, BlobWithMetadata { commitment, proof, blob })
+        .zip(bundle.iter_blobs())
+        .map(|(versioned_hash, (blob, commitment, proofs))| match version {
+            BlobsBundleVersion::V1 => (
+                versioned_hash,
+                BlobWithMetadata::V1(BlobWithMetadataV1 {
+                    commitment: *commitment,
+                    proof: proofs[0],
+                    blob: blob.clone(),
+                }),
+            ),
+            BlobsBundleVersion::V2 => (
+                versioned_hash,
+                BlobWithMetadata::V2(BlobWithMetadataV2 {
+                    commitment: *commitment,
+                    proofs: proofs.to_vec(),
+                    blob: blob.clone(),
+                }),
+            ),
         })
         .collect()
 }

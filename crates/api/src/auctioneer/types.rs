@@ -134,7 +134,7 @@ impl PayloadHeaderData {
 
         BuilderBid {
             header,
-            blob_kzg_commitments: self.payload_and_blobs.blobs_bundle.commitments.clone(),
+            blob_kzg_commitments: self.payload_and_blobs.blobs_bundle.commitments().clone(),
             value: self.bid_data.value,
             execution_requests: self.bid_data.execution_requests,
             pubkey: mock_public_key_bytes(),

@@ -276,7 +276,7 @@ mod tests {
         let signed_bid_submission = SignedBidSubmissionElectra {
             message: bid_trace.clone(),
             execution_payload: ExecutionPayload::test_random().into(),
-            blobs_bundle: BlobsBundle::default().into(),
+            blobs_bundle: Arc::new(BlobsBundle::V1(Default::default())),
             signature: BlsSignatureBytes::random(),
             execution_requests: Default::default(),
         };
