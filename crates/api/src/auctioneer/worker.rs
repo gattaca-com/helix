@@ -381,7 +381,7 @@ impl RegWorker {
         for i in range {
             if res_tx.is_closed() {
                 // validator dropped the request so no point in processing more
-                // a single check takes 1-5ms so it's ok to check this every time
+                // a single signature check takes 1-5ms so it's ok to check this every time
                 return false;
             }
 
