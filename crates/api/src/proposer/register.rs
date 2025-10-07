@@ -138,6 +138,10 @@ impl<A: Api> ProposerApi<A> {
         };
 
         if registrations_to_check.is_empty() {
+            info!(
+                num_registrations,
+                unknown_registrations, update_not_required, "skip process registrations"
+            );
             return Ok(StatusCode::OK);
         }
 
@@ -202,10 +206,14 @@ impl<A: Api> ProposerApi<A> {
 
         info!(
             ?process_time,
+            num_registrations,
             unknown_registrations,
             update_not_required,
-            successful_registrations = successful_registrations,
-            invalid_registrations = num_registrations - successful_registrations,
+            successful_registrations,
+            invalid_registrations = num_registrations.saturating_sub(
+                unknown_registrations + update_not_required + successful_registrations
+            ),
+            "processed registrations"
         );
 
         Ok(StatusCode::OK)
