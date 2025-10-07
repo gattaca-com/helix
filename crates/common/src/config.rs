@@ -16,7 +16,7 @@ pub fn is_local_dev() -> bool {
     unsafe { LOCAL_DEV }
 }
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct RelayConfig {
     pub instance_id: Option<String>,
     #[serde(default)]
@@ -64,8 +64,45 @@ pub struct RelayConfig {
     #[serde(default)]
     is_local_dev: bool,
     /// Cores configuration, recommended to be set for production use
-    #[serde(default)]
     pub cores: CoresConfig,
+}
+
+impl RelayConfig {
+    pub fn empty_for_test() -> Self {
+        Self {
+            instance_id: Default::default(),
+            website: Default::default(),
+            postgres: Default::default(),
+            simulators: Default::default(),
+            beacon_clients: Default::default(),
+            relays: Default::default(),
+            relay_network: Default::default(),
+            builders: Default::default(),
+            network_config: Default::default(),
+            logging: Default::default(),
+            validator_preferences: Default::default(),
+            router_config: Default::default(),
+            target_get_payload_propagation_duration_ms: Default::default(),
+            timing_game_config: Default::default(),
+            block_merging_config: Default::default(),
+            primev_config: Default::default(),
+            discord_webhook_url: Default::default(),
+            alerts_config: Default::default(),
+            payload_gossip_enabled: Default::default(),
+            header_gossip_enabled: Default::default(),
+            inclusion_list: Default::default(),
+            is_submission_instance: Default::default(),
+            is_registration_instance: Default::default(),
+            admin_token: Default::default(),
+            is_local_dev: Default::default(),
+            cores: CoresConfig {
+                auctioneer: 1,
+                tokio: vec![],
+                sub_workers: vec![],
+                reg_workers: vec![],
+            },
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -100,20 +137,6 @@ pub struct CoresConfig {
     pub sub_workers: Vec<usize>,
     /// Registrations
     pub reg_workers: Vec<usize>,
-}
-
-impl Default for CoresConfig {
-    fn default() -> Self {
-        let num_cpus = num_cpus::get_physical();
-        assert!(num_cpus > 4, "need at least 4 cores");
-
-        let tokio: Vec<_> = (0..num_cpus - 3).collect();
-        let auctioneer = num_cpus - 3;
-        let sub_workers = vec![num_cpus - 2];
-        let reg_workers = vec![num_cpus - 1];
-
-        Self { auctioneer, tokio, sub_workers, reg_workers }
-    }
 }
 
 impl Default for WebsiteConfig {
@@ -584,61 +607,6 @@ fn default_duration() -> u64 {
 #[derive(Clone, Deserialize, Serialize)]
 pub struct InclusionListConfig {
     pub node_url: Url,
-}
-
-#[cfg(test)]
-#[test]
-#[allow(clippy::field_reassign_with_default)]
-fn test_config() {
-    use crate::{Filtering, ValidatorPreferences};
-
-    let mut config = RelayConfig::default();
-    config.simulators = vec![SimulatorConfig {
-        url: "http://localhost:8080".to_string(),
-        namespace: "test".to_string(),
-        is_merging_simulator: true,
-        max_concurrent_tasks: 0,
-    }];
-    config.block_merging_config =
-        BlockMergingConfig { is_enabled: true, max_merged_bid_age_ms: 250 };
-    config
-        .beacon_clients
-        .push(BeaconClientConfig { url: Url::parse("http://localhost:8080").unwrap() });
-    config.network_config = NetworkConfig::Custom {
-        dir_path: "test".to_string(),
-        genesis_validator_root: Default::default(),
-        genesis_time: 1,
-    };
-    config.logging = LoggingConfig::File {
-        dir_path: "hello".parse().unwrap(),
-        file_name: "test".to_string(),
-        otlp_server: None,
-    };
-    config.validator_preferences = ValidatorPreferences {
-        filtering: Filtering::Regional,
-        trusted_builders: None,
-        header_delay: true,
-        delay_ms: Some(1000),
-        disable_inclusion_lists: false,
-    };
-    config.router_config = RouterConfig {
-        enabled_routes: vec![
-            RouteInfo { route: Route::GetValidators, rate_limit: None },
-            RouteInfo { route: Route::SubmitBlock, rate_limit: None },
-            RouteInfo { route: Route::ValidatorRegistration, rate_limit: None },
-            RouteInfo {
-                route: Route::GetHeader,
-                rate_limit: Some(RateLimitInfo { replenish_ms: 12, burst_size: 3 }),
-            },
-            RouteInfo { route: Route::GetPayload, rate_limit: None },
-            RouteInfo { route: Route::ProposerPayloadDelivered, rate_limit: None },
-            RouteInfo { route: Route::RegisterValidators, rate_limit: None },
-            RouteInfo { route: Route::Status, rate_limit: None },
-        ]
-        .to_vec(),
-        shutdown_delay_ms: 12_000,
-    };
-    println!("{}", serde_yaml::to_string(&config).unwrap());
 }
 
 #[cfg(test)]

@@ -49,7 +49,7 @@ mod test {
     async fn test_admin_service() {
         let auctioneer = Arc::new(LocalCache::new_test());
 
-        let mut config = config::RelayConfig::default();
+        let mut config = config::RelayConfig::empty_for_test();
         config.admin_token = "test_token".into();
         tokio::spawn(run_admin_service(auctioneer.clone(), config));
         tokio::time::sleep(std::time::Duration::from_secs(1)).await; // wait for server to start
@@ -79,7 +79,7 @@ mod test {
     async fn test_admin_service_unauthorized() {
         let auctioneer = Arc::new(LocalCache::new_test());
 
-        let mut config = config::RelayConfig::default();
+        let mut config = config::RelayConfig::empty_for_test();
         config.admin_token = "test_token".into();
         tokio::spawn(run_admin_service(auctioneer.clone(), config));
         tokio::time::sleep(std::time::Duration::from_secs(1)).await; // wait for server to start

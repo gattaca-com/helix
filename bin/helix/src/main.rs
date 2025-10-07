@@ -17,7 +17,7 @@ use helix_common::{
     signing::RelaySigningContext,
     task::{block_on, init_runtime},
     utils::{init_panic_hook, init_tracing_log},
-    CoresConfig, RelayConfig,
+    RelayConfig,
 };
 use helix_database::{
     postgres::postgres_db_service::PostgresDatabaseService, start_db_service, DatabaseService,
@@ -28,7 +28,7 @@ use helix_types::BlsKeypair;
 use helix_website::website_service::WebsiteService;
 use tikv_jemallocator::Jemalloc;
 use tokio::signal::unix::SignalKind;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
@@ -75,9 +75,6 @@ fn main() {
         "starting relay"
     );
 
-    if config.cores == CoresConfig::default() {
-        warn!("using default cores config, this is not recommended for production");
-    }
     info!(cores = ?config.cores, "cores config");
 
     block_on(start_metrics_server(&config));
