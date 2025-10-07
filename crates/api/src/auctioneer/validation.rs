@@ -102,11 +102,7 @@ impl<A: Api> Context<A> {
         new_seq: Option<u64>,
     ) -> Result<(), BuilderApiError> {
         if let Some((old_receive_ns, maybe_old_seq)) = self.sequence.get_mut(builder) {
-            if new_receive_ns > *old_receive_ns {
-                *old_receive_ns = new_receive_ns
-            } else {
-                return Err(BuilderApiError::AlreadyProcessingNewerPayload);
-            }
+            let mut check_timestamp = true;
 
             match (&maybe_old_seq, new_seq) {
                 (None, None) | (Some(_), None) => (),
@@ -114,12 +110,21 @@ impl<A: Api> Context<A> {
                 (Some(old_seq), Some(new_seq)) => {
                     if new_seq > *old_seq {
                         *maybe_old_seq = Some(new_seq);
+                        check_timestamp = false;
                     } else {
                         return Err(BuilderApiError::OutOfSequence {
                             seen: *old_seq,
                             this: new_seq,
                         });
                     }
+                }
+            }
+
+            if check_timestamp {
+                if new_receive_ns > *old_receive_ns {
+                    *old_receive_ns = new_receive_ns
+                } else {
+                    return Err(BuilderApiError::AlreadyProcessingNewerPayload);
                 }
             }
         } else {
