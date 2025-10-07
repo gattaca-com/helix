@@ -14,11 +14,10 @@ use helix_common::{
 };
 use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission};
 use rustc_hash::{FxHashMap, FxHashSet};
-use tracing::info;
+use tracing::{info, trace};
 
 #[derive(Clone, Copy)]
 pub struct BidEntry {
-    /// Timestamp in ns when the bid was received. Assume this is unique across all bids
     on_receive_ns: u64,
     value: U256,
 
@@ -95,6 +94,7 @@ impl BidSorter {
         merging_preferences: BlockMergingPreferences,
         is_optimistic: bool,
     ) {
+        trace!(is_optimistic, "sorting submission");
         let start = Instant::now();
         let bid_trace = submission.bid_trace();
         assert_eq!(bid_trace.slot, self.curr_bid_slot);
@@ -145,6 +145,7 @@ impl BidSorter {
             Entry::Occupied(mut entry) => {
                 let entry = entry.get_mut();
                 if entry.on_receive_ns >= new_bid.on_receive_ns {
+                    trace!("bid is stale, ignore");
                     // stale
                     return;
                 } else {
@@ -163,6 +164,7 @@ impl BidSorter {
                     self.update_top_bid(new_pubkey, new_bid, Some(trace), is_optimistic);
                 } else if new_pubkey == *curr_pubkey {
                     // this was a cancel, need to check all other bids
+                    trace!("cancel submission, traversing");
                     self.traverse_update_top_bid(Some(trace), is_optimistic);
                 }
             }
@@ -247,7 +249,7 @@ impl BidSorter {
         .as_ssz_bytes_fast()
         .into();
         let _ = self.top_bid_tx.send(top_bid_update);
-
+        trace!(?builder_pubkey, value =? bid.value, "updating best bid");
         self.curr_bid = Some((builder_pubkey, bid));
 
         if let Some(trace) = trace {

@@ -9,11 +9,11 @@ use axum::{
 use eyre::bail;
 use lazy_static::lazy_static;
 use prometheus::{
-    exponential_buckets, register_gauge_vec_with_registry, register_gauge_with_registry,
-    register_histogram_vec_with_registry, register_histogram_with_registry,
-    register_int_counter_vec_with_registry, register_int_counter_with_registry, Encoder, Gauge,
-    GaugeVec, Histogram, HistogramTimer, HistogramVec, IntCounter, IntCounterVec, IntGauge, Opts,
-    Registry, TextEncoder,
+    exponential_buckets, linear_buckets, register_gauge_vec_with_registry,
+    register_gauge_with_registry, register_histogram_vec_with_registry,
+    register_histogram_with_registry, register_int_counter_vec_with_registry,
+    register_int_counter_with_registry, Encoder, Gauge, GaugeVec, Histogram, HistogramTimer,
+    HistogramVec, IntCounter, IntCounterVec, IntGauge, Opts, Registry, TextEncoder,
 };
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -481,6 +481,35 @@ lazy_static! {
         "state_transition_latency_us",
         "Latency of state transition in us",
         &["start_event_end"],
+        vec![0.5, 1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 25_000., 50_000., 100_000., 500_000., 1_000_000., 5_000_000., 10_000_000., 50_000_000., 100_000_000.,],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+
+    //////////////// WORKER ////////////////
+
+    pub static ref WORKER_UTIL: HistogramVec = register_histogram_vec_with_registry!(
+        "worker_utilization",
+        "Worker utilization",
+        &["worker"],
+        linear_buckets(0.0, 0.05, 20).unwrap(),
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref WORKER_TASK_COUNT: IntCounterVec = register_int_counter_vec_with_registry!(
+        "worker_task_count",
+        "Count of tasks processed",
+        &["task", "worker"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref WORKER_TASK_LATENCY_US: HistogramVec = register_histogram_vec_with_registry!(
+        "worker_latency_us",
+        "Latency of task processed in us",
+        &["task", "worker"],
         vec![0.5, 1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 25_000., 50_000., 100_000., 500_000., 1_000_000., 5_000_000., 10_000_000., 50_000_000., 100_000_000.,],
         &RELAY_METRICS_REGISTRY
     )

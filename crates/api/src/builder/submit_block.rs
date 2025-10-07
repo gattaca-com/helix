@@ -6,7 +6,7 @@ use helix_common::{
     SubmissionTrace,
 };
 use http::HeaderMap;
-use tracing::error;
+use tracing::{error, trace};
 
 use super::api::BuilderApi;
 use crate::{builder::error::BuilderApiError, Api};
@@ -26,12 +26,14 @@ impl<A: Api> BuilderApi<A> {
         headers: HeaderMap,
         body: bytes::Bytes,
     ) -> Result<(), BuilderApiError> {
+        trace!("start handler");
+
         let mut trace = SubmissionTrace::init_from_timings(timings);
         trace.metadata = api.metadata_provider.get_metadata(&headers);
 
         let Ok(rx) = api.auctioneer_handle.block_submission(headers, body, trace) else {
             error!("failed sending request to worker");
-            return Err(BuilderApiError::InternalError)
+            return Err(BuilderApiError::InternalError);
         };
 
         match rx.await {

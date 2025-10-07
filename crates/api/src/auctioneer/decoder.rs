@@ -160,13 +160,6 @@ impl SubmissionDecoder {
         self.bytes_after_decompress = decompressed.len();
         self.decompress_latency = start.elapsed();
 
-        trace!(
-            size_compressed = self.bytes_before_decompress,
-            size_uncompressed = self.bytes_after_decompress,
-            compression =? self.compression,
-            "decompressed payload"
-        );
-
         Ok(decompressed)
     }
 
@@ -225,6 +218,14 @@ impl SubmissionDecoder {
         BID_DECODING_LATENCY
             .with_label_values(&[encoding_label])
             .observe(self.decode_latency.as_micros() as f64);
+
+        trace!(
+            size_compressed = self.bytes_before_decompress,
+            size_uncompressed = self.bytes_after_decompress,
+            compression =? self.compression,
+            decode_latency =? self.decode_latency,
+            "decoded payload"
+        );
     }
 }
 

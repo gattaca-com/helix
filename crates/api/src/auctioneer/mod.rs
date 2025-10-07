@@ -27,7 +27,7 @@ use helix_common::{
 use helix_housekeeper::{chain_event_updater::SlotData as HkSlotData, PayloadAttributesUpdate};
 use helix_types::Slot;
 pub use simulator::*;
-use tracing::{debug, info, info_span, warn};
+use tracing::{debug, info, info_span, trace, warn};
 pub use types::{GetPayloadResultData, PayloadBidData, PayloadHeaderData};
 
 use crate::{
@@ -72,19 +72,21 @@ pub fn spawn_workers<A: Api>(
 
     if config.is_submission_instance {
         for core in config.cores.sub_workers.clone() {
-            let worker = SubWorker {
-                rx: sub_worker_rx.clone(),
-                tx: event_tx.clone(),
-                merge_pool_tx: merge_pool_tx.clone(),
-                cache: cache.clone(),
-                chain_info: chain_info.clone(),
-                config: config.clone(),
-            };
+            let worker = SubWorker::new(
+                core,
+                event_tx.clone(),
+                merge_pool_tx.clone(),
+                cache.clone(),
+                chain_info.clone(),
+                config.clone(),
+            );
+            let rx = sub_worker_rx.clone();
+
             std::thread::Builder::new()
                 .name(format!("worker-{core}"))
                 .spawn(move || {
                     pin_thread_to_core(core);
-                    worker.run(core)
+                    worker.run(rx)
                 })
                 .unwrap();
         }
@@ -165,7 +167,7 @@ impl Default for State {
     }
 }
 
-// TODO: worker utilization, tokio metrics, gauge queue length, worker tasks by id
+// TODO: tokio metrics
 
 impl State {
     fn step<A: Api>(&mut self, event: Event, ctx: &mut Context<A>) {
@@ -295,6 +297,7 @@ impl State {
                 record_submission_step("loop_recv", sent_at.elapsed());
 
                 let _guard = span.enter();
+                trace!("received in auctioneer");
 
                 ctx.handle_submission(
                     submission,
@@ -306,6 +309,7 @@ impl State {
                     slot_data,
                 );
 
+                trace!("finished processing");
                 drop(_guard);
 
                 if let Some(state) = Self::maybe_start_broacasting(ctx, slot_data) {

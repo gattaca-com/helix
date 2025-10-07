@@ -146,6 +146,8 @@ impl<A: Api> Context<A> {
         self.seen_block_hashes.clear();
         self.sequence.clear();
         self.hydration_cache.clear();
+        // TODO: clearing this can take a lot, since we're potentially deallocating 5-10k
+        // submissions at once an alternative could be to replace the map with a ring buffer
         self.payloads.clear();
         self.sim_manager.on_new_slot(bid_slot.as_u64());
     }

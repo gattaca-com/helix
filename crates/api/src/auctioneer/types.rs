@@ -267,3 +267,12 @@ impl Event {
         }
     }
 }
+
+impl SubWorkerJob {
+    pub fn as_str(&self) -> &'static str {
+        match &self {
+            SubWorkerJob::BlockSubmission { .. } => "BlockSubmission",
+            SubWorkerJob::GetPayload { .. } => "GetPayload",
+        }
+    }
+}

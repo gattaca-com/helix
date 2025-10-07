@@ -111,7 +111,6 @@ impl<A: Api> Context<A> {
         slot_data: &SlotData,
     ) -> Result<(GetPayloadResponse, VersionedSignedProposal, GetPayloadTrace), ProposerApiError>
     {
-        // TODO: use trace
         self.validate_proposal_coordinate(&blinded, slot_data)?;
 
         if blinded.fork_name_unchecked() != slot_data.current_fork {
