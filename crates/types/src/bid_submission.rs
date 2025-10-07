@@ -9,9 +9,9 @@ use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    error::SigError, fields::ExecutionRequests, BlobsBundle, BlobsBundleV1, BlobsBundleV2, Bloom,
-    BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, ExecutionPayload, ExtraData,
-    PayloadAndBlobsRef, ValidationError,
+    error::SigError, fields::ExecutionRequests, BlobsBundle, BlobsBundleV1, BlobsBundleV2,
+    BlobsError, Bloom, BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes,
+    ExecutionPayload, ExtraData, PayloadAndBlobsRef, SszError,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
@@ -250,7 +250,7 @@ impl SignedBidSubmission {
     pub fn validate_payload_ssz_lengths(
         &self,
         max_blobs_per_block: usize,
-    ) -> Result<(), ValidationError> {
+    ) -> Result<(), BlockValidationError> {
         match self {
             SignedBidSubmission::Electra(bid) => {
                 bid.execution_payload.validate_ssz_lengths()?;
@@ -559,40 +559,40 @@ impl SignedBidSubmission {
         }
     }
 
-    pub fn validate(&self) -> Result<(), super::BidValidationError> {
+    pub fn validate(&self) -> Result<(), super::BlockValidationError> {
         let bid_trace = self.bid_trace();
         let execution_payload = self.execution_payload_ref();
 
         if bid_trace.parent_hash != execution_payload.parent_hash {
-            return Err(BidValidationError::ParentHashMismatch {
+            return Err(BlockValidationError::ParentHashMismatch {
                 message: bid_trace.parent_hash,
                 payload: execution_payload.parent_hash,
             });
         }
 
         if bid_trace.block_hash != execution_payload.block_hash {
-            return Err(BidValidationError::BlockHashMismatch {
+            return Err(BlockValidationError::BlockHashMismatch {
                 message: bid_trace.block_hash,
                 payload: execution_payload.block_hash,
             });
         }
 
         if bid_trace.gas_limit != execution_payload.gas_limit {
-            return Err(BidValidationError::GasLimitMismatch {
+            return Err(BlockValidationError::GasLimitMismatch {
                 message: bid_trace.gas_limit,
                 payload: execution_payload.gas_limit,
             });
         }
 
         if bid_trace.gas_used != execution_payload.gas_used {
-            return Err(BidValidationError::GasUsedMismatch {
+            return Err(BlockValidationError::GasUsedMismatch {
                 message: bid_trace.gas_used,
                 payload: execution_payload.gas_used,
             });
         }
 
         if bid_trace.value == U256::ZERO {
-            return Err(BidValidationError::ZeroValueBlock);
+            return Err(BlockValidationError::ZeroValueBlock);
         }
 
         Ok(())
@@ -634,7 +634,19 @@ impl SignedBidSubmission {
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
-pub enum BidValidationError {
+pub enum BlockValidationError {
+    #[error("submission for wrong slot. expected: {expected}, got: {got}")]
+    SubmissionForWrongSlot { expected: Slot, got: Slot },
+
+    #[error("fee recipient mismatch. got: {got:?}, expected: {expected:?}")]
+    FeeRecipientMismatch { got: Address, expected: Address },
+
+    #[error("proposer public key mismatch. got: {got:?}, expected: {expected:?}")]
+    ProposerPublicKeyMismatch { got: BlsPublicKeyBytes, expected: BlsPublicKeyBytes },
+
+    #[error("slot mismatch. got: {got}, expected: {expected}")]
+    SlotMismatch { got: u64, expected: u64 },
+
     #[error("block hash mismatch: message: {message:?}, payload: {payload:?}")]
     BlockHashMismatch { message: B256, payload: B256 },
 
@@ -647,8 +659,41 @@ pub enum BidValidationError {
     #[error("gas used mismatch. message: {message:?}, payload: {payload:?}")]
     GasUsedMismatch { message: u64, payload: u64 },
 
+    #[error("withdrawls root mismatch. got: {got:?}, expected: {expected:?}")]
+    WithdrawalsRootMismatch { got: B256, expected: B256 },
+
+    #[error("transactions root mismatch. got: {got:?}, expected: {expected:?}")]
+    TransactionsRootMismatch { got: B256, expected: B256 },
+
+    #[error("incorrect prev_randao - got: {got:?}, expected: {expected:?}")]
+    PrevRandaoMismatch { got: B256, expected: B256 },
+
+    #[error("not {fork_name:?} payload")]
+    InvalidPayloadType { fork_name: ForkName },
+
+    #[error("incorrect timestamp. got: {got}, expected: {expected}")]
+    IncorrectTimestamp { got: u64, expected: u64 },
+
+    #[error("already processing newer payload for this builder")]
+    AlreadyProcessingNewerPayload,
+
+    #[error("out of sequence submission: seen: {seen}, this request: {this}")]
+    OutOfSequence { seen: u64, this: u64 },
+
     #[error("zero value block")]
     ZeroValueBlock,
+
+    #[error("builder not in proposer's trusted list: {proposer_trusted_builders:?}")]
+    BuilderNotInProposersTrustedList { proposer_trusted_builders: Vec<String> },
+
+    #[error("block already received: {block_hash:?}")]
+    DuplicateBlockHash { block_hash: B256 },
+
+    #[error("ssz_error: {0:?}")]
+    SszError(SszError),
+
+    #[error(transparent)]
+    BlobsError(BlobsError),
 }
 
 #[cfg(test)]

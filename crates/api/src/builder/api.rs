@@ -34,8 +34,6 @@ pub struct BuilderApi<A: Api> {
     pub top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
     /// Failsafe: if we fail to demote we pause all optimistic submissions
     pub failsafe_triggered: Arc<AtomicBool>,
-    /// Failsafe: if we fail don't have any synced client we pause all optimistic submissions
-    pub accept_optimistic: Arc<AtomicBool>,
     pub auctioneer_handle: AuctioneerHandle,
     pub metadata_provider: Arc<A::MetadataProvider>,
 }
@@ -49,7 +47,6 @@ impl<A: Api> BuilderApi<A> {
         relay_config: RelayConfig,
         curr_slot_info: CurrentSlotInfo,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-        accept_optimistic: Arc<AtomicBool>,
         auctioneer_handle: AuctioneerHandle,
         metadata_provider: Arc<A::MetadataProvider>,
     ) -> Self {
@@ -62,7 +59,6 @@ impl<A: Api> BuilderApi<A> {
             curr_slot_info,
             top_bid_tx,
             failsafe_triggered: Arc::new(false.into()),
-            accept_optimistic,
             auctioneer_handle,
             metadata_provider,
         }

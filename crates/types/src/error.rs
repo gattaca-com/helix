@@ -1,19 +1,19 @@
 #[derive(Debug, thiserror::Error)]
 pub enum SigError {
-    #[error("Invalid signature bytes")]
+    #[error("invalid signature bytes")]
     InvalidBlsSignatureBytes,
 
-    #[error("Invalid pubkey bytes")]
+    #[error("invalid pubkey bytes")]
     InvalidBlsPubkeyBytes,
 
-    #[error("Invalid signature")]
+    #[error("invalid signature")]
     InvalidBlsSignature,
 }
 
 pub type SszError = ssz_types::Error;
 pub type CryptoError = lh_bls::Error;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum BlobsError {
     #[error("block is pre deneb")]
     PreDeneb,
@@ -31,13 +31,4 @@ pub enum BlobsError {
 
     #[error("blobs bundle too large: bundle {got}, max: {max}")]
     BundleTooLarge { got: usize, max: usize },
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ValidationError {
-    #[error("ssz_error: {0:?}")]
-    SszError(SszError),
-
-    #[error(transparent)]
-    BlobsError(BlobsError),
 }

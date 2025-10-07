@@ -67,7 +67,6 @@ pub async fn run_api_service<A: Api>(
         slot_data_rx,
     );
 
-    let accept_optimistic = Arc::new(AtomicBool::new(true));
     let builder_api = BuilderApi::<A>::new(
         local_cache.clone(),
         db.clone(),
@@ -76,7 +75,6 @@ pub async fn run_api_service<A: Api>(
         config.clone(),
         current_slot_info.clone(),
         top_bid_tx,
-        accept_optimistic,
         auctioneer_handle.clone(),
         metadata_provider.clone(),
     );
