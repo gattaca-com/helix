@@ -733,7 +733,8 @@ impl DatabaseService for PostgresDatabaseService {
             self.validator_registration_cache.get(&registration.message.pubkey)
         {
             if existing_entry.registration_info.registration.message.timestamp >=
-                registration.message.timestamp
+                registration.message.timestamp.saturating_sub(60 * 60)
+            // once per hour
             {
                 return false;
             }
