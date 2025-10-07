@@ -362,31 +362,41 @@ impl RegWorker {
     fn handle_task(&mut self, task: RegWorkerJob) {
         let start_task = Instant::now();
 
-        self._handle_task(task);
+        let completed = self._handle_task(task);
+        let task_tag = if completed { "RegistrationBatch" } else { "RegistrationBatch_Aborted" };
 
         let task_dur = start_task.elapsed();
         self.tel.loop_worked += task_dur;
 
-        WORKER_TASK_COUNT.with_label_values(&["RegistrationBatch", &self.id]).inc();
+        WORKER_TASK_COUNT.with_label_values(&[task_tag, &self.id]).inc();
         WORKER_TASK_LATENCY_US
-            .with_label_values(&["RegistrationBatch", &self.id])
+            .with_label_values(&[task_tag, &self.id])
             .observe(task_dur.as_micros() as f64);
     }
 
-    fn _handle_task(&self, RegWorkerJob { regs, range, res_tx }: RegWorkerJob) {
+    /// Returns whether the task was completed
+    fn _handle_task(&self, RegWorkerJob { regs, range, res_tx }: RegWorkerJob) -> bool {
         let mut res = Vec::with_capacity(range.len());
+
         for i in range {
+            if res_tx.is_closed() {
+                // validator dropped the request so no point in processing more
+                // a single check takes 1-5ms so it's ok to check this every time
+                return false;
+            }
+
             let start = Instant::now();
             let valid = validate_registration(&self.chain_info, &regs[i]);
             res.push((i, valid.is_ok()));
 
+            WORKER_TASK_COUNT.with_label_values(&["Registration", &self.id]).inc();
             WORKER_TASK_LATENCY_US
                 .with_label_values(&["Registration", &self.id])
                 .observe(start.elapsed().as_micros() as f64);
         }
 
-        WORKER_TASK_COUNT.with_label_values(&["Registration", &self.id]).inc_by(res.len() as u64);
         let _ = res_tx.send(res);
+        return true;
     }
 }
 
