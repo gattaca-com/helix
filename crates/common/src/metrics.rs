@@ -516,6 +516,14 @@ lazy_static! {
     .unwrap();
 
 
+    pub static ref WORKER_QUEUE_LEN: HistogramVec = register_histogram_vec_with_registry!(
+        "worker_queue_len",
+        "Length of worker queue",
+        &["type"],
+        vec![0., 1., 5., 10., 15., 25., 50., 100., 500., 1_000., 2_500.0,  5_000., 7_500., 10_000., 25_000., 50_000., 100_000.,],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 }
 
 pub struct ApiMetrics {
