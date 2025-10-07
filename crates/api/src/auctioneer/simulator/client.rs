@@ -6,8 +6,9 @@ use reqwest::{
     header::{HeaderMap, HeaderValue},
     RequestBuilder,
 };
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::auctioneer::simulator::{
     BlockMergeRequest, BlockMergeResponse, BlockSimRequest, BlockSimRpcResponse, RpcResult,
@@ -92,15 +93,27 @@ impl SimulatorClient {
     }
 
     pub async fn do_sim_request(to_send: RequestBuilder) -> Result<(), BlockSimError> {
-        let res = to_send.send().await?;
-        let res = res.error_for_status()?;
-        let res: BlockSimRpcResponse = res.json().await?;
+        let res = match Self::rpc_request::<BlockSimRpcResponse>(to_send).await {
+            Ok(res) => res,
+            Err(err) => {
+                error!(%err, "failed rpc simulation");
+                return Err(BlockSimError::RpcError);
+            }
+        };
 
         if let Some(error) = res.error {
             return Err(BlockSimError::BlockValidationFailed(error.message));
         }
 
         Ok(())
+    }
+
+    async fn rpc_request<T: DeserializeOwned>(
+        to_send: RequestBuilder,
+    ) -> Result<T, reqwest::Error> {
+        let res = to_send.send().await?;
+        let res = res.error_for_status()?;
+        res.json().await
     }
 
     pub fn merge_request_builder(&self, request: &BlockMergeRequest) -> RequestBuilder {
@@ -117,9 +130,13 @@ impl SimulatorClient {
     pub async fn do_merge_request(
         to_send: RequestBuilder,
     ) -> Result<BlockMergeResponse, BlockSimError> {
-        let res = to_send.send().await?;
-        let res = res.error_for_status()?;
-        let res: RpcResult<BlockMergeResponse> = res.json().await?;
+        let res = match Self::rpc_request::<RpcResult<BlockMergeResponse>>(to_send).await {
+            Ok(res) => res,
+            Err(err) => {
+                error!(%err, "failed rpc simulation");
+                return Err(BlockSimError::RpcError);
+            }
+        };
 
         debug!(?res, "received merge response");
 
@@ -129,7 +146,7 @@ impl SimulatorClient {
         }
     }
 
-    pub async fn is_synced(&self) -> Result<bool, BlockSimError> {
+    pub async fn is_synced(&self) -> Result<bool, reqwest::Error> {
         let payload = json!({
             "jsonrpc": "2.0",
             "id": "1",

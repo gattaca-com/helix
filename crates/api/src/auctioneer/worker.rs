@@ -7,7 +7,7 @@ use helix_common::{
     metrics::{WORKER_QUEUE_LEN, WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US, WORKER_UTIL},
     record_submission_step,
     utils::{utcnow_ns, utcnow_sec},
-    GetPayloadTrace, RelayConfig,
+    GetPayloadTrace, RelayConfig, SubmissionTrace,
 };
 use helix_types::{
     BlockMergingData, BlockMergingPreferences, BlsPublicKey, BlsPublicKeyBytes,
@@ -145,11 +145,11 @@ impl SubWorker {
 
     fn _handle_task(&self, task: SubWorkerJob) {
         match task {
-            SubWorkerJob::BlockSubmission { headers, body, trace, res_tx, span, sent_at } => {
+            SubWorkerJob::BlockSubmission { headers, body, mut trace, res_tx, span, sent_at } => {
                 record_submission_step("worker_recv", sent_at.elapsed());
                 let guard = span.enter();
                 trace!("received by worker");
-                match self.handle_block_submission(headers, body) {
+                match self.handle_block_submission(headers, body, &mut trace) {
                     Ok((submission, withdrawals_root, sequence, merging_data)) => {
                         let merging_preferences = merging_data
                             .as_ref()
@@ -253,6 +253,7 @@ impl SubWorker {
         &self,
         headers: http::HeaderMap,
         body: bytes::Bytes,
+        trace: &mut SubmissionTrace,
     ) -> Result<(Submission, B256, Option<u64>, Option<BlockMergingData>), BuilderApiError> {
         let mut decoder = SubmissionDecoder::from_headers(&headers);
         let body = decoder.decompress(body)?;
@@ -278,6 +279,7 @@ impl SubWorker {
 
             let payload: DehydratedBidSubmission = decoder.decode(body)?;
             let payload = payload.maybe_upgrade_to_fulu(self.chain_info.current_fork_name());
+            trace.decoded = utcnow_ns();
 
             (Submission::Dehydrated(payload), None)
         } else {
@@ -290,6 +292,8 @@ impl SubWorker {
                 let payload = payload.maybe_upgrade_to_fulu(self.chain_info.current_fork_name());
                 (payload, None)
             };
+
+            trace.decoded = utcnow_ns();
 
             if !skip_sigverify {
                 trace!("verifying signature");

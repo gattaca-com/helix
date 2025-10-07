@@ -20,6 +20,7 @@ use crate::{
         simulator::manager::{SimulationResult, SimulatorManager},
         types::{PayloadEntry, PendingPayload},
     },
+    builder::error::BuilderApiError,
     Api,
 };
 
@@ -146,6 +147,12 @@ impl<A: Api> Context<A> {
                 error!(%err, "failed to store block submission")
             }
         });
+
+        if let Some(res_tx) = result.res_tx {
+            // submission was initially valid but by the time sim finished the slot already
+            // progressed
+            let _ = res_tx.send(Err(BuilderApiError::AlreadyOnNextSlot));
+        }
     }
 
     pub fn on_new_slot(&mut self, bid_slot: Slot) {

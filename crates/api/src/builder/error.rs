@@ -36,6 +36,9 @@ pub enum BuilderApiError {
     #[error("could not find proposer duty for slot")]
     ProposerDutyNotFound,
 
+    #[error("already on next slot")]
+    AlreadyOnNextSlot,
+
     #[error("delivering payload: bid_slot: {bid_slot}, delivering: {delivering}")]
     DeliveringPayload { bid_slot: u64, delivering: u64 },
 
@@ -66,6 +69,7 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::ProposerDutyNotFound |
             BuilderApiError::HydrationError(_) |
             BuilderApiError::SigError(_) |
+            BuilderApiError::AlreadyOnNextSlot |
             BuilderApiError::DeliveringPayload { .. } => StatusCode::BAD_REQUEST,
 
             BuilderApiError::InvalidApiKey |
