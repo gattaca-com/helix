@@ -147,7 +147,7 @@ impl SimulatorManager {
         self.local_telemetry.merge_reqs += 1;
         if let Some(id) = self.next_merge_client() {
             let client = &mut self.simulators[id];
-            let to_send = client.merge_request_builder(&req);
+            let to_send = client.merge_request_builder();
             client.pending += 1;
 
             self.local_telemetry.max_in_flight =
@@ -156,7 +156,7 @@ impl SimulatorManager {
             let tx = self.sim_result_tx.clone();
             spawn_tracked!(async move {
                 debug!(block_hash =% req.block_hash, "sending merge request");
-                let res = SimulatorClient::do_merge_request(to_send).await;
+                let res = SimulatorClient::do_merge_request(&req, to_send).await;
                 timer.stop_and_record();
                 SimulatorMetrics::block_merge_status(res.is_ok());
 
@@ -187,8 +187,7 @@ impl SimulatorManager {
         const PAUSE_DURATION: Duration = Duration::from_secs(60);
 
         let client = &mut self.simulators[id];
-        let to_send =
-            client.sim_request_builder(&req.request, req.is_top_bid, req.submission.fork_name());
+        let (to_send, sim_method) = client.sim_request_builder(req.submission.fork_name());
         client.pending += 1;
 
         self.local_telemetry.max_in_flight = self.local_telemetry.max_in_flight.max(client.pending);
@@ -201,7 +200,9 @@ impl SimulatorManager {
 
             let optimistic_version = req.optimistic_version();
             SimulatorMetrics::sim_count(optimistic_version.is_optimistic());
-            let res = SimulatorClient::do_sim_request(to_send).await;
+            let res =
+                SimulatorClient::do_sim_request(&req.request, req.is_top_bid, sim_method, to_send)
+                    .await;
             let time = timer.stop_and_record();
 
             debug!(%block_hash, time_secs = time, ?res, "simulation completed");

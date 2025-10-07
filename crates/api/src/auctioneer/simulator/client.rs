@@ -64,23 +64,25 @@ impl SimulatorClient {
         self.can_simulate() && self.config.is_merging_simulator
     }
 
-    // TODO: ideally we dont serialize here
-    pub fn sim_request_builder(
-        &self,
+    pub fn sim_request_builder(&self, fork: ForkName) -> (RequestBuilder, String) {
+        let mut sim_method = &self.sim_method_v4;
+        if fork == ForkName::Fulu {
+            sim_method = &self.sim_method_v5;
+        }
+
+        (self.client.post(&self.config.url), sim_method.clone())
+    }
+
+    pub async fn do_sim_request(
         request: &BlockSimRequest,
         is_top_bid: bool,
-        fork: ForkName,
-    ) -> RequestBuilder {
+        sim_method: String,
+        to_send: RequestBuilder,
+    ) -> Result<(), BlockSimError> {
         let mut headers = HeaderMap::new();
         if is_top_bid {
             headers.insert("X-High-Priority", HeaderValue::from_static("true"));
         };
-
-        let mut sim_method = &self.sim_method_v4;
-
-        if fork == ForkName::Fulu {
-            sim_method = &self.sim_method_v5;
-        }
 
         let rpc_payload = json!({
             "jsonrpc": "2.0",
@@ -89,10 +91,8 @@ impl SimulatorClient {
             "params": [request]
         });
 
-        self.client.post(&self.config.url).headers(headers).json(&rpc_payload)
-    }
+        let to_send = to_send.headers(headers).json(&rpc_payload);
 
-    pub async fn do_sim_request(to_send: RequestBuilder) -> Result<(), BlockSimError> {
         let res = match Self::rpc_request::<BlockSimRpcResponse>(to_send).await {
             Ok(res) => res,
             Err(err) => {
@@ -116,7 +116,14 @@ impl SimulatorClient {
         res.json().await
     }
 
-    pub fn merge_request_builder(&self, request: &BlockMergeRequest) -> RequestBuilder {
+    pub fn merge_request_builder(&self) -> RequestBuilder {
+        self.client.post(&self.config.url)
+    }
+
+    pub async fn do_merge_request(
+        request: &BlockMergeRequest,
+        to_send: RequestBuilder,
+    ) -> Result<BlockMergeResponse, BlockSimError> {
         let rpc_payload = json!({
             "jsonrpc": "2.0",
             "id": "1",
@@ -124,12 +131,8 @@ impl SimulatorClient {
             "params": [request.request]
         });
 
-        self.client.post(&self.config.url).json(&rpc_payload)
-    }
+        let to_send = to_send.json(&rpc_payload);
 
-    pub async fn do_merge_request(
-        to_send: RequestBuilder,
-    ) -> Result<BlockMergeResponse, BlockSimError> {
         let res = match Self::rpc_request::<RpcResult<BlockMergeResponse>>(to_send).await {
             Ok(res) => res,
             Err(err) => {
