@@ -2,6 +2,7 @@ use std::{hash::Hasher, sync::Arc};
 
 use alloy_eips::eip7691::MAX_BLOBS_PER_BLOCK_ELECTRA;
 use alloy_primitives::B256;
+use lh_types::ForkName;
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
@@ -10,7 +11,8 @@ use tree_hash::TreeHash;
 use crate::{
     bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
-    BidTrace, Blob, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayload,
+    BidTrace, Blob, BlobsBundle, BlobsBundleV1, BlobsBundleV2, BlsPublicKeyBytes,
+    BlsSignatureBytes, ExecutionPayload,
 };
 
 /// A bid submission where transactions and blobs may be replaced by hashes instead of payload
@@ -78,6 +80,24 @@ impl DehydratedBidSubmission {
                     },
                 )
             }
+        }
+    }
+
+    pub fn maybe_upgrade_to_fulu(self, current_fork: ForkName) -> DehydratedBidSubmission {
+        match self {
+            DehydratedBidSubmission::Electra(electra) => {
+                if current_fork != ForkName::Fulu {
+                    return DehydratedBidSubmission::Electra(electra);
+                }
+                DehydratedBidSubmission::Fulu(DehydratedBidSubmissionFulu {
+                    message: electra.message,
+                    execution_payload: electra.execution_payload,
+                    blobs_bundle: electra.blobs_bundle,
+                    execution_requests: electra.execution_requests,
+                    signature: electra.signature,
+                })
+            }
+            DehydratedBidSubmission::Fulu(fulu) => DehydratedBidSubmission::Fulu(fulu),
         }
     }
 }
@@ -178,7 +198,7 @@ impl DehydratedBidSubmissionElectra {
 
         last_err?;
 
-        let mut sidecar = BlobsBundle::with_capacity(self.blobs_bundle.commitments.len());
+        let mut sidecar = BlobsBundleV1::with_capacity(self.blobs_bundle.commitments.len());
         for (index, commitment) in self.blobs_bundle.commitments.into_iter().enumerate() {
             let Some((proofs, blob)) = order_cache.blobs.get(&commitment) else {
                 return Err(HydrationError::UnknownBlobHash { commitment, index });
@@ -199,7 +219,7 @@ impl DehydratedBidSubmissionElectra {
             bid_submission::SignedBidSubmissionElectra {
                 message: self.message,
                 execution_payload: Arc::new(self.execution_payload),
-                blobs_bundle: Arc::new(sidecar),
+                blobs_bundle: Arc::new(BlobsBundle::V1(sidecar)),
                 execution_requests: self.execution_requests,
                 signature: self.signature,
             },
@@ -273,7 +293,7 @@ impl DehydratedBidSubmissionFulu {
 
         last_err?;
 
-        let mut sidecar = BlobsBundle::with_capacity(self.blobs_bundle.commitments.len());
+        let mut sidecar = BlobsBundleV2::with_capacity(self.blobs_bundle.commitments.len());
         for (index, commitment) in self.blobs_bundle.commitments.into_iter().enumerate() {
             let Some((proofs, blob)) = order_cache.blobs.get(&commitment) else {
                 return Err(HydrationError::UnknownBlobHash { commitment, index });
@@ -294,7 +314,7 @@ impl DehydratedBidSubmissionFulu {
             bid_submission::SignedBidSubmissionFulu {
                 message: self.message,
                 execution_payload: Arc::new(self.execution_payload),
-                blobs_bundle: Arc::new(sidecar),
+                blobs_bundle: Arc::new(BlobsBundle::V2(sidecar)),
                 execution_requests: self.execution_requests,
                 signature: self.signature,
             },

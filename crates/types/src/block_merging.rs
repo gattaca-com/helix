@@ -2,7 +2,7 @@ use std::{collections::HashMap, hash::Hash};
 
 use alloy_primitives::{bytes::Bytes, Address, B256, U256};
 use lh_test_random::TestRandom;
-use lh_types::test_utils::TestRandom;
+use lh_types::{test_utils::TestRandom, ForkName};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
@@ -17,6 +17,15 @@ use crate::{
 pub struct SignedBidSubmissionWithMergingData {
     pub submission: SignedBidSubmission,
     pub merging_data: BlockMergingData,
+}
+
+impl SignedBidSubmissionWithMergingData {
+    pub fn maybe_upgrade_to_fulu(self, fork: ForkName) -> Self {
+        Self {
+            submission: self.submission.maybe_upgrade_to_fulu(fork),
+            merging_data: self.merging_data,
+        }
+    }
 }
 
 // FIXME: panics at runtime
@@ -144,9 +153,22 @@ pub struct MergeableBundle {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct BlobWithMetadata {
+pub enum BlobWithMetadata {
+    V1(BlobWithMetadataV1),
+    V2(BlobWithMetadataV2),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BlobWithMetadataV1 {
     pub commitment: KzgCommitment,
     pub proof: KzgProof,
+    pub blob: Blob,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BlobWithMetadataV2 {
+    pub commitment: KzgCommitment,
+    pub proofs: Vec<KzgProof>,
     pub blob: Blob,
 }
 

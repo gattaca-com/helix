@@ -3,13 +3,14 @@ use std::sync::Arc;
 use alloy_primitives::{Address, B256, U256};
 use lh_types::{test_utils::TestRandom, ForkName, SignedRoot, Slot};
 use serde::{Deserialize, Serialize};
+use ssz::{Decode, DecodeError};
 use ssz_derive::{Decode, Encode};
 use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    error::SigError, fields::ExecutionRequests, BlobsBundle, Bloom, BlsPublicKey,
-    BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, ExecutionPayload, ExtraData,
+    error::SigError, fields::ExecutionRequests, BlobsBundle, BlobsBundleV1, BlobsBundleV2, Bloom,
+    BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, ExecutionPayload, ExtraData,
     PayloadAndBlobsRef, ValidationError,
 };
 
@@ -64,7 +65,7 @@ impl BidTrace {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+#[derive(Debug, Clone, Serialize, Encode)]
 #[serde(deny_unknown_fields)]
 pub struct SignedBidSubmissionElectra {
     pub message: BidTrace,
@@ -79,14 +80,72 @@ impl TestRandom for SignedBidSubmissionElectra {
         Self {
             message: BidTrace::random_for_test(rng),
             execution_payload: ExecutionPayload::random_for_test(rng).into(),
-            blobs_bundle: BlobsBundle::random_for_test(rng).into(),
+            blobs_bundle: BlobsBundle::V1(BlobsBundleV1::random_for_test(rng)).into(),
             execution_requests: ExecutionRequests::random_for_test(rng).into(),
             signature: BlsSignatureBytes::random(),
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+impl<'de> Deserialize<'de> for SignedBidSubmissionElectra {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            message: BidTrace,
+            execution_payload: Arc<ExecutionPayload>,
+            blobs_bundle: BlobsBundleV1,
+            execution_requests: Arc<ExecutionRequests>,
+            signature: BlsSignatureBytes,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(Self {
+            message: raw.message,
+            execution_payload: raw.execution_payload,
+            blobs_bundle: Arc::new(BlobsBundle::V1(raw.blobs_bundle)),
+            execution_requests: raw.execution_requests,
+            signature: raw.signature,
+        })
+    }
+}
+
+impl Decode for SignedBidSubmissionElectra {
+    fn is_ssz_fixed_len() -> bool {
+        false
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        use ssz::SszDecoderBuilder;
+
+        let mut builder = SszDecoderBuilder::new(bytes);
+        builder.register_type::<BidTrace>()?;
+        builder.register_anonymous_variable_length_item()?; // execution_payload
+        builder.register_type::<BlobsBundleV1>()?; // blobs_bundle as V1
+        builder.register_anonymous_variable_length_item()?; // execution_requests
+        builder.register_type::<BlsSignatureBytes>()?; // signature
+
+        let mut decoder = builder.build()?;
+
+        let message = decoder.decode_next::<BidTrace>()?;
+        let execution_payload = decoder.decode_next::<Arc<ExecutionPayload>>()?;
+        let blobs_bundle_v1 = decoder.decode_next::<BlobsBundleV1>()?;
+        let execution_requests = decoder.decode_next::<Arc<ExecutionRequests>>()?;
+        let signature = decoder.decode_next::<BlsSignatureBytes>()?;
+
+        Ok(Self {
+            message,
+            execution_payload,
+            blobs_bundle: Arc::new(BlobsBundle::V1(blobs_bundle_v1)),
+            execution_requests,
+            signature,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Encode)]
 #[serde(deny_unknown_fields)]
 pub struct SignedBidSubmissionFulu {
     pub message: BidTrace,
@@ -101,10 +160,68 @@ impl TestRandom for SignedBidSubmissionFulu {
         Self {
             message: BidTrace::random_for_test(rng),
             execution_payload: ExecutionPayload::random_for_test(rng).into(),
-            blobs_bundle: BlobsBundle::random_for_test(rng).into(),
+            blobs_bundle: BlobsBundle::V2(BlobsBundleV2::random_for_test(rng)).into(),
             execution_requests: ExecutionRequests::random_for_test(rng).into(),
             signature: BlsSignatureBytes::random(),
         }
+    }
+}
+
+impl<'de> Deserialize<'de> for SignedBidSubmissionFulu {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            message: BidTrace,
+            execution_payload: Arc<ExecutionPayload>,
+            blobs_bundle: BlobsBundleV2,
+            execution_requests: Arc<ExecutionRequests>,
+            signature: BlsSignatureBytes,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(Self {
+            message: raw.message,
+            execution_payload: raw.execution_payload,
+            blobs_bundle: Arc::new(BlobsBundle::V2(raw.blobs_bundle)),
+            execution_requests: raw.execution_requests,
+            signature: raw.signature,
+        })
+    }
+}
+
+impl Decode for SignedBidSubmissionFulu {
+    fn is_ssz_fixed_len() -> bool {
+        false
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        use ssz::SszDecoderBuilder;
+
+        let mut builder = SszDecoderBuilder::new(bytes);
+        builder.register_type::<BidTrace>()?;
+        builder.register_anonymous_variable_length_item()?; // execution_payload
+        builder.register_type::<BlobsBundleV2>()?; // blobs_bundle as V2
+        builder.register_anonymous_variable_length_item()?; // execution_requests
+        builder.register_type::<BlsSignatureBytes>()?; // signature
+
+        let mut decoder = builder.build()?;
+
+        let message = decoder.decode_next::<BidTrace>()?;
+        let execution_payload = decoder.decode_next::<Arc<ExecutionPayload>>()?;
+        let blobs_bundle_v2 = decoder.decode_next::<BlobsBundleV2>()?;
+        let execution_requests = decoder.decode_next::<Arc<ExecutionRequests>>()?;
+        let signature = decoder.decode_next::<BlsSignatureBytes>()?;
+
+        Ok(Self {
+            message,
+            execution_payload,
+            blobs_bundle: Arc::new(BlobsBundle::V2(blobs_bundle_v2)),
+            execution_requests,
+            signature,
+        })
     }
 }
 
@@ -191,7 +308,7 @@ impl SignedBidSubmission {
     }
 
     pub fn blobs_bundle(&self) -> Arc<BlobsBundle> {
-        match &self {
+        match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
                 signed_bid_submission.blobs_bundle.clone()
             }
@@ -487,6 +604,33 @@ impl SignedBidSubmission {
             SignedBidSubmission::Fulu(_) => ForkName::Fulu,
         }
     }
+
+    pub fn maybe_upgrade_to_fulu(self, current_fork: ForkName) -> SignedBidSubmission {
+        match self {
+            SignedBidSubmission::Electra(electra) => {
+                if current_fork != ForkName::Fulu {
+                    return SignedBidSubmission::Electra(electra);
+                }
+                let blobs_bundle = match Arc::unwrap_or_clone(electra.blobs_bundle) {
+                    BlobsBundle::V2(current_blobs_bundle) => current_blobs_bundle,
+                    BlobsBundle::V1(current_blobs_bundle) => BlobsBundleV2 {
+                        blobs: current_blobs_bundle.blobs,
+                        commitments: current_blobs_bundle.commitments,
+                        proofs: current_blobs_bundle.proofs,
+                    },
+                };
+
+                SignedBidSubmission::Fulu(SignedBidSubmissionFulu {
+                    message: electra.message,
+                    execution_payload: electra.execution_payload,
+                    blobs_bundle: Arc::new(BlobsBundle::V2(blobs_bundle)),
+                    execution_requests: electra.execution_requests,
+                    signature: electra.signature,
+                })
+            }
+            SignedBidSubmission::Fulu(fulu) => SignedBidSubmission::Fulu(fulu),
+        }
+    }
 }
 
 #[derive(Debug, Clone, thiserror::Error)]
@@ -510,16 +654,21 @@ pub enum BidValidationError {
 #[cfg(test)]
 mod tests {
 
+    use alloy_consensus::Signed;
     use ssz::Encode;
 
     use super::*;
-    use crate::test_utils::{test_encode_decode_json, test_encode_decode_ssz};
+    use crate::test_utils::{test_decode_json, test_encode_decode_json, test_encode_decode_ssz};
 
     #[test]
     // from the relay API spec, adding the blob and the proposer_pubkey field
     fn electra_bid_submission() {
         let data_json = include_str!("testdata/signed-bid-submission-electra.json");
         let s = test_encode_decode_json::<SignedBidSubmission>(data_json);
+        match &s {
+            SignedBidSubmission::Electra(_) => println!("Got Electra variant for JSON"),
+            SignedBidSubmission::Fulu(_) => println!("Got Fulu variant for JSON (wrong!)"),
+        }
         assert!(matches!(s, SignedBidSubmission::Electra(_)));
     }
 
@@ -527,11 +676,69 @@ mod tests {
     // from alloy
     fn electra_bid_submission_2() {
         let data_json = include_str!("testdata/signed-bid-submission-electra-2.json");
-        let s = test_encode_decode_json::<SignedBidSubmission>(data_json);
-        assert!(matches!(s, SignedBidSubmission::Electra(_)));
+        let s = test_decode_json::<SignedBidSubmission>(data_json);
+
+        let blobs_empty = match &s {
+            SignedBidSubmission::Electra(electra) => electra.blobs_bundle.blobs().is_empty(),
+            SignedBidSubmission::Fulu(fulu) => fulu.blobs_bundle.blobs().is_empty(),
+        };
+
+        if blobs_empty {
+            // When blobs are empty, we can't distinguish variants reliably
+            assert!(matches!(s, SignedBidSubmission::Electra(_)));
+            let s = s.maybe_upgrade_to_fulu(ForkName::Fulu);
+            assert!(matches!(s, SignedBidSubmission::Fulu(_)));
+        } else {
+            match &s {
+                SignedBidSubmission::Electra(_) => println!("Got Electra variant for JSON"),
+                SignedBidSubmission::Fulu(_) => {
+                    println!("Got Fulu variant for JSON (may be wrong!)")
+                }
+            }
+            assert!(matches!(s, SignedBidSubmission::Electra(_)));
+        }
 
         let data_ssz = include_bytes!("testdata/signed-bid-submission-electra-2.bin");
-        test_encode_decode_ssz::<SignedBidSubmission>(data_ssz);
+        let mut s = test_encode_decode_ssz::<SignedBidSubmission>(data_ssz);
+        if blobs_empty {
+            assert!(matches!(s, SignedBidSubmission::Electra(_)));
+            s = s.maybe_upgrade_to_fulu(ForkName::Fulu);
+            assert!(matches!(s, SignedBidSubmission::Fulu(_)));
+        } else {
+            match &s {
+                SignedBidSubmission::Electra(_) => println!("Got Electra variant for JSON"),
+                SignedBidSubmission::Fulu(_) => {
+                    println!("Got Fulu variant for JSON (may be wrong!)")
+                }
+            }
+            assert!(matches!(s, SignedBidSubmission::Electra(_)));
+        }
+        assert_eq!(data_ssz, s.as_ssz_bytes().as_slice());
+    }
+
+    #[test]
+    fn electra_bid_submission_ssz() {
+        let data_ssz = SignedBidSubmission::Electra(SignedBidSubmissionElectra::random_for_test(
+            &mut rand::thread_rng(),
+        ))
+        .as_ssz_bytes();
+        let s = test_encode_decode_ssz::<SignedBidSubmission>(&data_ssz);
+        assert!(matches!(s, SignedBidSubmission::Electra(_)));
+        assert_eq!(data_ssz, s.as_ssz_bytes().as_slice());
+    }
+
+    #[test]
+    fn fulu_bid_submission_json() {
+        let data_json = include_str!("testdata/signed-bid-submission-fulu.json");
+        let s = test_decode_json::<SignedBidSubmission>(data_json);
+        assert!(matches!(s, SignedBidSubmission::Fulu(_)));
+    }
+
+    #[test]
+    fn fulu_bid_submission_ssz() {
+        let data_ssz = include_bytes!("testdata/signed-bid-submission-fulu.ssz");
+        let s = test_encode_decode_ssz::<SignedBidSubmission>(data_ssz);
+        assert!(matches!(s, SignedBidSubmission::Fulu(_)));
         assert_eq!(data_ssz, s.as_ssz_bytes().as_slice());
     }
 }

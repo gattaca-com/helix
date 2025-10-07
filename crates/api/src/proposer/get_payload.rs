@@ -12,7 +12,7 @@ use helix_common::{
 use helix_database::DatabaseService;
 use helix_types::{
     BlsPublicKeyBytes, ExecPayload, ForkName, GetPayloadResponse, PayloadAndBlobs,
-    PayloadAndBlobsRef, SignedBlindedBeaconBlock, Slot, SlotClockTrait,
+    SignedBlindedBeaconBlock, Slot, SlotClockTrait,
 };
 use http::StatusCode;
 use tokio::time::sleep;
@@ -253,7 +253,7 @@ impl<A: Api> ProposerApi<A> {
         self.gossip_payload(
             to_publish.signed_block.slot(),
             &proposer_public_key,
-            to_proposer.data.as_ref().into(),
+            &to_proposer.data,
             fork,
         )
         .await;
@@ -387,11 +387,11 @@ impl<A: Api> ProposerApi<A> {
         &self,
         bid_slot: Slot,
         proposer_public_key: &BlsPublicKeyBytes,
-        execution_payload: PayloadAndBlobsRef<'_>,
+        execution_payload: &PayloadAndBlobs,
         fork_name: ForkName,
     ) {
         let params = BroadcastPayloadParams::to_proto(
-            execution_payload,
+            &execution_payload,
             bid_slot.as_u64(),
             proposer_public_key,
             fork_name,

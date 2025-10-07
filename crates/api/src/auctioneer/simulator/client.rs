@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use helix_common::{simulator::BlockSimError, SimulatorConfig};
+use helix_types::ForkName;
 use reqwest::{
     header::{HeaderMap, HeaderValue},
     RequestBuilder,
@@ -67,6 +68,7 @@ impl SimulatorClient {
         &self,
         request: &BlockSimRequest,
         is_top_bid: bool,
+        fork: ForkName,
     ) -> RequestBuilder {
         let mut headers = HeaderMap::new();
         if is_top_bid {
@@ -75,10 +77,7 @@ impl SimulatorClient {
 
         let mut sim_method = &self.sim_method_v4;
 
-        if request.blobs_bundle.is_some() &&
-            request.blobs_bundle.as_ref().unwrap().proofs.len() >
-                request.blobs_bundle.as_ref().unwrap().commitments.len()
-        {
+        if fork == ForkName::Fulu {
             sim_method = &self.sim_method_v5;
         }
 
