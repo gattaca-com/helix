@@ -2,7 +2,6 @@ use std::{hash::Hasher, sync::Arc};
 
 use alloy_eips::eip7691::MAX_BLOBS_PER_BLOCK_ELECTRA;
 use alloy_primitives::B256;
-use lh_types::ForkName;
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
@@ -82,24 +81,6 @@ impl DehydratedBidSubmission {
             }
         }
     }
-
-    pub fn maybe_upgrade_to_fulu(self, current_fork: ForkName) -> DehydratedBidSubmission {
-        match self {
-            DehydratedBidSubmission::Electra(electra) => {
-                if current_fork != ForkName::Fulu {
-                    return DehydratedBidSubmission::Electra(electra);
-                }
-                DehydratedBidSubmission::Fulu(DehydratedBidSubmissionFulu {
-                    message: electra.message,
-                    execution_payload: electra.execution_payload,
-                    blobs_bundle: electra.blobs_bundle,
-                    execution_requests: electra.execution_requests,
-                    signature: electra.signature,
-                })
-            }
-            DehydratedBidSubmission::Fulu(fulu) => DehydratedBidSubmission::Fulu(fulu),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
@@ -107,9 +88,22 @@ impl DehydratedBidSubmission {
 pub struct DehydratedBidSubmissionElectra {
     message: BidTrace,
     execution_payload: ExecutionPayload,
-    blobs_bundle: DehydratedBlobs,
+    blobs_bundle: DehydratedBlobsElectra,
     execution_requests: Arc<ExecutionRequests>,
     signature: BlsSignatureBytes,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+struct DehydratedBlobsElectra {
+    proofs: Vec<KzgProof>,
+    new_items: Vec<BlobItemElectra>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+struct BlobItemElectra {
+    proof: KzgProof,
+    commitment: KzgCommitment,
+    blob: Blob,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
@@ -117,19 +111,19 @@ pub struct DehydratedBidSubmissionElectra {
 pub struct DehydratedBidSubmissionFulu {
     message: BidTrace,
     execution_payload: ExecutionPayload,
-    blobs_bundle: DehydratedBlobs,
+    blobs_bundle: DehydratedBlobsFulu,
     execution_requests: Arc<ExecutionRequests>,
     signature: BlsSignatureBytes,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-struct DehydratedBlobs {
+struct DehydratedBlobsFulu {
     commitments: Vec<KzgCommitment>,
-    new_items: Vec<BlobItem>,
+    new_items: Vec<BlobItemFulu>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-struct BlobItem {
+struct BlobItemFulu {
     proof: Vec<KzgProof>,
     commitment: KzgCommitment,
     blob: Blob,
@@ -186,29 +180,29 @@ impl DehydratedBidSubmissionElectra {
         let mut blob_cache_hits: usize = 0;
         let new_blobs = self.blobs_bundle.new_items.len();
         for blob_item in self.blobs_bundle.new_items {
-            order_cache.blobs.insert(blob_item.commitment, (blob_item.proof, blob_item.blob));
+            order_cache
+                .blobs_electra
+                .insert(blob_item.proof, (blob_item.commitment, blob_item.blob));
         }
 
-        if self.blobs_bundle.commitments.len() > MAX_BLOBS_PER_BLOCK_ELECTRA as usize {
+        if self.blobs_bundle.proofs.len() > MAX_BLOBS_PER_BLOCK_ELECTRA as usize {
             last_err = Err(HydrationError::TooManyBlobs {
-                blobs: self.blobs_bundle.commitments.len(),
+                blobs: self.blobs_bundle.proofs.len(),
                 max: MAX_BLOBS_PER_BLOCK_ELECTRA as usize,
             });
         }
 
         last_err?;
 
-        let mut sidecar = BlobsBundleV1::with_capacity(self.blobs_bundle.commitments.len());
-        for (index, commitment) in self.blobs_bundle.commitments.into_iter().enumerate() {
-            let Some((proofs, blob)) = order_cache.blobs.get(&commitment) else {
-                return Err(HydrationError::UnknownBlobHash { commitment, index });
+        let mut sidecar = BlobsBundleV1::with_capacity(self.blobs_bundle.proofs.len());
+        for (index, proof) in self.blobs_bundle.proofs.into_iter().enumerate() {
+            let Some((commitment, blob)) = order_cache.blobs_electra.get(&proof) else {
+                return Err(HydrationError::UnknownBlobHashElectra { proof, index });
             };
 
             // safe because we checked the length above
-            sidecar.commitments.push(commitment).unwrap();
-            for proof in proofs {
-                sidecar.proofs.push(*proof);
-            }
+            sidecar.commitments.push(*commitment).unwrap();
+            sidecar.proofs.push(proof);
             sidecar.blobs.push(blob.clone());
             blob_cache_hits += 1;
         }
@@ -281,7 +275,7 @@ impl DehydratedBidSubmissionFulu {
         let mut blob_cache_hits: usize = 0;
         let new_blobs = self.blobs_bundle.new_items.len();
         for blob_item in self.blobs_bundle.new_items {
-            order_cache.blobs.insert(blob_item.commitment, (blob_item.proof, blob_item.blob));
+            order_cache.blobs_fulu.insert(blob_item.commitment, (blob_item.proof, blob_item.blob));
         }
 
         if self.blobs_bundle.commitments.len() > max_blobs_per_block {
@@ -295,8 +289,8 @@ impl DehydratedBidSubmissionFulu {
 
         let mut sidecar = BlobsBundleV2::with_capacity(self.blobs_bundle.commitments.len());
         for (index, commitment) in self.blobs_bundle.commitments.into_iter().enumerate() {
-            let Some((proofs, blob)) = order_cache.blobs.get(&commitment) else {
-                return Err(HydrationError::UnknownBlobHash { commitment, index });
+            let Some((proofs, blob)) = order_cache.blobs_fulu.get(&commitment) else {
+                return Err(HydrationError::UnknownBlobHashFulu { commitment, index });
             };
 
             // safe because we checked the length above
@@ -327,21 +321,25 @@ impl DehydratedBidSubmissionFulu {
 struct Cache {
     // hash -> transaction bytes
     transactions: FxHashMap<u64, Transaction>,
+    // proof -> commtiment / blob
+    blobs_electra: FxHashMap<KzgProof, (KzgCommitment, Blob)>,
     // commitment -> proofs / blob
-    blobs: FxHashMap<KzgCommitment, (Vec<KzgProof>, Blob)>,
+    blobs_fulu: FxHashMap<KzgCommitment, (Vec<KzgProof>, Blob)>,
 }
 
 impl Cache {
     pub fn new() -> Self {
         Self {
             transactions: FxHashMap::with_capacity_and_hasher(10_000, Default::default()),
-            blobs: FxHashMap::with_capacity_and_hasher(1_000, Default::default()),
+            blobs_electra: FxHashMap::with_capacity_and_hasher(1_000, Default::default()),
+            blobs_fulu: FxHashMap::with_capacity_and_hasher(1_000, Default::default()),
         }
     }
 
     pub fn clear(&mut self) {
         self.transactions.clear();
-        self.blobs.clear();
+        self.blobs_electra.clear();
+        self.blobs_fulu.clear();
     }
 }
 
@@ -382,8 +380,11 @@ pub enum HydrationError {
     #[error("invalid tx bytes: length {length}, index {index}")]
     InvalidTxLength { length: usize, index: usize },
 
+    #[error("unknown blob: proof {proof}, index {index}")]
+    UnknownBlobHashElectra { proof: KzgProof, index: usize },
+
     #[error("unknown blob: commitment {commitment}, index {index}")]
-    UnknownBlobHash { commitment: KzgCommitment, index: usize },
+    UnknownBlobHashFulu { commitment: KzgCommitment, index: usize },
 
     #[error("too many blobs: blobs {blobs}, max {max}")]
     TooManyBlobs { blobs: usize, max: usize },

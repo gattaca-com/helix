@@ -278,7 +278,6 @@ impl SubWorker {
             }
 
             let payload: DehydratedBidSubmission = decoder.decode(body)?;
-            let payload = payload.maybe_upgrade_to_fulu(self.chain_info.current_fork_name());
             trace.decoded = utcnow_ns();
 
             (Submission::Dehydrated(payload), None)
