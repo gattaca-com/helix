@@ -234,12 +234,13 @@ impl SubWorker {
             SubWorkerJob::GetPayload { blinded_block, proposer_pubkey, mut trace, res_tx } => {
                 match self.handle_get_payload(&proposer_pubkey, blinded_block, &mut trace) {
                     Ok((blinded, block_hash)) => {
-                        let _ = self.tx.try_send(Event::GetPayload {
-                            block_hash,
-                            blinded,
-                            trace,
-                            res_tx,
-                        });
+                        if self
+                            .tx
+                            .try_send(Event::GetPayload { block_hash, blinded, trace, res_tx })
+                            .is_err()
+                        {
+                            error!("failed sending get_payload to auctioneer");
+                        };
                     }
                     Err(err) => {
                         let _ = res_tx.send(Err(err));

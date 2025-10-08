@@ -507,6 +507,14 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref STATE_TRANSITION_COUNT: IntCounterVec = register_int_counter_vec_with_registry!(
+        "state_transition_count",
+        "Count of state transition events",
+        &["start_event_end"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
 
     //////////////// WORKER ////////////////
 

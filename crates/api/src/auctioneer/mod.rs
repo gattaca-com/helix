@@ -11,7 +11,11 @@ mod types;
 mod validation;
 mod worker;
 
-use std::{cmp::Ordering, sync::Arc, time::Instant};
+use std::{
+    cmp::Ordering,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use alloy_primitives::B256;
 pub use handle::{AuctioneerHandle, RegWorkerHandle};
@@ -19,7 +23,7 @@ use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
     local_cache::LocalCache,
-    metrics::STATE_TRANSITION_LATENCY,
+    metrics::{STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN, WORKER_UTIL},
     record_submission_step,
     utils::pin_thread_to_core,
     RelayConfig,
@@ -98,7 +102,8 @@ pub fn spawn_workers<A: Api>(
         let bid_sorter = BidSorter::new(top_bid_tx);
         let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
         let ctx = Context::new(chain_info, config, sim_manager, db, bid_sorter, cache);
-        let auctioneer = Auctioneer::<A> { ctx, state: State::default() };
+        let id = format!("auctioneer_{auctioneer_core}");
+        let auctioneer = Auctioneer::<A> { ctx, state: State::default(), tel: Telemetry::new(id) };
 
         std::thread::Builder::new()
             .name("auctioneer".to_string())
@@ -115,6 +120,7 @@ pub fn spawn_workers<A: Api>(
 struct Auctioneer<A: Api> {
     ctx: Context<A>,
     state: State,
+    tel: Telemetry,
 }
 
 impl<A: Api> Auctioneer<A> {
@@ -128,14 +134,16 @@ impl<A: Api> Auctioneer<A> {
 
         loop {
             for evt in rx.try_iter() {
-                self.state.step(evt, &mut self.ctx);
+                self.state.step(evt, &mut self.ctx, &mut self.tel);
             }
 
             if let Ok(slot_data) = slot_data_rx.try_recv() {
                 let HkSlotData { bid_slot, registration_data, payload_attributes, il } = slot_data;
                 let evt = Event::SlotData { bid_slot, registration_data, payload_attributes, il };
-                self.state.step(evt, &mut self.ctx);
+                self.state.step(evt, &mut self.ctx, &mut self.tel);
             }
+
+            self.tel.telemetry(&rx);
         }
     }
 }
@@ -172,16 +180,23 @@ impl Default for State {
 // TODO: tokio metrics
 
 impl State {
-    fn step<A: Api>(&mut self, event: Event, ctx: &mut Context<A>) {
+    fn step<A: Api>(&mut self, event: Event, ctx: &mut Context<A>, tel: &mut Telemetry) {
+        let start = Instant::now();
         let start_state = self.as_str();
         let event_tag = event.as_str();
-        let start = Instant::now();
-        self._step(event, ctx);
-        let end_state = self.as_str();
 
+        self._step(event, ctx);
+
+        let end_state = self.as_str();
+        let step_dur = start.elapsed();
+        tel.loop_worked += step_dur;
+
+        let task_name = format!("{start_state}+{event_tag}->{end_state}");
+
+        STATE_TRANSITION_COUNT.with_label_values(&[&task_name]).inc();
         STATE_TRANSITION_LATENCY
-            .with_label_values(&[&format!("{start_state}+{event_tag}->{end_state}")])
-            .observe(start.elapsed().as_nanos() as f64 / 1000.);
+            .with_label_values(&[&task_name])
+            .observe(step_dur.as_nanos() as f64 / 1000.);
     }
 
     fn _step<A: Api>(&mut self, event: Event, ctx: &mut Context<A>) {
@@ -524,6 +539,58 @@ impl State {
             State::Slot { .. } => "Slot",
             State::Sorting(_) => "Sorting",
             State::Broadcasting { .. } => "Broadcasting",
+        }
+    }
+}
+
+pub struct Telemetry {
+    id: String,
+    work: Duration,
+    spin: Duration,
+    next_record: Instant,
+    loop_start: Instant,
+    loop_worked: Duration,
+}
+
+impl Telemetry {
+    const REPORT_FREQ: Duration = Duration::from_millis(500);
+
+    fn new(id: String) -> Self {
+        Self {
+            id,
+            work: Default::default(),
+            spin: Duration::default(),
+            next_record: Instant::now() + Self::REPORT_FREQ,
+            loop_start: Instant::now(),
+            loop_worked: Duration::ZERO,
+        }
+    }
+
+    fn telemetry<T>(&mut self, rx: &crossbeam_channel::Receiver<T>) {
+        let now = Instant::now();
+        let loop_elapsed = now.duration_since(self.loop_start);
+
+        if loop_elapsed.is_zero() {
+            return;
+        }
+
+        let worked = std::cmp::min(self.loop_worked, loop_elapsed);
+        self.work += worked;
+        self.spin += loop_elapsed - worked;
+
+        self.loop_worked -= worked;
+        self.loop_start = now;
+
+        if self.next_record < now {
+            self.next_record = now + Self::REPORT_FREQ;
+            let spin = std::mem::take(&mut self.spin);
+            let work = std::mem::take(&mut self.work);
+
+            let total = spin + work;
+            let util = if total.is_zero() { 0.0 } else { work.as_secs_f64() / total.as_secs_f64() };
+
+            WORKER_UTIL.with_label_values(&[&self.id]).observe(util);
+            WORKER_QUEUE_LEN.with_label_values(&["auctioneer"]).observe(rx.len() as f64);
         }
     }
 }
