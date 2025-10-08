@@ -5,7 +5,7 @@ use std::sync::{atomic::AtomicBool, Arc};
 use bytes::Bytes;
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
-    chain_info::ChainInfo, local_cache::LocalCache, metadata_provider::MetadataProvider,
+    api_provider::ApiProvider, chain_info::ChainInfo, local_cache::LocalCache,
     signing::RelaySigningContext, RelayConfig,
 };
 use helix_database::DatabaseService;
@@ -36,7 +36,7 @@ pub fn start_api_service<A: Api>(
     chain_info: Arc<ChainInfo>,
     relay_signing_context: Arc<RelaySigningContext>,
     multi_beacon_client: Arc<MultiBeaconClient>,
-    metadata_provider: Arc<A::MetadataProvider>,
+    api_provider: Arc<A::ApiProvider>,
     current_slot_info: CurrentSlotInfo,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
@@ -52,7 +52,7 @@ pub fn start_api_service<A: Api>(
         chain_info,
         relay_signing_context,
         multi_beacon_client,
-        metadata_provider,
+        api_provider,
         known_validators_loaded,
         terminating,
         top_bid_tx,
@@ -67,11 +67,9 @@ pub fn start_admin_service(auctioneer: Arc<LocalCache>, config: &RelayConfig) {
 
 pub trait Api: Clone + Send + Sync + 'static {
     type DatabaseService: DatabaseService;
-    type MetadataProvider: MetadataProvider;
+    type ApiProvider: ApiProvider;
 }
 
-/// Timeout in milliseconds from when the call started
-pub const HEADER_TIMEOUT_MS: &str = "x-timeout-ms";
 pub const HEADER_API_KEY: &str = "x-api-key";
 pub const HEADER_SEQUENCE: &str = "x-sequence";
 pub const HEADER_HYDRATE: &str = "x-hydrate";

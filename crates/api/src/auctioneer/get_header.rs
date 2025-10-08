@@ -1,9 +1,10 @@
+use helix_common::api::proposer_api::GetHeaderParams;
 use tokio::sync::oneshot;
 use tracing::error;
 
 use crate::{
     auctioneer::{context::Context, types::GetHeaderResult},
-    proposer::{GetHeaderParams, ProposerApiError},
+    proposer::ProposerApiError,
     Api,
 };
 

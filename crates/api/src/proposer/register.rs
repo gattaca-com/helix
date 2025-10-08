@@ -7,7 +7,7 @@ use axum::{
 };
 use helix_common::{
     api::proposer_api::ValidatorRegistrationInfo,
-    metadata_provider::MetadataProvider,
+    api_provider::ApiProvider,
     metrics::{
         REGISTRATIONS_INVALID, REGISTRATIONS_SKIPPED, REGISTRATIONS_TO_CHECK_COUNT,
         REGISTRATIONS_UNKNOWN,
@@ -110,7 +110,7 @@ impl<A: Api> ProposerApi<A> {
             }
         }
 
-        let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
+        let user_agent = proposer_api.api_provider.get_metadata(&headers);
 
         let head_slot = proposer_api.curr_slot_info.head_slot();
         let num_registrations = registrations.len();

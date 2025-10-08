@@ -35,7 +35,7 @@ pub struct BuilderApi<A: Api> {
     /// Failsafe: if we fail to demote we pause all optimistic submissions
     pub failsafe_triggered: Arc<AtomicBool>,
     pub auctioneer_handle: AuctioneerHandle,
-    pub metadata_provider: Arc<A::MetadataProvider>,
+    pub api_provider: Arc<A::ApiProvider>,
 }
 
 impl<A: Api> BuilderApi<A> {
@@ -48,7 +48,7 @@ impl<A: Api> BuilderApi<A> {
         curr_slot_info: CurrentSlotInfo,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
         auctioneer_handle: AuctioneerHandle,
-        metadata_provider: Arc<A::MetadataProvider>,
+        api_provider: Arc<A::ApiProvider>,
     ) -> Self {
         Self {
             local_cache,
@@ -60,7 +60,7 @@ impl<A: Api> BuilderApi<A> {
             top_bid_tx,
             failsafe_triggered: Arc::new(false.into()),
             auctioneer_handle,
-            metadata_provider,
+            api_provider,
         }
     }
 

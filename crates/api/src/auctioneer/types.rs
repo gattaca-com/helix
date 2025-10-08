@@ -2,7 +2,10 @@ use std::{ops::Range, sync::Arc, time::Instant};
 
 use alloy_primitives::{B256, U256};
 use helix_common::{
-    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
+    api::{
+        builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
+        proposer_api::GetHeaderParams,
+    },
     GetPayloadTrace, SubmissionTrace,
 };
 use helix_housekeeper::PayloadAttributesUpdate;
@@ -15,10 +18,8 @@ use helix_types::{
 use tokio::sync::oneshot;
 
 use crate::{
-    auctioneer::simulator::manager::SimulationResult,
-    builder::error::BuilderApiError,
-    gossiper::types::BroadcastPayloadParams,
-    proposer::{GetHeaderParams, ProposerApiError},
+    auctioneer::simulator::manager::SimulationResult, builder::error::BuilderApiError,
+    gossiper::types::BroadcastPayloadParams, proposer::ProposerApiError,
 };
 
 pub type SubmissionResult = Result<(), BuilderApiError>;
