@@ -70,6 +70,7 @@ pub struct BlockMergeRequestRef<'a> {
 type MergeResult = Result<BlockMergeResponse, BlockSimError>;
 
 pub struct BlockMergeRequest {
+    pub bid_slot: u64,
     /// The serialized request
     pub request: serde_json::Value,
     /// The block hash of the execution payload
@@ -79,6 +80,7 @@ pub struct BlockMergeRequest {
 
 impl BlockMergeRequest {
     pub fn new(
+        bid_slot: u64,
         original_value: U256,
         proposer_fee_recipient: Address,
         execution_payload: &ExecutionPayload,
@@ -97,7 +99,7 @@ impl BlockMergeRequest {
         };
         let request = json!(request_ref);
         let (tx, rx) = oneshot::channel();
-        (Self { request, block_hash, res_tx: tx }, rx)
+        (Self { bid_slot, request, block_hash, res_tx: tx }, rx)
     }
 }
 

@@ -387,6 +387,12 @@ impl State {
                 let _ = res_tx.send(maybe_payload);
             }
 
+            (State::Sorting(slot_data), Event::MergeRequest(request)) => {
+                if slot_data.bid_slot == request.bid_slot {
+                    ctx.sim_manager.handle_merge_request(request);
+                }
+            }
+
             ///////////// INVALID STATES / EVENTS /////////////
 
             // late submission
@@ -471,6 +477,10 @@ impl State {
                 Event::GetBestPayloadForMerging { res_tx, .. },
             ) => {
                 let _ = res_tx.send(None);
+            }
+
+            (State::Slot { .. } | State::Broadcasting { .. }, Event::MergeRequest(request)) => {
+                warn!(bid_slot =% request.bid_slot, "received early or late merge request");
             }
         }
     }
