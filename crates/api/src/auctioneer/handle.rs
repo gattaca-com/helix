@@ -102,7 +102,7 @@ impl AuctioneerHandle {
     }
 
     pub fn merge_request(&self, request: BlockMergeRequest) -> Result<(), ChannelFull> {
-        trace!("sending to auctioneer");
+        trace!("sending to worker");
         self.auctioneer.try_send(Event::MergeRequest(request)).map_err(|_| ChannelFull)
     }
 }

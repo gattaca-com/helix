@@ -213,9 +213,8 @@ impl<A: Api> ProposerApi<A> {
 
         let this = self.clone();
         tokio::spawn(async move {
-            this.merge_requests_tx
-                .send(merge_request)
-                .await
+            this.auctioneer_handle
+                .merge_request(merge_request)
                 .map_err(|_| PayloadMergingError::SendFailed)?;
             let response = res_rx.await??;
 
