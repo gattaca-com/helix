@@ -4,6 +4,7 @@ use std::{
     io::Write,
     panic,
     path::{Path, PathBuf},
+    sync::OnceLock,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -117,11 +118,20 @@ fn get_crate_filter(crates_level: tracing::Level) -> EnvFilter {
     env_filter
 }
 
+static APP_ID: OnceLock<String> = OnceLock::new();
+static DISCORD_WEBHOOK_URL: OnceLock<Url> = OnceLock::new();
+
 pub fn init_panic_hook(
-    instance_id: String,
+    app_id: String,
     discord_web_hook: Option<Url>,
     crash_log_path: Option<PathBuf>,
 ) {
+    APP_ID.set(app_id).unwrap();
+
+    if let Some(webhook_url) = discord_web_hook {
+        DISCORD_WEBHOOK_URL.set(webhook_url).unwrap();
+    }
+
     panic::set_hook(Box::new(move |info| {
         let backtrace = backtrace::Backtrace::new();
         let crash_log = format!("Panic: {info}\nFull backtrace:\n{backtrace:?}\n");
@@ -129,29 +139,33 @@ pub fn init_panic_hook(
         error!("{crash_log}");
         eprintln!("{crash_log}");
 
+        alert_discord(&crash_log);
+
         if let Some(crash_log_path) = crash_log_path.clone() {
             save_to_file(crash_log_path, crash_log.clone());
-        }
-        if let Some(discord_web_hook) = discord_web_hook.clone() {
-            alert_discord(
-                discord_web_hook,
-                &format!("Relay: {instance_id} crashed! Please see the console log for details!"),
-                &instance_id,
-            );
         }
     }));
 }
 
-pub fn alert_discord(webhook_url: Url, message: &str, region: &str) {
-    let max_length = message.len().min(1850);
-    let content = format!("Instance: RELAY-{}\n{}", region, &message[..max_length]);
+pub fn alert_discord(message: &str) {
+    let Some(webhook_url) = DISCORD_WEBHOOK_URL.get() else {
+        error!("discord hook not set!");
+        error!("{message}");
+        return;
+    };
 
-    let mut payload = HashMap::new();
-    payload.insert("content", content);
+    let app_id = APP_ID.get().map(String::as_str).unwrap_or("unknown");
 
-    if let Err(err) = reqwest::blocking::Client::new().post(webhook_url).json(&payload).send() {
-        error!(?err, message, "could not send alert to Discord");
-        eprintln!("could not send alert to Discord: err={err}, message={message}");
+    let max_len = 1850.min(message.len());
+    let msg = format!("Instance: RELAY-{app_id}\n{}", &message[..max_len]);
+
+    let content = HashMap::from([("content", msg)]);
+
+    if let Err(err) =
+        reqwest::blocking::Client::new().post(webhook_url.clone()).json(&content).send()
+    {
+        error!("failed to send discord alert: {err}");
+        eprintln!("failed to send discord alert: {err}");
     }
 }
 
