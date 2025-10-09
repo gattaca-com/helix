@@ -18,8 +18,10 @@ use helix_types::{
 use tokio::sync::oneshot;
 
 use crate::{
-    auctioneer::simulator::manager::SimulationResult, builder::error::BuilderApiError,
-    gossiper::types::BroadcastPayloadParams, proposer::ProposerApiError,
+    auctioneer::{simulator::manager::SimulationResult, BlockMergeRequest},
+    builder::error::BuilderApiError,
+    gossiper::types::BroadcastPayloadParams,
+    proposer::ProposerApiError,
 };
 
 pub type SubmissionResult = Result<(), BuilderApiError>;
@@ -252,6 +254,7 @@ pub enum Event {
         bid_slot: Slot,
         res_tx: oneshot::Sender<BestMergeablePayload>,
     },
+    MergeRequest(BlockMergeRequest),
 }
 
 impl Event {
@@ -265,6 +268,7 @@ impl Event {
             Event::SimResult(_) => "SimResult",
             Event::SimulatorSync { .. } => "SimulatorSync",
             Event::GetBestPayloadForMerging { .. } => "GetBestPayloadForMerging",
+            Event::MergeRequest(_) => "MergeRequest",
         }
     }
 }

@@ -203,6 +203,7 @@ impl<A: Api> ProposerApi<A> {
         debug!("merging block");
 
         let (merge_request, res_rx) = BlockMergeRequest::new(
+            bid_slot,
             data.bid_data.value,
             proposer_fee_recipient,
             &data.payload_and_blobs.execution_payload,
@@ -212,7 +213,10 @@ impl<A: Api> ProposerApi<A> {
 
         let this = self.clone();
         tokio::spawn(async move {
-            this.merge_requests_tx.send(merge_request).await?;
+            this.merge_requests_tx
+                .send(merge_request)
+                .await
+                .map_err(|_| PayloadMergingError::SendFailed)?;
             let response = res_rx.await??;
 
             // Sanity check: if the merged payload has a lower value than the original bid,
@@ -347,7 +351,7 @@ enum PayloadMergingError {
     #[error("reached maximum blob count for block")]
     MaxBlobCountReached,
     #[error("failed sending merge request to manager")]
-    SendFailed(#[from] tokio::sync::mpsc::error::SendError<BlockMergeRequest>),
+    SendFailed,
     #[error("failed receive response from manager. Was the request dropped?")]
     RecvFailed(#[from] tokio::sync::oneshot::error::RecvError),
 }

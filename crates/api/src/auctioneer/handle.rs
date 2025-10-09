@@ -7,9 +7,12 @@ use tokio::sync::oneshot;
 use tracing::trace;
 
 use crate::{
-    auctioneer::types::{
-        BestMergeablePayload, Event, GetHeaderResult, GetPayloadResult, RegWorkerJob, SubWorkerJob,
-        SubmissionResult,
+    auctioneer::{
+        types::{
+            BestMergeablePayload, Event, GetHeaderResult, GetPayloadResult, RegWorkerJob,
+            SubWorkerJob, SubmissionResult,
+        },
+        BlockMergeRequest,
     },
     gossiper::types::BroadcastPayloadParams,
 };
@@ -96,6 +99,11 @@ impl AuctioneerHandle {
             .map_err(|_| ChannelFull)?;
 
         Ok(rx)
+    }
+
+    pub fn merge_request(&self, request: BlockMergeRequest) -> Result<(), ChannelFull> {
+        trace!("sending to auctioneer");
+        self.auctioneer.try_send(Event::MergeRequest(request)).map_err(|_| ChannelFull)
     }
 }
 
