@@ -363,8 +363,11 @@ impl State {
             }
 
             // sim result
-            (State::Sorting(_), Event::SimResult(mut result)) => {
-                ctx.sort_simulation_result(&mut result);
+            (State::Sorting(slot_data), Event::SimResult(mut result)) => {
+                if result.1.as_ref().is_some_and(|r| r.submission.slot() == slot_data.bid_slot) {
+                    ctx.sort_simulation_result(&mut result);
+                }
+
                 ctx.handle_simulation_result(result);
             }
 
