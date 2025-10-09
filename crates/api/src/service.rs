@@ -37,7 +37,7 @@ pub async fn run_api_service<A: Api>(
     chain_info: Arc<ChainInfo>,
     relay_signing_context: Arc<RelaySigningContext>,
     multi_beacon_client: Arc<MultiBeaconClient>,
-    metadata_provider: Arc<A::MetadataProvider>,
+    api_provider: Arc<A::ApiProvider>,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
@@ -76,7 +76,7 @@ pub async fn run_api_service<A: Api>(
         current_slot_info.clone(),
         top_bid_tx,
         auctioneer_handle.clone(),
-        metadata_provider.clone(),
+        api_provider.clone(),
     );
     let builder_api = Arc::new(builder_api);
 
@@ -86,7 +86,7 @@ pub async fn run_api_service<A: Api>(
         local_cache,
         db.clone(),
         gossiper.clone(),
-        metadata_provider.clone(),
+        api_provider.clone(),
         relay_signing_context,
         multi_beacon_client,
         chain_info.clone(),

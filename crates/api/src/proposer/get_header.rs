@@ -6,10 +6,10 @@ use std::{
 use alloy_primitives::B256;
 use axum::{extract::Path, http::HeaderMap, response::IntoResponse, Extension};
 use helix_common::{
+    api::proposer_api::GetHeaderParams,
+    api_provider::{ApiProvider, TimingResult},
     chain_info::ChainInfo,
-    metadata_provider::MetadataProvider,
-    metrics::GetHeaderMetric,
-    resign_builder_bid, task,
+    resign_builder_bid, spawn_tracked,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
     GetHeaderTrace, RequestTimings,
 };
@@ -19,9 +19,9 @@ use tracing::{debug, error, info, warn, Instrument};
 
 use super::ProposerApi;
 use crate::{
-    proposer::{error::ProposerApiError, GetHeaderParams, GET_HEADER_REQUEST_CUTOFF_MS},
+    proposer::{error::ProposerApiError, GET_HEADER_REQUEST_CUTOFF_MS},
     router::Terminating,
-    Api, HEADER_TIMEOUT_MS,
+    Api,
 };
 
 impl<A: Api> ProposerApi<A> {
@@ -72,88 +72,38 @@ impl<A: Api> ProposerApi<A> {
         };
         trace.validation_complete = utcnow_ns();
 
-        let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
+        let user_agent = proposer_api.api_provider.get_metadata(&headers);
 
-        let mut mev_boost = false;
+        let TimingResult { is_mev_boost, sleep_time } = proposer_api.api_provider.get_timing(
+            &params,
+            &headers,
+            &duty.entry.preferences,
+            ms_into_slot,
+        );
 
-        // how far is the client
-        let client_latency_ms = match get_x_mev_boost_header_start_ms(&headers) {
-            Some(request_initiated_ms) => {
-                let latency = utcnow_ms().saturating_sub(request_initiated_ms);
-                mev_boost = true;
-                latency * 105 / 100 // add some buffer
-            }
-            None => proposer_api.relay_config.timing_game_config.default_client_latency_ms,
-        };
-
-        info!(client_latency_ms, mev_boost, "request latency");
-
-        let client_timeout_ms = headers
-            .get(HEADER_TIMEOUT_MS)
-            .and_then(|h| h.to_str().ok())
-            .and_then(|h| match h.parse::<u64>() {
-                Ok(delay) => {
-                    // TODO: move to debug at some point
-                    info!("header timeout ms: {}", delay);
-                    Some(delay)
-                }
-                Err(err) => {
-                    warn!(%err, "invalid header timeout ms");
-                    None
-                }
-            });
-
-        // If timing games are enabled for the proposer then we sleep a fixed amount before
-        // returning the header
-        if duty.entry.preferences.header_delay || client_timeout_ms.is_some() {
-            let max_sleep_time = proposer_api
-                .relay_config
-                .timing_game_config
-                .latest_header_delay_ms_in_slot
-                .saturating_sub(ms_into_slot);
-
-            let target_sleep_time = match client_timeout_ms {
-                Some(timeout_ms) => timeout_ms.saturating_sub(client_latency_ms),
-                None => {
-                    // TODO: convert this to a timeout instead of a delay
-                    duty.entry
-                        .preferences
-                        .delay_ms
-                        .unwrap_or(proposer_api.relay_config.timing_game_config.max_header_delay_ms)
-                }
-            };
-
-            let sleep_time_ms = std::cmp::min(max_sleep_time, target_sleep_time);
-
-            // leave additional time to resign the compute and sign the builder bid
-            let sleep_time_adj = sleep_time_ms.saturating_sub(5);
-
-            let sleep_time = Duration::from_millis(sleep_time_adj);
-            let mut get_header_metric = GetHeaderMetric::new(sleep_time);
-
+        if let Some(sleep_time) = sleep_time {
             debug!(target: "timing_games",
-                ?sleep_time,
-                %ms_into_slot,
-                target_sleep_time,
-                max_sleep_time,
-                slot = params.slot,
-                pubkey = ?params.pubkey,
-                "timing game sleep");
+            ?sleep_time,
+            ms_into_slot,
+            slot = params.slot,
+            pubkey = ?params.pubkey,
+            "timing game sleep");
 
-            if sleep_time > Duration::ZERO {
-                tokio::time::sleep(sleep_time).await;
-            }
-
-            get_header_metric.record();
+            tokio::time::sleep(sleep_time).await;
         }
 
         let Ok(rx) = proposer_api.auctioneer_handle.get_header(params) else {
             error!("failed to send get_header to auctioneer");
-            return Err(ProposerApiError::ServiceUnavailableError);
+            return Err(ProposerApiError::InternalServerError);
         };
 
-        // TODO: refactor errors
-        let local_bid = rx.await.map_err(|_| ProposerApiError::NoBidPrepared)??;
+        let local_bid = match rx.await {
+            Ok(res) => res?,
+            Err(err) => {
+                warn!(%err, "failed to get header from auctioneer");
+                return Err(ProposerApiError::InternalServerError);
+            }
+        };
 
         let now_ns = utcnow_ns();
         trace.best_bid_fetched = now_ns;
@@ -228,7 +178,7 @@ impl<A: Api> ProposerApi<A> {
             params.pubkey,
             bid_block_hash,
             trace,
-            mev_boost,
+            is_mev_boost,
             user_agent.clone(),
         )
         .await;
@@ -255,27 +205,23 @@ async fn save_get_header_call<DB: DatabaseService + 'static>(
     mev_boost: bool,
     user_agent: Option<String>,
 ) {
-    task::spawn(
-        file!(),
-        line!(),
-        async move {
-            if let Err(err) = db
-                .save_get_header_call(
-                    slot,
-                    parent_hash,
-                    public_key,
-                    best_block_hash,
-                    trace,
-                    mev_boost,
-                    user_agent,
-                )
-                .await
-            {
-                error!(%err, "error saving get header call to database");
-            }
+    spawn_tracked!(async move {
+        if let Err(err) = db
+            .save_get_header_call(
+                slot,
+                parent_hash,
+                public_key,
+                best_block_hash,
+                trace,
+                mev_boost,
+                user_agent,
+            )
+            .await
+        {
+            error!(%err, "error saving get header call to database");
         }
-        .in_current_span(),
-    );
+    }
+    .in_current_span());
 }
 
 /// Validates that the bid request is not sent too late within the current slot.
@@ -308,15 +254,3 @@ fn validate_bid_request_time(
 //     let keywords = ["Kiln", "mev-boost", "commit-boost", "Vouch"];
 //     keywords.iter().any(|&keyword| client_name.contains(keyword))
 // }
-
-/// Fetches the timestamp set by the mev-boost client when initialising the `get_header` request.
-fn get_x_mev_boost_header_start_ms(header_map: &HeaderMap) -> Option<u64> {
-    const MEV_BOOST_START_TIME_HEADER: &str = "X-MEVBoost-StartTimeUnixMS";
-    const DATE_MS_HEADER: &str = "Date-Milliseconds";
-
-    let header =
-        header_map.get(DATE_MS_HEADER).or_else(|| header_map.get(MEV_BOOST_START_TIME_HEADER))?;
-    let start_time_str = header.to_str().ok()?;
-    let start_time_ms: u64 = start_time_str.parse().ok()?;
-    Some(start_time_ms)
-}

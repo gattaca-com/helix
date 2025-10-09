@@ -373,16 +373,6 @@ lazy_static! {
     .unwrap();
 
 
-    //////////////// TIMING GAMES ////////////////
-
-    static ref GET_HEADER_TIMEOUT: HistogramVec = register_histogram_vec_with_registry!(
-        "get_header_sleep",
-        "Sleep time for get header",
-        &["is_timeout"],
-        &RELAY_METRICS_REGISTRY
-    )
-    .unwrap();
-
     //////////////// CACHE ////////////////
 
     static ref DELIEVERED_PAYLOADS_CACHE_HIT: IntCounter = register_int_counter_with_registry!(
@@ -735,31 +725,6 @@ pub struct BeaconMetrics;
 impl BeaconMetrics {
     pub fn beacon_sync(beacon: &str, is_synced: bool) {
         BEACON_SYNC.with_label_values(&[beacon]).set(is_synced as i64 as f64);
-    }
-}
-
-pub struct GetHeaderMetric {
-    sleep_time: f64,
-    has_recorded: bool,
-}
-
-impl GetHeaderMetric {
-    pub fn new(sleep_time: Duration) -> Self {
-        Self { sleep_time: sleep_time.as_secs_f64(), has_recorded: false }
-    }
-
-    pub fn record(&mut self) {
-        self.has_recorded = true;
-    }
-}
-
-impl Drop for GetHeaderMetric {
-    fn drop(&mut self) {
-        let is_timeout = !self.has_recorded;
-
-        GET_HEADER_TIMEOUT
-            .with_label_values(&[is_timeout.to_string().as_str()])
-            .observe(self.sleep_time);
     }
 }
 

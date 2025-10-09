@@ -3,8 +3,8 @@ use std::{sync::Arc, time::Duration};
 use axum::{http::HeaderMap, response::IntoResponse, Extension};
 use helix_beacon::types::BroadcastValidation;
 use helix_common::{
+    api_provider::ApiProvider,
     chain_info::ChainInfo,
-    metadata_provider::MetadataProvider,
     spawn_tracked,
     utils::{extract_request_id, utcnow_ns},
     GetPayloadTrace, RequestTimings,
@@ -57,7 +57,7 @@ impl<A: Api> ProposerApi<A> {
 
         let mut trace = GetPayloadTrace::init_from_timings(timings);
 
-        let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
+        let user_agent = proposer_api.api_provider.get_metadata(&headers);
 
         // TODO: move decoding to worker
         let signed_blinded_block: SignedBlindedBeaconBlock = serde_json::from_slice(&body)
@@ -127,7 +127,7 @@ impl<A: Api> ProposerApi<A> {
 
         let mut trace = GetPayloadTrace::init_from_timings(timings);
 
-        let user_agent = proposer_api.metadata_provider.get_metadata(&headers);
+        let user_agent = proposer_api.api_provider.get_metadata(&headers);
 
         let signed_blinded_block: SignedBlindedBeaconBlock = serde_json::from_slice(&body)
             .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;

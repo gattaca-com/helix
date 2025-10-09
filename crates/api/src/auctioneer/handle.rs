@@ -1,6 +1,6 @@
 use std::{ops::Range, sync::Arc, time::Instant};
 
-use helix_common::{GetPayloadTrace, SubmissionTrace};
+use helix_common::{api::proposer_api::GetHeaderParams, GetPayloadTrace, SubmissionTrace};
 use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot};
 use http::HeaderMap;
 use tokio::sync::oneshot;
@@ -12,7 +12,6 @@ use crate::{
         SubmissionResult,
     },
     gossiper::types::BroadcastPayloadParams,
-    proposer::GetHeaderParams,
 };
 
 #[derive(Clone)]

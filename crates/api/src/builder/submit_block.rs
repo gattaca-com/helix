@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use axum::Extension;
 use helix_common::{
-    self, metadata_provider::MetadataProvider, utils::extract_request_id, RequestTimings,
-    SubmissionTrace,
+    self, api_provider::ApiProvider, utils::extract_request_id, RequestTimings, SubmissionTrace,
 };
 use http::HeaderMap;
 use tracing::{error, trace};
@@ -29,7 +28,7 @@ impl<A: Api> BuilderApi<A> {
         trace!("start handler");
 
         let mut trace = SubmissionTrace::init_from_timings(timings);
-        trace.metadata = api.metadata_provider.get_metadata(&headers);
+        trace.metadata = api.api_provider.get_metadata(&headers);
 
         let Ok(rx) = api.auctioneer_handle.block_submission(headers, body, trace) else {
             error!("failed sending request to worker");

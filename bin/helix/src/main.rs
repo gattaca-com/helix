@@ -10,9 +10,9 @@ use eyre::eyre;
 use helix_api::{start_admin_service, start_api_service, Api};
 use helix_beacon::start_beacon_client;
 use helix_common::{
+    api_provider::DefaultApiProvider,
     load_config, load_keypair,
     local_cache::LocalCache,
-    metadata_provider::DefaultMetadataProvider,
     metrics::start_metrics_server,
     signing::RelaySigningContext,
     task::{block_on, init_runtime},
@@ -38,7 +38,7 @@ struct ApiProd;
 
 impl Api for ApiProd {
     type DatabaseService = PostgresDatabaseService;
-    type MetadataProvider = DefaultMetadataProvider;
+    type ApiProvider = DefaultApiProvider;
 }
 
 fn main() {
@@ -121,6 +121,8 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
 
     start_admin_service(local_cache.clone(), &config);
 
+    let api_provider = DefaultApiProvider::new(config.clone().into());
+
     start_api_service::<ApiProd>(
         config.clone(),
         db.clone(),
@@ -128,7 +130,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         chain_info,
         relay_signing_context,
         beacon_client,
-        Arc::new(DefaultMetadataProvider {}),
+        Arc::new(api_provider),
         current_slot_info,
         known_validators_loaded,
         terminating.clone(),
