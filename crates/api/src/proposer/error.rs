@@ -192,6 +192,9 @@ pub enum ProposerApiError {
 
     #[error("failed to deserialize validator public key: {0:?}")]
     InvalidPublicKey(Vec<u8>),
+
+    #[error("{0}")]
+    InvalidGetHeader(&'static str),
 }
 
 impl IntoResponse for ProposerApiError {
@@ -252,7 +255,9 @@ impl IntoResponse for ProposerApiError {
             ProposerApiError::DeliveringPayload |
             ProposerApiError::GetPayloadAlreadyReceived |
             ProposerApiError::RequestForPastSlot { .. } => StatusCode::BAD_REQUEST,
-            ProposerApiError::InvalidPublicKey(_) => StatusCode::BAD_REQUEST,
+            ProposerApiError::InvalidPublicKey(_) | ProposerApiError::InvalidGetHeader(_) => {
+                StatusCode::BAD_REQUEST
+            }
 
             ProposerApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
 

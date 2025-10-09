@@ -35,7 +35,7 @@ impl<A: Api> ProposerApi<A> {
     /// The function returns a JSON response containing the best bid if found.
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/getHeader>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)), err)]
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
         Extension(timings): Extension<RequestTimings>,
@@ -74,12 +74,10 @@ impl<A: Api> ProposerApi<A> {
 
         let user_agent = proposer_api.api_provider.get_metadata(&headers);
 
-        let TimingResult { is_mev_boost, sleep_time } = proposer_api.api_provider.get_timing(
-            &params,
-            &headers,
-            &duty.entry.preferences,
-            ms_into_slot,
-        );
+        let TimingResult { is_mev_boost, sleep_time } = proposer_api
+            .api_provider
+            .get_timing(&params, &headers, &duty.entry.preferences, ms_into_slot)
+            .map_err(ProposerApiError::InvalidGetHeader)?;
 
         if let Some(sleep_time) = sleep_time {
             debug!(target: "timing_games",
@@ -164,8 +162,9 @@ impl<A: Api> ProposerApi<A> {
         };
 
         let bid_block_hash = *bid.block_hash();
+        let value = *bid.value();
         debug!(
-            value = ?bid.value(),
+            ?value,
             block_hash =% bid_block_hash,
             "delivering bid",
         );
@@ -189,7 +188,7 @@ impl<A: Api> ProposerApi<A> {
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
 
         let signed_bid = serde_json::to_value(signed_bid)?;
-        info!(block_hash =% bid_block_hash, "delivering bid");
+        info!(block_hash =% bid_block_hash, ?value, "delivering bid");
 
         Ok(axum::Json(signed_bid))
     }

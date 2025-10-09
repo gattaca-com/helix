@@ -16,7 +16,7 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
         headers: &HeaderMap,
         preferences: &ValidatorPreferences,
         ms_into_slot: u64,
-    ) -> TimingResult;
+    ) -> Result<TimingResult, &'static str>;
 
     fn get_metadata(&self, headers: &HeaderMap) -> Option<String>;
 }
@@ -48,7 +48,7 @@ impl ApiProvider for DefaultApiProvider {
         headers: &HeaderMap,
         preferences: &ValidatorPreferences,
         ms_into_slot: u64,
-    ) -> TimingResult {
+    ) -> Result<TimingResult, &'static str> {
         let mut is_mev_boost = false;
 
         // how far is the client
@@ -104,12 +104,12 @@ impl ApiProvider for DefaultApiProvider {
 
             let sleep_time = Duration::from_millis(sleep_time_adj);
 
-            TimingResult {
+            Ok(TimingResult {
                 sleep_time: (sleep_time > Duration::ZERO).then(|| sleep_time),
                 is_mev_boost,
-            }
+            })
         } else {
-            TimingResult { sleep_time: None, is_mev_boost }
+            Ok(TimingResult { sleep_time: None, is_mev_boost })
         }
     }
 }
