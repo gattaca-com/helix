@@ -15,7 +15,7 @@ use helix_common::{
 };
 use helix_database::DatabaseService;
 use helix_types::BlsPublicKeyBytes;
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{debug, error, info, trace, warn, Instrument};
 
 use super::ProposerApi;
 use crate::{
@@ -79,6 +79,8 @@ impl<A: Api> ProposerApi<A> {
             .get_timing(&params, &headers, &duty.entry.preferences, ms_into_slot)
             .map_err(ProposerApiError::InvalidGetHeader)?;
 
+        let mut timing_guard = TimeoutGuard::default();
+
         if let Some(sleep_time) = sleep_time {
             debug!(target: "timing_games",
             ?sleep_time,
@@ -88,7 +90,10 @@ impl<A: Api> ProposerApi<A> {
             "timing game sleep");
 
             tokio::time::sleep(sleep_time).await;
-        }
+            timing_guard.done_sleep = true;
+        } else {
+            timing_guard.done_sleep = true;
+        };
 
         let Ok(rx) = proposer_api.auctioneer_handle.get_header(params) else {
             error!("failed to send get_header to auctioneer");
@@ -190,7 +195,24 @@ impl<A: Api> ProposerApi<A> {
         let signed_bid = serde_json::to_value(signed_bid)?;
         info!(block_hash =% bid_block_hash, ?value, "delivering bid");
 
+        timing_guard.done_fetch = true;
         Ok(axum::Json(signed_bid))
+    }
+}
+
+#[derive(Default)]
+struct TimeoutGuard {
+    done_sleep: bool,
+    done_fetch: bool,
+}
+
+impl Drop for TimeoutGuard {
+    fn drop(&mut self) {
+        if !self.done_fetch {
+            trace!("didn't complete fetch")
+        } else if !self.done_sleep {
+            trace!("didn't complete sleep")
+        }
     }
 }
 
