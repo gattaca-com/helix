@@ -83,7 +83,6 @@ pub fn init_runtime(relay_config: &RelayConfig) {
         })
         .enable_all()
         .worker_threads(config.tokio.len())
-        .max_blocking_threads(1) // we don't use spawn_blocking
         .on_thread_start(move || {
             let thread_id = thread::current().id();
             let (core, _count) = cores_a.lock().add(thread_id);
