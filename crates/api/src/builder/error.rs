@@ -21,13 +21,13 @@ pub enum BuilderApiError {
     #[error("block validation: {0}")]
     BidValidation(#[from] BlockValidationError),
 
-    #[error(transparent)]
+    #[error("signature: {0:?}")]
     SigError(#[from] SigError),
 
     #[error("block simulation: {0:?}")]
     BlockSimulation(#[from] BlockSimError),
 
-    #[error(transparent)]
+    #[error("hydration: {0:?}")]
     HydrationError(#[from] HydrationError),
 
     #[error("untrusted builder on dehydrated payload")]
@@ -66,7 +66,7 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::SszDecode(_) |
             BuilderApiError::PayloadDecode |
             BuilderApiError::BidValidation(_) |
-            BuilderApiError::ProposerDutyNotFound |
+            BuilderApiError::TooEarlyOrUnregistered |
             BuilderApiError::HydrationError(_) |
             BuilderApiError::SigError(_) |
             BuilderApiError::AlreadyOnNextSlot |
