@@ -66,7 +66,7 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::SszDecode(_) |
             BuilderApiError::PayloadDecode |
             BuilderApiError::BidValidation(_) |
-            BuilderApiError::TooEarlyOrUnregistered |
+            BuilderApiError::ProposerDutyNotFound |
             BuilderApiError::HydrationError(_) |
             BuilderApiError::SigError(_) |
             BuilderApiError::AlreadyOnNextSlot |
