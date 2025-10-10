@@ -248,8 +248,3 @@ fn validate_bid_request_time(
 
     Ok(ms_into_slot.max(0) as u64)
 }
-
-// pub fn is_mev_boost_client(client_name: &str) -> bool {
-//     let keywords = ["Kiln", "mev-boost", "commit-boost", "Vouch"];
-//     keywords.iter().any(|&keyword| client_name.contains(keyword))
-// }
