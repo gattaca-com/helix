@@ -1,6 +1,6 @@
 use std::{
     sync::{Arc, atomic::Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{Extension, extract::Path, http::HeaderMap, response::IntoResponse};
@@ -9,9 +9,12 @@ use helix_common::{
     api::proposer_api::GetHeaderParams,
     api_provider::{ApiProvider, TimingResult},
     chain_info::ChainInfo,
-    resign_builder_bid, spawn_tracked,
+    metrics::BID_SIGNING_LATENCY,
+    signing::RelaySigningContext,
+    spawn_tracked,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
+use helix_types::{BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
 use tracing::{Instrument, debug, error, info, trace, warn};
 
 use super::ProposerApi;
@@ -237,4 +240,28 @@ fn validate_bid_request_time(
     }
 
     Ok(ms_into_slot.max(0) as u64)
+}
+
+/// Signs the builder bid with the relay key. This is necessary because the relay is the "builder"
+/// from the proposer point of view
+pub fn resign_builder_bid(
+    mut message: BuilderBid,
+    signing_ctx: &RelaySigningContext,
+    fork: ForkName,
+) -> GetHeaderResponse {
+    let start = Instant::now();
+
+    message.pubkey = *signing_ctx.pubkey();
+    let sig = signing_ctx.sign_builder_message(&message).serialize().into();
+
+    let bid = GetHeaderResponse {
+        version: fork,
+        metadata: Default::default(),
+        data: SignedBuilderBid { message, signature: sig },
+    };
+
+    BID_SIGNING_LATENCY.observe(start.elapsed().as_micros() as f64);
+    debug!("re-signing builder bid took {:?}", start.elapsed());
+
+    bid
 }

@@ -5,7 +5,6 @@ pub mod bid_submission;
 pub mod builder_info;
 pub mod chain_info;
 pub mod config;
-pub mod eth;
 pub mod local_cache;
 pub mod metrics;
 pub mod proposer;
@@ -19,7 +18,6 @@ pub mod validator_preferences;
 
 pub use builder_info::*;
 pub use config::*;
-pub use eth::*;
 pub use proposer::*;
 pub use traces::*;
 pub use validator::*;

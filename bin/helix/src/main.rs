@@ -120,21 +120,21 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
 
     let api_provider = DefaultApiProvider::new(config.clone().into());
 
-    start_api_service::<ApiProd>(
+    tokio::spawn(start_api_service::<ApiProd>(
         config.clone(),
         db.clone(),
         local_cache,
+        current_slot_info,
         chain_info,
         relay_signing_context,
         beacon_client,
         Arc::new(api_provider),
-        current_slot_info,
         known_validators_loaded,
         terminating.clone(),
         top_bid_tx,
         slot_data_rx,
         relay_network_api.api(),
-    );
+    ));
 
     let termination_grace_period = config.router_config.shutdown_delay_ms;
 

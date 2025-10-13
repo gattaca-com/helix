@@ -1,17 +1,9 @@
 #![allow(clippy::too_many_arguments)]
 
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::Arc;
 
-use bytes::Bytes;
-use helix_beacon::multi_beacon_client::MultiBeaconClient;
-use helix_common::{
-    RelayConfig, api_provider::ApiProvider, chain_info::ChainInfo, local_cache::LocalCache,
-    signing::RelaySigningContext,
-};
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_housekeeper::{CurrentSlotInfo, chain_event_updater::SlotData};
-use helix_network::api::RelayNetworkApi;
-use service::run_api_service;
+use helix_common::{RelayConfig, api_provider::ApiProvider, local_cache::LocalCache};
+pub use service::start_api_service;
 
 pub mod admin_service;
 pub mod auctioneer;
@@ -27,38 +19,6 @@ pub mod service;
 
 mod grpc {
     include!(concat!(env!("OUT_DIR"), "/gossip.rs"));
-}
-
-pub fn start_api_service<A: Api>(
-    config: RelayConfig,
-    db: Arc<PostgresDatabaseService>,
-    local_cache: Arc<LocalCache>,
-    chain_info: Arc<ChainInfo>,
-    relay_signing_context: Arc<RelaySigningContext>,
-    multi_beacon_client: Arc<MultiBeaconClient>,
-    api_provider: Arc<A::ApiProvider>,
-    current_slot_info: CurrentSlotInfo,
-    known_validators_loaded: Arc<AtomicBool>,
-    terminating: Arc<AtomicBool>,
-    top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-    slot_data_rx: crossbeam_channel::Receiver<SlotData>,
-    relay_network_api: RelayNetworkApi,
-) {
-    tokio::spawn(run_api_service::<A>(
-        config.clone(),
-        db,
-        local_cache,
-        current_slot_info,
-        chain_info,
-        relay_signing_context,
-        multi_beacon_client,
-        api_provider,
-        known_validators_loaded,
-        terminating,
-        top_bid_tx,
-        slot_data_rx,
-        relay_network_api,
-    ));
 }
 
 pub fn start_admin_service(auctioneer: Arc<LocalCache>, config: &RelayConfig) {

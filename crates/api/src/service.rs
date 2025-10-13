@@ -30,7 +30,7 @@ use crate::{
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
-pub async fn run_api_service<A: Api>(
+pub async fn start_api_service<A: Api>(
     mut config: RelayConfig,
     db: Arc<PostgresDatabaseService>,
     local_cache: Arc<LocalCache>,
