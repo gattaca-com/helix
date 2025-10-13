@@ -18,6 +18,7 @@ use helix_common::{
     RelayConfig, ValidatorPreferences, alerts::AlertManager, chain_info::ChainInfo,
     local_cache::LocalCache, signing::RelaySigningContext,
 };
+use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_housekeeper::CurrentSlotInfo;
 use hyper::StatusCode;
 use tokio::sync::mpsc::{self};
@@ -34,7 +35,7 @@ use crate::{
 #[derive(Clone)]
 pub struct ProposerApi<A: Api> {
     pub local_cache: Arc<LocalCache>,
-    pub db: Arc<A::DatabaseService>,
+    pub db: Arc<PostgresDatabaseService>,
     pub gossiper: Arc<GrpcGossiperClientManager>,
     pub multi_beacon_client: Arc<MultiBeaconClient>,
     pub api_provider: Arc<A::ApiProvider>,
@@ -56,7 +57,7 @@ pub struct ProposerApi<A: Api> {
 impl<A: Api> ProposerApi<A> {
     pub fn new(
         local_cache: Arc<LocalCache>,
-        db: Arc<A::DatabaseService>,
+        db: Arc<PostgresDatabaseService>,
         gossiper: Arc<GrpcGossiperClientManager>,
         api_provider: Arc<A::ApiProvider>,
         signing_context: Arc<RelaySigningContext>,

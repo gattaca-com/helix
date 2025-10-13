@@ -3,12 +3,11 @@ use tokio::sync::oneshot;
 use tracing::error;
 
 use crate::{
-    Api,
     auctioneer::{context::Context, types::GetHeaderResult},
     proposer::ProposerApiError,
 };
 
-impl<A: Api> Context<A> {
+impl Context {
     pub(super) fn handle_get_header(
         &self,
         params: GetHeaderParams,

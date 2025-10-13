@@ -28,6 +28,7 @@ use helix_common::{
     record_submission_step,
     utils::pin_thread_to_core,
 };
+use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_housekeeper::{PayloadAttributesUpdate, chain_event_updater::SlotData as HkSlotData};
 use helix_types::Slot;
 pub use simulator::*;
@@ -35,7 +36,6 @@ use tracing::{debug, info, info_span, trace, warn};
 pub use types::{GetPayloadResultData, PayloadBidData, PayloadHeaderData};
 
 use crate::{
-    Api,
     auctioneer::{
         bid_sorter::BidSorter,
         context::Context,
@@ -48,10 +48,10 @@ use crate::{
 };
 
 // TODO: tidy up builder and proposer api state, and spawn in a separate function
-pub fn spawn_workers<A: Api>(
+pub fn spawn_workers(
     chain_info: ChainInfo,
     config: RelayConfig,
-    db: Arc<A::DatabaseService>,
+    db: Arc<PostgresDatabaseService>,
     merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
     cache: LocalCache,
     top_bid_tx: tokio::sync::broadcast::Sender<bytes::Bytes>,
@@ -103,7 +103,7 @@ pub fn spawn_workers<A: Api>(
         let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
         let ctx = Context::new(chain_info, config, sim_manager, db, bid_sorter, cache);
         let id = format!("auctioneer_{auctioneer_core}");
-        let auctioneer = Auctioneer::<A> { ctx, state: State::default(), tel: Telemetry::new(id) };
+        let auctioneer = Auctioneer { ctx, state: State::default(), tel: Telemetry::new(id) };
 
         std::thread::Builder::new()
             .name("auctioneer".to_string())
@@ -117,13 +117,13 @@ pub fn spawn_workers<A: Api>(
     (AuctioneerHandle::new(sub_worker_tx, event_tx), RegWorkerHandle::new(reg_worker_tx))
 }
 
-struct Auctioneer<A: Api> {
-    ctx: Context<A>,
+struct Auctioneer {
+    ctx: Context,
     state: State,
     tel: Telemetry,
 }
 
-impl<A: Api> Auctioneer<A> {
+impl Auctioneer {
     fn run(
         mut self,
         rx: crossbeam_channel::Receiver<Event>,
@@ -180,7 +180,7 @@ impl Default for State {
 // TODO: tokio metrics
 
 impl State {
-    fn step<A: Api>(&mut self, event: Event, ctx: &mut Context<A>, tel: &mut Telemetry) {
+    fn step(&mut self, event: Event, ctx: &mut Context, tel: &mut Telemetry) {
         let start = Instant::now();
         let start_state = self.as_str();
         let event_tag = event.as_str();
@@ -199,7 +199,7 @@ impl State {
             .observe(step_dur.as_nanos() as f64 / 1000.);
     }
 
-    fn _step<A: Api>(&mut self, event: Event, ctx: &mut Context<A>) {
+    fn _step(&mut self, event: Event, ctx: &mut Context) {
         match (&self, event) {
             ///////////// LIFECYCLE EVENTS (ALWAYS VALID) /////////////
 
@@ -506,12 +506,12 @@ impl State {
         }
     }
 
-    fn process_slot_data<A: Api>(
+    fn process_slot_data(
         bid_slot: Slot,
         registration_data: Option<BuilderGetValidatorsResponseEntry>,
         payload_attributes: Option<PayloadAttributesUpdate>,
         il: Option<InclusionListWithMetadata>,
-        ctx: &mut Context<A>,
+        ctx: &mut Context,
     ) -> Self {
         match (registration_data, payload_attributes) {
             (Some(registration_data), Some(payload_attributes)) => {
@@ -554,7 +554,7 @@ impl State {
     /// Check whether we received the payload we were waiting for the pending get_payload, this
     /// makes sense to be called only when we add a new payload ie. when receiving a new submission
     /// or from gossip
-    fn maybe_start_broacasting<A: Api>(ctx: &mut Context<A>, slot_data: &SlotData) -> Option<Self> {
+    fn maybe_start_broacasting(ctx: &mut Context, slot_data: &SlotData) -> Option<Self> {
         let block_hash = ctx.maybe_try_unblind(slot_data)?;
         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
 

@@ -9,13 +9,12 @@ use helix_common::{
     BuilderInfo, RelayConfig, chain_info::ChainInfo, local_cache::LocalCache,
     metrics::SimulatorMetrics, spawn_tracked,
 };
-use helix_database::DatabaseService;
+use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{error, info, warn};
 
 use crate::{
-    Api,
     auctioneer::{
         bid_sorter::BidSorter,
         simulator::manager::{SimulationResult, SimulatorManager},
@@ -38,24 +37,24 @@ pub struct SlotContext {
     pub sim_manager: SimulatorManager,
 }
 
-pub struct Context<A: Api> {
+pub struct Context {
     pub chain_info: ChainInfo,
     pub _config: RelayConfig,
     pub cache: LocalCache,
     pub unknown_builder_info: BuilderInfo,
-    pub db: Arc<A::DatabaseService>,
+    pub db: Arc<PostgresDatabaseService>,
     pub slot_context: SlotContext,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
 const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
 
-impl<A: Api> Context<A> {
+impl Context {
     pub fn new(
         chain_info: ChainInfo,
         config: RelayConfig,
         sim_manager: SimulatorManager,
-        db: Arc<A::DatabaseService>,
+        db: Arc<PostgresDatabaseService>,
         bid_sorter: BidSorter,
         cache: LocalCache,
     ) -> Self {
@@ -186,7 +185,7 @@ impl<A: Api> Context<A> {
     }
 }
 
-impl<A: Api> Deref for Context<A> {
+impl Deref for Context {
     type Target = SlotContext;
 
     fn deref(&self) -> &Self::Target {
@@ -194,7 +193,7 @@ impl<A: Api> Deref for Context<A> {
     }
 }
 
-impl<A: Api> DerefMut for Context<A> {
+impl DerefMut for Context {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.slot_context
     }

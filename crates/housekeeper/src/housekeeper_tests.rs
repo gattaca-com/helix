@@ -13,7 +13,7 @@ use helix_common::{
     RelayConfig, ValidatorSummary, api::builder_api::BuilderGetValidatorsResponseEntry,
     chain_info::ChainInfo, config::PrimevConfig, local_cache::LocalCache,
 };
-use helix_database::mock_database_service::MockDatabaseService;
+
 use helix_network::RelayNetworkManager;
 use tokio::sync::broadcast;
 

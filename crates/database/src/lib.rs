@@ -1,7 +1,5 @@
 pub mod error;
-pub mod mock_database_service;
 pub mod postgres;
-pub mod traits;
 pub mod types;
 
 use std::{
@@ -14,7 +12,6 @@ use std::{
 
 use helix_common::{RelayConfig, is_local_dev};
 use postgres::postgres_db_service::PostgresDatabaseService;
-pub use traits::*;
 pub use types::*;
 
 pub async fn start_db_service(

@@ -11,7 +11,6 @@ use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 use crate::{
-    Api,
     auctioneer::{
         context::Context,
         types::{GetPayloadResult, GetPayloadResultData, PayloadEntry, PendingPayload, SlotData},
@@ -20,7 +19,7 @@ use crate::{
     proposer::ProposerApiError,
 };
 
-impl<A: Api> Context<A> {
+impl Context {
     pub(super) fn handle_gossip_payload(
         &mut self,
         payload: BroadcastPayloadParams,

@@ -13,13 +13,14 @@ use helix_common::{
     },
     metrics,
 };
-use helix_database::{DatabaseService, error::DatabaseError};
+use helix_database::{
+    error::DatabaseError, postgres::postgres_db_service::PostgresDatabaseService,
+};
 use moka::sync::Cache;
 use tracing::warn;
 
-use crate::{
-    Api,
-    relay_data::{BuilderBlocksReceivedStats, ProposerPayloadDeliveredStats, error::DataApiError},
+use crate::relay_data::{
+    BuilderBlocksReceivedStats, ProposerPayloadDeliveredStats, error::DataApiError,
 };
 
 pub(crate) type BidsCache = Cache<BuilderBlocksReceivedParams, Vec<ReceivedBlocksResponse>>;
@@ -27,17 +28,17 @@ pub(crate) type DeliveredPayloadsCache =
     Cache<ProposerPayloadDeliveredParams, Vec<DeliveredPayloadsResponse>>;
 
 #[derive(Clone)]
-pub struct DataApi<A: Api> {
+pub struct DataApi {
     validator_preferences: Arc<ValidatorPreferences>,
-    db: Arc<A::DatabaseService>,
+    db: Arc<PostgresDatabaseService>,
     payload_delivered_stats: ProposerPayloadDeliveredStats,
     builder_blocks_received_stats: BuilderBlocksReceivedStats,
 }
 
-impl<A: Api> DataApi<A> {
+impl DataApi {
     pub fn new(
         validator_preferences: Arc<ValidatorPreferences>,
-        db: Arc<A::DatabaseService>,
+        db: Arc<PostgresDatabaseService>,
     ) -> Self {
         let payload_delivered_stats = ProposerPayloadDeliveredStats::default();
         let builder_blocks_received_stats = BuilderBlocksReceivedStats::default();
@@ -62,7 +63,7 @@ impl<A: Api> DataApi<A> {
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getDeliveredPayloads>
     pub async fn proposer_payload_delivered(
-        Extension(data_api): Extension<Arc<DataApi<A>>>,
+        Extension(data_api): Extension<Arc<DataApi>>,
         Extension(cache): Extension<DeliveredPayloadsCache>,
         Query(mut params): Query<ProposerPayloadDeliveredParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
@@ -109,7 +110,7 @@ impl<A: Api> DataApi<A> {
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getReceivedBids>
     pub async fn builder_bids_received(
-        Extension(data_api): Extension<Arc<DataApi<A>>>,
+        Extension(data_api): Extension<Arc<DataApi>>,
         Extension(cache): Extension<BidsCache>,
         Query(mut params): Query<BuilderBlocksReceivedParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
@@ -155,7 +156,7 @@ impl<A: Api> DataApi<A> {
 
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Data/getValidatorRegistration>
     pub async fn validator_registration(
-        Extension(data_api): Extension<Arc<DataApi<A>>>,
+        Extension(data_api): Extension<Arc<DataApi>>,
         Query(params): Query<ValidatorRegistrationParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
         match data_api.db.get_validator_registration(&params.pubkey).await {

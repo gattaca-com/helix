@@ -8,7 +8,7 @@ use helix_common::{
     RelayConfig, api_provider::ApiProvider, chain_info::ChainInfo, local_cache::LocalCache,
     signing::RelaySigningContext,
 };
-use helix_database::DatabaseService;
+use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_housekeeper::{CurrentSlotInfo, chain_event_updater::SlotData};
 use helix_network::api::RelayNetworkApi;
 use service::run_api_service;
@@ -31,7 +31,7 @@ mod grpc {
 
 pub fn start_api_service<A: Api>(
     config: RelayConfig,
-    db: Arc<A::DatabaseService>,
+    db: Arc<PostgresDatabaseService>,
     local_cache: Arc<LocalCache>,
     chain_info: Arc<ChainInfo>,
     relay_signing_context: Arc<RelaySigningContext>,
@@ -66,7 +66,6 @@ pub fn start_admin_service(auctioneer: Arc<LocalCache>, config: &RelayConfig) {
 }
 
 pub trait Api: Clone + Send + Sync + 'static {
-    type DatabaseService: DatabaseService;
     type ApiProvider: ApiProvider;
 }
 

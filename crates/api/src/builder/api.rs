@@ -8,6 +8,7 @@ use alloy_primitives::{Address, B256};
 use axum::{Extension, http::StatusCode, response::IntoResponse};
 use bytes::Bytes;
 use helix_common::{RelayConfig, chain_info::ChainInfo, local_cache::LocalCache};
+use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_housekeeper::CurrentSlotInfo;
 use helix_types::{
     BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
@@ -25,7 +26,7 @@ pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB
 #[derive(Clone)]
 pub struct BuilderApi<A: Api> {
     pub local_cache: Arc<LocalCache>,
-    pub db: Arc<A::DatabaseService>,
+    pub db: Arc<PostgresDatabaseService>,
     pub chain_info: Arc<ChainInfo>,
     pub gossiper: Arc<GrpcGossiperClientManager>,
     pub curr_slot_info: CurrentSlotInfo,
@@ -41,7 +42,7 @@ pub struct BuilderApi<A: Api> {
 impl<A: Api> BuilderApi<A> {
     pub fn new(
         local_cache: Arc<LocalCache>,
-        db: Arc<A::DatabaseService>,
+        db: Arc<PostgresDatabaseService>,
         chain_info: Arc<ChainInfo>,
         gossiper: Arc<GrpcGossiperClientManager>,
         relay_config: RelayConfig,

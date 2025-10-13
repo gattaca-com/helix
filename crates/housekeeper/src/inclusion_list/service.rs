@@ -7,7 +7,7 @@ use helix_common::{
     chain_info::ChainInfo,
     local_cache::LocalCache,
 };
-use helix_database::DatabaseService;
+use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_network::RelayNetworkManager;
 use helix_types::{BlsPublicKeyBytes, Slot};
 use tracing::{error, info, warn};
@@ -19,8 +19,8 @@ use crate::{
 const MISSING_INCLUSION_LIST_CUTOFF: Duration = Duration::from_secs(6);
 
 #[derive(Clone)]
-pub struct InclusionListService<DB: DatabaseService> {
-    db: Arc<DB>,
+pub struct InclusionListService {
+    db: Arc<PostgresDatabaseService>,
     local_cache: Arc<LocalCache>,
     http_il_fetcher: HttpInclusionListFetcher,
     chain_info: Arc<ChainInfo>,
@@ -28,9 +28,9 @@ pub struct InclusionListService<DB: DatabaseService> {
     network_api: Arc<RelayNetworkManager>,
 }
 
-impl<DB: DatabaseService> InclusionListService<DB> {
+impl InclusionListService {
     pub fn new(
-        db: Arc<DB>,
+        db: Arc<PostgresDatabaseService>,
         local_cache: Arc<LocalCache>,
         config: InclusionListConfig,
         chain_info: Arc<ChainInfo>,
