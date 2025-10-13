@@ -67,10 +67,9 @@ pub type BeaconBlockFulu = lh_types::beacon_block::BeaconBlockFulu<MainnetEthSpe
 pub type BeaconBlockBodyFulu = lh_types::beacon_block_body::BeaconBlockBodyFulu<MainnetEthSpec>;
 
 // Get header
-pub type SignedBuilderBidInner = crate::builder_bid::SignedBuilderBid;
-// TODO: change names , below should be GetHeaderResponse
+pub type SignedBuilderBid = crate::builder_bid::SignedBuilderBid;
 /// Response object of GET `/eth/v1/builder/header/{slot}/{parent_hash}/{pubkey}`
-pub type SignedBuilderBid = lh_types::ForkVersionedResponse<SignedBuilderBidInner>;
+pub type GetHeaderResponse = lh_types::ForkVersionedResponse<SignedBuilderBid>;
 
 // Get payload
 /// Request object of POST `/eth/v1/builder/blinded_blocks`
