@@ -1,6 +1,6 @@
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use alloy_primitives::B256;
@@ -15,11 +15,11 @@ use parking_lot::RwLock;
 use tracing::{error, info};
 
 use crate::{
+    BuilderConfig, BuilderInfo, ProposerInfo,
     api::builder_api::{
         BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
         SlotCoordinate,
     },
-    BuilderConfig, BuilderInfo, ProposerInfo,
 };
 
 const ESTIMATED_TRUSTED_PROPOSERS: usize = 200_000;
@@ -244,7 +244,7 @@ impl LocalCache {
 mod tests {
 
     use alloy_primitives::U256;
-    use helix_types::{get_fixed_pubkey_bytes, BlsPublicKey, TestRandomSeed};
+    use helix_types::{BlsPublicKey, TestRandomSeed, get_fixed_pubkey_bytes};
 
     use super::*;
     use crate::BuilderConfig;

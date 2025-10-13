@@ -1,13 +1,13 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
     time::Instant,
 };
 
 use alloy_primitives::{B256, U256};
 use helix_common::{
-    chain_info::ChainInfo, local_cache::LocalCache, metrics::SimulatorMetrics, spawn_tracked,
-    BuilderInfo, RelayConfig,
+    BuilderInfo, RelayConfig, chain_info::ChainInfo, local_cache::LocalCache,
+    metrics::SimulatorMetrics, spawn_tracked,
 };
 use helix_database::DatabaseService;
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot};
@@ -15,13 +15,13 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{error, info, warn};
 
 use crate::{
+    Api,
     auctioneer::{
         bid_sorter::BidSorter,
         simulator::manager::{SimulationResult, SimulatorManager},
         types::{PayloadEntry, PendingPayload},
     },
     builder::error::BuilderApiError,
-    Api,
 };
 
 // Context that is only valid for a given slot
@@ -101,7 +101,7 @@ impl<A: Api> Context<A> {
     pub fn handle_simulation_result(&mut self, result: SimulationResult) {
         let (id, result) = result;
 
-        let paused_until = result.as_ref().and_then(|r| r.paused_until.clone());
+        let paused_until = result.as_ref().and_then(|r| r.paused_until);
         self.sim_manager.handle_task_response(id, paused_until);
 
         let Some(result) = result else {
@@ -111,32 +111,31 @@ impl<A: Api> Context<A> {
         let builder = *result.submission.builder_public_key();
         let block_hash = *result.submission.block_hash();
 
-        if let Err(err) = result.result.as_ref() {
-            if err.is_demotable() {
-                if self.cache.demote_builder(&builder) {
-                    warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
+        if let Err(err) = result.result.as_ref() &&
+            err.is_demotable()
+        {
+            if self.cache.demote_builder(&builder) {
+                warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
 
-                    SimulatorMetrics::demotion_count();
+                SimulatorMetrics::demotion_count();
 
-                    let reason = err.to_string();
-                    let bid_slot = result.submission.slot();
-                    let failsafe_triggered = self.sim_manager.failsafe_triggered.clone();
+                let reason = err.to_string();
+                let bid_slot = result.submission.slot();
+                let failsafe_triggered = self.sim_manager.failsafe_triggered.clone();
 
-                    let db = self.db.clone();
-                    spawn_tracked!(async move {
-                        if let Err(err) = db
-                            .db_demote_builder(bid_slot.as_u64(), &builder, &block_hash, reason)
-                            .await
-                        {
-                            failsafe_triggered.store(true, Ordering::Relaxed);
-                            error!(%builder, %err, %block_hash, "failed to demote builder in database! Pausing all optmistic submissions");
-                        }
-                    });
-                } else {
-                    warn!(%err, %builder, %block_hash, "failed simulation with known error, skipping demotion");
-                }
-            };
-        }
+                let db = self.db.clone();
+                spawn_tracked!(async move {
+                    if let Err(err) =
+                        db.db_demote_builder(bid_slot.as_u64(), &builder, &block_hash, reason).await
+                    {
+                        failsafe_triggered.store(true, Ordering::Relaxed);
+                        error!(%builder, %err, %block_hash, "failed to demote builder in database! Pausing all optmistic submissions");
+                    }
+                });
+            } else {
+                warn!(%err, %builder, %block_hash, "failed simulation with known error, skipping demotion");
+            }
+        };
 
         let db = self.db.clone();
         spawn_tracked!(async move {

@@ -3,8 +3,8 @@ use helix_common::BuilderInfo;
 use helix_types::{BlockValidationError, BlsPublicKeyBytes, SignedBidSubmission};
 
 use crate::{
-    auctioneer::{context::Context, types::SlotData},
     Api,
+    auctioneer::{context::Context, types::SlotData},
 };
 
 impl<A: Api> Context<A> {

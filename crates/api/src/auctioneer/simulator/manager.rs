@@ -1,16 +1,15 @@
 use std::{
     self,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use helix_common::{
-    bid_submission::OptimisticVersion, is_local_dev, metrics::SimulatorMetrics,
-    record_submission_step, simulator::BlockSimError, spawn_tracked, SimulatorConfig,
-    SubmissionTrace,
+    SimulatorConfig, SubmissionTrace, bid_submission::OptimisticVersion, is_local_dev,
+    metrics::SimulatorMetrics, record_submission_step, simulator::BlockSimError, spawn_tracked,
 };
 use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission};
 use tokio::sync::oneshot;
@@ -18,9 +17,9 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     auctioneer::{
-        simulator::{client::SimulatorClient, BlockMergeRequest, SimulatorRequest},
-        types::SubmissionResult,
         Event,
+        simulator::{BlockMergeRequest, SimulatorRequest, client::SimulatorClient},
+        types::SubmissionResult,
     },
     service::SIMULATOR_REQUEST_TIMEOUT,
 };
@@ -176,10 +175,10 @@ impl SimulatorManager {
         sim.pending = sim.pending.saturating_sub(1);
         sim.paused_until = sim.paused_until.max(paused_until); // keep highest pause
 
-        if let Some(id) = self.next_sim_client() {
-            if let Some(req) = self.requests.next_req() {
-                self.spawn_sim(id, req);
-            }
+        if let Some(id) = self.next_sim_client() &&
+            let Some(req) = self.requests.next_req()
+        {
+            self.spawn_sim(id, req);
         }
     }
 
@@ -209,11 +208,7 @@ impl SimulatorManager {
 
             let paused_until = if let Err(err) = res.as_ref() {
                 SimulatorMetrics::sim_status(false);
-                if err.is_temporary() {
-                    Some(Instant::now() + PAUSE_DURATION)
-                } else {
-                    None
-                }
+                if err.is_temporary() { Some(Instant::now() + PAUSE_DURATION) } else { None }
             } else {
                 SimulatorMetrics::sim_status(true);
                 None

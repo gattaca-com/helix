@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use axum::{http::StatusCode, response::IntoResponse, routing::post, Extension, Router};
-use helix_common::{local_cache::LocalCache, RelayConfig};
+use axum::{Extension, Router, http::StatusCode, response::IntoResponse, routing::post};
+use helix_common::{RelayConfig, local_cache::LocalCache};
 use tower_http::validate_request::ValidateRequestHeaderLayer;
 use tracing::{error, info};
 

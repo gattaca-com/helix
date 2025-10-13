@@ -2,10 +2,10 @@ use std::time::Duration;
 
 use alloy_primitives::B256;
 use helix_types::{
-    custom_slot_clock, duration_into_slot, holesky_slot_clock, holesky_spec, hoodi_slot_clock,
-    hoodi_spec, mainnet_slot_clock, sepolia_slot_clock, sepolia_spec, spec_from_file, ChainSpec,
-    EthSpec, ForkName, MainnetEthSpec, Slot, SlotClock, SlotClockTrait, HOLESKY_GENESIS_TIME,
-    HOODI_GENESIS_TIME, MAINNET_GENESIS_TIME, SEPOLIA_GENESIS_TIME,
+    ChainSpec, EthSpec, ForkName, HOLESKY_GENESIS_TIME, HOODI_GENESIS_TIME, MAINNET_GENESIS_TIME,
+    MainnetEthSpec, SEPOLIA_GENESIS_TIME, Slot, SlotClock, SlotClockTrait, custom_slot_clock,
+    duration_into_slot, holesky_slot_clock, holesky_spec, hoodi_slot_clock, hoodi_spec,
+    mainnet_slot_clock, sepolia_slot_clock, sepolia_spec, spec_from_file,
 };
 
 pub(crate) const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] = [

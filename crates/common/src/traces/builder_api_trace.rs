@@ -2,7 +2,7 @@ use std::{sync::atomic::Ordering, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{metrics::SUB_TRACE_LATENCY, utils::utcnow_ns, RequestTimings};
+use crate::{RequestTimings, metrics::SUB_TRACE_LATENCY, utils::utcnow_ns};
 
 // all timestamps are in nanoseconds
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

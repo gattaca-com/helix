@@ -6,11 +6,11 @@ use std::{
 use alloy_primitives::{Address, B256, U256};
 use bytes::Bytes;
 use helix_common::{
+    SubmissionTrace,
     api::builder_api::TopBidUpdate,
-    metrics::{TopBidMetrics, BID_SORTER_PROCESS_LATENCY_US},
+    metrics::{BID_SORTER_PROCESS_LATENCY_US, TopBidMetrics},
     record_submission_step_ns,
     utils::{avg_duration, utcnow_ns},
-    SubmissionTrace,
 };
 use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -116,7 +116,7 @@ impl BidSorter {
 
     pub fn best_mergeable(&self) -> Option<B256> {
         let curr = self.curr_bid.as_ref()?;
-        curr.1.merging.allow_appending.then(|| curr.1.block_hash)
+        curr.1.merging.allow_appending.then_some(curr.1.block_hash)
     }
 
     pub fn demote(&mut self, demoted: BlsPublicKeyBytes) {
@@ -180,10 +180,10 @@ impl BidSorter {
             return;
         };
 
-        if let Some((curr, _)) = &self.curr_bid {
-            if *curr == demoted {
-                self.traverse_update_top_bid(None, false);
-            }
+        if let Some((curr, _)) = &self.curr_bid &&
+            *curr == demoted
+        {
+            self.traverse_update_top_bid(None, false);
         }
     }
 

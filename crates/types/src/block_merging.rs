@@ -1,16 +1,16 @@
 use std::{collections::HashMap, hash::Hash};
 
-use alloy_primitives::{bytes::Bytes, Address, B256, U256};
+use alloy_primitives::{Address, B256, U256, bytes::Bytes};
 use lh_test_random::TestRandom;
-use lh_types::{test_utils::TestRandom, ForkName};
+use lh_types::{ForkName, test_utils::TestRandom};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use ssz_derive::{Decode, Encode};
 
 use crate::{
-    fields::{KzgCommitment, KzgProof},
     Blob, SignedBidSubmission,
+    fields::{KzgCommitment, KzgProof},
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]

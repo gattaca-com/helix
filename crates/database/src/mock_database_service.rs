@@ -3,14 +3,14 @@ use std::sync::{Arc, Mutex};
 use alloy_primitives::{Address, B256, U256};
 use async_trait::async_trait;
 use helix_common::{
+    BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, ProposerInfo,
+    SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         data_api::BidFilters,
         proposer_api::ValidatorRegistrationInfo,
     },
     bid_submission::OptimisticVersion,
-    BuilderInfo, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, ProposerInfo,
-    SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
 };
 use helix_types::{
     BlsPublicKeyBytes, BlsSignatureBytes, PayloadAndBlobs, SignedBidSubmission,
@@ -20,8 +20,8 @@ use parking_lot::RwLock;
 use rustc_hash::FxHashSet;
 
 use crate::{
-    error::DatabaseError, BidSubmissionDocument, BuilderInfoDocument, DatabaseService,
-    DeliveredPayloadDocument,
+    BidSubmissionDocument, BuilderInfoDocument, DatabaseService, DeliveredPayloadDocument,
+    error::DatabaseError,
 };
 
 #[derive(Default, Clone)]
@@ -188,11 +188,7 @@ impl DatabaseService for MockDatabaseService {
     }
 
     async fn check_builder_api_key(&self, api_key: &str) -> Result<bool, DatabaseError> {
-        if api_key == "valid" {
-            Ok(true)
-        } else {
-            Ok(false)
-        }
+        if api_key == "valid" { Ok(true) } else { Ok(false) }
     }
 
     async fn db_demote_builder(
@@ -270,11 +266,7 @@ impl DatabaseService for MockDatabaseService {
         &self,
         api_key: &str,
     ) -> Result<Option<String>, DatabaseError> {
-        if api_key == "valid" {
-            Ok(Some("test_pool".to_string()))
-        } else {
-            Ok(None)
-        }
+        if api_key == "valid" { Ok(Some("test_pool".to_string())) } else { Ok(None) }
     }
 
     async fn get_validator_registrations(

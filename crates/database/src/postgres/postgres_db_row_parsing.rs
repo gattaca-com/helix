@@ -1,9 +1,9 @@
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
+    BuilderInfo, Filtering, ProposerInfo, SignedValidatorRegistrationEntry, ValidatorPreferences,
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
     },
-    BuilderInfo, Filtering, ProposerInfo, SignedValidatorRegistrationEntry, ValidatorPreferences,
 };
 use helix_types::{
     BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, SignedValidatorRegistration,
@@ -12,8 +12,8 @@ use helix_types::{
 use thiserror::Error;
 
 use crate::{
-    error::DatabaseError, postgres::postgres_db_u256_parsing::PostgresNumeric,
-    BidSubmissionDocument, BuilderInfoDocument, DeliveredPayloadDocument,
+    BidSubmissionDocument, BuilderInfoDocument, DeliveredPayloadDocument, error::DatabaseError,
+    postgres::postgres_db_u256_parsing::PostgresNumeric,
 };
 
 #[derive(Debug, Error)]

@@ -8,7 +8,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use crate::{api::*, chain_info::ChainInfo, BuilderInfo, ValidatorPreferences};
+use crate::{BuilderInfo, ValidatorPreferences, api::*, chain_info::ChainInfo};
 
 static mut LOCAL_DEV: bool = false;
 
@@ -666,10 +666,12 @@ mod tests {
 
         let result = config.validate_bid_sorter();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("relay is serving headers so should have submissions enabled"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("relay is serving headers so should have submissions enabled")
+        );
     }
 
     #[test]
@@ -678,10 +680,12 @@ mod tests {
 
         let result = config.validate_bid_sorter();
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("relay is receiving blocks so should have get_header enabled"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("relay is receiving blocks so should have get_header enabled")
+        );
     }
 
     #[test]

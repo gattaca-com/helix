@@ -1,8 +1,8 @@
 use std::{collections::hash_map::Entry, sync::Arc};
 
 use alloy_primitives::{
-    map::foldhash::{HashMap, HashMapExt},
     B256, U256,
+    map::foldhash::{HashMap, HashMapExt},
 };
 use helix_common::{simulator::BlockSimError, utils::utcnow_ms};
 use helix_types::{
@@ -17,10 +17,10 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    Api,
     auctioneer::{BlockMergeRequest, BlockMergeResponse, PayloadBidData, PayloadHeaderData},
     gossiper::types::BroadcastPayloadParams,
-    proposer::{error::ProposerApiError, ProposerApi},
-    Api,
+    proposer::{ProposerApi, error::ProposerApiError},
 };
 
 struct BestMergedBlockEntry {
@@ -268,10 +268,7 @@ impl<A: Api> ProposerApi<A> {
 
         let parent_beacon_block_root = self
             .curr_slot_info
-            .payload_attributes(
-                data.payload_and_blobs.execution_payload.parent_hash,
-                bid_slot.into(),
-            )
+            .payload_attributes(data.payload_and_blobs.execution_payload.parent_hash, bid_slot)
             .and_then(|payload_attrs_update| {
                 payload_attrs_update.payload_attributes.parent_beacon_block_root
             });
@@ -369,7 +366,7 @@ fn append_merged_blobs(
                 original_blobs_bundle
                     .push_blob(
                         data.commitment,
-                        &vec![data.proof],
+                        &[data.proof],
                         data.blob.clone(),
                         max_blobs_per_block,
                     )
@@ -392,6 +389,7 @@ fn append_merged_blobs(
 }
 
 /// Represents the possible states of the block merging task
+#[allow(clippy::large_enum_variant)]
 enum MergingTaskState {
     /// Base block fetching needs to be retried, not necessarily due to an error.
     RetryFetch,

@@ -1,13 +1,13 @@
 use std::{sync::Arc, time::Duration};
 
-use axum::{http::HeaderMap, response::IntoResponse, Extension};
+use axum::{Extension, http::HeaderMap, response::IntoResponse};
 use helix_beacon::types::BroadcastValidation;
 use helix_common::{
+    GetPayloadTrace, RequestTimings,
     api_provider::ApiProvider,
     chain_info::ChainInfo,
     spawn_tracked,
     utils::{extract_request_id, utcnow_ns},
-    GetPayloadTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
 use helix_types::{
@@ -20,10 +20,10 @@ use tracing::{error, info, warn};
 
 use super::ProposerApi;
 use crate::{
+    Api,
     auctioneer::GetPayloadResultData,
     gossiper::types::{BroadcastGetPayloadParams, BroadcastPayloadParams},
     proposer::error::ProposerApiError,
-    Api,
 };
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
@@ -354,13 +354,13 @@ impl<A: Api> ProposerApi<A> {
         if let Some(until_slot_start) = until_slot_start {
             info!("waiting until slot start t=0: {} ms", until_slot_start.as_millis());
             sleep(until_slot_start).await;
-        } else if let Some(since_slot_start) = since_slot_start {
-            if since_slot_start.as_millis() > GET_PAYLOAD_REQUEST_CUTOFF_MS as u128 {
-                return Err(ProposerApiError::GetPayloadRequestTooLate {
-                    cutoff: GET_PAYLOAD_REQUEST_CUTOFF_MS as u64,
-                    request_time: since_slot_start.as_millis() as u64,
-                });
-            }
+        } else if let Some(since_slot_start) = since_slot_start &&
+            since_slot_start.as_millis() > GET_PAYLOAD_REQUEST_CUTOFF_MS as u128
+        {
+            return Err(ProposerApiError::GetPayloadRequestTooLate {
+                cutoff: GET_PAYLOAD_REQUEST_CUTOFF_MS as u64,
+                request_time: since_slot_start.as_millis() as u64,
+            });
         }
         Ok(())
     }
@@ -391,7 +391,7 @@ impl<A: Api> ProposerApi<A> {
         fork_name: ForkName,
     ) {
         let params = BroadcastPayloadParams::to_proto(
-            &execution_payload,
+            execution_payload,
             bid_slot.as_u64(),
             proposer_public_key,
             fork_name,

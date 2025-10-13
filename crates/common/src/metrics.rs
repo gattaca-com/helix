@@ -2,18 +2,18 @@ use std::{net::SocketAddr, time::Duration};
 
 use axum::{
     body::Body,
-    http::{header::CONTENT_TYPE, StatusCode},
+    http::{StatusCode, header::CONTENT_TYPE},
     response::{IntoResponse, Response},
     routing::get,
 };
 use eyre::bail;
 use lazy_static::lazy_static;
 use prometheus::{
-    exponential_buckets, linear_buckets, register_gauge_vec_with_registry,
-    register_gauge_with_registry, register_histogram_vec_with_registry,
-    register_histogram_with_registry, register_int_counter_vec_with_registry,
-    register_int_counter_with_registry, Encoder, Gauge, GaugeVec, Histogram, HistogramTimer,
-    HistogramVec, IntCounter, IntCounterVec, IntGauge, Opts, Registry, TextEncoder,
+    Encoder, Gauge, GaugeVec, Histogram, HistogramTimer, HistogramVec, IntCounter, IntCounterVec,
+    IntGauge, Opts, Registry, TextEncoder, exponential_buckets, linear_buckets,
+    register_gauge_vec_with_registry, register_gauge_with_registry,
+    register_histogram_vec_with_registry, register_histogram_with_registry,
+    register_int_counter_vec_with_registry, register_int_counter_with_registry,
 };
 use tokio::net::TcpListener;
 use tracing::{error, info};

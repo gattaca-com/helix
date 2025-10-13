@@ -6,13 +6,13 @@ use tokio_tungstenite::connect_async;
 use tracing::{debug, error, warn};
 
 use crate::{
+    RelayNetworkManager,
     event_handlers::NetworkEvent,
     messages::{
         EncodingError, HelloMessage, MessageAuthenticationError, NetworkMessage,
         NetworkMessageType, RawNetworkMessage,
     },
     socket::PeerSocket,
-    RelayNetworkManager,
 };
 
 struct PeerInfo {

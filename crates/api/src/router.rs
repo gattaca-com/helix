@@ -1,33 +1,33 @@
 use std::{
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use axum::{
+    Extension, Router,
     error_handling::HandleErrorLayer,
     extract::DefaultBodyLimit,
     http::StatusCode,
     middleware,
     routing::{any, get, post},
-    Extension, Router,
 };
-use helix_common::{utils::extract_request_id, Route, RouterConfig};
+use helix_common::{Route, RouterConfig, utils::extract_request_id};
 use helix_network::api::RelayNetworkApi;
 use hyper::{HeaderMap, Uri};
-use tower::{timeout::TimeoutLayer, BoxError, ServiceBuilder};
+use tower::{BoxError, ServiceBuilder, timeout::TimeoutLayer};
 use tower_governor::{
-    governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor, GovernorLayer,
+    GovernorLayer, governor::GovernorConfigBuilder, key_extractor::SmartIpKeyExtractor,
 };
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tracing::{info, warn};
 
 use crate::{
+    Api,
     builder::api::BuilderApi,
     middleware::body_limit_middleware,
     proposer::{self, ProposerApi},
     relay_data::{BidsCache, DataApi, DeliveredPayloadsCache},
     service::API_REQUEST_TIMEOUT,
-    Api,
 };
 
 #[derive(Clone)]

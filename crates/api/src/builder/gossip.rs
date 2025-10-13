@@ -1,10 +1,10 @@
-use helix_common::{spawn_tracked, utils::utcnow_ns, GossipedPayloadTrace};
+use helix_common::{GossipedPayloadTrace, spawn_tracked, utils::utcnow_ns};
 use helix_database::DatabaseService;
 use tracing::{debug, error};
 use uuid::Uuid;
 
 use super::api::BuilderApi;
-use crate::{gossiper::types::BroadcastPayloadParams, Api};
+use crate::{Api, gossiper::types::BroadcastPayloadParams};
 
 // Handle Gossiped Payloads
 impl<A: Api> BuilderApi<A> {

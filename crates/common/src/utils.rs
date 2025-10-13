@@ -9,14 +9,14 @@ use std::{
 };
 
 use http::HeaderMap;
-use opentelemetry::{trace::TracerProvider as _, KeyValue};
+use opentelemetry::{KeyValue, trace::TracerProvider as _};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
 use reqwest::Url;
 use tracing::error;
 use tracing_appender::{non_blocking::WorkerGuard, rolling::Rotation};
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 use crate::LoggingConfig;
@@ -217,11 +217,7 @@ pub fn utcnow_ns() -> u64 {
 }
 
 pub fn avg_duration(duration: Duration, count: u32) -> Option<Duration> {
-    if count != 0 {
-        Some(duration / count)
-    } else {
-        None
-    }
+    if count != 0 { Some(duration / count) } else { None }
 }
 
 pub fn pin_thread_to_core(core: usize) -> bool {

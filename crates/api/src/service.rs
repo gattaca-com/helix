@@ -1,21 +1,22 @@
 use std::{
     net::SocketAddr,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 
 use bytes::Bytes;
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
-    chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext, RelayConfig,
+    RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
 };
-use helix_housekeeper::{chain_event_updater::SlotData, CurrentSlotInfo};
+use helix_housekeeper::{CurrentSlotInfo, chain_event_updater::SlotData};
 use helix_network::api::RelayNetworkApi;
 use moka::sync::Cache;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::{
+    Api,
     auctioneer::spawn_workers,
     builder::api::BuilderApi,
     gossip::{self},
@@ -23,7 +24,6 @@ use crate::{
     proposer::ProposerApi,
     relay_data::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry},
     router::build_router,
-    Api,
 };
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);

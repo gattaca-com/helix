@@ -1,6 +1,6 @@
 use std::{ops::Range, sync::Arc, time::Instant};
 
-use helix_common::{api::proposer_api::GetHeaderParams, GetPayloadTrace, SubmissionTrace};
+use helix_common::{GetPayloadTrace, SubmissionTrace, api::proposer_api::GetHeaderParams};
 use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot};
 use http::HeaderMap;
 use tokio::sync::oneshot;
@@ -8,11 +8,11 @@ use tracing::trace;
 
 use crate::{
     auctioneer::{
+        BlockMergeRequest,
         types::{
             BestMergeablePayload, Event, GetHeaderResult, GetPayloadResult, RegWorkerJob,
             SubWorkerJob, SubmissionResult,
         },
-        BlockMergeRequest,
     },
     gossiper::types::BroadcastPayloadParams,
 };
@@ -75,7 +75,7 @@ impl AuctioneerHandle {
         self.worker
             .try_send(SubWorkerJob::GetPayload {
                 proposer_pubkey,
-                blinded_block,
+                blinded_block: Box::new(blinded_block),
                 trace,
                 res_tx: tx,
             })

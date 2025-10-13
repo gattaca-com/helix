@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 pub use chain_event_updater::{ChainEventUpdater, PayloadAttributesUpdate, SlotUpdate};
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
-use helix_common::{chain_info::ChainInfo, local_cache::LocalCache, RelayConfig};
+use helix_common::{RelayConfig, chain_info::ChainInfo, local_cache::LocalCache};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_network::RelayNetworkManager;
 pub use housekeeper::Housekeeper;

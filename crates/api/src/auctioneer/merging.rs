@@ -1,8 +1,8 @@
 use tracing::error;
 
 use crate::{
-    auctioneer::{context::Context, types::BestMergeablePayload},
     Api,
+    auctioneer::{context::Context, types::BestMergeablePayload},
 };
 
 impl<A: Api> Context<A> {

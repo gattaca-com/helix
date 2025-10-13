@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use helix_common::{
     api::builder_api::InclusionList,
-    signing::{RelaySigningContext, RELAY_DOMAIN},
+    signing::{RELAY_DOMAIN, RelaySigningContext},
     utils::utcnow_ms,
 };
 use helix_types::{BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes, SignedRoot};

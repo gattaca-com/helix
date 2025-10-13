@@ -2,21 +2,21 @@ use std::time::Instant;
 
 use alloy_primitives::B256;
 use helix_common::{
-    self, bid_submission::OptimisticVersion, metrics::HYDRATION_CACHE_HITS, record_submission_step,
-    BuilderInfo, SubmissionTrace,
+    self, BuilderInfo, SubmissionTrace, bid_submission::OptimisticVersion,
+    metrics::HYDRATION_CACHE_HITS, record_submission_step,
 };
 use helix_types::{BlockMergingPreferences, SignedBidSubmission};
 use tokio::sync::oneshot;
 use tracing::trace;
 
 use crate::{
+    Api,
     auctioneer::{
         context::Context,
-        simulator::{manager::SimulationResult, BlockSimRequest, SimulatorRequest},
+        simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
         types::{PayloadEntry, SlotData, Submission, SubmissionResult},
     },
     builder::error::BuilderApiError,
-    Api,
 };
 
 impl<A: Api> Context<A> {

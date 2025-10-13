@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use helix_common::{spawn_tracked, utils::utcnow_ns, GetPayloadTrace};
+use helix_common::{GetPayloadTrace, spawn_tracked, utils::utcnow_ns};
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 
 use crate::{
+    Api,
     builder::api::BuilderApi,
     gossiper::types::GossipedMessage,
-    proposer::{get_payload::ProposerApiVersion, ProposerApi},
-    Api,
+    proposer::{ProposerApi, get_payload::ProposerApiVersion},
 };
 
 pub async fn process_gossip_messages<A: Api>(

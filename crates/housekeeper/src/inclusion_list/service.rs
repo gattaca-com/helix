@@ -2,10 +2,10 @@ use std::{sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
 use helix_common::{
+    InclusionListConfig,
     api::builder_api::{InclusionList, InclusionListWithMetadata},
     chain_info::ChainInfo,
     local_cache::LocalCache,
-    InclusionListConfig,
 };
 use helix_database::DatabaseService;
 use helix_network::RelayNetworkManager;

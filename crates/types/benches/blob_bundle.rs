@@ -1,7 +1,7 @@
 use std::hint::black_box;
 
 use alloy_rpc_types::engine::BlobsBundleV1;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use helix_types::{BlobsBundle, SignedBidSubmission};
 use lh_types::MainnetEthSpec;
 use ssz::{Decode, Encode};

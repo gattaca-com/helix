@@ -1,9 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use axum::{
+    Extension,
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     response::IntoResponse,
-    Extension,
 };
 use bytes::Bytes;
 use futures::StreamExt;
@@ -13,7 +13,7 @@ use tokio::time::{self};
 use tracing::{debug, error};
 
 use super::api::BuilderApi;
-use crate::{builder::error::BuilderApiError, Api, HEADER_API_KEY};
+use crate::{Api, HEADER_API_KEY, builder::error::BuilderApiError};
 
 impl<A: Api> BuilderApi<A> {
     #[tracing::instrument(skip_all)]

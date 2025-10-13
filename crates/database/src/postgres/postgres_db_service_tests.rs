@@ -5,26 +5,26 @@ mod tests {
     use alloy_primitives::{B256, U256};
     use deadpool_postgres::{Config, ManagerConfig, Pool, RecyclingMethod};
     use helix_common::{
+        Filtering, GetPayloadTrace, PostgresConfig, SubmissionTrace, ValidatorSummary,
         api::proposer_api::ValidatorRegistrationInfo,
         bid_submission::OptimisticVersion,
         utils::{utcnow_ns, utcnow_sec},
         validator_preferences::ValidatorPreferences,
-        Filtering, GetPayloadTrace, PostgresConfig, SubmissionTrace, ValidatorSummary,
     };
     use helix_types::{
         BidTrace, BlobsBundle, BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey,
         BlsSignatureBytes, ExecutionPayload, PayloadAndBlobs, SignedBidSubmissionElectra,
         SignedValidatorRegistration, TestRandomSeed, Validator, ValidatorRegistration, Withdrawal,
     };
-    use rand::{rng, seq::SliceRandom, Rng};
+    use rand::{Rng, rng, seq::SliceRandom};
     use tokio::sync::OnceCell;
     use tokio_postgres::NoTls;
 
     use crate::{
+        DatabaseService,
         postgres::{
             postgres_db_init::run_migrations_async, postgres_db_service::PostgresDatabaseService,
         },
-        DatabaseService,
     };
 
     const REGION: i16 = 1;

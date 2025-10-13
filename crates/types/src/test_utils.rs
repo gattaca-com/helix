@@ -1,4 +1,4 @@
-use alloy_primitives::{b256, B256};
+use alloy_primitives::{B256, b256};
 use lh_types::test_utils::{TestRandom, XorShiftRng};
 use rand::SeedableRng;
 use serde_json::Value;

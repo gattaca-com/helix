@@ -1,5 +1,5 @@
 use alloy_primitives::{Address, B256};
-use lh_types::{test_utils::TestRandom, Epoch, SignedRoot};
+use lh_types::{Epoch, SignedRoot, test_utils::TestRandom};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;

@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
 use alloy_eips::{eip7594::CELLS_PER_EXT_BLOB, eip7691::MAX_BLOBS_PER_BLOCK_ELECTRA};
-use lh_types::{test_utils::TestRandom, ForkName, ForkVersionDecode};
+use lh_types::{ForkName, ForkVersionDecode, test_utils::TestRandom};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use ssz::DecodeError;
 use ssz_derive::Encode;
 
 use crate::{
-    fields::{KzgCommitment, KzgCommitments, KzgProof, KzgProofs},
     BlobsError, BlockValidationError, ExecutionPayload, SignedBeaconBlock,
+    fields::{KzgCommitment, KzgCommitments, KzgProof, KzgProofs},
 };
 
 pub type Blob = Arc<alloy_consensus::Blob>;
@@ -82,16 +82,14 @@ impl ssz::Decode for BlobsBundleV1 {
         if proofs_valid && blobs_valid {
             Ok(Self { commitments: raw.commitments, proofs: raw.proofs, blobs: raw.blobs })
         } else {
-            Err(ssz::DecodeError::BytesInvalid(
-                format!(
-                    "Invalid BlobsBundleV2: expected {} proofs and {} commitments for {} blobs, got {} proofs and {} commitments",
-                    raw.blobs.len() * CELLS_PER_EXT_BLOB,
-                    raw.blobs.len(),
-                    raw.blobs.len(),
-                    raw.proofs.len(),
-                    raw.commitments.len()
-                )
-            ))
+            Err(ssz::DecodeError::BytesInvalid(format!(
+                "Invalid BlobsBundleV2: expected {} proofs and {} commitments for {} blobs, got {} proofs and {} commitments",
+                raw.blobs.len() * CELLS_PER_EXT_BLOB,
+                raw.blobs.len(),
+                raw.blobs.len(),
+                raw.proofs.len(),
+                raw.commitments.len()
+            )))
         }
     }
 }
@@ -198,16 +196,14 @@ impl ssz::Decode for BlobsBundleV2 {
         {
             Ok(Self { commitments: raw.commitments, proofs: raw.proofs, blobs: raw.blobs })
         } else {
-            Err(ssz::DecodeError::BytesInvalid(
-                format!(
-                    "Invalid BlobsBundleV2: expected {} proofs and {} commitments for {} blobs, got {} proofs and {} commitments",
-                    raw.blobs.len() * CELLS_PER_EXT_BLOB,
-                    raw.blobs.len(),
-                    raw.blobs.len(),
-                    raw.proofs.len(),
-                    raw.commitments.len()
-                )
-            ))
+            Err(ssz::DecodeError::BytesInvalid(format!(
+                "Invalid BlobsBundleV2: expected {} proofs and {} commitments for {} blobs, got {} proofs and {} commitments",
+                raw.blobs.len() * CELLS_PER_EXT_BLOB,
+                raw.blobs.len(),
+                raw.blobs.len(),
+                raw.proofs.len(),
+                raw.commitments.len()
+            )))
         }
     }
 }
@@ -454,14 +450,14 @@ pub struct SignedBlockContents {
 mod tests {
     use lh_eth2::types::BlobsBundle as LhBlobsBundle;
     use lh_types::{
-        test_utils::{TestRandom, XorShiftRng},
         KzgCommitment as LhKzgCommitment, KzgProof as LhKzgProof, MainnetEthSpec,
+        test_utils::{TestRandom, XorShiftRng},
     };
     use rand::SeedableRng;
     use ssz::Encode;
 
     use super::*;
-    use crate::{test_encode_decode_json, SignedBidSubmission};
+    use crate::{SignedBidSubmission, test_encode_decode_json};
 
     #[test]
     fn test_blobs_bundle_() {

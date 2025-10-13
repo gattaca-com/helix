@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use alloy_primitives::U256;
-use lh_types::{test_utils::TestRandom, SignedRoot};
+use lh_types::{SignedRoot, test_utils::TestRandom};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    fields::{ExecutionRequests, KzgCommitments},
     BlsPublicKeyBytes, BlsSignatureBytes, ExecutionPayloadHeader,
+    fields::{ExecutionRequests, KzgCommitments},
 };
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize, Encode, Decode, TreeHash)]

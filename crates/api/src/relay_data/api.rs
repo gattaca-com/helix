@@ -1,24 +1,25 @@
 use std::{sync::Arc, time::Duration};
 
 use axum::{
+    Json,
     extract::{Extension, Query},
     response::IntoResponse,
-    Json,
 };
 use helix_common::{
+    ValidatorPreferences,
     api::data_api::{
         BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
         ReceivedBlocksResponse, ValidatorRegistrationParams,
     },
-    metrics, ValidatorPreferences,
+    metrics,
 };
-use helix_database::{error::DatabaseError, DatabaseService};
+use helix_database::{DatabaseService, error::DatabaseError};
 use moka::sync::Cache;
 use tracing::warn;
 
 use crate::{
-    relay_data::{error::DataApiError, BuilderBlocksReceivedStats, ProposerPayloadDeliveredStats},
     Api,
+    relay_data::{BuilderBlocksReceivedStats, ProposerPayloadDeliveredStats, error::DataApiError},
 };
 
 pub(crate) type BidsCache = Cache<BuilderBlocksReceivedParams, Vec<ReceivedBlocksResponse>>;

@@ -1,15 +1,16 @@
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
 use eyre::eyre;
-use helix_api::{start_admin_service, start_api_service, Api};
+use helix_api::{Api, start_admin_service, start_api_service};
 use helix_beacon::start_beacon_client;
 use helix_common::{
+    RelayConfig,
     api_provider::DefaultApiProvider,
     load_config, load_keypair,
     local_cache::LocalCache,
@@ -17,10 +18,9 @@ use helix_common::{
     signing::RelaySigningContext,
     task::{block_on, init_runtime},
     utils::{init_panic_hook, init_tracing_log},
-    RelayConfig,
 };
 use helix_database::{
-    postgres::postgres_db_service::PostgresDatabaseService, start_db_service, DatabaseService,
+    DatabaseService, postgres::postgres_db_service::PostgresDatabaseService, start_db_service,
 };
 use helix_housekeeper::start_housekeeper;
 use helix_network::RelayNetworkManager;
@@ -103,7 +103,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
 
     let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
 
-    if config.router_config.validate_bid_sorter()? {}
+    config.router_config.validate_bid_sorter()?;
 
     let current_slot_info = start_housekeeper(
         db.clone(),

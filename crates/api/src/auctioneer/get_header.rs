@@ -3,9 +3,9 @@ use tokio::sync::oneshot;
 use tracing::error;
 
 use crate::{
+    Api,
     auctioneer::{context::Context, types::GetHeaderResult},
     proposer::ProposerApiError,
-    Api,
 };
 
 impl<A: Api> Context<A> {

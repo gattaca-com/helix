@@ -1,8 +1,8 @@
 use std::{
     collections::HashMap,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -15,19 +15,19 @@ use helix_beacon::{
     types::{HeadEventData, StateId},
 };
 use helix_common::{
+    BuilderConfig, BuilderInfo, ProposerDuty, RelayConfig, SignedValidatorRegistrationEntry,
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, is_local_dev,
-    local_cache::LocalCache, task, utils::utcnow_dur, BuilderConfig, BuilderInfo, ProposerDuty,
-    RelayConfig, SignedValidatorRegistrationEntry,
+    local_cache::LocalCache, task, utils::utcnow_dur,
 };
 use helix_database::DatabaseService;
 use helix_network::RelayNetworkManager;
 use helix_types::{BlsPublicKeyBytes, Epoch, Slot, SlotClockTrait};
-use tokio::sync::{broadcast, Mutex};
-use tracing::{debug, error, info, warn, Instrument};
+use tokio::sync::{Mutex, broadcast};
+use tracing::{Instrument, debug, error, info, warn};
 
 use crate::{
-    chain_event_updater::SlotData, error::HousekeeperError, inclusion_list::InclusionListService,
-    EthereumPrimevService,
+    EthereumPrimevService, chain_event_updater::SlotData, error::HousekeeperError,
+    inclusion_list::InclusionListService,
 };
 
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 1;
@@ -332,21 +332,21 @@ impl<DB: DatabaseService> Housekeeper<DB> {
 
         self.slots.update_proposer_duties(head_slot);
 
-        if let Some(inclusion_list_service) = self.inclusion_list_service.as_ref() {
-            if let Some(next_duty) = proposer_duties.iter().find(|duty| duty.slot == head_slot) {
-                let pub_key = next_duty.pubkey;
-                let inclusion_list_service = inclusion_list_service.clone();
-                task::spawn(
-                    file!(),
-                    line!(),
-                    async move {
-                        inclusion_list_service
-                            .handle_inclusion_list_for_slot(block_hash, pub_key, head_slot.as_u64())
-                            .await
-                    }
-                    .in_current_span(),
-                );
-            }
+        if let Some(inclusion_list_service) = self.inclusion_list_service.as_ref() &&
+            let Some(next_duty) = proposer_duties.iter().find(|duty| duty.slot == head_slot)
+        {
+            let pub_key = next_duty.pubkey;
+            let inclusion_list_service = inclusion_list_service.clone();
+            task::spawn(
+                file!(),
+                line!(),
+                async move {
+                    inclusion_list_service
+                        .handle_inclusion_list_for_slot(block_hash, pub_key, head_slot.as_u64())
+                        .await
+                }
+                .in_current_span(),
+            );
         }
     }
 
@@ -522,7 +522,7 @@ impl<DB: DatabaseService> Housekeeper<DB> {
 
     fn should_update_trusted_proposers(&self, head_slot: u64) -> bool {
         let last_updated = self.slots.trusted_proposers();
-        head_slot % TRUSTED_PROPOSERS_UPDATE_FREQ == 0 ||
+        head_slot.is_multiple_of(TRUSTED_PROPOSERS_UPDATE_FREQ) ||
             head_slot.saturating_sub(last_updated) >= TRUSTED_PROPOSERS_UPDATE_FREQ
     }
 

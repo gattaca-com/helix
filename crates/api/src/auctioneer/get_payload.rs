@@ -11,13 +11,13 @@ use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 use crate::{
+    Api,
     auctioneer::{
         context::Context,
         types::{GetPayloadResult, GetPayloadResultData, PayloadEntry, PendingPayload, SlotData},
     },
     gossiper::types::BroadcastPayloadParams,
     proposer::ProposerApiError,
-    Api,
 };
 
 impl<A: Api> Context<A> {
@@ -39,12 +39,12 @@ impl<A: Api> Context<A> {
         let block_hash = payload.execution_payload.execution_payload.block_hash;
         let entry = PayloadEntry::new_gossip(payload);
 
-        if let Some(curr) = self.payloads.get(&block_hash) {
-            if curr.bid_data.is_some() {
-                // we received this block both locally and via gossip, keep the local one so we can
-                // serve get_header on it
-                return;
-            }
+        if let Some(curr) = self.payloads.get(&block_hash) &&
+            curr.bid_data.is_some()
+        {
+            // we received this block both locally and via gossip, keep the local one so we can
+            // serve get_header on it
+            return;
         }
 
         self.payloads.insert(block_hash, entry);

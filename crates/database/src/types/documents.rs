@@ -1,10 +1,10 @@
 use alloy_primitives::{B256, U256};
 use helix_common::{
+    BuilderConfig, SubmissionTrace,
     api::{
         builder_api::BuilderGetValidatorsResponseEntry,
         data_api::{DeliveredPayloadsResponse, ReceivedBlocksResponse},
     },
-    BuilderConfig, SubmissionTrace,
 };
 use helix_types::{BidTrace, BlsPublicKey, TestRandom};
 use serde::{Deserialize, Serialize};

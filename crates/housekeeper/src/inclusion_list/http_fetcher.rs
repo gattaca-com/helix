@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use alloy_primitives::Bytes;
-use helix_common::{api::builder_api::InclusionList, InclusionListConfig};
+use helix_common::{InclusionListConfig, api::builder_api::InclusionList};
 use helix_types::Transaction;
 use reqwest::{Client, ClientBuilder, StatusCode};
 use serde::Deserialize;

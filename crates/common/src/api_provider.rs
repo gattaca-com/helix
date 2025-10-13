@@ -4,7 +4,7 @@ use axum::http::HeaderMap;
 use tracing::{info, warn};
 
 use crate::{
-    api::proposer_api::GetHeaderParams, utils::utcnow_ms, RelayConfig, ValidatorPreferences,
+    RelayConfig, ValidatorPreferences, api::proposer_api::GetHeaderParams, utils::utcnow_ms,
 };
 
 pub const HEADER_TIMEOUT_MS: &str = "x-timeout-ms";
@@ -52,7 +52,7 @@ impl ApiProvider for DefaultApiProvider {
         let mut is_mev_boost = false;
 
         // how far is the client
-        let client_latency_ms = match get_x_mev_boost_header_start_ms(&headers) {
+        let client_latency_ms = match get_x_mev_boost_header_start_ms(headers) {
             Some(request_initiated_ms) => {
                 let latency = utcnow_ms().saturating_sub(request_initiated_ms);
                 is_mev_boost = true;
@@ -105,7 +105,7 @@ impl ApiProvider for DefaultApiProvider {
             let sleep_time = Duration::from_millis(sleep_time_adj);
 
             Ok(TimingResult {
-                sleep_time: (sleep_time > Duration::ZERO).then(|| sleep_time),
+                sleep_time: (sleep_time > Duration::ZERO).then_some(sleep_time),
                 is_mev_boost,
             })
         } else {
