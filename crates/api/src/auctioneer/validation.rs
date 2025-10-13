@@ -2,12 +2,9 @@ use alloy_primitives::B256;
 use helix_common::BuilderInfo;
 use helix_types::{BlockValidationError, BlsPublicKeyBytes, SignedBidSubmission};
 
-use crate::{
-    Api,
-    auctioneer::{context::Context, types::SlotData},
-};
+use crate::auctioneer::{context::Context, types::SlotData};
 
-impl<A: Api> Context<A> {
+impl Context {
     pub fn validate_submission(
         &mut self,
         payload: &SignedBidSubmission,

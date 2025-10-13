@@ -19,9 +19,7 @@ use helix_common::{
     task::{block_on, init_runtime},
     utils::{init_panic_hook, init_tracing_log},
 };
-use helix_database::{
-    DatabaseService, postgres::postgres_db_service::PostgresDatabaseService, start_db_service,
-};
+use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, start_db_service};
 use helix_housekeeper::start_housekeeper;
 use helix_network::RelayNetworkManager;
 use helix_types::BlsKeypair;
@@ -37,7 +35,6 @@ static GLOBAL: Jemalloc = Jemalloc;
 struct ApiProd;
 
 impl Api for ApiProd {
-    type DatabaseService = PostgresDatabaseService;
     type ApiProvider = DefaultApiProvider;
 }
 

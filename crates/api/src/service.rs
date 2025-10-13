@@ -9,6 +9,7 @@ use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
     RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
 };
+use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_housekeeper::{CurrentSlotInfo, chain_event_updater::SlotData};
 use helix_network::api::RelayNetworkApi;
 use moka::sync::Cache;
@@ -31,7 +32,7 @@ pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub async fn run_api_service<A: Api>(
     mut config: RelayConfig,
-    db: Arc<A::DatabaseService>,
+    db: Arc<PostgresDatabaseService>,
     local_cache: Arc<LocalCache>,
     current_slot_info: CurrentSlotInfo,
     chain_info: Arc<ChainInfo>,
@@ -57,7 +58,7 @@ pub async fn run_api_service<A: Api>(
     let (merge_requests_tx, _merge_requests_rx) = mpsc::channel(10_000);
 
     // spawn auctioneer
-    let (auctioneer_handle, registrations_handle) = spawn_workers::<A>(
+    let (auctioneer_handle, registrations_handle) = spawn_workers(
         Arc::unwrap_or_clone(chain_info.clone()),
         config.clone(),
         db.clone(),
@@ -108,7 +109,7 @@ pub async fn run_api_service<A: Api>(
         tokio::spawn(proposer_api.clone().process_block_merging(pool_rx));
     }
 
-    let data_api = Arc::new(DataApi::<A>::new(validator_preferences.clone(), db.clone()));
+    let data_api = Arc::new(DataApi::new(validator_preferences.clone(), db.clone()));
 
     let bids_cache: BidsCache =
         Cache::builder().time_to_idle(Duration::from_secs(300)).max_capacity(10_000).build();

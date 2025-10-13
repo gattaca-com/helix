@@ -10,7 +10,6 @@ use tokio::sync::oneshot;
 use tracing::trace;
 
 use crate::{
-    Api,
     auctioneer::{
         context::Context,
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
@@ -19,7 +18,7 @@ use crate::{
     builder::error::BuilderApiError,
 };
 
-impl<A: Api> Context<A> {
+impl Context {
     pub(super) fn handle_submission(
         &mut self,
         submission: Submission,

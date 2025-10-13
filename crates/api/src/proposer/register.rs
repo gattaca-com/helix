@@ -15,7 +15,6 @@ use helix_common::{
     },
     utils::extract_request_id,
 };
-use helix_database::DatabaseService;
 use helix_types::SignedValidatorRegistration;
 use tokio::{task::JoinSet, time::Instant};
 use tracing::{error, info, trace, warn};

@@ -5,7 +5,6 @@ use std::{
 };
 
 use alloy_primitives::B256;
-use async_trait::async_trait;
 use dashmap::{DashMap, DashSet};
 use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
 use helix_common::{
@@ -15,7 +14,7 @@ use helix_common::{
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         data_api::BidFilters,
-        proposer_api::ValidatorRegistrationInfo,
+        proposer_api::{GetHeaderParams, ValidatorRegistrationInfo},
     },
     bid_submission::OptimisticVersion,
     metrics::DbMetricRecord,
@@ -31,7 +30,6 @@ use tokio_postgres::{NoTls, types::ToSql};
 use tracing::{error, info, instrument, warn};
 
 use crate::{
-    DatabaseService,
     error::DatabaseError,
     postgres::{
         postgres_db_filters::PgBidFilters,
@@ -706,10 +704,9 @@ impl Default for PostgresDatabaseService {
     }
 }
 
-#[async_trait]
-impl DatabaseService for PostgresDatabaseService {
+impl PostgresDatabaseService {
     /// Assume the entries are already validated
-    fn save_validator_registrations(
+    pub fn save_validator_registrations(
         &self,
         entries: impl Iterator<Item = ValidatorRegistrationInfo>,
         pool_name: Option<String>,
@@ -728,7 +725,10 @@ impl DatabaseService for PostgresDatabaseService {
         }
     }
 
-    fn is_registration_update_required(&self, registration: &SignedValidatorRegistration) -> bool {
+    pub fn is_registration_update_required(
+        &self,
+        registration: &SignedValidatorRegistration,
+    ) -> bool {
         if let Some(existing_entry) =
             self.validator_registration_cache.get(&registration.message.pubkey) &&
             existing_entry.registration_info.registration.message.timestamp >=
@@ -746,7 +746,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn get_validator_registration(
+    pub async fn get_validator_registration(
         &self,
         pub_key: &BlsPublicKeyBytes,
     ) -> Result<SignedValidatorRegistrationEntry, DatabaseError> {
@@ -788,7 +788,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn get_validator_registrations(
+    pub async fn get_validator_registrations(
         &self,
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_validator_registrations");
@@ -813,7 +813,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn get_validator_registrations_for_pub_keys(
+    pub async fn get_validator_registrations_for_pub_keys(
         &self,
         pub_keys: &[&BlsPublicKeyBytes],
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError> {
@@ -849,7 +849,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn set_proposer_duties(
+    pub async fn set_proposer_duties(
         &self,
         proposer_duties: Vec<BuilderGetValidatorsResponseEntry>,
     ) -> Result<(), DatabaseError> {
@@ -920,7 +920,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn get_proposer_duties(
+    pub async fn get_proposer_duties(
         &self,
     ) -> Result<Vec<BuilderGetValidatorsResponseEntry>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_proposer_duties");
@@ -947,7 +947,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn get_validator_preferences(
+    pub async fn get_validator_preferences(
         &self,
         pub_key: &BlsPublicKeyBytes,
     ) -> Result<Option<ValidatorPreferences>, DatabaseError> {
@@ -988,7 +988,7 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(result)
     }
 
-    async fn update_validator_preferences(
+    pub async fn update_validator_preferences(
         &self,
         pub_key: &BlsPublicKeyBytes,
         preferences: &ValidatorPreferences,
@@ -1050,7 +1050,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn get_pool_validators(
+    pub async fn get_pool_validators(
         &self,
         pool_name: &str,
     ) -> Result<Vec<BlsPublicKeyBytes>, DatabaseError> {
@@ -1090,7 +1090,7 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(validators)
     }
 
-    async fn set_known_validators(
+    pub async fn set_known_validators(
         &self,
         known_validators: Vec<ValidatorSummary>,
     ) -> Result<(), DatabaseError> {
@@ -1158,12 +1158,12 @@ impl DatabaseService for PostgresDatabaseService {
         Ok(())
     }
 
-    fn known_validators_cache(&self) -> &Arc<RwLock<FxHashSet<BlsPublicKeyBytes>>> {
+    pub fn known_validators_cache(&self) -> &Arc<RwLock<FxHashSet<BlsPublicKeyBytes>>> {
         &self.known_validators_cache
     }
 
     #[instrument(skip_all)]
-    async fn get_validator_pool_name(
+    pub async fn get_validator_pool_name(
         &self,
         api_key: &str,
     ) -> Result<Option<String>, DatabaseError> {
@@ -1209,7 +1209,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn save_too_late_get_payload(
+    pub async fn save_too_late_get_payload(
         &self,
         slot: u64,
         proposer_pub_key: &BlsPublicKeyBytes,
@@ -1246,7 +1246,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn save_delivered_payload(
+    pub async fn save_delivered_payload(
         &self,
         proposer_pub_key: BlsPublicKeyBytes,
         payload: Arc<PayloadAndBlobs>,
@@ -1359,6 +1359,7 @@ impl DatabaseService for PostgresDatabaseService {
 
         if !payload.execution_payload.withdrawals.is_empty() {
             // Save the withdrawals
+            #[allow(clippy::type_complexity)]
             let mut structured_params: Vec<(i32, Vec<u8>, i32, &[u8], i64)> = Vec::new();
             for entry in payload.execution_payload.withdrawals.iter() {
                 structured_params.push((
@@ -1412,7 +1413,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn store_block_submission(
+    pub async fn store_block_submission(
         &self,
         submission: SignedBidSubmission,
         trace: SubmissionTrace,
@@ -1432,7 +1433,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn store_builder_info(
+    pub async fn store_builder_info(
         &self,
         builder_pub_key: &BlsPublicKeyBytes,
         builder_info: &BuilderInfo,
@@ -1468,7 +1469,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn store_builders_info(
+    pub async fn store_builders_info(
         &self,
         builders: &[BuilderInfoDocument],
     ) -> Result<(), DatabaseError> {
@@ -1556,7 +1557,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError> {
+    pub async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_all_builder_infos");
 
         let rows =
@@ -1567,7 +1568,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn check_builder_api_key(&self, api_key: &str) -> Result<bool, DatabaseError> {
+    pub async fn check_builder_api_key(&self, api_key: &str) -> Result<bool, DatabaseError> {
         let mut record = DbMetricRecord::new("check_builder_api_key");
 
         let client = self.high_priority_pool.get().await?;
@@ -1579,7 +1580,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn db_demote_builder(
+    pub async fn db_demote_builder(
         &self,
         slot: u64,
         builder_pub_key: &BlsPublicKeyBytes,
@@ -1626,7 +1627,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn get_bids(
+    pub async fn get_bids(
         &self,
         filters: &BidFilters,
         validator_preferences: Arc<ValidatorPreferences>,
@@ -1768,7 +1769,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn get_delivered_payloads(
+    pub async fn get_delivered_payloads(
         &self,
         filters: &BidFilters,
         validator_preferences: Arc<ValidatorPreferences>,
@@ -1891,11 +1892,9 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn save_get_header_call(
+    pub async fn save_get_header_call(
         &self,
-        slot: u64,
-        parent_hash: B256,
-        public_key: BlsPublicKeyBytes,
+        params: GetHeaderParams,
         best_block_hash: B256,
         trace: GetHeaderTrace,
         mev_boost: bool,
@@ -1917,10 +1916,10 @@ impl DatabaseService for PostgresDatabaseService {
                         ($1, $2, $3, $4, $5, $6, $7)
                 ",
                 &[
-                    &(slot as i32),
+                    &(params.slot as i32),
                     &(region_id),
-                    &(parent_hash.as_slice()),
-                    &(public_key.as_slice()),
+                    &(params.parent_hash.as_slice()),
+                    &(params.pubkey.as_slice()),
                     &(best_block_hash.as_slice()),
                     &(mev_boost),
                     &(user_agent),
@@ -1953,7 +1952,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn save_failed_get_payload(
+    pub async fn save_failed_get_payload(
         &self,
         slot: u64,
         block_hash: B256,
@@ -2010,7 +2009,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn save_gossiped_payload_trace(
+    pub async fn save_gossiped_payload_trace(
         &self,
         block_hash: B256,
         trace: GossipedPayloadTrace,
@@ -2040,7 +2039,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn get_trusted_proposers(&self) -> Result<Vec<ProposerInfo>, DatabaseError> {
+    pub async fn get_trusted_proposers(&self) -> Result<Vec<ProposerInfo>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_trusted_proposers");
         let rows = self
             .high_priority_pool
@@ -2059,7 +2058,7 @@ impl DatabaseService for PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    async fn save_inclusion_list(
+    pub async fn save_inclusion_list(
         &self,
         inclusion_list: &InclusionListWithMetadata,
         slot: u64,

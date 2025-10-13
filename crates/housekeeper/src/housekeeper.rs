@@ -19,7 +19,7 @@ use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, is_local_dev,
     local_cache::LocalCache, task, utils::utcnow_dur,
 };
-use helix_database::DatabaseService;
+use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_network::RelayNetworkManager;
 use helix_types::{BlsPublicKeyBytes, Epoch, Slot, SlotClockTrait};
 use tokio::sync::{Mutex, broadcast};
@@ -87,20 +87,20 @@ impl HousekeeperSlots {
 /// If running multiple API instances in a single region only one housekeeper is needed as services
 /// will sync through db.
 #[derive(Clone)]
-pub struct Housekeeper<DB: DatabaseService + 'static> {
-    db: Arc<DB>,
+pub struct Housekeeper {
+    db: Arc<PostgresDatabaseService>,
     beacon_client: Arc<MultiBeaconClient>,
     auctioneer: Arc<LocalCache>,
     chain_info: Arc<ChainInfo>,
     primev_service: Option<EthereumPrimevService>,
     slots: HousekeeperSlots,
-    inclusion_list_service: Option<InclusionListService<DB>>,
+    inclusion_list_service: Option<InclusionListService>,
     local_builders: Vec<BuilderConfig>,
 }
 
-impl<DB: DatabaseService> Housekeeper<DB> {
+impl Housekeeper {
     pub fn new(
-        db: Arc<DB>,
+        db: Arc<PostgresDatabaseService>,
         beacon_client: Arc<MultiBeaconClient>,
         auctioneer: Arc<LocalCache>,
         config: &RelayConfig,
@@ -447,7 +447,7 @@ impl<DB: DatabaseService> Housekeeper<DB> {
     async fn primev_update_with_duties(
         primev_service: EthereumPrimevService,
         auctioneer: Arc<LocalCache>,
-        db: Arc<DB>,
+        db: Arc<PostgresDatabaseService>,
         proposer_duties: Vec<ProposerDuty>,
     ) -> Result<(), HousekeeperError> {
         let primev_validators =

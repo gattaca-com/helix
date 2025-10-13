@@ -1,11 +1,8 @@
 use tracing::error;
 
-use crate::{
-    Api,
-    auctioneer::{context::Context, types::BestMergeablePayload},
-};
+use crate::auctioneer::{context::Context, types::BestMergeablePayload};
 
-impl<A: Api> Context<A> {
+impl Context {
     /// If the current best bid allows merging, return its payload
     pub(super) fn get_best_mergeable_payload(&self) -> BestMergeablePayload {
         let best = self.bid_sorter.best_mergeable()?;

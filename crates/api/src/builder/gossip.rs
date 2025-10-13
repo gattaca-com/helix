@@ -1,5 +1,4 @@
 use helix_common::{GossipedPayloadTrace, spawn_tracked, utils::utcnow_ns};
-use helix_database::DatabaseService;
 use tracing::{debug, error};
 use uuid::Uuid;
 

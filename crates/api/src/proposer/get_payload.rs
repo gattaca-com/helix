@@ -9,7 +9,6 @@ use helix_common::{
     spawn_tracked,
     utils::{extract_request_id, utcnow_ns},
 };
-use helix_database::DatabaseService;
 use helix_types::{
     BlsPublicKeyBytes, ExecPayload, ForkName, GetPayloadResponse, PayloadAndBlobs,
     SignedBlindedBeaconBlock, Slot, SlotClockTrait,

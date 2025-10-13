@@ -20,11 +20,8 @@ mod tests {
     use tokio::sync::OnceCell;
     use tokio_postgres::NoTls;
 
-    use crate::{
-        DatabaseService,
-        postgres::{
-            postgres_db_init::run_migrations_async, postgres_db_service::PostgresDatabaseService,
-        },
+    use crate::postgres::{
+        postgres_db_init::run_migrations_async, postgres_db_service::PostgresDatabaseService,
     };
 
     const REGION: i16 = 1;

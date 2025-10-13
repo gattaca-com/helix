@@ -3,7 +3,6 @@ use std::{
     time::Duration,
 };
 
-use alloy_primitives::B256;
 use axum::{Extension, extract::Path, http::HeaderMap, response::IntoResponse};
 use helix_common::{
     GetHeaderTrace, RequestTimings,
@@ -13,8 +12,6 @@ use helix_common::{
     resign_builder_bid, spawn_tracked,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
-use helix_database::DatabaseService;
-use helix_types::BlsPublicKeyBytes;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
 use super::ProposerApi;
@@ -174,18 +171,18 @@ impl<A: Api> ProposerApi<A> {
             "delivering bid",
         );
 
-        // Save trace to DB
-        save_get_header_call(
-            proposer_api.db.clone(),
-            params.slot,
-            params.parent_hash,
-            params.pubkey,
-            bid_block_hash,
-            trace,
-            is_mev_boost,
-            user_agent.clone(),
-        )
-        .await;
+        let db = proposer_api.db.clone();
+        spawn_tracked!(
+            async move {
+                if let Err(err) = db
+                    .save_get_header_call(params, bid_block_hash, trace, is_mev_boost, user_agent)
+                    .await
+                {
+                    error!(%err, "error saving get header call to database");
+                }
+            }
+            .in_current_span()
+        );
 
         let fork = proposer_api.chain_info.current_fork_name();
 
@@ -214,37 +211,6 @@ impl Drop for TimeoutGuard {
             trace!("didn't complete sleep")
         }
     }
-}
-
-async fn save_get_header_call<DB: DatabaseService + 'static>(
-    db: Arc<DB>,
-    slot: u64,
-    parent_hash: B256,
-    public_key: BlsPublicKeyBytes,
-    best_block_hash: B256,
-    trace: GetHeaderTrace,
-    mev_boost: bool,
-    user_agent: Option<String>,
-) {
-    spawn_tracked!(
-        async move {
-            if let Err(err) = db
-                .save_get_header_call(
-                    slot,
-                    parent_hash,
-                    public_key,
-                    best_block_hash,
-                    trace,
-                    mev_boost,
-                    user_agent,
-                )
-                .await
-            {
-                error!(%err, "error saving get header call to database");
-            }
-        }
-        .in_current_span()
-    );
 }
 
 /// Validates that the bid request is not sent too late within the current slot.
