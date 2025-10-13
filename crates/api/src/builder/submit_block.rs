@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use axum::Extension;
 use helix_common::{
-    self, api_provider::ApiProvider, utils::extract_request_id, RequestTimings, SubmissionTrace,
+    self, RequestTimings, SubmissionTrace, api_provider::ApiProvider, utils::extract_request_id,
 };
 use http::HeaderMap;
 use tracing::{error, trace};
 
 use super::api::BuilderApi;
-use crate::{builder::error::BuilderApiError, Api};
+use crate::{Api, builder::error::BuilderApiError};
 
 impl<A: Api> BuilderApi<A> {
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
@@ -40,10 +40,10 @@ impl<A: Api> BuilderApi<A> {
             Err(_) => Err(BuilderApiError::RequestTimeout),
         };
 
-        if let Err(err) = &res {
-            if err.should_report() {
-                error!(%err)
-            }
+        if let Err(err) = &res &&
+            err.should_report()
+        {
+            error!(%err)
         }
 
         res

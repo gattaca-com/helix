@@ -20,21 +20,22 @@ use std::{
 use alloy_primitives::B256;
 pub use handle::{AuctioneerHandle, RegWorkerHandle};
 use helix_common::{
+    RelayConfig,
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN, WORKER_UTIL},
     record_submission_step,
     utils::pin_thread_to_core,
-    RelayConfig,
 };
-use helix_housekeeper::{chain_event_updater::SlotData as HkSlotData, PayloadAttributesUpdate};
+use helix_housekeeper::{PayloadAttributesUpdate, chain_event_updater::SlotData as HkSlotData};
 use helix_types::Slot;
 pub use simulator::*;
 use tracing::{debug, info, info_span, trace, warn};
 pub use types::{GetPayloadResultData, PayloadBidData, PayloadHeaderData};
 
 use crate::{
+    Api,
     auctioneer::{
         bid_sorter::BidSorter,
         context::Context,
@@ -44,7 +45,6 @@ use crate::{
     },
     builder::error::BuilderApiError,
     proposer::{MergingPoolMessage, ProposerApiError},
-    Api,
 };
 
 // TODO: tidy up builder and proposer api state, and spawn in a separate function
@@ -266,12 +266,12 @@ impl State {
                 State::Broadcasting { slot_data, block_hash },
                 Event::SlotData { bid_slot, registration_data, payload_attributes, il },
             ) => match bid_slot.cmp(&slot_data.bid_slot) {
-                Ordering::Less | Ordering::Equal => return,
+                Ordering::Less | Ordering::Equal => (),
                 Ordering::Greater => {
-                    if let Some(attributes) = &payload_attributes {
-                        if &attributes.parent_hash != block_hash {
-                            warn!(maybe_missed_slot =% slot_data.bid_slot, parent_hash =% attributes.parent_hash, broadcasting_hash =% block_hash, "new slot while broacasting different block, was the slot missed?");
-                        }
+                    if let Some(attributes) = &payload_attributes &&
+                        &attributes.parent_hash != block_hash
+                    {
+                        warn!(maybe_missed_slot =% slot_data.bid_slot, parent_hash =% attributes.parent_hash, broadcasting_hash =% block_hash, "new slot while broacasting different block, was the slot missed?");
                     }
 
                     ctx.on_new_slot(bid_slot);
@@ -347,7 +347,7 @@ impl State {
                 if let Some(local) = ctx.payloads.get(&block_hash) {
                     if let Some(block_hash) = ctx.handle_get_payload(
                         local.payload_and_blobs.clone(),
-                        blinded,
+                        *blinded,
                         trace,
                         res_tx,
                         slot_data,
@@ -358,7 +358,7 @@ impl State {
                 } else {
                     // we may still receive the payload from builder / gossip later
                     ctx.pending_payload =
-                        Some(PendingPayload { block_hash, blinded, trace, res_tx });
+                        Some(PendingPayload { block_hash, blinded: *blinded, trace, res_tx });
                 }
             }
 

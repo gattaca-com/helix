@@ -2,8 +2,8 @@ use std::{
     collections::HashMap,
     future::Future,
     sync::{
-        atomic::{AtomicU32, Ordering},
         Arc, OnceLock,
+        atomic::{AtomicU32, Ordering},
     },
     thread::{self, ThreadId},
 };
@@ -15,7 +15,7 @@ use tokio::{
 };
 use tracing::Instrument;
 
-use crate::{utils::pin_thread_to_core, RelayConfig};
+use crate::{RelayConfig, utils::pin_thread_to_core};
 
 static RUNTIME: OnceLock<runtime::Runtime> = OnceLock::new();
 
@@ -64,14 +64,14 @@ where
 pub fn init_runtime(relay_config: &RelayConfig) {
     let config = &relay_config.cores;
     if relay_config.is_submission_instance {
-        assert!(config.sub_workers.len() > 0, "need at least 1 submission worker core");
+        assert!(!config.sub_workers.is_empty(), "need at least 1 submission worker core");
     }
 
     if relay_config.is_registration_instance {
-        assert!(config.reg_workers.len() > 0, "need at least 1 registration worker core");
+        assert!(!config.reg_workers.is_empty(), "need at least 1 registration worker core");
     }
 
-    assert!(config.tokio.len() > 0, "need at least 1 tokio core");
+    assert!(!config.tokio.is_empty(), "need at least 1 tokio core");
 
     let cores_a = Arc::new(Mutex::new(Cores::new(config.tokio.clone())));
     let cores_b = cores_a.clone();
@@ -117,8 +117,10 @@ impl Cores {
     }
 
     fn remove(&mut self, thread: ThreadId) {
-        if let Some(core) = self.by_id.remove(&thread) {
-            self.counts.get_mut(&core).map(|count| *count -= 1);
+        if let Some(core) = self.by_id.remove(&thread) &&
+            let Some(count) = self.counts.get_mut(&core)
+        {
+            *count -= 1
         }
     }
 

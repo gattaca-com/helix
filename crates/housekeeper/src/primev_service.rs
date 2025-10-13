@@ -220,20 +220,19 @@ impl EthereumPrimevService {
             tuples
                 .iter()
                 .map(|token| {
-                    if let ethers::abi::Token::Tuple(values) = token {
-                        if values.len() >= 3 {
-                            if let (
-                                ethers::abi::Token::Bool(vanilla_opted_in),
-                                ethers::abi::Token::Bool(avs_opted_in),
-                                ethers::abi::Token::Bool(middleware_opted_in),
-                            ) = (
-                                values.first().unwrap_or(&ethers::abi::Token::Bool(false)),
-                                values.get(1).unwrap_or(&ethers::abi::Token::Bool(false)),
-                                values.get(2).unwrap_or(&ethers::abi::Token::Bool(false)),
-                            ) {
-                                return (*vanilla_opted_in, *avs_opted_in, *middleware_opted_in);
-                            }
-                        }
+                    if let ethers::abi::Token::Tuple(values) = token &&
+                        values.len() >= 3 &&
+                        let (
+                            ethers::abi::Token::Bool(vanilla_opted_in),
+                            ethers::abi::Token::Bool(avs_opted_in),
+                            ethers::abi::Token::Bool(middleware_opted_in),
+                        ) = (
+                            values.first().unwrap_or(&ethers::abi::Token::Bool(false)),
+                            values.get(1).unwrap_or(&ethers::abi::Token::Bool(false)),
+                            values.get(2).unwrap_or(&ethers::abi::Token::Bool(false)),
+                        )
+                    {
+                        return (*vanilla_opted_in, *avs_opted_in, *middleware_opted_in);
                     }
                     (false, false, false) // Default if parsing fails
                 })
@@ -246,10 +245,10 @@ impl EthereumPrimevService {
         // Extract the public keys of validators that are opted into any Primev service
         let mut opted_in_validators = Vec::new();
         for (index, status) in opted_in_statuses.iter().enumerate() {
-            if status.0 || status.1 || status.2 {
-                if let Some(duty) = proposer_duties.get(index) {
-                    opted_in_validators.push(duty.pubkey);
-                }
+            if (status.0 || status.1 || status.2) &&
+                let Some(duty) = proposer_duties.get(index)
+            {
+                opted_in_validators.push(duty.pubkey);
             }
         }
 

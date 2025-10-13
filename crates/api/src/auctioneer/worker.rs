@@ -2,12 +2,12 @@ use std::time::{Duration, Instant};
 
 use alloy_primitives::B256;
 use helix_common::{
+    GetPayloadTrace, RelayConfig, SubmissionTrace,
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{WORKER_QUEUE_LEN, WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US, WORKER_UTIL},
     record_submission_step,
     utils::{utcnow_ns, utcnow_sec},
-    GetPayloadTrace, RelayConfig, SubmissionTrace,
 };
 use helix_types::{
     BlockMergingData, BlockMergingPreferences, BlsPublicKey, BlsPublicKeyBytes,
@@ -18,14 +18,14 @@ use http::HeaderValue;
 use tracing::{error, info, info_span, trace, warn};
 
 use crate::{
+    HEADER_API_KEY, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_SEQUENCE,
     auctioneer::{
+        Event,
         decoder::SubmissionDecoder,
         types::{RegWorkerJob, SubWorkerJob, Submission},
-        Event,
     },
     builder::{api::get_mergeable_orders, error::BuilderApiError},
     proposer::{MergingPoolMessage, ProposerApiError},
-    HEADER_API_KEY, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_SEQUENCE,
 };
 
 pub struct Telemetry {
@@ -232,11 +232,16 @@ impl SubWorker {
             }
 
             SubWorkerJob::GetPayload { blinded_block, proposer_pubkey, mut trace, res_tx } => {
-                match self.handle_get_payload(&proposer_pubkey, blinded_block, &mut trace) {
+                match self.handle_get_payload(&proposer_pubkey, *blinded_block, &mut trace) {
                     Ok((blinded, block_hash)) => {
                         if self
                             .tx
-                            .try_send(Event::GetPayload { block_hash, blinded, trace, res_tx })
+                            .try_send(Event::GetPayload {
+                                block_hash,
+                                blinded: Box::new(blinded),
+                                trace,
+                                res_tx,
+                            })
                             .is_err()
                         {
                             error!("failed sending get_payload to auctioneer");
@@ -396,7 +401,7 @@ impl RegWorker {
         }
 
         let _ = res_tx.send(res);
-        return true;
+        true
     }
 }
 

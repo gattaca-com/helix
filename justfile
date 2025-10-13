@@ -9,7 +9,7 @@ fmt-check:
   cargo +{{toolchain}} fmt --check
 
 clippy:
-  cargo clippy --all-features --no-deps -- -D warnings
+  cargo +{{toolchain}} clippy --all-features --fix --allow-dirty --no-deps -- -D warnings
 
 test:
   cargo test --workspace --all-features

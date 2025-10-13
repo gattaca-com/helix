@@ -232,7 +232,7 @@ pub mod mock_beacon_node {
     use std::collections::HashMap;
 
     use httpmock::Mock;
-    use serde::{de::DeserializeOwned, Serialize};
+    use serde::{Serialize, de::DeserializeOwned};
 
     use super::*;
 
@@ -278,7 +278,7 @@ pub mod mock_beacon_node {
             self.mock_api("/eth/v1/node/syncing", 200, sync_status.clone());
         }
 
-        pub fn with_sse_event(&self, topic: &str) -> Mock {
+        pub fn with_sse_event(&self, topic: &str) -> Mock<'_> {
             self.server.mock(|when, then| {
                 when.path("/eth/v1/events").query_param("topics", topic);
                 then.status(200);

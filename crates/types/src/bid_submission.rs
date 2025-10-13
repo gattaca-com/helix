@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use alloy_primitives::{Address, B256, U256};
-use lh_types::{test_utils::TestRandom, ForkName, SignedRoot, Slot};
+use lh_types::{ForkName, SignedRoot, Slot, test_utils::TestRandom};
 use serde::{Deserialize, Serialize};
 use ssz::{Decode, DecodeError};
 use ssz_derive::{Decode, Encode};
@@ -9,9 +9,9 @@ use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    error::SigError, fields::ExecutionRequests, BlobsBundle, BlobsBundleV1, BlobsBundleV2,
-    BlobsError, Bloom, BlsPublicKey, BlsPublicKeyBytes, BlsSignature, BlsSignatureBytes,
-    ExecutionPayload, ExtraData, PayloadAndBlobsRef, SszError,
+    BlobsBundle, BlobsBundleV1, BlobsBundleV2, BlobsError, Bloom, BlsPublicKey, BlsPublicKeyBytes,
+    BlsSignature, BlsSignatureBytes, ExecutionPayload, ExtraData, PayloadAndBlobsRef, SszError,
+    error::SigError, fields::ExecutionRequests,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
@@ -345,7 +345,7 @@ impl SignedBidSubmission {
         }
     }
 
-    pub fn payload_and_blobs_ref(&self) -> PayloadAndBlobsRef {
+    pub fn payload_and_blobs_ref(&self) -> PayloadAndBlobsRef<'_> {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => PayloadAndBlobsRef {
                 execution_payload: self.execution_payload_ref(),

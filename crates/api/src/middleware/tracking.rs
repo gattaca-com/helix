@@ -13,7 +13,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use bytes::Bytes;
-use helix_common::{metrics::ApiMetrics, utils::utcnow_ns, BodyTimings, RequestTimings};
+use helix_common::{BodyTimings, RequestTimings, metrics::ApiMetrics, utils::utcnow_ns};
 use http::header::CONTENT_LENGTH;
 use http_body::{Body as HttpBody, Frame};
 use http_body_util::Limited;
@@ -140,11 +140,10 @@ async fn do_request(mut req: Request<Body>, next: Next, stats: Arc<BodyTimings>)
         .headers()
         .get(CONTENT_LENGTH)
         .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.parse::<usize>().ok())
+        .and_then(|s| s.parse::<usize>().ok()) &&
+        len > MAX_PAYLOAD_LENGTH
     {
-        if len > MAX_PAYLOAD_LENGTH {
-            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
-        }
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }
 
     if req.body().is_end_stream() {
@@ -161,13 +160,13 @@ async fn do_request(mut req: Request<Body>, next: Next, stats: Arc<BodyTimings>)
 #[cfg(test)]
 mod tests {
     use axum::{
+        Router,
         body::Body,
         extract::DefaultBodyLimit,
         http::{Request, StatusCode},
         middleware,
         response::IntoResponse,
         routing::post,
-        Router,
     };
     use bytes::Bytes;
     use http_body_util::BodyExt;

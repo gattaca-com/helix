@@ -96,6 +96,7 @@ impl IntoResponse for BuilderApiError {
 impl BuilderApiError {
     // when adding new errors to ignore make sure to be very conservative, ie better to log a bit
     // more than to risk not logging a relevant error
+    #[allow(clippy::match_like_matches_macro)]
     pub fn should_report(&self) -> bool {
         match self {
             Self::DeliveringPayload { .. } |

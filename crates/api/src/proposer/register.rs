@@ -1,11 +1,12 @@
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::{Arc, atomic::Ordering};
 
 use axum::{
+    Extension,
     extract::Json,
     http::{HeaderMap, StatusCode},
-    Extension,
 };
 use helix_common::{
+    Filtering, ValidatorPreferences,
     api::proposer_api::ValidatorRegistrationInfo,
     api_provider::ApiProvider,
     metrics::{
@@ -13,7 +14,6 @@ use helix_common::{
         REGISTRATIONS_UNKNOWN,
     },
     utils::extract_request_id,
-    Filtering, ValidatorPreferences,
 };
 use helix_database::DatabaseService;
 use helix_types::SignedValidatorRegistration;
@@ -22,9 +22,9 @@ use tracing::{error, info, trace, warn};
 
 use super::ProposerApi;
 use crate::{
-    proposer::{error::ProposerApiError, PreferencesHeader},
-    router::KnownValidatorsLoaded,
     Api, HEADER_API_KEY,
+    proposer::{PreferencesHeader, error::ProposerApiError},
+    router::KnownValidatorsLoaded,
 };
 
 impl<A: Api> ProposerApi<A> {
@@ -132,7 +132,7 @@ impl<A: Api> ProposerApi<A> {
                     }
                 })
                 .filter(|reg| {
-                    if proposer_api.db.is_registration_update_required(&reg) {
+                    if proposer_api.db.is_registration_update_required(reg) {
                         true
                     } else {
                         skipped_registrations += 1;

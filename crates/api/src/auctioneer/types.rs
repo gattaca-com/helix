@@ -2,23 +2,23 @@ use std::{ops::Range, sync::Arc, time::Instant};
 
 use alloy_primitives::{B256, U256};
 use helix_common::{
+    GetPayloadTrace, SubmissionTrace,
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         proposer_api::GetHeaderParams,
     },
-    GetPayloadTrace, SubmissionTrace,
 };
 use helix_housekeeper::PayloadAttributesUpdate;
 use helix_types::{
-    mock_public_key_bytes, BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid,
-    DehydratedBidSubmission, ExecutionPayload, ExecutionRequests, ForkName, GetPayloadResponse,
-    PayloadAndBlobs, SignedBidSubmission, SignedBlindedBeaconBlock, SignedValidatorRegistration,
-    Slot, VersionedSignedProposal,
+    BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission,
+    ExecutionPayload, ExecutionRequests, ForkName, GetPayloadResponse, PayloadAndBlobs,
+    SignedBidSubmission, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot,
+    VersionedSignedProposal, mock_public_key_bytes,
 };
 use tokio::sync::oneshot;
 
 use crate::{
-    auctioneer::{simulator::manager::SimulationResult, BlockMergeRequest},
+    auctioneer::{BlockMergeRequest, simulator::manager::SimulationResult},
     builder::error::BuilderApiError,
     gossiper::types::BroadcastPayloadParams,
     proposer::ProposerApiError,
@@ -36,6 +36,7 @@ pub struct GetPayloadResultData {
     pub fork: ForkName,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 pub enum Submission {
     // received after sigverify
@@ -163,7 +164,7 @@ pub enum SubWorkerJob {
     },
 
     GetPayload {
-        blinded_block: SignedBlindedBeaconBlock,
+        blinded_block: Box<SignedBlindedBeaconBlock>,
         proposer_pubkey: BlsPublicKeyBytes,
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
@@ -208,6 +209,7 @@ impl SlotData {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum Event {
     // Assume this data is already validate, ie valid this bid_slot
     SlotData {
@@ -239,7 +241,7 @@ pub enum Event {
     // Receive multiple of these potentially, assume some light validation
     GetPayload {
         block_hash: B256,
-        blinded: SignedBlindedBeaconBlock,
+        blinded: Box<SignedBlindedBeaconBlock>,
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
     },

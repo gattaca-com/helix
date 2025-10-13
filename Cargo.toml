@@ -14,10 +14,10 @@ members = [
 resolver = "2"
 
 [workspace.package]
-edition = "2021"
+edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/gattaca-com/helix"
-rust-version = "1.88.0"
+rust-version = "1.90.0"
 version = "0.0.1"
 
 [workspace.dependencies]

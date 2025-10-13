@@ -9,6 +9,9 @@ use async_trait::async_trait;
 use dashmap::{DashMap, DashSet};
 use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
 use helix_common::{
+    BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, PostgresConfig,
+    ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace,
+    ValidatorPreferences, ValidatorSummary,
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         data_api::BidFilters,
@@ -17,9 +20,6 @@ use helix_common::{
     bid_submission::OptimisticVersion,
     metrics::DbMetricRecord,
     utils::utcnow_ms,
-    BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, PostgresConfig,
-    ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace,
-    ValidatorPreferences, ValidatorSummary,
 };
 use helix_types::{
     BlsPublicKeyBytes, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
@@ -27,10 +27,11 @@ use helix_types::{
 use parking_lot::RwLock;
 use rustc_hash::FxHashSet;
 use tokio::sync::mpsc::Sender;
-use tokio_postgres::{types::ToSql, NoTls};
+use tokio_postgres::{NoTls, types::ToSql};
 use tracing::{error, info, instrument, warn};
 
 use crate::{
+    DatabaseService,
     error::DatabaseError,
     postgres::{
         postgres_db_filters::PgBidFilters,
@@ -39,7 +40,6 @@ use crate::{
         postgres_db_u256_parsing::PostgresNumeric,
     },
     types::{BidSubmissionDocument, BuilderInfoDocument, DeliveredPayloadDocument},
-    DatabaseService,
 };
 
 struct PendingBlockSubmissionValue {
@@ -730,19 +730,17 @@ impl DatabaseService for PostgresDatabaseService {
 
     fn is_registration_update_required(&self, registration: &SignedValidatorRegistration) -> bool {
         if let Some(existing_entry) =
-            self.validator_registration_cache.get(&registration.message.pubkey)
-        {
-            if existing_entry.registration_info.registration.message.timestamp >=
+            self.validator_registration_cache.get(&registration.message.pubkey) &&
+            existing_entry.registration_info.registration.message.timestamp >=
                 registration.message.timestamp.saturating_sub(60 * 60) &&
-                existing_entry.registration_info.registration.message.fee_recipient ==
-                    registration.message.fee_recipient &&
-                existing_entry.registration_info.registration.message.gas_limit ==
-                    registration.message.gas_limit
-            {
-                // do registration once per hour, unless fee recipient / gas limit has changed
+            existing_entry.registration_info.registration.message.fee_recipient ==
+                registration.message.fee_recipient &&
+            existing_entry.registration_info.registration.message.gas_limit ==
+                registration.message.gas_limit
+        {
+            // do registration once per hour, unless fee recipient / gas limit has changed
 
-                return false;
-            }
+            return false;
         }
         true
     }
