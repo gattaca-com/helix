@@ -5,8 +5,8 @@ use helix_types::BlsPublicKeyBytes;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    inclusion_lists::service::MultiRelayInclusionListsService, messages::NetworkMessage,
-    RelayNetworkManager,
+    RelayNetworkManager, inclusion_lists::service::MultiRelayInclusionListsService,
+    messages::NetworkMessage,
 };
 
 #[derive(Debug)]

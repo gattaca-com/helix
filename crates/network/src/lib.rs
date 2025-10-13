@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use helix_common::{
-    api::{builder_api::InclusionList, PATH_RELAY_NETWORK},
-    signing::RelaySigningContext,
     RelayNetworkConfig,
+    api::{PATH_RELAY_NETWORK, builder_api::InclusionList},
+    signing::RelaySigningContext,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;

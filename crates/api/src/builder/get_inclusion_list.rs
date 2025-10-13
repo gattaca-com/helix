@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use axum::{extract::Path, response::IntoResponse, Extension};
+use axum::{Extension, extract::Path, response::IntoResponse};
 use helix_common::api::builder_api::InclusionList;
 use hyper::StatusCode;
 use tracing::debug;
 
-use super::{api::BuilderApi, error::BuilderApiError, InclusionListPathParams};
+use super::{InclusionListPathParams, api::BuilderApi, error::BuilderApiError};
 use crate::Api;
 
 impl<A: Api> BuilderApi<A> {

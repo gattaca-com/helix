@@ -8,15 +8,15 @@ pub(crate) mod get_payload;
 mod register;
 mod types;
 
-use std::sync::{atomic::Ordering, Arc};
+use std::sync::{Arc, atomic::Ordering};
 
-use axum::{response::IntoResponse, Extension};
+use axum::{Extension, response::IntoResponse};
 pub use block_merging::MergingPoolMessage;
 pub use error::*;
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
-    alerts::AlertManager, chain_info::ChainInfo, local_cache::LocalCache,
-    signing::RelaySigningContext, RelayConfig, ValidatorPreferences,
+    RelayConfig, ValidatorPreferences, alerts::AlertManager, chain_info::ChainInfo,
+    local_cache::LocalCache, signing::RelaySigningContext,
 };
 use helix_housekeeper::CurrentSlotInfo;
 use hyper::StatusCode;
@@ -24,11 +24,11 @@ use tokio::sync::mpsc::{self};
 pub use types::*;
 
 use crate::{
+    Api,
     auctioneer::{AuctioneerHandle, BlockMergeRequest, RegWorkerHandle},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::block_merging::BestMergedBlock,
     router::Terminating,
-    Api,
 };
 
 #[derive(Clone)]

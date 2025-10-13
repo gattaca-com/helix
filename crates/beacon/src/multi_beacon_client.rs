@@ -1,14 +1,14 @@
 use std::{
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
 use alloy_primitives::B256;
 use futures::future::join_all;
-use helix_common::{metrics::BeaconMetrics, spawn_tracked, ProposerDuty, ValidatorSummary};
+use helix_common::{ProposerDuty, ValidatorSummary, metrics::BeaconMetrics, spawn_tracked};
 use helix_types::{ForkName, VersionedSignedProposal};
 use tokio::{sync::broadcast::Sender, time::sleep};
 use tracing::error;

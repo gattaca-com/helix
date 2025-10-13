@@ -12,15 +12,15 @@ use helix_common::metrics::{
 };
 use helix_types::BlsPublicKeyBytes;
 use http::{
-    header::{CONTENT_ENCODING, CONTENT_TYPE},
     HeaderMap, HeaderValue,
+    header::{CONTENT_ENCODING, CONTENT_TYPE},
 };
 use serde::de::DeserializeOwned;
 use ssz::Decode;
 use tracing::trace;
 use zstd::{
     stream::read::Decoder as ZstdDecoder,
-    zstd_safe::{get_frame_content_size, CONTENTSIZE_ERROR, CONTENTSIZE_UNKNOWN},
+    zstd_safe::{CONTENTSIZE_ERROR, CONTENTSIZE_UNKNOWN, get_frame_content_size},
 };
 
 use crate::builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError};

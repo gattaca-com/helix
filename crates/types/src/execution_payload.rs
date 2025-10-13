@@ -1,5 +1,5 @@
 use alloy_primitives::{Address, B256, U256};
-use lh_types::{test_utils::TestRandom, EthSpec, ForkName, ForkVersionDecode, MainnetEthSpec};
+use lh_types::{EthSpec, ForkName, ForkVersionDecode, MainnetEthSpec, test_utils::TestRandom};
 use serde::{Deserialize, Serialize};
 use ssz::Decode;
 use ssz_derive::{Decode, Encode};
@@ -7,9 +7,9 @@ use tree_hash::TreeHash;
 use tree_hash_derive::TreeHash;
 
 use crate::{
-    convert_bloom_to_lighthouse, convert_transactions_to_lighthouse,
+    BlockValidationError, SszError, convert_bloom_to_lighthouse,
+    convert_transactions_to_lighthouse,
     fields::{Bloom, ExtraData, Transactions, Withdrawals},
-    BlockValidationError, SszError,
 };
 
 // Both Electra and Fulu share the same ExecutionPayload,

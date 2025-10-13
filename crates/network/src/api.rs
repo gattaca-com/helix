@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::{extract::WebSocketUpgrade, response::IntoResponse, Extension};
+use axum::{Extension, extract::WebSocketUpgrade, response::IntoResponse};
 use tracing::{debug, warn};
 
 use crate::RelayNetworkManager;

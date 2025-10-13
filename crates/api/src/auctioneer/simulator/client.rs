@@ -1,13 +1,13 @@
 use std::time::Instant;
 
-use helix_common::{simulator::BlockSimError, SimulatorConfig};
+use helix_common::{SimulatorConfig, simulator::BlockSimError};
 use helix_types::ForkName;
 use reqwest::{
-    header::{HeaderMap, HeaderValue},
     RequestBuilder,
+    header::{HeaderMap, HeaderValue},
 };
 use serde::de::DeserializeOwned;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::{debug, error};
 
 use crate::auctioneer::simulator::{

@@ -8,10 +8,9 @@ use ssz_derive::{Decode, Encode};
 use tree_hash::TreeHash;
 
 use crate::{
-    bid_submission,
-    fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
     BidTrace, Blob, BlobsBundle, BlobsBundleV1, BlobsBundleV2, BlsPublicKeyBytes,
-    BlsSignatureBytes, ExecutionPayload,
+    BlsSignatureBytes, ExecutionPayload, bid_submission,
+    fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
 };
 
 /// A bid submission where transactions and blobs may be replaced by hashes instead of payload

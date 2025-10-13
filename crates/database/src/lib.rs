@@ -6,13 +6,13 @@ pub mod types;
 
 use std::{
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
-use helix_common::{is_local_dev, RelayConfig};
+use helix_common::{RelayConfig, is_local_dev};
 use postgres::postgres_db_service::PostgresDatabaseService;
 pub use traits::*;
 pub use types::*;

@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{metrics::GET_PAYLOAD_TRACE_LATENCY, utils::utcnow_ns, RequestTimings};
+use crate::{RequestTimings, metrics::GET_PAYLOAD_TRACE_LATENCY, utils::utcnow_ns};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RegisterValidatorsTrace {

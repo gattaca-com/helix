@@ -2,8 +2,8 @@ use std::{collections::HashMap, sync::Arc, time::Instant};
 
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
-    api::builder_api::InclusionListWithMetadata, bid_submission::OptimisticVersion,
-    simulator::BlockSimError, SubmissionTrace, ValidatorPreferences,
+    SubmissionTrace, ValidatorPreferences, api::builder_api::InclusionListWithMetadata,
+    bid_submission::OptimisticVersion, simulator::BlockSimError,
 };
 use helix_types::{
     BidTrace, BlobsBundle, BlockMergingPreferences, BlsPublicKeyBytes, BlsSignatureBytes,
@@ -179,10 +179,6 @@ impl SimulatorRequest {
     }
 
     pub fn optimistic_version(&self) -> OptimisticVersion {
-        if self.res_tx.is_some() {
-            OptimisticVersion::NotOptimistic
-        } else {
-            OptimisticVersion::V1
-        }
+        if self.res_tx.is_some() { OptimisticVersion::NotOptimistic } else { OptimisticVersion::V1 }
     }
 }

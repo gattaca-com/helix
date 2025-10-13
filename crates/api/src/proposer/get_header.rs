@@ -1,27 +1,27 @@
 use std::{
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
     time::Duration,
 };
 
 use alloy_primitives::B256;
-use axum::{extract::Path, http::HeaderMap, response::IntoResponse, Extension};
+use axum::{Extension, extract::Path, http::HeaderMap, response::IntoResponse};
 use helix_common::{
+    GetHeaderTrace, RequestTimings,
     api::proposer_api::GetHeaderParams,
     api_provider::{ApiProvider, TimingResult},
     chain_info::ChainInfo,
     resign_builder_bid, spawn_tracked,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
-    GetHeaderTrace, RequestTimings,
 };
 use helix_database::DatabaseService;
 use helix_types::BlsPublicKeyBytes;
-use tracing::{debug, error, info, trace, warn, Instrument};
+use tracing::{Instrument, debug, error, info, trace, warn};
 
 use super::ProposerApi;
 use crate::{
-    proposer::{error::ProposerApiError, GET_HEADER_REQUEST_CUTOFF_MS},
-    router::Terminating,
     Api,
+    proposer::{GET_HEADER_REQUEST_CUTOFF_MS, error::ProposerApiError},
+    router::Terminating,
 };
 
 impl<A: Api> ProposerApi<A> {
@@ -226,23 +226,25 @@ async fn save_get_header_call<DB: DatabaseService + 'static>(
     mev_boost: bool,
     user_agent: Option<String>,
 ) {
-    spawn_tracked!(async move {
-        if let Err(err) = db
-            .save_get_header_call(
-                slot,
-                parent_hash,
-                public_key,
-                best_block_hash,
-                trace,
-                mev_boost,
-                user_agent,
-            )
-            .await
-        {
-            error!(%err, "error saving get header call to database");
+    spawn_tracked!(
+        async move {
+            if let Err(err) = db
+                .save_get_header_call(
+                    slot,
+                    parent_hash,
+                    public_key,
+                    best_block_hash,
+                    trace,
+                    mev_boost,
+                    user_agent,
+                )
+                .await
+            {
+                error!(%err, "error saving get header call to database");
+            }
         }
-    }
-    .in_current_span());
+        .in_current_span()
+    );
 }
 
 /// Validates that the bid request is not sent too late within the current slot.

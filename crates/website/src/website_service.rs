@@ -1,8 +1,8 @@
 use std::{net::SocketAddr, sync::Arc};
 
-use axum::{routing::get, Router};
+use axum::{Router, routing::get};
 use helix_beacon::{beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient};
-use helix_common::{chain_info::ChainInfo, local_cache::LocalCache, NetworkConfig, RelayConfig};
+use helix_common::{NetworkConfig, RelayConfig, chain_info::ChainInfo, local_cache::LocalCache};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_housekeeper::{ChainEventUpdater, CurrentSlotInfo};
 use parking_lot::RwLock;

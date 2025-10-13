@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use helix_common::{chain_info::ChainInfo, WebsiteConfig};
+use helix_common::{WebsiteConfig, chain_info::ChainInfo};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_housekeeper::CurrentSlotInfo;
 use parking_lot::RwLock;

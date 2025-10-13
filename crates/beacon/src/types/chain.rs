@@ -1,4 +1,4 @@
-use alloy_primitives::{hex, B256};
+use alloy_primitives::{B256, hex};
 use helix_types::{Slot, Withdrawals};
 use serde::{Deserialize, Serialize};
 

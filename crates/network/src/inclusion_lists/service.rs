@@ -5,10 +5,10 @@ use helix_types::BlsPublicKeyBytes;
 use tracing::{error, trace, warn};
 
 use crate::{
+    RelayNetworkManager,
     event_handlers::{InclusionListEvent, InclusionListEventInfo, NetworkEvent},
     inclusion_lists::consensus,
     messages::{InclusionListMessage, InclusionListMessageInfo, NetworkMessage},
-    RelayNetworkManager,
 };
 
 pub(crate) struct MultiRelayInclusionListsService {

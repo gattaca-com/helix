@@ -1,7 +1,7 @@
 use std::hint::black_box;
 
 use alloy_rpc_types::engine::ExecutionPayloadV3 as AlloyExecutionPayload;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use helix_types::{ExecutionPayload, SignedBidSubmission};
 use lh_types::MainnetEthSpec;
 use ssz::{Decode, Encode};

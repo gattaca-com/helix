@@ -1,8 +1,8 @@
 use alloy_primitives::FixedBytes;
-use lh_types::{test_utils::TestRandom, EthSpec, FixedVector, MainnetEthSpec, VariableList};
+use lh_types::{EthSpec, FixedVector, MainnetEthSpec, VariableList, test_utils::TestRandom};
 use rand::Rng;
 
-use crate::{ssz_bytes_wrapper, SszError};
+use crate::{SszError, ssz_bytes_wrapper};
 
 pub type Withdrawal = lh_types::withdrawal::Withdrawal;
 pub type Withdrawals = lh_types::execution_payload::Withdrawals<MainnetEthSpec>;

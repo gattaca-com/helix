@@ -1,8 +1,8 @@
 use teloxide::{
+    Bot,
     payloads::SendMessageSetters,
     prelude::Requester,
     types::{ChatId, ParseMode},
-    Bot,
 };
 use tracing::error;
 

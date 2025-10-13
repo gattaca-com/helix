@@ -1,13 +1,13 @@
 use std::{
     collections::HashMap,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{Arc, atomic::AtomicBool},
 };
 
 use alloy_consensus::{Bytes48, TxEip4844, TxType};
 use alloy_primitives::{Address, B256};
-use axum::{http::StatusCode, response::IntoResponse, Extension};
+use axum::{Extension, http::StatusCode, response::IntoResponse};
 use bytes::Bytes;
-use helix_common::{chain_info::ChainInfo, local_cache::LocalCache, RelayConfig};
+use helix_common::{RelayConfig, chain_info::ChainInfo, local_cache::LocalCache};
 use helix_housekeeper::CurrentSlotInfo;
 use helix_types::{
     BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
@@ -17,7 +17,7 @@ use helix_types::{
 use tracing::error;
 
 use crate::{
-    auctioneer::AuctioneerHandle, gossiper::grpc_gossiper::GrpcGossiperClientManager, Api,
+    Api, auctioneer::AuctioneerHandle, gossiper::grpc_gossiper::GrpcGossiperClientManager,
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB

@@ -3,6 +3,8 @@ use std::sync::Arc;
 use alloy_primitives::B256;
 use async_trait::async_trait;
 use helix_common::{
+    GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, ProposerInfo,
+    SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         data_api::BidFilters,
@@ -10,8 +12,6 @@ use helix_common::{
     },
     bid_submission::OptimisticVersion,
     builder_info::BuilderInfo,
-    GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, ProposerInfo,
-    SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
 };
 use helix_types::{
     BlsPublicKeyBytes, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
@@ -167,7 +167,7 @@ pub trait DatabaseService: Send + Sync + Clone {
     async fn get_trusted_proposers(&self) -> Result<Vec<ProposerInfo>, DatabaseError>;
 
     async fn get_validator_pool_name(&self, api_key: &str)
-        -> Result<Option<String>, DatabaseError>;
+    -> Result<Option<String>, DatabaseError>;
 
     async fn get_validator_registrations(
         &self,

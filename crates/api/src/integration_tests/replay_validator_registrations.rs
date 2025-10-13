@@ -2,10 +2,10 @@ use std::{collections::HashMap, time::Duration};
 
 use helix_beacon::beacon_client::BeaconClient;
 use helix_common::{
+    BeaconClientConfig,
     api::{
         builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
     },
-    BeaconClientConfig,
 };
 use helix_types::{BlsPublicKeyBytes, SignedValidatorRegistration, Slot};
 use reqwest::{Error, Response};

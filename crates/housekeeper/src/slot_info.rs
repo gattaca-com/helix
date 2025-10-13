@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use alloy_primitives::{Bytes, B256};
+use alloy_primitives::{B256, Bytes};
 use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponse, BuilderGetValidatorsResponseEntry},
     chain_info::ChainInfo,

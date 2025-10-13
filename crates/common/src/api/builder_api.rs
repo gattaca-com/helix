@@ -9,7 +9,7 @@ use ssz::Encode;
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
-use crate::{api::proposer_api::ValidatorRegistrationInfo, BuilderValidatorPreferences};
+use crate::{BuilderValidatorPreferences, api::proposer_api::ValidatorRegistrationInfo};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BuilderGetValidatorsResponseEntry {
@@ -119,7 +119,7 @@ impl From<&InclusionListWithMetadata> for InclusionList {
 
 #[cfg(test)]
 mod tests {
-    use alloy_primitives::{Bytes, B256, U256};
+    use alloy_primitives::{B256, Bytes, U256};
     use helix_types::Transaction;
 
     use super::*;

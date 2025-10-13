@@ -32,20 +32,20 @@ mod tests {
     use alloy_consensus::{TxEip1559, TxEnvelope};
     use alloy_primitives::Signature;
     use alloy_rlp::Encodable as _;
-    use axum::{routing::any, Extension, Router};
+    use axum::{Extension, Router, routing::any};
     use helix_common::{
-        api::builder_api::InclusionList, chain_info::ChainInfo, signing::RelaySigningContext,
-        utils::utcnow_sec, RelayNetworkConfig, RelayNetworkPeerConfig,
+        RelayNetworkConfig, RelayNetworkPeerConfig, api::builder_api::InclusionList,
+        chain_info::ChainInfo, signing::RelaySigningContext, utils::utcnow_sec,
     };
     use helix_types::{BlsKeypair, BlsSecretKey, Transaction};
-    use rand::{rngs::SmallRng, seq::IndexedRandom, Rng as _, SeedableRng};
+    use rand::{Rng as _, SeedableRng, rngs::SmallRng, seq::IndexedRandom};
     use tokio::task::JoinSet;
     use tracing::{error, info};
     use tree_hash::TreeHash;
 
     use crate::{
-        api::RelayNetworkApi, inclusion_lists::consensus::INCLUSION_LIST_MAX_BYTES,
-        RelayNetworkManager,
+        RelayNetworkManager, api::RelayNetworkApi,
+        inclusion_lists::consensus::INCLUSION_LIST_MAX_BYTES,
     };
 
     const RELAY_CONNECT_PATH: &str = "/relay/v1/network";

@@ -12,7 +12,7 @@ use helix_common::{
 use helix_types::{Slot, SlotClockTrait};
 use tokio::{
     sync::broadcast,
-    time::{interval, interval_at, sleep, Instant},
+    time::{Instant, interval, interval_at, sleep},
 };
 use tracing::{error, info, warn};
 use tree_hash::TreeHash;

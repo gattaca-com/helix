@@ -1,7 +1,7 @@
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicUsize},
         Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize},
     },
     time::Duration,
 };
@@ -10,8 +10,8 @@ use helix_beacon::{
     beacon_client::mock_beacon_node::MockBeaconNode, multi_beacon_client::MultiBeaconClient,
 };
 use helix_common::{
-    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
-    config::PrimevConfig, local_cache::LocalCache, RelayConfig, ValidatorSummary,
+    RelayConfig, ValidatorSummary, api::builder_api::BuilderGetValidatorsResponseEntry,
+    chain_info::ChainInfo, config::PrimevConfig, local_cache::LocalCache,
 };
 use helix_database::mock_database_service::MockDatabaseService;
 use helix_network::RelayNetworkManager;
@@ -221,7 +221,7 @@ async fn test_primev_real_contract_integration() {
         abi::{Abi, Address, Token},
         contract::Contract,
         providers::{Http, Middleware, Provider},
-        types::{transaction::eip2718::TypedTransaction, TransactionRequest},
+        types::{TransactionRequest, transaction::eip2718::TypedTransaction},
     };
     // Test is ignored by default since it requires external network connectivity
     // Run with: cargo test test_primev_real_contract_integration -- --ignored

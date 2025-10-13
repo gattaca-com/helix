@@ -4,7 +4,7 @@ use crate::models::DeliveredPayload;
 
 //Askama filters
 pub mod filters {
-    use alloy_primitives::{utils::format_ether, U256};
+    use alloy_primitives::{U256, utils::format_ether};
     use askama::Result;
     use num_format::{Locale, ToFormattedString};
 

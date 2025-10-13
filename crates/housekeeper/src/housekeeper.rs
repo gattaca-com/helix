@@ -522,7 +522,7 @@ impl<DB: DatabaseService> Housekeeper<DB> {
 
     fn should_update_trusted_proposers(&self, head_slot: u64) -> bool {
         let last_updated = self.slots.trusted_proposers();
-        head_slot % TRUSTED_PROPOSERS_UPDATE_FREQ == 0 ||
+        head_slot.is_multiple_of(TRUSTED_PROPOSERS_UPDATE_FREQ) ||
             head_slot.saturating_sub(last_updated) >= TRUSTED_PROPOSERS_UPDATE_FREQ
     }
 

@@ -1,15 +1,15 @@
 #![allow(clippy::too_many_arguments)]
 
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::{Arc, atomic::AtomicBool};
 
 use bytes::Bytes;
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
-    api_provider::ApiProvider, chain_info::ChainInfo, local_cache::LocalCache,
-    signing::RelaySigningContext, RelayConfig,
+    RelayConfig, api_provider::ApiProvider, chain_info::ChainInfo, local_cache::LocalCache,
+    signing::RelaySigningContext,
 };
 use helix_database::DatabaseService;
-use helix_housekeeper::{chain_event_updater::SlotData, CurrentSlotInfo};
+use helix_housekeeper::{CurrentSlotInfo, chain_event_updater::SlotData};
 use helix_network::api::RelayNetworkApi;
 use service::run_api_service;
 

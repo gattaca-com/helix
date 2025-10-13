@@ -7,7 +7,7 @@ use tokio::{
     sync::mpsc::{self},
     time::sleep,
 };
-use tonic::{codec::CompressionEncoding, transport::Channel, Request, Response, Status};
+use tonic::{Request, Response, Status, codec::CompressionEncoding, transport::Channel};
 use tracing::error;
 
 use crate::{
