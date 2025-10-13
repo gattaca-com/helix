@@ -1359,6 +1359,7 @@ impl PostgresDatabaseService {
 
         if !payload.execution_payload.withdrawals.is_empty() {
             // Save the withdrawals
+            #[allow(clippy::type_complexity)]
             let mut structured_params: Vec<(i32, Vec<u8>, i32, &[u8], i64)> = Vec::new();
             for entry in payload.execution_payload.withdrawals.iter() {
                 structured_params.push((
