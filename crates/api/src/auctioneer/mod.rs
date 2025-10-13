@@ -455,13 +455,31 @@ impl State {
             }
 
             // submission unregistered
-            (State::Slot { .. }, Event::Submission { res_tx, .. }) => {
-                let _ = res_tx.send(Err(BuilderApiError::ProposerDutyNotFound));
+            (State::Slot { bid_slot, .. }, Event::Submission { res_tx, submission, .. }) => {
+                if submission.bid_slot() == bid_slot.as_u64() {
+                    // either not registered or waiting for full data from housekepper
+                    let _ = res_tx.send(Err(BuilderApiError::ProposerDutyNotFound));
+                } else {
+                    let _ = res_tx.send(Err(BuilderApiError::BidValidation(
+                        helix_types::BlockValidationError::SubmissionForWrongSlot {
+                            expected: *bid_slot,
+                            got: submission.bid_slot().into(),
+                        },
+                    )));
+                }
             }
 
-            // get_header unregistered
-            (State::Slot { .. }, Event::GetHeader { res_tx, .. }) => {
-                let _ = res_tx.send(Err(ProposerApiError::ProposerNotRegistered));
+            // get_header not sorting
+            (State::Slot { bid_slot, .. }, Event::GetHeader { res_tx, params }) => {
+                if params.slot == bid_slot.as_u64() {
+                    // either not registered or waiting for full data from housekepper
+                    let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
+                } else {
+                    let _ = res_tx.send(Err(ProposerApiError::RequestWrongSlot {
+                        request_slot: params.slot,
+                        bid_slot: bid_slot.as_u64(),
+                    }));
+                }
             }
 
             // get_payload unregistered

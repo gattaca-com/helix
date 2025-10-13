@@ -55,8 +55,6 @@ impl BidEntry {
 struct BidSorterTelemetry {
     subs: u32,
     top_bids: u32,
-    /// Latency to created builder bid struct (tx root)
-    subs_create_time: Duration,
     /// Internal bid processing time of the sorter
     subs_process_time: Duration,
 }
@@ -95,12 +93,11 @@ impl BidSorter {
         is_optimistic: bool,
     ) {
         trace!(is_optimistic, "sorting submission");
-        let start = Instant::now();
+
         let bid_trace = submission.bid_trace();
         assert_eq!(bid_trace.slot, self.curr_bid_slot);
         let bid = BidEntry::new(trace.receive, submission, merging_preferences);
         let builder_pubkey = bid_trace.builder_pubkey;
-        self.local_telemetry.subs_create_time += start.elapsed();
 
         let start = Instant::now();
         self.process_header(builder_pubkey, bid, trace, is_optimistic);
@@ -271,13 +268,11 @@ impl BidSorter {
     pub(super) fn report(&mut self) {
         let tel = std::mem::take(&mut self.local_telemetry);
 
-        let avg_sub_create = avg_duration(tel.subs_create_time, tel.subs);
         let avg_sub_process = avg_duration(tel.subs_process_time, tel.subs);
 
         info!(
             slot = self.curr_bid_slot,
             valid_subs = tel.subs,
-            ?avg_sub_create,
             ?avg_sub_process,
             top_bids = tel.top_bids,
             "bid sorter telemetry"

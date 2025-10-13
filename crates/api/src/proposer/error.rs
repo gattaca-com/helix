@@ -255,9 +255,7 @@ impl IntoResponse for ProposerApiError {
             ProposerApiError::DeliveringPayload |
             ProposerApiError::GetPayloadAlreadyReceived |
             ProposerApiError::RequestForPastSlot { .. } => StatusCode::BAD_REQUEST,
-            ProposerApiError::InvalidPublicKey(_) | ProposerApiError::InvalidGetHeader(_) => {
-                StatusCode::BAD_REQUEST
-            }
+            ProposerApiError::InvalidPublicKey(_) => StatusCode::BAD_REQUEST,
 
             ProposerApiError::InvalidApiKey => StatusCode::UNAUTHORIZED,
 
@@ -266,6 +264,8 @@ impl IntoResponse for ProposerApiError {
             }
 
             ProposerApiError::ServiceUnavailableError => StatusCode::SERVICE_UNAVAILABLE,
+
+            ProposerApiError::InvalidGetHeader(_) => StatusCode::UNAUTHORIZED,
         };
 
         (code, self.to_string()).into_response()
