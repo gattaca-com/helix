@@ -151,7 +151,7 @@ impl DehydratedBidSubmissionElectra {
                 let bytes = tx.as_ref().try_into().unwrap();
                 let hash = u64::from_le_bytes(bytes);
                 let Some(cached_tx) = order_cache.transactions.get(&hash) else {
-                    last_err = Err(HydrationError::UnknownTxHash { hash, index });
+                    last_err = Err(HydrationError::UnknownTxHash { index });
                     continue;
                 };
 
@@ -246,7 +246,7 @@ impl DehydratedBidSubmissionFulu {
                 let bytes = tx.as_ref().try_into().unwrap();
                 let hash = u64::from_le_bytes(bytes);
                 let Some(cached_tx) = order_cache.transactions.get(&hash) else {
-                    last_err = Err(HydrationError::UnknownTxHash { hash, index });
+                    last_err = Err(HydrationError::UnknownTxHash { index });
                     continue;
                 };
 
@@ -374,8 +374,8 @@ impl Default for HydrationCache {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HydrationError {
-    #[error("unkown tx: hash {hash}, index {index}")]
-    UnknownTxHash { hash: u64, index: usize },
+    #[error("unkown tx: index {index}")]
+    UnknownTxHash { index: usize },
 
     #[error("invalid tx bytes: length {length}, index {index}")]
     InvalidTxLength { length: usize, index: usize },

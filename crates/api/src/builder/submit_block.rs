@@ -18,7 +18,7 @@ impl<A: Api> BuilderApi<A> {
         builder_pubkey = tracing::field::Empty,
         builder_id = tracing::field::Empty,
         block_hash = tracing::field::Empty,
-    ), err)]
+    ))]
     pub async fn submit_block(
         Extension(api): Extension<Arc<BuilderApi<A>>>,
         Extension(timings): Extension<RequestTimings>,
@@ -35,9 +35,17 @@ impl<A: Api> BuilderApi<A> {
             return Err(BuilderApiError::InternalError);
         };
 
-        match rx.await {
+        let res = match rx.await {
             Ok(res) => res,
             Err(_) => Err(BuilderApiError::RequestTimeout),
+        };
+
+        if let Err(err) = &res {
+            if err.should_report() {
+                error!(%err)
+            }
         }
+
+        res
     }
 }

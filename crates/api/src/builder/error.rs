@@ -92,3 +92,18 @@ impl IntoResponse for BuilderApiError {
         (code, self.to_string()).into_response()
     }
 }
+
+impl BuilderApiError {
+    // when adding new errors to ignore make sure to be very conservative, ie better to log a bit
+    // more than to risk not logging a relevant error
+    pub fn should_report(&self) -> bool {
+        match self {
+            Self::DeliveringPayload { .. } |
+            Self::BidValidation(BlockValidationError::DuplicateBlockHash { .. }) |
+            Self::BidValidation(BlockValidationError::OutOfSequence { .. }) |
+            Self::BidValidation(BlockValidationError::AlreadyProcessingNewerPayload) => false,
+
+            _ => true,
+        }
+    }
+}

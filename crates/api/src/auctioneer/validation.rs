@@ -107,7 +107,10 @@ impl<A: Api> Context<A> {
 
             match (&maybe_old_seq, new_seq) {
                 (None, None) | (Some(_), None) => (),
-                (None, Some(new_seq)) => *maybe_old_seq = Some(new_seq),
+                (None, Some(new_seq)) => {
+                    *maybe_old_seq = Some(new_seq);
+                    check_timestamp = false
+                }
                 (Some(old_seq), Some(new_seq)) => {
                     if new_seq > *old_seq {
                         *maybe_old_seq = Some(new_seq);
