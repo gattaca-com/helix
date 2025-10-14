@@ -7,6 +7,7 @@ use helix_common::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         proposer_api::GetHeaderParams,
     },
+    metrics::BID_CREATION_LATENCY,
 };
 use helix_housekeeper::PayloadAttributesUpdate;
 use helix_types::{
@@ -16,6 +17,7 @@ use helix_types::{
     VersionedSignedProposal, mock_public_key_bytes,
 };
 use tokio::sync::oneshot;
+use tracing::debug;
 
 use crate::{
     auctioneer::{BlockMergeRequest, simulator::manager::SimulationResult},
@@ -131,18 +133,25 @@ impl PayloadHeaderData {
 
     /// This is expensive because of the tx root
     pub fn to_builder_bid_slow(self) -> BuilderBid {
+        let start = Instant::now();
+
         let header = self
             .payload_and_blobs
             .execution_payload
             .to_header(Some(self.bid_data.withdrawals_root));
 
-        BuilderBid {
+        let bid = BuilderBid {
             header,
             blob_kzg_commitments: self.payload_and_blobs.blobs_bundle.commitments().clone(),
             value: self.bid_data.value,
             execution_requests: self.bid_data.execution_requests,
             pubkey: mock_public_key_bytes(),
-        }
+        };
+
+        BID_CREATION_LATENCY.observe(start.elapsed().as_micros() as f64);
+        debug!("creating builder bid took {:?}", start.elapsed());
+
+        bid
     }
 }
 

@@ -100,10 +100,12 @@ impl BuilderApiError {
     pub fn should_report(&self) -> bool {
         match self {
             Self::DeliveringPayload { .. } |
+            Self::ProposerDutyNotFound |
             Self::BidValidation(BlockValidationError::DuplicateBlockHash { .. }) |
             Self::BidValidation(BlockValidationError::OutOfSequence { .. }) |
             Self::BidValidation(BlockValidationError::AlreadyProcessingNewerPayload) |
             Self::BidValidation(BlockValidationError::SubmissionForWrongSlot { .. }) |
+            Self::BidValidation(BlockValidationError::PrevRandaoMismatch { .. }) |
             Self::SimOnNextSlot => false,
 
             _ => true,
