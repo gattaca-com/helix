@@ -149,7 +149,7 @@ impl Context {
         if let Some(res_tx) = result.res_tx {
             // submission was initially valid but by the time sim finished the slot already
             // progressed
-            let _ = res_tx.send(Err(BuilderApiError::AlreadyOnNextSlot));
+            let _ = res_tx.send(Err(BuilderApiError::SimOnNextSlot));
         }
     }
 

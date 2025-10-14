@@ -36,8 +36,8 @@ pub enum BuilderApiError {
     #[error("could not find proposer duty for slot")]
     ProposerDutyNotFound,
 
-    #[error("already on next slot")]
-    AlreadyOnNextSlot,
+    #[error("late sim, already on next slot")]
+    SimOnNextSlot,
 
     #[error("delivering payload: bid_slot: {bid_slot}, delivering: {delivering}")]
     DeliveringPayload { bid_slot: u64, delivering: u64 },
@@ -69,7 +69,7 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::ProposerDutyNotFound |
             BuilderApiError::HydrationError(_) |
             BuilderApiError::SigError(_) |
-            BuilderApiError::AlreadyOnNextSlot |
+            BuilderApiError::SimOnNextSlot |
             BuilderApiError::DeliveringPayload { .. } => StatusCode::BAD_REQUEST,
 
             BuilderApiError::InvalidApiKey |
@@ -102,7 +102,9 @@ impl BuilderApiError {
             Self::DeliveringPayload { .. } |
             Self::BidValidation(BlockValidationError::DuplicateBlockHash { .. }) |
             Self::BidValidation(BlockValidationError::OutOfSequence { .. }) |
-            Self::BidValidation(BlockValidationError::AlreadyProcessingNewerPayload) => false,
+            Self::BidValidation(BlockValidationError::AlreadyProcessingNewerPayload) |
+            Self::BidValidation(BlockValidationError::SubmissionForWrongSlot { .. }) |
+            Self::SimOnNextSlot => false,
 
             _ => true,
         }

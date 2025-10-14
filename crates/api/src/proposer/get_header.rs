@@ -15,7 +15,7 @@ use helix_common::{
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
 use helix_types::{BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
-use tracing::{Instrument, debug, error, info, trace, warn};
+use tracing::{Instrument, debug, error, info, warn};
 
 use super::ProposerApi;
 use crate::{
@@ -35,7 +35,7 @@ impl<A: Api> ProposerApi<A> {
     /// The function returns a JSON response containing the best bid if found.
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/getHeader>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers)))]
+    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers), slot = params.slot))]
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
         Extension(timings): Extension<RequestTimings>,
@@ -209,9 +209,9 @@ struct TimeoutGuard {
 impl Drop for TimeoutGuard {
     fn drop(&mut self) {
         if !self.done_fetch {
-            trace!("didn't complete fetch")
+            warn!("didn't complete fetch")
         } else if !self.done_sleep {
-            trace!("didn't complete sleep")
+            warn!("didn't complete sleep")
         }
     }
 }
