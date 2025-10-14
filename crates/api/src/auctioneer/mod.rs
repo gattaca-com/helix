@@ -355,10 +355,14 @@ impl State {
                         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
                         *self = State::Broadcasting { slot_data: slot_data.clone(), block_hash }
                     }
-                } else {
+                } else if ctx.pending_payload.is_none() {
                     // we may still receive the payload from builder / gossip later
+                    info!(bid_slot =% slot_data.bid_slot, %block_hash, "received get_payload but don't have block, keep as pending");
                     ctx.pending_payload =
                         Some(PendingPayload { block_hash, blinded: *blinded, trace, res_tx });
+                } else {
+                    // keep only one pending per slot
+                    let _ = res_tx.send(Err(ProposerApiError::GetPayloadAlreadyReceived));
                 }
             }
 

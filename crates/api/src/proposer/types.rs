@@ -2,7 +2,7 @@ use helix_common::Filtering;
 use helix_types::BlsPublicKeyBytes;
 use serde::Deserialize;
 
-pub const GET_HEADER_REQUEST_CUTOFF_MS: i64 = 3000;
+pub const GET_HEADER_REQUEST_CUTOFF_MS: i64 = 3200;
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct PreferencesHeader {

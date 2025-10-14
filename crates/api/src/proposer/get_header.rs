@@ -63,13 +63,7 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::ProposerNotRegistered);
         };
 
-        let ms_into_slot = match validate_bid_request_time(&proposer_api.chain_info, &params) {
-            Ok(ms_into_slot) => ms_into_slot,
-            Err(err) => {
-                warn!(%err, "invalid bid request time");
-                return Err(err);
-            }
-        };
+        let ms_into_slot = validate_bid_request_time(&proposer_api.chain_info, &params)?;
         trace.validation_complete = utcnow_ns();
 
         let user_agent = proposer_api.api_provider.get_metadata(&headers);
@@ -261,7 +255,7 @@ pub fn resign_builder_bid(
     };
 
     BID_SIGNING_LATENCY.observe(start.elapsed().as_micros() as f64);
-    debug!("re-signing builder bid took {:?}", start.elapsed());
+    debug!("signing builder bid took {:?}", start.elapsed());
 
     bid
 }
