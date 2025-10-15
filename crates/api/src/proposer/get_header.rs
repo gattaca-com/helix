@@ -15,7 +15,7 @@ use helix_common::{
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
 use helix_types::{BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
-use tracing::{Instrument, debug, error, info, warn};
+use tracing::{Instrument, debug, error, info, trace, warn};
 
 use super::ProposerApi;
 use crate::{
@@ -35,7 +35,7 @@ impl<A: Api> ProposerApi<A> {
     /// The function returns a JSON response containing the best bid if found.
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/getHeader>
-    #[tracing::instrument(skip_all, fields(id =% extract_request_id(&headers), slot = params.slot))]
+    #[tracing::instrument(skip_all, err(level = tracing::Level::TRACE), fields(id =% extract_request_id(&headers), slot = params.slot))]
     pub async fn get_header(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
         Extension(timings): Extension<RequestTimings>,
@@ -43,6 +43,8 @@ impl<A: Api> ProposerApi<A> {
         headers: HeaderMap,
         Path(params): Path<GetHeaderParams>,
     ) -> Result<impl IntoResponse, ProposerApiError> {
+        trace!("starting call");
+
         if terminating.load(Ordering::Relaxed) || proposer_api.local_cache.kill_switch_enabled() {
             return Err(ProposerApiError::ServiceUnavailableError);
         }
@@ -66,6 +68,8 @@ impl<A: Api> ProposerApi<A> {
         let ms_into_slot = validate_bid_request_time(&proposer_api.chain_info, &params)?;
         trace.validation_complete = utcnow_ns();
 
+        trace!(ms_into_slot, "completed validation");
+
         let user_agent = proposer_api.api_provider.get_metadata(&headers);
 
         let TimingResult { is_mev_boost, sleep_time } = proposer_api
@@ -76,18 +80,20 @@ impl<A: Api> ProposerApi<A> {
         let mut timing_guard = TimeoutGuard::default();
 
         if let Some(sleep_time) = sleep_time {
-            debug!(target: "timing_games",
-            ?sleep_time,
-            ms_into_slot,
-            slot = params.slot,
-            pubkey = ?params.pubkey,
-            "timing game sleep");
+            debug!(
+                ?sleep_time,
+                ms_into_slot,
+                slot = params.slot,
+                pubkey = ?params.pubkey,
+                "timing game sleep");
 
             tokio::time::sleep(sleep_time).await;
             timing_guard.done_sleep = true;
         } else {
             timing_guard.done_sleep = true;
         };
+
+        trace!("done sleep");
 
         let Ok(rx) = proposer_api.auctioneer_handle.get_header(params) else {
             error!("failed to send get_header to auctioneer");

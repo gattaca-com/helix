@@ -12,7 +12,8 @@ use crate::{Api, builder::error::BuilderApiError};
 
 impl<A: Api> BuilderApi<A> {
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
-    #[tracing::instrument(skip_all, fields(
+    #[tracing::instrument(skip_all, err(level = tracing::Level::TRACE),
+        fields(
         id =% extract_request_id(&headers),
         slot = tracing::field::Empty, // submission slot
         builder_pubkey = tracing::field::Empty,
