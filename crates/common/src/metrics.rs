@@ -427,6 +427,21 @@ lazy_static! {
     )
     .unwrap();
 
+    //////////////// GET HEADER ////////////////
+    pub static ref HEADER_TIMEOUT_FETCH: IntCounter = register_int_counter_with_registry!(
+        "header_timeout_fetch",
+        "Count of timeouts in header fetch",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref HEADER_TIMEOUT_SLEEP: IntCounter = register_int_counter_with_registry!(
+        "header_timeout_sleep",
+        "Count of timeouts in header fetch",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     //////////////// DECODING BLOCKS ////////////////
 
     pub static ref SUBMISSION_BY_COMPRESSION: IntCounterVec = register_int_counter_vec_with_registry!(

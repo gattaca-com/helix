@@ -89,21 +89,6 @@ pub struct PostgresDatabaseService {
 }
 
 impl PostgresDatabaseService {
-    pub fn new(cfg: &Config, region: i16) -> Result<Self, Box<dyn std::error::Error>> {
-        let pool = cfg.create_pool(None, NoTls)?;
-        let high_priority_pool = cfg.create_pool(None, NoTls)?;
-        Ok(PostgresDatabaseService {
-            validator_registration_cache: Arc::new(DashMap::new()),
-            pending_validator_registrations: Arc::new(DashSet::new()),
-            block_submissions_sender: None,
-            known_validators_cache: Arc::new(RwLock::new(new_validator_set())),
-            validator_pool_cache: Arc::new(DashMap::new()),
-            region,
-            pool: Arc::new(pool),
-            high_priority_pool: Arc::new(high_priority_pool),
-        })
-    }
-
     pub async fn from_relay_config(relay_config: &RelayConfig) -> Self {
         let mut cfg = Config::new();
         cfg.host = Some(relay_config.postgres.hostname.clone());

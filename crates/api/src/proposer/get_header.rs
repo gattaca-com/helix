@@ -9,7 +9,7 @@ use helix_common::{
     api::proposer_api::GetHeaderParams,
     api_provider::{ApiProvider, TimingResult},
     chain_info::ChainInfo,
-    metrics::BID_SIGNING_LATENCY,
+    metrics::{BID_SIGNING_LATENCY, HEADER_TIMEOUT_FETCH, HEADER_TIMEOUT_SLEEP},
     signing::RelaySigningContext,
     spawn_tracked,
     utils::{extract_request_id, utcnow_ms, utcnow_ns},
@@ -162,11 +162,6 @@ impl<A: Api> ProposerApi<A> {
 
         let bid_block_hash = *bid.block_hash();
         let value = *bid.value();
-        debug!(
-            ?value,
-            block_hash =% bid_block_hash,
-            "delivering bid",
-        );
 
         let db = proposer_api.db.clone();
         spawn_tracked!(
@@ -203,8 +198,10 @@ struct TimeoutGuard {
 impl Drop for TimeoutGuard {
     fn drop(&mut self) {
         if !self.done_fetch {
+            HEADER_TIMEOUT_FETCH.inc();
             warn!("didn't complete fetch")
         } else if !self.done_sleep {
+            HEADER_TIMEOUT_SLEEP.inc();
             warn!("didn't complete sleep")
         }
     }
