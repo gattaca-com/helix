@@ -41,9 +41,6 @@ pub struct RelayConfig {
     pub router_config: RouterConfig,
     #[serde(default = "default_duration")]
     pub target_get_payload_propagation_duration_ms: u64,
-    /// Configuration for timing game parameters.
-    #[serde(default)]
-    pub timing_game_config: TimingGameConfig,
     /// Configuration for block merging parameters.
     #[serde(default)]
     pub block_merging_config: BlockMergingConfig,
@@ -83,7 +80,6 @@ impl RelayConfig {
             validator_preferences: Default::default(),
             router_config: Default::default(),
             target_get_payload_propagation_duration_ms: Default::default(),
-            timing_game_config: Default::default(),
             block_merging_config: Default::default(),
             primev_config: Default::default(),
             discord_webhook_url: Default::default(),
@@ -194,21 +190,6 @@ pub struct PostgresConfig {
     pub password: String,
     pub region: i16,
     pub region_name: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Default)]
-pub struct TimingGameConfig {
-    /// Max time we will delay for before returning get header.
-    #[serde(default = "default_u64::<650>")]
-    pub max_header_delay_ms: u64,
-    /// Max ms into slot we will sleep up to. e.g., if a request is made 2.4s into the next slot
-    /// and the limit is 2.5s we will only sleep 100ms.
-    #[serde(default = "default_u64::<2000>")]
-    pub latest_header_delay_ms_in_slot: u64,
-    /// Default latency to assume if the client does not provide a "request start timestamp"
-    /// header.
-    #[serde(default = "default_u64::<150>")]
-    pub default_client_latency_ms: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
