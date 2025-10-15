@@ -306,6 +306,7 @@ impl<A: Api> ProposerApi<A> {
             withdrawals_root,
             execution_requests: Arc::new(response.execution_requests),
             value: response.proposer_value,
+            tx_root: None,
         };
 
         let new_bid = PayloadHeaderData { payload_and_blobs: payload_and_blobs.clone(), bid_data };

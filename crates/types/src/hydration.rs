@@ -9,7 +9,8 @@ use tree_hash::TreeHash;
 
 use crate::{
     BidTrace, Blob, BlobsBundle, BlobsBundleV1, BlobsBundleV2, BlsPublicKeyBytes,
-    BlsSignatureBytes, ExecutionPayload, bid_submission,
+    BlsSignatureBytes, ExecutionPayload, SignedBidSubmission, SignedBidSubmissionElectra,
+    SignedBidSubmissionFulu, bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
 };
 
@@ -21,6 +22,14 @@ pub enum DehydratedBidSubmission {
     Electra(DehydratedBidSubmissionElectra),
     Fulu(DehydratedBidSubmissionFulu),
 }
+
+pub struct HydratedData {
+    pub submission: bid_submission::SignedBidSubmission,
+    pub tx_cache_hits: usize,
+    pub blob_cache_hits: usize,
+    pub tx_root: B256,
+}
+
 impl DehydratedBidSubmission {
     pub fn slot(&self) -> u64 {
         match self {
@@ -54,30 +63,10 @@ impl DehydratedBidSubmission {
         self,
         hydration_cache: &mut HydrationCache,
         max_blobs_per_block: usize,
-    ) -> Result<(bid_submission::SignedBidSubmission, usize, usize), HydrationError> {
+    ) -> Result<HydratedData, HydrationError> {
         match self {
-            DehydratedBidSubmission::Electra(dehydrated_bid_submission_electra) => {
-                dehydrated_bid_submission_electra.hydrate(hydration_cache).map(
-                    |(signed_bid_submission, tx_cache_hits, blob_cache_hits)| {
-                        (
-                            bid_submission::SignedBidSubmission::Electra(signed_bid_submission),
-                            tx_cache_hits,
-                            blob_cache_hits,
-                        )
-                    },
-                )
-            }
-            DehydratedBidSubmission::Fulu(dehydrated_bid_submission_fulu) => {
-                dehydrated_bid_submission_fulu.hydrate(hydration_cache, max_blobs_per_block).map(
-                    |(signed_bid_submission, tx_cache_hits, blob_cache_hits)| {
-                        (
-                            bid_submission::SignedBidSubmission::Fulu(signed_bid_submission),
-                            tx_cache_hits,
-                            blob_cache_hits,
-                        )
-                    },
-                )
-            }
+            DehydratedBidSubmission::Electra(s) => s.hydrate(hydration_cache),
+            DehydratedBidSubmission::Fulu(s) => s.hydrate(hydration_cache, max_blobs_per_block),
         }
     }
 }
@@ -90,6 +79,7 @@ pub struct DehydratedBidSubmissionElectra {
     blobs_bundle: DehydratedBlobsElectra,
     execution_requests: Arc<ExecutionRequests>,
     signature: BlsSignatureBytes,
+    tx_root: B256,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
@@ -113,6 +103,7 @@ pub struct DehydratedBidSubmissionFulu {
     blobs_bundle: DehydratedBlobsFulu,
     execution_requests: Arc<ExecutionRequests>,
     signature: BlsSignatureBytes,
+    tx_root: B256,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
@@ -134,7 +125,7 @@ impl DehydratedBidSubmissionElectra {
     pub fn hydrate(
         mut self,
         hydration_cache: &mut HydrationCache,
-    ) -> Result<(bid_submission::SignedBidSubmissionElectra, usize, usize), HydrationError> {
+    ) -> Result<HydratedData, HydrationError> {
         let order_cache = hydration_cache.caches.entry(self.message.builder_pubkey).or_default();
 
         // avoid short-circuiting the loop to maximize cache population
@@ -208,17 +199,15 @@ impl DehydratedBidSubmissionElectra {
 
         blob_cache_hits = blob_cache_hits.saturating_sub(new_blobs);
 
-        Ok((
-            bid_submission::SignedBidSubmissionElectra {
-                message: self.message,
-                execution_payload: Arc::new(self.execution_payload),
-                blobs_bundle: Arc::new(BlobsBundle::V1(sidecar)),
-                execution_requests: self.execution_requests,
-                signature: self.signature,
-            },
-            tx_cache_hits,
-            blob_cache_hits,
-        ))
+        let submission = SignedBidSubmission::Electra(SignedBidSubmissionElectra {
+            message: self.message,
+            execution_payload: Arc::new(self.execution_payload),
+            blobs_bundle: Arc::new(BlobsBundle::V1(sidecar)),
+            execution_requests: self.execution_requests,
+            signature: self.signature,
+        });
+
+        Ok(HydratedData { submission, tx_cache_hits, blob_cache_hits, tx_root: self.tx_root })
     }
 }
 
@@ -229,7 +218,7 @@ impl DehydratedBidSubmissionFulu {
         mut self,
         hydration_cache: &mut HydrationCache,
         max_blobs_per_block: usize,
-    ) -> Result<(bid_submission::SignedBidSubmissionFulu, usize, usize), HydrationError> {
+    ) -> Result<HydratedData, HydrationError> {
         let order_cache = hydration_cache.caches.entry(self.message.builder_pubkey).or_default();
 
         // avoid short-circuiting the loop to maximize cache population
@@ -303,17 +292,15 @@ impl DehydratedBidSubmissionFulu {
 
         blob_cache_hits = blob_cache_hits.saturating_sub(new_blobs);
 
-        Ok((
-            bid_submission::SignedBidSubmissionFulu {
-                message: self.message,
-                execution_payload: Arc::new(self.execution_payload),
-                blobs_bundle: Arc::new(BlobsBundle::V2(sidecar)),
-                execution_requests: self.execution_requests,
-                signature: self.signature,
-            },
-            tx_cache_hits,
-            blob_cache_hits,
-        ))
+        let submission = SignedBidSubmission::Fulu(SignedBidSubmissionFulu {
+            message: self.message,
+            execution_payload: Arc::new(self.execution_payload),
+            blobs_bundle: Arc::new(BlobsBundle::V2(sidecar)),
+            execution_requests: self.execution_requests,
+            signature: self.signature,
+        });
+
+        Ok(HydratedData { submission, tx_cache_hits, blob_cache_hits, tx_root: self.tx_root })
     }
 }
 

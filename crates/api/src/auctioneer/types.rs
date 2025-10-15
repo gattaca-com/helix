@@ -91,11 +91,13 @@ impl PayloadEntry {
     pub fn new_submission(
         signed_bid_submission: SignedBidSubmission,
         withdrawals_root: B256,
+        tx_root: Option<B256>,
     ) -> Self {
         Self {
             payload_and_blobs: signed_bid_submission.payload_and_blobs_ref().to_owned().into(),
             bid_data: Some(PayloadBidData {
                 withdrawals_root,
+                tx_root,
                 execution_requests: signed_bid_submission.execution_requests().clone(),
                 value: signed_bid_submission.value(),
             }),
@@ -131,14 +133,14 @@ impl PayloadHeaderData {
         &self.execution_payload().block_hash
     }
 
-    /// This is expensive because of the tx root
+    /// This may be slow because of the tx root
     pub fn to_builder_bid_slow(self) -> BuilderBid {
         let start = Instant::now();
 
         let header = self
             .payload_and_blobs
             .execution_payload
-            .to_header(Some(self.bid_data.withdrawals_root));
+            .to_header(Some(self.bid_data.withdrawals_root), self.bid_data.tx_root);
 
         let bid = BuilderBid {
             header,
@@ -158,6 +160,7 @@ impl PayloadHeaderData {
 #[derive(Clone)]
 pub struct PayloadBidData {
     pub withdrawals_root: B256,
+    pub tx_root: Option<B256>,
     pub execution_requests: Arc<ExecutionRequests>,
     pub value: U256,
 }
