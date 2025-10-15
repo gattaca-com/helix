@@ -118,8 +118,6 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
 
     start_admin_service(local_cache.clone(), &config);
 
-    let api_provider = DefaultApiProvider::new(config.clone().into());
-
     tokio::spawn(start_api_service::<ApiProd>(
         config.clone(),
         db.clone(),
@@ -128,7 +126,7 @@ async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
         chain_info,
         relay_signing_context,
         beacon_client,
-        Arc::new(api_provider),
+        Arc::new(DefaultApiProvider {}),
         known_validators_loaded,
         terminating.clone(),
         top_bid_tx,
