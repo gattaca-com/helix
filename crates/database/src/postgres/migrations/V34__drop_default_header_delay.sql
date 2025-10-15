@@ -1,0 +1,1 @@
+ALTER TABLE validator_preferences ALTER COLUMN delay_ms DROP DEFAULT;
