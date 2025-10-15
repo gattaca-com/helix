@@ -116,7 +116,9 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                         },
                     ),
                     header_delay: row.get::<&str, bool>("header_delay"),
-                    delay_ms: parse_i64_to_u64(row.get::<&str, i64>("delay_ms")).ok(),
+                    delay_ms: row
+                        .get::<&str, Option<i64>>("delay_ms")
+                        .and_then(|v| parse_i64_to_u64(v).ok()),
                     disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
                 },
             },
@@ -133,7 +135,9 @@ impl FromRow for ValidatorPreferences {
                 |trusted_builders| trusted_builders.into_iter().map(|b| b.to_string()).collect(),
             ),
             header_delay: row.get::<&str, bool>("header_delay"),
-            delay_ms: parse_i64_to_u64(row.get::<&str, i64>("delay_ms")).ok(),
+            delay_ms: row
+                .get::<&str, Option<i64>>("delay_ms")
+                .and_then(|v| parse_i64_to_u64(v).ok()),
             disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
         })
     }
@@ -208,7 +212,9 @@ impl FromRow for SignedValidatorRegistrationEntry {
                         },
                     ),
                     header_delay: row.get::<&str, bool>("header_delay"),
-                    delay_ms: parse_i64_to_u64(row.get::<&str, i64>("delay_ms")).ok(),
+                    delay_ms: row
+                        .get::<&str, Option<i64>>("delay_ms")
+                        .and_then(|v| parse_i64_to_u64(v).ok()),
                     disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
                 },
             },
