@@ -49,11 +49,6 @@ pub struct RelayConfig {
     pub discord_webhook_url: Option<Url>,
     #[serde(default)]
     pub alerts_config: Option<AlertsConfig>,
-    /// If `header_gossip_enabled` is `false` this setting has no effect.
-    #[serde(default)]
-    pub payload_gossip_enabled: bool,
-    #[serde(default)]
-    pub header_gossip_enabled: bool,
     pub inclusion_list: Option<InclusionListConfig>,
     pub is_submission_instance: bool,
     pub is_registration_instance: bool,
@@ -84,8 +79,6 @@ impl RelayConfig {
             primev_config: Default::default(),
             discord_webhook_url: Default::default(),
             alerts_config: Default::default(),
-            payload_gossip_enabled: Default::default(),
-            header_gossip_enabled: Default::default(),
             inclusion_list: Default::default(),
             is_submission_instance: Default::default(),
             is_registration_instance: Default::default(),
