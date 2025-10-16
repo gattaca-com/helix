@@ -132,7 +132,7 @@ impl Context {
                     }
                 });
             } else {
-                warn!(%err, %builder, %block_hash, "failed simulation with known error, skipping demotion");
+                warn!(%err, %builder, %block_hash, "builder already demoted, skipping demotion");
             }
         };
 
