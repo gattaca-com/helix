@@ -203,12 +203,12 @@ struct TimeoutGuard {
 
 impl Drop for TimeoutGuard {
     fn drop(&mut self) {
-        if !self.done_fetch {
-            HEADER_TIMEOUT_FETCH.inc();
-            warn!("didn't complete fetch")
-        } else if !self.done_sleep {
+        if !self.done_sleep {
             HEADER_TIMEOUT_SLEEP.inc();
             warn!("didn't complete sleep")
+        } else if !self.done_fetch {
+            HEADER_TIMEOUT_FETCH.inc();
+            warn!("didn't complete fetch")
         }
     }
 }
