@@ -128,7 +128,7 @@ impl Context {
 
                 hydrated.submission.validate_payload_ssz_lengths(max_blobs_per_block)?;
 
-                (hydrated.submission, Some(hydrated.tx_root))
+                (hydrated.submission, hydrated.tx_root)
             }
         };
 

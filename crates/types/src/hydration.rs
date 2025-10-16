@@ -27,7 +27,7 @@ pub struct HydratedData {
     pub submission: bid_submission::SignedBidSubmission,
     pub tx_cache_hits: usize,
     pub blob_cache_hits: usize,
-    pub tx_root: B256,
+    pub tx_root: Option<B256>,
 }
 
 impl DehydratedBidSubmission {
@@ -79,7 +79,7 @@ pub struct DehydratedBidSubmissionElectra {
     blobs_bundle: DehydratedBlobsElectra,
     execution_requests: Arc<ExecutionRequests>,
     signature: BlsSignatureBytes,
-    tx_root: B256,
+    tx_root: Option<B256>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
@@ -103,7 +103,7 @@ pub struct DehydratedBidSubmissionFulu {
     blobs_bundle: DehydratedBlobsFulu,
     execution_requests: Arc<ExecutionRequests>,
     signature: BlsSignatureBytes,
-    tx_root: B256,
+    tx_root: Option<B256>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]

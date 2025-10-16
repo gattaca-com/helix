@@ -44,7 +44,7 @@ impl<A: Api> ProposerApi<A> {
     /// 6. Returns the unblinded payload to proposer.
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlock>
-    #[tracing::instrument(skip_all, fields(id), err)]
+    #[tracing::instrument(skip_all, fields(id, slot), err)]
     pub async fn get_payload(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
         Extension(timings): Extension<RequestTimings>,
@@ -61,6 +61,8 @@ impl<A: Api> ProposerApi<A> {
         // TODO: move decoding to worker
         let signed_blinded_block: SignedBlindedBeaconBlock = serde_json::from_slice(&body)
             .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
+
+        tracing::Span::current().record("slot", signed_blinded_block.slot().as_u64());
 
         trace.decode = utcnow_ns();
 
@@ -114,7 +116,7 @@ impl<A: Api> ProposerApi<A> {
     /// 6. Returns the unblinded payload to proposer.
     ///
     /// Implements this API: <https://ethereum.github.io/builder-specs/#/Builder/submitBlindedBlockV2>
-    #[tracing::instrument(skip_all, fields(id), err)]
+    #[tracing::instrument(skip_all, fields(id, slot), err)]
     pub async fn get_payload_v2(
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
         Extension(timings): Extension<RequestTimings>,
@@ -130,6 +132,8 @@ impl<A: Api> ProposerApi<A> {
 
         let signed_blinded_block: SignedBlindedBeaconBlock = serde_json::from_slice(&body)
             .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
+
+        tracing::Span::current().record("slot", signed_blinded_block.slot().as_u64());
 
         trace.decode = utcnow_ns();
 

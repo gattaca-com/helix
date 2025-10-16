@@ -487,8 +487,15 @@ impl State {
             }
 
             // get_payload unregistered
-            (State::Slot { .. }, Event::GetPayload { res_tx, .. }) => {
-                let _ = res_tx.send(Err(ProposerApiError::ProposerNotRegistered));
+            (State::Slot { bid_slot, .. }, Event::GetPayload { res_tx, blinded, .. }) => {
+                if bid_slot.saturating_sub(Slot::from(1u64)) == blinded.slot() {
+                    let _ = res_tx.send(Err(ProposerApiError::RequestForPastSlot {
+                        head_slot: blinded.slot(),
+                        request_slot: blinded.slot(),
+                    }));
+                } else {
+                    let _ = res_tx.send(Err(ProposerApiError::ProposerNotRegistered));
+                }
             }
 
             // gossip payload unregistered

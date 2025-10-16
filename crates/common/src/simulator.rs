@@ -85,4 +85,12 @@ mod tests {
 
         assert!(err.is_temporary())
     }
+
+    #[test]
+    fn test_demotable() {
+        assert!(
+            BlockSimError::InvalidTxRoot { got: Default::default(), expected: Default::default() }
+                .is_demotable()
+        )
+    }
 }
