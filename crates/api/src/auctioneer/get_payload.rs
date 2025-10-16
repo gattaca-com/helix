@@ -174,7 +174,7 @@ impl Context {
                 // NOTE: not if it comes via gossip, just implement the check manually
                 let local_execution_payload_header = local
                     .execution_payload
-                    .to_header(None)
+                    .to_header(None, None)
                     .to_lighthouse_electra_header()
                     .map_err(ProposerApiError::SszError)?;
 
@@ -250,7 +250,7 @@ impl Context {
                 // NOTE: not if it comes via gossip, just implement the check manually
                 let local_execution_payload_header = local
                     .execution_payload
-                    .to_header(None)
+                    .to_header(None, None)
                     .to_lighthouse_fulu_header()
                     .map_err(ProposerApiError::SszError)?;
 

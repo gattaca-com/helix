@@ -152,6 +152,8 @@ pub struct SimulatorRequest {
     pub res_tx: Option<oneshot::Sender<SubmissionResult>>,
     pub merging_preferences: BlockMergingPreferences,
     pub trace: SubmissionTrace,
+    // only Some for dehydrated submissions
+    pub tx_root: Option<B256>,
 }
 
 impl SimulatorRequest {

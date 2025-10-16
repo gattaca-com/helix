@@ -199,7 +199,7 @@ impl SimulatorManager {
 
             let optimistic_version = req.optimistic_version();
             SimulatorMetrics::sim_count(optimistic_version.is_optimistic());
-            let res =
+            let mut res =
                 SimulatorClient::do_sim_request(&req.request, req.is_top_bid, sim_method, to_send)
                     .await;
             let time = timer.stop_and_record();
@@ -213,6 +213,14 @@ impl SimulatorManager {
                 SimulatorMetrics::sim_status(true);
                 None
             };
+
+            if let Some(got) = req.tx_root {
+                let expected = req.submission.transactions_root();
+
+                if expected != got {
+                    res = Err(BlockSimError::InvalidTxRoot { got, expected })
+                }
+            }
 
             record_submission_step("simulation", start_sim.elapsed());
 

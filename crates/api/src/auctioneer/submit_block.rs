@@ -37,7 +37,7 @@ impl Context {
             slot_data,
             merging_preferences,
         ) {
-            Ok((submission, optimistic_version)) => {
+            Ok((submission, optimistic_version, tx_root)) => {
                 let res_tx = if optimistic_version.is_optimistic() {
                     let _ = res_tx.send(Ok(()));
                     None
@@ -52,6 +52,7 @@ impl Context {
                     slot_data,
                     merging_preferences,
                     withdrawals_root,
+                    tx_root,
                 );
             }
 
@@ -100,26 +101,34 @@ impl Context {
         trace: &mut SubmissionTrace,
         slot_data: &SlotData,
         merging_preferences: BlockMergingPreferences,
-    ) -> Result<(SignedBidSubmission, OptimisticVersion), BuilderApiError> {
-        let submission = match submission {
-            Submission::Full(full) => full,
+    ) -> Result<(SignedBidSubmission, OptimisticVersion, Option<B256>), BuilderApiError> {
+        let (submission, maybe_tx_root) = match submission {
+            Submission::Full(full) => (full, None),
             Submission::Dehydrated(dehydrated) => {
                 trace!("hydrating submission");
                 let start = Instant::now();
                 let max_blobs_per_block = self.chain_info.max_blobs_per_block();
-                let (payload, tx_cache_hits, blob_cache_hits) =
+
+                let hydrated =
                     dehydrated.hydrate(&mut self.hydration_cache, max_blobs_per_block)?;
 
-                trace!(tx_cache_hits, blob_cache_hits, "hydration done");
+                trace!(
+                    tx_cache_hits = hydrated.tx_cache_hits,
+                    blob_cache_hits = hydrated.blob_cache_hits,
+                    "hydration done"
+                );
                 record_submission_step("hydration", start.elapsed());
 
                 HYDRATION_CACHE_HITS
                     .with_label_values(&["transaction"])
-                    .inc_by(tx_cache_hits as u64);
-                HYDRATION_CACHE_HITS.with_label_values(&["blob"]).inc_by(blob_cache_hits as u64);
+                    .inc_by(hydrated.tx_cache_hits as u64);
+                HYDRATION_CACHE_HITS
+                    .with_label_values(&["blob"])
+                    .inc_by(hydrated.blob_cache_hits as u64);
 
-                payload.validate_payload_ssz_lengths(max_blobs_per_block)?;
-                payload
+                hydrated.submission.validate_payload_ssz_lengths(max_blobs_per_block)?;
+
+                (hydrated.submission, Some(hydrated.tx_root))
             }
         };
 
@@ -149,7 +158,7 @@ impl Context {
             OptimisticVersion::NotOptimistic
         };
 
-        Ok((submission, optimistic_version))
+        Ok((submission, optimistic_version, maybe_tx_root))
     }
 
     fn simulate_and_store(
@@ -160,6 +169,7 @@ impl Context {
         slot_data: &SlotData,
         merging_preferences: BlockMergingPreferences,
         withdrawals_root: B256,
+        tx_root: Option<B256>,
     ) {
         // TODO: pass this from previous step
         let is_top_bid = self.bid_sorter.is_top_bid(&submission);
@@ -180,11 +190,13 @@ impl Context {
             submission: submission.clone(),
             merging_preferences,
             trace,
+            tx_root,
         };
+
         self.sim_manager.handle_sim_request(req);
 
         let block_hash = *submission.block_hash();
-        let entry = PayloadEntry::new_submission(submission, withdrawals_root);
+        let entry = PayloadEntry::new_submission(submission, withdrawals_root, tx_root);
         self.payloads.insert(block_hash, entry);
     }
 
