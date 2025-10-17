@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main, staging, develop, alloy-migration]
+    branches: [main, develop]
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,16 +12,13 @@ permissions:
   packages: write
 
 jobs:
-  build:
+  build-relay:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -50,7 +47,49 @@ jobs:
         with:
           context: .
           push: true
+          file: ./relay.Dockerfile
           tags: |
-            ghcr.io/gattaca-com/helix:${{ env.IMAGE_NAME }}
-          cache-from: type=registry,ref=ghcr.io/gattaca-com/helix:buildcache
-          cache-to: type=registry,ref=ghcr.io/gattaca-com/helix:buildcache,mode=max
+            ghcr.io/gattaca-com/helix-relay:${{ env.IMAGE_NAME }}
+          cache-from: type=registry,ref=ghcr.io/gattaca-com/helix-relay:buildcache
+          cache-to: type=registry,ref=ghcr.io/gattaca-com/helix-relay:buildcache,mode=max
+
+  build-simulator:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set IMAGE_NAME
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BRANCH=$(echo "${{ github.head_ref }}" | tr '[:upper:]' '[:lower:]' | tr '/' '-')
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+            IMAGE_NAME="${BRANCH}_${SHORT_SHA}"
+          else
+            REF_BRANCH=$(echo "${{ github.ref_name }}" | tr '[:upper:]' '[:lower:]' | tr '/' '-')
+            IMAGE_NAME="${REF_BRANCH}"
+          fi
+          echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          file: ./simulator.Dockerfile
+          tags: |
+            ghcr.io/gattaca-com/helix-simulator:${{ env.IMAGE_NAME }}
+          cache-from: type=registry,ref=ghcr.io/gattaca-com/helix-simulator:buildcache
+          cache-to: type=registry,ref=ghcr.io/gattaca-com/helix-simulator:buildcache,mode=max
