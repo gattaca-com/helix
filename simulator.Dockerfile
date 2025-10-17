@@ -20,7 +20,7 @@ COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
 COPY . .
-RUN cargo build --release --bin helix-simulator
+RUN cargo build --release -p helix-simulator
 
 FROM debian:stable-slim AS runtime
 WORKDIR /app
