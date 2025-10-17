@@ -153,8 +153,8 @@ impl Housekeeper {
         loop {
             let head = self.slots.head();
             let timeout = (self.chain_info.clock.start_of(head + 1).unwrap())
-                .saturating_sub(utcnow_dur())
-                + CUTOFF_TIME;
+                .saturating_sub(utcnow_dur()) +
+                CUTOFF_TIME;
 
             if let Ok(head_event_result) = tokio::time::timeout(timeout, head_event_rx.recv()).await
             {
@@ -334,8 +334,8 @@ impl Housekeeper {
 
         self.slots.update_proposer_duties(head_slot);
 
-        if let Some(inclusion_list_service) = self.inclusion_list_service.as_ref()
-            && let Some(next_duty) = proposer_duties.iter().find(|duty| duty.slot == head_slot)
+        if let Some(inclusion_list_service) = self.inclusion_list_service.as_ref() &&
+            let Some(next_duty) = proposer_duties.iter().find(|duty| duty.slot == head_slot)
         {
             let pub_key = next_duty.pubkey;
             let inclusion_list_service = inclusion_list_service.clone();
@@ -464,8 +464,8 @@ impl Housekeeper {
         for builder_pubkey in primev_builders {
             match auctioneer.get_builder_info(&builder_pubkey) {
                 Some(builder_info) => {
-                    if builder_info.builder_id == Some("PrimevBuilder".to_string())
-                        || builder_info
+                    if builder_info.builder_id == Some("PrimevBuilder".to_string()) ||
+                        builder_info
                             .builder_ids
                             .as_ref()
                             .is_some_and(|v| v.contains(&"PrimevBuilder".to_string()))
@@ -524,8 +524,8 @@ impl Housekeeper {
 
     fn should_update_trusted_proposers(&self, head_slot: u64) -> bool {
         let last_updated = self.slots.trusted_proposers();
-        head_slot.is_multiple_of(TRUSTED_PROPOSERS_UPDATE_FREQ)
-            || head_slot.saturating_sub(last_updated) >= TRUSTED_PROPOSERS_UPDATE_FREQ
+        head_slot.is_multiple_of(TRUSTED_PROPOSERS_UPDATE_FREQ) ||
+            head_slot.saturating_sub(last_updated) >= TRUSTED_PROPOSERS_UPDATE_FREQ
     }
 
     /// Update the proposer whitelist.
