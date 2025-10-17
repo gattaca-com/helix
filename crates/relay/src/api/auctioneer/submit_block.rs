@@ -1,0 +1,221 @@
+use std::time::Instant;
+
+use alloy_primitives::B256;
+use helix_common::{
+    self, BuilderInfo, SubmissionTrace, bid_submission::OptimisticVersion,
+    metrics::HYDRATION_CACHE_HITS, record_submission_step,
+};
+use helix_types::{BlockMergingPreferences, SignedBidSubmission};
+use tokio::sync::oneshot;
+use tracing::trace;
+
+use crate::api::{
+    auctioneer::{
+        context::Context,
+        simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
+        types::{PayloadEntry, SlotData, Submission, SubmissionResult},
+    },
+    builder::error::BuilderApiError,
+};
+
+impl Context {
+    pub(super) fn handle_submission(
+        &mut self,
+        submission: Submission,
+        merging_preferences: BlockMergingPreferences,
+        withdrawals_root: B256,
+        sequence: Option<u64>,
+        mut trace: SubmissionTrace,
+        res_tx: oneshot::Sender<SubmissionResult>,
+        slot_data: &SlotData,
+    ) {
+        match self.validate_and_sort(
+            submission,
+            withdrawals_root,
+            sequence,
+            &mut trace,
+            slot_data,
+            merging_preferences,
+        ) {
+            Ok((submission, optimistic_version, tx_root)) => {
+                let res_tx = if optimistic_version.is_optimistic() {
+                    let _ = res_tx.send(Ok(()));
+                    None
+                } else {
+                    Some(res_tx)
+                };
+
+                self.simulate_and_store(
+                    submission,
+                    trace,
+                    res_tx,
+                    slot_data,
+                    merging_preferences,
+                    withdrawals_root,
+                    tx_root,
+                );
+            }
+
+            Err(err) => {
+                let _ = res_tx.send(Err(err));
+            }
+        }
+    }
+
+    /// Sort the simulation result if it wasn't optimistic
+    pub(super) fn sort_simulation_result(&mut self, result: &mut SimulationResult) {
+        let Some(result) = &mut result.1 else {
+            return;
+        };
+
+        let res_tx = result.res_tx.take();
+
+        match &result.result {
+            Err(err) if err.is_demotable() => {
+                self.bid_sorter.demote(*result.submission.builder_public_key());
+                if let Some(res_tx) = res_tx {
+                    let _ = res_tx.send(Err(BuilderApiError::BlockSimulation(err.clone())));
+                };
+            }
+
+            Ok(_) | Err(_) => {
+                if let Some(res_tx) = res_tx {
+                    self.bid_sorter.sort(
+                        &result.submission,
+                        &mut result.trace,
+                        result.merging_preferences,
+                        false,
+                    );
+
+                    let _ = res_tx.send(Ok(()));
+                };
+            }
+        }
+    }
+
+    fn validate_and_sort(
+        &mut self,
+        submission: Submission,
+        withdrawals_root: B256,
+        sequence: Option<u64>,
+        trace: &mut SubmissionTrace,
+        slot_data: &SlotData,
+        merging_preferences: BlockMergingPreferences,
+    ) -> Result<(SignedBidSubmission, OptimisticVersion, Option<B256>), BuilderApiError> {
+        let (submission, maybe_tx_root) = match submission {
+            Submission::Full(full) => (full, None),
+            Submission::Dehydrated(dehydrated) => {
+                trace!("hydrating submission");
+                let start = Instant::now();
+                let max_blobs_per_block = self.chain_info.max_blobs_per_block();
+
+                let hydrated =
+                    dehydrated.hydrate(&mut self.hydration_cache, max_blobs_per_block)?;
+
+                trace!(
+                    tx_cache_hits = hydrated.tx_cache_hits,
+                    blob_cache_hits = hydrated.blob_cache_hits,
+                    "hydration done"
+                );
+                record_submission_step("hydration", start.elapsed());
+
+                HYDRATION_CACHE_HITS
+                    .with_label_values(&["transaction"])
+                    .inc_by(hydrated.tx_cache_hits as u64);
+                HYDRATION_CACHE_HITS
+                    .with_label_values(&["blob"])
+                    .inc_by(hydrated.blob_cache_hits as u64);
+
+                hydrated.submission.validate_payload_ssz_lengths(max_blobs_per_block)?;
+
+                (hydrated.submission, hydrated.tx_root)
+            }
+        };
+
+        let builder_info = self.builder_info(submission.builder_public_key());
+        tracing::Span::current()
+            .record("builder_id", tracing::field::display(builder_info.builder_id()));
+
+        trace!("validating submission");
+        let start_val = Instant::now();
+        self.validate_submission(
+            &submission,
+            &withdrawals_root,
+            sequence,
+            &builder_info,
+            slot_data,
+            trace.receive,
+        )?;
+        record_submission_step("validated", start_val.elapsed());
+        trace!("validated");
+
+        let optimistic_version = if self.sim_manager.can_process_optimistic_submission()
+            && self.should_process_optimistically(&submission, &builder_info, slot_data)
+        {
+            self.bid_sorter.sort(&submission, trace, merging_preferences, true);
+            OptimisticVersion::V1
+        } else {
+            OptimisticVersion::NotOptimistic
+        };
+
+        Ok((submission, optimistic_version, maybe_tx_root))
+    }
+
+    fn simulate_and_store(
+        &mut self,
+        submission: SignedBidSubmission,
+        trace: SubmissionTrace,
+        res_tx: Option<oneshot::Sender<SubmissionResult>>,
+        slot_data: &SlotData,
+        merging_preferences: BlockMergingPreferences,
+        withdrawals_root: B256,
+        tx_root: Option<B256>,
+    ) {
+        // TODO: pass this from previous step
+        let is_top_bid = self.bid_sorter.is_top_bid(&submission);
+        let inclusion_list = slot_data.il.clone();
+
+        let request = BlockSimRequest::new(
+            slot_data.registration_data.entry.registration.message.gas_limit,
+            &submission,
+            slot_data.registration_data.entry.preferences.clone(),
+            slot_data.payload_attributes.payload_attributes.parent_beacon_block_root,
+            inclusion_list,
+        );
+
+        let req = SimulatorRequest {
+            request,
+            is_top_bid,
+            res_tx,
+            submission: submission.clone(),
+            merging_preferences,
+            trace,
+            tx_root,
+        };
+
+        self.sim_manager.handle_sim_request(req);
+
+        let block_hash = *submission.block_hash();
+        let entry = PayloadEntry::new_submission(submission, withdrawals_root, tx_root);
+        self.payloads.insert(block_hash, entry);
+    }
+
+    fn should_process_optimistically(
+        &self,
+        submission: &SignedBidSubmission,
+        builder_info: &BuilderInfo,
+        slot_data: &SlotData,
+    ) -> bool {
+        if builder_info.is_optimistic && submission.message().value <= builder_info.collateral {
+            if slot_data.registration_data.entry.preferences.filtering.is_regional()
+                && !builder_info.can_process_regional_slot_optimistically()
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        false
+    }
+}

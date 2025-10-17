@@ -7,9 +7,18 @@ rust-version.workspace = true
 version.workspace = true
 
 [dependencies]
+alloy-consensus.workspace = true
+alloy-primitives.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+bytes.workspace = true
 crossbeam-channel.workspace = true
+dashmap.workspace = true
+ethereum_serde_utils.workspace = true
+ethereum_ssz.workspace = true
 eyre.workspace = true
-helix-api.workspace = true
+flate2.workspace = true
+futures.workspace = true
 helix-beacon.workspace = true
 helix-common.workspace = true
 helix-database.workspace = true
@@ -17,8 +26,40 @@ helix-housekeeper.workspace = true
 helix-network.workspace = true
 helix-types.workspace = true
 helix-website.workspace = true
+http.workspace = true
+http-body.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+mockito.workspace = true
+moka.workspace = true
+parking_lot.workspace = true
+pin-project-lite.workspace = true
+prost.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+reqwest-eventsource.workspace = true
+rustc-hash.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serial_test.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
+tokio-tungstenite.workspace = true
+tonic.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tower_governor.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator.workspace = true

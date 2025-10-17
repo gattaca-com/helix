@@ -4,7 +4,6 @@ members = [
   "crates/relay",
   "crates/simulator",
 
-  "crates/api",
   "crates/beacon",
   "crates/common",
   "crates/database",
@@ -53,7 +52,6 @@ eyre = "0.6.12"
 flate2 = "1.0"
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
-helix-api = { path = "./crates/api" }
 helix-beacon = { path = "./crates/beacon" }
 helix-common = { path = "crates/common" }
 helix-database = { path = "./crates/database" }

@@ -6,8 +6,9 @@ use std::{
     time::Duration,
 };
 
+mod api;
+
 use eyre::eyre;
-use helix_api::{Api, start_admin_service, start_api_service};
 use helix_beacon::start_beacon_client;
 use helix_common::{
     RelayConfig,
@@ -27,6 +28,8 @@ use helix_website::website_service::WebsiteService;
 use tikv_jemallocator::Jemalloc;
 use tokio::signal::unix::SignalKind;
 use tracing::{error, info};
+
+use crate::api::{Api, start_admin_service, start_api_service};
 
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
