@@ -7,6 +7,7 @@ use std::{
 };
 
 mod api;
+mod network;
 mod website;
 
 use eyre::eyre;
