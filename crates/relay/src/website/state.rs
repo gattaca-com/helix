@@ -1,10 +1,12 @@
 use std::sync::Arc;
 
 use helix_common::{WebsiteConfig, chain_info::ChainInfo};
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use parking_lot::RwLock;
 
-use crate::{housekeeper::CurrentSlotInfo, website::templates::IndexTemplate};
+use crate::{
+    database::postgres::postgres_db_service::PostgresDatabaseService, housekeeper::CurrentSlotInfo,
+    website::templates::IndexTemplate,
+};
 
 #[derive(Clone)]
 pub struct AppState {

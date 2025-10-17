@@ -5,7 +5,6 @@ use alloy_primitives::{Address, B256};
 use axum::{Extension, http::StatusCode, response::IntoResponse};
 use bytes::Bytes;
 use helix_common::{RelayConfig, local_cache::LocalCache};
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_types::{
     BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
     BlockMergingData, BundleOrder, KzgCommitment, MergeableBundle, MergeableOrder, MergeableOrders,
@@ -15,6 +14,7 @@ use tracing::error;
 
 use crate::{
     api::{Api, auctioneer::AuctioneerHandle},
+    database::postgres::postgres_db_service::PostgresDatabaseService,
     housekeeper::CurrentSlotInfo,
 };
 

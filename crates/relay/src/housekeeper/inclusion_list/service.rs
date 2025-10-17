@@ -7,11 +7,11 @@ use helix_common::{
     chain_info::ChainInfo,
     local_cache::LocalCache,
 };
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_types::{BlsPublicKeyBytes, Slot};
 use tracing::{error, info, warn};
 
 use crate::{
+    database::postgres::postgres_db_service::PostgresDatabaseService,
     housekeeper::{
         chain_event_updater::SlotData, inclusion_list::http_fetcher::HttpInclusionListFetcher,
     },

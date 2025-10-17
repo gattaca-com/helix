@@ -9,7 +9,6 @@ use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
     RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
 };
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use moka::sync::Cache;
 use tracing::{error, info};
 
@@ -24,6 +23,7 @@ use crate::{
         relay_data::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry},
         router::build_router,
     },
+    database::postgres::postgres_db_service::PostgresDatabaseService,
     housekeeper::{CurrentSlotInfo, chain_event_updater::SlotData},
     network::api::RelayNetworkApi,
 };

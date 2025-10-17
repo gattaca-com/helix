@@ -1,8 +1,9 @@
 use axum::response::{IntoResponse, Response};
 use helix_common::{local_cache::AuctioneerError, simulator::BlockSimError};
-use helix_database::error::DatabaseError;
 use helix_types::{BlockValidationError, HydrationError, SigError};
 use http::StatusCode;
+
+use crate::database::error::DatabaseError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuilderApiError {

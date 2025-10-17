@@ -15,7 +15,6 @@ use helix_common::{
     RelayConfig, ValidatorPreferences, alerts::AlertManager, chain_info::ChainInfo,
     local_cache::LocalCache, signing::RelaySigningContext,
 };
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use hyper::StatusCode;
 pub use types::*;
 
@@ -27,6 +26,7 @@ use crate::{
         proposer::block_merging::BestMergedBlock,
         router::Terminating,
     },
+    database::postgres::postgres_db_service::PostgresDatabaseService,
     housekeeper::CurrentSlotInfo,
 };
 

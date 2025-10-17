@@ -1,19 +1,21 @@
 use async_trait::async_trait;
 use deadpool_postgres::tokio_postgres;
-use helix_database::{
-    error::DatabaseError,
-    postgres::{
-        postgres_db_row_parsing::{
-            FromRow, parse_bytes_to_address, parse_bytes_to_hash, parse_bytes_to_pubkey_bytes,
-            parse_i32_to_u64, parse_i32_to_usize, parse_numeric_to_u256, parse_rows,
-        },
-        postgres_db_service::PostgresDatabaseService,
-        postgres_db_u256_parsing::PostgresNumeric,
-    },
-};
 use helix_types::BidTrace;
 
-use crate::website::models::DeliveredPayload;
+use crate::{
+    database::{
+        error::DatabaseError,
+        postgres::{
+            postgres_db_row_parsing::{
+                FromRow, parse_bytes_to_address, parse_bytes_to_hash, parse_bytes_to_pubkey_bytes,
+                parse_i32_to_u64, parse_i32_to_usize, parse_numeric_to_u256, parse_rows,
+            },
+            postgres_db_service::PostgresDatabaseService,
+            postgres_db_u256_parsing::PostgresNumeric,
+        },
+    },
+    website::models::DeliveredPayload,
+};
 
 #[async_trait]
 pub trait WebsiteDatabaseService: Send + Sync {

@@ -28,7 +28,6 @@ use helix_common::{
     record_submission_step,
     utils::pin_thread_to_core,
 };
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_types::Slot;
 pub use simulator::*;
 use tracing::{debug, info, info_span, trace, warn};
@@ -46,6 +45,7 @@ use crate::{
         builder::error::BuilderApiError,
         proposer::{MergingPoolMessage, ProposerApiError},
     },
+    database::postgres::postgres_db_service::PostgresDatabaseService,
     housekeeper::{PayloadAttributesUpdate, chain_event_updater::SlotData as HkSlotData},
 };
 

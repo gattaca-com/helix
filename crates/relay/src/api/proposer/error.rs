@@ -4,10 +4,11 @@ use axum::{
 };
 use helix_beacon::error::BeaconClientError;
 use helix_common::local_cache::AuctioneerError;
-use helix_database::error::DatabaseError;
 use helix_types::{SigError, Slot, SszError};
 use hyper::StatusCode;
 use thiserror::Error;
+
+use crate::database::error::DatabaseError;
 
 #[derive(Debug, Error)]
 pub enum ProposerApiError {

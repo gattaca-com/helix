@@ -1,27 +1,10 @@
-use alloy_primitives::{B256, U256};
+use alloy_primitives::U256;
 use helix_common::{
-    BuilderConfig, SubmissionTrace,
-    api::{
-        builder_api::BuilderGetValidatorsResponseEntry,
-        data_api::{DeliveredPayloadsResponse, ReceivedBlocksResponse},
-    },
+    BuilderConfig,
+    api::data_api::{DeliveredPayloadsResponse, ReceivedBlocksResponse},
 };
-use helix_types::{BidTrace, BlsPublicKey, TestRandom};
+use helix_types::{BidTrace, TestRandom};
 use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize)]
-pub struct ProposerDutiesDocument {
-    pub duties: Vec<BuilderGetValidatorsResponseEntry>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TooLateGetPayloadDocument {
-    pub slot: u64,
-    pub proposer_pub_key: BlsPublicKey,
-    pub payload_hash: B256,
-    pub message_received: u64,
-    pub payload_fetched: u64,
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeliveredPayloadDocument {
@@ -54,31 +37,7 @@ impl From<DeliveredPayloadDocument> for DeliveredPayloadsResponse {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SubmissionTraceDocument {
-    pub block_hash: B256,
-    pub trace: SubmissionTrace,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DemotionDocument {
-    pub pub_key: BlsPublicKey,
-    pub demotion_time: u64,
-}
-
-impl DemotionDocument {
-    pub fn new(pub_key: BlsPublicKey, demotion_time: u64) -> Self {
-        Self { pub_key, demotion_time }
-    }
-}
-
 pub type BuilderInfoDocument = BuilderConfig;
-
-#[derive(Serialize, Deserialize)]
-pub struct KnownValidatorsDocument {
-    pub public_key: BlsPublicKey,
-    pub index: usize,
-}
 
 #[derive(Serialize, Deserialize, Debug, TestRandom)]
 pub struct BidSubmissionDocument {

@@ -48,7 +48,7 @@ mod proposer_api_tests {
         utils::utcnow_ns,
         Filtering, ValidatorPreferences,
     };
-    use helix_database::mock_database_service::MockDatabaseService;
+    use crate::databasemock_database_service::MockDatabaseService;
     use helix_datastore::MockAuctioneer;
     use helix_housekeeper::{CurrentSlotInfo, PayloadAttributesUpdate, SlotUpdate};
     use helix_types::{

@@ -19,12 +19,12 @@ use helix_common::{
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, is_local_dev,
     local_cache::LocalCache, task, utils::utcnow_dur,
 };
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_types::{BlsPublicKeyBytes, Epoch, Slot, SlotClockTrait};
 use tokio::sync::{Mutex, broadcast};
 use tracing::{Instrument, debug, error, info, warn};
 
 use crate::{
+    database::postgres::postgres_db_service::PostgresDatabaseService,
     housekeeper::{
         EthereumPrimevService, chain_event_updater::SlotData, error::HousekeeperError,
         inclusion_list::InclusionListService,

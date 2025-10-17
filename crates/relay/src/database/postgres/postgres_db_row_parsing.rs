@@ -9,18 +9,11 @@ use helix_types::{
     BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, SignedValidatorRegistration,
     ValidatorRegistration,
 };
-use thiserror::Error;
 
-use crate::{
+use crate::database::{
     BidSubmissionDocument, BuilderInfoDocument, DeliveredPayloadDocument, error::DatabaseError,
     postgres::postgres_db_u256_parsing::PostgresNumeric,
 };
-
-#[derive(Debug, Error)]
-pub enum RowParsingError {
-    #[error("Parsing error: {0}")]
-    General(#[from] Box<dyn std::error::Error>),
-}
 
 pub trait FromRow {
     fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError>

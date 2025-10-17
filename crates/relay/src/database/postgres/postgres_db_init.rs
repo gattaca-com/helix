@@ -7,7 +7,7 @@ use refinery::{AsyncMigrate, Migrate, Report};
 /// folder
 mod embedded_migrations {
     use refinery::embed_migrations;
-    embed_migrations!("src/postgres/migrations");
+    embed_migrations!("src/database/postgres/migrations");
 }
 
 /// Run the migrations defined in the /src/postgres/migrations folder

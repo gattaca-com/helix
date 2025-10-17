@@ -1,7 +1,8 @@
 use helix_beacon::error::BeaconClientError;
 use helix_common::local_cache::AuctioneerError;
-use helix_database::error::DatabaseError;
 use thiserror::Error;
+
+use crate::database::error::DatabaseError;
 
 #[derive(Debug, Error)]
 pub enum HousekeeperError {

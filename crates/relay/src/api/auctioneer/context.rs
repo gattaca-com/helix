@@ -9,18 +9,20 @@ use helix_common::{
     BuilderInfo, RelayConfig, chain_info::ChainInfo, local_cache::LocalCache,
     metrics::SimulatorMetrics, spawn_tracked,
 };
-use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{error, info, warn};
 
-use crate::api::{
-    auctioneer::{
-        bid_sorter::BidSorter,
-        simulator::manager::{SimulationResult, SimulatorManager},
-        types::{PayloadEntry, PendingPayload},
+use crate::{
+    api::{
+        auctioneer::{
+            bid_sorter::BidSorter,
+            simulator::manager::{SimulationResult, SimulatorManager},
+            types::{PayloadEntry, PendingPayload},
+        },
+        builder::error::BuilderApiError,
     },
-    builder::error::BuilderApiError,
+    database::postgres::postgres_db_service::PostgresDatabaseService,
 };
 
 // Context that is only valid for a given slot

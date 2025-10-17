@@ -13,14 +13,14 @@ use helix_common::{
     },
     metrics,
 };
-use helix_database::{
-    error::DatabaseError, postgres::postgres_db_service::PostgresDatabaseService,
-};
 use moka::sync::Cache;
 use tracing::warn;
 
-use crate::api::relay_data::{
-    BuilderBlocksReceivedStats, ProposerPayloadDeliveredStats, error::DataApiError,
+use crate::{
+    api::relay_data::{
+        BuilderBlocksReceivedStats, ProposerPayloadDeliveredStats, error::DataApiError,
+    },
+    database::{error::DatabaseError, postgres::postgres_db_service::PostgresDatabaseService},
 };
 
 pub(crate) type BidsCache = Cache<BuilderBlocksReceivedParams, Vec<ReceivedBlocksResponse>>;
