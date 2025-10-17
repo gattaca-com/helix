@@ -2,15 +2,13 @@ use std::{collections::HashMap, sync::Arc};
 
 use alloy_primitives::Address;
 use async_trait::async_trait;
+use helix_types::{BlockMergeRequestV1, BlockMergeResponseV1};
 use jsonrpsee::{proc_macros::rpc, types::ErrorObject};
 use reth_ethereum::node::core::rpc::result::internal_rpc_err;
 use tokio::sync::oneshot;
 
 use crate::{
-    block_merging::types::{
-        BlockMergeRequestV1, BlockMergeResponseV1, BlockMergingConfig, DistributionConfig,
-        PrivateKeySigner,
-    },
+    block_merging::types::{BlockMergingConfig, DistributionConfig, PrivateKeySigner},
     validation::ValidationApi,
 };
 
