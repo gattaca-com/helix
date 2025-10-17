@@ -136,7 +136,7 @@ impl PayloadHeaderData {
     }
 
     /// This may be slow because of the tx root
-    pub fn to_builder_bid_slow(self) -> BuilderBid {
+    pub fn into_builder_bid_slow(self) -> BuilderBid {
         let start = Instant::now();
 
         let header = self

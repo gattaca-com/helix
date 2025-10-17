@@ -1,5 +1,6 @@
 pub mod chain_event_updater;
 pub mod error;
+#[allow(clippy::module_inception)]
 pub mod housekeeper;
 // #[cfg(test)]
 // pub mod housekeeper_tests;

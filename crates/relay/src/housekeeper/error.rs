@@ -6,11 +6,11 @@ use crate::{beacon::error::BeaconClientError, database::error::DatabaseError};
 #[derive(Debug, Error)]
 pub enum HousekeeperError {
     #[error("beacon client error. {0}")]
-    BeaconClientError(#[from] BeaconClientError),
+    BeaconClient(#[from] BeaconClientError),
 
     #[error("database error. {0}")]
-    DatabaseError(#[from] DatabaseError),
+    Database(#[from] DatabaseError),
 
     #[error("auctioneer error. {0}")]
-    AuctioneerError(#[from] AuctioneerError),
+    Auctioneer(#[from] AuctioneerError),
 }
