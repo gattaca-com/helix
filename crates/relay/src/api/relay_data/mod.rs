@@ -16,8 +16,6 @@ use helix_common::api::data_api::{
 use moka::Expiry;
 use tracing::info;
 
-pub struct DataApiStats {}
-
 #[derive(Debug, Clone, Default)]
 pub struct ProposerPayloadDeliveredStats {
     pub total: Arc<AtomicUsize>,

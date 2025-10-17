@@ -1,13 +1,10 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, atomic::AtomicBool},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use alloy_consensus::{Bytes48, TxEip4844, TxType};
 use alloy_primitives::{Address, B256};
 use axum::{Extension, http::StatusCode, response::IntoResponse};
 use bytes::Bytes;
-use helix_common::{RelayConfig, chain_info::ChainInfo, local_cache::LocalCache};
+use helix_common::{RelayConfig, local_cache::LocalCache};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_housekeeper::CurrentSlotInfo;
 use helix_types::{
@@ -17,9 +14,7 @@ use helix_types::{
 };
 use tracing::error;
 
-use crate::api::{
-    Api, auctioneer::AuctioneerHandle, gossiper::grpc_gossiper::GrpcGossiperClientManager,
-};
+use crate::api::{Api, auctioneer::AuctioneerHandle};
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB
 
@@ -27,14 +22,10 @@ pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB
 pub struct BuilderApi<A: Api> {
     pub local_cache: Arc<LocalCache>,
     pub db: Arc<PostgresDatabaseService>,
-    pub chain_info: Arc<ChainInfo>,
-    pub gossiper: Arc<GrpcGossiperClientManager>,
     pub curr_slot_info: CurrentSlotInfo,
     pub relay_config: Arc<RelayConfig>,
     /// Subscriber for TopBid updates, SSZ encoded
     pub top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-    /// Failsafe: if we fail to demote we pause all optimistic submissions
-    pub failsafe_triggered: Arc<AtomicBool>,
     pub auctioneer_handle: AuctioneerHandle,
     pub api_provider: Arc<A::ApiProvider>,
 }
@@ -43,8 +34,6 @@ impl<A: Api> BuilderApi<A> {
     pub fn new(
         local_cache: Arc<LocalCache>,
         db: Arc<PostgresDatabaseService>,
-        chain_info: Arc<ChainInfo>,
-        gossiper: Arc<GrpcGossiperClientManager>,
         relay_config: RelayConfig,
         curr_slot_info: CurrentSlotInfo,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
@@ -54,12 +43,9 @@ impl<A: Api> BuilderApi<A> {
         Self {
             local_cache,
             db,
-            chain_info,
-            gossiper,
             relay_config: Arc::new(relay_config),
             curr_slot_info,
             top_bid_tx,
-            failsafe_triggered: Arc::new(false.into()),
             auctioneer_handle,
             api_provider,
         }

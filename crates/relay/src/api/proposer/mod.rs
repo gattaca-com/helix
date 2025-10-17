@@ -1,6 +1,3 @@
-// #[cfg(test)]
-// pub mod tests;
-
 mod block_merging;
 mod error;
 mod get_header;
@@ -21,12 +18,11 @@ use helix_common::{
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_housekeeper::CurrentSlotInfo;
 use hyper::StatusCode;
-use tokio::sync::mpsc::{self};
 pub use types::*;
 
 use crate::api::{
     Api,
-    auctioneer::{AuctioneerHandle, BlockMergeRequest, RegWorkerHandle},
+    auctioneer::{AuctioneerHandle, RegWorkerHandle},
     gossiper::grpc_gossiper::GrpcGossiperClientManager,
     proposer::block_merging::BestMergedBlock,
     router::Terminating,
@@ -47,8 +43,6 @@ pub struct ProposerApi<A: Api> {
     pub relay_config: RelayConfig,
     /// Set in the block merging process
     pub shared_best_merged: BestMergedBlock,
-    /// Send simulation requests
-    pub merge_requests_tx: mpsc::Sender<BlockMergeRequest>,
     pub alert_manager: AlertManager,
     pub auctioneer_handle: AuctioneerHandle,
     pub reg_handle: RegWorkerHandle,
@@ -66,7 +60,6 @@ impl<A: Api> ProposerApi<A> {
         validator_preferences: Arc<ValidatorPreferences>,
         relay_config: RelayConfig,
         curr_slot_info: CurrentSlotInfo,
-        merge_requests_tx: mpsc::Sender<BlockMergeRequest>,
         auctioneer_handle: AuctioneerHandle,
         reg_handle: RegWorkerHandle,
     ) -> Self {
@@ -83,7 +76,6 @@ impl<A: Api> ProposerApi<A> {
             curr_slot_info,
             shared_best_merged: BestMergedBlock::new(),
             alert_manager: AlertManager::from_relay_config(&relay_config),
-            merge_requests_tx,
             auctioneer_handle,
             reg_handle,
         }

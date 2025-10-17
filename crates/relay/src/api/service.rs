@@ -13,7 +13,6 @@ use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_housekeeper::{CurrentSlotInfo, chain_event_updater::SlotData};
 use helix_network::api::RelayNetworkApi;
 use moka::sync::Cache;
-use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use crate::api::{
@@ -55,7 +54,6 @@ pub async fn start_api_service<A: Api>(
 
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
     let (merge_pool_tx, pool_rx) = tokio::sync::mpsc::channel(10_000);
-    let (merge_requests_tx, _merge_requests_rx) = mpsc::channel(10_000);
 
     // spawn auctioneer
     let (auctioneer_handle, registrations_handle) = spawn_workers(
@@ -71,8 +69,6 @@ pub async fn start_api_service<A: Api>(
     let builder_api = BuilderApi::<A>::new(
         local_cache.clone(),
         db.clone(),
-        chain_info.clone(),
-        gossiper.clone(),
         config.clone(),
         current_slot_info.clone(),
         top_bid_tx,
@@ -94,7 +90,6 @@ pub async fn start_api_service<A: Api>(
         validator_preferences.clone(),
         config.clone(),
         current_slot_info,
-        merge_requests_tx,
         auctioneer_handle,
         registrations_handle,
     ));

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{collections::HashMap, sync::Arc};
 
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
@@ -120,15 +120,6 @@ pub enum RpcResult<T> {
     Err { error: JsonRpcError },
 }
 
-impl<T> RpcResult<T> {
-    pub fn as_error(&self) -> Option<&JsonRpcError> {
-        match self {
-            RpcResult::Err { error } => Some(error),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockMergeResponse {
     pub execution_payload: ExecutionPayload,
@@ -139,10 +130,6 @@ pub struct BlockMergeResponse {
     pub proposer_value: U256,
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
 }
-
-pub type SimResult = Result<(), BlockSimError>;
-// (simulator id, paused_until)
-pub type SimReponse = (usize, Option<Instant>);
 
 pub struct SimulatorRequest {
     pub request: BlockSimRequest,

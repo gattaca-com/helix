@@ -6,9 +6,6 @@ pub enum GossipError {
     #[error("Failed to broadcast block: {0}")]
     BroadcastError(Box<tonic::Status>),
 
-    #[error("Failed to reconnect")]
-    ReconnectFailed,
-    // Add other error common as needed
     #[error("Broadcast timed out")]
     TimeoutError,
 

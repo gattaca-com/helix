@@ -179,11 +179,6 @@ impl GrpcGossiperClientManager {
                 .expect("failed to start gossiper service");
         });
     }
-
-    #[cfg(test)]
-    pub fn mock() -> Self {
-        Self { clients: vec![] }
-    }
 }
 
 impl GrpcGossiperClientManager {
