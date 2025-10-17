@@ -715,13 +715,13 @@ impl PostgresDatabaseService {
         registration: &SignedValidatorRegistration,
     ) -> bool {
         if let Some(existing_entry) =
-            self.validator_registration_cache.get(&registration.message.pubkey)
-            && existing_entry.registration_info.registration.message.timestamp
-                >= registration.message.timestamp.saturating_sub(60 * 60)
-            && existing_entry.registration_info.registration.message.fee_recipient
-                == registration.message.fee_recipient
-            && existing_entry.registration_info.registration.message.gas_limit
-                == registration.message.gas_limit
+            self.validator_registration_cache.get(&registration.message.pubkey) &&
+            existing_entry.registration_info.registration.message.timestamp >=
+                registration.message.timestamp.saturating_sub(60 * 60) &&
+            existing_entry.registration_info.registration.message.fee_recipient ==
+                registration.message.fee_recipient &&
+            existing_entry.registration_info.registration.message.gas_limit ==
+                registration.message.gas_limit
         {
             // do registration once per hour, unless fee recipient / gas limit has changed
 
