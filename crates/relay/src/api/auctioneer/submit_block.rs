@@ -149,8 +149,8 @@ impl Context {
         record_submission_step("validated", start_val.elapsed());
         trace!("validated");
 
-        let optimistic_version = if self.sim_manager.can_process_optimistic_submission()
-            && self.should_process_optimistically(&submission, &builder_info, slot_data)
+        let optimistic_version = if self.sim_manager.can_process_optimistic_submission() &&
+            self.should_process_optimistically(&submission, &builder_info, slot_data)
         {
             self.bid_sorter.sort(&submission, trace, merging_preferences, true);
             OptimisticVersion::V1
@@ -207,8 +207,8 @@ impl Context {
         slot_data: &SlotData,
     ) -> bool {
         if builder_info.is_optimistic && submission.message().value <= builder_info.collateral {
-            if slot_data.registration_data.entry.preferences.filtering.is_regional()
-                && !builder_info.can_process_regional_slot_optimistically()
+            if slot_data.registration_data.entry.preferences.filtering.is_regional() &&
+                !builder_info.can_process_regional_slot_optimistically()
             {
                 return false;
             }

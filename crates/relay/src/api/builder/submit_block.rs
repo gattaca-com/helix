@@ -41,8 +41,8 @@ impl<A: Api> BuilderApi<A> {
             Err(_) => Err(BuilderApiError::RequestTimeout),
         };
 
-        if let Err(err) = &res
-            && err.should_report()
+        if let Err(err) = &res &&
+            err.should_report()
         {
             error!(%err)
         }

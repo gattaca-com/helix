@@ -175,8 +175,8 @@ impl SimulatorManager {
         sim.pending = sim.pending.saturating_sub(1);
         sim.paused_until = sim.paused_until.max(paused_until); // keep highest pause
 
-        if let Some(id) = self.next_sim_client()
-            && let Some(req) = self.requests.next_req()
+        if let Some(id) = self.next_sim_client() &&
+            let Some(req) = self.requests.next_req()
         {
             self.spawn_sim(id, req);
         }

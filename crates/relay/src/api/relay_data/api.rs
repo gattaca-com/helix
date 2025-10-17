@@ -114,10 +114,10 @@ impl DataApi {
         Extension(cache): Extension<BidsCache>,
         Query(mut params): Query<BuilderBlocksReceivedParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
-        if params.slot.is_none()
-            && params.block_hash.is_none()
-            && params.block_number.is_none()
-            && params.builder_pubkey.is_none()
+        if params.slot.is_none() &&
+            params.block_hash.is_none() &&
+            params.block_number.is_none() &&
+            params.builder_pubkey.is_none()
         {
             return Err(DataApiError::MissingFilter);
         }

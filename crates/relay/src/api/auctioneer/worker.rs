@@ -74,9 +74,9 @@ impl Default for Telemetry {
         Self {
             work: Default::default(),
             spin: Default::default(),
-            next_record: Instant::now()
-                + Self::REPORT_FREQ
-                + Duration::from_millis(utcnow_ns() % 10 * 5), // to scatter worker reports
+            next_record: Instant::now() +
+                Self::REPORT_FREQ +
+                Duration::from_millis(utcnow_ns() % 10 * 5), // to scatter worker reports
             loop_start: Instant::now(),
             loop_worked: Default::default(),
         }

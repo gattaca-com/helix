@@ -268,8 +268,8 @@ impl State {
             ) => match bid_slot.cmp(&slot_data.bid_slot) {
                 Ordering::Less | Ordering::Equal => (),
                 Ordering::Greater => {
-                    if let Some(attributes) = &payload_attributes
-                        && &attributes.parent_hash != block_hash
+                    if let Some(attributes) = &payload_attributes &&
+                        &attributes.parent_hash != block_hash
                     {
                         warn!(maybe_missed_slot =% slot_data.bid_slot, parent_hash =% attributes.parent_hash, broadcasting_hash =% block_hash, "new slot while broacasting different block, was the slot missed?");
                     }
@@ -440,9 +440,9 @@ impl State {
                 State::Broadcasting { block_hash, slot_data: slot_ctx },
                 Event::GossipPayload(payload),
             ) => {
-                if *block_hash == payload.execution_payload.execution_payload.block_hash
-                    && slot_ctx.bid_slot == payload.slot
-                    && slot_ctx.proposer_pubkey() == &payload.proposer_pub_key
+                if *block_hash == payload.execution_payload.execution_payload.block_hash &&
+                    slot_ctx.bid_slot == payload.slot &&
+                    slot_ctx.proposer_pubkey() == &payload.proposer_pub_key
                 {
                     debug!("already broadcasting gossip payload");
                 } else {

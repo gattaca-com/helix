@@ -140,8 +140,8 @@ async fn do_request(mut req: Request<Body>, next: Next, stats: Arc<BodyTimings>)
         .headers()
         .get(CONTENT_LENGTH)
         .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.parse::<usize>().ok())
-        && len > MAX_PAYLOAD_LENGTH
+        .and_then(|s| s.parse::<usize>().ok()) &&
+        len > MAX_PAYLOAD_LENGTH
     {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
     }

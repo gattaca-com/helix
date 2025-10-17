@@ -357,8 +357,8 @@ impl<A: Api> ProposerApi<A> {
         if let Some(until_slot_start) = until_slot_start {
             info!("waiting until slot start t=0: {} ms", until_slot_start.as_millis());
             sleep(until_slot_start).await;
-        } else if let Some(since_slot_start) = since_slot_start
-            && since_slot_start.as_millis() > GET_PAYLOAD_REQUEST_CUTOFF_MS as u128
+        } else if let Some(since_slot_start) = since_slot_start &&
+            since_slot_start.as_millis() > GET_PAYLOAD_REQUEST_CUTOFF_MS as u128
         {
             return Err(ProposerApiError::GetPayloadRequestTooLate {
                 cutoff: GET_PAYLOAD_REQUEST_CUTOFF_MS as u64,

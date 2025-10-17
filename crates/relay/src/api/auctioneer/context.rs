@@ -110,8 +110,8 @@ impl Context {
         let builder = *result.submission.builder_public_key();
         let block_hash = *result.submission.block_hash();
 
-        if let Err(err) = result.result.as_ref()
-            && err.is_demotable()
+        if let Err(err) = result.result.as_ref() &&
+            err.is_demotable()
         {
             if self.cache.demote_builder(&builder) {
                 warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");

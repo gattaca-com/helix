@@ -58,8 +58,8 @@ impl BestMergedBlock {
             .read()
             .as_ref()
             .filter(|entry| {
-                entry.slot == slot
-                    && entry.bid.execution_payload().parent_hash == *parent_block_hash
+                entry.slot == slot &&
+                    entry.bid.execution_payload().parent_hash == *parent_block_hash
             })
             .map(|entry| (entry.base_block_time_ms, entry.bid.clone()))
     }
@@ -159,8 +159,8 @@ impl<A: Api> ProposerApi<A> {
                         original_tx_count: original_payload.execution_payload.transactions.len(),
                         merged_tx_count: response.execution_payload.transactions.len(),
                         original_blob_count: original_payload.blobs_bundle.blobs().len(),
-                        merged_blob_count: original_payload.blobs_bundle.blobs().len()
-                            + response.appended_blobs.len(),
+                        merged_blob_count: original_payload.blobs_bundle.blobs().len() +
+                            response.appended_blobs.len(),
                         builder_inclusions: response.builder_inclusions.clone(),
                     });
                     let _ = self

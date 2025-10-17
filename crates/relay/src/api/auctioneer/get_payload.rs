@@ -38,8 +38,8 @@ impl Context {
         let block_hash = payload.execution_payload.execution_payload.block_hash;
         let entry = PayloadEntry::new_gossip(payload);
 
-        if let Some(curr) = self.payloads.get(&block_hash)
-            && curr.bid_data.is_some()
+        if let Some(curr) = self.payloads.get(&block_hash) &&
+            curr.bid_data.is_some()
         {
             // we received this block both locally and via gossip, keep the local one so we can
             // serve get_header on it
@@ -160,12 +160,12 @@ impl Context {
         slot_data: &SlotData,
     ) -> Result<(GetPayloadResponse, VersionedSignedProposal), ProposerApiError> {
         match blinded {
-            SignedBlindedBeaconBlock::Altair(_)
-            | SignedBlindedBeaconBlock::Base(_)
-            | SignedBlindedBeaconBlock::Bellatrix(_)
-            | SignedBlindedBeaconBlock::Capella(_)
-            | SignedBlindedBeaconBlock::Deneb(_)
-            | SignedBlindedBeaconBlock::Gloas(_) => {
+            SignedBlindedBeaconBlock::Altair(_) |
+            SignedBlindedBeaconBlock::Base(_) |
+            SignedBlindedBeaconBlock::Bellatrix(_) |
+            SignedBlindedBeaconBlock::Capella(_) |
+            SignedBlindedBeaconBlock::Deneb(_) |
+            SignedBlindedBeaconBlock::Gloas(_) => {
                 Err(ProposerApiError::UnsupportedBeaconChainVersion)
             }
             SignedBlindedBeaconBlock::Electra(blinded_block) => {

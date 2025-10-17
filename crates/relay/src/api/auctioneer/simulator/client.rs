@@ -49,8 +49,8 @@ impl SimulatorClient {
 
     /// A lighter check to decide whether we should accept optimistic submissions
     pub fn can_simulate_light(&self) -> bool {
-        self.is_synced
-            && match self.paused_until {
+        self.is_synced &&
+            match self.paused_until {
                 Some(until) => Instant::now() > until,
                 None => true,
             }
