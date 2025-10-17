@@ -101,7 +101,7 @@ impl<A: Api> ProposerApi<A> {
         };
 
         let local_bid = match rx.await {
-            Ok(res) => res?,
+            Ok(res) => res.inspect_err(|_| timing_guard.done_fetch = true)?,
             Err(err) => {
                 warn!(%err, "failed to get header from auctioneer");
                 return Err(ProposerApiError::InternalServerError);
@@ -228,8 +228,6 @@ fn validate_bid_request_time(
     let ms_into_slot = curr_timestamp_ms.saturating_sub((slot_start_timestamp * 1000) as i64);
 
     if ms_into_slot > GET_HEADER_REQUEST_CUTOFF_MS {
-        warn!(curr_timestamp_ms = curr_timestamp_ms, slot = %bid_request.slot, "get_request");
-
         return Err(ProposerApiError::GetHeaderRequestTooLate {
             ms_into_slot: ms_into_slot as u64,
             cutoff: GET_HEADER_REQUEST_CUTOFF_MS as u64,
