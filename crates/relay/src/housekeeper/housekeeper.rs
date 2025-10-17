@@ -9,11 +9,6 @@ use std::{
 
 use alloy_eips::merge::EPOCH_SLOTS;
 use alloy_primitives::{B256, U256};
-use helix_beacon::{
-    error::BeaconClientError,
-    multi_beacon_client::MultiBeaconClient,
-    types::{HeadEventData, StateId},
-};
 use helix_common::{
     BuilderConfig, BuilderInfo, ProposerDuty, RelayConfig, SignedValidatorRegistrationEntry,
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, is_local_dev,
@@ -24,6 +19,11 @@ use tokio::sync::{Mutex, broadcast};
 use tracing::{Instrument, debug, error, info, warn};
 
 use crate::{
+    beacon::{
+        error::BeaconClientError,
+        multi_beacon_client::MultiBeaconClient,
+        types::{HeadEventData, StateId},
+    },
     database::postgres::postgres_db_service::PostgresDatabaseService,
     housekeeper::{
         EthereumPrimevService, chain_event_updater::SlotData, error::HousekeeperError,

@@ -7,13 +7,13 @@ use std::{
 };
 
 mod api;
+mod beacon;
 mod database;
 mod housekeeper;
 mod network;
 mod website;
 
 use eyre::eyre;
-use helix_beacon::start_beacon_client;
 use helix_common::{
     RelayConfig,
     api_provider::DefaultApiProvider,
@@ -31,6 +31,7 @@ use tracing::{error, info};
 
 use crate::{
     api::{Api, start_admin_service, start_api_service},
+    beacon::start_beacon_client,
     database::{postgres::postgres_db_service::PostgresDatabaseService, start_db_service},
     housekeeper::start_housekeeper,
     network::RelayNetworkManager,

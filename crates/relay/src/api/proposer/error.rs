@@ -2,13 +2,12 @@ use axum::{
     self,
     response::{IntoResponse, Response},
 };
-use helix_beacon::error::BeaconClientError;
 use helix_common::local_cache::AuctioneerError;
 use helix_types::{SigError, Slot, SszError};
 use hyper::StatusCode;
 use thiserror::Error;
 
-use crate::database::error::DatabaseError;
+use crate::{beacon::error::BeaconClientError, database::error::DatabaseError};
 
 #[derive(Debug, Error)]
 pub enum ProposerApiError {

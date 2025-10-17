@@ -2,28 +2,6 @@ use alloy_primitives::{B256, hex};
 use helix_types::{Slot, Withdrawals};
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Clone)]
-pub enum BlockId {
-    Head,
-    Genesis,
-    Finalized,
-    Slot(Slot),
-    Root(B256),
-}
-
-impl std::fmt::Display for BlockId {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        let printable = match *self {
-            BlockId::Finalized => "finalized",
-            BlockId::Head => "head",
-            BlockId::Genesis => "genesis",
-            BlockId::Slot(slot) => return write!(f, "{slot}"),
-            BlockId::Root(root) => return write!(f, "{root}"),
-        };
-        write!(f, "{printable}")
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum StateId {
     Head,

@@ -1,7 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
 use axum::{Extension, http::HeaderMap, response::IntoResponse};
-use helix_beacon::types::BroadcastValidation;
 use helix_common::{
     GetPayloadTrace, RequestTimings,
     api_provider::ApiProvider,
@@ -18,11 +17,14 @@ use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use super::ProposerApi;
-use crate::api::{
-    Api,
-    auctioneer::GetPayloadResultData,
-    gossiper::types::{BroadcastGetPayloadParams, BroadcastPayloadParams},
-    proposer::error::ProposerApiError,
+use crate::{
+    api::{
+        Api,
+        auctioneer::GetPayloadResultData,
+        gossiper::types::{BroadcastGetPayloadParams, BroadcastPayloadParams},
+        proposer::error::ProposerApiError,
+    },
+    beacon::types::BroadcastValidation,
 };
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;

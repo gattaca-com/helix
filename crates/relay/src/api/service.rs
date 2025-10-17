@@ -5,7 +5,6 @@ use std::{
 };
 
 use bytes::Bytes;
-use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
     RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
 };
@@ -23,6 +22,7 @@ use crate::{
         relay_data::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry},
         router::build_router,
     },
+    beacon::multi_beacon_client::MultiBeaconClient,
     database::postgres::postgres_db_service::PostgresDatabaseService,
     housekeeper::{CurrentSlotInfo, chain_event_updater::SlotData},
     network::api::RelayNetworkApi,

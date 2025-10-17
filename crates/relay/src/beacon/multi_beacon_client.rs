@@ -13,7 +13,7 @@ use helix_types::{ForkName, VersionedSignedProposal};
 use tokio::{sync::broadcast::Sender, time::sleep};
 use tracing::error;
 
-use crate::{
+use crate::beacon::{
     beacon_client::BeaconClient,
     error::BeaconClientError,
     types::{BroadcastValidation, HeadEventData, PayloadAttributesEvent, StateId, SyncStatus},
@@ -41,15 +41,6 @@ impl MultiBeaconClient {
         let start = self.best_index.load(Ordering::Relaxed);
 
         self.beacon_clients[start..].iter().chain(&self.beacon_clients[..start]).cloned()
-    }
-
-    pub async fn broadcast_block(
-        &self,
-        block: Arc<VersionedSignedProposal>,
-        broadcast_validation: Option<BroadcastValidation>,
-        consensus_version: ForkName,
-    ) -> Result<(), BeaconClientError> {
-        self.publish_block(block, broadcast_validation, consensus_version).await
     }
 }
 
@@ -235,7 +226,7 @@ impl MultiBeaconClient {
 #[cfg(test)]
 mod multi_beacon_client_tests {
     use super::*;
-    use crate::beacon_client::mock_beacon_node::MockBeaconNode;
+    use crate::beacon::beacon_client::mock_beacon_node::MockBeaconNode;
 
     fn mock_beacon_client(head_slot: u64) -> Arc<BeaconClient> {
         let sync_status =

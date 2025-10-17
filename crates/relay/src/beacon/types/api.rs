@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::error::ApiError;
+use crate::beacon::error::ApiError;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(bound = "T: Serialize + serde::de::DeserializeOwned")]

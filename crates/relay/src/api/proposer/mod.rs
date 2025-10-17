@@ -10,7 +10,6 @@ use std::sync::{Arc, atomic::Ordering};
 use axum::{Extension, response::IntoResponse};
 pub use block_merging::MergingPoolMessage;
 pub use error::*;
-use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{
     RelayConfig, ValidatorPreferences, alerts::AlertManager, chain_info::ChainInfo,
     local_cache::LocalCache, signing::RelaySigningContext,
@@ -26,6 +25,7 @@ use crate::{
         proposer::block_merging::BestMergedBlock,
         router::Terminating,
     },
+    beacon::multi_beacon_client::MultiBeaconClient,
     database::postgres::postgres_db_service::PostgresDatabaseService,
     housekeeper::CurrentSlotInfo,
 };

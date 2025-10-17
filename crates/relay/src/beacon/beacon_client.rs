@@ -4,13 +4,13 @@ use ::ssz::Encode;
 use alloy_primitives::B256;
 use futures::StreamExt;
 use helix_common::{BeaconClientConfig, ProposerDuty, ValidatorSummary};
-use helix_types::{ForkName, Slot, VersionedSignedProposal};
+use helix_types::{ForkName, VersionedSignedProposal};
 use reqwest::header::CONTENT_TYPE;
 use reqwest_eventsource::EventSource;
 use tokio::{sync::broadcast::Sender, time::sleep};
 use tracing::{debug, error, warn};
 
-use crate::{
+use crate::beacon::{
     error::{ApiError, BeaconClientError},
     types::{
         ApiResult, BeaconResponse, BroadcastValidation, HeadEventData, PayloadAttributesEvent,
@@ -61,30 +61,6 @@ impl BeaconClient {
         Ok(self.http.get(target).send().await?)
     }
 
-    pub async fn post<T: serde::Serialize + ?Sized>(
-        &self,
-        path: &str,
-        argument: &T,
-    ) -> Result<(), BeaconClientError> {
-        let response = self.http_post(path, argument).await?;
-        match response.status() {
-            reqwest::StatusCode::OK | reqwest::StatusCode::ACCEPTED => Ok(()),
-            _ => {
-                let api_err = response.json::<ApiError>().await?;
-                Err(BeaconClientError::Api(api_err))
-            }
-        }
-    }
-
-    pub async fn http_post<T: serde::Serialize + ?Sized>(
-        &self,
-        path: &str,
-        argument: &T,
-    ) -> Result<reqwest::Response, BeaconClientError> {
-        let target = self.config.url.join(path)?;
-        Ok(self.http.post(target).json(argument).send().await?)
-    }
-
     /// Subscribe to SSE events from the beacon client `events` endpoint.
     pub async fn subscribe_to_sse<T: serde::de::DeserializeOwned>(
         &self,
@@ -119,31 +95,12 @@ impl BeaconClient {
             sleep(Duration::from_millis(500)).await;
         }
     }
-
-    pub async fn broadcast_block(
-        &self,
-        block: Arc<VersionedSignedProposal>,
-        broadcast_validation: Option<BroadcastValidation>,
-        consensus_version: ForkName,
-    ) -> Result<(), BeaconClientError> {
-        self.publish_block(block, broadcast_validation, consensus_version).await?;
-        Ok(())
-    }
-
-    pub fn identifier(&self) -> String {
-        "BEACON-CLIENT".to_string()
-    }
 }
 
 impl BeaconClient {
     pub async fn sync_status(&self) -> Result<SyncStatus, BeaconClientError> {
         let response: BeaconResponse<SyncStatus> = self.get("eth/v1/node/syncing").await?;
         Ok(response.data)
-    }
-
-    pub async fn current_slot(&self) -> Result<Slot, BeaconClientError> {
-        let sync_status = self.sync_status().await?;
-        Ok(sync_status.head_slot)
     }
 
     pub async fn subscribe_to_head_events(
@@ -228,6 +185,7 @@ impl BeaconClient {
     }
 }
 
+#[cfg(test)]
 pub mod mock_beacon_node {
     use std::collections::HashMap;
 
@@ -266,7 +224,7 @@ pub mod mock_beacon_node {
             });
         }
 
-        pub fn with_state_validators(&self, state_validators: Vec<ValidatorSummary>) {
+        pub fn _with_state_validators(&self, state_validators: Vec<ValidatorSummary>) {
             self.mock_api(
                 "eth/v1/beacon/states/head/validators?status=active,pending",
                 200,
@@ -278,7 +236,7 @@ pub mod mock_beacon_node {
             self.mock_api("/eth/v1/node/syncing", 200, sync_status.clone());
         }
 
-        pub fn with_sse_event(&self, topic: &str) -> Mock<'_> {
+        pub fn _with_sse_event(&self, topic: &str) -> Mock<'_> {
             self.server.mock(|when, then| {
                 when.path("/eth/v1/events").query_param("topics", topic);
                 then.status(200);

@@ -4882,30 +4882,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
-name = "helix-beacon"
-version = "0.0.1"
-dependencies = [
- "alloy-primitives",
- "axum 0.8.5",
- "ethereum_serde_utils",
- "ethereum_ssz",
- "futures",
- "helix-common",
- "helix-types",
- "http 1.3.1",
- "httpmock",
- "mockito",
- "reqwest 0.11.27",
- "reqwest-eventsource",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "url",
-]
-
-[[package]]
 name = "helix-common"
 version = "0.0.1"
 dependencies = [
@@ -4973,7 +4949,6 @@ dependencies = [
  "eyre",
  "flate2",
  "futures",
- "helix-beacon",
  "helix-common",
  "helix-types",
  "http 1.3.1",

@@ -27,26 +27,8 @@ pub enum BeaconClientError {
     #[error("beacon node unavailable")]
     BeaconNodeUnavailable,
 
-    #[error("block validation failed")]
-    BlockValidationFailed,
-
     #[error("block integration failed")]
     BlockIntegrationFailed,
-
-    #[error("beacon node syncing")]
-    BeaconNodeSyncing,
-
-    #[error("channel error")]
-    ChannelError,
-
-    #[error("Error publishing block: {0}")]
-    BlockPublishError(String),
-
-    #[error("Error initializing broadcaster: {0}")]
-    BroadcasterInitError(String),
-
-    #[error("Request not supported")]
-    RequestNotSupported,
 }
 
 impl IntoResponse for BeaconClientError {

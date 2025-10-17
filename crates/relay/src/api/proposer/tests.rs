@@ -35,7 +35,7 @@ mod proposer_api_tests {
     };
 
     use alloy_primitives::{address, b256, hex, FixedBytes, U256};
-    use helix_beacon::multi_beacon_client::MultiBeaconClient;
+    use crate::beacon::multi_beacon_client::MultiBeaconClient;
     use helix_common::{
         api::{
             builder_api::BuilderGetValidatorsResponseEntry,

@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use helix_beacon::{
+use crate::beacon::{
     beacon_client::mock_beacon_node::MockBeaconNode, multi_beacon_client::MultiBeaconClient,
 };
 use helix_common::{

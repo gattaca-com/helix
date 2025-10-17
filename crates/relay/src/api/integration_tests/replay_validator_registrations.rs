@@ -1,6 +1,5 @@
 use std::{collections::HashMap, time::Duration};
 
-use helix_beacon::beacon_client::BeaconClient;
 use helix_common::{
     BeaconClientConfig,
     api::{
@@ -13,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use tokio::{sync::mpsc::channel, time::sleep};
 use tracing::{error, info};
 use url::Url;
+
+use crate::beacon::beacon_client::BeaconClient;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BuilderGetValidatorsResponseEntryExternal {
@@ -129,7 +130,7 @@ async fn run() {
     });
 
     let (head_event_sender, mut head_event_receiver) =
-        tokio::sync::broadcast::channel::<helix_beacon::types::HeadEventData>(100);
+        tokio::sync::broadcast::channel::<crate::beacon::types::HeadEventData>(100);
 
     tokio::spawn(async move {
         if let Err(err) = beacon_client.subscribe_to_head_events(head_event_sender).await {

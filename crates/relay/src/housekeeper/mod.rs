@@ -11,7 +11,6 @@ mod slot_info;
 use std::sync::Arc;
 
 pub use chain_event_updater::{ChainEventUpdater, PayloadAttributesUpdate, SlotUpdate};
-use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{RelayConfig, chain_info::ChainInfo, local_cache::LocalCache};
 pub use housekeeper::Housekeeper;
 pub use primev_service::EthereumPrimevService;
@@ -19,6 +18,7 @@ pub use slot_info::CurrentSlotInfo;
 use tokio::sync::broadcast;
 
 use crate::{
+    beacon::multi_beacon_client::MultiBeaconClient,
     database::postgres::postgres_db_service::PostgresDatabaseService,
     housekeeper::chain_event_updater::SlotData, network::RelayNetworkManager,
 };

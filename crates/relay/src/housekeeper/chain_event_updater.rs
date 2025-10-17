@@ -2,7 +2,6 @@ use std::{collections::HashMap, ops::Deref, sync::Arc, time::Duration};
 
 use alloy_primitives::B256;
 use futures::FutureExt;
-use helix_beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent};
 use helix_common::{
     api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
@@ -17,7 +16,10 @@ use tokio::{
 use tracing::{error, info, warn};
 use tree_hash::TreeHash;
 
-use crate::housekeeper::CurrentSlotInfo;
+use crate::{
+    beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent},
+    housekeeper::CurrentSlotInfo,
+};
 
 // Do not accept slots more than 60 seconds in the future
 const MAX_DISTANCE_FOR_FUTURE_SLOT: u64 = 60;

@@ -1,6 +1,6 @@
 [workspace]
 default-members = ["crates/relay"]
-members = ["crates/beacon", "crates/common", "crates/relay", "crates/simulator", "crates/types"]
+members = ["crates/common", "crates/relay", "crates/simulator", "crates/types"]
 resolver = "2"
 
 [workspace.package]
@@ -41,7 +41,6 @@ eyre = "0.6.12"
 flate2 = "1.0"
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
-helix-beacon = { path = "./crates/beacon" }
 helix-common = { path = "crates/common" }
 helix-types = { path = "./crates/types" }
 http = "1.0"
