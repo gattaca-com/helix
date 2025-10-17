@@ -13,7 +13,7 @@ use helix_database::{
 };
 use helix_types::BidTrace;
 
-use crate::models::DeliveredPayload;
+use crate::website::models::DeliveredPayload;
 
 #[async_trait]
 pub trait WebsiteDatabaseService: Send + Sync {

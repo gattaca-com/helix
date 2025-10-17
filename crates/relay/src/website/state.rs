@@ -5,7 +5,7 @@ use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
 use helix_housekeeper::CurrentSlotInfo;
 use parking_lot::RwLock;
 
-use crate::templates::IndexTemplate;
+use crate::website::templates::IndexTemplate;
 
 #[derive(Clone)]
 pub struct AppState {

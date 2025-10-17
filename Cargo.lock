@@ -5032,11 +5032,13 @@ version = "0.0.1"
 dependencies = [
  "alloy-consensus",
  "alloy-primitives",
+ "askama",
  "async-trait",
  "axum 0.8.5",
  "bytes",
  "crossbeam-channel",
  "dashmap 5.5.3",
+ "deadpool-postgres",
  "ethereum_serde_utils",
  "ethereum_ssz",
  "eyre",
@@ -5048,13 +5050,13 @@ dependencies = [
  "helix-housekeeper",
  "helix-network",
  "helix-types",
- "helix-website",
  "http 1.3.1",
  "http-body 1.0.1",
  "http-body-util",
  "hyper 1.7.0",
  "mockito",
  "moka",
+ "num-format",
  "parking_lot",
  "pin-project-lite",
  "prost 0.12.6",
@@ -5148,28 +5150,6 @@ dependencies = [
  "tree_hash",
  "tree_hash_derive",
  "types",
-]
-
-[[package]]
-name = "helix-website"
-version = "0.0.1"
-dependencies = [
- "alloy-primitives",
- "askama",
- "async-trait",
- "axum 0.8.5",
- "crossbeam-channel",
- "deadpool-postgres",
- "helix-beacon",
- "helix-common",
- "helix-database",
- "helix-housekeeper",
- "helix-types",
- "num-format",
- "parking_lot",
- "serde",
- "tokio",
- "tracing",
 ]
 
 [[package]]
