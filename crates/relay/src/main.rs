@@ -6,9 +6,14 @@ use std::{
     time::Duration,
 };
 
+mod api;
+mod beacon;
+mod database;
+mod housekeeper;
+mod network;
+mod website;
+
 use eyre::eyre;
-use helix_api::{Api, start_admin_service, start_api_service};
-use helix_beacon::start_beacon_client;
 use helix_common::{
     RelayConfig,
     api_provider::DefaultApiProvider,
@@ -19,14 +24,19 @@ use helix_common::{
     task::{block_on, init_runtime},
     utils::{init_panic_hook, init_tracing_log},
 };
-use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, start_db_service};
-use helix_housekeeper::start_housekeeper;
-use helix_network::RelayNetworkManager;
 use helix_types::BlsKeypair;
-use helix_website::website_service::WebsiteService;
 use tikv_jemallocator::Jemalloc;
 use tokio::signal::unix::SignalKind;
 use tracing::{error, info};
+
+use crate::{
+    api::{Api, start_admin_service, start_api_service},
+    beacon::start_beacon_client,
+    database::{postgres::postgres_db_service::PostgresDatabaseService, start_db_service},
+    housekeeper::start_housekeeper,
+    network::RelayNetworkManager,
+    website::WebsiteService,
+};
 
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;

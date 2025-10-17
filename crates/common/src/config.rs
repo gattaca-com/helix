@@ -542,6 +542,7 @@ pub enum Route {
     RegisterValidators,
     GetHeader,
     GetPayload,
+    GetPayloadV2,
     ProposerPayloadDelivered,
     BuilderBidsReceived,
     ValidatorRegistration,
@@ -560,6 +561,7 @@ impl Route {
             Route::RegisterValidators => format!("{PATH_PROPOSER_API}{PATH_REGISTER_VALIDATORS}"),
             Route::GetHeader => format!("{PATH_PROPOSER_API}{PATH_GET_HEADER}"),
             Route::GetPayload => format!("{PATH_PROPOSER_API}{PATH_GET_PAYLOAD}"),
+            Route::GetPayloadV2 => format!("{PATH_PROPOSER_API_V2}{PATH_GET_PAYLOAD}"),
             Route::ProposerPayloadDelivered => {
                 format!("{PATH_DATA_API}{PATH_PROPOSER_PAYLOAD_DELIVERED}")
             }
