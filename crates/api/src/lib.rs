@@ -30,6 +30,7 @@ pub trait Api: Clone + Send + Sync + 'static {
 }
 
 pub const HEADER_API_KEY: &str = "x-api-key";
+pub const HEADER_API_TOKEN: &str = "x-api-token";
 pub const HEADER_SEQUENCE: &str = "x-sequence";
 pub const HEADER_HYDRATE: &str = "x-hydrate";
 pub const HEADER_IS_MERGEABLE: &str = "x-mergeable";
