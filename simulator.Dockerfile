@@ -1,4 +1,4 @@
-FROM lukemathwalker/cargo-chef:latest-rust-1.88 AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-1.90 AS chef
 WORKDIR /app
 
 # Install libclang and dependencies required by bindgen
