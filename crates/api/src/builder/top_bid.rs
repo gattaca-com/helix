@@ -13,7 +13,7 @@ use tokio::time::{self};
 use tracing::{debug, error};
 
 use super::api::BuilderApi;
-use crate::{Api, HEADER_API_KEY, builder::error::BuilderApiError};
+use crate::{Api, HEADER_API_KEY, HEADER_API_TOKEN, builder::error::BuilderApiError};
 
 impl<A: Api> BuilderApi<A> {
     #[tracing::instrument(skip_all)]
@@ -22,7 +22,8 @@ impl<A: Api> BuilderApi<A> {
         headers: HeaderMap,
         ws: WebSocketUpgrade,
     ) -> Result<impl IntoResponse, BuilderApiError> {
-        let Some(api_key) = headers.get(HEADER_API_KEY) else {
+        let Some(api_key) = headers.get(HEADER_API_KEY).or_else(|| headers.get(HEADER_API_TOKEN))
+        else {
             return Err(BuilderApiError::InvalidApiKey);
         };
 
