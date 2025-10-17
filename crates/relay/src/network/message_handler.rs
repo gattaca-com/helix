@@ -5,7 +5,7 @@ use helix_types::BlsPublicKeyBytes;
 use tokio_tungstenite::connect_async;
 use tracing::{debug, error, warn};
 
-use crate::{
+use crate::network::{
     RelayNetworkManager,
     event_handlers::NetworkEvent,
     messages::{
@@ -174,9 +174,9 @@ fn peer_supports_message_type(opt_peer_info: &Option<PeerInfo>, message: &Networ
 #[derive(Debug, thiserror::Error)]
 enum WsConnectionError {
     #[error("failed to send message")]
-    SendError(crate::socket::Error),
+    SendError(crate::network::socket::Error),
     #[error("failed to receive message")]
-    RecvError(crate::socket::Error),
+    RecvError(crate::network::socket::Error),
     #[error("failed to decode message")]
     DecodingError(#[from] EncodingError),
     #[error("first message from peer was not a Hello")]

@@ -6,7 +6,6 @@ use axum::{Extension, http::StatusCode, response::IntoResponse};
 use bytes::Bytes;
 use helix_common::{RelayConfig, local_cache::LocalCache};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_housekeeper::CurrentSlotInfo;
 use helix_types::{
     BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
     BlockMergingData, BundleOrder, KzgCommitment, MergeableBundle, MergeableOrder, MergeableOrders,
@@ -14,7 +13,10 @@ use helix_types::{
 };
 use tracing::error;
 
-use crate::api::{Api, auctioneer::AuctioneerHandle};
+use crate::{
+    api::{Api, auctioneer::AuctioneerHandle},
+    housekeeper::CurrentSlotInfo,
+};
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB
 

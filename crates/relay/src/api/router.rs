@@ -12,7 +12,6 @@ use axum::{
     routing::{any, get, post},
 };
 use helix_common::{Route, RouterConfig, utils::extract_request_id};
-use helix_network::api::RelayNetworkApi;
 use hyper::{HeaderMap, Uri};
 use tower::{BoxError, ServiceBuilder, timeout::TimeoutLayer};
 use tower_governor::{
@@ -21,13 +20,16 @@ use tower_governor::{
 use tower_http::request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer};
 use tracing::{info, warn};
 
-use crate::api::{
-    Api,
-    builder::api::BuilderApi,
-    middleware::body_limit_middleware,
-    proposer::{self, ProposerApi},
-    relay_data::{BidsCache, DataApi, DeliveredPayloadsCache},
-    service::API_REQUEST_TIMEOUT,
+use crate::{
+    api::{
+        Api,
+        builder::api::BuilderApi,
+        middleware::body_limit_middleware,
+        proposer::{self, ProposerApi},
+        relay_data::{BidsCache, DataApi, DeliveredPayloadsCache},
+        service::API_REQUEST_TIMEOUT,
+    },
+    network::api::RelayNetworkApi,
 };
 
 #[derive(Clone)]

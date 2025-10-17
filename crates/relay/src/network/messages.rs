@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
 use tree_hash_derive::TreeHash;
 
-use crate::socket::WSMessage;
+use crate::network::socket::WSMessage;
 
 const VALID_DURATION_MS: u64 = Duration::from_secs(5).as_millis() as u64;
 
@@ -192,7 +192,7 @@ mod tests {
     use helix_types::Transaction;
     use serde::{Deserialize, Serialize};
 
-    use crate::messages::{
+    use crate::network::messages::{
         HelloMessage, InclusionListMessage, InclusionListMessageInfo, NetworkMessage,
         RawNetworkMessage,
     };

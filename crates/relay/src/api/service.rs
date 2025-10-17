@@ -10,20 +10,22 @@ use helix_common::{
     RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
 };
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_housekeeper::{CurrentSlotInfo, chain_event_updater::SlotData};
-use helix_network::api::RelayNetworkApi;
 use moka::sync::Cache;
 use tracing::{error, info};
 
-use crate::api::{
-    Api,
-    auctioneer::spawn_workers,
-    builder::api::BuilderApi,
-    gossip::{self},
-    gossiper::grpc_gossiper::GrpcGossiperClientManager,
-    proposer::ProposerApi,
-    relay_data::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry},
-    router::build_router,
+use crate::{
+    api::{
+        Api,
+        auctioneer::spawn_workers,
+        builder::api::BuilderApi,
+        gossip::{self},
+        gossiper::grpc_gossiper::GrpcGossiperClientManager,
+        proposer::ProposerApi,
+        relay_data::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry},
+        router::build_router,
+    },
+    housekeeper::{CurrentSlotInfo, chain_event_updater::SlotData},
+    network::api::RelayNetworkApi,
 };
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);

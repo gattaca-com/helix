@@ -4,7 +4,7 @@ use helix_common::api::builder_api::InclusionList;
 use helix_types::BlsPublicKeyBytes;
 use tracing::{error, trace, warn};
 
-use crate::{
+use crate::network::{
     RelayNetworkManager,
     event_handlers::{InclusionListEvent, InclusionListEventInfo, NetworkEvent},
     inclusion_lists::consensus,

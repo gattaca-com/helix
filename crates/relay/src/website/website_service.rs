@@ -4,17 +4,19 @@ use axum::{Router, routing::get};
 use helix_beacon::{beacon_client::BeaconClient, multi_beacon_client::MultiBeaconClient};
 use helix_common::{NetworkConfig, RelayConfig, chain_info::ChainInfo, local_cache::LocalCache};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_housekeeper::{ChainEventUpdater, CurrentSlotInfo};
 use parking_lot::RwLock;
 use tokio::{net::TcpListener, sync::broadcast};
 use tracing::{debug, error, info};
 
-use crate::website::{
-    handlers,
-    models::DeliveredPayload,
-    postgres_db_website::WebsiteDatabaseService,
-    state::{AppState, CachedTemplates},
-    templates::IndexTemplate,
+use crate::{
+    housekeeper::{ChainEventUpdater, CurrentSlotInfo},
+    website::{
+        handlers,
+        models::DeliveredPayload,
+        postgres_db_website::WebsiteDatabaseService,
+        state::{AppState, CachedTemplates},
+        templates::IndexTemplate,
+    },
 };
 
 pub struct WebsiteService;

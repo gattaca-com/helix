@@ -9,7 +9,6 @@ use helix_common::{
     },
     metrics::BID_CREATION_LATENCY,
 };
-use helix_housekeeper::PayloadAttributesUpdate;
 use helix_types::{
     BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission,
     ExecutionPayload, ExecutionRequests, ForkName, GetPayloadResponse, PayloadAndBlobs,
@@ -19,11 +18,14 @@ use helix_types::{
 use tokio::sync::oneshot;
 use tracing::debug;
 
-use crate::api::{
-    auctioneer::{BlockMergeRequest, simulator::manager::SimulationResult},
-    builder::error::BuilderApiError,
-    gossiper::types::BroadcastPayloadParams,
-    proposer::ProposerApiError,
+use crate::{
+    api::{
+        auctioneer::{BlockMergeRequest, simulator::manager::SimulationResult},
+        builder::error::BuilderApiError,
+        gossiper::types::BroadcastPayloadParams,
+        proposer::ProposerApiError,
+    },
+    housekeeper::PayloadAttributesUpdate,
 };
 
 pub type SubmissionResult = Result<(), BuilderApiError>;

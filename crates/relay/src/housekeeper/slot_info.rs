@@ -9,7 +9,7 @@ use helix_types::Slot;
 use parking_lot::RwLock;
 use tracing::{error, info};
 
-use crate::{PayloadAttributesUpdate, SlotUpdate};
+use crate::housekeeper::{PayloadAttributesUpdate, SlotUpdate};
 
 /// All information that is refreshed every slot. This is thread safe and can be cloned/shared
 #[derive(Clone)]

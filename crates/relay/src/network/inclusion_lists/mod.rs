@@ -43,7 +43,7 @@ mod tests {
     use tracing::{error, info};
     use tree_hash::TreeHash;
 
-    use crate::{
+    use crate::network::{
         RelayNetworkManager, api::RelayNetworkApi,
         inclusion_lists::consensus::INCLUSION_LIST_MAX_BYTES,
     };

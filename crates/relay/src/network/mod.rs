@@ -9,7 +9,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 use tracing::{error, info, warn};
 
-use crate::{
+use crate::network::{
     api::RelayNetworkApi,
     event_handlers::{InclusionListEvent, InclusionListEventInfo, NetworkEvent},
     messages::NetworkMessage,

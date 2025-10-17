@@ -4,7 +4,7 @@ use helix_common::api::builder_api::InclusionList;
 use helix_types::BlsPublicKeyBytes;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{
+use crate::network::{
     RelayNetworkManager, inclusion_lists::service::MultiRelayInclusionListsService,
     messages::NetworkMessage,
 };

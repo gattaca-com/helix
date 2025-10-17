@@ -16,16 +16,18 @@ use helix_common::{
     local_cache::LocalCache, signing::RelaySigningContext,
 };
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_housekeeper::CurrentSlotInfo;
 use hyper::StatusCode;
 pub use types::*;
 
-use crate::api::{
-    Api,
-    auctioneer::{AuctioneerHandle, RegWorkerHandle},
-    gossiper::grpc_gossiper::GrpcGossiperClientManager,
-    proposer::block_merging::BestMergedBlock,
-    router::Terminating,
+use crate::{
+    api::{
+        Api,
+        auctioneer::{AuctioneerHandle, RegWorkerHandle},
+        gossiper::grpc_gossiper::GrpcGossiperClientManager,
+        proposer::block_merging::BestMergedBlock,
+        router::Terminating,
+    },
+    housekeeper::CurrentSlotInfo,
 };
 
 #[derive(Clone)]

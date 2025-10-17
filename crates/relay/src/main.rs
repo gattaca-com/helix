@@ -7,6 +7,7 @@ use std::{
 };
 
 mod api;
+mod housekeeper;
 mod network;
 mod website;
 
@@ -23,8 +24,6 @@ use helix_common::{
     utils::{init_panic_hook, init_tracing_log},
 };
 use helix_database::{postgres::postgres_db_service::PostgresDatabaseService, start_db_service};
-use helix_housekeeper::start_housekeeper;
-use helix_network::RelayNetworkManager;
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
 use tokio::signal::unix::SignalKind;
@@ -32,6 +31,8 @@ use tracing::{error, info};
 
 use crate::{
     api::{Api, start_admin_service, start_api_service},
+    housekeeper::start_housekeeper,
+    network::RelayNetworkManager,
     website::WebsiteService,
 };
 

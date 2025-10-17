@@ -1,15 +1,6 @@
 [workspace]
 default-members = ["crates/relay"]
-members = [
-  "crates/relay",
-  "crates/simulator",
-
-  "crates/beacon",
-  "crates/common",
-  "crates/database",
-  "crates/housekeeper",
-  "crates/types",
-]
+members = ["crates/beacon", "crates/common", "crates/database", "crates/relay", "crates/simulator", "crates/types"]
 resolver = "2"
 
 [workspace.package]
@@ -53,7 +44,6 @@ futures-util = { version = "0.3", features = ["compat"] }
 helix-beacon = { path = "./crates/beacon" }
 helix-common = { path = "crates/common" }
 helix-database = { path = "./crates/database" }
-helix-housekeeper = { path = "./crates/housekeeper" }
 helix-types = { path = "./crates/types" }
 http = "1.0"
 http-body = "1.0"

@@ -14,13 +14,12 @@ pub use chain_event_updater::{ChainEventUpdater, PayloadAttributesUpdate, SlotUp
 use helix_beacon::multi_beacon_client::MultiBeaconClient;
 use helix_common::{RelayConfig, chain_info::ChainInfo, local_cache::LocalCache};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_network::RelayNetworkManager;
 pub use housekeeper::Housekeeper;
 pub use primev_service::EthereumPrimevService;
 pub use slot_info::CurrentSlotInfo;
 use tokio::sync::broadcast;
 
-use crate::chain_event_updater::SlotData;
+use crate::{housekeeper::chain_event_updater::SlotData, network::RelayNetworkManager};
 
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
 const PAYLOAD_ATTRIBUTE_CHANNEL_SIZE: usize = 300;

@@ -8,12 +8,14 @@ use helix_common::{
     local_cache::LocalCache,
 };
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_network::RelayNetworkManager;
 use helix_types::{BlsPublicKeyBytes, Slot};
 use tracing::{error, info, warn};
 
 use crate::{
-    chain_event_updater::SlotData, inclusion_list::http_fetcher::HttpInclusionListFetcher,
+    housekeeper::{
+        chain_event_updater::SlotData, inclusion_list::http_fetcher::HttpInclusionListFetcher,
+    },
+    network::RelayNetworkManager,
 };
 
 const MISSING_INCLUSION_LIST_CUTOFF: Duration = Duration::from_secs(6);

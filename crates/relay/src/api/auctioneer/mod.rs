@@ -29,22 +29,24 @@ use helix_common::{
     utils::pin_thread_to_core,
 };
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_housekeeper::{PayloadAttributesUpdate, chain_event_updater::SlotData as HkSlotData};
 use helix_types::Slot;
 pub use simulator::*;
 use tracing::{debug, info, info_span, trace, warn};
 pub use types::{GetPayloadResultData, PayloadBidData, PayloadHeaderData};
 
-use crate::api::{
-    auctioneer::{
-        bid_sorter::BidSorter,
-        context::Context,
-        manager::SimulatorManager,
-        types::{Event, PendingPayload, SlotData},
-        worker::{RegWorker, SubWorker},
+use crate::{
+    api::{
+        auctioneer::{
+            bid_sorter::BidSorter,
+            context::Context,
+            manager::SimulatorManager,
+            types::{Event, PendingPayload, SlotData},
+            worker::{RegWorker, SubWorker},
+        },
+        builder::error::BuilderApiError,
+        proposer::{MergingPoolMessage, ProposerApiError},
     },
-    builder::error::BuilderApiError,
-    proposer::{MergingPoolMessage, ProposerApiError},
+    housekeeper::{PayloadAttributesUpdate, chain_event_updater::SlotData as HkSlotData},
 };
 
 // TODO: tidy up builder and proposer api state, and spawn in a separate function

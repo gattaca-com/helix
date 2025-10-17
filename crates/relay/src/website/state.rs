@@ -2,10 +2,9 @@ use std::sync::Arc;
 
 use helix_common::{WebsiteConfig, chain_info::ChainInfo};
 use helix_database::postgres::postgres_db_service::PostgresDatabaseService;
-use helix_housekeeper::CurrentSlotInfo;
 use parking_lot::RwLock;
 
-use crate::website::templates::IndexTemplate;
+use crate::{housekeeper::CurrentSlotInfo, website::templates::IndexTemplate};
 
 #[derive(Clone)]
 pub struct AppState {
