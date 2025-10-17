@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
   && rm -rf /var/lib/apt/lists/*
 
 COPY . .
-RUN cargo build --release --bin helix
+RUN cargo build --release --bin helix-relay
 
 FROM debian:stable-slim AS runtime
 WORKDIR /app
@@ -25,6 +25,6 @@ RUN apt-get update && apt-get install -y \
   ca-certificates && \
   rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/helix ./
+COPY --from=builder /app/target/release/helix-relay ./
 
-ENTRYPOINT ["/app/helix"]
+ENTRYPOINT ["/app/helix-relay"]
