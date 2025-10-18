@@ -6,14 +6,13 @@ mod grpc {
     include!("./generated/gossip.rs");
 }
 
-pub use client::GrpcGossiperClientManager;
-pub use types::{BroadcastGetPayloadParams, BroadcastPayloadParams};
-
 use std::sync::Arc;
 
+pub use client::GrpcGossiperClientManager;
 use helix_common::{GetPayloadTrace, spawn_tracked, utils::utcnow_ns};
 use tokio::sync::mpsc;
 use tracing::{debug, error};
+pub use types::{BroadcastGetPayloadParams, BroadcastPayloadParams};
 
 use crate::{
     api::{
