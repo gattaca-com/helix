@@ -13,9 +13,8 @@ use helix_types::{
 use tracing::error;
 
 use crate::{
-    api::{Api, auctioneer::AuctioneerHandle},
-    database::postgres::postgres_db_service::PostgresDatabaseService,
-    housekeeper::CurrentSlotInfo,
+    api::Api, auctioneer::AuctioneerHandle,
+    database::postgres::postgres_db_service::PostgresDatabaseService, housekeeper::CurrentSlotInfo,
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB

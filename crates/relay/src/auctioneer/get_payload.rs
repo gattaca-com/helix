@@ -11,14 +11,10 @@ use tokio::sync::oneshot;
 use tracing::{info, warn};
 
 use crate::{
-    api::{
-        auctioneer::{
-            context::Context,
-            types::{
-                GetPayloadResult, GetPayloadResultData, PayloadEntry, PendingPayload, SlotData,
-            },
-        },
-        proposer::ProposerApiError,
+    api::proposer::ProposerApiError,
+    auctioneer::{
+        context::Context,
+        types::{GetPayloadResult, GetPayloadResultData, PayloadEntry, PendingPayload, SlotData},
     },
     gossip::BroadcastPayloadParams,
 };

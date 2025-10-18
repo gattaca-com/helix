@@ -32,20 +32,20 @@ use helix_types::Slot;
 pub use simulator::*;
 use tracing::{debug, info, info_span, trace, warn};
 pub use types::{GetPayloadResultData, PayloadBidData, PayloadHeaderData};
+use worker::{RegWorker, SubWorker};
 
 use crate::{
+    PostgresDatabaseService,
     api::{
-        auctioneer::{
-            bid_sorter::BidSorter,
-            context::Context,
-            manager::SimulatorManager,
-            types::{Event, PendingPayload, SlotData},
-            worker::{RegWorker, SubWorker},
-        },
         builder::error::BuilderApiError,
         proposer::{MergingPoolMessage, ProposerApiError},
     },
-    database::postgres::postgres_db_service::PostgresDatabaseService,
+    auctioneer::{
+        bid_sorter::BidSorter,
+        context::Context,
+        manager::SimulatorManager,
+        types::{Event, PendingPayload, SlotData},
+    },
     housekeeper::{PayloadAttributesUpdate, chain_event_updater::SlotData as HkSlotData},
 };
 

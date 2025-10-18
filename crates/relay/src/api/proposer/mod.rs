@@ -18,12 +18,8 @@ use hyper::StatusCode;
 pub use types::*;
 
 use crate::{
-    api::{
-        Api,
-        auctioneer::{AuctioneerHandle, RegWorkerHandle},
-        proposer::block_merging::BestMergedBlock,
-        router::Terminating,
-    },
+    api::{Api, proposer::block_merging::BestMergedBlock, router::Terminating},
+    auctioneer::{AuctioneerHandle, RegWorkerHandle},
     beacon::multi_beacon_client::MultiBeaconClient,
     database::postgres::postgres_db_service::PostgresDatabaseService,
     gossip::GrpcGossiperClientManager,

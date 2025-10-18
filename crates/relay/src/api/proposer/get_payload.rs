@@ -18,7 +18,8 @@ use tracing::{error, info, warn};
 
 use super::ProposerApi;
 use crate::{
-    api::{Api, auctioneer::GetPayloadResultData, proposer::error::ProposerApiError},
+    api::{Api, proposer::error::ProposerApiError},
+    auctioneer::GetPayloadResultData,
     beacon::types::BroadcastValidation,
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
 };

@@ -17,15 +17,16 @@ use helix_types::{
 use http::HeaderValue;
 use tracing::{error, info, info_span, trace, warn};
 
-use crate::api::{
-    HEADER_API_KEY, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_SEQUENCE,
-    auctioneer::{
-        Event,
-        decoder::SubmissionDecoder,
-        types::{RegWorkerJob, SubWorkerJob, Submission},
+use crate::{
+    api::{
+        HEADER_API_KEY, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_SEQUENCE,
+        builder::{api::get_mergeable_orders, error::BuilderApiError},
+        proposer::{MergingPoolMessage, ProposerApiError},
     },
-    builder::{api::get_mergeable_orders, error::BuilderApiError},
-    proposer::{MergingPoolMessage, ProposerApiError},
+    auctioneer::{
+        decoder::SubmissionDecoder,
+        types::{Event, RegWorkerJob, SubWorkerJob, Submission},
+    },
 };
 
 pub struct Telemetry {

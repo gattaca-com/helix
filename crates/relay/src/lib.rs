@@ -1,4 +1,5 @@
 mod api;
+mod auctioneer;
 mod beacon;
 mod database;
 mod gossip;

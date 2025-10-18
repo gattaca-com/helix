@@ -19,11 +19,8 @@ use tokio::sync::oneshot;
 use tracing::debug;
 
 use crate::{
-    api::{
-        auctioneer::{BlockMergeRequest, simulator::manager::SimulationResult},
-        builder::error::BuilderApiError,
-        proposer::ProposerApiError,
-    },
+    api::{builder::error::BuilderApiError, proposer::ProposerApiError},
+    auctioneer::{BlockMergeRequest, simulator::manager::SimulationResult},
     gossip::BroadcastPayloadParams,
     housekeeper::PayloadAttributesUpdate,
 };

@@ -14,13 +14,11 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{error, info, warn};
 
 use crate::{
-    api::{
-        auctioneer::{
-            bid_sorter::BidSorter,
-            simulator::manager::{SimulationResult, SimulatorManager},
-            types::{PayloadEntry, PendingPayload},
-        },
-        builder::error::BuilderApiError,
+    api::builder::error::BuilderApiError,
+    auctioneer::{
+        bid_sorter::BidSorter,
+        simulator::manager::{SimulationResult, SimulatorManager},
+        types::{PayloadEntry, PendingPayload},
     },
     database::postgres::postgres_db_service::PostgresDatabaseService,
 };

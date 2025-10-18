@@ -263,7 +263,7 @@ mod tests {
         let expected = BlsPublicKeyBytes::from_hex("0xa1885d66bef164889a2e35845c3b626545d7b0e513efe335e97c3a45e534013fa3bc38c3b7e6143695aecc4872ac52c4").unwrap();
 
         let data_json =
-            include_bytes!("../../../../types/src/testdata/signed-bid-submission-electra-2.json");
+            include_bytes!("../../../types/src/testdata/signed-bid-submission-electra-2.json");
         let decoder = SubmissionDecoder {
             compression: Compression::Gzip,
             encoding: Encoding::Json,
@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(pubkey, expected);
 
         let data_ssz =
-            include_bytes!("../../../../types/src/testdata/signed-bid-submission-electra-2.bin");
+            include_bytes!("../../../types/src/testdata/signed-bid-submission-electra-2.bin");
         let decoder = SubmissionDecoder {
             compression: Compression::Gzip,
             encoding: Encoding::Ssz,
