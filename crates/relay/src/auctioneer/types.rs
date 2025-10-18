@@ -179,6 +179,7 @@ pub enum SubWorkerJob {
         proposer_pubkey: BlsPublicKeyBytes,
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
+        span: tracing::Span,
     },
 }
 
@@ -248,6 +249,7 @@ pub enum Event {
     GetHeader {
         params: GetHeaderParams,
         res_tx: oneshot::Sender<GetHeaderResult>,
+        span: tracing::Span,
     },
     // Receive multiple of these potentially, assume some light validation
     GetPayload {
@@ -255,6 +257,7 @@ pub enum Event {
         blinded: Box<SignedBlindedBeaconBlock>,
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
+        span: tracing::Span,
     },
     GossipPayload(BroadcastPayloadParams),
     SimResult(SimulationResult),

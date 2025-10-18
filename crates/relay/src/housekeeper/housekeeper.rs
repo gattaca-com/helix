@@ -19,6 +19,7 @@ use tokio::sync::{Mutex, broadcast};
 use tracing::{Instrument, debug, error, info, warn};
 
 use crate::{
+    auctioneer::Event,
     beacon::{
         error::BeaconClientError,
         multi_beacon_client::MultiBeaconClient,
@@ -26,8 +27,7 @@ use crate::{
     },
     database::postgres::postgres_db_service::PostgresDatabaseService,
     housekeeper::{
-        EthereumPrimevService, chain_event_updater::SlotData, error::HousekeeperError,
-        inclusion_list::InclusionListService,
+        EthereumPrimevService, error::HousekeeperError, inclusion_list::InclusionListService,
     },
     network::RelayNetworkManager,
 };
@@ -107,7 +107,7 @@ impl Housekeeper {
         auctioneer: Arc<LocalCache>,
         config: &RelayConfig,
         chain_info: Arc<ChainInfo>,
-        auctioneer_handle: crossbeam_channel::Sender<SlotData>,
+        event_tx: crossbeam_channel::Sender<Event>,
         relay_network_api: Arc<RelayNetworkManager>,
     ) -> Self {
         let primev_service =
@@ -119,7 +119,7 @@ impl Housekeeper {
                 auctioneer.clone(),
                 config,
                 chain_info.clone(),
-                auctioneer_handle,
+                event_tx,
                 relay_network_api,
             )
         });

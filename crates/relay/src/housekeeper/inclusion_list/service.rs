@@ -11,10 +11,8 @@ use helix_types::{BlsPublicKeyBytes, Slot};
 use tracing::{error, info, warn};
 
 use crate::{
-    database::postgres::postgres_db_service::PostgresDatabaseService,
-    housekeeper::{
-        chain_event_updater::SlotData, inclusion_list::http_fetcher::HttpInclusionListFetcher,
-    },
+    auctioneer::Event, database::postgres::postgres_db_service::PostgresDatabaseService,
+    housekeeper::inclusion_list::http_fetcher::HttpInclusionListFetcher,
     network::RelayNetworkManager,
 };
 
@@ -26,7 +24,7 @@ pub struct InclusionListService {
     local_cache: Arc<LocalCache>,
     http_il_fetcher: HttpInclusionListFetcher,
     chain_info: Arc<ChainInfo>,
-    auctioneer_handle: crossbeam_channel::Sender<SlotData>,
+    event_tx: crossbeam_channel::Sender<Event>,
     network_api: Arc<RelayNetworkManager>,
 }
 
@@ -36,12 +34,12 @@ impl InclusionListService {
         local_cache: Arc<LocalCache>,
         config: InclusionListConfig,
         chain_info: Arc<ChainInfo>,
-        auctioneer_handle: crossbeam_channel::Sender<SlotData>,
+        event_tx: crossbeam_channel::Sender<Event>,
         network_api: Arc<RelayNetworkManager>,
     ) -> Self {
         let http_il_fetcher = HttpInclusionListFetcher::new(config);
 
-        Self { db, local_cache, auctioneer_handle, http_il_fetcher, chain_info, network_api }
+        Self { db, local_cache, event_tx, http_il_fetcher, chain_info, network_api }
     }
 
     /// Fetch and persist inclusion list for this slot.
@@ -78,7 +76,7 @@ impl InclusionListService {
             (head_slot, pub_key, parent_hash),
         );
 
-        let _ = self.auctioneer_handle.try_send(SlotData {
+        let _ = self.event_tx.try_send(Event::SlotData {
             bid_slot: (head_slot + 1).into(),
             registration_data: None,
             payload_attributes: None,

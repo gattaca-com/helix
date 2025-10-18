@@ -3,10 +3,8 @@ use std::{collections::HashMap, ops::Deref, sync::Arc, time::Duration};
 use alloy_primitives::B256;
 use futures::FutureExt;
 use helix_common::{
-    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
-    chain_info::ChainInfo,
-    local_cache::LocalCache,
-    utils::utcnow_sec,
+    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo,
+    local_cache::LocalCache, utils::utcnow_sec,
 };
 use helix_types::{Slot, SlotClockTrait};
 use tokio::{
@@ -17,6 +15,7 @@ use tracing::{error, info, warn};
 use tree_hash::TreeHash;
 
 use crate::{
+    auctioneer::Event,
     beacon::types::{HeadEventData, PayloadAttributes, PayloadAttributesEvent},
     housekeeper::CurrentSlotInfo,
 };
@@ -50,15 +49,6 @@ pub struct SlotUpdate {
     pub new_duties: Option<Vec<BuilderGetValidatorsResponseEntry>>,
 }
 
-// Ugly workaround to avoid dependency on helix-api, remove when moving
-// auctioneer to its own crate
-pub struct SlotData {
-    pub bid_slot: Slot,
-    pub registration_data: Option<BuilderGetValidatorsResponseEntry>,
-    pub payload_attributes: Option<PayloadAttributesUpdate>,
-    pub il: Option<InclusionListWithMetadata>,
-}
-
 /// Manages the update of head slots and the fetching of new proposer duties.
 pub struct ChainEventUpdater {
     head_slot: u64,
@@ -67,7 +57,7 @@ pub struct ChainEventUpdater {
     local_cache: Arc<LocalCache>,
     chain_info: Arc<ChainInfo>,
     curr_slot_info: CurrentSlotInfo,
-    auctioneer_handle: crossbeam_channel::Sender<SlotData>,
+    event_tx: crossbeam_channel::Sender<Event>,
 }
 
 impl ChainEventUpdater {
@@ -75,7 +65,7 @@ impl ChainEventUpdater {
         auctioneer: Arc<LocalCache>,
         chain_info: Arc<ChainInfo>,
         curr_slot_info: CurrentSlotInfo,
-        auctioneer_handle: crossbeam_channel::Sender<SlotData>,
+        event_tx: crossbeam_channel::Sender<Event>,
     ) -> Self {
         Self {
             head_slot: 0,
@@ -84,7 +74,7 @@ impl ChainEventUpdater {
             proposer_duties: Vec::new(),
             chain_info,
             curr_slot_info,
-            auctioneer_handle,
+            event_tx,
         }
     }
 
@@ -182,7 +172,7 @@ impl ChainEventUpdater {
             return;
         }
 
-        info!(head_slot =% slot, "Processing slot");
+        info!(head_slot =% slot, "processing slot");
 
         // Validate this isn't a faulty head slot
         let slot_timestamp =
@@ -204,11 +194,6 @@ impl ChainEventUpdater {
         sleep(Duration::from_secs(1)).await;
 
         let mut new_duties = self.local_cache.get_proposer_duties();
-        info!(
-            head_slot = slot,
-            new_duties = new_duties.len(),
-            "Fetched proposer duties from auctioneer"
-        );
 
         for duty in new_duties.iter_mut() {
             let pubkey = &duty.entry.registration.message.pubkey;
@@ -233,7 +218,9 @@ impl ChainEventUpdater {
             .iter()
             .find_map(|((_, s), a)| if *s == bid_slot { Some(a.clone()) } else { None });
 
-        let _ = self.auctioneer_handle.try_send(SlotData {
+        info!(bid_slot, ?next_duty, ?next_payload_attributes, "sending update to auctionner");
+
+        let _ = self.event_tx.try_send(Event::SlotData {
             bid_slot: bid_slot.into(),
             registration_data: next_duty.clone(),
             payload_attributes: next_payload_attributes,
@@ -277,12 +264,12 @@ impl ChainEventUpdater {
             head_slot = self.head_slot,
             payload_attribute_slot =% event.data.proposal_slot,
             payload_attribute_parent = ?event.data.parent_block_hash,
-            "Processing payload attribute event",
+            "processing payload attribute event",
         );
 
         // only send to auctioneer if payload attributes are for the immediate next slot
         if event.data.proposal_slot.as_u64() == self.head_slot + 1 {
-            let _ = self.auctioneer_handle.try_send(SlotData {
+            let _ = self.event_tx.try_send(Event::SlotData {
                 bid_slot: event.data.proposal_slot,
                 registration_data: None,
                 payload_attributes: Some(update.clone()),

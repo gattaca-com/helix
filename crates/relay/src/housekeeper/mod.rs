@@ -19,9 +19,8 @@ pub use slot_info::CurrentSlotInfo;
 use tokio::sync::broadcast;
 
 use crate::{
-    beacon::multi_beacon_client::MultiBeaconClient,
-    database::postgres::postgres_db_service::PostgresDatabaseService,
-    housekeeper::chain_event_updater::SlotData, network::RelayNetworkManager,
+    auctioneer::Event, beacon::multi_beacon_client::MultiBeaconClient,
+    database::postgres::postgres_db_service::PostgresDatabaseService, network::RelayNetworkManager,
 };
 
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
@@ -34,7 +33,7 @@ pub async fn start_housekeeper(
     config: &RelayConfig,
     beacon_client: Arc<MultiBeaconClient>,
     chain_info: Arc<ChainInfo>,
-    auctioneer_handle: crossbeam_channel::Sender<SlotData>,
+    event_tx: crossbeam_channel::Sender<Event>,
     relay_network_api: Arc<RelayNetworkManager>,
 ) -> eyre::Result<CurrentSlotInfo> {
     let (head_event_sender, head_event_receiver) = broadcast::channel(HEAD_EVENT_CHANNEL_SIZE);
@@ -51,7 +50,7 @@ pub async fn start_housekeeper(
             auctioneer.clone(),
             config,
             chain_info.clone(),
-            auctioneer_handle.clone(),
+            event_tx.clone(),
             relay_network_api,
         );
         housekeeper.start(head_event_receiver.resubscribe()).await?;
@@ -59,7 +58,7 @@ pub async fn start_housekeeper(
 
     let curr_slot_info = CurrentSlotInfo::new();
     let chain_updater =
-        ChainEventUpdater::new(auctioneer, chain_info, curr_slot_info.clone(), auctioneer_handle);
+        ChainEventUpdater::new(auctioneer, chain_info, curr_slot_info.clone(), event_tx);
     tokio::spawn(chain_updater.start(head_event_receiver, payload_attribute_receiver));
 
     Ok(curr_slot_info)
