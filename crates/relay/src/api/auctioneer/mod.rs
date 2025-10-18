@@ -337,8 +337,24 @@ impl State {
             }
 
             // get_header
-            (State::Sorting(_), Event::GetHeader { params, res_tx }) => {
-                ctx.handle_get_header(params, res_tx)
+            (State::Sorting(slot_data), Event::GetHeader { params, res_tx }) => {
+                if slot_data.bid_slot != params.slot {
+                    let _ = res_tx.send(Err(ProposerApiError::RequestWrongSlot {
+                        request_slot: params.slot,
+                        bid_slot: slot_data.bid_slot.into(),
+                    }));
+                } else if slot_data.payload_attributes.parent_hash != params.parent_hash {
+                    // proposer is on a different fork
+                    warn!(req =% params.parent_hash, this =% slot_data.payload_attributes.parent_hash, "get header for mismatched parent hash");
+                    let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
+                } else if slot_data.registration_data.entry.registration.message.pubkey !=
+                    params.pubkey
+                {
+                    warn!(req =% params.pubkey, this =% slot_data.registration_data.entry.registration.message.pubkey, "get header for mismatched proposer");
+                    let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
+                } else {
+                    ctx.handle_get_header(params, res_tx)
+                }
             }
 
             // get_payload

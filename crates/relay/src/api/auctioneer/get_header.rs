@@ -13,18 +13,11 @@ impl Context {
         params: GetHeaderParams,
         res_tx: oneshot::Sender<GetHeaderResult>,
     ) {
-        let res = self.get_header(params);
-        let _ = res_tx.send(res);
+        assert_eq!(params.slot, self.bid_slot.as_u64(), "params should already be validated!");
+        let _ = res_tx.send(self.get_header());
     }
 
-    fn get_header(&self, params: GetHeaderParams) -> GetHeaderResult {
-        if params.slot != self.bid_slot.as_u64() {
-            return Err(ProposerApiError::RequestWrongSlot {
-                request_slot: params.slot,
-                bid_slot: self.bid_slot.as_u64(),
-            });
-        }
-
+    fn get_header(&self) -> GetHeaderResult {
         let Some(best_block_hash) = self.bid_sorter.get_header() else {
             return Err(ProposerApiError::NoBidPrepared);
         };
