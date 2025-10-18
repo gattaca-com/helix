@@ -1,14 +1,27 @@
+mod client;
+mod error;
+mod types;
+mod grpc {
+    // To re-generate the bindings run: REGENERATE_PROTO=1 cargo build
+    #![allow(clippy::all)]
+    include!("generated/gossip.rs");
+}
+
 use std::sync::Arc;
 
+pub use client::GrpcGossiperClientManager;
 use helix_common::{GetPayloadTrace, spawn_tracked, utils::utcnow_ns};
 use tokio::sync::mpsc;
 use tracing::{debug, error};
+pub use types::{BroadcastGetPayloadParams, BroadcastPayloadParams};
 
-use crate::api::{
-    Api,
-    builder::api::BuilderApi,
-    gossiper::types::GossipedMessage,
-    proposer::{ProposerApi, get_payload::ProposerApiVersion},
+use crate::{
+    api::{
+        Api,
+        builder::api::BuilderApi,
+        proposer::{ProposerApi, get_payload::ProposerApiVersion},
+    },
+    gossip::types::GossipedMessage,
 };
 
 pub async fn process_gossip_messages<A: Api>(

@@ -36,10 +36,6 @@ jobs:
           path: ./repos/${{ secrets.REPO_NAME }}
           ref: ${{ github.ref }}
 
-      # Install Protocol Buffers Compiler
-      - name: Install Protobuf Compiler (protoc)
-        run: sudo apt-get install -y protobuf-compiler
-
       - name: Change to project directory
         run: cd ./repos/${{ secrets.REPO_NAME }}
 

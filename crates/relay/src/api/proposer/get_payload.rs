@@ -18,13 +18,9 @@ use tracing::{error, info, warn};
 
 use super::ProposerApi;
 use crate::{
-    api::{
-        Api,
-        auctioneer::GetPayloadResultData,
-        gossiper::types::{BroadcastGetPayloadParams, BroadcastPayloadParams},
-        proposer::error::ProposerApiError,
-    },
+    api::{Api, auctioneer::GetPayloadResultData, proposer::error::ProposerApiError},
     beacon::types::BroadcastValidation,
+    gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
 };
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;

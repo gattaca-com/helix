@@ -3,7 +3,7 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 use super::api::BuilderApi;
-use crate::api::{Api, gossiper::types::BroadcastPayloadParams};
+use crate::{api::Api, gossip::BroadcastPayloadParams};
 
 // Handle Gossiped Payloads
 impl<A: Api> BuilderApi<A> {

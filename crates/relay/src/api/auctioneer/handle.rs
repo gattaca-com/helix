@@ -6,15 +6,15 @@ use http::HeaderMap;
 use tokio::sync::oneshot;
 use tracing::trace;
 
-use crate::api::{
-    auctioneer::{
+use crate::{
+    api::auctioneer::{
         BlockMergeRequest,
         types::{
             BestMergeablePayload, Event, GetHeaderResult, GetPayloadResult, RegWorkerJob,
             SubWorkerJob, SubmissionResult,
         },
     },
-    gossiper::types::BroadcastPayloadParams,
+    gossip::BroadcastPayloadParams,
 };
 
 #[derive(Clone)]

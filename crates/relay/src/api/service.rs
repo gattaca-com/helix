@@ -16,14 +16,13 @@ use crate::{
         Api,
         auctioneer::spawn_workers,
         builder::api::BuilderApi,
-        gossip::{self},
-        gossiper::grpc_gossiper::GrpcGossiperClientManager,
         proposer::ProposerApi,
         relay_data::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry},
         router::build_router,
     },
     beacon::multi_beacon_client::MultiBeaconClient,
     database::postgres::postgres_db_service::PostgresDatabaseService,
+    gossip::{GrpcGossiperClientManager, process_gossip_messages},
     housekeeper::{CurrentSlotInfo, chain_event_updater::SlotData},
     network::api::RelayNetworkApi,
 };
@@ -96,7 +95,7 @@ pub async fn start_api_service<A: Api>(
         registrations_handle,
     ));
 
-    tokio::spawn(gossip::process_gossip_messages(
+    tokio::spawn(process_gossip_messages(
         builder_api.clone(),
         proposer_api.clone(),
         gossip_receiver,

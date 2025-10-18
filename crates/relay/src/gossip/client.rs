@@ -10,16 +10,14 @@ use tokio::{
 use tonic::{Request, Response, Status, codec::CompressionEncoding, transport::Channel};
 use tracing::error;
 
-use crate::api::{
-    gossiper::{
-        error::GossipError,
-        types::{BroadcastGetPayloadParams, BroadcastPayloadParams, GossipedMessage},
-    },
+use crate::gossip::{
+    error::GossipError,
     grpc::{
         self,
         gossip_service_client::GossipServiceClient,
         gossip_service_server::{GossipService, GossipServiceServer},
     },
+    types::{BroadcastGetPayloadParams, BroadcastPayloadParams, GossipedMessage},
 };
 
 const PAYLOAD_ID: &str = "payload";

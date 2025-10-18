@@ -22,9 +22,9 @@ use crate::{
     api::{
         auctioneer::{BlockMergeRequest, simulator::manager::SimulationResult},
         builder::error::BuilderApiError,
-        gossiper::types::BroadcastPayloadParams,
         proposer::ProposerApiError,
     },
+    gossip::BroadcastPayloadParams,
     housekeeper::PayloadAttributesUpdate,
 };
 
