@@ -62,7 +62,7 @@ pub struct SlotData {
 /// Manages the update of head slots and the fetching of new proposer duties.
 pub struct ChainEventUpdater {
     head_slot: u64,
-    known_payload_attributes: HashMap<(B256, Slot), PayloadAttributesEvent>,
+    known_payload_attributes: HashMap<(B256, Slot), PayloadAttributesUpdate>,
     proposer_duties: Vec<BuilderGetValidatorsResponseEntry>,
     local_cache: Arc<LocalCache>,
     chain_info: Arc<ChainInfo>,
@@ -177,7 +177,6 @@ impl ChainEventUpdater {
         }
     }
 
-    /// Handles a new slot in a non-blocking, timeout-safe way.
     async fn process_slot(&mut self, slot: u64) {
         if self.head_slot >= slot {
             return;
@@ -224,13 +223,20 @@ impl ChainEventUpdater {
 
         self.proposer_duties.clone_from(&new_duties);
 
-        // Get the next proposer duty for the new slot.
-        let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == slot + 1).cloned();
+        let bid_slot = slot + 1;
+
+        let next_duty = self.proposer_duties.iter().find(|duty| duty.slot == bid_slot).cloned();
+
+        // we may have cached this from before
+        let next_payload_attributes = self
+            .known_payload_attributes
+            .iter()
+            .find_map(|((_, s), a)| if *s == bid_slot { Some(a.clone()) } else { None });
 
         let _ = self.auctioneer_handle.try_send(SlotData {
-            bid_slot: (slot + 1).into(),
+            bid_slot: bid_slot.into(),
             registration_data: next_duty.clone(),
-            payload_attributes: None,
+            payload_attributes: next_payload_attributes,
             il: None,
         });
 
@@ -254,10 +260,18 @@ impl ChainEventUpdater {
         }
 
         // Clean up old payload attributes
-        self.known_payload_attributes.retain(|_, value| value.data.proposal_slot >= self.head_slot);
+        self.known_payload_attributes.retain(|_, value| value.slot >= self.head_slot);
+
+        let withdrawals_root = event.data.payload_attributes.withdrawals.tree_hash_root();
+        let update = PayloadAttributesUpdate {
+            slot: event.data.proposal_slot,
+            parent_hash: event.data.parent_block_hash,
+            withdrawals_root,
+            payload_attributes: event.data.payload_attributes,
+        };
 
         // Save new one
-        self.known_payload_attributes.insert(*payload_attributes_key, event.clone());
+        self.known_payload_attributes.insert(*payload_attributes_key, update.clone());
 
         info!(
             head_slot = self.head_slot,
@@ -266,21 +280,15 @@ impl ChainEventUpdater {
             "Processing payload attribute event",
         );
 
-        let withdrawals_root = event.data.payload_attributes.withdrawals.tree_hash_root();
-
-        let update = PayloadAttributesUpdate {
-            slot: event.data.proposal_slot,
-            parent_hash: event.data.parent_block_hash,
-            withdrawals_root,
-            payload_attributes: event.data.payload_attributes,
-        };
-
-        let _ = self.auctioneer_handle.try_send(SlotData {
-            bid_slot: event.data.proposal_slot,
-            registration_data: None,
-            payload_attributes: Some(update.clone()),
-            il: None,
-        });
+        // only send to auctioneer if payload attributes are for the immediate next slot
+        if event.data.proposal_slot.as_u64() == self.head_slot + 1 {
+            let _ = self.auctioneer_handle.try_send(SlotData {
+                bid_slot: event.data.proposal_slot,
+                registration_data: None,
+                payload_attributes: Some(update.clone()),
+                il: None,
+            });
+        }
 
         self.curr_slot_info.handle_new_payload_attributes(update);
     }
