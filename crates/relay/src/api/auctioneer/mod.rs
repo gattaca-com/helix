@@ -227,6 +227,8 @@ impl State {
                         (registration_data, payload_attributes, il)
                     }
                     Ordering::Greater => {
+                        assert_eq!(bid_slot, *curr_slot + 1, "gap in slot data received (slot)");
+
                         ctx.on_new_slot(bid_slot);
                         (registration_data, payload_attributes, il)
                     }
@@ -251,6 +253,12 @@ impl State {
                     }
                 }
                 Ordering::Greater => {
+                    assert_eq!(
+                        bid_slot,
+                        slot_data.bid_slot + 1,
+                        "gap in slot data received (sort)"
+                    );
+
                     ctx.on_new_slot(bid_slot);
                     // another relay delivered the payload
                     *self = Self::process_slot_data(
@@ -270,6 +278,12 @@ impl State {
             ) => match bid_slot.cmp(&slot_data.bid_slot) {
                 Ordering::Less | Ordering::Equal => (),
                 Ordering::Greater => {
+                    assert_eq!(
+                        bid_slot,
+                        slot_data.bid_slot + 1,
+                        "gap in slot data received (broadcast)"
+                    );
+
                     if let Some(attributes) = &payload_attributes &&
                         &attributes.parent_hash != block_hash
                     {
