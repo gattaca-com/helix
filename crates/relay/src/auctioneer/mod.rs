@@ -29,6 +29,7 @@ use helix_common::{
     utils::pin_thread_to_core,
 };
 use helix_types::Slot;
+use rustc_hash::FxHashMap;
 pub use simulator::*;
 use tracing::{debug, info, info_span, trace, warn};
 pub use types::{Event, GetPayloadResultData, PayloadBidData, PayloadHeaderData};
@@ -147,7 +148,7 @@ enum State {
     Slot {
         bid_slot: Slot,
         registration_data: Option<BuilderGetValidatorsResponseEntry>,
-        payload_attributes: Option<PayloadAttributesUpdate>,
+        payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,
         il: Option<InclusionListWithMetadata>,
     },
 
@@ -163,7 +164,7 @@ impl Default for State {
         Self::Slot {
             bid_slot: Slot::new(0),
             registration_data: None,
-            payload_attributes: None,
+            payload_attributes_map: Default::default(),
             il: None,
         }
     }
@@ -200,21 +201,20 @@ impl State {
                 State::Slot {
                     bid_slot: curr_slot,
                     registration_data: curr_reg,
-                    payload_attributes: curr_att,
+                    payload_attributes_map,
                     il: curr_il,
                 },
                 Event::SlotData { bid_slot, registration_data, payload_attributes, il },
             ) => {
-                let (reg, att, il) = match bid_slot.cmp(curr_slot) {
+                let (reg, att_map, il) = match bid_slot.cmp(curr_slot) {
                     Ordering::Less => return,
                     Ordering::Equal => {
                         // more data for current slot, maybe we can start sorting
                         // assume we can't receive different data for the same slot
                         let registration_data = curr_reg.clone().or(registration_data);
-                        let payload_attributes = curr_att.clone().or(payload_attributes);
                         let il = curr_il.clone().or(il);
 
-                        (registration_data, payload_attributes, il)
+                        (registration_data, payload_attributes_map.clone(), il)
                     }
                     Ordering::Greater => {
                         if *curr_slot > 0 {
@@ -226,11 +226,12 @@ impl State {
                         }
 
                         ctx.on_new_slot(bid_slot);
-                        (registration_data, payload_attributes, il)
+                        (registration_data, FxHashMap::default(), il)
                     }
                 };
 
-                *self = Self::process_slot_data(bid_slot, reg, att, il, ctx);
+                *self =
+                    Self::process_slot_data(bid_slot, att_map, reg, payload_attributes, il, ctx);
             }
 
             // new slot, either IL or slot was delivered by another relay
@@ -240,9 +241,23 @@ impl State {
             ) => match bid_slot.cmp(&slot_data.bid_slot) {
                 Ordering::Less => (),
                 Ordering::Equal => {
-                    // add inclusion list
-                    if slot_data.il.is_none() && il.is_some() {
-                        // received new IL
+                    // check fork
+                    if let Some(update) = payload_attributes &&
+                        !slot_data.payload_attributes_map.contains_key(&update.parent_hash)
+                    {
+                        info!(received =? update.parent_hash, sorting =? slot_data.payload_attributes_map.keys(), "sorting for an additional fork");
+
+                        // ugly clone but should be relatively rare
+                        let mut slot_data = slot_data.clone();
+                        slot_data.payload_attributes_map.insert(update.parent_hash, update);
+
+                        *self = State::Sorting(slot_data);
+                    } else if slot_data.il.is_none() && il.is_some() {
+                        info!(
+                            txs = il.as_ref().map(|i| i.txs.len()).unwrap_or_default(),
+                            "received new inclusion list"
+                        );
+
                         // ugly clone but should be relatively rare
                         let slot_data = SlotData { il, ..slot_data.clone() };
                         *self = State::Sorting(slot_data);
@@ -259,6 +274,7 @@ impl State {
                     // another relay delivered the payload
                     *self = Self::process_slot_data(
                         bid_slot,
+                        FxHashMap::default(),
                         registration_data,
                         payload_attributes,
                         il,
@@ -293,6 +309,7 @@ impl State {
                     ctx.on_new_slot(bid_slot);
                     *self = Self::process_slot_data(
                         bid_slot,
+                        FxHashMap::default(),
                         registration_data,
                         payload_attributes,
                         il,
@@ -360,9 +377,9 @@ impl State {
                         request_slot: params.slot,
                         bid_slot: slot_data.bid_slot.into(),
                     }));
-                } else if slot_data.payload_attributes.parent_hash != params.parent_hash {
+                } else if !slot_data.payload_attributes_map.contains_key(&params.parent_hash) {
                     // proposer is on a different fork
-                    warn!(req =% params.parent_hash, this =% slot_data.payload_attributes.parent_hash, "get header for mismatched parent hash");
+                    warn!(req =% params.parent_hash, have =? slot_data.payload_attributes_map.keys(), "get header for unknown parent hash");
                     let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
                 } else if slot_data.registration_data.entry.registration.message.pubkey !=
                     params.pubkey
@@ -563,45 +580,46 @@ impl State {
 
     fn process_slot_data(
         bid_slot: Slot,
+        mut payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,
         registration_data: Option<BuilderGetValidatorsResponseEntry>,
-        payload_attributes: Option<PayloadAttributesUpdate>,
+        payload_attributes_update: Option<PayloadAttributesUpdate>,
         il: Option<InclusionListWithMetadata>,
         ctx: &mut Context,
     ) -> Self {
-        match (registration_data, payload_attributes) {
-            (Some(registration_data), Some(payload_attributes)) => {
+        if let Some(update) = payload_attributes_update {
+            payload_attributes_map.insert(update.parent_hash, update);
+        }
+
+        match (registration_data, payload_attributes_map.is_empty()) {
+            (Some(registration_data), false) => {
                 let current_fork = ctx.chain_info.fork_at_slot(bid_slot);
 
-                let slot_data =
-                    SlotData { bid_slot, registration_data, payload_attributes, current_fork, il };
+                info!(%bid_slot, attributes = payload_attributes_map.len(), "processed slot data, start sorting");
 
-                info!(%bid_slot, "processed slot data, start sorting");
+                let slot_data = SlotData {
+                    bid_slot,
+                    registration_data,
+                    payload_attributes_map,
+                    current_fork,
+                    il,
+                };
+
                 State::Sorting(slot_data)
             }
 
-            (Some(registration_data), None) => {
-                info!(%bid_slot, registration = true, attributes = false, il = il.is_some(), "processed slot data");
+            (Some(registration_data), true) => {
+                info!(%bid_slot, registration = true, attributes = 0, il = il.is_some(), "processed slot data");
                 State::Slot {
                     bid_slot,
                     registration_data: Some(registration_data),
-                    payload_attributes: None,
+                    payload_attributes_map,
                     il,
                 }
             }
 
-            (None, Some(payload_attributes)) => {
-                info!(%bid_slot, registration = false, attributes = true, il = il.is_some(), "processed slot data");
-                State::Slot {
-                    bid_slot,
-                    registration_data: None,
-                    payload_attributes: Some(payload_attributes),
-                    il,
-                }
-            }
-
-            (None, None) => {
-                info!(%bid_slot, registration = false, attributes = false, il = il.is_some(), "processed slot data");
-                State::Slot { bid_slot, registration_data: None, payload_attributes: None, il }
+            (None, _) => {
+                info!(%bid_slot, registration = false, attributes = payload_attributes_map.len(), il = il.is_some(), "processed slot data");
+                State::Slot { bid_slot, registration_data: None, payload_attributes_map, il }
             }
         }
     }

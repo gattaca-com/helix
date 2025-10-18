@@ -2,7 +2,10 @@ use alloy_primitives::B256;
 use helix_common::BuilderInfo;
 use helix_types::{BlockValidationError, BlsPublicKeyBytes, SignedBidSubmission};
 
-use crate::auctioneer::{context::Context, types::SlotData};
+use crate::{
+    auctioneer::{context::Context, types::SlotData},
+    housekeeper::PayloadAttributesUpdate,
+};
 
 impl Context {
     pub fn validate_submission(
@@ -12,6 +15,7 @@ impl Context {
         sequence: Option<u64>,
         builder_info: &BuilderInfo,
         slot_data: &SlotData,
+        payload_attributes: &PayloadAttributesUpdate,
         on_receive_ns: u64,
     ) -> Result<(), BlockValidationError> {
         if payload.slot() != self.bid_slot {
@@ -23,7 +27,7 @@ impl Context {
 
         self.staleness_check(payload.builder_public_key(), on_receive_ns, sequence)?;
         self.check_duplicate_submission(*payload.block_hash())?;
-        self.validate_submission_data(payload, withdrawals_root, slot_data)?;
+        self.validate_submission_data(payload, withdrawals_root, slot_data, payload_attributes)?;
         self.check_if_trusted_builder(builder_info, slot_data)?;
 
         Ok(())
@@ -34,6 +38,7 @@ impl Context {
         payload: &SignedBidSubmission,
         withdrawals_root: &B256,
         slot_data: &SlotData,
+        payload_attributes: &PayloadAttributesUpdate,
     ) -> Result<(), BlockValidationError> {
         if slot_data.current_fork != payload.fork_name() {
             return Err(BlockValidationError::InvalidPayloadType {
@@ -44,10 +49,10 @@ impl Context {
         // checks internal consistency of the payload
         payload.validate()?;
 
-        if slot_data.payload_attributes.payload_attributes.timestamp != payload.timestamp() {
+        if payload_attributes.timestamp != payload.timestamp() {
             return Err(BlockValidationError::IncorrectTimestamp {
                 got: payload.timestamp(),
-                expected: slot_data.payload_attributes.payload_attributes.timestamp,
+                expected: payload_attributes.timestamp,
             });
         }
 
@@ -67,7 +72,6 @@ impl Context {
             });
         }
 
-        let payload_attributes = &slot_data.payload_attributes;
         if *payload.prev_randao() != payload_attributes.prev_randao {
             return Err(BlockValidationError::PrevRandaoMismatch {
                 got: *payload.prev_randao(),

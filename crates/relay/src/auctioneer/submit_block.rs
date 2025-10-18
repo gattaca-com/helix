@@ -16,6 +16,7 @@ use crate::{
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
         types::{PayloadEntry, SlotData, Submission, SubmissionResult},
     },
+    housekeeper::PayloadAttributesUpdate,
 };
 
 impl Context {
@@ -29,6 +30,16 @@ impl Context {
         res_tx: oneshot::Sender<SubmissionResult>,
         slot_data: &SlotData,
     ) {
+        let Some(payload_attributes) =
+            slot_data.payload_attributes_map.get(submission.parent_hash())
+        else {
+            let _ = res_tx.send(Err(BuilderApiError::UknnownParentHash {
+                got: *submission.parent_hash(),
+                have: slot_data.payload_attributes_map.keys().cloned().collect(),
+            }));
+            return;
+        };
+
         match self.validate_and_sort(
             submission,
             withdrawals_root,
@@ -36,6 +47,7 @@ impl Context {
             &mut trace,
             slot_data,
             merging_preferences,
+            payload_attributes,
         ) {
             Ok((submission, optimistic_version, tx_root)) => {
                 let res_tx = if optimistic_version.is_optimistic() {
@@ -51,8 +63,8 @@ impl Context {
                     res_tx,
                     slot_data,
                     merging_preferences,
-                    withdrawals_root,
                     tx_root,
+                    payload_attributes,
                 );
             }
 
@@ -101,6 +113,7 @@ impl Context {
         trace: &mut SubmissionTrace,
         slot_data: &SlotData,
         merging_preferences: BlockMergingPreferences,
+        payload_attributes: &PayloadAttributesUpdate,
     ) -> Result<(SignedBidSubmission, OptimisticVersion, Option<B256>), BuilderApiError> {
         let (submission, maybe_tx_root) = match submission {
             Submission::Full(full) => (full, None),
@@ -144,6 +157,7 @@ impl Context {
             sequence,
             &builder_info,
             slot_data,
+            payload_attributes,
             trace.receive,
         )?;
         record_submission_step("validated", start_val.elapsed());
@@ -168,8 +182,8 @@ impl Context {
         res_tx: Option<oneshot::Sender<SubmissionResult>>,
         slot_data: &SlotData,
         merging_preferences: BlockMergingPreferences,
-        withdrawals_root: B256,
         tx_root: Option<B256>,
+        payload_attributes: &PayloadAttributesUpdate,
     ) {
         // TODO: pass this from previous step
         let is_top_bid = self.bid_sorter.is_top_bid(&submission);
@@ -179,7 +193,7 @@ impl Context {
             slot_data.registration_data.entry.registration.message.gas_limit,
             &submission,
             slot_data.registration_data.entry.preferences.clone(),
-            slot_data.payload_attributes.payload_attributes.parent_beacon_block_root,
+            payload_attributes.parent_beacon_block_root,
             inclusion_list,
         );
 
@@ -196,7 +210,8 @@ impl Context {
         self.sim_manager.handle_sim_request(req);
 
         let block_hash = *submission.block_hash();
-        let entry = PayloadEntry::new_submission(submission, withdrawals_root, tx_root);
+        let entry =
+            PayloadEntry::new_submission(submission, payload_attributes.withdrawals_root, tx_root);
         self.payloads.insert(block_hash, entry);
     }
 

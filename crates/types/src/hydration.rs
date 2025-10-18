@@ -59,6 +59,13 @@ impl DehydratedBidSubmission {
         }
     }
 
+    pub fn parent_hash(&self) -> &B256 {
+        match self {
+            DehydratedBidSubmission::Electra(s) => &s.message.parent_hash,
+            DehydratedBidSubmission::Fulu(s) => &s.message.parent_hash,
+        }
+    }
+
     pub fn hydrate(
         self,
         hydration_cache: &mut HydrationCache,
