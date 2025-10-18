@@ -1,6 +1,10 @@
 # Helix 🧬
 
-Helix is a MEV-Boost Relay implementation developed as an entirely new code base from the ground up. It has been designed with these key foundational principles at its core: Fast. Simple. Contained.
+[![Ci](https://github.com/gattaca-com/helix/actions/workflows/lint.yml/badge.svg)](https://github.com/gattaca-com/helix/actions/workflows/lint.yml)
+[![X](https://img.shields.io/twitter/follow/titanrelayxyz)](https://x.com/titanrelayxyz)
+[![Discord](https://dcbadge.limes.pink/api/server/https://discord.gg/hnerZ7dhTk?style=flat)](https://discord.gg/hnerZ7dhTk?style=flat)
+
+Helix is a MEV-Boost Relay designed with three key foundational principles: fast, simple, contained.
 
 ## Audits
 
@@ -16,4 +20,4 @@ MIT + Apache-2.0
 
 ## Contact
 
-https://twitter.com/titanbuilderxyz
+https://twitter.com/titanrelayxyz
