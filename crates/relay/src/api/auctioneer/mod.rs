@@ -227,7 +227,13 @@ impl State {
                         (registration_data, payload_attributes, il)
                     }
                     Ordering::Greater => {
-                        assert_eq!(bid_slot, *curr_slot + 1, "gap in slot data received (slot)");
+                        if *curr_slot > 0 {
+                            assert_eq!(
+                                bid_slot,
+                                *curr_slot + 1,
+                                "gap in slot data received (slot)"
+                            );
+                        }
 
                         ctx.on_new_slot(bid_slot);
                         (registration_data, payload_attributes, il)
