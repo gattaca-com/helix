@@ -1,3 +1,4 @@
+use alloy_primitives::B256;
 use axum::response::{IntoResponse, Response};
 use helix_common::{local_cache::AuctioneerError, simulator::BlockSimError};
 use helix_types::{BlockValidationError, HydrationError, SigError};
@@ -57,6 +58,9 @@ pub enum BuilderApiError {
 
     #[error("internal error")]
     InternalError,
+
+    #[error("unknown parent hash: got: {got}, have: {have:?}")]
+    UknnownParentHash { got: B256, have: Vec<B256> },
 }
 
 impl IntoResponse for BuilderApiError {
@@ -71,7 +75,8 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::HydrationError(_) |
             BuilderApiError::SigError(_) |
             BuilderApiError::SimOnNextSlot |
-            BuilderApiError::DeliveringPayload { .. } => StatusCode::BAD_REQUEST,
+            BuilderApiError::DeliveringPayload { .. } |
+            BuilderApiError::UknnownParentHash { .. } => StatusCode::BAD_REQUEST,
 
             BuilderApiError::InvalidApiKey |
             BuilderApiError::UntrustedBuilderOnDehydratedPayload => StatusCode::UNAUTHORIZED,
