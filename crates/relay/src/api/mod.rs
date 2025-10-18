@@ -6,7 +6,6 @@ use helix_common::{RelayConfig, api_provider::ApiProvider, local_cache::LocalCac
 pub use service::start_api_service;
 
 pub mod admin_service;
-pub mod auctioneer;
 pub mod builder;
 pub mod integration_tests;
 pub mod middleware;

@@ -19,9 +19,9 @@ use tracing::{debug, error, info, warn};
 use crate::{
     api::{
         Api,
-        auctioneer::{BlockMergeRequest, BlockMergeResponse, PayloadBidData, PayloadHeaderData},
         proposer::{ProposerApi, error::ProposerApiError},
     },
+    auctioneer::{BlockMergeRequest, BlockMergeResponse, PayloadBidData, PayloadHeaderData},
     gossip::BroadcastPayloadParams,
 };
 

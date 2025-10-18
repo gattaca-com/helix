@@ -14,12 +14,12 @@ use tracing::{error, info};
 use crate::{
     api::{
         Api,
-        auctioneer::spawn_workers,
         builder::api::BuilderApi,
         proposer::ProposerApi,
         relay_data::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry},
         router::build_router,
     },
+    auctioneer::spawn_workers,
     beacon::multi_beacon_client::MultiBeaconClient,
     database::postgres::postgres_db_service::PostgresDatabaseService,
     gossip::{GrpcGossiperClientManager, process_gossip_messages},

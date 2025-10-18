@@ -7,7 +7,7 @@ use tokio::sync::oneshot;
 use tracing::trace;
 
 use crate::{
-    api::auctioneer::{
+    auctioneer::{
         BlockMergeRequest,
         types::{
             BestMergeablePayload, Event, GetHeaderResult, GetPayloadResult, RegWorkerJob,

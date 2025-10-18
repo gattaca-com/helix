@@ -10,7 +10,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tracing::{debug, error};
 
-use crate::api::auctioneer::simulator::{
+use crate::auctioneer::simulator::{
     BlockMergeRequest, BlockMergeResponse, BlockSimRequest, BlockSimRpcResponse, RpcResult,
 };
 

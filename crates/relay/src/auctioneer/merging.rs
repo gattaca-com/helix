@@ -1,6 +1,6 @@
 use tracing::error;
 
-use crate::api::auctioneer::{context::Context, types::BestMergeablePayload};
+use crate::auctioneer::{context::Context, types::BestMergeablePayload};
 
 impl Context {
     /// If the current best bid allows merging, return its payload

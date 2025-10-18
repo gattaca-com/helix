@@ -9,13 +9,13 @@ use helix_types::{BlockMergingPreferences, SignedBidSubmission};
 use tokio::sync::oneshot;
 use tracing::trace;
 
-use crate::api::{
+use crate::{
+    api::builder::error::BuilderApiError,
     auctioneer::{
         context::Context,
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
         types::{PayloadEntry, SlotData, Submission, SubmissionResult},
     },
-    builder::error::BuilderApiError,
 };
 
 impl Context {

@@ -13,7 +13,7 @@ use helix_types::{
 use serde_json::json;
 use tokio::sync::oneshot;
 
-use crate::api::auctioneer::types::SubmissionResult;
+use crate::auctioneer::types::SubmissionResult;
 
 pub mod client;
 pub mod manager;

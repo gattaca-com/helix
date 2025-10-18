@@ -15,13 +15,12 @@ use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmissio
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, warn};
 
-use crate::api::{
+use crate::{
+    api::service::SIMULATOR_REQUEST_TIMEOUT,
     auctioneer::{
-        Event,
         simulator::{BlockMergeRequest, SimulatorRequest, client::SimulatorClient},
-        types::SubmissionResult,
+        types::{Event, SubmissionResult},
     },
-    service::SIMULATOR_REQUEST_TIMEOUT,
 };
 
 #[derive(Default)]
