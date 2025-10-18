@@ -166,6 +166,7 @@ impl SubWorker {
                             tracing::field::display(submission.builder_pubkey()),
                         );
 
+                        trace!("sending to auctioneer");
                         drop(guard);
 
                         if self.config.block_merging_config.is_enabled {
@@ -232,9 +233,20 @@ impl SubWorker {
                 }
             }
 
-            SubWorkerJob::GetPayload { blinded_block, proposer_pubkey, mut trace, res_tx } => {
+            SubWorkerJob::GetPayload {
+                blinded_block,
+                proposer_pubkey,
+                mut trace,
+                res_tx,
+                span,
+            } => {
+                let guard = span.enter();
+                trace!("received by worker");
                 match self.handle_get_payload(&proposer_pubkey, *blinded_block, &mut trace) {
                     Ok((blinded, block_hash)) => {
+                        trace!("sending to auctioneer");
+                        drop(guard);
+
                         if self
                             .tx
                             .try_send(Event::GetPayload {
@@ -242,6 +254,7 @@ impl SubWorker {
                                 blinded: Box::new(blinded),
                                 trace,
                                 res_tx,
+                                span,
                             })
                             .is_err()
                         {
@@ -326,7 +339,9 @@ impl SubWorker {
         blinded_block: SignedBlindedBeaconBlock,
         _trace: &mut GetPayloadTrace,
     ) -> Result<(SignedBlindedBeaconBlock, B256), ProposerApiError> {
+        trace!("verifying signature");
         verify_signed_blinded_block_signature(&self.chain_info, &blinded_block, proposer_pubkey)?;
+        trace!("signature verified");
 
         let block_hash = blinded_block
             .message()

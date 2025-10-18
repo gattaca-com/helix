@@ -19,11 +19,11 @@ use crate::{
         relay_data::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry},
         router::build_router,
     },
-    auctioneer::spawn_workers,
+    auctioneer::{Event, spawn_workers},
     beacon::multi_beacon_client::MultiBeaconClient,
     database::postgres::postgres_db_service::PostgresDatabaseService,
     gossip::{GrpcGossiperClientManager, process_gossip_messages},
-    housekeeper::{CurrentSlotInfo, chain_event_updater::SlotData},
+    housekeeper::CurrentSlotInfo,
     network::api::RelayNetworkApi,
 };
 
@@ -42,7 +42,7 @@ pub async fn start_api_service<A: Api>(
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-    slot_data_rx: crossbeam_channel::Receiver<SlotData>,
+    event_channel: (crossbeam_channel::Sender<Event>, crossbeam_channel::Receiver<Event>),
     relay_network_api: RelayNetworkApi,
 ) {
     let gossiper = Arc::new(
@@ -64,7 +64,7 @@ pub async fn start_api_service<A: Api>(
         merge_pool_tx,
         Arc::unwrap_or_clone(local_cache.clone()),
         top_bid_tx.clone(),
-        slot_data_rx,
+        event_channel,
     );
 
     let builder_api = BuilderApi::<A>::new(

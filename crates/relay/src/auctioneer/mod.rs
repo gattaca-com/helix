@@ -31,7 +31,7 @@ use helix_common::{
 use helix_types::Slot;
 pub use simulator::*;
 use tracing::{debug, info, info_span, trace, warn};
-pub use types::{GetPayloadResultData, PayloadBidData, PayloadHeaderData};
+pub use types::{Event, GetPayloadResultData, PayloadBidData, PayloadHeaderData};
 use worker::{RegWorker, SubWorker};
 
 use crate::{
@@ -44,9 +44,9 @@ use crate::{
         bid_sorter::BidSorter,
         context::Context,
         manager::SimulatorManager,
-        types::{Event, PendingPayload, SlotData},
+        types::{PendingPayload, SlotData},
     },
-    housekeeper::{PayloadAttributesUpdate, chain_event_updater::SlotData as HkSlotData},
+    housekeeper::PayloadAttributesUpdate,
 };
 
 // TODO: tidy up builder and proposer api state, and spawn in a separate function
@@ -57,11 +57,11 @@ pub fn spawn_workers(
     merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
     cache: LocalCache,
     top_bid_tx: tokio::sync::broadcast::Sender<bytes::Bytes>,
-    slot_data_rx: crossbeam_channel::Receiver<HkSlotData>,
+    event_channel: (crossbeam_channel::Sender<Event>, crossbeam_channel::Receiver<Event>),
 ) -> (AuctioneerHandle, RegWorkerHandle) {
     let (sub_worker_tx, sub_worker_rx) = crossbeam_channel::bounded(10_000);
     let (reg_worker_tx, reg_worker_rx) = crossbeam_channel::bounded(100_000);
-    let (event_tx, event_rx) = crossbeam_channel::bounded(10_000);
+    let (event_tx, event_rx) = event_channel;
 
     if config.is_registration_instance {
         for core in config.cores.reg_workers.clone() {
@@ -111,7 +111,7 @@ pub fn spawn_workers(
             .name("auctioneer".to_string())
             .spawn(move || {
                 pin_thread_to_core(auctioneer_core);
-                auctioneer.run(event_rx, slot_data_rx)
+                auctioneer.run(event_rx)
             })
             .unwrap();
     }
@@ -126,22 +126,12 @@ struct Auctioneer {
 }
 
 impl Auctioneer {
-    fn run(
-        mut self,
-        rx: crossbeam_channel::Receiver<Event>,
-        slot_data_rx: crossbeam_channel::Receiver<HkSlotData>,
-    ) {
+    fn run(mut self, rx: crossbeam_channel::Receiver<Event>) {
         let _span = info_span!("auctioneer").entered();
         info!("starting");
 
         loop {
             for evt in rx.try_iter() {
-                self.state.step(evt, &mut self.ctx, &mut self.tel);
-            }
-
-            if let Ok(slot_data) = slot_data_rx.try_recv() {
-                let HkSlotData { bid_slot, registration_data, payload_attributes, il } = slot_data;
-                let evt = Event::SlotData { bid_slot, registration_data, payload_attributes, il };
                 self.state.step(evt, &mut self.ctx, &mut self.tel);
             }
 
@@ -293,7 +283,11 @@ impl State {
                     if let Some(attributes) = &payload_attributes &&
                         &attributes.parent_hash != block_hash
                     {
-                        warn!(maybe_missed_slot =% slot_data.bid_slot, parent_hash =% attributes.parent_hash, broadcasting_hash =% block_hash, "new slot while broacasting different block, was the slot missed?");
+                        warn!(
+                            maybe_missed_slot =% slot_data.bid_slot,
+                            parent_hash =% attributes.parent_hash,
+                            broadcasting_hash =% block_hash,
+                            "new slot while broacasting different block, was the slot missed?");
                     }
 
                     ctx.on_new_slot(bid_slot);
@@ -357,7 +351,10 @@ impl State {
             }
 
             // get_header
-            (State::Sorting(slot_data), Event::GetHeader { params, res_tx }) => {
+            (State::Sorting(slot_data), Event::GetHeader { params, res_tx, span }) => {
+                let _guard = span.enter();
+                trace!("received in auctioneer");
+
                 if slot_data.bid_slot != params.slot {
                     let _ = res_tx.send(Err(ProposerApiError::RequestWrongSlot {
                         request_slot: params.slot,
@@ -375,13 +372,19 @@ impl State {
                 } else {
                     ctx.handle_get_header(params, res_tx)
                 }
+
+                trace!("finished processing");
+                drop(_guard);
             }
 
             // get_payload
             (
                 State::Sorting(slot_data),
-                Event::GetPayload { blinded, block_hash, trace, res_tx },
+                Event::GetPayload { blinded, block_hash, trace, res_tx, span },
             ) => {
+                let _guard = span.enter();
+                trace!("received in auctioneer");
+
                 if let Some(local) = ctx.payloads.get(&block_hash) {
                     if let Some(block_hash) = ctx.handle_get_payload(
                         local.payload_and_blobs.clone(),
@@ -402,6 +405,9 @@ impl State {
                     // keep only one pending per slot
                     let _ = res_tx.send(Err(ProposerApiError::GetPayloadAlreadyReceived));
                 }
+
+                trace!("finished processing");
+                drop(_guard);
             }
 
             // sim result
@@ -512,7 +518,7 @@ impl State {
             }
 
             // get_header not sorting
-            (State::Slot { bid_slot, .. }, Event::GetHeader { res_tx, params }) => {
+            (State::Slot { bid_slot, .. }, Event::GetHeader { res_tx, params, .. }) => {
                 if params.slot == bid_slot.as_u64() {
                     // either not registered or waiting for full data from housekepper
                     let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
