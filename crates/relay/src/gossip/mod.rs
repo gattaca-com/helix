@@ -2,8 +2,9 @@ mod client;
 mod error;
 mod types;
 mod grpc {
+    // To re-generate the bindings run: REGENERATE_PROTO=1 cargo build
     #![allow(clippy::all)]
-    include!("./generated/gossip.rs");
+    include!("generated/gossip.rs");
 }
 
 use std::sync::Arc;
