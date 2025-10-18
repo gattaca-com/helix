@@ -668,6 +668,9 @@ pub enum BlockValidationError {
     #[error("incorrect prev_randao - got: {got:?}, expected: {expected:?}")]
     PrevRandaoMismatch { got: B256, expected: B256 },
 
+    #[error("unknown parent hash: submission: {submission}, have: {have:?}")]
+    UknnownParentHash { submission: B256, have: Vec<B256> },
+
     #[error("not {fork_name:?} payload")]
     InvalidPayloadType { fork_name: ForkName },
 

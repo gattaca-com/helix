@@ -8,29 +8,37 @@ use crate::{
 };
 
 impl Context {
-    pub fn validate_submission(
+    pub fn validate_submission<'a>(
         &mut self,
-        payload: &SignedBidSubmission,
+        submission: &SignedBidSubmission,
         withdrawals_root: &B256,
         sequence: Option<u64>,
         builder_info: &BuilderInfo,
-        slot_data: &SlotData,
-        payload_attributes: &PayloadAttributesUpdate,
+        slot_data: &'a SlotData,
         on_receive_ns: u64,
-    ) -> Result<(), BlockValidationError> {
-        if payload.slot() != self.bid_slot {
+    ) -> Result<&'a PayloadAttributesUpdate, BlockValidationError> {
+        if submission.slot() != self.bid_slot {
             return Err(BlockValidationError::SubmissionForWrongSlot {
                 expected: self.bid_slot,
-                got: payload.slot(),
+                got: submission.slot(),
             });
         }
 
-        self.staleness_check(payload.builder_public_key(), on_receive_ns, sequence)?;
-        self.check_duplicate_submission(*payload.block_hash())?;
-        self.validate_submission_data(payload, withdrawals_root, slot_data, payload_attributes)?;
+        let Some(payload_attributes) =
+            slot_data.payload_attributes_map.get(submission.parent_hash())
+        else {
+            return Err(BlockValidationError::UknnownParentHash {
+                submission: *submission.parent_hash(),
+                have: slot_data.payload_attributes_map.keys().cloned().collect(),
+            });
+        };
+
+        self.staleness_check(submission.builder_public_key(), on_receive_ns, sequence)?;
+        self.check_duplicate_submission(*submission.block_hash())?;
+        self.validate_submission_data(submission, withdrawals_root, slot_data, payload_attributes)?;
         self.check_if_trusted_builder(builder_info, slot_data)?;
 
-        Ok(())
+        Ok(payload_attributes)
     }
 
     fn validate_submission_data(
