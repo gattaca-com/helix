@@ -1,6 +1,8 @@
 use alloy_primitives::B256;
 use helix_common::BuilderInfo;
-use helix_types::{BlockValidationError, BlsPublicKeyBytes, SignedBidSubmission};
+use helix_types::{
+    BlockValidationError, BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion,
+};
 
 use crate::{
     auctioneer::{context::Context, types::SlotData},
@@ -11,11 +13,10 @@ impl Context {
     pub fn validate_submission<'a>(
         &mut self,
         submission: &SignedBidSubmission,
+        version: SubmissionVersion,
         withdrawals_root: &B256,
-        sequence: Option<u64>,
         builder_info: &BuilderInfo,
         slot_data: &'a SlotData,
-        on_receive_ns: u64,
     ) -> Result<&'a PayloadAttributesUpdate, BlockValidationError> {
         if submission.slot() != self.bid_slot {
             return Err(BlockValidationError::SubmissionForWrongSlot {
@@ -33,7 +34,7 @@ impl Context {
             });
         };
 
-        self.staleness_check(submission.builder_public_key(), on_receive_ns, sequence)?;
+        self.staleness_check(submission.builder_public_key(), version)?;
         self.check_duplicate_submission(*submission.block_hash())?;
         self.validate_submission_data(submission, withdrawals_root, slot_data, payload_attributes)?;
         self.check_if_trusted_builder(builder_info, slot_data)?;
@@ -108,40 +109,19 @@ impl Context {
     fn staleness_check(
         &mut self,
         builder: &BlsPublicKeyBytes,
-        new_receive_ns: u64,
-        new_seq: Option<u64>,
+        version: SubmissionVersion,
     ) -> Result<(), BlockValidationError> {
-        if let Some((old_receive_ns, maybe_old_seq)) = self.sequence.get_mut(builder) {
-            let mut check_timestamp = true;
-
-            match (&maybe_old_seq, new_seq) {
-                (None, None) | (Some(_), None) => (),
-                (None, Some(new_seq)) => {
-                    *maybe_old_seq = Some(new_seq);
-                    check_timestamp = false
-                }
-                (Some(old_seq), Some(new_seq)) => {
-                    if new_seq > *old_seq {
-                        *maybe_old_seq = Some(new_seq);
-                        check_timestamp = false;
-                    } else {
-                        return Err(BlockValidationError::OutOfSequence {
-                            seen: *old_seq,
-                            this: new_seq,
-                        });
-                    }
-                }
-            }
-
-            if check_timestamp {
-                if new_receive_ns > *old_receive_ns {
-                    *old_receive_ns = new_receive_ns
-                } else {
-                    return Err(BlockValidationError::AlreadyProcessingNewerPayload);
-                }
+        if let Some(old_version) = self.version.get_mut(builder) {
+            if *old_version >= version {
+                return Err(BlockValidationError::OutOfSequence {
+                    seen: *old_version,
+                    this: version,
+                });
+            } else {
+                *old_version = version
             }
         } else {
-            self.sequence.insert(*builder, (new_receive_ns, new_seq));
+            self.version.insert(*builder, version);
         }
 
         Ok(())

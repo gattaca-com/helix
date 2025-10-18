@@ -9,7 +9,7 @@ use helix_common::{
     BuilderInfo, RelayConfig, chain_info::ChainInfo, local_cache::LocalCache,
     metrics::SimulatorMetrics, spawn_tracked,
 };
-use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot};
+use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{error, info, warn};
 
@@ -30,8 +30,8 @@ pub struct SlotContext {
     pub pending_payload: Option<PendingPayload>,
     pub bid_sorter: BidSorter,
     pub seen_block_hashes: FxHashSet<B256>,
-    /// builder -> (last on_receive_ns, sequence number)
-    pub sequence: FxHashMap<BlsPublicKeyBytes, (u64, Option<u64>)>,
+    /// builder -> version
+    pub version: FxHashMap<BlsPublicKeyBytes, SubmissionVersion>,
     pub hydration_cache: HydrationCache,
     pub payloads: FxHashMap<B256, PayloadEntry>,
     pub sim_manager: SimulatorManager,
@@ -76,7 +76,7 @@ impl Context {
                 EXPECTED_PAYLOADS_PER_SLOT,
                 Default::default(),
             ),
-            sequence: FxHashMap::with_capacity_and_hasher(
+            version: FxHashMap::with_capacity_and_hasher(
                 EXPECTED_BUILDERS_PER_SLOT,
                 Default::default(),
             ),
@@ -162,7 +162,7 @@ impl Context {
         }
         self.bid_sorter.process_slot(bid_slot.as_u64());
         self.seen_block_hashes.clear();
-        self.sequence.clear();
+        self.version.clear();
         self.hydration_cache.clear();
         self.sim_manager.on_new_slot(bid_slot.as_u64());
 

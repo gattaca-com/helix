@@ -5,7 +5,7 @@ use helix_common::{
     self, BuilderInfo, SubmissionTrace, bid_submission::OptimisticVersion,
     metrics::HYDRATION_CACHE_HITS, record_submission_step,
 };
-use helix_types::{BlockMergingPreferences, SignedBidSubmission};
+use helix_types::{BlockMergingPreferences, SignedBidSubmission, SubmissionVersion};
 use tokio::sync::oneshot;
 use tracing::trace;
 
@@ -23,17 +23,17 @@ impl Context {
     pub(super) fn handle_submission(
         &mut self,
         submission: Submission,
+        version: SubmissionVersion,
         merging_preferences: BlockMergingPreferences,
         withdrawals_root: B256,
-        sequence: Option<u64>,
         mut trace: SubmissionTrace,
         res_tx: oneshot::Sender<SubmissionResult>,
         slot_data: &SlotData,
     ) {
         match self.validate_and_sort(
             submission,
+            version,
             withdrawals_root,
-            sequence,
             &mut trace,
             slot_data,
             merging_preferences,
@@ -74,6 +74,7 @@ impl Context {
             Ok(_) | Err(_) => {
                 if let Some(res_tx) = res_tx {
                     self.bid_sorter.sort(
+                        result.version,
                         &result.submission,
                         &mut result.trace,
                         result.merging_preferences,
@@ -89,8 +90,8 @@ impl Context {
     fn validate_and_sort<'a>(
         &mut self,
         submission: Submission,
+        version: SubmissionVersion,
         withdrawals_root: B256,
-        sequence: Option<u64>,
         trace: &mut SubmissionTrace,
         slot_data: &'a SlotData,
         merging_preferences: BlockMergingPreferences,
@@ -133,11 +134,10 @@ impl Context {
         let start_val = Instant::now();
         let payload_attributes = self.validate_submission(
             &submission,
+            version,
             &withdrawals_root,
-            sequence,
             &builder_info,
             slot_data,
-            trace.receive,
         )?;
         record_submission_step("validated", start_val.elapsed());
         trace!("validated");
@@ -145,7 +145,7 @@ impl Context {
         let optimistic_version = if self.sim_manager.can_process_optimistic_submission() &&
             self.should_process_optimistically(&submission, &builder_info, slot_data)
         {
-            self.bid_sorter.sort(&submission, trace, merging_preferences, true);
+            self.bid_sorter.sort(version, &submission, trace, merging_preferences, true);
             OptimisticVersion::V1
         } else {
             OptimisticVersion::NotOptimistic
@@ -156,6 +156,7 @@ impl Context {
             tx_root: maybe_tx_root,
             payload_attributes,
             merging_preferences,
+            version,
         };
 
         Ok((validated, optimistic_version))
@@ -188,6 +189,7 @@ impl Context {
             merging_preferences: validated.merging_preferences,
             trace,
             tx_root: validated.tx_root,
+            version: validated.version,
         };
 
         self.sim_manager.handle_sim_request(req);
@@ -226,4 +228,5 @@ struct ValidatedData<'a> {
     tx_root: Option<B256>,
     payload_attributes: &'a PayloadAttributesUpdate,
     merging_preferences: BlockMergingPreferences,
+    version: SubmissionVersion,
 }
