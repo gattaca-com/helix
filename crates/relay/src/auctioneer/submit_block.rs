@@ -142,14 +142,16 @@ impl Context {
         record_submission_step("validated", start_val.elapsed());
         trace!("validated");
 
-        let optimistic_version = if self.sim_manager.can_process_optimistic_submission() &&
-            self.should_process_optimistically(&submission, &builder_info, slot_data)
-        {
-            self.bid_sorter.sort(version, &submission, trace, merging_preferences, true);
-            OptimisticVersion::V1
-        } else {
-            OptimisticVersion::NotOptimistic
-        };
+        let (optimistic_version, is_top_bid) =
+            if self.sim_manager.can_process_optimistic_submission() &&
+                self.should_process_optimistically(&submission, &builder_info, slot_data)
+            {
+                let is_top_bid =
+                    self.bid_sorter.sort(version, &submission, trace, merging_preferences, true);
+                (OptimisticVersion::V1, is_top_bid)
+            } else {
+                (OptimisticVersion::NotOptimistic, false)
+            };
 
         let validated = ValidatedData {
             submission,
@@ -157,6 +159,7 @@ impl Context {
             payload_attributes,
             merging_preferences,
             version,
+            is_top_bid,
         };
 
         Ok((validated, optimistic_version))
@@ -169,8 +172,6 @@ impl Context {
         res_tx: Option<oneshot::Sender<SubmissionResult>>,
         slot_data: &SlotData,
     ) {
-        // TODO: pass this from previous step
-        let is_top_bid = self.bid_sorter.is_top_bid(&validated.submission);
         let inclusion_list = slot_data.il.clone();
 
         let request = BlockSimRequest::new(
@@ -183,7 +184,7 @@ impl Context {
 
         let req = SimulatorRequest {
             request,
-            is_top_bid,
+            is_top_bid: validated.is_top_bid,
             res_tx,
             submission: validated.submission.clone(),
             merging_preferences: validated.merging_preferences,
@@ -229,4 +230,5 @@ struct ValidatedData<'a> {
     payload_attributes: &'a PayloadAttributesUpdate,
     merging_preferences: BlockMergingPreferences,
     version: SubmissionVersion,
+    is_top_bid: bool,
 }

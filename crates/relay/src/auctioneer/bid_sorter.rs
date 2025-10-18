@@ -178,6 +178,7 @@ impl BidSorter {
         }
     }
 
+    /// Sort the bid and returns whether it became the top bid
     pub fn sort(
         &mut self,
         version: SubmissionVersion,
@@ -185,7 +186,7 @@ impl BidSorter {
         trace: &mut SubmissionTrace,
         merging_preferences: BlockMergingPreferences,
         is_optimistic: bool,
-    ) {
+    ) -> bool {
         trace!(is_optimistic, "sorting submission");
 
         let bid_trace = submission.bid_trace();
@@ -194,21 +195,15 @@ impl BidSorter {
         let builder_pubkey = bid_trace.builder_pubkey;
 
         let start = Instant::now();
-        self.process_header(builder_pubkey, bid, trace, is_optimistic);
+        let is_top_bid = self.process_header(builder_pubkey, bid, trace, is_optimistic);
         let process_latency = start.elapsed();
 
         // telemetry
         self.local_telemetry.subs += 1;
         self.local_telemetry.subs_process_time += process_latency;
         BID_SORTER_PROCESS_LATENCY_US.observe(process_latency.as_micros() as f64);
-    }
 
-    // TODO: return this from .sort instead
-    pub fn is_top_bid(&self, sub: &SignedBidSubmission) -> bool {
-        self.forks
-            .get(sub.parent_hash())
-            .and_then(|s| s.curr_bid.as_ref())
-            .is_some_and(|c| c.1.block_hash == sub.message().block_hash)
+        is_top_bid
     }
 
     // TODO: should we return one hash per fork?
@@ -235,7 +230,7 @@ impl BidSorter {
         new_bid: BidEntry,
         trace: &mut SubmissionTrace,
         is_optimistic: bool,
-    ) {
+    ) -> bool {
         let state = self.forks.entry(new_bid.parent_hash).or_insert_with(|| ForkState::default());
         match state.bids.entry(new_pubkey) {
             Entry::Occupied(mut entry) => {
@@ -243,7 +238,7 @@ impl BidSorter {
                 if entry.version >= new_bid.version {
                     trace!("bid is stale, ignore");
                     // stale
-                    return;
+                    return false;
                 } else {
                     *entry = new_bid;
                 }
@@ -266,6 +261,8 @@ impl BidSorter {
                         is_optimistic,
                         &self.top_bid_tx,
                     );
+
+                    true
                 } else if new_pubkey == *curr_pubkey {
                     // this was a cancel, need to check all other bids
                     trace!("cancel submission, traversing");
@@ -275,6 +272,11 @@ impl BidSorter {
                         is_optimistic,
                         &self.top_bid_tx,
                     );
+
+                    false
+                } else {
+                    // new bid lower than best
+                    false
                 }
             }
 
@@ -287,6 +289,8 @@ impl BidSorter {
                     is_optimistic,
                     &self.top_bid_tx,
                 );
+
+                true
             }
         }
     }
