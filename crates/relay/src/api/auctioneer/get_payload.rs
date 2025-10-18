@@ -10,13 +10,17 @@ use helix_types::{
 use tokio::sync::oneshot;
 use tracing::{info, warn};
 
-use crate::api::{
-    auctioneer::{
-        context::Context,
-        types::{GetPayloadResult, GetPayloadResultData, PayloadEntry, PendingPayload, SlotData},
+use crate::{
+    api::{
+        auctioneer::{
+            context::Context,
+            types::{
+                GetPayloadResult, GetPayloadResultData, PayloadEntry, PendingPayload, SlotData,
+            },
+        },
+        proposer::ProposerApiError,
     },
-    gossiper::types::BroadcastPayloadParams,
-    proposer::ProposerApiError,
+    gossip::BroadcastPayloadParams,
 };
 
 impl Context {

@@ -21,12 +21,12 @@ use crate::{
     api::{
         Api,
         auctioneer::{AuctioneerHandle, RegWorkerHandle},
-        gossiper::grpc_gossiper::GrpcGossiperClientManager,
         proposer::block_merging::BestMergedBlock,
         router::Terminating,
     },
     beacon::multi_beacon_client::MultiBeaconClient,
     database::postgres::postgres_db_service::PostgresDatabaseService,
+    gossip::GrpcGossiperClientManager,
     housekeeper::CurrentSlotInfo,
 };
 

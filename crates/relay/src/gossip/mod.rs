@@ -1,14 +1,27 @@
+mod client;
+mod error;
+mod types;
+mod grpc {
+    #![allow(clippy::all)]
+    include!("./generated/gossip.rs");
+}
+
+pub use client::GrpcGossiperClientManager;
+pub use types::{BroadcastGetPayloadParams, BroadcastPayloadParams};
+
 use std::sync::Arc;
 
 use helix_common::{GetPayloadTrace, spawn_tracked, utils::utcnow_ns};
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 
-use crate::api::{
-    Api,
-    builder::api::BuilderApi,
-    gossiper::types::GossipedMessage,
-    proposer::{ProposerApi, get_payload::ProposerApiVersion},
+use crate::{
+    api::{
+        Api,
+        builder::api::BuilderApi,
+        proposer::{ProposerApi, get_payload::ProposerApiVersion},
+    },
+    gossip::types::GossipedMessage,
 };
 
 pub async fn process_gossip_messages<A: Api>(

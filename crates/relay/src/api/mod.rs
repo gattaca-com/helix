@@ -8,18 +8,12 @@ pub use service::start_api_service;
 pub mod admin_service;
 pub mod auctioneer;
 pub mod builder;
-pub mod gossip;
-pub mod gossiper;
 pub mod integration_tests;
 pub mod middleware;
 pub mod proposer;
 pub mod relay_data;
 pub mod router;
 pub mod service;
-
-mod grpc {
-    include!(concat!(env!("OUT_DIR"), "/gossip.rs"));
-}
 
 pub fn start_admin_service(auctioneer: Arc<LocalCache>, config: &RelayConfig) {
     tokio::spawn(admin_service::run_admin_service(auctioneer, config.clone()));

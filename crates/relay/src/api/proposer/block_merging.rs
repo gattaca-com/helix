@@ -16,11 +16,13 @@ use tokio::{
 };
 use tracing::{debug, error, info, warn};
 
-use crate::api::{
-    Api,
-    auctioneer::{BlockMergeRequest, BlockMergeResponse, PayloadBidData, PayloadHeaderData},
-    gossiper::types::BroadcastPayloadParams,
-    proposer::{ProposerApi, error::ProposerApiError},
+use crate::{
+    api::{
+        Api,
+        auctioneer::{BlockMergeRequest, BlockMergeResponse, PayloadBidData, PayloadHeaderData},
+        proposer::{ProposerApi, error::ProposerApiError},
+    },
+    gossip::BroadcastPayloadParams,
 };
 
 struct BestMergedBlockEntry {

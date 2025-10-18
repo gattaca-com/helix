@@ -1,6 +1,7 @@
 mod api;
 mod beacon;
 mod database;
+mod gossip;
 mod housekeeper;
 mod network;
 mod website;
