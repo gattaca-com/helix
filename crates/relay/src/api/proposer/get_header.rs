@@ -187,15 +187,22 @@ impl<A: Api> ProposerApi<A> {
         let bid = bid.into_builder_bid_slow();
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
 
-        spawn_tracked!(
-            async move {
-                info!("gossiping payload");
-                proposer_api
-                    .gossip_payload(params.slot.into(), &params.pubkey, &payload_and_blobs, fork)
-                    .await;
-            }
-            .in_current_span()
-        );
+        if proposer_api.relay_config.gossip_payload_on_header {
+            spawn_tracked!(
+                async move {
+                    info!("gossiping payload");
+                    proposer_api
+                        .gossip_payload(
+                            params.slot.into(),
+                            &params.pubkey,
+                            &payload_and_blobs,
+                            fork,
+                        )
+                        .await;
+                }
+                .in_current_span()
+            );
+        }
 
         let signed_bid = serde_json::to_value(signed_bid)?;
         info!(block_hash =% bid_block_hash, ?value, "delivering bid");
