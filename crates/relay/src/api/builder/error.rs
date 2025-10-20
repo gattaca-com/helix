@@ -102,7 +102,6 @@ impl BuilderApiError {
         match self {
             Self::DeliveringPayload { .. } |
             Self::ProposerDutyNotFound |
-            Self::BidValidation(BlockValidationError::DuplicateBlockHash { .. }) |
             Self::BidValidation(BlockValidationError::OutOfSequence { .. }) |
             Self::BidValidation(BlockValidationError::AlreadyProcessingNewerPayload) |
             Self::BidValidation(BlockValidationError::SubmissionForWrongSlot { .. }) |
