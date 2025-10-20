@@ -35,7 +35,6 @@ impl Context {
         };
 
         self.staleness_check(submission.builder_public_key(), version)?;
-        self.check_duplicate_submission(*submission.block_hash())?;
         self.validate_submission_data(submission, withdrawals_root, slot_data, payload_attributes)?;
         self.check_if_trusted_builder(builder_info, slot_data)?;
 
@@ -93,14 +92,6 @@ impl Context {
                 got: *withdrawals_root,
                 expected: payload_attributes.withdrawals_root,
             });
-        }
-
-        Ok(())
-    }
-
-    fn check_duplicate_submission(&mut self, block_hash: B256) -> Result<(), BlockValidationError> {
-        if !self.seen_block_hashes.insert(block_hash) {
-            return Err(BlockValidationError::DuplicateBlockHash { block_hash });
         }
 
         Ok(())
