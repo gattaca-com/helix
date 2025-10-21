@@ -14,7 +14,7 @@ use helix_types::{
 };
 use http::StatusCode;
 use tokio::time::sleep;
-use tracing::{error, info, warn};
+use tracing::{Instrument, error, info, warn};
 
 use super::ProposerApi;
 use crate::{
@@ -75,14 +75,19 @@ impl<A: Api> ProposerApi<A> {
 
         let slot = signed_blinded_block.message().slot();
 
-        // Broadcast get payload request
-        proposer_api
-            .gossiper
-            .broadcast_get_payload(BroadcastGetPayloadParams {
-                signed_blinded_beacon_block: signed_blinded_block.clone(),
-                request_id,
-            })
-            .await;
+        let gossiper = proposer_api.gossiper.clone();
+        let params = BroadcastGetPayloadParams {
+            signed_blinded_beacon_block: signed_blinded_block.clone(),
+            request_id,
+        };
+
+        spawn_tracked!(
+            async move {
+                info!("gossiping get payload");
+                gossiper.broadcast_get_payload(params).await;
+            }
+            .in_current_span()
+        );
 
         match proposer_api
             ._get_payload(signed_blinded_block, &mut trace, user_agent, ProposerApiVersion::V1)

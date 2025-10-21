@@ -57,6 +57,8 @@ pub struct RelayConfig {
     is_local_dev: bool,
     /// Cores configuration, recommended to be set for production use
     pub cores: CoresConfig,
+    #[serde(default = "default_bool::<true>")]
+    pub gossip_payload_on_header: bool,
 }
 
 impl RelayConfig {
@@ -90,6 +92,7 @@ impl RelayConfig {
                 sub_workers: vec![],
                 reg_workers: vec![],
             },
+            gossip_payload_on_header: false,
         }
     }
 }
