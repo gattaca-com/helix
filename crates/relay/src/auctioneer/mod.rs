@@ -245,7 +245,7 @@ impl State {
                     if let Some(update) = payload_attributes &&
                         !slot_data.payload_attributes_map.contains_key(&update.parent_hash)
                     {
-                        info!(received =? update.parent_hash, sorting =? slot_data.payload_attributes_map.keys(), "sorting for an additional fork");
+                        info!(bid_slot =% slot_data.bid_slot, received =? update.parent_hash, sorting =? slot_data.payload_attributes_map.keys(), "sorting for an additional fork");
 
                         // ugly clone but should be relatively rare
                         let mut slot_data = slot_data.clone();
@@ -480,25 +480,19 @@ impl State {
             }
 
             // gossiped payload, proposer equivocating?
-            (
-                State::Broadcasting { block_hash, slot_data: slot_ctx },
-                Event::GossipPayload(payload),
-            ) => {
+            (State::Broadcasting { block_hash, slot_data }, Event::GossipPayload(payload)) => {
                 if *block_hash == payload.execution_payload.execution_payload.block_hash &&
-                    slot_ctx.bid_slot == payload.slot &&
-                    slot_ctx.proposer_pubkey() == &payload.proposer_pub_key
+                    slot_data.bid_slot == payload.slot &&
+                    slot_data.proposer_pubkey() == &payload.proposer_pub_key
                 {
                     debug!("already broadcasting gossip payload");
                 } else {
-                    // is the proposer equivocating across regions?
-                    warn!(
-                        have.block_hash =% block_hash,
-                        have.slot =% slot_ctx.bid_slot,
-                        have.pubkey =%  slot_ctx.proposer_pubkey(),
-                        got.block_hash =% payload.execution_payload.execution_payload.block_hash,
-                        got.slot = payload.slot,
-                        got.pubkey =% &payload.proposer_pub_key,
-                        "mismatch in broadcasting / gossip payload")
+                    // ignore gossiped payload, get payload has already being served
+                    info!(
+                        broadcast.block_hash =% block_hash,
+                        gossip.block_hash =% payload.execution_payload.execution_payload.block_hash,
+                        slot =% slot_data.bid_slot,
+                        "ignoring gossiped payload while broadcasting")
                 }
             }
 
@@ -544,7 +538,10 @@ impl State {
 
             // gossip payload unregistered
             (State::Slot { bid_slot, .. }, Event::GossipPayload(payload)) => {
-                warn!(curr =% bid_slot, gossip_slot = payload.slot, "received early or late gossip payload");
+                // avoid logging if just one slot late
+                if bid_slot.as_u64() != payload.slot + 1 {
+                    warn!(curr =% bid_slot, gossip_slot = payload.slot, "received early or late gossip payload");
+                }
             }
 
             // merging
