@@ -14,7 +14,7 @@ use crate::{
     auctioneer::{
         context::Context,
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
-        types::{PayloadEntry, SlotData, Submission, SubmissionResult},
+        types::{PayloadEntry, SlotData, Submission, SubmissionData, SubmissionResult},
     },
     housekeeper::PayloadAttributesUpdate,
 };
@@ -22,22 +22,11 @@ use crate::{
 impl Context {
     pub(super) fn handle_submission(
         &mut self,
-        submission: Submission,
-        version: SubmissionVersion,
-        merging_preferences: BlockMergingPreferences,
-        withdrawals_root: B256,
-        mut trace: SubmissionTrace,
+        submission_data: SubmissionData,
         res_tx: oneshot::Sender<SubmissionResult>,
         slot_data: &SlotData,
     ) {
-        match self.validate_and_sort(
-            submission,
-            version,
-            withdrawals_root,
-            &mut trace,
-            slot_data,
-            merging_preferences,
-        ) {
+        match self.validate_and_sort(submission_data, slot_data) {
             Ok((validated, optimistic_version)) => {
                 let res_tx = if optimistic_version.is_optimistic() {
                     let _ = res_tx.send(Ok(()));
@@ -46,7 +35,7 @@ impl Context {
                     Some(res_tx)
                 };
 
-                self.simulate_and_store(validated, trace, res_tx, slot_data);
+                self.simulate_and_store(validated, res_tx, slot_data);
             }
 
             Err(err) => {
@@ -89,14 +78,10 @@ impl Context {
 
     fn validate_and_sort<'a>(
         &mut self,
-        submission: Submission,
-        version: SubmissionVersion,
-        withdrawals_root: B256,
-        trace: &mut SubmissionTrace,
+        mut submission_data: SubmissionData,
         slot_data: &'a SlotData,
-        merging_preferences: BlockMergingPreferences,
     ) -> Result<(ValidatedData<'a>, OptimisticVersion), BuilderApiError> {
-        let (submission, maybe_tx_root) = match submission {
+        let (submission, maybe_tx_root) = match submission_data.submission {
             Submission::Full(full) => (full, None),
             Submission::Dehydrated(dehydrated) => {
                 trace!("hydrating submission");
@@ -134,8 +119,8 @@ impl Context {
         let start_val = Instant::now();
         let payload_attributes = self.validate_submission(
             &submission,
-            version,
-            &withdrawals_root,
+            submission_data.version,
+            &submission_data.withdrawals_root,
             &builder_info,
             slot_data,
         )?;
@@ -146,8 +131,13 @@ impl Context {
             if self.sim_manager.can_process_optimistic_submission() &&
                 self.should_process_optimistically(&submission, &builder_info, slot_data)
             {
-                let is_top_bid =
-                    self.bid_sorter.sort(version, &submission, trace, merging_preferences, true);
+                let is_top_bid = self.bid_sorter.sort(
+                    submission_data.version,
+                    &submission,
+                    &mut submission_data.trace,
+                    submission_data.merging_preferences,
+                    true,
+                );
                 (OptimisticVersion::V1, is_top_bid)
             } else {
                 (OptimisticVersion::NotOptimistic, false)
@@ -157,9 +147,10 @@ impl Context {
             submission,
             tx_root: maybe_tx_root,
             payload_attributes,
-            merging_preferences,
-            version,
+            merging_preferences: submission_data.merging_preferences,
+            version: submission_data.version,
             is_top_bid,
+            trace: submission_data.trace,
         };
 
         Ok((validated, optimistic_version))
@@ -168,7 +159,6 @@ impl Context {
     fn simulate_and_store(
         &mut self,
         validated: ValidatedData,
-        trace: SubmissionTrace,
         res_tx: Option<oneshot::Sender<SubmissionResult>>,
         slot_data: &SlotData,
     ) {
@@ -188,7 +178,7 @@ impl Context {
             res_tx,
             submission: validated.submission.clone(),
             merging_preferences: validated.merging_preferences,
-            trace,
+            trace: validated.trace,
             tx_root: validated.tx_root,
             version: validated.version,
         };
@@ -231,4 +221,5 @@ struct ValidatedData<'a> {
     merging_preferences: BlockMergingPreferences,
     version: SubmissionVersion,
     is_top_bid: bool,
+    trace: SubmissionTrace,
 }

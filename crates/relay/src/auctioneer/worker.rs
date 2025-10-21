@@ -26,7 +26,7 @@ use crate::{
     },
     auctioneer::{
         decoder::SubmissionDecoder,
-        types::{Event, RegWorkerJob, SubWorkerJob, Submission},
+        types::{Event, RegWorkerJob, SubWorkerJob, Submission, SubmissionData},
     },
 };
 
@@ -171,13 +171,17 @@ impl SubWorker {
                         drop(guard);
 
                         if self.config.block_merging_config.is_enabled {
-                            let message = Event::Submission {
+                            let submission_data = SubmissionData {
                                 // TODO: move this to auctioneer, avoid clones
                                 submission: submission.clone(),
                                 version,
                                 merging_preferences,
                                 withdrawals_root,
                                 trace,
+                            };
+
+                            let message = Event::Submission {
+                                submission_data,
                                 res_tx,
                                 span,
                                 sent_at: Instant::now(),
@@ -211,12 +215,16 @@ impl SubWorker {
                                 };
                             }
                         } else {
-                            let message = Event::Submission {
+                            let submission_data = SubmissionData {
                                 submission,
                                 version,
                                 merging_preferences,
                                 withdrawals_root,
                                 trace,
+                            };
+
+                            let message = Event::Submission {
+                                submission_data,
                                 res_tx,
                                 span,
                                 sent_at: Instant::now(),

@@ -1,4 +1,8 @@
-use std::{ops::Range, sync::Arc, time::Instant};
+use std::{
+    ops::{Deref, Range},
+    sync::Arc,
+    time::Instant,
+};
 
 use alloy_primitives::{B256, U256};
 use helix_common::{
@@ -36,6 +40,22 @@ pub struct GetPayloadResultData {
     pub to_publish: VersionedSignedProposal,
     pub trace: GetPayloadTrace,
     pub fork: ForkName,
+}
+
+pub struct SubmissionData {
+    pub submission: Submission,
+    pub merging_preferences: BlockMergingPreferences,
+    pub version: SubmissionVersion,
+    pub withdrawals_root: B256,
+    pub trace: SubmissionTrace,
+}
+
+impl Deref for SubmissionData {
+    type Target = Submission;
+
+    fn deref(&self) -> &Self::Target {
+        &self.submission
+    }
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -243,11 +263,7 @@ pub enum Event {
         il: Option<InclusionListWithMetadata>,
     },
     Submission {
-        submission: Submission,
-        version: SubmissionVersion,
-        merging_preferences: BlockMergingPreferences,
-        withdrawals_root: B256,
-        trace: SubmissionTrace,
+        submission_data: SubmissionData,
         res_tx: oneshot::Sender<SubmissionResult>,
         span: tracing::Span,
         sent_at: Instant,

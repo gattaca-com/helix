@@ -231,7 +231,7 @@ impl BidSorter {
         trace: &mut SubmissionTrace,
         is_optimistic: bool,
     ) -> bool {
-        let state = self.forks.entry(new_bid.parent_hash).or_insert_with(|| ForkState::default());
+        let state = self.forks.entry(new_bid.parent_hash).or_default();
         match state.bids.entry(new_pubkey) {
             Entry::Occupied(mut entry) => {
                 let entry = entry.get_mut();

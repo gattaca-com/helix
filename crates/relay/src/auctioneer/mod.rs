@@ -333,31 +333,14 @@ impl State {
             // submission
             (
                 State::Sorting(slot_data),
-                Event::Submission {
-                    submission,
-                    version,
-                    merging_preferences,
-                    withdrawals_root,
-                    trace,
-                    res_tx,
-                    span,
-                    sent_at,
-                },
+                Event::Submission { submission_data, res_tx, span, sent_at },
             ) => {
                 record_submission_step("loop_recv", sent_at.elapsed());
 
                 let _guard = span.enter();
                 trace!("received in auctioneer");
 
-                ctx.handle_submission(
-                    submission,
-                    version,
-                    merging_preferences,
-                    withdrawals_root,
-                    trace,
-                    res_tx,
-                    slot_data,
-                );
+                ctx.handle_submission(submission_data, res_tx, slot_data);
 
                 trace!("finished processing");
                 drop(_guard);
@@ -466,10 +449,10 @@ impl State {
             // late submission
             (
                 State::Broadcasting { slot_data: slot_ctx, .. },
-                Event::Submission { submission, res_tx, .. },
+                Event::Submission { submission_data, res_tx, .. },
             ) => {
                 let _ = res_tx.send(Err(BuilderApiError::DeliveringPayload {
-                    bid_slot: submission.bid_slot(),
+                    bid_slot: submission_data.bid_slot(),
                     delivering: slot_ctx.bid_slot.as_u64(),
                 }));
             }
@@ -520,15 +503,15 @@ impl State {
             }
 
             // submission unregistered
-            (State::Slot { bid_slot, .. }, Event::Submission { res_tx, submission, .. }) => {
-                if submission.bid_slot() == bid_slot.as_u64() {
+            (State::Slot { bid_slot, .. }, Event::Submission { res_tx, submission_data, .. }) => {
+                if submission_data.bid_slot() == bid_slot.as_u64() {
                     // either not registered or waiting for full data from housekepper
                     let _ = res_tx.send(Err(BuilderApiError::ProposerDutyNotFound));
                 } else {
                     let _ = res_tx.send(Err(BuilderApiError::BidValidation(
                         helix_types::BlockValidationError::SubmissionForWrongSlot {
                             expected: *bid_slot,
-                            got: submission.bid_slot().into(),
+                            got: submission_data.bid_slot().into(),
                         },
                     )));
                 }
