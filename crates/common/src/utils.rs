@@ -101,8 +101,7 @@ pub async fn init_tracing_log(
     }
 }
 
-const CRATES: &[&str] =
-    &["api", "beacon", "common", "database", "housekeeper", "network", "types", "website"];
+const CRATES: &[&str] = &["common", "relay", "simulator", "types"];
 
 fn get_crate_filter(crates_level: tracing::Level) -> EnvFilter {
     let mut env_filter = EnvFilter::new("info");
