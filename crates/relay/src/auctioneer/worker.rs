@@ -13,6 +13,7 @@ use helix_types::{
     BlockMergingData, BlockMergingPreferences, BlsPublicKey, BlsPublicKeyBytes,
     DehydratedBidSubmission, ExecPayload, SigError, SignedBidSubmission,
     SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock, SignedValidatorRegistration,
+    SubmissionVersion,
 };
 use http::HeaderValue;
 use tracing::{error, info, info_span, trace, warn};
@@ -151,7 +152,7 @@ impl SubWorker {
                 let guard = span.enter();
                 trace!("received by worker");
                 match self.handle_block_submission(headers, body, &mut trace) {
-                    Ok((submission, withdrawals_root, sequence, merging_data)) => {
+                    Ok((submission, withdrawals_root, version, merging_data)) => {
                         let merging_preferences = merging_data
                             .as_ref()
                             .map(|m| BlockMergingPreferences { allow_appending: m.allow_appending })
@@ -173,9 +174,9 @@ impl SubWorker {
                             let message = Event::Submission {
                                 // TODO: move this to auctioneer, avoid clones
                                 submission: submission.clone(),
+                                version,
                                 merging_preferences,
                                 withdrawals_root,
-                                sequence,
                                 trace,
                                 res_tx,
                                 span,
@@ -212,9 +213,9 @@ impl SubWorker {
                         } else {
                             let message = Event::Submission {
                                 submission,
+                                version,
                                 merging_preferences,
                                 withdrawals_root,
-                                sequence,
                                 trace,
                                 res_tx,
                                 span,
@@ -274,7 +275,8 @@ impl SubWorker {
         headers: http::HeaderMap,
         body: bytes::Bytes,
         trace: &mut SubmissionTrace,
-    ) -> Result<(Submission, B256, Option<u64>, Option<BlockMergingData>), BuilderApiError> {
+    ) -> Result<(Submission, B256, SubmissionVersion, Option<BlockMergingData>), BuilderApiError>
+    {
         let mut decoder = SubmissionDecoder::from_headers(&headers);
         let body = decoder.decompress(body)?;
         let has_mergeable_data = matches!(headers.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"));
@@ -330,7 +332,8 @@ impl SubWorker {
         let withdrawals_root = submission.withdrawal_root();
         trace!("withdrawals root done");
 
-        Ok((submission, withdrawals_root, sequence, merging_data))
+        let version = SubmissionVersion::new(trace.receive, sequence);
+        Ok((submission, withdrawals_root, version, merging_data))
     }
 
     fn handle_get_payload(

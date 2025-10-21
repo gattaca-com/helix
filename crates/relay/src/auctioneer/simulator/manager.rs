@@ -11,7 +11,9 @@ use helix_common::{
     SimulatorConfig, SubmissionTrace, bid_submission::OptimisticVersion, is_local_dev,
     metrics::SimulatorMetrics, record_submission_step, simulator::BlockSimError, spawn_tracked,
 };
-use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission};
+use helix_types::{
+    BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion,
+};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, warn};
 
@@ -49,6 +51,7 @@ pub struct SimulationResultInner {
     pub merging_preferences: BlockMergingPreferences,
     pub trace: SubmissionTrace,
     pub optimistic_version: OptimisticVersion,
+    pub version: SubmissionVersion,
 }
 
 // TODO:
@@ -233,6 +236,7 @@ impl SimulatorManager {
                     merging_preferences: req.merging_preferences,
                     trace: req.trace,
                     optimistic_version,
+                    version: req.version,
                 }),
             );
 

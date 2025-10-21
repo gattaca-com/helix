@@ -12,13 +12,15 @@ use helix_common::{
     record_submission_step_ns,
     utils::{avg_duration, utcnow_ns},
 };
-use helix_types::{BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission};
+use helix_types::{
+    BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{info, trace};
 
 #[derive(Clone, Copy)]
 pub struct BidEntry {
-    on_receive_ns: u64,
+    version: SubmissionVersion,
     value: U256,
 
     block_hash: B256,
@@ -32,7 +34,7 @@ pub struct BidEntry {
 
 impl BidEntry {
     fn new(
-        on_receive_ns: u64,
+        version: SubmissionVersion,
         submission: &SignedBidSubmission,
         merging: BlockMergingPreferences,
     ) -> Self {
@@ -40,7 +42,7 @@ impl BidEntry {
         let payload = submission.execution_payload_ref();
 
         Self {
-            on_receive_ns,
+            version,
             value: bid_trace.value,
             block_hash: payload.block_hash,
             block_number: payload.block_number,
@@ -178,6 +180,7 @@ impl BidSorter {
 
     pub fn sort(
         &mut self,
+        version: SubmissionVersion,
         submission: &SignedBidSubmission,
         trace: &mut SubmissionTrace,
         merging_preferences: BlockMergingPreferences,
@@ -187,7 +190,7 @@ impl BidSorter {
 
         let bid_trace = submission.bid_trace();
         assert_eq!(bid_trace.slot, self.curr_bid_slot);
-        let bid = BidEntry::new(trace.receive, submission, merging_preferences);
+        let bid = BidEntry::new(version, submission, merging_preferences);
         let builder_pubkey = bid_trace.builder_pubkey;
 
         let start = Instant::now();
@@ -237,7 +240,7 @@ impl BidSorter {
         match state.bids.entry(new_pubkey) {
             Entry::Occupied(mut entry) => {
                 let entry = entry.get_mut();
-                if entry.on_receive_ns >= new_bid.on_receive_ns {
+                if entry.version >= new_bid.version {
                     trace!("bid is stale, ignore");
                     // stale
                     return;

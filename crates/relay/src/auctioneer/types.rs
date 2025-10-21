@@ -13,7 +13,7 @@ use helix_types::{
     BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission,
     ExecutionPayload, ExecutionRequests, ForkName, GetPayloadResponse, PayloadAndBlobs,
     SignedBidSubmission, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot,
-    VersionedSignedProposal, mock_public_key_bytes,
+    SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
 };
 use rustc_hash::FxHashMap;
 use tokio::sync::oneshot;
@@ -244,9 +244,9 @@ pub enum Event {
     },
     Submission {
         submission: Submission,
+        version: SubmissionVersion,
         merging_preferences: BlockMergingPreferences,
         withdrawals_root: B256,
-        sequence: Option<u64>,
         trace: SubmissionTrace,
         res_tx: oneshot::Sender<SubmissionResult>,
         span: tracing::Span,

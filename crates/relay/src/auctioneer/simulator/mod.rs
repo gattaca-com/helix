@@ -8,7 +8,7 @@ use helix_common::{
 use helix_types::{
     BidTrace, BlobsBundle, BlockMergingPreferences, BlsPublicKeyBytes, BlsSignatureBytes,
     BuilderInclusionResult, ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin,
-    SignedBidSubmission,
+    SignedBidSubmission, SubmissionVersion,
 };
 use serde_json::json;
 use tokio::sync::oneshot;
@@ -134,6 +134,7 @@ pub struct BlockMergeResponse {
 pub struct SimulatorRequest {
     pub request: BlockSimRequest,
     pub is_top_bid: bool,
+    pub version: SubmissionVersion,
     pub submission: SignedBidSubmission,
     /// None if optimistic
     pub res_tx: Option<oneshot::Sender<SubmissionResult>>,

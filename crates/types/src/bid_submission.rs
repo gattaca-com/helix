@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{cmp::Ordering, sync::Arc};
 
 use alloy_primitives::{Address, B256, U256};
 use lh_types::{ForkName, SignedRoot, Slot, test_utils::TestRandom};
@@ -633,6 +633,43 @@ impl SignedBidSubmission {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct SubmissionVersion {
+    on_receive_ns: u64,
+    sequence: Option<u64>,
+}
+
+impl SubmissionVersion {
+    pub fn new(on_receive_ns: u64, sequence: Option<u64>) -> Self {
+        Self { on_receive_ns, sequence }
+    }
+}
+
+impl std::fmt::Debug for SubmissionVersion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(seq) = self.sequence {
+            write!(f, "(recv_ns: {}, seq: {})", self.on_receive_ns, seq)
+        } else {
+            write!(f, "(recv_ns: {})", self.on_receive_ns)
+        }
+    }
+}
+
+impl Ord for SubmissionVersion {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.sequence, other.sequence) {
+            (Some(a), Some(b)) => a.cmp(&b),
+            _ => self.on_receive_ns.cmp(&other.on_receive_ns),
+        }
+    }
+}
+
+impl PartialOrd for SubmissionVersion {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum BlockValidationError {
     #[error("submission for wrong slot. expected: {expected}, got: {got}")]
@@ -680,8 +717,8 @@ pub enum BlockValidationError {
     #[error("already processing newer payload for this builder")]
     AlreadyProcessingNewerPayload,
 
-    #[error("out of sequence submission: seen: {seen}, this request: {this}")]
-    OutOfSequence { seen: u64, this: u64 },
+    #[error("out of sequence submission: seen: {seen:?}, this request: {this:?}")]
+    OutOfSequence { seen: SubmissionVersion, this: SubmissionVersion },
 
     #[error("zero value block")]
     ZeroValueBlock,

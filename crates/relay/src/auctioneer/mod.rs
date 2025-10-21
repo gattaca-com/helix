@@ -335,9 +335,9 @@ impl State {
                 State::Sorting(slot_data),
                 Event::Submission {
                     submission,
+                    version,
                     merging_preferences,
                     withdrawals_root,
-                    sequence,
                     trace,
                     res_tx,
                     span,
@@ -351,9 +351,9 @@ impl State {
 
                 ctx.handle_submission(
                     submission,
+                    version,
                     merging_preferences,
                     withdrawals_root,
-                    sequence,
                     trace,
                     res_tx,
                     slot_data,
