@@ -726,9 +726,6 @@ pub enum BlockValidationError {
     #[error("builder not in proposer's trusted list: {proposer_trusted_builders:?}")]
     BuilderNotInProposersTrustedList { proposer_trusted_builders: Vec<String> },
 
-    #[error("block already received: {block_hash:?}")]
-    DuplicateBlockHash { block_hash: B256 },
-
     #[error("ssz_error: {0:?}")]
     SszError(SszError),
 

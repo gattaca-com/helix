@@ -10,7 +10,7 @@ use helix_common::{
     metrics::SimulatorMetrics, spawn_tracked,
 };
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use tracing::{error, info, warn};
 
 use crate::{
@@ -29,7 +29,6 @@ pub struct SlotContext {
     pub bid_slot: Slot,
     pub pending_payload: Option<PendingPayload>,
     pub bid_sorter: BidSorter,
-    pub seen_block_hashes: FxHashSet<B256>,
     /// builder -> version
     pub version: FxHashMap<BlsPublicKeyBytes, SubmissionVersion>,
     pub hydration_cache: HydrationCache,
@@ -72,10 +71,6 @@ impl Context {
             bid_slot: Slot::new(0),
             pending_payload: None,
             bid_sorter,
-            seen_block_hashes: FxHashSet::with_capacity_and_hasher(
-                EXPECTED_PAYLOADS_PER_SLOT,
-                Default::default(),
-            ),
             version: FxHashMap::with_capacity_and_hasher(
                 EXPECTED_BUILDERS_PER_SLOT,
                 Default::default(),
@@ -161,7 +156,6 @@ impl Context {
                 .send(Err(crate::api::proposer::ProposerApiError::NoExecutionPayloadFound));
         }
         self.bid_sorter.process_slot(bid_slot.as_u64());
-        self.seen_block_hashes.clear();
         self.version.clear();
         self.hydration_cache.clear();
         self.sim_manager.on_new_slot(bid_slot.as_u64());
