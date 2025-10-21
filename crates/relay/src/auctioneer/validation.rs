@@ -2,31 +2,43 @@ use alloy_primitives::B256;
 use helix_common::BuilderInfo;
 use helix_types::{BlockValidationError, BlsPublicKeyBytes, SignedBidSubmission};
 
-use crate::auctioneer::{context::Context, types::SlotData};
+use crate::{
+    auctioneer::{context::Context, types::SlotData},
+    housekeeper::PayloadAttributesUpdate,
+};
 
 impl Context {
-    pub fn validate_submission(
+    pub fn validate_submission<'a>(
         &mut self,
-        payload: &SignedBidSubmission,
+        submission: &SignedBidSubmission,
         withdrawals_root: &B256,
         sequence: Option<u64>,
         builder_info: &BuilderInfo,
-        slot_data: &SlotData,
+        slot_data: &'a SlotData,
         on_receive_ns: u64,
-    ) -> Result<(), BlockValidationError> {
-        if payload.slot() != self.bid_slot {
+    ) -> Result<&'a PayloadAttributesUpdate, BlockValidationError> {
+        if submission.slot() != self.bid_slot {
             return Err(BlockValidationError::SubmissionForWrongSlot {
                 expected: self.bid_slot,
-                got: payload.slot(),
+                got: submission.slot(),
             });
         }
 
-        self.staleness_check(payload.builder_public_key(), on_receive_ns, sequence)?;
-        self.check_duplicate_submission(*payload.block_hash())?;
-        self.validate_submission_data(payload, withdrawals_root, slot_data)?;
+        let Some(payload_attributes) =
+            slot_data.payload_attributes_map.get(submission.parent_hash())
+        else {
+            return Err(BlockValidationError::UknnownParentHash {
+                submission: *submission.parent_hash(),
+                have: slot_data.payload_attributes_map.keys().cloned().collect(),
+            });
+        };
+
+        self.staleness_check(submission.builder_public_key(), on_receive_ns, sequence)?;
+        self.check_duplicate_submission(*submission.block_hash())?;
+        self.validate_submission_data(submission, withdrawals_root, slot_data, payload_attributes)?;
         self.check_if_trusted_builder(builder_info, slot_data)?;
 
-        Ok(())
+        Ok(payload_attributes)
     }
 
     fn validate_submission_data(
@@ -34,6 +46,7 @@ impl Context {
         payload: &SignedBidSubmission,
         withdrawals_root: &B256,
         slot_data: &SlotData,
+        payload_attributes: &PayloadAttributesUpdate,
     ) -> Result<(), BlockValidationError> {
         if slot_data.current_fork != payload.fork_name() {
             return Err(BlockValidationError::InvalidPayloadType {
@@ -44,10 +57,10 @@ impl Context {
         // checks internal consistency of the payload
         payload.validate()?;
 
-        if slot_data.payload_attributes.payload_attributes.timestamp != payload.timestamp() {
+        if payload_attributes.timestamp != payload.timestamp() {
             return Err(BlockValidationError::IncorrectTimestamp {
                 got: payload.timestamp(),
-                expected: slot_data.payload_attributes.payload_attributes.timestamp,
+                expected: payload_attributes.timestamp,
             });
         }
 
@@ -67,7 +80,6 @@ impl Context {
             });
         }
 
-        let payload_attributes = &slot_data.payload_attributes;
         if *payload.prev_randao() != payload_attributes.prev_randao {
             return Err(BlockValidationError::PrevRandaoMismatch {
                 got: *payload.prev_randao(),

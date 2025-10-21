@@ -1,6 +1,7 @@
+use alloy_primitives::B256;
 use helix_common::api::proposer_api::GetHeaderParams;
 use tokio::sync::oneshot;
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::{
     api::proposer::ProposerApiError,
@@ -14,11 +15,12 @@ impl Context {
         res_tx: oneshot::Sender<GetHeaderResult>,
     ) {
         assert_eq!(params.slot, self.bid_slot.as_u64(), "params should already be validated!");
-        let _ = res_tx.send(self.get_header());
+        let _ = res_tx.send(self.get_header(params.parent_hash));
     }
 
-    fn get_header(&self) -> GetHeaderResult {
-        let Some(best_block_hash) = self.bid_sorter.get_header() else {
+    fn get_header(&self, parent_hash: B256) -> GetHeaderResult {
+        let Some(best_block_hash) = self.bid_sorter.get_header(&parent_hash) else {
+            warn!(%parent_hash, "no bids for this fork");
             return Err(ProposerApiError::NoBidPrepared);
         };
 

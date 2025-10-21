@@ -15,6 +15,7 @@ use helix_types::{
     SignedBidSubmission, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot,
     VersionedSignedProposal, mock_public_key_bytes,
 };
+use rustc_hash::FxHashMap;
 use tokio::sync::oneshot;
 use tracing::debug;
 
@@ -72,6 +73,13 @@ impl Submission {
         match self {
             Submission::Full(s) => s.withdrawals_root(),
             Submission::Dehydrated(s) => s.withdrawal_root(),
+        }
+    }
+
+    pub fn parent_hash(&self) -> &B256 {
+        match self {
+            Submission::Full(s) => s.parent_hash(),
+            Submission::Dehydrated(s) => s.parent_hash(),
         }
     }
 }
@@ -196,8 +204,8 @@ pub struct SlotData {
     pub bid_slot: Slot,
     /// Data about the validator registration
     pub registration_data: BuilderGetValidatorsResponseEntry,
-    /// Payload attributes for the incoming blocks
-    pub payload_attributes: PayloadAttributesUpdate,
+    /// Parent hash -> payload attributes for the incoming blocks
+    pub payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,
     /// Current fork
     pub current_fork: ForkName,
     /// Inclusion list
