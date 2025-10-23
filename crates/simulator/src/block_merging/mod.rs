@@ -62,9 +62,10 @@ impl BlockMergingApi {
         &self,
         request: BlockMergeRequestV1,
     ) -> Result<BlockMergeResponseV1, BlockMergingApiError> {
+        let based_block_hash = request.execution_payload.payload_inner.payload_inner.parent_hash;
         info!(
             target: "rpc::relay::block_merging",
-            block_hash=%request.execution_payload.payload_inner.payload_inner.block_hash,
+            block_hash=%based_block_hash,
             tx_count=%request.execution_payload.payload_inner.payload_inner.transactions.len(),
             proposer_value=%request.original_value,
             "Merging block v1",
@@ -80,6 +81,7 @@ impl BlockMergingApi {
         // async fn to not be Send, which is required for spawning it.
         let (response, blob_versioned_hashes, request_cache) = self
             .merge_block(
+                based_block_hash,
                 request.original_value,
                 proposer_fee_recipient,
                 block,
@@ -149,6 +151,7 @@ impl BlockMergingApi {
     /// and the cached reads used during execution.
     async fn merge_block(
         &self,
+        base_block_hash: B256,
         original_value: U256,
         proposer_fee_recipient: Address,
         base_block: Block,
@@ -385,6 +388,7 @@ impl BlockMergingApi {
         let built_block = builder.finish(&state_provider)?;
 
         let response = BlockMergeResponseV1 {
+            base_block_hash,
             execution_payload: built_block.execution_payload,
             execution_requests: built_block.execution_requests,
             appended_blobs: built_block.appended_blob_versioned_hashes,

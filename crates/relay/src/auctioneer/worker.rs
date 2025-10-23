@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use alloy_primitives::B256;
 use helix_common::{
-    GetPayloadTrace, RelayConfig, SubmissionTrace,
+    GetPayloadTrace, SubmissionTrace,
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{WORKER_QUEUE_LEN, WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US, WORKER_UTIL},
@@ -10,19 +10,17 @@ use helix_common::{
     utils::{utcnow_ns, utcnow_sec},
 };
 use helix_types::{
-    BlockMergingData, BlockMergingPreferences, BlsPublicKey, BlsPublicKeyBytes,
-    DehydratedBidSubmission, ExecPayload, SigError, SignedBidSubmission,
-    SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock, SignedValidatorRegistration,
-    SubmissionVersion,
+    BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission, ExecPayload,
+    SigError, SignedBidSubmission, SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock,
+    SignedValidatorRegistration, SubmissionVersion,
 };
 use http::HeaderValue;
-use tracing::{error, info, info_span, trace, warn};
+use tracing::{error, info, info_span, trace};
 
 use crate::{
     api::{
         HEADER_API_KEY, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_SEQUENCE,
-        builder::{api::get_mergeable_orders, error::BuilderApiError},
-        proposer::{MergingPoolMessage, ProposerApiError},
+        builder::error::BuilderApiError, proposer::ProposerApiError,
     },
     auctioneer::{
         decoder::SubmissionDecoder,
@@ -89,11 +87,8 @@ impl Default for Telemetry {
 pub(super) struct SubWorker {
     id: String,
     tx: crossbeam_channel::Sender<Event>,
-    // TODO: move this to auctioneer
-    merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
     cache: LocalCache,
     chain_info: ChainInfo,
-    config: RelayConfig,
     tel: Telemetry,
 }
 
@@ -101,20 +96,10 @@ impl SubWorker {
     pub fn new(
         id: usize,
         tx: crossbeam_channel::Sender<Event>,
-        merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
         cache: LocalCache,
         chain_info: ChainInfo,
-        config: RelayConfig,
     ) -> Self {
-        Self {
-            id: format!("submission_{id}"),
-            tx,
-            merge_pool_tx,
-            cache,
-            chain_info,
-            config,
-            tel: Telemetry::default(),
-        }
+        Self { id: format!("submission_{id}"), tx, cache, chain_info, tel: Telemetry::default() }
     }
 
     pub(super) fn run(mut self, rx: crossbeam_channel::Receiver<SubWorkerJob>) {
@@ -153,11 +138,6 @@ impl SubWorker {
                 trace!("received by worker");
                 match self.handle_block_submission(headers, body, &mut trace) {
                     Ok((submission, withdrawals_root, version, merging_data)) => {
-                        let merging_preferences = merging_data
-                            .as_ref()
-                            .map(|m| BlockMergingPreferences { allow_appending: m.allow_appending })
-                            .unwrap_or_default();
-
                         tracing::Span::current()
                             .record("bid_slot", tracing::field::display(submission.bid_slot()));
                         tracing::Span::current()
@@ -170,69 +150,23 @@ impl SubWorker {
                         trace!("sending to auctioneer");
                         drop(guard);
 
-                        if self.config.block_merging_config.is_enabled {
-                            let submission_data = SubmissionData {
-                                // TODO: move this to auctioneer, avoid clones
-                                submission: submission.clone(),
-                                version,
-                                merging_preferences,
-                                withdrawals_root,
-                                trace,
-                            };
+                        let submission_data = SubmissionData {
+                            submission: submission.clone(),
+                            version,
+                            merging_data,
+                            withdrawals_root,
+                            trace,
+                        };
 
-                            let message = Event::Submission {
-                                submission_data,
-                                res_tx,
-                                span,
-                                sent_at: Instant::now(),
-                            };
+                        let message = Event::Submission {
+                            submission_data,
+                            res_tx,
+                            span,
+                            sent_at: Instant::now(),
+                        };
 
-                            if self.tx.try_send(message).is_err() {
-                                error!("failed sending submisison to auctioneer");
-                            }
-
-                            if let Some(merging_data) = merging_data {
-                                let Submission::Full(payload) = submission else {
-                                    return;
-                                };
-
-                                let mergeable_orders =
-                                    match get_mergeable_orders(&payload, merging_data) {
-                                        Ok(orders) => orders,
-                                        Err(err) => {
-                                            warn!(%err, "failed to get mergeable orders");
-                                            return;
-                                        }
-                                    };
-
-                                if mergeable_orders.orders.is_empty() {
-                                    return;
-                                }
-
-                                let message = MergingPoolMessage::new(&payload, mergeable_orders);
-                                if let Err(err) = self.merge_pool_tx.try_send(message) {
-                                    error!(?err, "failed to send mergeable orders to merging pool");
-                                };
-                            }
-                        } else {
-                            let submission_data = SubmissionData {
-                                submission,
-                                version,
-                                merging_preferences,
-                                withdrawals_root,
-                                trace,
-                            };
-
-                            let message = Event::Submission {
-                                submission_data,
-                                res_tx,
-                                span,
-                                sent_at: Instant::now(),
-                            };
-
-                            if self.tx.try_send(message).is_err() {
-                                error!("failed sending submisison to auctioneer");
-                            }
+                        if self.tx.try_send(message).is_err() {
+                            error!("failed sending submission to auctioneer");
                         }
                     }
 
