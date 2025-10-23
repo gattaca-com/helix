@@ -224,6 +224,10 @@ impl BidSorter {
         self.forks.get(parent_hash).and_then(|s| s.curr_bid.as_ref().map(|b| b.1.block_hash))
     }
 
+    pub fn get_builder_pub_key(&self, parent_hash: &B256) -> Option<BlsPublicKeyBytes> {
+        self.forks.get(parent_hash).and_then(|s| s.curr_bid.as_ref().map(|b| b.0))
+    }
+
     fn process_header(
         &mut self,
         new_pubkey: BlsPublicKeyBytes,
