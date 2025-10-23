@@ -1740,12 +1740,17 @@ impl PostgresDatabaseService {
                 " AND (slot_preferences.filtering = ${param_index} OR slot_preferences.filtering IS NULL)"
             ));
             params.push(Box::new(filtering));
+            param_index += 1;
+        }
+
+        let mut query = format!("{block_query} UNION {header_query}");
+        if let Some(limit) = filters.limit() {
+            params.push(Box::new(limit));
+            query.push_str(&format!(" LIMIT ${}", param_index));
         }
 
         let params_refs: Vec<&(dyn ToSql + Sync)> =
             params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect();
-
-        let query = format!("{block_query} UNION {header_query}");
 
         let rows = self.pool.get().await?.query(&query, &params_refs[..]).await?;
 

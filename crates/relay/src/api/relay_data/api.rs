@@ -122,12 +122,12 @@ impl DataApi {
             return Err(DataApiError::MissingFilter);
         }
 
-        if params.limit.is_some() && params.limit.unwrap() > 500 {
+        if params.limit.is_some() && params.limit.unwrap() > 500 && params.slot.is_none() {
             return Err(DataApiError::LimitReached { limit: 500 });
         }
         data_api.builder_blocks_received_stats.record_total(&params);
 
-        if params.limit.is_none() {
+        if params.limit.is_none() && params.slot.is_none() {
             params.limit = Some(500);
         }
 
