@@ -40,6 +40,7 @@ pub struct GetPayloadResultData {
     pub to_publish: VersionedSignedProposal,
     pub trace: GetPayloadTrace,
     pub fork: ForkName,
+    pub builder_pubkey: Option<BlsPublicKeyBytes>,
 }
 
 pub struct SubmissionData {
