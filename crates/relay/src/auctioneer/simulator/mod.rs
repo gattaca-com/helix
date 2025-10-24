@@ -6,9 +6,9 @@ use helix_common::{
     bid_submission::OptimisticVersion, simulator::BlockSimError,
 };
 use helix_types::{
-    BidTrace, BlobsBundle, BlockMergingPreferences, BlsPublicKeyBytes, BlsSignatureBytes,
-    BuilderInclusionResult, ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin,
-    SignedBidSubmission, SubmissionVersion,
+    BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BuilderInclusionResult,
+    ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin, SignedBidSubmission,
+    SubmissionVersion,
 };
 use serde_json::json;
 use tokio::sync::oneshot;
@@ -67,15 +67,12 @@ pub struct BlockMergeRequestRef<'a> {
     pub merging_data: &'a [MergeableOrderWithOrigin],
 }
 
-type MergeResult = Result<BlockMergeResponse, BlockSimError>;
-
 pub struct BlockMergeRequest {
     pub bid_slot: u64,
     /// The serialized request
     pub request: serde_json::Value,
     /// The block hash of the execution payload
     pub block_hash: B256,
-    pub res_tx: oneshot::Sender<MergeResult>,
 }
 
 impl BlockMergeRequest {
@@ -86,7 +83,7 @@ impl BlockMergeRequest {
         execution_payload: &ExecutionPayload,
         parent_beacon_block_root: Option<B256>,
         merging_data: &[MergeableOrderWithOrigin],
-    ) -> (Self, oneshot::Receiver<MergeResult>) {
+    ) -> Self {
         let block_hash = execution_payload.block_hash;
         // We serialize the request ahead of time, to avoid copying the original
         // payload and merging data.
@@ -98,8 +95,7 @@ impl BlockMergeRequest {
             merging_data,
         };
         let request = json!(request_ref);
-        let (tx, rx) = oneshot::channel();
-        (Self { bid_slot, request, block_hash, res_tx: tx }, rx)
+        Self { bid_slot, request, block_hash }
     }
 }
 
@@ -120,8 +116,11 @@ pub enum RpcResult<T> {
     Err { error: JsonRpcError },
 }
 
+pub type BlockMergeResult = (usize, Result<BlockMergeResponse, BlockSimError>);
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BlockMergeResponse {
+    pub base_block_hash: B256,
     pub execution_payload: ExecutionPayload,
     pub execution_requests: ExecutionRequests,
     /// Versioned hashes of the appended blob transactions.
@@ -138,7 +137,6 @@ pub struct SimulatorRequest {
     pub submission: SignedBidSubmission,
     /// None if optimistic
     pub res_tx: Option<oneshot::Sender<SubmissionResult>>,
-    pub merging_preferences: BlockMergingPreferences,
     pub trace: SubmissionTrace,
     // only Some for dehydrated submissions
     pub tx_root: Option<B256>,

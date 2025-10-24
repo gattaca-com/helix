@@ -1,10 +1,10 @@
 mod bid_sorter;
+mod block_merger;
 mod context;
 mod decoder;
 mod get_header;
 mod get_payload;
 mod handle;
-mod merging;
 mod simulator;
 mod submit_block;
 mod types;
@@ -31,16 +31,13 @@ use helix_common::{
 use helix_types::Slot;
 use rustc_hash::FxHashMap;
 pub use simulator::*;
-use tracing::{debug, info, info_span, trace, warn};
+use tracing::{debug, error, info, info_span, trace, warn};
 pub use types::{Event, GetPayloadResultData, PayloadBidData, PayloadHeaderData};
 use worker::{RegWorker, SubWorker};
 
 use crate::{
     PostgresDatabaseService,
-    api::{
-        builder::error::BuilderApiError,
-        proposer::{MergingPoolMessage, ProposerApiError},
-    },
+    api::{builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::{
         bid_sorter::BidSorter,
         context::Context,
@@ -55,7 +52,6 @@ pub fn spawn_workers(
     chain_info: ChainInfo,
     config: RelayConfig,
     db: Arc<PostgresDatabaseService>,
-    merge_pool_tx: tokio::sync::mpsc::Sender<MergingPoolMessage>,
     cache: LocalCache,
     top_bid_tx: tokio::sync::broadcast::Sender<bytes::Bytes>,
     event_channel: (crossbeam_channel::Sender<Event>, crossbeam_channel::Receiver<Event>),
@@ -81,14 +77,7 @@ pub fn spawn_workers(
 
     if config.is_submission_instance {
         for core in config.cores.sub_workers.clone() {
-            let worker = SubWorker::new(
-                core,
-                event_tx.clone(),
-                merge_pool_tx.clone(),
-                cache.clone(),
-                chain_info.clone(),
-                config.clone(),
-            );
+            let worker = SubWorker::new(core, event_tx.clone(), cache.clone(), chain_info.clone());
             let rx = sub_worker_rx.clone();
 
             std::thread::Builder::new()
@@ -328,6 +317,11 @@ impl State {
                 ctx.handle_simulation_result(result);
             }
 
+            // late merge result
+            (State::Broadcasting { .. } | State::Slot { .. }, Event::MergeResult((id, _))) => {
+                ctx.handle_simulation_result((id, None));
+            }
+
             ///////////// VALID STATES / EVENTS /////////////
 
             // submission
@@ -427,21 +421,17 @@ impl State {
                 }
             }
 
-            // merging request
-            (State::Sorting(slot_data), Event::GetBestPayloadForMerging { bid_slot, res_tx }) => {
-                let maybe_payload = if slot_data.bid_slot == bid_slot {
-                    ctx.get_best_mergeable_payload()
-                } else {
-                    None
-                };
-
-                let _ = res_tx.send(maybe_payload);
-            }
-
-            (State::Sorting(slot_data), Event::MergeRequest(request)) => {
-                if slot_data.bid_slot == request.bid_slot {
-                    ctx.sim_manager.handle_merge_request(request);
+            (State::Sorting(_), Event::MergeResult((id, result))) => {
+                match result {
+                    Ok(response) => {
+                        ctx.handle_merge_response(response);
+                    }
+                    Err(err) => {
+                        error!(%err, bid_slot =% id, "failed to merge block");
+                    }
                 }
+
+                ctx.handle_simulation_result((id, None));
             }
 
             ///////////// INVALID STATES / EVENTS /////////////
@@ -542,18 +532,6 @@ impl State {
                 if bid_slot.as_u64() != payload.slot + 1 {
                     warn!(curr =% bid_slot, gossip_slot = payload.slot, "received early or late gossip payload");
                 }
-            }
-
-            // merging
-            (
-                State::Slot { .. } | State::Broadcasting { .. },
-                Event::GetBestPayloadForMerging { res_tx, .. },
-            ) => {
-                let _ = res_tx.send(None);
-            }
-
-            (State::Slot { .. } | State::Broadcasting { .. }, Event::MergeRequest(request)) => {
-                warn!(bid_slot =% request.bid_slot, "received early or late merge request");
             }
         }
     }

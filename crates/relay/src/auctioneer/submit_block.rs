@@ -5,13 +5,14 @@ use helix_common::{
     self, BuilderInfo, SubmissionTrace, bid_submission::OptimisticVersion,
     metrics::HYDRATION_CACHE_HITS, record_submission_step,
 };
-use helix_types::{BlockMergingPreferences, SignedBidSubmission, SubmissionVersion};
+use helix_types::{BlockMergingData, SignedBidSubmission, SubmissionVersion};
 use tokio::sync::oneshot;
-use tracing::trace;
+use tracing::{error, trace};
 
 use crate::{
     api::builder::error::BuilderApiError,
     auctioneer::{
+        BlockMergeRequest,
         context::Context,
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
         types::{PayloadEntry, SlotData, Submission, SubmissionData, SubmissionResult},
@@ -35,7 +36,11 @@ impl Context {
                     Some(res_tx)
                 };
 
-                self.simulate_and_store(validated, res_tx, slot_data);
+                self.simulate_and_store(&validated, res_tx, slot_data);
+
+                if self._config.block_merging_config.is_enabled {
+                    self.request_merged_block(validated);
+                }
             }
 
             Err(err) => {
@@ -66,7 +71,6 @@ impl Context {
                         result.version,
                         &result.submission,
                         &mut result.trace,
-                        result.merging_preferences,
                         false,
                     );
 
@@ -135,7 +139,6 @@ impl Context {
                     submission_data.version,
                     &submission,
                     &mut submission_data.trace,
-                    submission_data.merging_preferences,
                     true,
                 );
                 (OptimisticVersion::V1, is_top_bid)
@@ -147,7 +150,7 @@ impl Context {
             submission,
             tx_root: maybe_tx_root,
             payload_attributes,
-            merging_preferences: submission_data.merging_preferences,
+            merging_data: submission_data.merging_data,
             version: submission_data.version,
             is_top_bid,
             trace: submission_data.trace,
@@ -158,7 +161,7 @@ impl Context {
 
     fn simulate_and_store(
         &mut self,
-        validated: ValidatedData,
+        validated: &ValidatedData,
         res_tx: Option<oneshot::Sender<SubmissionResult>>,
         slot_data: &SlotData,
     ) {
@@ -177,8 +180,7 @@ impl Context {
             is_top_bid: validated.is_top_bid,
             res_tx,
             submission: validated.submission.clone(),
-            merging_preferences: validated.merging_preferences,
-            trace: validated.trace,
+            trace: validated.trace.clone(),
             tx_root: validated.tx_root,
             version: validated.version,
         };
@@ -187,7 +189,7 @@ impl Context {
 
         let block_hash = *validated.submission.block_hash();
         let entry = PayloadEntry::new_submission(
-            validated.submission,
+            validated.submission.clone(), // is there a way to avoid this clone?
             validated.payload_attributes.withdrawals_root,
             validated.tx_root,
         );
@@ -212,14 +214,36 @@ impl Context {
 
         false
     }
+
+    fn request_merged_block(&mut self, validated: ValidatedData) {
+        self.block_merger.update(&validated);
+        if self.block_merger.should_request_merge() {
+            let Some((mergeable_orders, _)) = self.block_merger.fetch_best_mergeable_orders()
+            else {
+                error!("failed to get best mergeable orders, this should never happen!");
+                return;
+            };
+
+            let merge_request = BlockMergeRequest::new(
+                validated.submission.slot().as_u64(),
+                validated.submission.bid_trace().value,
+                validated.submission.bid_trace().proposer_fee_recipient,
+                validated.submission.execution_payload_ref(),
+                validated.payload_attributes.parent_beacon_block_root,
+                mergeable_orders,
+            );
+
+            self.sim_manager.handle_merge_request(merge_request);
+        }
+    }
 }
 
-struct ValidatedData<'a> {
-    submission: SignedBidSubmission,
-    tx_root: Option<B256>,
-    payload_attributes: &'a PayloadAttributesUpdate,
-    merging_preferences: BlockMergingPreferences,
-    version: SubmissionVersion,
-    is_top_bid: bool,
-    trace: SubmissionTrace,
+pub struct ValidatedData<'a> {
+    pub submission: SignedBidSubmission,
+    pub tx_root: Option<B256>,
+    pub payload_attributes: &'a PayloadAttributesUpdate,
+    pub merging_data: Option<BlockMergingData>,
+    pub version: SubmissionVersion,
+    pub is_top_bid: bool,
+    pub trace: SubmissionTrace,
 }

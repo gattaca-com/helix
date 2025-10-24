@@ -54,14 +54,12 @@ pub async fn start_api_service<A: Api>(
     let validator_preferences = Arc::new(config.validator_preferences.clone());
 
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
-    let (merge_pool_tx, pool_rx) = tokio::sync::mpsc::channel(10_000);
 
     // spawn auctioneer
     let (auctioneer_handle, registrations_handle) = spawn_workers(
         Arc::unwrap_or_clone(chain_info.clone()),
         config.clone(),
         db.clone(),
-        merge_pool_tx,
         Arc::unwrap_or_clone(local_cache.clone()),
         top_bid_tx.clone(),
         event_channel,
@@ -100,10 +98,6 @@ pub async fn start_api_service<A: Api>(
         proposer_api.clone(),
         gossip_receiver,
     ));
-
-    if config.block_merging_config.is_enabled {
-        tokio::spawn(proposer_api.clone().process_block_merging(pool_rx));
-    }
 
     let data_api = Arc::new(DataApi::new(validator_preferences.clone(), db.clone()));
 

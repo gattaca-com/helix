@@ -14,10 +14,10 @@ use helix_common::{
     metrics::BID_CREATION_LATENCY,
 };
 use helix_types::{
-    BlockMergingPreferences, BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission,
-    ExecutionPayload, ExecutionRequests, ForkName, GetPayloadResponse, PayloadAndBlobs,
-    SignedBidSubmission, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot,
-    SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
+    BlockMergingData, BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ExecutionPayload,
+    ExecutionRequests, ForkName, GetPayloadResponse, PayloadAndBlobs, SignedBidSubmission,
+    SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot, SubmissionVersion,
+    VersionedSignedProposal, mock_public_key_bytes,
 };
 use rustc_hash::FxHashMap;
 use tokio::sync::oneshot;
@@ -25,7 +25,7 @@ use tracing::debug;
 
 use crate::{
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
-    auctioneer::{BlockMergeRequest, simulator::manager::SimulationResult},
+    auctioneer::{BlockMergeResult, simulator::manager::SimulationResult},
     gossip::BroadcastPayloadParams,
     housekeeper::PayloadAttributesUpdate,
 };
@@ -33,7 +33,6 @@ use crate::{
 pub type SubmissionResult = Result<(), BuilderApiError>;
 pub type GetHeaderResult = Result<PayloadHeaderData, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
-pub type BestMergeablePayload = Option<PayloadHeaderData>;
 
 pub struct GetPayloadResultData {
     pub to_proposer: GetPayloadResponse,
@@ -44,7 +43,7 @@ pub struct GetPayloadResultData {
 
 pub struct SubmissionData {
     pub submission: Submission,
-    pub merging_preferences: BlockMergingPreferences,
+    pub merging_data: Option<BlockMergingData>,
     pub version: SubmissionVersion,
     pub withdrawals_root: B256,
     pub trace: SubmissionTrace,
@@ -289,12 +288,7 @@ pub enum Event {
         id: usize,
         is_synced: bool,
     },
-    // TODO: remove once we move merging to auctioneer
-    GetBestPayloadForMerging {
-        bid_slot: Slot,
-        res_tx: oneshot::Sender<BestMergeablePayload>,
-    },
-    MergeRequest(BlockMergeRequest),
+    MergeResult(BlockMergeResult),
 }
 
 impl Event {
@@ -307,8 +301,7 @@ impl Event {
             Event::GossipPayload(_) => "GossipPayload",
             Event::SimResult(_) => "SimResult",
             Event::SimulatorSync { .. } => "SimulatorSync",
-            Event::GetBestPayloadForMerging { .. } => "GetBestPayloadForMerging",
-            Event::MergeRequest(_) => "MergeRequest",
+            Event::MergeResult(_) => "MergeResult",
         }
     }
 }
