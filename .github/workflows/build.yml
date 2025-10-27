@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [feature/test-ci-on-self-hosted-runner]
+    branches: [feat/test-ci-on-self-hosted-runner]
 
 env:
   CARGO_TERM_COLOR: always
