@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main, develop]
+    branches: [feature/test-ci-on-self-hosted-runner]
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build-relay:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +54,7 @@ jobs:
           cache-to: type=registry,ref=ghcr.io/gattaca-com/helix-relay:buildcache,mode=max
 
   build-simulator:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
 
     steps:
       - uses: actions/checkout@v4
