@@ -77,6 +77,8 @@ pub type SignedBlindedBeaconBlock =
     lh_types::signed_beacon_block::SignedBlindedBeaconBlock<MainnetEthSpec>; // TODO: maybe re implement this to avoid trait
 pub type SignedBlindedBeaconBlockElectra =
     lh_types::signed_beacon_block::SignedBeaconBlockElectra<MainnetEthSpec, BlindedPayload>;
+pub type SignedBlindedBeaconBlockFulu =
+    lh_types::signed_beacon_block::SignedBeaconBlockFulu<MainnetEthSpec, BlindedPayload>;
 pub type BlindedPayloadElectra = lh_types::payload::BlindedPayloadElectra<MainnetEthSpec>;
 pub type BlindedPayload = lh_types::payload::BlindedPayload<MainnetEthSpec>;
 pub type BlindedPayloadRef<'a> = lh_types::payload::BlindedPayloadRef<'a, MainnetEthSpec>;

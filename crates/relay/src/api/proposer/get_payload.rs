@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 use axum::{Extension, http::HeaderMap, response::IntoResponse};
 use helix_common::{
@@ -10,7 +10,8 @@ use helix_common::{
 };
 use helix_types::{
     BlsPublicKeyBytes, ExecPayload, ForkName, GetPayloadResponse, PayloadAndBlobs,
-    SignedBlindedBeaconBlock, Slot, SlotClockTrait,
+    SignedBlindedBeaconBlock, SignedBlindedBeaconBlockElectra, SignedBlindedBeaconBlockFulu, Slot,
+    SlotClockTrait,
 };
 use http::StatusCode;
 use tokio::time::sleep;
@@ -25,6 +26,7 @@ use crate::{
 };
 
 const GET_PAYLOAD_REQUEST_CUTOFF_MS: i64 = 4000;
+const CONSENSUS_VERSION_HEADER: &str = "Eth-Consensus-Version";
 
 pub enum ProposerApiVersion {
     V1,
@@ -57,9 +59,31 @@ impl<A: Api> ProposerApi<A> {
 
         let user_agent = proposer_api.api_provider.get_metadata(&headers);
 
+        let fork: ForkName = match fork_name_from_header(&headers) {
+            Ok(Some(fork)) => fork,
+            _ => {
+                return Err(ProposerApiError::InvalidFork);
+            }
+        };
+
         // TODO: move decoding to worker
-        let signed_blinded_block: SignedBlindedBeaconBlock = serde_json::from_slice(&body)
-            .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
+        let signed_blinded_block: SignedBlindedBeaconBlock = match fork {
+            ForkName::Electra => {
+                let signed_blinded_block_electra: SignedBlindedBeaconBlockElectra =
+                    serde_json::from_slice(&body)
+                        .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
+                signed_blinded_block_electra.into()
+            }
+            ForkName::Fulu => {
+                let signed_blinded_block_fulu: SignedBlindedBeaconBlockFulu =
+                    serde_json::from_slice(&body)
+                        .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
+                signed_blinded_block_fulu.into()
+            }
+            _ => {
+                return Err(ProposerApiError::InvalidFork);
+            }
+        };
 
         tracing::Span::current().record("slot", signed_blinded_block.slot().as_u64());
 
@@ -134,8 +158,31 @@ impl<A: Api> ProposerApi<A> {
 
         let user_agent = proposer_api.api_provider.get_metadata(&headers);
 
-        let signed_blinded_block: SignedBlindedBeaconBlock = serde_json::from_slice(&body)
-            .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
+        let fork: ForkName = match fork_name_from_header(&headers) {
+            Ok(Some(fork)) => fork,
+            _ => {
+                return Err(ProposerApiError::InvalidFork);
+            }
+        };
+
+        // TODO: move decoding to worker
+        let signed_blinded_block: SignedBlindedBeaconBlock = match fork {
+            ForkName::Electra => {
+                let signed_blinded_block_electra: SignedBlindedBeaconBlockElectra =
+                    serde_json::from_slice(&body)
+                        .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
+                signed_blinded_block_electra.into()
+            }
+            ForkName::Fulu => {
+                let signed_blinded_block_fulu: SignedBlindedBeaconBlockFulu =
+                    serde_json::from_slice(&body)
+                        .inspect_err(|err| warn!(%err, "failed to deserialize signed block"))?;
+                signed_blinded_block_fulu.into()
+            }
+            _ => {
+                return Err(ProposerApiError::InvalidFork);
+            }
+        };
 
         tracing::Span::current().record("slot", signed_blinded_block.slot().as_u64());
 
@@ -419,4 +466,11 @@ fn calculate_slot_time_info(
     let since_slot_start = Duration::from_nanos(request_time_ns).checked_sub(slot_start); // None if we're before slot time
 
     Some((since_slot_start, until_slot_start))
+}
+
+fn fork_name_from_header(headers: &HeaderMap) -> Result<Option<ForkName>, String> {
+    headers
+        .get(CONSENSUS_VERSION_HEADER)
+        .map(|fork_name| fork_name.to_str().map_err(|e| e.to_string()).and_then(ForkName::from_str))
+        .transpose()
 }
