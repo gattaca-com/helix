@@ -11,7 +11,7 @@ use tree_hash_derive::TreeHash;
 
 use crate::{BuilderValidatorPreferences, api::proposer_api::ValidatorRegistrationInfo};
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BuilderGetValidatorsResponseEntry {
     pub slot: Slot,
     #[serde(with = "serde_utils::quoted_u64")]

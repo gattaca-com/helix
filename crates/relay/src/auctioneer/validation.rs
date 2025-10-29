@@ -36,7 +36,7 @@ impl Context {
 
         self.staleness_check(submission.builder_public_key(), version)?;
         self.validate_submission_data(submission, withdrawals_root, slot_data, payload_attributes)?;
-        self.check_if_trusted_builder(builder_info, slot_data)?;
+        check_if_trusted_builder(builder_info, slot_data)?;
 
         Ok(payload_attributes)
     }
@@ -117,43 +117,142 @@ impl Context {
 
         Ok(())
     }
+}
 
-    fn check_if_trusted_builder(
-        &self,
-        builder_info: &BuilderInfo,
-        slot_data: &SlotData,
-    ) -> Result<(), BlockValidationError> {
-        if let Some(trusted_builders) =
-            &slot_data.registration_data.entry.preferences.trusted_builders
-        {
-            // Handle case where proposer specifies an empty list.
-            if trusted_builders.is_empty() {
-                return Ok(());
-            }
-
-            if let Some(builder_id) = &builder_info.builder_id {
-                if trusted_builders.contains(builder_id) {
-                    Ok(())
-                } else {
-                    Err(BlockValidationError::BuilderNotInProposersTrustedList {
-                        proposer_trusted_builders: trusted_builders.clone(),
-                    })
-                }
-            } else if let Some(ids) = &builder_info.builder_ids {
-                if ids.iter().any(|id| trusted_builders.contains(id)) {
-                    Ok(())
-                } else {
-                    Err(BlockValidationError::BuilderNotInProposersTrustedList {
-                        proposer_trusted_builders: trusted_builders.clone(),
-                    })
-                }
-            } else {
-                Err(BlockValidationError::BuilderNotInProposersTrustedList {
-                    proposer_trusted_builders: trusted_builders.clone(),
-                })
-            }
-        } else {
-            Ok(())
+pub fn check_if_trusted_builder(
+    builder_info: &BuilderInfo,
+    slot_data: &SlotData,
+) -> Result<(), BlockValidationError> {
+    if let Some(trusted_builders) = &slot_data.registration_data.entry.preferences.trusted_builders
+    {
+        if trusted_builders.is_empty() {
+            return Ok(());
         }
+
+        let mut builder_ids = builder_info
+            .builder_id
+            .iter()
+            .chain(builder_info.builder_ids.iter().flat_map(|ids| ids.iter()));
+
+        if builder_ids.any(|id| trusted_builders.contains(id)) {
+            Ok(())
+        } else {
+            Err(BlockValidationError::BuilderNotInProposersTrustedList {
+                proposer_trusted_builders: trusted_builders.clone(),
+            })
+        }
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use helix_common::{
+        BuilderInfo, ValidatorPreferences,
+        api::{
+            builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
+        },
+    };
+    use helix_types::ForkName;
+
+    use crate::auctioneer::{types::SlotData, validation::check_if_trusted_builder};
+
+    #[test]
+    fn test_check_if_trusted_builder_empty_list() {
+        let builder_info = BuilderInfo {
+            builder_id: Some("not_trusted".to_string()),
+            builder_ids: None,
+            ..Default::default()
+        };
+        let slot_data = SlotData {
+            bid_slot: Default::default(),
+            registration_data: Default::default(),
+            current_fork: ForkName::Fulu,
+            payload_attributes_map: Default::default(),
+            il: Default::default(),
+        };
+        assert!(check_if_trusted_builder(&builder_info, &slot_data).is_ok());
+    }
+
+    #[test]
+    fn test_check_if_trusted_builder_id_in_list() {
+        let builder_info = BuilderInfo {
+            builder_id: Some("trusted".to_string()),
+            builder_ids: None,
+            ..Default::default()
+        };
+        let slot_data = SlotData {
+            bid_slot: Default::default(),
+            registration_data: BuilderGetValidatorsResponseEntry {
+                entry: ValidatorRegistrationInfo {
+                    preferences: ValidatorPreferences {
+                        trusted_builders: Some(vec!["trusted".to_string()]),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            current_fork: ForkName::Fulu,
+            payload_attributes_map: Default::default(),
+            il: Default::default(),
+        };
+
+        assert!(check_if_trusted_builder(&builder_info, &slot_data).is_ok());
+    }
+
+    #[test]
+    fn test_check_if_trusted_builder_ids_in_list() {
+        let builder_info = BuilderInfo {
+            builder_id: Some("not_trusted".to_string()),
+            builder_ids: Some(vec!["trusted".to_string()]),
+            ..Default::default()
+        };
+        let slot_data = SlotData {
+            bid_slot: Default::default(),
+            registration_data: BuilderGetValidatorsResponseEntry {
+                entry: ValidatorRegistrationInfo {
+                    preferences: ValidatorPreferences {
+                        trusted_builders: Some(vec!["trusted".to_string()]),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            current_fork: ForkName::Fulu,
+            payload_attributes_map: Default::default(),
+            il: Default::default(),
+        };
+
+        assert!(check_if_trusted_builder(&builder_info, &slot_data).is_ok());
+    }
+
+    #[test]
+    fn test_check_if_trusted_builder_not_in_list() {
+        let builder_info = BuilderInfo {
+            builder_id: Some("not_trusted".to_string()),
+            builder_ids: None,
+            ..Default::default()
+        };
+        let slot_data = SlotData {
+            bid_slot: Default::default(),
+            registration_data: BuilderGetValidatorsResponseEntry {
+                entry: ValidatorRegistrationInfo {
+                    preferences: ValidatorPreferences {
+                        trusted_builders: Some(vec!["trusted".to_string()]),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            current_fork: ForkName::Fulu,
+            payload_attributes_map: Default::default(),
+            il: Default::default(),
+        };
+
+        assert!(check_if_trusted_builder(&builder_info, &slot_data).is_err());
     }
 }
