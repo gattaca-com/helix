@@ -18,6 +18,7 @@ use std::{
 };
 
 use alloy_primitives::B256;
+pub use block_merger::OrderValidationError;
 pub use handle::{AuctioneerHandle, RegWorkerHandle};
 use helix_common::{
     RelayConfig,

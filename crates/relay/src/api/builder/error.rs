@@ -3,7 +3,7 @@ use helix_common::{local_cache::AuctioneerError, simulator::BlockSimError};
 use helix_types::{BlockValidationError, HydrationError, SigError};
 use http::StatusCode;
 
-use crate::{api::builder::api::OrderValidationError, database::error::DatabaseError};
+use crate::{auctioneer::OrderValidationError, database::error::DatabaseError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum BuilderApiError {

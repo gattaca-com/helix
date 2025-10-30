@@ -151,7 +151,7 @@ impl SubWorker {
                         drop(guard);
 
                         let submission_data = SubmissionData {
-                            submission: submission.clone(),
+                            submission,
                             version,
                             merging_data,
                             withdrawals_root,

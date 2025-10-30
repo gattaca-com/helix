@@ -38,7 +38,7 @@ impl Context {
 
                 self.simulate_and_store(&validated, res_tx, slot_data);
 
-                if self._config.block_merging_config.is_enabled {
+                if self.config.block_merging_config.is_enabled {
                     self.request_merged_block(validated);
                 }
             }

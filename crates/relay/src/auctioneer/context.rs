@@ -41,7 +41,7 @@ pub struct SlotContext {
 
 pub struct Context {
     pub chain_info: ChainInfo,
-    pub _config: RelayConfig,
+    pub config: RelayConfig,
     pub cache: LocalCache,
     pub unknown_builder_info: BuilderInfo,
     pub db: Arc<PostgresDatabaseService>,
@@ -69,7 +69,7 @@ impl Context {
             api_key: None,
         };
 
-        let block_merger = BlockMerger::new(0, chain_info.clone(), cache.clone());
+        let block_merger = BlockMerger::new(0, chain_info.clone(), cache.clone(), config.clone());
 
         let slot_context = SlotContext {
             sim_manager,
@@ -88,7 +88,7 @@ impl Context {
             block_merger,
         };
 
-        Self { chain_info, cache, unknown_builder_info, slot_context, db, _config: config }
+        Self { chain_info, cache, unknown_builder_info, slot_context, db, config }
     }
 
     pub fn builder_info(&self, builder: &BlsPublicKeyBytes) -> BuilderInfo {

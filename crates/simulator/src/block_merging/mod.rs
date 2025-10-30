@@ -62,7 +62,7 @@ impl BlockMergingApi {
         &self,
         request: BlockMergeRequestV1,
     ) -> Result<BlockMergeResponseV1, BlockMergingApiError> {
-        let based_block_hash = request.execution_payload.payload_inner.payload_inner.parent_hash;
+        let based_block_hash = request.execution_payload.payload_inner.payload_inner.block_hash;
         info!(
             target: "rpc::relay::block_merging",
             block_hash=%based_block_hash,
