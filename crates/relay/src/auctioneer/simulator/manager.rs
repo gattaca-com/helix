@@ -158,9 +158,9 @@ impl SimulatorManager {
                 timer.stop_and_record();
                 SimulatorMetrics::block_merge_status(res.is_ok());
 
-                let result = (id, None);
+                let result = (id, res);
 
-                let _ = tx.try_send(Event::SimResult(result));
+                let _ = tx.try_send(Event::MergeResult(result));
             });
         } else {
             self.local_telemetry.dropped_merge_reqs += 1;

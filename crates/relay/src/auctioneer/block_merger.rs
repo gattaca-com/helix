@@ -10,14 +10,13 @@ use helix_common::{RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, 
 use helix_types::{
     BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
     BlockMergingData, BundleOrder, KzgCommitment, MergeableBundle, MergeableOrder,
-    MergeableOrderWithOrigin, MergeableOrders, MergeableTransaction, MergedBlock, Order,
-    PayloadAndBlobs, SignedBidSubmission, Transactions,
+    MergeableOrderWithOrigin, MergeableOrders, MergeableOrdersWithPref, MergeableTransaction,
+    MergedBlock, Order, PayloadAndBlobs, SignedBidSubmission, Transactions,
 };
 use tracing::{debug, error, warn};
 
 use crate::auctioneer::{
-    BlockMergeResponse, PayloadBidData, PayloadHeaderData, submit_block::ValidatedData,
-    types::PayloadEntry,
+    BlockMergeResponse, PayloadBidData, PayloadHeaderData, types::PayloadEntry,
 };
 
 const MERGE_REQUEST_INTERVAL_MS: u64 = 50;
@@ -113,18 +112,17 @@ impl BlockMerger {
         Some(entry.bid.clone())
     }
 
-    pub fn update(&mut self, block: &ValidatedData<'_>) {
-        if let Some(merging_data) = &block.merging_data {
-            let mergeable_orders =
-                get_mergeable_orders(&block.submission, merging_data).ok();
+    pub fn update(
+        &mut self,
+        is_top_bid: bool,
+        block_hash: &B256,
+        block_value: U256,
+        merging_data: MergeableOrdersWithPref,
+    ) {
+        self.best_mergeable_orders.insert_orders(block_value, merging_data.orders);
 
-            if let Some(orders) = mergeable_orders {
-                self.best_mergeable_orders.insert_orders(block.submission.value(), orders);
-            }
-
-            if block.is_top_bid && merging_data.allow_appending {
-                self.update_base_block(block);
-            }
+        if is_top_bid && merging_data.allow_appending {
+            self.update_base_block(block_hash, block_value);
         }
     }
 
@@ -181,17 +179,23 @@ impl BlockMerger {
             block_hash,
             original_value: base_block_data.value,
             merged_value: response.proposer_value,
-            original_tx_count: base_block_data.num_transactions,
+            original_tx_count: original_payload.execution_payload.transactions.len(),
             merged_tx_count: response.execution_payload.transactions.len(),
-            original_blob_count: base_block_data.num_blobs,
-            merged_blob_count: base_block_data.num_blobs + response.appended_blobs.len(),
-            builder_inclusions: response.builder_inclusions.clone(),
+            original_blob_count: original_payload.blobs_bundle.blobs().len(),
+            merged_blob_count: original_payload.blobs_bundle.blobs().len() +
+                response.appended_blobs.len(),
+            builder_inclusions: response.builder_inclusions,
         });
 
         let blobs = &self.best_mergeable_orders.mergeable_blob_bundles;
 
-        let mut merged_blobs_bundle = Arc::unwrap_or_clone(original_payload).blobs_bundle;
-        append_merged_blobs(&mut merged_blobs_bundle, blobs, &response, max_blobs_per_block)?;
+        let mut merged_blobs_bundle = original_payload.blobs_bundle.clone();
+        append_merged_blobs(
+            &mut merged_blobs_bundle,
+            blobs,
+            &response.appended_blobs,
+            max_blobs_per_block,
+        )?;
 
         let withdrawals_root = response.execution_payload.withdrawals_root();
 
@@ -220,22 +224,17 @@ impl BlockMerger {
         Ok((block_hash, PayloadEntry { payload_and_blobs, bid_data: Some(bid_data) }))
     }
 
-    fn update_base_block(&mut self, base_block: &ValidatedData<'_>) {
-        let block_hash = *base_block.submission.block_hash();
-        if self.base_blocks.contains_key(&block_hash) {
+    fn update_base_block(&mut self, base_block_hash: &B256, base_block_value: U256) {
+        if self.base_blocks.contains_key(base_block_hash) {
             return;
         }
 
         let base_block_time_ms = utcnow_ms();
 
-        let base_block_data = BaseBlockData {
-            time_ms: base_block_time_ms,
-            value: base_block.submission.value(),
-            num_transactions: base_block.submission.num_txs(),
-            num_blobs: base_block.submission.blobs_bundle().blobs().len(),
-        };
+        let base_block_data =
+            BaseBlockData { time_ms: base_block_time_ms, value: base_block_value };
 
-        self.base_blocks.insert(block_hash, base_block_data);
+        self.base_blocks.insert(*base_block_hash, base_block_data);
         self.has_new_base_block = true;
     }
 }
@@ -243,8 +242,6 @@ impl BlockMerger {
 struct BaseBlockData {
     time_ms: u64,
     value: U256,
-    num_transactions: usize,
-    num_blobs: usize,
 }
 
 struct BestMergedBlock {
@@ -282,9 +279,7 @@ impl BestMergeableOrders {
         }
     }
 
-    fn load(
-        &mut self,
-    ) -> Option<(&[MergeableOrderWithOrigin], &HashMap<B256, BlobWithMetadata>)> {
+    fn load(&mut self) -> Option<(&[MergeableOrderWithOrigin], &HashMap<B256, BlobWithMetadata>)> {
         // Reset the new orders flag
         self.has_new_orders = false;
         Some((&self.best_orders, &self.mergeable_blob_bundles))
@@ -308,13 +303,14 @@ impl BestMergeableOrders {
             // Collect all blobs for this order
             match self.order_map.entry(o) {
                 // If the order already exists, keep the one with the highest bid
-                Entry::Occupied(mut e) if e.get().value < bid_value => {
-                    // We update the value of the bid to the highest
-                    e.get_mut().value = bid_value;
-                    // and the origin for the order
-                    self.best_orders[e.get().index].origin = origin;
+                Entry::Occupied(mut e) => {
+                    if e.get().value < bid_value {
+                        // We update the value of the bid to the highest
+                        e.get_mut().value = bid_value;
+                        // and the origin for the order
+                        self.best_orders[e.get().index].origin = origin;
+                    }
                 }
-                Entry::Occupied(_) => {}
                 // Otherwise, insert the new order
                 Entry::Vacant(e) => {
                     // If there were any new orders, we mark it
@@ -342,7 +338,7 @@ impl BestMergeableOrders {
 /// Expands the references in [`BlockMergingData`] from the transactions in the
 /// payload of the given submission. If any bundle references a transaction not in
 /// the payload, it will be silently ignored.
-fn get_mergeable_orders(
+pub fn get_mergeable_orders(
     payload: &SignedBidSubmission,
     merging_data: &BlockMergingData,
 ) -> Result<MergeableOrders, OrderValidationError> {
@@ -354,9 +350,10 @@ fn get_mergeable_orders(
 
     // Expand all orders to include the tx's bytes, checking for missing blobs.
     let mergeable_orders = merging_data
-        .merge_orders.as_slice()
-        .into_iter()
-        .map(|order| order_to_mergeable(&order, txs, &blob_versioned_hashes))
+        .merge_orders
+        .as_slice()
+        .iter()
+        .map(|order| order_to_mergeable(order, txs, &blob_versioned_hashes))
         .collect::<Result<Vec<_>, _>>()?;
 
     // Stores all block blobs inside a map keyed by versioned hash
@@ -410,8 +407,12 @@ fn order_to_mergeable(
 
             let BundleOrder { reverting_txs, dropping_txs, .. } = bundle;
 
-            let mergeable_bundle =
-                MergeableBundle { transactions, reverting_txs: reverting_txs.clone(), dropping_txs: dropping_txs.clone() }.into();
+            let mergeable_bundle = MergeableBundle {
+                transactions,
+                reverting_txs: reverting_txs.clone(),
+                dropping_txs: dropping_txs.clone(),
+            }
+            .into();
             Ok(mergeable_bundle)
         }
     }
@@ -484,10 +485,10 @@ fn calculate_versioned_hash(commitment: Bytes48) -> B256 {
 fn append_merged_blobs(
     original_blobs_bundle: &mut BlobsBundle,
     blobs: &HashMap<B256, BlobWithMetadata>,
-    response: &BlockMergeResponse,
+    appended_blobs: &Vec<B256>,
     max_blobs_per_block: usize,
 ) -> Result<(), PayloadMergingError> {
-    for vh in &response.appended_blobs {
+    for vh in appended_blobs {
         let blob_data = blobs.get(vh).ok_or(PayloadMergingError::BlobNotFound)?;
         match blob_data {
             BlobWithMetadata::V1(data) => {

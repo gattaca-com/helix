@@ -1,11 +1,11 @@
 use std::time::Instant;
 
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256, U256};
 use helix_common::{
     self, BuilderInfo, SubmissionTrace, bid_submission::OptimisticVersion,
     metrics::HYDRATION_CACHE_HITS, record_submission_step,
 };
-use helix_types::{BlockMergingData, SignedBidSubmission, SubmissionVersion};
+use helix_types::{MergeableOrdersWithPref, SignedBidSubmission, SubmissionVersion};
 use tokio::sync::oneshot;
 use tracing::{error, trace};
 
@@ -28,7 +28,7 @@ impl Context {
         slot_data: &SlotData,
     ) {
         match self.validate_and_sort(submission_data, slot_data) {
-            Ok((validated, optimistic_version)) => {
+            Ok((validated, optimistic_version, merging_data)) => {
                 let res_tx = if optimistic_version.is_optimistic() {
                     let _ = res_tx.send(Ok(()));
                     None
@@ -36,10 +36,12 @@ impl Context {
                     Some(res_tx)
                 };
 
-                self.simulate_and_store(&validated, res_tx, slot_data);
+                self.simulate_and_store(validated, res_tx, slot_data);
 
-                if self.config.block_merging_config.is_enabled {
-                    self.request_merged_block(validated);
+                if self.config.block_merging_config.is_enabled &&
+                    let Some(data) = merging_data
+                {
+                    self.request_merged_block(data);
                 }
             }
 
@@ -84,7 +86,7 @@ impl Context {
         &mut self,
         mut submission_data: SubmissionData,
         slot_data: &'a SlotData,
-    ) -> Result<(ValidatedData<'a>, OptimisticVersion), BuilderApiError> {
+    ) -> Result<(ValidatedData<'a>, OptimisticVersion, Option<MergeData>), BuilderApiError> {
         let (submission, maybe_tx_root) = match submission_data.submission {
             Submission::Full(full) => (full, None),
             Submission::Dehydrated(dehydrated) => {
@@ -146,22 +148,32 @@ impl Context {
                 (OptimisticVersion::NotOptimistic, false)
             };
 
+        let merging_data = submission_data.merging_data.map(|data| MergeData {
+            is_top_bid,
+            slot: submission.slot().as_u64(),
+            block_hash: *submission.block_hash(),
+            block_value: submission.value(),
+            proposer_fee_recipient: *submission.proposer_fee_recipient(),
+            parent_beacon_block_root: payload_attributes.parent_beacon_block_root,
+            execution_payload: submission.execution_payload_ref().clone(),
+            merging_data: data,
+        });
+
         let validated = ValidatedData {
             submission,
             tx_root: maybe_tx_root,
             payload_attributes,
-            merging_data: submission_data.merging_data,
             version: submission_data.version,
             is_top_bid,
             trace: submission_data.trace,
         };
 
-        Ok((validated, optimistic_version))
+        Ok((validated, optimistic_version, merging_data))
     }
 
     fn simulate_and_store(
         &mut self,
-        validated: &ValidatedData,
+        validated: ValidatedData,
         res_tx: Option<oneshot::Sender<SubmissionResult>>,
         slot_data: &SlotData,
     ) {
@@ -189,7 +201,7 @@ impl Context {
 
         let block_hash = *validated.submission.block_hash();
         let entry = PayloadEntry::new_submission(
-            validated.submission.clone(), // is there a way to avoid this clone?
+            validated.submission,
             validated.payload_attributes.withdrawals_root,
             validated.tx_root,
         );
@@ -215,8 +227,14 @@ impl Context {
         false
     }
 
-    fn request_merged_block(&mut self, validated: ValidatedData) {
-        self.block_merger.update(&validated);
+    fn request_merged_block(&mut self, merging_data: MergeData) {
+        self.block_merger.update(
+            merging_data.is_top_bid,
+            &merging_data.block_hash,
+            merging_data.block_value,
+            merging_data.merging_data,
+        );
+
         if self.block_merger.should_request_merge() {
             let Some((mergeable_orders, _)) = self.block_merger.fetch_best_mergeable_orders()
             else {
@@ -225,11 +243,11 @@ impl Context {
             };
 
             let merge_request = BlockMergeRequest::new(
-                validated.submission.slot().as_u64(),
-                validated.submission.bid_trace().value,
-                validated.submission.bid_trace().proposer_fee_recipient,
-                validated.submission.execution_payload_ref(),
-                validated.payload_attributes.parent_beacon_block_root,
+                merging_data.slot,
+                merging_data.block_value,
+                merging_data.proposer_fee_recipient,
+                &merging_data.execution_payload,
+                merging_data.parent_beacon_block_root,
                 mergeable_orders,
             );
 
@@ -242,8 +260,18 @@ pub struct ValidatedData<'a> {
     pub submission: SignedBidSubmission,
     pub tx_root: Option<B256>,
     pub payload_attributes: &'a PayloadAttributesUpdate,
-    pub merging_data: Option<BlockMergingData>,
     pub version: SubmissionVersion,
     pub is_top_bid: bool,
     pub trace: SubmissionTrace,
+}
+
+pub struct MergeData {
+    pub is_top_bid: bool,
+    pub slot: u64,
+    pub block_hash: B256,
+    pub block_value: U256,
+    pub proposer_fee_recipient: Address,
+    pub parent_beacon_block_root: Option<B256>,
+    pub execution_payload: helix_types::ExecutionPayload,
+    pub merging_data: MergeableOrdersWithPref,
 }

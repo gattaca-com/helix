@@ -165,6 +165,11 @@ pub struct BlobWithMetadataV2 {
     pub blob: Blob,
 }
 
+pub struct MergeableOrdersWithPref {
+    pub allow_appending: bool,
+    pub orders: MergeableOrders,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MergeableOrders {
     /// Address of the builder that submitted these orders.

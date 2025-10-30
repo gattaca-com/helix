@@ -11,8 +11,8 @@ use helix_common::{
 };
 use helix_types::{
     BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission, ExecPayload,
-    SigError, SignedBidSubmission, SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock,
-    SignedValidatorRegistration, SubmissionVersion,
+    MergeableOrdersWithPref, SigError, SignedBidSubmission, SignedBidSubmissionWithMergingData,
+    SignedBlindedBeaconBlock, SignedValidatorRegistration, SubmissionVersion,
 };
 use http::HeaderValue;
 use tracing::{error, info, info_span, trace};
@@ -23,6 +23,7 @@ use crate::{
         builder::error::BuilderApiError, proposer::ProposerApiError,
     },
     auctioneer::{
+        block_merger::get_mergeable_orders,
         decoder::SubmissionDecoder,
         types::{Event, RegWorkerJob, SubWorkerJob, Submission, SubmissionData},
     },
@@ -149,6 +150,23 @@ impl SubWorker {
 
                         trace!("sending to auctioneer");
                         drop(guard);
+
+                        let merging_data = merging_data.and_then(|data| {
+                            if let Submission::Full(ref signed_bid_submission) = submission {
+                                match get_mergeable_orders(signed_bid_submission, &data) {
+                                    Ok(orders) => Some(MergeableOrdersWithPref {
+                                        allow_appending: data.allow_appending,
+                                        orders,
+                                    }),
+                                    Err(err) => {
+                                        error!(%err, "failed to process mergeable orders");
+                                        None
+                                    }
+                                }
+                            } else {
+                                None
+                            }
+                        });
 
                         let submission_data = SubmissionData {
                             submission,

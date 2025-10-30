@@ -14,8 +14,8 @@ use helix_common::{
     metrics::BID_CREATION_LATENCY,
 };
 use helix_types::{
-    BlockMergingData, BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ExecutionPayload,
-    ExecutionRequests, ForkName, GetPayloadResponse, PayloadAndBlobs, SignedBidSubmission,
+    BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ExecutionPayload, ExecutionRequests,
+    ForkName, GetPayloadResponse, MergeableOrdersWithPref, PayloadAndBlobs, SignedBidSubmission,
     SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot, SubmissionVersion,
     VersionedSignedProposal, mock_public_key_bytes,
 };
@@ -43,7 +43,7 @@ pub struct GetPayloadResultData {
 
 pub struct SubmissionData {
     pub submission: Submission,
-    pub merging_data: Option<BlockMergingData>,
+    pub merging_data: Option<MergeableOrdersWithPref>,
     pub version: SubmissionVersion,
     pub withdrawals_root: B256,
     pub trace: SubmissionTrace,
