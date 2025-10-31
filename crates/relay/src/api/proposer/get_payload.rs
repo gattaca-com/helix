@@ -61,8 +61,10 @@ impl<A: Api> ProposerApi<A> {
 
         let fork: ForkName = match fork_name_from_header(&headers) {
             Ok(Some(fork)) => fork,
-            _ => {
-                return Err(ProposerApiError::InvalidFork);
+            err => {
+                let curr = proposer_api.chain_info.current_fork_name();
+                warn!(?err, "missing {CONSENSUS_VERSION_HEADER} header! using {curr:?}");
+                curr
             }
         };
 
@@ -160,8 +162,10 @@ impl<A: Api> ProposerApi<A> {
 
         let fork: ForkName = match fork_name_from_header(&headers) {
             Ok(Some(fork)) => fork,
-            _ => {
-                return Err(ProposerApiError::InvalidFork);
+            err => {
+                let curr = proposer_api.chain_info.current_fork_name();
+                warn!(?err, "missing {CONSENSUS_VERSION_HEADER} header! using {curr:?}");
+                curr
             }
         };
 
