@@ -105,13 +105,6 @@ impl BlockMergingData {
     }
 }
 
-#[derive(
-    Debug, Default, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, Encode, Decode, TestRandom,
-)]
-pub struct BlockMergingPreferences {
-    pub allow_appending: bool,
-}
-
 /// Represents one or more transactions to be appended into a block atomically.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, Hash)]
 #[serde(untagged)]
@@ -172,6 +165,11 @@ pub struct BlobWithMetadataV2 {
     pub commitment: KzgCommitment,
     pub proofs: Vec<KzgProof>,
     pub blob: Blob,
+}
+
+pub struct MergeableOrdersWithPref {
+    pub allow_appending: bool,
+    pub orders: MergeableOrders,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

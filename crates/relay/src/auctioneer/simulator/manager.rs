@@ -11,9 +11,7 @@ use helix_common::{
     SimulatorConfig, SubmissionTrace, bid_submission::OptimisticVersion, is_local_dev,
     metrics::SimulatorMetrics, record_submission_step, simulator::BlockSimError, spawn_tracked,
 };
-use helix_types::{
-    BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion,
-};
+use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, warn};
 
@@ -48,7 +46,6 @@ pub struct SimulationResultInner {
     // TODO: move up
     pub paused_until: Option<Instant>,
     pub submission: SignedBidSubmission,
-    pub merging_preferences: BlockMergingPreferences,
     pub trace: SubmissionTrace,
     pub optimistic_version: OptimisticVersion,
     pub version: SubmissionVersion,
@@ -156,15 +153,14 @@ impl SimulatorManager {
             let timer = SimulatorMetrics::block_merge_timer(client.endpoint());
             let tx = self.sim_result_tx.clone();
             spawn_tracked!(async move {
-                debug!(block_hash =% req.block_hash, "sending merge request");
+                debug!(bid_slot = %req.bid_slot, block_hash = %req.block_hash, "sending merge request");
                 let res = SimulatorClient::do_merge_request(&req, to_send).await;
                 timer.stop_and_record();
                 SimulatorMetrics::block_merge_status(res.is_ok());
 
-                let _ = req.res_tx.send(res);
-                let result = (id, None);
+                let result = (id, res);
 
-                let _ = tx.try_send(Event::SimResult(result));
+                let _ = tx.try_send(Event::MergeResult(result));
             });
         } else {
             self.local_telemetry.dropped_merge_reqs += 1;
@@ -233,7 +229,6 @@ impl SimulatorManager {
                     paused_until,
                     res_tx: req.res_tx,
                     submission: req.submission,
-                    merging_preferences: req.merging_preferences,
                     trace: req.trace,
                     optimistic_version,
                     version: req.version,
