@@ -62,12 +62,15 @@ impl Context {
         let (res, maybe_block_hash) = match self.get_payload(blinded, local, trace, slot_data) {
             Ok((to_proposer, to_publish, trace)) => {
                 let block_hash = to_proposer.data.execution_payload.block_hash;
+                let parent_hash = to_proposer.data.execution_payload.parent_hash;
+                let builder_pubkey = self.bid_sorter.get_builder_pub_key(&parent_hash);
                 (
                     Ok(GetPayloadResultData {
                         to_proposer,
                         to_publish,
                         trace,
                         fork: slot_data.current_fork,
+                        builder_pubkey,
                     }),
                     Some(block_hash),
                 )

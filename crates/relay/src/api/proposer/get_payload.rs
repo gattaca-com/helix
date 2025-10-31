@@ -21,7 +21,7 @@ use super::ProposerApi;
 use crate::{
     api::{Api, proposer::error::ProposerApiError},
     auctioneer::GetPayloadResultData,
-    beacon::types::BroadcastValidation,
+    beacon::{error::BeaconClientError, types::BroadcastValidation},
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
 };
 
@@ -245,6 +245,13 @@ impl<A: Api> ProposerApi<A> {
             .map_err(|_| ProposerApiError::InvalidFork)?
             .block_hash()
             .0;
+        let parent_hash = signed_blinded_block
+            .message()
+            .body()
+            .execution_payload()
+            .map_err(|_| ProposerApiError::InvalidFork)?
+            .parent_hash()
+            .0;
 
         let (head_slot, slot_duty) = self.curr_slot_info.slot_info();
         // Verify that we have a proposer connected for the current proposal
@@ -273,7 +280,13 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::InternalServerError);
         };
 
-        let GetPayloadResultData { to_proposer, to_publish, trace: new_trace, fork } = rx
+        let GetPayloadResultData {
+            to_proposer,
+            to_publish,
+            trace: new_trace,
+            fork,
+            builder_pubkey,
+        } = rx
             .await
             .inspect_err(|err| {
                 error!(%err, "failed to receive payload response from auctioneer");
@@ -321,6 +334,8 @@ impl<A: Api> ProposerApi<A> {
         let self_clone = self.clone();
         let mut trace_clone = *trace;
         let payload_clone = to_proposer.data.clone();
+        let head_slot_as_u64 = head_slot.as_u64();
+        let block_hash_clone = block_hash;
 
         let handle = spawn_tracked!(async move {
             let mut failed_publishing = false;
@@ -334,6 +349,39 @@ impl<A: Api> ProposerApi<A> {
                 )
                 .await
             {
+                if matches!(err, BeaconClientError::BlockValidationFailed(..)) {
+                    if let Some(builder_pubkey) = builder_pubkey {
+                        if self_clone.local_cache.demote_builder(&builder_pubkey) {
+                            warn!(%builder_pubkey, %block_hash_clone, "Builder demoted due to validation failure");
+
+                            let reason = "Block validation failed".to_string();
+                            let db = self_clone.db.clone();
+
+                            spawn_tracked!(async move {
+                                if let Err(err) = db
+                                    .db_demote_builder(
+                                        head_slot_as_u64,
+                                        &builder_pubkey,
+                                        &block_hash_clone,
+                                        reason,
+                                    )
+                                    .await
+                                {
+                                    error!(
+                                        %builder_pubkey,
+                                        %err,
+                                        %block_hash_clone,
+                                        "failed to demote builder in database! Pausing all optimistic submissions"
+                                    );
+                                }
+                            });
+                        } else {
+                            warn!(%builder_pubkey, "Builder already demoted in cache, skipping");
+                        }
+                    } else {
+                        warn!(parent_hash = ?parent_hash, "No builder pubkey found for demotion");
+                    }
+                }
                 error!(%err, "error publishing block");
                 failed_publishing = true;
             };
