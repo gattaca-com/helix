@@ -23,7 +23,10 @@ use zstd::{
     zstd_safe::{CONTENTSIZE_ERROR, CONTENTSIZE_UNKNOWN, get_frame_content_size},
 };
 
-use crate::api::{HEADER_SUBMISSION_TYPE, builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError}};
+use crate::api::{
+    HEADER_SUBMISSION_TYPE,
+    builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubmissionType {

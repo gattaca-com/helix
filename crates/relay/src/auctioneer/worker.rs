@@ -302,7 +302,8 @@ impl SubWorker {
 
         trace!(?sequence, should_hydrate, skip_sigverify, has_mergeable_data, "processing payload");
         let (submission, merging_data) = if (should_hydrate && submission_type.is_none()) ||
-            matches!(submission_type, Some(SubmissionType::DehydratedBidSubmission)) {
+            matches!(submission_type, Some(SubmissionType::DehydratedBidSubmission))
+        {
             // caches are per builder and the builder pubkey is still unvalidated so we rely on the
             // api key pubkey for safety
             if !skip_sigverify {
@@ -314,10 +315,14 @@ impl SubWorker {
 
             (Submission::Dehydrated(payload), None)
         } else {
-                let (payload, merging_data) = if (has_mergeable_data && submission_type.is_none()) ||
-                matches!(submission_type, Some(SubmissionType::SignedBidSubmissionWithMergingData)) {
+            let (payload, merging_data) = if (has_mergeable_data && submission_type.is_none()) ||
+                matches!(
+                    submission_type,
+                    Some(SubmissionType::SignedBidSubmissionWithMergingData)
+                ) {
                 let sub_with_merging: SignedBidSubmissionWithMergingData = decoder.decode(body)?;
-                let upgraded = sub_with_merging.maybe_upgrade_to_fulu(self.chain_info.current_fork_name());
+                let upgraded =
+                    sub_with_merging.maybe_upgrade_to_fulu(self.chain_info.current_fork_name());
                 (upgraded.submission, Some(upgraded.merging_data))
             } else {
                 let sub: SignedBidSubmission = decoder.decode(body)?;
