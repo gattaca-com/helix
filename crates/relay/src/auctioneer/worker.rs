@@ -25,7 +25,7 @@ use crate::{
         proposer::{MergingPoolMessage, ProposerApiError},
     },
     auctioneer::{
-        decoder::SubmissionDecoder,
+        decoder::{SubmissionDecoder, SubmissionType},
         types::{Event, RegWorkerJob, SubWorkerJob, Submission, SubmissionData},
     },
 };
@@ -287,6 +287,7 @@ impl SubWorker {
     {
         let mut decoder = SubmissionDecoder::from_headers(&headers);
         let body = decoder.decompress(body)?;
+        let submission_type = SubmissionType::from_headers(&headers);
         let has_mergeable_data = matches!(headers.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"));
         let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref(), has_mergeable_data)?;
 
@@ -300,7 +301,8 @@ impl SubWorker {
             .and_then(|seq| seq.parse::<u64>().ok());
 
         trace!(?sequence, should_hydrate, skip_sigverify, has_mergeable_data, "processing payload");
-        let (submission, merging_data) = if should_hydrate {
+        let (submission, merging_data) = if (should_hydrate && submission_type.is_none()) ||
+            matches!(submission_type, Some(SubmissionType::DehydratedBidSubmission)) {
             // caches are per builder and the builder pubkey is still unvalidated so we rely on the
             // api key pubkey for safety
             if !skip_sigverify {
@@ -312,14 +314,24 @@ impl SubWorker {
 
             (Submission::Dehydrated(payload), None)
         } else {
-            let (payload, merging_data) = if has_mergeable_data {
-                let payload: SignedBidSubmissionWithMergingData = decoder.decode(body)?;
-                let payload = payload.maybe_upgrade_to_fulu(self.chain_info.current_fork_name());
-                (payload.submission, Some(payload.merging_data))
+                let (payload, merging_data) = if (has_mergeable_data && submission_type.is_none()) ||
+                matches!(submission_type, Some(SubmissionType::SignedBidSubmissionWithMergingData)) {
+                let sub_with_merging: SignedBidSubmissionWithMergingData = decoder.decode(body)?;
+                let upgraded = sub_with_merging.maybe_upgrade_to_fulu(self.chain_info.current_fork_name());
+                (upgraded.submission, Some(upgraded.merging_data))
             } else {
-                let payload: SignedBidSubmission = decoder.decode(body)?;
-                let payload = payload.maybe_upgrade_to_fulu(self.chain_info.current_fork_name());
-                (payload, None)
+                let sub: SignedBidSubmission = decoder.decode(body)?;
+                let upgraded = sub.maybe_upgrade_to_fulu(self.chain_info.current_fork_name());
+                let merging_data = if has_mergeable_data {
+                    Some(BlockMergingData {
+                        allow_appending: true,
+                        builder_address: upgraded.fee_recipient(),
+                        merge_orders: vec![],
+                    })
+                } else {
+                    None
+                };
+                (upgraded, merging_data)
             };
 
             trace.decoded = utcnow_ns();

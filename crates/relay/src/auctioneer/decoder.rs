@@ -23,7 +23,30 @@ use zstd::{
     zstd_safe::{CONTENTSIZE_ERROR, CONTENTSIZE_UNKNOWN, get_frame_content_size},
 };
 
-use crate::api::builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError};
+use crate::api::{HEADER_SUBMISSION_TYPE, builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError}};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmissionType {
+    SignedBidSubmission = 0,
+    SignedBidSubmissionWithMergingData = 1,
+    DehydratedBidSubmission = 2,
+}
+
+impl SubmissionType {
+    pub fn from_u8(n: u8) -> Option<Self> {
+        match n {
+            0 => Some(SubmissionType::SignedBidSubmission),
+            1 => Some(SubmissionType::SignedBidSubmissionWithMergingData),
+            2 => Some(SubmissionType::DehydratedBidSubmission),
+            _ => None,
+        }
+    }
+
+    pub fn from_headers(header_map: &HeaderMap) -> Option<Self> {
+        let submission_type = header_map.get(HEADER_SUBMISSION_TYPE)?.to_str().ok()?;
+        Self::from_u8(submission_type.parse().ok()?)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Compression {
