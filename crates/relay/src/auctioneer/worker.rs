@@ -303,25 +303,29 @@ impl SubWorker {
         trace!(?sequence, should_hydrate, skip_sigverify, has_mergeable_data, "processing payload");
 
         let (submission, merging_data) = match submission_type {
-            Some(SubmissionType::SignedBidSubmission) => {
-                decode_sub(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
+            Some(SubmissionType::Default) => {
+                decode_default(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
             }
-            Some(SubmissionType::SignedBidSubmissionWithMergingData) => {
-                decode_merging(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
+            Some(SubmissionType::Merge) => {
+                decode_merge(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
             }
-            Some(SubmissionType::SignedBidSubmissionWithDefaultMergingData) => {
-                decode_merging_default(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
-            }
-            Some(SubmissionType::DehydratedBidSubmission) => {
+            Some(SubmissionType::MergeAppendOnly) => decode_merge_append_only(
+                &mut decoder,
+                body,
+                trace,
+                skip_sigverify,
+                &self.chain_info,
+            )?,
+            Some(SubmissionType::Dehydrated) => {
                 decode_dehydrated(&mut decoder, body, trace, skip_sigverify)?
             }
             None => {
                 if should_hydrate {
                     decode_dehydrated(&mut decoder, body, trace, skip_sigverify)?
                 } else if has_mergeable_data {
-                    decode_merging(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
+                    decode_merge(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
                 } else {
-                    decode_sub(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
+                    decode_default(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
                 }
             }
         };
@@ -436,7 +440,7 @@ fn decode_dehydrated(
     Ok((Submission::Dehydrated(payload), None))
 }
 
-fn decode_merging(
+fn decode_merge(
     decoder: &mut SubmissionDecoder,
     body: bytes::Bytes,
     trace: &mut SubmissionTrace,
@@ -450,7 +454,7 @@ fn decode_merging(
     Ok((Submission::Full(upgraded.submission), Some(upgraded.merging_data)))
 }
 
-fn decode_merging_default(
+fn decode_merge_append_only(
     decoder: &mut SubmissionDecoder,
     body: bytes::Bytes,
     trace: &mut SubmissionTrace,
@@ -464,7 +468,7 @@ fn decode_merging_default(
     Ok((Submission::Full(upgraded.submission), Some(upgraded.merging_data)))
 }
 
-fn decode_sub(
+fn decode_default(
     decoder: &mut SubmissionDecoder,
     body: bytes::Bytes,
     trace: &mut SubmissionTrace,

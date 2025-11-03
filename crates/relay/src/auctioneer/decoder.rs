@@ -17,6 +17,7 @@ use http::{
 };
 use serde::de::DeserializeOwned;
 use ssz::Decode;
+use strum::{AsRefStr, EnumString};
 use tracing::trace;
 use zstd::{
     stream::read::Decoder as ZstdDecoder,
@@ -28,28 +29,19 @@ use crate::api::{
     builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, AsRefStr)]
+#[strum(serialize_all = "lowercase")]
 pub enum SubmissionType {
-    SignedBidSubmission = 0,
-    SignedBidSubmissionWithMergingData = 1,
-    SignedBidSubmissionWithDefaultMergingData = 2,
-    DehydratedBidSubmission = 3,
+    Default,
+    Merge,
+    MergeAppendOnly,
+    Dehydrated,
 }
 
 impl SubmissionType {
-    pub fn from_u8(n: u8) -> Option<Self> {
-        match n {
-            0 => Some(SubmissionType::SignedBidSubmission),
-            1 => Some(SubmissionType::SignedBidSubmissionWithMergingData),
-            2 => Some(SubmissionType::SignedBidSubmissionWithDefaultMergingData),
-            3 => Some(SubmissionType::DehydratedBidSubmission),
-            _ => None,
-        }
-    }
-
     pub fn from_headers(header_map: &HeaderMap) -> Option<Self> {
         let submission_type = header_map.get(HEADER_SUBMISSION_TYPE)?.to_str().ok()?;
-        Self::from_u8(submission_type.parse().ok()?)
+        submission_type.parse().ok()
     }
 }
 
