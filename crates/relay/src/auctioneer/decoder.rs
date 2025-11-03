@@ -32,7 +32,8 @@ use crate::api::{
 pub enum SubmissionType {
     SignedBidSubmission = 0,
     SignedBidSubmissionWithMergingData = 1,
-    DehydratedBidSubmission = 2,
+    SignedBidSubmissionWithDefaultMergingData = 2,
+    DehydratedBidSubmission = 3,
 }
 
 impl SubmissionType {
@@ -40,7 +41,8 @@ impl SubmissionType {
         match n {
             0 => Some(SubmissionType::SignedBidSubmission),
             1 => Some(SubmissionType::SignedBidSubmissionWithMergingData),
-            2 => Some(SubmissionType::DehydratedBidSubmission),
+            2 => Some(SubmissionType::SignedBidSubmissionWithDefaultMergingData),
+            3 => Some(SubmissionType::DehydratedBidSubmission),
             _ => None,
         }
     }
@@ -191,7 +193,7 @@ impl SubmissionDecoder {
 
     // TODO: pass a buffer pool to avoid allocations
     pub fn decode<T: Decode + DeserializeOwned>(
-        mut self,
+        &mut self,
         body: Bytes,
     ) -> Result<T, BuilderApiError> {
         let start = Instant::now();

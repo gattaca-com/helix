@@ -4,7 +4,7 @@ use alloy_primitives::{Address, B256, U256, bytes::Bytes};
 use lh_test_random::TestRandom;
 use lh_types::{ForkName, test_utils::TestRandom};
 use rand::Rng;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use smallvec::SmallVec;
 use ssz_derive::{Decode, Encode};
 
@@ -28,7 +28,52 @@ impl SignedBidSubmissionWithMergingData {
     }
 }
 
-// FIXME: panics at runtime
+#[derive(Debug, Clone, Serialize, Encode)]
+pub struct SignedBidSubmissionWithDefaultMergingData {
+    pub submission: SignedBidSubmission,
+    pub merging_data: BlockMergingData,
+}
+
+impl SignedBidSubmissionWithDefaultMergingData {
+    pub fn maybe_upgrade_to_fulu(self, fork: ForkName) -> Self {
+        Self {
+            submission: self.submission.maybe_upgrade_to_fulu(fork),
+            merging_data: self.merging_data,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for SignedBidSubmissionWithDefaultMergingData {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let submission = SignedBidSubmission::deserialize(deserializer)?;
+        let merging_data = BlockMergingData {
+            allow_appending: true,
+            builder_address: submission.fee_recipient(),
+            merge_orders: vec![],
+        };
+        Ok(SignedBidSubmissionWithDefaultMergingData { submission, merging_data })
+    }
+}
+
+impl ssz::Decode for SignedBidSubmissionWithDefaultMergingData {
+    fn is_ssz_fixed_len() -> bool {
+        false
+    }
+
+    fn from_ssz_bytes(bytes: &[u8]) -> Result<Self, ssz::DecodeError> {
+        let submission = SignedBidSubmission::from_ssz_bytes(bytes)?;
+        let merging_data = BlockMergingData {
+            allow_appending: true,
+            builder_address: submission.fee_recipient(),
+            merge_orders: vec![],
+        };
+        Ok(SignedBidSubmissionWithDefaultMergingData { submission, merging_data })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
 #[ssz(enum_behaviour = "union")]
 #[serde(untagged)]
