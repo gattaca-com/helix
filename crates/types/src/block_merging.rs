@@ -29,8 +29,8 @@ impl SignedBidSubmissionWithMergingData {
 }
 
 // FIXME: panics at runtime
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-#[ssz(enum_behaviour = "transparent")]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, PartialEq, Eq)]
+#[ssz(enum_behaviour = "union")]
 #[serde(untagged)]
 pub enum Order {
     Tx(TransactionOrder),
@@ -50,7 +50,7 @@ impl TestRandom for Order {
 /// Vector of transaction indices. Aliased for easier use.
 pub type TxIndices = SmallVec<[usize; 8]>;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Encode, Decode, TestRandom)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Encode, Decode, TestRandom, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct TransactionOrder {
     /// Index into block.transactions
@@ -59,7 +59,7 @@ pub struct TransactionOrder {
     pub can_revert: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode, TestRandom, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 /// References a bundle of transactions via their indices.
 /// All indices are for the block the transactions come from.
@@ -89,7 +89,9 @@ impl BundleOrder {
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize, Encode, Decode, TestRandom)]
+#[derive(
+    Debug, Default, Clone, Serialize, Deserialize, Encode, Decode, TestRandom, PartialEq, Eq,
+)]
 #[serde(deny_unknown_fields)]
 pub struct BlockMergingData {
     pub allow_appending: bool,
@@ -261,5 +263,101 @@ impl MergedBlock {
             self.merged_blob_count,
             builder_inclusions
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ssz::{Decode, Encode};
+
+    use super::*;
+
+    #[test]
+    fn order_ssz_round_trip_tx() {
+        let tx_order = TransactionOrder { index: 42, can_revert: true };
+        let order = Order::Tx(tx_order);
+
+        let bytes = order.as_ssz_bytes();
+        let decoded = Order::from_ssz_bytes(&bytes).expect("SSZ decode should succeed");
+        assert_eq!(order, decoded);
+    }
+
+    #[test]
+    fn order_ssz_round_trip_bundle() {
+        let bundle_order = BundleOrder {
+            txs: smallvec::smallvec![1, 2, 3],
+            reverting_txs: smallvec::smallvec![0],
+            dropping_txs: smallvec::smallvec![2],
+        };
+        let order = Order::Bundle(bundle_order);
+
+        let bytes = order.as_ssz_bytes();
+        let decoded = Order::from_ssz_bytes(&bytes).expect("SSZ decode should succeed");
+        assert_eq!(order, decoded);
+    }
+
+    #[test]
+    fn block_merging_data_ssz_round_trip_mixed_orders() {
+        let tx_order = Order::Tx(TransactionOrder { index: 1, can_revert: false });
+        let bundle_order = Order::Bundle(BundleOrder {
+            txs: smallvec::smallvec![0, 2, 4],
+            reverting_txs: smallvec::smallvec![1],
+            dropping_txs: smallvec::smallvec![2],
+        });
+
+        let data = BlockMergingData {
+            allow_appending: true,
+            builder_address: Address::repeat_byte(0x42),
+            merge_orders: vec![tx_order, bundle_order],
+        };
+
+        let bytes = data.as_ssz_bytes();
+        let decoded = BlockMergingData::from_ssz_bytes(&bytes).expect("SSZ decode should succeed");
+        assert_eq!(data, decoded);
+    }
+
+    #[test]
+    fn order_json_round_trip_tx() {
+        let tx_order = TransactionOrder { index: 42, can_revert: true };
+        let order = Order::Tx(tx_order);
+
+        let json = serde_json::to_string(&order).expect("JSON encode should succeed");
+        let decoded: Order = serde_json::from_str(&json).expect("JSON decode should succeed");
+        assert_eq!(order, decoded);
+    }
+
+    #[test]
+    fn order_json_round_trip_bundle() {
+        let bundle_order = BundleOrder {
+            txs: smallvec::smallvec![1, 2, 3],
+            reverting_txs: smallvec::smallvec![0],
+            dropping_txs: smallvec::smallvec![2],
+        };
+        let order = Order::Bundle(bundle_order);
+
+        let json = serde_json::to_string(&order).expect("JSON encode should succeed");
+        let decoded: Order = serde_json::from_str(&json).expect("JSON decode should succeed");
+        assert_eq!(order, decoded);
+    }
+
+    #[test]
+    fn block_merging_data_json_round_trip_mixed_orders() {
+        let tx_order = Order::Tx(TransactionOrder { index: 1, can_revert: false });
+        let bundle_order = Order::Bundle(BundleOrder {
+            txs: smallvec::smallvec![0, 2, 4],
+            reverting_txs: smallvec::smallvec![1],
+            dropping_txs: smallvec::smallvec![2],
+        });
+
+        let data = BlockMergingData {
+            allow_appending: true,
+            builder_address: Address::repeat_byte(0x42),
+            merge_orders: vec![tx_order, bundle_order],
+        };
+
+        let json = serde_json::to_string(&data).expect("JSON encode should succeed");
+        let decoded: BlockMergingData =
+            serde_json::from_str(&json).expect("JSON decode should succeed");
+        assert_eq!(data, decoded);
     }
 }

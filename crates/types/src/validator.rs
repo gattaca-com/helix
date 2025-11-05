@@ -10,13 +10,13 @@ use crate::{
 
 /// From Lighthouse, replacing PublicKeyBytes with PublicKey
 /// Validator registration, for use in interacting with servers implementing the builder API.
-#[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Encode, Decode)]
+#[derive(PartialEq, Default, Debug, Serialize, Deserialize, Clone, Encode, Decode)]
 pub struct SignedValidatorRegistrationData {
     pub message: ValidatorRegistrationData,
     pub signature: BlsSignatureBytes,
 }
 
-#[derive(PartialEq, Debug, Serialize, Deserialize, Clone, Encode, Decode, TreeHash)]
+#[derive(PartialEq, Default, Debug, Serialize, Deserialize, Clone, Encode, Decode, TreeHash)]
 pub struct ValidatorRegistrationData {
     pub fee_recipient: Address,
     #[serde(with = "serde_utils::quoted_u64")]

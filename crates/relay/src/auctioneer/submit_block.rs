@@ -5,7 +5,9 @@ use helix_common::{
     self, BuilderInfo, SubmissionTrace, bid_submission::OptimisticVersion,
     metrics::HYDRATION_CACHE_HITS, record_submission_step,
 };
-use helix_types::{MergeableOrdersWithPref, SignedBidSubmission, SubmissionVersion};
+use helix_types::{
+    MergeableOrdersWithPref, BlockValidationError, SignedBidSubmission, SubmissionVersion,
+};
 use tokio::sync::oneshot;
 use tracing::{error, trace};
 
@@ -87,6 +89,15 @@ impl Context {
         mut submission_data: SubmissionData,
         slot_data: &'a SlotData,
     ) -> Result<(ValidatedData<'a>, OptimisticVersion, Option<MergeData>), BuilderApiError> {
+        if submission_data.bid_slot() != self.bid_slot.as_u64() {
+            return Err(BuilderApiError::BidValidation(
+                BlockValidationError::SubmissionForWrongSlot {
+                    expected: self.bid_slot,
+                    got: submission_data.bid_slot().into(),
+                },
+            ));
+        }
+
         let (submission, maybe_tx_root) = match submission_data.submission {
             Submission::Full(full) => (full, None),
             Submission::Dehydrated(dehydrated) => {

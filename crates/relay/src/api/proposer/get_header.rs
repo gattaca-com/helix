@@ -133,7 +133,7 @@ impl<A: Api> ProposerApi<A> {
         let bid = bid.into_builder_bid_slow();
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
 
-        if proposer_api.relay_config.gossip_payload_on_header {
+        if proposer_api.relay_config.gossip_payload_on_header && is_mev_boost {
             spawn_tracked!(
                 async move {
                     info!("gossiping payload");
