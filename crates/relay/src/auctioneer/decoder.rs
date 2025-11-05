@@ -361,17 +361,23 @@ mod tests {
 
     #[test]
     fn test_submission_type_deserialization() {
-        assert_eq!("merge_append_only".parse::<SubmissionType>().unwrap(), SubmissionType::MergeAppendOnly);
+        assert_eq!(
+            "merge_append_only".parse::<SubmissionType>().unwrap(),
+            SubmissionType::MergeAppendOnly
+        );
         assert_eq!("default".parse::<SubmissionType>().unwrap(), SubmissionType::Default);
         assert_eq!("merge".parse::<SubmissionType>().unwrap(), SubmissionType::Merge);
         assert_eq!("dehydrated".parse::<SubmissionType>().unwrap(), SubmissionType::Dehydrated);
 
         //Case shouldn't matter
-        assert_eq!("Merge_Append_Only".parse::<SubmissionType>().unwrap(), SubmissionType::MergeAppendOnly);
+        assert_eq!(
+            "Merge_Append_Only".parse::<SubmissionType>().unwrap(),
+            SubmissionType::MergeAppendOnly
+        );
         assert_eq!("Default".parse::<SubmissionType>().unwrap(), SubmissionType::Default);
         assert_eq!("Merge".parse::<SubmissionType>().unwrap(), SubmissionType::Merge);
         assert_eq!("Dehydrated".parse::<SubmissionType>().unwrap(), SubmissionType::Dehydrated);
-        
+
         // Test that invalid values fail
         assert!("invalid".parse::<SubmissionType>().is_err());
         assert!("MergeAppendOnly".parse::<SubmissionType>().is_err()); // CamelCase should fail

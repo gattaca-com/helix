@@ -10,8 +10,8 @@ use helix_common::{
     utils::{utcnow_ns, utcnow_sec},
 };
 use helix_types::{
-    BlockMergingData, BlockMergingPreferences, BlsPublicKey, BlsPublicKeyBytes,
-    DehydratedBidSubmission, ExecPayload, SigError, SignedBidSubmission,
+    BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission, ExecPayload,
+    MergeableOrdersWithPref, SigError, SignedBidSubmission,
     SignedBidSubmissionWithDefaultMergingData, SignedBidSubmissionWithMergingData,
     SignedBlindedBeaconBlock, SignedValidatorRegistration, SubmissionVersion,
 };
