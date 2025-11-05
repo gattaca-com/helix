@@ -10,8 +10,9 @@ use helix_common::{
     utils::{utcnow_ns, utcnow_sec},
 };
 use helix_types::{
-    BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission, ExecPayload,
-    MergeableOrdersWithPref, SigError, SignedBidSubmission, SignedBidSubmissionWithMergingData,
+    BlockMergingData, BlockMergingPreferences, BlsPublicKey, BlsPublicKeyBytes,
+    DehydratedBidSubmission, ExecPayload, SigError, SignedBidSubmission,
+    SignedBidSubmissionWithDefaultMergingData, SignedBidSubmissionWithMergingData,
     SignedBlindedBeaconBlock, SignedValidatorRegistration, SubmissionVersion,
 };
 use http::HeaderValue;
@@ -24,7 +25,7 @@ use crate::{
     },
     auctioneer::{
         block_merger::get_mergeable_orders,
-        decoder::SubmissionDecoder,
+        decoder::{SubmissionDecoder, SubmissionType},
         types::{Event, RegWorkerJob, SubWorkerJob, Submission, SubmissionData},
     },
 };
@@ -241,6 +242,7 @@ impl SubWorker {
     {
         let mut decoder = SubmissionDecoder::from_headers(&headers);
         let body = decoder.decompress(body)?;
+        let submission_type = SubmissionType::from_headers(&headers);
         let has_mergeable_data = matches!(headers.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"));
         let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref(), has_mergeable_data)?;
 
@@ -254,40 +256,33 @@ impl SubWorker {
             .and_then(|seq| seq.parse::<u64>().ok());
 
         trace!(?sequence, should_hydrate, skip_sigverify, has_mergeable_data, "processing payload");
-        let (submission, merging_data) = if should_hydrate {
-            // caches are per builder and the builder pubkey is still unvalidated so we rely on the
-            // api key pubkey for safety
-            if !skip_sigverify {
-                return Err(BuilderApiError::UntrustedBuilderOnDehydratedPayload);
+
+        let (submission, merging_data) = match submission_type {
+            Some(SubmissionType::Default) => {
+                decode_default(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
             }
-
-            let payload: DehydratedBidSubmission = decoder.decode(body)?;
-            trace.decoded = utcnow_ns();
-
-            (Submission::Dehydrated(payload), None)
-        } else {
-            let (payload, merging_data) = if has_mergeable_data {
-                let payload: SignedBidSubmissionWithMergingData = decoder.decode(body)?;
-                let payload = payload.maybe_upgrade_to_fulu(self.chain_info.current_fork_name());
-                (payload.submission, Some(payload.merging_data))
-            } else {
-                let payload: SignedBidSubmission = decoder.decode(body)?;
-                let payload = payload.maybe_upgrade_to_fulu(self.chain_info.current_fork_name());
-                (payload, None)
-            };
-
-            trace.decoded = utcnow_ns();
-
-            if !skip_sigverify {
-                trace!("verifying signature");
-                let start_sig = Instant::now();
-                payload.verify_signature(self.chain_info.builder_domain)?;
-                trace!("signature ok");
-                record_submission_step("signature", start_sig.elapsed());
+            Some(SubmissionType::Merge) => {
+                decode_merge(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
             }
-
-            payload.validate_payload_ssz_lengths(self.chain_info.max_blobs_per_block())?;
-            (Submission::Full(payload), merging_data)
+            Some(SubmissionType::MergeAppendOnly) => decode_merge_append_only(
+                &mut decoder,
+                body,
+                trace,
+                skip_sigverify,
+                &self.chain_info,
+            )?,
+            Some(SubmissionType::Dehydrated) => {
+                decode_dehydrated(&mut decoder, body, trace, skip_sigverify)?
+            }
+            None => {
+                if should_hydrate {
+                    decode_dehydrated(&mut decoder, body, trace, skip_sigverify)?
+                } else if has_mergeable_data {
+                    decode_merge(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
+                } else {
+                    decode_default(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
+                }
+            }
         };
 
         trace!("computing withdrawals root");
@@ -384,6 +379,78 @@ impl RegWorker {
         let _ = res_tx.send(res);
         true
     }
+}
+
+fn decode_dehydrated(
+    decoder: &mut SubmissionDecoder,
+    body: bytes::Bytes,
+    trace: &mut SubmissionTrace,
+    skip_sigverify: bool,
+) -> Result<(Submission, Option<BlockMergingData>), BuilderApiError> {
+    if !skip_sigverify {
+        return Err(BuilderApiError::UntrustedBuilderOnDehydratedPayload);
+    }
+    let payload: DehydratedBidSubmission = decoder.decode(body)?;
+    trace.decoded = utcnow_ns();
+    Ok((Submission::Dehydrated(payload), None))
+}
+
+fn decode_merge(
+    decoder: &mut SubmissionDecoder,
+    body: bytes::Bytes,
+    trace: &mut SubmissionTrace,
+    skip_sigverify: bool,
+    chain_info: &ChainInfo,
+) -> Result<(Submission, Option<BlockMergingData>), BuilderApiError> {
+    let sub_with_merging: SignedBidSubmissionWithMergingData = decoder.decode(body)?;
+    let mut upgraded = sub_with_merging.maybe_upgrade_to_fulu(chain_info.current_fork_name());
+    trace.decoded = utcnow_ns();
+    verify_and_validate(&mut upgraded.submission, skip_sigverify, chain_info)?;
+    Ok((Submission::Full(upgraded.submission), Some(upgraded.merging_data)))
+}
+
+fn decode_merge_append_only(
+    decoder: &mut SubmissionDecoder,
+    body: bytes::Bytes,
+    trace: &mut SubmissionTrace,
+    skip_sigverify: bool,
+    chain_info: &ChainInfo,
+) -> Result<(Submission, Option<BlockMergingData>), BuilderApiError> {
+    let sub_with_merging: SignedBidSubmissionWithDefaultMergingData = decoder.decode(body)?;
+    let mut upgraded = sub_with_merging.maybe_upgrade_to_fulu(chain_info.current_fork_name());
+    trace.decoded = utcnow_ns();
+    verify_and_validate(&mut upgraded.submission, skip_sigverify, chain_info)?;
+    Ok((Submission::Full(upgraded.submission), Some(upgraded.merging_data)))
+}
+
+fn decode_default(
+    decoder: &mut SubmissionDecoder,
+    body: bytes::Bytes,
+    trace: &mut SubmissionTrace,
+    skip_sigverify: bool,
+    chain_info: &ChainInfo,
+) -> Result<(Submission, Option<BlockMergingData>), BuilderApiError> {
+    let sub_with_merging: SignedBidSubmission = decoder.decode(body)?;
+    let mut upgraded = sub_with_merging.maybe_upgrade_to_fulu(chain_info.current_fork_name());
+    trace.decoded = utcnow_ns();
+    verify_and_validate(&mut upgraded, skip_sigverify, chain_info)?;
+    Ok((Submission::Full(upgraded), None))
+}
+
+fn verify_and_validate(
+    submission: &mut SignedBidSubmission,
+    skip_sigverify: bool,
+    chain_info: &ChainInfo,
+) -> Result<(), BuilderApiError> {
+    if !skip_sigverify {
+        trace!("verifying signature");
+        let start_sig = Instant::now();
+        submission.verify_signature(chain_info.builder_domain)?;
+        trace!("signature ok");
+        record_submission_step("signature", start_sig.elapsed());
+    }
+    submission.validate_payload_ssz_lengths(chain_info.max_blobs_per_block())?;
+    Ok(())
 }
 
 fn verify_signed_blinded_block_signature(
