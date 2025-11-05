@@ -1,4 +1,3 @@
-mod block_merging;
 mod error;
 mod get_header;
 pub(crate) mod get_payload;
@@ -8,7 +7,6 @@ mod types;
 use std::sync::{Arc, atomic::Ordering};
 
 use axum::{Extension, response::IntoResponse};
-pub use block_merging::MergingPoolMessage;
 pub use error::*;
 use helix_common::{
     RelayConfig, ValidatorPreferences, alerts::AlertManager, chain_info::ChainInfo,
@@ -18,7 +16,7 @@ use hyper::StatusCode;
 pub use types::*;
 
 use crate::{
-    api::{Api, proposer::block_merging::BestMergedBlock, router::Terminating},
+    api::{Api, router::Terminating},
     auctioneer::{AuctioneerHandle, RegWorkerHandle},
     beacon::multi_beacon_client::MultiBeaconClient,
     database::postgres::postgres_db_service::PostgresDatabaseService,
@@ -39,8 +37,6 @@ pub struct ProposerApi<A: Api> {
     pub chain_info: Arc<ChainInfo>,
     pub validator_preferences: Arc<ValidatorPreferences>,
     pub relay_config: RelayConfig,
-    /// Set in the block merging process
-    pub shared_best_merged: BestMergedBlock,
     pub alert_manager: AlertManager,
     pub auctioneer_handle: AuctioneerHandle,
     pub reg_handle: RegWorkerHandle,
@@ -72,7 +68,6 @@ impl<A: Api> ProposerApi<A> {
             validator_preferences,
             relay_config: relay_config.clone(),
             curr_slot_info,
-            shared_best_merged: BestMergedBlock::new(),
             alert_manager: AlertManager::from_relay_config(&relay_config),
             auctioneer_handle,
             reg_handle,

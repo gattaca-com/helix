@@ -12,9 +12,7 @@ use helix_common::{
     record_submission_step_ns,
     utils::{avg_duration, utcnow_ns},
 };
-use helix_types::{
-    BlockMergingPreferences, BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion,
-};
+use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::{info, trace};
 
@@ -28,16 +26,10 @@ pub struct BidEntry {
     block_number: u64,
     parent_hash: B256,
     fee_recipient: Address,
-
-    merging: BlockMergingPreferences,
 }
 
 impl BidEntry {
-    fn new(
-        version: SubmissionVersion,
-        submission: &SignedBidSubmission,
-        merging: BlockMergingPreferences,
-    ) -> Self {
+    fn new(version: SubmissionVersion, submission: &SignedBidSubmission) -> Self {
         let bid_trace = submission.bid_trace();
         let payload = submission.execution_payload_ref();
 
@@ -48,7 +40,6 @@ impl BidEntry {
             block_number: payload.block_number,
             parent_hash: payload.parent_hash,
             fee_recipient: payload.fee_recipient,
-            merging,
         }
     }
 }
@@ -184,14 +175,13 @@ impl BidSorter {
         version: SubmissionVersion,
         submission: &SignedBidSubmission,
         trace: &mut SubmissionTrace,
-        merging_preferences: BlockMergingPreferences,
         is_optimistic: bool,
     ) -> bool {
         trace!(is_optimistic, "sorting submission");
 
         let bid_trace = submission.bid_trace();
         assert_eq!(bid_trace.slot, self.curr_bid_slot);
-        let bid = BidEntry::new(version, submission, merging_preferences);
+        let bid = BidEntry::new(version, submission);
         let builder_pubkey = bid_trace.builder_pubkey;
 
         let start = Instant::now();
@@ -204,12 +194,6 @@ impl BidSorter {
         BID_SORTER_PROCESS_LATENCY_US.observe(process_latency.as_micros() as f64);
 
         is_top_bid
-    }
-
-    // TODO: should we return one hash per fork?
-    pub fn best_mergeable(&self) -> Option<B256> {
-        let curr = self.forks.iter().next()?.1.curr_bid.as_ref()?;
-        curr.1.merging.allow_appending.then_some(curr.1.block_hash)
     }
 
     pub fn demote(&mut self, demoted: BlsPublicKeyBytes) {

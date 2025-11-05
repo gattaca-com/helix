@@ -253,6 +253,7 @@ pub struct BlockMergeRequestV1 {
 #[serde_as]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockMergeResponseV1 {
+    pub base_block_hash: B256,
     #[serde(with = "alloy_rpc_types::beacon::payload::beacon_payload_v3")]
     pub execution_payload: ExecutionPayloadV3,
     pub execution_requests: ExecutionRequestsV4,

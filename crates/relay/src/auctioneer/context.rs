@@ -16,7 +16,9 @@ use tracing::{error, info, warn};
 use crate::{
     api::builder::error::BuilderApiError,
     auctioneer::{
+        BlockMergeResponse,
         bid_sorter::BidSorter,
+        block_merger::BlockMerger,
         simulator::manager::{SimulationResult, SimulatorManager},
         types::{PayloadEntry, PendingPayload},
     },
@@ -34,11 +36,12 @@ pub struct SlotContext {
     pub hydration_cache: HydrationCache,
     pub payloads: FxHashMap<B256, PayloadEntry>,
     pub sim_manager: SimulatorManager,
+    pub block_merger: BlockMerger,
 }
 
 pub struct Context {
     pub chain_info: ChainInfo,
-    pub _config: RelayConfig,
+    pub config: RelayConfig,
     pub cache: LocalCache,
     pub unknown_builder_info: BuilderInfo,
     pub db: Arc<PostgresDatabaseService>,
@@ -66,6 +69,8 @@ impl Context {
             api_key: None,
         };
 
+        let block_merger = BlockMerger::new(0, chain_info.clone(), cache.clone(), config.clone());
+
         let slot_context = SlotContext {
             sim_manager,
             bid_slot: Slot::new(0),
@@ -80,9 +85,10 @@ impl Context {
                 EXPECTED_PAYLOADS_PER_SLOT,
                 Default::default(),
             ),
+            block_merger,
         };
 
-        Self { chain_info, cache, unknown_builder_info, slot_context, db, _config: config }
+        Self { chain_info, cache, unknown_builder_info, slot_context, db, config }
     }
 
     pub fn builder_info(&self, builder: &BlsPublicKeyBytes) -> BuilderInfo {
@@ -159,6 +165,7 @@ impl Context {
         self.version.clear();
         self.hydration_cache.clear();
         self.sim_manager.on_new_slot(bid_slot.as_u64());
+        self.block_merger.on_new_slot(bid_slot.as_u64());
 
         // here we need to deallocate a lot of data, taking more than 1s on busy slots
         // this is not a big issue since it 's only at the beginning of the slot, but it blocks the
@@ -176,6 +183,27 @@ impl Context {
             drop(payloads_to_drop);
             info!("dropped {} payloads in {:?}", to_drop, start.elapsed())
         });
+    }
+
+    pub fn handle_merge_response(&mut self, response: BlockMergeResponse) {
+        let block_hash = response.execution_payload.block_hash;
+        let Some(original_payload) = self.payloads.get(&response.base_block_hash) else {
+            warn!(%block_hash, "could not fetch original payload for merged block");
+            return;
+        };
+
+        let original_payload_and_blobs = original_payload.payload_and_blobs.clone();
+
+        //TODO: this function does a lot of work, should move that work away from the event loop
+        let Some(payload) = self
+            .block_merger
+            .prepare_merged_payload_for_storage(response, original_payload_and_blobs)
+            .ok()
+        else {
+            warn!(%block_hash, "failed to prepare merged payload for storage");
+            return;
+        };
+        self.payloads.insert(block_hash, payload);
     }
 }
 
