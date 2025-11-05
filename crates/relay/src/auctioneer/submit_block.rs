@@ -6,7 +6,7 @@ use helix_common::{
     metrics::HYDRATION_CACHE_HITS, record_submission_step,
 };
 use helix_types::{
-    MergeableOrdersWithPref, BlockValidationError, SignedBidSubmission, SubmissionVersion,
+    BlockValidationError, MergeableOrdersWithPref, SignedBidSubmission, SubmissionVersion,
 };
 use tokio::sync::oneshot;
 use tracing::{error, trace};
