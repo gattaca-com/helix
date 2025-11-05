@@ -4970,6 +4970,8 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "strum 0.27.2",
+ "strum_macros 0.27.2",
  "thiserror 1.0.69",
  "tikv-jemallocator",
  "tokio",
