@@ -11,8 +11,7 @@ use helix_common::{
 };
 use helix_types::{
     BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission, ExecPayload,
-    MergeableOrdersWithPref, SigError, SignedBidSubmission,
-    SignedBidSubmissionWithDefaultMergingData, SignedBidSubmissionWithMergingData,
+    MergeableOrdersWithPref, SigError, SignedBidSubmission, SignedBidSubmissionWithMergingData,
     SignedBlindedBeaconBlock, SignedValidatorRegistration, SubmissionVersion,
 };
 use http::HeaderValue;
@@ -25,7 +24,7 @@ use crate::{
     },
     auctioneer::{
         block_merger::get_mergeable_orders,
-        decoder::{SubmissionDecoder, SubmissionType},
+        decoder::{MergeType, SubmissionDecoder, SubmissionType},
         types::{Event, RegWorkerJob, SubWorkerJob, Submission, SubmissionData},
     },
 };
@@ -243,6 +242,7 @@ impl SubWorker {
         let mut decoder = SubmissionDecoder::from_headers(&headers);
         let body = decoder.decompress(body)?;
         let submission_type = SubmissionType::from_headers(&headers);
+        let merge_type = MergeType::from_headers(&headers);
         let has_mergeable_data = matches!(headers.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"));
         let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref(), has_mergeable_data)?;
 
@@ -258,29 +258,46 @@ impl SubWorker {
         trace!(?sequence, should_hydrate, skip_sigverify, has_mergeable_data, "processing payload");
 
         let (submission, merging_data) = match submission_type {
-            Some(SubmissionType::Default) => {
-                decode_default(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
-            }
-            Some(SubmissionType::Merge) => {
-                decode_merge(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
-            }
-            Some(SubmissionType::MergeAppendOnly) => decode_merge_append_only(
+            Some(SubmissionType::Default) => decode_default(
                 &mut decoder,
                 body,
                 trace,
                 skip_sigverify,
                 &self.chain_info,
+                &merge_type,
+            )?,
+            Some(SubmissionType::Merge) => decode_merge(
+                &mut decoder,
+                body,
+                trace,
+                skip_sigverify,
+                &self.chain_info,
+                &merge_type,
             )?,
             Some(SubmissionType::Dehydrated) => {
-                decode_dehydrated(&mut decoder, body, trace, skip_sigverify)?
+                decode_dehydrated(&mut decoder, body, trace, skip_sigverify, &merge_type)?
             }
             None => {
                 if should_hydrate {
-                    decode_dehydrated(&mut decoder, body, trace, skip_sigverify)?
+                    decode_dehydrated(&mut decoder, body, trace, skip_sigverify, &merge_type)?
                 } else if has_mergeable_data {
-                    decode_merge(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
+                    decode_merge(
+                        &mut decoder,
+                        body,
+                        trace,
+                        skip_sigverify,
+                        &self.chain_info,
+                        &merge_type,
+                    )?
                 } else {
-                    decode_default(&mut decoder, body, trace, skip_sigverify, &self.chain_info)?
+                    decode_default(
+                        &mut decoder,
+                        body,
+                        trace,
+                        skip_sigverify,
+                        &self.chain_info,
+                        &merge_type,
+                    )?
                 }
             }
         };
@@ -386,13 +403,29 @@ fn decode_dehydrated(
     body: bytes::Bytes,
     trace: &mut SubmissionTrace,
     skip_sigverify: bool,
+    merge_type: &Option<MergeType>,
 ) -> Result<(Submission, Option<BlockMergingData>), BuilderApiError> {
     if !skip_sigverify {
         return Err(BuilderApiError::UntrustedBuilderOnDehydratedPayload);
     }
     let payload: DehydratedBidSubmission = decoder.decode(body)?;
     trace.decoded = utcnow_ns();
-    Ok((Submission::Dehydrated(payload), None))
+
+    let merging_data = match merge_type {
+        Some(MergeType::Mergeable) => {
+            //Should this return an error instead?
+            error!("mergeable dehydrated submissions are not supported");
+            None
+        }
+        Some(MergeType::AppendOnly) => Some(BlockMergingData {
+            allow_appending: true,
+            builder_address: payload.fee_recipient(),
+            merge_orders: vec![],
+        }),
+        None => None,
+    };
+
+    Ok((Submission::Dehydrated(payload), merging_data))
 }
 
 fn decode_merge(
@@ -401,26 +434,26 @@ fn decode_merge(
     trace: &mut SubmissionTrace,
     skip_sigverify: bool,
     chain_info: &ChainInfo,
+    merge_type: &Option<MergeType>,
 ) -> Result<(Submission, Option<BlockMergingData>), BuilderApiError> {
     let sub_with_merging: SignedBidSubmissionWithMergingData = decoder.decode(body)?;
     let mut upgraded = sub_with_merging.maybe_upgrade_to_fulu(chain_info.current_fork_name());
     trace.decoded = utcnow_ns();
+    let merging_data = match merge_type {
+        Some(MergeType::Mergeable) => Some(upgraded.merging_data),
+        //Handle append-only by creating empty mergeable orders
+        //this allows builder to switch between append-only and mergeable without changing
+        // submission alternatively we could reject or ignore append-only here if the
+        // submission is mergeable?
+        Some(MergeType::AppendOnly) => Some(BlockMergingData {
+            allow_appending: upgraded.merging_data.allow_appending,
+            builder_address: upgraded.merging_data.builder_address,
+            merge_orders: vec![],
+        }),
+        None => Some(upgraded.merging_data),
+    };
     verify_and_validate(&mut upgraded.submission, skip_sigverify, chain_info)?;
-    Ok((Submission::Full(upgraded.submission), Some(upgraded.merging_data)))
-}
-
-fn decode_merge_append_only(
-    decoder: &mut SubmissionDecoder,
-    body: bytes::Bytes,
-    trace: &mut SubmissionTrace,
-    skip_sigverify: bool,
-    chain_info: &ChainInfo,
-) -> Result<(Submission, Option<BlockMergingData>), BuilderApiError> {
-    let sub_with_merging: SignedBidSubmissionWithDefaultMergingData = decoder.decode(body)?;
-    let mut upgraded = sub_with_merging.maybe_upgrade_to_fulu(chain_info.current_fork_name());
-    trace.decoded = utcnow_ns();
-    verify_and_validate(&mut upgraded.submission, skip_sigverify, chain_info)?;
-    Ok((Submission::Full(upgraded.submission), Some(upgraded.merging_data)))
+    Ok((Submission::Full(upgraded.submission), merging_data))
 }
 
 fn decode_default(
@@ -429,12 +462,26 @@ fn decode_default(
     trace: &mut SubmissionTrace,
     skip_sigverify: bool,
     chain_info: &ChainInfo,
+    merge_type: &Option<MergeType>,
 ) -> Result<(Submission, Option<BlockMergingData>), BuilderApiError> {
     let sub_with_merging: SignedBidSubmission = decoder.decode(body)?;
     let mut upgraded = sub_with_merging.maybe_upgrade_to_fulu(chain_info.current_fork_name());
     trace.decoded = utcnow_ns();
+    let merging_data = match merge_type {
+        Some(MergeType::Mergeable) => {
+            //Should this return an error instead?
+            error!("mergeable dehydrated submissions are not supported");
+            None
+        }
+        Some(MergeType::AppendOnly) => Some(BlockMergingData {
+            allow_appending: true,
+            builder_address: upgraded.fee_recipient(),
+            merge_orders: vec![],
+        }),
+        None => None,
+    };
     verify_and_validate(&mut upgraded, skip_sigverify, chain_info)?;
-    Ok((Submission::Full(upgraded), None))
+    Ok((Submission::Full(upgraded), merging_data))
 }
 
 fn verify_and_validate(
