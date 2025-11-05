@@ -147,7 +147,7 @@ impl BlockMerger {
         &mut self,
         response: BlockMergeResponse,
         original_payload: Arc<PayloadAndBlobs>,
-    ) -> Result<(B256, PayloadEntry), PayloadMergingError> {
+    ) -> Result<PayloadEntry, PayloadMergingError> {
         let bid_slot = self.curr_bid_slot;
         let max_blobs_per_block = self.chain_info.max_blobs_per_block();
 
@@ -221,7 +221,7 @@ impl BlockMerger {
             Some(BestMergedBlock { base_block_time_ms: base_block_data.time_ms, bid: new_bid });
 
         // Return the payload entry to be stored for get payload calls
-        Ok((block_hash, PayloadEntry { payload_and_blobs, bid_data: Some(bid_data) }))
+        Ok(PayloadEntry { payload_and_blobs, bid_data: Some(bid_data) })
     }
 
     fn update_base_block(&mut self, base_block_hash: &B256, base_block_value: U256) {

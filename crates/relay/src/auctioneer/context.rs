@@ -194,7 +194,8 @@ impl Context {
 
         let original_payload_and_blobs = original_payload.payload_and_blobs.clone();
 
-        let Some((block_hash, payload)) = self
+        //TODO: this function does a lot of work, should move that work away from the event loop
+        let Some(payload) = self
             .block_merger
             .prepare_merged_payload_for_storage(response, original_payload_and_blobs)
             .ok()
