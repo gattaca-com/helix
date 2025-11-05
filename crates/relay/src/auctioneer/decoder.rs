@@ -30,7 +30,7 @@ use crate::api::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, AsRefStr)]
-#[strum(serialize_all = "lowercase")]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub enum SubmissionType {
     Default,
     Merge,
@@ -349,5 +349,31 @@ mod tests {
         let pubkey_ssz = decoder.extract_builder_pubkey(data_ssz.as_slice(), true).unwrap();
 
         assert_eq!(pubkey_json, pubkey_ssz)
+    }
+
+    #[test]
+    fn test_submission_type_serialization() {
+        assert_eq!(SubmissionType::MergeAppendOnly.as_ref(), "merge_append_only");
+        assert_eq!(SubmissionType::Default.as_ref(), "default");
+        assert_eq!(SubmissionType::Merge.as_ref(), "merge");
+        assert_eq!(SubmissionType::Dehydrated.as_ref(), "dehydrated");
+    }
+
+    #[test]
+    fn test_submission_type_deserialization() {
+        assert_eq!("merge_append_only".parse::<SubmissionType>().unwrap(), SubmissionType::MergeAppendOnly);
+        assert_eq!("default".parse::<SubmissionType>().unwrap(), SubmissionType::Default);
+        assert_eq!("merge".parse::<SubmissionType>().unwrap(), SubmissionType::Merge);
+        assert_eq!("dehydrated".parse::<SubmissionType>().unwrap(), SubmissionType::Dehydrated);
+
+        //Case shouldn't matter
+        assert_eq!("Merge_Append_Only".parse::<SubmissionType>().unwrap(), SubmissionType::MergeAppendOnly);
+        assert_eq!("Default".parse::<SubmissionType>().unwrap(), SubmissionType::Default);
+        assert_eq!("Merge".parse::<SubmissionType>().unwrap(), SubmissionType::Merge);
+        assert_eq!("Dehydrated".parse::<SubmissionType>().unwrap(), SubmissionType::Dehydrated);
+        
+        // Test that invalid values fail
+        assert!("invalid".parse::<SubmissionType>().is_err());
+        assert!("MergeAppendOnly".parse::<SubmissionType>().is_err()); // CamelCase should fail
     }
 }
