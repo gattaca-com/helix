@@ -25,7 +25,7 @@ use zstd::{
 };
 
 use crate::api::{
-    HEADER_SUBMISSION_TYPE,
+    HEADER_MERGE_TYPE, HEADER_SUBMISSION_TYPE,
     builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
 };
 
@@ -34,7 +34,6 @@ use crate::api::{
 pub enum SubmissionType {
     Default,
     Merge,
-    MergeAppendOnly,
     Dehydrated,
 }
 
@@ -42,6 +41,20 @@ impl SubmissionType {
     pub fn from_headers(header_map: &HeaderMap) -> Option<Self> {
         let submission_type = header_map.get(HEADER_SUBMISSION_TYPE)?.to_str().ok()?;
         submission_type.parse().ok()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, AsRefStr)]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
+pub enum MergeType {
+    Mergeable,
+    AppendOnly,
+}
+
+impl MergeType {
+    pub fn from_headers(header_map: &HeaderMap) -> Option<Self> {
+        let merge_type = header_map.get(HEADER_MERGE_TYPE)?.to_str().ok()?;
+        merge_type.parse().ok()
     }
 }
 
@@ -353,7 +366,6 @@ mod tests {
 
     #[test]
     fn test_submission_type_serialization() {
-        assert_eq!(SubmissionType::MergeAppendOnly.as_ref(), "merge_append_only");
         assert_eq!(SubmissionType::Default.as_ref(), "default");
         assert_eq!(SubmissionType::Merge.as_ref(), "merge");
         assert_eq!(SubmissionType::Dehydrated.as_ref(), "dehydrated");
@@ -361,19 +373,11 @@ mod tests {
 
     #[test]
     fn test_submission_type_deserialization() {
-        assert_eq!(
-            "merge_append_only".parse::<SubmissionType>().unwrap(),
-            SubmissionType::MergeAppendOnly
-        );
         assert_eq!("default".parse::<SubmissionType>().unwrap(), SubmissionType::Default);
         assert_eq!("merge".parse::<SubmissionType>().unwrap(), SubmissionType::Merge);
         assert_eq!("dehydrated".parse::<SubmissionType>().unwrap(), SubmissionType::Dehydrated);
 
         //Case shouldn't matter
-        assert_eq!(
-            "Merge_Append_Only".parse::<SubmissionType>().unwrap(),
-            SubmissionType::MergeAppendOnly
-        );
         assert_eq!("Default".parse::<SubmissionType>().unwrap(), SubmissionType::Default);
         assert_eq!("Merge".parse::<SubmissionType>().unwrap(), SubmissionType::Merge);
         assert_eq!("Dehydrated".parse::<SubmissionType>().unwrap(), SubmissionType::Dehydrated);
@@ -381,5 +385,25 @@ mod tests {
         // Test that invalid values fail
         assert!("invalid".parse::<SubmissionType>().is_err());
         assert!("MergeAppendOnly".parse::<SubmissionType>().is_err()); // CamelCase should fail
+    }
+
+    #[test]
+    fn test_merge_type_serialization() {
+        assert_eq!(MergeType::Mergeable.as_ref(), "mergeable");
+        assert_eq!(MergeType::AppendOnly.as_ref(), "append_only");
+    }
+
+    #[test]
+    fn test_merge_type_deserialization() {
+        assert_eq!("mergeable".parse::<MergeType>().unwrap(), MergeType::Mergeable);
+        assert_eq!("append_only".parse::<MergeType>().unwrap(), MergeType::AppendOnly);
+
+        //Case shouldn't matter
+        assert_eq!("Mergeable".parse::<MergeType>().unwrap(), MergeType::Mergeable);
+        assert_eq!("Append_Only".parse::<MergeType>().unwrap(), MergeType::AppendOnly);
+
+        // Test that invalid values fail
+        assert!("invalid".parse::<MergeType>().is_err());
+        assert!("AppendOnly".parse::<MergeType>().is_err()); // CamelCase should fail
     }
 }
