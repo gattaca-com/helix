@@ -92,8 +92,10 @@ impl DataApi {
             .await
         {
             Ok(result) => {
+                let mut seen = std::collections::HashSet::with_capacity(result.len());
                 let response = result
                     .into_iter()
+                    .filter(|b| seen.insert(b.bid_trace.block_hash))
                     .map(|b| b.into())
                     .collect::<Vec<DeliveredPayloadsResponse>>();
 
@@ -140,8 +142,12 @@ impl DataApi {
         match data_api.db.get_bids(&(&params).into(), data_api.validator_preferences.clone()).await
         {
             Ok(result) => {
-                let response =
-                    result.into_iter().map(|b| b.into()).collect::<Vec<ReceivedBlocksResponse>>();
+                let mut seen = std::collections::HashSet::with_capacity(result.len());
+                let response = result
+                    .into_iter()
+                    .filter(|b| seen.insert(b.bid_trace.block_hash))
+                    .map(|b| b.into())
+                    .collect::<Vec<ReceivedBlocksResponse>>();
 
                 cache.insert(params, response.clone());
 
