@@ -274,8 +274,24 @@ impl PostgresDatabaseService {
                     }
                     _ = ticker.tick() => {
                         if !batch.is_empty() {
-                            if let Err(e) = svc_clone._flush_block_submissions(&batch, &mut last_slot_processed).await {
-                                error!("block batch failed: {:?}", e);
+
+                            let mut retry_count = 0;
+                            const MAX_RETRIES: usize = 3;
+
+                            loop {
+                                match svc_clone._flush_block_submissions(&batch, &mut last_slot_processed).await {
+                                    Ok(_) => break,
+                                    Err(e) => {
+                                        retry_count += 1;
+
+                                        if retry_count >= MAX_RETRIES {
+                                            error!("block batch failed after {} retries: {:?}", retry_count, e);
+                                            break;
+                                        }
+
+                                        tokio::time::sleep(Duration::from_millis(100)).await;
+                                    }
+                                }
                             }
                             batch.clear();
                         }
@@ -491,6 +507,9 @@ impl PostgresDatabaseService {
             num_txs: i32,
             timestamp: i64,
             first_seen: i64,
+            region_id: i16,
+            optimistic_version: i16,
+            metadata: Option<String>,
         }
 
         let mut structured_blocks: Vec<BlockParams> = Vec::with_capacity(batch.len());
@@ -513,6 +532,9 @@ impl PostgresDatabaseService {
                 num_txs: item.submission.num_txs() as i32,
                 timestamp: item.submission.timestamp() as i64,
                 first_seen: item.trace.receive as i64,
+                region_id: self.region,
+                optimistic_version: item.optimistic_version as i16,
+                metadata: item.trace.metadata.clone(),
             });
         }
 
@@ -533,12 +555,15 @@ impl PostgresDatabaseService {
             params.push(&blk.num_txs);
             params.push(&blk.timestamp);
             params.push(&blk.first_seen);
+            params.push(&blk.region_id);
+            params.push(&blk.optimistic_version);
+            params.push(&blk.metadata);
         }
 
         // Build and execute INSERT for block_submission
         let num_cols = BLOCK_SUBMISSION_FIELD_COUNT;
         let mut sql = String::from(
-            "INSERT INTO block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen) VALUES ",
+            "INSERT INTO block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen, region_id, optimistic_version, metadata) VALUES ",
         );
         let clauses: Vec<String> = (0..structured_blocks.len())
             .map(|i| {
@@ -549,78 +574,9 @@ impl PostgresDatabaseService {
             })
             .collect();
         sql.push_str(&clauses.join(", "));
-        sql.push_str(" ON CONFLICT (block_hash) DO NOTHING");
         client.execute(&sql, &params).await?;
 
-        // Step 2: build structured params for submission_trace
-        struct TraceParams {
-            block_hash: Vec<u8>,
-            region_id: i16,
-            optimistic_version: i16,
-            receive: i64,
-            decode: i64,
-            pre_checks: i64,
-            signature: i64,
-            floor_bid_checks: i64,
-            simulation: i64,
-            auctioneer_update: i64,
-            request_finish: i64,
-            metadata: Option<String>,
-        }
-
-        let mut structured_traces: Vec<TraceParams> = Vec::with_capacity(batch.len());
-        // TODO: refactor tracing
-        for item in batch {
-            structured_traces.push(TraceParams {
-                block_hash: item.submission.block_hash().as_slice().to_vec(),
-                region_id: self.region,
-                optimistic_version: item.optimistic_version as i16,
-                receive: item.trace.receive as i64,
-                decode: 0,
-                pre_checks: 0,
-                signature: 0,
-                floor_bid_checks: 0,
-                simulation: 0,
-                auctioneer_update: 0,
-                request_finish: 0,
-                metadata: item.trace.metadata.clone(),
-            });
-        }
-
-        let mut ts_params: Vec<&(dyn ToSql + Sync)> =
-            Vec::with_capacity(structured_traces.len() * 12);
-        for tr in &structured_traces {
-            ts_params.push(&tr.block_hash);
-            ts_params.push(&tr.region_id);
-            ts_params.push(&tr.optimistic_version);
-            ts_params.push(&tr.receive);
-            ts_params.push(&tr.decode);
-            ts_params.push(&tr.pre_checks);
-            ts_params.push(&tr.signature);
-            ts_params.push(&tr.floor_bid_checks);
-            ts_params.push(&tr.simulation);
-            ts_params.push(&tr.auctioneer_update);
-            ts_params.push(&tr.request_finish);
-            ts_params.push(&tr.metadata);
-        }
-
-        // Build and execute INSERT for submission_trace
-        let trace_cols = 12;
-        let mut ts_sql = String::from(
-            "INSERT INTO submission_trace (block_hash, region_id, optimistic_version, receive, decode, pre_checks, signature, floor_bid_checks, simulation, auctioneer_update, request_finish, metadata) VALUES ",
-        );
-        let ts_clauses: Vec<String> = (0..structured_traces.len())
-            .map(|i| {
-                let start = i * trace_cols + 1;
-                let placeholders: Vec<String> =
-                    (0..trace_cols).map(|j| format!("${}", start + j)).collect();
-                format!("({})", placeholders.join(", "))
-            })
-            .collect();
-        ts_sql.push_str(&ts_clauses.join(", "));
-        client.execute(&ts_sql, &ts_params).await?;
-
-        // Step 3: build structured params for slot_preferences, skipping already processed slots
+        // Step 2: build structured params for slot_preferences, skipping already processed slots
         // Collect only new slots
         let mut new_rows: Vec<(i32, Vec<u8>)> = Vec::with_capacity(batch.len());
         let mut tmp_last_processed_slot = *last_processed_slot;
@@ -1793,7 +1749,7 @@ impl PostgresDatabaseService {
             Filtering::Global => None,
         };
 
-        if validator_preferences.trusted_builders.is_some() || filtering.is_some() {
+        if filtering.is_some() {
             query.push_str(
                 "
                 INNER JOIN
@@ -1853,14 +1809,6 @@ impl PostgresDatabaseService {
             param_index += 1;
         }
 
-        if let Some(trusted_builders) = &validator_preferences.trusted_builders {
-            query.push_str(&format!(
-                " AND delivered_payload_preferences.trusted_builders @> ${param_index}"
-            ));
-            params.push(Box::new(trusted_builders));
-            param_index += 1;
-        }
-
         if let Some(order) = filters.order() {
             query.push_str(" ORDER BY block_submission.value ");
             query.push_str(if order >= 0 { "ASC" } else { "DESC" });
@@ -1894,16 +1842,15 @@ impl PostgresDatabaseService {
 
         let region_id = self.region;
 
-        let mut client = self.pool.get().await?;
-        let transaction = client.transaction().await?;
+        let client = self.pool.get().await?;
 
-        transaction
+        client
             .execute(
                 "
                     INSERT INTO get_header
-                        (slot_number, region_id, parent_hash, proposer_pubkey, block_hash, mev_boost, user_agent)
+                        (slot_number, region_id, parent_hash, proposer_pubkey, block_hash, mev_boost, user_agent, receive, validation_complete, best_bid_fetched)
                     VALUES
-                        ($1, $2, $3, $4, $5, $6, $7)
+                        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 ",
                 &[
                     &(params.slot as i32),
@@ -1913,29 +1860,12 @@ impl PostgresDatabaseService {
                     &(best_block_hash.as_slice()),
                     &(mev_boost),
                     &(user_agent),
-                ],
-            )
-            .await?;
-
-        transaction
-            .execute(
-                "
-                INSERT INTO get_header_trace
-                    (block_hash, region_id, receive, validation_complete, best_bid_fetched)
-                VALUES
-                    ($1, $2, $3, $4, $5)
-            ",
-                &[
-                    &(best_block_hash.as_slice()),
-                    &(region_id),
                     &(trace.receive as i64),
                     &(trace.validation_complete as i64),
                     &(trace.best_bid_fetched as i64),
                 ],
             )
             .await?;
-
-        transaction.commit().await?;
 
         record.record_success();
         Ok(())
