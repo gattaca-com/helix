@@ -4,8 +4,9 @@ use alloy_primitives::B256;
 use helix_common::GetPayloadTrace;
 use helix_types::{
     BeaconBlockBodyElectra, BeaconBlockBodyFulu, BeaconBlockElectra, BeaconBlockFulu,
-    GetPayloadResponse, PayloadAndBlobs, SignedBeaconBlock, SignedBeaconBlockElectra,
-    SignedBeaconBlockFulu, SignedBlindedBeaconBlock, VersionedSignedProposal,
+    BlsPublicKeyBytes, GetPayloadResponse, PayloadAndBlobs, SignedBeaconBlock,
+    SignedBeaconBlockElectra, SignedBeaconBlockFulu, SignedBlindedBeaconBlock,
+    VersionedSignedProposal,
 };
 use tokio::sync::oneshot;
 use tracing::{info, warn};
@@ -58,6 +59,7 @@ impl Context {
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
         slot_data: &SlotData,
+        builder_pubkey: Option<BlsPublicKeyBytes>,
     ) -> Option<B256> {
         let (res, maybe_block_hash) = match self.get_payload(blinded, local, trace, slot_data) {
             Ok((to_proposer, to_publish, trace)) => {
@@ -68,6 +70,7 @@ impl Context {
                         to_publish,
                         trace,
                         fork: slot_data.current_fork,
+                        builder_pubkey,
                     }),
                     Some(block_hash),
                 )
@@ -95,6 +98,7 @@ impl Context {
                 trace,
                 res_tx,
                 slot_data,
+                local.builder_pubkey.clone(),
             )
         } else {
             self.pending_payload = Some(pending);

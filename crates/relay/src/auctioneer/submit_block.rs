@@ -6,7 +6,8 @@ use helix_common::{
     metrics::HYDRATION_CACHE_HITS, record_submission_step,
 };
 use helix_types::{
-    BlockValidationError, MergeableOrdersWithPref, SignedBidSubmission, SubmissionVersion,
+    BlockValidationError, BlsPublicKeyBytes, MergeableOrdersWithPref, SignedBidSubmission,
+    SubmissionVersion,
 };
 use tokio::sync::oneshot;
 use tracing::{error, trace};
@@ -164,6 +165,7 @@ impl Context {
             slot: submission.slot().as_u64(),
             block_hash: *submission.block_hash(),
             block_value: submission.value(),
+            builder_public_key: *submission.builder_public_key(),
             proposer_fee_recipient: *submission.proposer_fee_recipient(),
             parent_beacon_block_root: payload_attributes.parent_beacon_block_root,
             execution_payload: submission.execution_payload_ref().clone(),
@@ -243,6 +245,7 @@ impl Context {
             merging_data.is_top_bid,
             &merging_data.block_hash,
             merging_data.block_value,
+            merging_data.builder_public_key,
             merging_data.merging_data,
         );
 
@@ -282,6 +285,7 @@ pub struct MergeData {
     pub block_hash: B256,
     pub block_value: U256,
     pub proposer_fee_recipient: Address,
+    pub builder_public_key: BlsPublicKeyBytes,
     pub parent_beacon_block_root: Option<B256>,
     pub execution_payload: helix_types::ExecutionPayload,
     pub merging_data: MergeableOrdersWithPref,

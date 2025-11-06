@@ -9,9 +9,9 @@ use bytes::Bytes;
 use helix_common::{RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, utils::utcnow_ms};
 use helix_types::{
     BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
-    BlockMergingData, BundleOrder, KzgCommitment, MergeableBundle, MergeableOrder,
-    MergeableOrderWithOrigin, MergeableOrders, MergeableOrdersWithPref, MergeableTransaction,
-    MergedBlock, Order, PayloadAndBlobs, SignedBidSubmission, Transactions,
+    BlockMergingData, BlsPublicKeyBytes, BundleOrder, KzgCommitment, MergeableBundle,
+    MergeableOrder, MergeableOrderWithOrigin, MergeableOrders, MergeableOrdersWithPref,
+    MergeableTransaction, MergedBlock, Order, PayloadAndBlobs, SignedBidSubmission, Transactions,
 };
 use tracing::{debug, error, warn};
 
@@ -117,12 +117,13 @@ impl BlockMerger {
         is_top_bid: bool,
         block_hash: &B256,
         block_value: U256,
+        builder_pubkey: BlsPublicKeyBytes,
         merging_data: MergeableOrdersWithPref,
     ) {
         self.best_mergeable_orders.insert_orders(block_value, merging_data.orders);
 
         if is_top_bid && merging_data.allow_appending {
-            self.update_base_block(block_hash, block_value);
+            self.update_base_block(block_hash, block_value, builder_pubkey);
         }
     }
 
@@ -221,10 +222,19 @@ impl BlockMerger {
             Some(BestMergedBlock { base_block_time_ms: base_block_data.time_ms, bid: new_bid });
 
         // Return the payload entry to be stored for get payload calls
-        Ok(PayloadEntry { payload_and_blobs, bid_data: Some(bid_data) })
+        Ok(PayloadEntry {
+            payload_and_blobs,
+            bid_data: Some(bid_data),
+            builder_pubkey: Some(base_block_data.builder_pubkey),
+        })
     }
 
-    fn update_base_block(&mut self, base_block_hash: &B256, base_block_value: U256) {
+    fn update_base_block(
+        &mut self,
+        base_block_hash: &B256,
+        base_block_value: U256,
+        builder_pubkey: BlsPublicKeyBytes,
+    ) {
         if self.base_blocks.contains_key(base_block_hash) {
             return;
         }
@@ -232,7 +242,7 @@ impl BlockMerger {
         let base_block_time_ms = utcnow_ms();
 
         let base_block_data =
-            BaseBlockData { time_ms: base_block_time_ms, value: base_block_value };
+            BaseBlockData { time_ms: base_block_time_ms, value: base_block_value, builder_pubkey };
 
         self.base_blocks.insert(*base_block_hash, base_block_data);
         self.has_new_base_block = true;
@@ -242,6 +252,7 @@ impl BlockMerger {
 struct BaseBlockData {
     time_ms: u64,
     value: U256,
+    builder_pubkey: BlsPublicKeyBytes,
 }
 
 struct BestMergedBlock {
