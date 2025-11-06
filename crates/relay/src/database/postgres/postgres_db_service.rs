@@ -46,7 +46,7 @@ struct PendingBlockSubmissionValue {
     pub optimistic_version: OptimisticVersion,
 }
 
-const BLOCK_SUBMISSION_FIELD_COUNT: usize = 13;
+const BLOCK_SUBMISSION_FIELD_COUNT: usize = 16;
 const MAINNET_VALIDATOR_COUNT: usize = 1_100_000;
 
 fn new_validator_set() -> FxHashSet<BlsPublicKeyBytes> {
