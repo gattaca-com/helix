@@ -122,7 +122,9 @@ impl BlockMerger {
         block_value: U256,
         merging_data: MergeableOrdersWithPref,
     ) {
-        self.best_mergeable_orders.insert_orders(block_value, merging_data.orders);
+        if !merging_data.orders.orders.is_empty() {
+            self.best_mergeable_orders.insert_orders(block_value, merging_data.orders);
+        }
 
         if is_top_bid && merging_data.allow_appending {
             self.update_base_block(block_hash, block_value);
@@ -237,10 +239,11 @@ impl BlockMerger {
     }
 
     fn update_base_block(&mut self, base_block_hash: &B256, base_block_value: U256) {
-        let start_time = Instant::now();
         if self.base_blocks.contains_key(base_block_hash) {
             return;
         }
+
+        let start_time = Instant::now();
 
         let base_block_time_ms = utcnow_ms();
 
