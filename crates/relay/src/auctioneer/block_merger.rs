@@ -123,6 +123,7 @@ impl BlockMerger {
     }
 
     pub fn update_base_block(&mut self, base_block: BlockHash) {
+        trace!("updating base block");
         if self.base_blocks.contains_key(&base_block) {
             self.base_block = Some(base_block);
             self.has_new_base_block = true;
@@ -130,8 +131,6 @@ impl BlockMerger {
     }
 
     pub fn insert_merge_data(&mut self, merging_data: MergeData) {
-        trace!(merging_data.is_top_bid, merging_data.merging_data.allow_appending, %merging_data.block_hash,"updating block merger state");
-
         if !merging_data.merging_data.orders.orders.is_empty() {
             self.best_mergeable_orders
                 .insert_orders(merging_data.block_value, merging_data.merging_data.orders);
@@ -170,7 +169,7 @@ impl BlockMerger {
 
         self.has_new_base_block = false;
         self.last_merge_request_time_ms = utcnow_ms();
-        record_step("fetch_best_mergeable_orders", start_time.elapsed());
+        record_step("fetch_merge_request", start_time.elapsed());
         Some(merge_request)
     }
 
