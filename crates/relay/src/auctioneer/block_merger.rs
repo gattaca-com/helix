@@ -13,7 +13,7 @@ use helix_types::{
     MergeableOrderWithOrigin, MergeableOrders, MergeableOrdersWithPref, MergeableTransaction,
     MergedBlock, Order, PayloadAndBlobs, SignedBidSubmission, Transactions,
 };
-use tracing::{debug, error, warn};
+use tracing::{debug, error, trace, warn};
 
 use crate::auctioneer::{
     BlockMergeResponse, PayloadBidData, PayloadHeaderData, types::PayloadEntry,
@@ -122,6 +122,8 @@ impl BlockMerger {
         block_value: U256,
         merging_data: MergeableOrdersWithPref,
     ) {
+        trace!(is_top_bid, merging_data.allow_appending, %block_hash,"updating block merger state");
+
         if !merging_data.orders.orders.is_empty() {
             self.best_mergeable_orders.insert_orders(block_value, merging_data.orders);
         }
