@@ -14,7 +14,7 @@ use helix_common::{
     metrics,
 };
 use moka::sync::Cache;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::{
     api::relay_data::{
@@ -86,12 +86,15 @@ impl DataApi {
             return Ok(Json(cached_result));
         }
 
+        debug!(?params, ?data_api.validator_preferences, "fetching payloads");
+
         match data_api
             .db
             .get_delivered_payloads(&(&params).into(), data_api.validator_preferences.clone())
             .await
         {
             Ok(result) => {
+                debug!(?result, "payloads fetched");
                 let mut seen = std::collections::HashSet::with_capacity(result.len());
                 let response = result
                     .into_iter()
