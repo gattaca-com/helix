@@ -123,7 +123,7 @@ impl BlockMerger {
     }
 
     pub fn update_base_block(&mut self, base_block: BlockHash) {
-        trace!("updating base block");
+        trace!(%base_block,"updating base block");
         if self.base_blocks.contains_key(&base_block) {
             self.base_block = Some(base_block);
             self.has_new_base_block = true;
@@ -132,11 +132,13 @@ impl BlockMerger {
 
     pub fn insert_merge_data(&mut self, merging_data: MergeData) {
         if !merging_data.merging_data.orders.orders.is_empty() {
+            trace!(%merging_data.block_hash,"inserting merge orders from block");
             self.best_mergeable_orders
                 .insert_orders(merging_data.block_value, merging_data.merging_data.orders);
         }
 
         if merging_data.merging_data.allow_appending {
+            trace!(%merging_data.block_hash,"inserting new base block data");
             self.insert_base_block_data(
                 merging_data.slot,
                 &merging_data.block_hash,
