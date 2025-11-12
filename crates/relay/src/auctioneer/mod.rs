@@ -387,6 +387,7 @@ impl State {
                         trace,
                         res_tx,
                         slot_data,
+                        None,
                     ) {
                         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
                         *self = State::Broadcasting { slot_data: slot_data.clone(), block_hash }
@@ -533,6 +534,15 @@ impl State {
                 if bid_slot.as_u64() != payload.slot + 1 {
                     warn!(curr =% bid_slot, gossip_slot = payload.slot, "received early or late gossip payload");
                 }
+            }
+
+            // Builder demotion — can happen in any state
+            (
+                State::Slot { .. } | State::Sorting(_) | State::Broadcasting { .. },
+                Event::BuilderDemotion { slot, builder_pubkey, block_hash, reason },
+            ) => {
+                // Demotion is slot-agnostic and safe to process anytime
+                ctx.handle_builder_demotion(slot, builder_pubkey, block_hash, reason);
             }
         }
     }

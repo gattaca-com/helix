@@ -20,8 +20,8 @@ use tracing::{Instrument, error, info, warn};
 use super::ProposerApi;
 use crate::{
     api::{Api, proposer::error::ProposerApiError},
-    auctioneer::GetPayloadResultData,
-    beacon::types::BroadcastValidation,
+    auctioneer::{Event, GetPayloadResultData},
+    beacon::{error::BeaconClientError, types::BroadcastValidation},
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
 };
 
@@ -273,7 +273,13 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::InternalServerError);
         };
 
-        let GetPayloadResultData { to_proposer, to_publish, trace: new_trace, fork } = rx
+        let GetPayloadResultData {
+            to_proposer,
+            to_publish,
+            trace: new_trace,
+            fork,
+            builder_pubkey,
+        } = rx
             .await
             .inspect_err(|err| {
                 error!(%err, "failed to receive payload response from auctioneer");
@@ -321,6 +327,7 @@ impl<A: Api> ProposerApi<A> {
         let self_clone = self.clone();
         let mut trace_clone = *trace;
         let payload_clone = to_proposer.data.clone();
+        let slot = to_publish.signed_block.slot().clone();
 
         let handle = spawn_tracked!(async move {
             let mut failed_publishing = false;
@@ -334,6 +341,30 @@ impl<A: Api> ProposerApi<A> {
                 )
                 .await
             {
+                if matches!(err, BeaconClientError::BlockValidationFailed(..)) {
+                    if let Some(builder_pubkey) = builder_pubkey {
+                        let reason = format!("Block validation failed: {err}");
+
+                        let _ = self_clone.auctioneer_handle.send_event(Event::BuilderDemotion {
+                            slot,
+                            builder_pubkey,
+                            block_hash,
+                            reason,
+                        });
+
+                        warn!(
+                            %builder_pubkey,
+                            %block_hash,
+                            slot = %slot,
+                            "BuilderDemotion event sent due to BlockValidationFailed"
+                        );
+                    } else {
+                        warn!(
+                            "BlockValidationFailed but no builder_pubkey — cannot demote (gossiped payload?)"
+                        );
+                    }
+                }
+
                 error!(%err, "error publishing block");
                 failed_publishing = true;
             };

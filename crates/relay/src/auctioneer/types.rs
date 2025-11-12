@@ -39,6 +39,7 @@ pub struct GetPayloadResultData {
     pub to_publish: VersionedSignedProposal,
     pub trace: GetPayloadTrace,
     pub fork: ForkName,
+    pub builder_pubkey: Option<BlsPublicKeyBytes>,
 }
 
 pub struct SubmissionData {
@@ -111,6 +112,7 @@ pub struct PayloadEntry {
     pub payload_and_blobs: Arc<PayloadAndBlobs>,
     /// Some only if we processed the submission locally
     pub bid_data: Option<PayloadBidData>,
+    pub builder_pubkey: Option<BlsPublicKeyBytes>,
 }
 
 impl PayloadEntry {
@@ -127,11 +129,12 @@ impl PayloadEntry {
                 execution_requests: signed_bid_submission.execution_requests().clone(),
                 value: signed_bid_submission.value(),
             }),
+            builder_pubkey: Some(signed_bid_submission.message().builder_pubkey.clone()),
         }
     }
 
     pub fn new_gossip(data: BroadcastPayloadParams) -> Self {
-        Self { payload_and_blobs: data.execution_payload, bid_data: None }
+        Self { payload_and_blobs: data.execution_payload, bid_data: None, builder_pubkey: None }
     }
 
     pub fn to_header_data(&self) -> Option<PayloadHeaderData> {
@@ -289,6 +292,12 @@ pub enum Event {
         is_synced: bool,
     },
     MergeResult(BlockMergeResult),
+    BuilderDemotion {
+        slot: Slot,
+        builder_pubkey: BlsPublicKeyBytes,
+        block_hash: B256,
+        reason: String,
+    },
 }
 
 impl Event {
@@ -302,6 +311,7 @@ impl Event {
             Event::SimResult(_) => "SimResult",
             Event::SimulatorSync { .. } => "SimulatorSync",
             Event::MergeResult(_) => "MergeResult",
+            Event::BuilderDemotion { .. } => "BuilderDemotion",
         }
     }
 }
