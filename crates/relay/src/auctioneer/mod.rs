@@ -422,13 +422,13 @@ impl State {
                 }
             }
 
-            (State::Sorting(_), Event::MergeResult((id, result))) => {
+            (State::Sorting(slot_data), Event::MergeResult((id, result))) => {
                 match result {
                     Ok(response) => {
                         ctx.handle_merge_response(response);
                     }
                     Err(err) => {
-                        error!(%err, bid_slot =% id, "failed to merge block");
+                        error!(%err, bid_slot =% slot_data.bid_slot, "failed to merge block");
                     }
                 }
 
