@@ -20,6 +20,7 @@ use helix_types::{
     VersionedSignedProposal, mock_public_key_bytes,
 };
 use rustc_hash::FxHashMap;
+use ssz_derive::{Decode, Encode};
 use tokio::sync::oneshot;
 use tracing::debug;
 
@@ -39,6 +40,7 @@ pub struct GetPayloadResultData {
     pub to_publish: VersionedSignedProposal,
     pub trace: GetPayloadTrace,
     pub fork: ForkName,
+    pub bid: PayloadBidData,
 }
 
 pub struct SubmissionData {
@@ -107,10 +109,8 @@ impl Submission {
 /// some fields are optional because payloads also arrive via gossip and we only gossip
 /// PayloadAndBlobs
 pub struct PayloadEntry {
-    /// Either from a submission or via gossip
     pub payload_and_blobs: Arc<PayloadAndBlobs>,
-    /// Some only if we processed the submission locally
-    pub bid_data: Option<PayloadBidData>,
+    pub bid_data: PayloadBidData,
 }
 
 impl PayloadEntry {
@@ -121,21 +121,22 @@ impl PayloadEntry {
     ) -> Self {
         Self {
             payload_and_blobs: signed_bid_submission.payload_and_blobs_ref().to_owned().into(),
-            bid_data: Some(PayloadBidData {
+            bid_data: PayloadBidData {
                 withdrawals_root,
                 tx_root,
                 execution_requests: signed_bid_submission.execution_requests().clone(),
                 value: signed_bid_submission.value(),
-            }),
+                builder_pubkey: *signed_bid_submission.builder_public_key(),
+            },
         }
     }
 
     pub fn new_gossip(data: BroadcastPayloadParams) -> Self {
-        Self { payload_and_blobs: data.execution_payload, bid_data: None }
+        Self { payload_and_blobs: data.execution_payload, bid_data: data.bid_data }
     }
 
     pub fn to_header_data(&self) -> Option<PayloadHeaderData> {
-        let bid_data = self.bid_data.as_ref()?.clone();
+        let bid_data = self.bid_data.clone();
         Some(PayloadHeaderData { payload_and_blobs: self.payload_and_blobs.clone(), bid_data })
     }
 }
@@ -183,12 +184,13 @@ impl PayloadHeaderData {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PayloadBidData {
     pub withdrawals_root: B256,
     pub tx_root: Option<B256>,
     pub execution_requests: Arc<ExecutionRequests>,
     pub value: U256,
+    pub builder_pubkey: BlsPublicKeyBytes,
 }
 
 pub enum SubWorkerJob {

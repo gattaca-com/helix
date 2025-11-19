@@ -387,6 +387,7 @@ impl State {
                         trace,
                         res_tx,
                         slot_data,
+                        local.bid_data.clone(),
                     ) {
                         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
                         *self = State::Broadcasting { slot_data: slot_data.clone(), block_hash }

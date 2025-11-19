@@ -1,12 +1,9 @@
 use std::{str::FromStr, sync::Arc, time::Duration};
 
+use alloy_primitives::Address;
 use axum::{Extension, http::HeaderMap, response::IntoResponse};
 use helix_common::{
-    GetPayloadTrace, RequestTimings,
-    api_provider::ApiProvider,
-    chain_info::ChainInfo,
-    spawn_tracked,
-    utils::{extract_request_id, utcnow_ns},
+    Filtering, GetPayloadTrace, RequestTimings, api_provider::ApiProvider, chain_info::ChainInfo, spawn_tracked, utils::{extract_request_id, utcnow_ns}
 };
 use helix_types::{
     BlsPublicKeyBytes, ExecPayload, ForkName, GetPayloadResponse, PayloadAndBlobs,
@@ -20,7 +17,7 @@ use tracing::{Instrument, error, info, warn};
 use super::ProposerApi;
 use crate::{
     api::{Api, proposer::error::ProposerApiError},
-    auctioneer::GetPayloadResultData,
+    auctioneer::{GetPayloadResultData, PayloadBidData},
     beacon::types::BroadcastValidation,
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
 };
@@ -254,16 +251,16 @@ impl<A: Api> ProposerApi<A> {
         };
 
         let proposer_public_key = slot_duty.entry.registration.message.pubkey;
+        let proposer_fee_recipient = slot_duty.entry.registration.message.fee_recipient;
+        let filtering = slot_duty.entry.preferences.filtering;
 
         info!(%head_slot, request_ts = trace.receive, %block_hash);
+        let slot = signed_blinded_block.message().slot();
 
         // Verify that the request is for the current slot
-        if signed_blinded_block.message().slot() <= head_slot {
+        if slot <= head_slot {
             warn!("request for past slot");
-            return Err(ProposerApiError::RequestForPastSlot {
-                request_slot: signed_blinded_block.message().slot(),
-                head_slot,
-            });
+            return Err(ProposerApiError::RequestForPastSlot { request_slot: slot, head_slot });
         }
 
         let Ok(rx) =
@@ -273,7 +270,7 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::InternalServerError);
         };
 
-        let GetPayloadResultData { to_proposer, to_publish, trace: new_trace, fork } = rx
+        let GetPayloadResultData { to_proposer, to_publish, trace: new_trace, fork, bid } = rx
             .await
             .inspect_err(|err| {
                 error!(%err, "failed to receive payload response from auctioneer");
@@ -313,6 +310,7 @@ impl<A: Api> ProposerApi<A> {
             &proposer_public_key,
             &to_proposer.data,
             fork,
+            &bid,
         )
         .await;
 
@@ -346,10 +344,14 @@ impl<A: Api> ProposerApi<A> {
             trace_clone.on_deliver_payload = utcnow_ns();
             self_clone
                 .save_delivered_payload_info(
+                    slot.as_u64(),
                     payload_clone,
+                    bid,
                     proposer_public_key,
+                    proposer_fee_recipient,
                     &trace_clone,
                     user_agent,
+                    filtering,
                 )
                 .await;
 
@@ -425,16 +427,31 @@ impl<A: Api> ProposerApi<A> {
 
     async fn save_delivered_payload_info(
         &self,
+        slot: u64,
         payload: Arc<PayloadAndBlobs>,
+        bid: PayloadBidData,
         proposer_public_key: BlsPublicKeyBytes,
+        proposer_fee_recipient: Address,
         trace: &GetPayloadTrace,
         user_agent: Option<String>,
+        filtering: Filtering,
     ) {
         let db = self.db.clone();
         let trace = *trace;
         spawn_tracked!(async move {
-            if let Err(err) =
-                db.save_delivered_payload(proposer_public_key, payload, &trace, user_agent).await
+            if let Err(err) = db
+                .save_delivered_payload(
+                    proposer_public_key,
+                    payload,
+                    &trace,
+                    user_agent,
+                    slot,
+                    &bid.builder_pubkey,
+                    proposer_fee_recipient,
+                    bid.value,
+                    filtering,
+                )
+                .await
             {
                 error!(%err, "error saving payload to database");
             }
@@ -447,12 +464,14 @@ impl<A: Api> ProposerApi<A> {
         proposer_public_key: &BlsPublicKeyBytes,
         execution_payload: &PayloadAndBlobs,
         fork_name: ForkName,
+        bid: &PayloadBidData,
     ) {
         let params = BroadcastPayloadParams::to_proto(
             execution_payload,
             bid_slot.as_u64(),
             proposer_public_key,
             fork_name,
+            bid,
         );
         self.gossiper.broadcast_payload(params).await
     }

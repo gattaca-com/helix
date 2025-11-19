@@ -13,6 +13,7 @@ use tracing::{info, warn};
 use crate::{
     api::proposer::ProposerApiError,
     auctioneer::{
+        PayloadBidData,
         context::Context,
         types::{GetPayloadResult, GetPayloadResultData, PayloadEntry, PendingPayload, SlotData},
     },
@@ -37,15 +38,6 @@ impl Context {
 
         let block_hash = payload.execution_payload.execution_payload.block_hash;
         let entry = PayloadEntry::new_gossip(payload);
-
-        if let Some(curr) = self.payloads.get(&block_hash) &&
-            curr.bid_data.is_some()
-        {
-            // we received this block both locally and via gossip, keep the local one so we can
-            // serve get_header on it
-            return;
-        }
-
         self.payloads.insert(block_hash, entry);
     }
 
@@ -58,6 +50,7 @@ impl Context {
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
         slot_data: &SlotData,
+        bid: PayloadBidData,
     ) -> Option<B256> {
         let (res, maybe_block_hash) = match self.get_payload(blinded, local, trace, slot_data) {
             Ok((to_proposer, to_publish, trace)) => {
@@ -68,6 +61,7 @@ impl Context {
                         to_publish,
                         trace,
                         fork: slot_data.current_fork,
+                        bid,
                     }),
                     Some(block_hash),
                 )
@@ -95,6 +89,7 @@ impl Context {
                 trace,
                 res_tx,
                 slot_data,
+                local.bid_data.clone(),
             )
         } else {
             self.pending_payload = Some(pending);

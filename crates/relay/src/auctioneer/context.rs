@@ -193,11 +193,16 @@ impl Context {
         };
 
         let original_payload_and_blobs = original_payload.payload_and_blobs.clone();
+        let builder_pubkey = original_payload.bid_data.builder_pubkey;
 
         //TODO: this function does a lot of work, should move that work away from the event loop
         let Some(payload) = self
             .block_merger
-            .prepare_merged_payload_for_storage(response, original_payload_and_blobs)
+            .prepare_merged_payload_for_storage(
+                response,
+                original_payload_and_blobs,
+                builder_pubkey,
+            )
             .ok()
         else {
             warn!(%block_hash, "failed to prepare merged payload for storage");

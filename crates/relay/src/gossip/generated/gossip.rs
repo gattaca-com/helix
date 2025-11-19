@@ -10,6 +10,8 @@ pub struct BroadcastPayloadParams {
     pub proposer_pub_key: ::prost::alloc::vec::Vec<u8>,
     #[prost(string, optional, tag = "4")]
     pub fork_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bytes = "vec", optional, tag = "5")]
+    pub bid_data: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
