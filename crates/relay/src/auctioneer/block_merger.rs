@@ -9,9 +9,9 @@ use bytes::Bytes;
 use helix_common::{RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, utils::utcnow_ms};
 use helix_types::{
     BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
-    BlockMergingData, BundleOrder, KzgCommitment, MergeableBundle, MergeableOrder,
-    MergeableOrderWithOrigin, MergeableOrders, MergeableOrdersWithPref, MergeableTransaction,
-    MergedBlock, Order, PayloadAndBlobs, SignedBidSubmission, Transactions,
+    BlockMergingData, BlsPublicKeyBytes, BundleOrder, KzgCommitment, MergeableBundle,
+    MergeableOrder, MergeableOrderWithOrigin, MergeableOrders, MergeableOrdersWithPref,
+    MergeableTransaction, MergedBlock, Order, PayloadAndBlobs, SignedBidSubmission, Transactions,
 };
 use tracing::{debug, error, warn};
 
@@ -147,6 +147,7 @@ impl BlockMerger {
         &mut self,
         response: BlockMergeResponse,
         original_payload: Arc<PayloadAndBlobs>,
+        builder_pubkey: BlsPublicKeyBytes,
     ) -> Result<PayloadEntry, PayloadMergingError> {
         let bid_slot = self.curr_bid_slot;
         let max_blobs_per_block = self.chain_info.max_blobs_per_block();
@@ -209,6 +210,7 @@ impl BlockMerger {
             execution_requests: Arc::new(response.execution_requests),
             value: response.proposer_value,
             tx_root: None,
+            builder_pubkey,
         };
 
         let new_bid = PayloadHeaderData {
@@ -221,7 +223,7 @@ impl BlockMerger {
             Some(BestMergedBlock { base_block_time_ms: base_block_data.time_ms, bid: new_bid });
 
         // Return the payload entry to be stored for get payload calls
-        Ok(PayloadEntry { payload_and_blobs, bid_data: Some(bid_data) })
+        Ok(PayloadEntry { payload_and_blobs, bid_data })
     }
 
     fn update_base_block(&mut self, base_block_hash: &B256, base_block_value: U256) {

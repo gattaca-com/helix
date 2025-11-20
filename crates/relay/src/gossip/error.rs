@@ -23,4 +23,7 @@ pub enum GossipError {
 
     #[error("Slice decode error: {0:?}")]
     SliceDecodeError(#[from] std::array::TryFromSliceError),
+
+    #[error("Missing bid data")]
+    MissingBidData,
 }
