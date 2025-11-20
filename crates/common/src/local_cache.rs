@@ -105,7 +105,7 @@ impl LocalCache {
         let primev_proposers = Arc::new(DashSet::with_capacity(MAX_PRIMEV_PROPOSERS));
         let kill_switch = Arc::new(AtomicBool::new(false));
         let proposer_duties = Arc::new(RwLock::new(Vec::new()));
-        let merged_blocks = Arc::new(DashMap::with_capacity(10000));
+        let merged_blocks = Arc::new(DashMap::with_capacity(1000));
 
         Self {
             inclusion_list: Default::default(),

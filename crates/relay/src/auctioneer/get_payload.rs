@@ -38,7 +38,7 @@ impl Context {
 
         let block_hash = payload.execution_payload.execution_payload.block_hash;
         let entry = PayloadEntry::new_gossip(payload);
-        self.payloads.insert(block_hash, entry);
+        self.payloads.entry(block_hash).or_insert(entry);
     }
 
     /// If we start broacasting, returns the block hash of the block

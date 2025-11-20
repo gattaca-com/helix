@@ -3,7 +3,11 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 use alloy_primitives::Address;
 use axum::{Extension, http::HeaderMap, response::IntoResponse};
 use helix_common::{
-    Filtering, GetPayloadTrace, RequestTimings, api_provider::ApiProvider, chain_info::ChainInfo, spawn_tracked, utils::{extract_request_id, utcnow_ns}
+    Filtering, GetPayloadTrace, RequestTimings,
+    api_provider::ApiProvider,
+    chain_info::ChainInfo,
+    spawn_tracked,
+    utils::{extract_request_id, utcnow_ns},
 };
 use helix_types::{
     BlsPublicKeyBytes, ExecPayload, ForkName, GetPayloadResponse, PayloadAndBlobs,
@@ -19,6 +23,7 @@ use crate::{
     api::{Api, proposer::error::ProposerApiError},
     auctioneer::{GetPayloadResultData, PayloadBidData},
     beacon::types::BroadcastValidation,
+    database::SavePayloadParams,
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
 };
 
@@ -438,21 +443,19 @@ impl<A: Api> ProposerApi<A> {
     ) {
         let db = self.db.clone();
         let trace = *trace;
+        let params = SavePayloadParams {
+            slot,
+            builder_pub_key: bid.builder_pubkey,
+            proposer_pub_key: proposer_public_key,
+            value: bid.value,
+            proposer_fee_recipient,
+            payload: payload.clone(),
+            latency_trace: trace,
+            user_agent,
+            filtering,
+        };
         spawn_tracked!(async move {
-            if let Err(err) = db
-                .save_delivered_payload(
-                    proposer_public_key,
-                    payload,
-                    &trace,
-                    user_agent,
-                    slot,
-                    &bid.builder_pubkey,
-                    proposer_fee_recipient,
-                    bid.value,
-                    filtering,
-                )
-                .await
-            {
+            if let Err(err) = db.save_delivered_payload(&params).await {
                 error!(%err, "error saving payload to database");
             }
         });
