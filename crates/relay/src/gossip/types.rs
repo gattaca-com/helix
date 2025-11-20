@@ -3,11 +3,11 @@ use std::sync::Arc;
 use helix_types::{
     BlsPublicKeyBytes, ForkName, ForkVersionDecode, PayloadAndBlobs, SignedBlindedBeaconBlock,
 };
-use ssz::Encode;
+use ssz::{Decode, Encode};
 use uuid::Uuid;
 
 use super::grpc::{self};
-use crate::gossip::error::GossipError;
+use crate::{auctioneer::PayloadBidData, gossip::error::GossipError};
 
 #[derive(Debug, Clone)]
 pub enum GossipedMessage {
@@ -61,11 +61,15 @@ pub struct BroadcastPayloadParams {
     pub execution_payload: Arc<PayloadAndBlobs>,
     pub slot: u64,
     pub proposer_pub_key: BlsPublicKeyBytes,
+    pub bid_data: PayloadBidData,
 }
 
 impl BroadcastPayloadParams {
     pub fn from_proto(proto_params: grpc::BroadcastPayloadParams) -> Result<Self, GossipError> {
         let fork_name = proto_params.fork_name.and_then(|s| s.parse::<ForkName>().ok());
+        let Some(bid_data) = proto_params.bid_data else {
+            return Err(GossipError::MissingBidData);
+        };
 
         Ok(Self {
             execution_payload: decode_ssz_payload_and_blobs(
@@ -76,6 +80,8 @@ impl BroadcastPayloadParams {
             slot: proto_params.slot,
             proposer_pub_key: BlsPublicKeyBytes::try_from(proto_params.proposer_pub_key.as_slice())
                 .map_err(|_| GossipError::BlsDecodeError)?,
+            bid_data: PayloadBidData::from_ssz_bytes(&bid_data)
+                .map_err(GossipError::SszDecodeError)?,
         })
     }
 
@@ -84,12 +90,14 @@ impl BroadcastPayloadParams {
         slot: u64,
         proposer_pub_key: &BlsPublicKeyBytes,
         current_fork: ForkName,
+        bid_data: &PayloadBidData,
     ) -> grpc::BroadcastPayloadParams {
         grpc::BroadcastPayloadParams {
             execution_payload: execution_payload.as_ssz_bytes(),
             slot,
             proposer_pub_key: proposer_pub_key.to_vec(),
             fork_name: Some(current_fork.to_string()),
+            bid_data: Some(bid_data.as_ssz_bytes()),
         }
     }
 }

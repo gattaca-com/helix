@@ -29,11 +29,15 @@ impl Context {
             return Err(ProposerApiError::NoBidPrepared);
         };
 
-        let Some(data) = entry.to_header_data() else {
+        let Some(original_bid) = entry.to_header_data() else {
             error!("failed to get header data from payload entry, this should never happen!");
             return Err(ProposerApiError::NoBidPrepared);
         };
 
-        Ok(data)
+        if let Some(merged_bid) = self.block_merger.get_header(&original_bid) {
+            return Ok(merged_bid);
+        }
+
+        Ok(original_bid)
     }
 }

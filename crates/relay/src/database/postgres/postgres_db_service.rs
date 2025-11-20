@@ -1,6 +1,9 @@
 use std::{
     ops::DerefMut,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 
@@ -20,9 +23,7 @@ use helix_common::{
     metrics::DbMetricRecord,
     utils::utcnow_ms,
 };
-use helix_types::{
-    BlsPublicKeyBytes, PayloadAndBlobs, SignedBidSubmission, SignedValidatorRegistration,
-};
+use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SignedValidatorRegistration};
 use parking_lot::RwLock;
 use rustc_hash::FxHashSet;
 use tokio::sync::mpsc::Sender;
@@ -37,7 +38,9 @@ use crate::database::{
         postgres_db_row_parsing::{parse_bytes_to_pubkey_bytes, parse_row, parse_rows},
         postgres_db_u256_parsing::PostgresNumeric,
     },
-    types::{BidSubmissionDocument, BuilderInfoDocument, DeliveredPayloadDocument},
+    types::{
+        BidSubmissionDocument, BuilderInfoDocument, DeliveredPayloadDocument, SavePayloadParams,
+    },
 };
 
 struct PendingBlockSubmissionValue {
@@ -48,6 +51,7 @@ struct PendingBlockSubmissionValue {
 
 const BLOCK_SUBMISSION_FIELD_COUNT: usize = 16;
 const MAINNET_VALIDATOR_COUNT: usize = 1_100_000;
+static DELIVERED_PAYLOADS_MIG_SLOT: AtomicU64 = AtomicU64::new(0);
 
 fn new_validator_set() -> FxHashSet<BlsPublicKeyBytes> {
     FxHashSet::with_capacity_and_hasher(MAINNET_VALIDATOR_COUNT, Default::default())
@@ -1189,46 +1193,49 @@ impl PostgresDatabaseService {
     #[instrument(skip_all)]
     pub async fn save_delivered_payload(
         &self,
-        proposer_pub_key: BlsPublicKeyBytes,
-        payload: Arc<PayloadAndBlobs>,
-        latency_trace: &GetPayloadTrace,
-        user_agent: Option<String>,
+        save_payload_params: &SavePayloadParams,
     ) -> Result<(), DatabaseError> {
-        latency_trace.record_metrics();
+        save_payload_params.latency_trace.record_metrics();
         let mut record = DbMetricRecord::new("save_delivered_payload");
 
         let region_id = self.region;
-        let block_hash = payload.execution_payload.block_hash;
-        let mut client = self.pool.get().await?;
-        let transaction = client.transaction().await?;
-        transaction.execute(
+        let block_hash = save_payload_params.payload.execution_payload.block_hash;
+        let client = self.pool.get().await?;
+        client.execute(
             "
                 INSERT INTO delivered_payload 
-                    (block_hash, payload_parent_hash, fee_recipient, state_root, receipts_root, logs_bloom, prev_randao, timestamp, block_number, gas_limit, gas_used, extra_data, base_fee_per_gas, user_agent)
+                    (block_hash, payload_parent_hash, fee_recipient, state_root, receipts_root, logs_bloom, prev_randao, timestamp, block_number, gas_limit, gas_used, extra_data, base_fee_per_gas, user_agent, slot_number, builder_pubkey, proposer_pubkey, proposer_fee_recipient, value, num_txs, filtering )
                 VALUES 
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
                 ON CONFLICT (block_hash)
                 DO NOTHING
             ",
             &[
                 &(block_hash.as_slice()),
-                &(payload.execution_payload.parent_hash.as_slice()),
-                &(payload.execution_payload.fee_recipient.as_slice()),
-                &(payload.execution_payload.state_root.as_slice()),
-                &(payload.execution_payload.receipts_root.as_slice()),
-                &(payload.execution_payload.logs_bloom.to_vec()),
-                &(payload.execution_payload.prev_randao.as_slice()),
-                &(payload.execution_payload.timestamp as i64),
-                &(payload.execution_payload.block_number as i32),
-                &(payload.execution_payload.gas_limit as i32),
-                &(payload.execution_payload.gas_used as i32),
-                &(payload.execution_payload.extra_data.to_vec()),
-                &(PostgresNumeric::from(payload.execution_payload.base_fee_per_gas)),
-                &(user_agent),
+                &(save_payload_params.payload.execution_payload.parent_hash.as_slice()),
+                &(save_payload_params.payload.execution_payload.fee_recipient.as_slice()),
+                &(save_payload_params.payload.execution_payload.state_root.as_slice()),
+                &(save_payload_params.payload.execution_payload.receipts_root.as_slice()),
+                &(save_payload_params.payload.execution_payload.logs_bloom.to_vec()),
+                &(save_payload_params.payload.execution_payload.prev_randao.as_slice()),
+                &(save_payload_params.payload.execution_payload.timestamp as i64),
+                &(save_payload_params.payload.execution_payload.block_number as i32),
+                &(save_payload_params.payload.execution_payload.gas_limit as i32),
+                &(save_payload_params.payload.execution_payload.gas_used as i32),
+                &(save_payload_params.payload.execution_payload.extra_data.to_vec()),
+                &(PostgresNumeric::from(save_payload_params.payload.execution_payload.base_fee_per_gas)),
+                &(save_payload_params.user_agent),
+                &(save_payload_params.slot as i32),
+                &(save_payload_params.builder_pub_key.as_slice()),
+                &(save_payload_params.proposer_pub_key.as_slice()),
+                &(save_payload_params.proposer_fee_recipient.as_slice()),
+                &(PostgresNumeric::from(save_payload_params.value)),
+                &(save_payload_params.payload.execution_payload.transactions.len() as i32),
+                &(save_payload_params.filtering as i16),
             ],
             ).await?;
 
-        transaction.execute(
+        client.execute(
                 "
                     INSERT INTO delivered_payload_preferences (block_hash, filtering, trusted_builders)
                     SELECT $1::bytea, filtering, trusted_builders
@@ -1238,11 +1245,11 @@ impl PostgresDatabaseService {
                 ",
                 &[
                     &(block_hash.as_slice()),
-                    &(proposer_pub_key.as_slice()),
+                    &(save_payload_params.proposer_pub_key.as_slice()),
                 ],
                 ).await?;
 
-        transaction.execute(
+        client.execute(
             "
                 INSERT INTO payload_trace
                     (block_hash, region_id, receive, proposer_index_validated, signature_validated, payload_fetched, validation_complete, beacon_client_broadcast, broadcaster_block_broadcast, on_deliver_payload)
@@ -1252,23 +1259,25 @@ impl PostgresDatabaseService {
             &[
                 &(block_hash.as_slice()),
                 &(region_id),
-                &(latency_trace.receive as i64),
-                &(latency_trace.proposer_index_validated as i64),
-                &(latency_trace.signature_validated as i64),
-                &(latency_trace.payload_fetched as i64),
-                &(latency_trace.validation_complete as i64),
-                &(latency_trace.beacon_client_broadcast as i64),
-                &(latency_trace.broadcaster_block_broadcast as i64),
-                &(latency_trace.on_deliver_payload as i64),
+                &(save_payload_params.latency_trace.receive as i64),
+                &(save_payload_params.latency_trace.proposer_index_validated as i64),
+                &(save_payload_params.latency_trace.signature_validated as i64),
+                &(save_payload_params.latency_trace.payload_fetched as i64),
+                &(save_payload_params.latency_trace.validation_complete as i64),
+                &(save_payload_params.latency_trace.beacon_client_broadcast as i64),
+                &(save_payload_params.latency_trace.broadcaster_block_broadcast as i64),
+                &(save_payload_params.latency_trace.on_deliver_payload as i64),
             ],
         ).await?;
 
-        if !payload.execution_payload.transactions.is_empty() {
+        if !save_payload_params.payload.execution_payload.transactions.is_empty() {
             // Save the transactions
             let mut structured_params: Vec<(Vec<u8>, &[u8])> = Vec::new();
-            for entry in payload.execution_payload.transactions.iter() {
-                structured_params
-                    .push((payload.execution_payload.block_hash.to_vec(), entry.as_ref()));
+            for entry in save_payload_params.payload.execution_payload.transactions.iter() {
+                structured_params.push((
+                    save_payload_params.payload.execution_payload.block_hash.to_vec(),
+                    entry.as_ref(),
+                ));
             }
 
             // Prepare the params vector from the structured parameters
@@ -1295,17 +1304,17 @@ impl PostgresDatabaseService {
             sql.push_str(&values_clauses.join(", "));
             sql.push_str(" ON CONFLICT (md5(block_hash::text), md5(bytes::text)) DO NOTHING");
 
-            transaction.execute(&sql, &params[..]).await?;
+            client.execute(&sql, &params[..]).await?;
         }
 
-        if !payload.execution_payload.withdrawals.is_empty() {
+        if !save_payload_params.payload.execution_payload.withdrawals.is_empty() {
             // Save the withdrawals
             #[allow(clippy::type_complexity)]
             let mut structured_params: Vec<(i32, Vec<u8>, i32, &[u8], i64)> = Vec::new();
-            for entry in payload.execution_payload.withdrawals.iter() {
+            for entry in save_payload_params.payload.execution_payload.withdrawals.iter() {
                 structured_params.push((
                     entry.index as i32,
-                    payload.execution_payload.block_hash.to_vec(),
+                    save_payload_params.payload.execution_payload.block_hash.to_vec(),
                     entry.validator_index as i32,
                     entry.address.as_ref(),
                     entry.amount as i64,
@@ -1344,10 +1353,8 @@ impl PostgresDatabaseService {
             sql.push_str(&values_clauses.join(", "));
             sql.push_str(" ON CONFLICT (index, block_hash) DO NOTHING");
 
-            transaction.execute(&sql, &params[..]).await?;
+            client.execute(&sql, &params[..]).await?;
         }
-
-        transaction.commit().await?;
 
         record.record_success();
         Ok(())
@@ -1720,7 +1727,145 @@ impl PostgresDatabaseService {
         filters: &BidFilters,
         validator_preferences: Arc<ValidatorPreferences>,
     ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
+        let mut mig_slot = DELIVERED_PAYLOADS_MIG_SLOT.load(Ordering::Relaxed);
+        if mig_slot == 0 {
+            let row = self.pool.get().await?
+                .query_one(
+                    "SELECT COALESCE(MIN(slot_number), 0) as min_slot FROM delivered_payload WHERE slot_number IS NOT NULL", 
+                    &[]
+                )
+                .await?;
+            let slot_num: i32 = row.get("min_slot");
+            mig_slot = slot_num as u64;
+            DELIVERED_PAYLOADS_MIG_SLOT.store(mig_slot, Ordering::Relaxed);
+            info!("Loaded delivered_payload migration slot: {}", mig_slot);
+        }
+
+        let use_legacy = if let Some(requested_slot) = filters.slot {
+            requested_slot < mig_slot
+        } else if let Some(cursor) = filters.cursor {
+            match filters.limit {
+                Some(limit) => cursor.saturating_sub(limit) < mig_slot,
+                None => true,
+            }
+        } else {
+            false
+        };
+
+        if use_legacy {
+            self.get_delivered_payloads_legacy(filters, validator_preferences).await
+        } else {
+            self.get_delivered_payloads_new(filters, validator_preferences).await
+        }
+    }
+
+    #[instrument(skip_all)]
+    pub async fn get_delivered_payloads_new(
+        &self,
+        filters: &BidFilters,
+        validator_preferences: Arc<ValidatorPreferences>,
+    ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_delivered_payloads");
+
+        let filters = PgBidFilters::from(filters);
+        let mut query = String::from(
+            "
+            SELECT
+                delivered_payload.slot_number            slot_number,
+                delivered_payload.payload_parent_hash    parent_hash,
+                delivered_payload.block_hash             block_hash,
+                delivered_payload.builder_pubkey         builder_public_key,
+                delivered_payload.proposer_pubkey        proposer_public_key,
+                delivered_payload.proposer_fee_recipient proposer_fee_recipient,
+                delivered_payload.value                  submission_value,
+                delivered_payload.gas_limit              gas_limit,
+                delivered_payload.gas_used               gas_used,
+                delivered_payload.block_number           block_number,
+                delivered_payload.num_txs                num_txs
+            FROM
+                delivered_payload
+        ",
+        );
+
+        let filtering = match validator_preferences.filtering {
+            Filtering::Regional => Some(1_i16),
+            Filtering::Global => None,
+        };
+
+        query.push_str(" WHERE 1 = 1 AND delivered_payload.slot_number IS NOT NULL");
+
+        let mut param_index = 1;
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+
+        if let Some(slot) = filters.slot() {
+            query.push_str(&format!(" AND delivered_payload.slot_number = ${param_index}"));
+            params.push(Box::new(slot));
+            param_index += 1;
+        }
+
+        if let Some(cursor) = filters.cursor() {
+            query.push_str(&format!(" AND delivered_payload.slot_number <= ${param_index}"));
+            params.push(Box::new(cursor));
+            param_index += 1;
+        }
+
+        if let Some(block_number) = filters.block_number() {
+            query.push_str(&format!(" AND delivered_payload.block_number = ${param_index}"));
+            params.push(Box::new(block_number));
+            param_index += 1;
+        }
+
+        if let Some(proposer_pubkey) = filters.proposer_pubkey() {
+            query.push_str(&format!(" AND delivered_payload.proposer_pubkey = ${param_index}"));
+            params.push(Box::new(proposer_pubkey.to_vec()));
+            param_index += 1;
+        }
+
+        if let Some(builder_pubkey) = filters.builder_pubkey() {
+            query.push_str(&format!(" AND delivered_payload.builder_pubkey = ${param_index}"));
+            params.push(Box::new(builder_pubkey.to_vec()));
+            param_index += 1;
+        }
+
+        if let Some(block_hash) = filters.block_hash() {
+            query.push_str(&format!(" AND delivered_payload.block_hash = ${param_index}"));
+            params.push(Box::new(block_hash));
+            param_index += 1;
+        }
+
+        if let Some(filtering) = filtering {
+            query.push_str(&format!(" AND delivered_payload.filtering = ${param_index}"));
+            params.push(Box::new(filtering));
+            param_index += 1;
+        }
+
+        if let Some(order) = filters.order() {
+            query.push_str(" ORDER BY delivered_payload.value ");
+            query.push_str(if order >= 0 { "ASC" } else { "DESC" });
+        } else {
+            query.push_str(" ORDER BY delivered_payload.slot_number DESC");
+        }
+
+        if let Some(limit) = filters.limit() {
+            query.push_str(&format!(" LIMIT ${param_index}"));
+            params.push(Box::new(limit));
+        }
+
+        let params_refs: Vec<&(dyn ToSql + Sync)> =
+            params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect();
+
+        let rows = self.pool.get().await?.query(&query, &params_refs[..]).await?;
+        record.record_success();
+        parse_rows(rows)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn get_delivered_payloads_legacy(
+        &self,
+        filters: &BidFilters,
+        validator_preferences: Arc<ValidatorPreferences>,
+    ) -> Result<Vec<DeliveredPayloadDocument>, DatabaseError> {
+        let mut record = DbMetricRecord::new("get_delivered_payloads_legacy");
 
         let filters = PgBidFilters::from(filters);
         let mut query = String::from(

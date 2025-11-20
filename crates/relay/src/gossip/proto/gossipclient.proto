@@ -14,6 +14,7 @@ message BroadcastPayloadParams {
   uint64 slot = 2;
   bytes proposer_pub_key = 3;
   optional string fork_name = 4;
+  optional bytes bid_data = 5;
 }
 
 message BroadcastGetPayloadParams {

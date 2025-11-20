@@ -1,7 +1,7 @@
 use std::{hash::Hasher, sync::Arc};
 
 use alloy_eips::eip7691::MAX_BLOBS_PER_BLOCK_ELECTRA;
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256};
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
 use ssz_derive::{Decode, Encode};
@@ -49,6 +49,13 @@ impl DehydratedBidSubmission {
         match self {
             DehydratedBidSubmission::Electra(s) => &s.message.builder_pubkey,
             DehydratedBidSubmission::Fulu(s) => &s.message.builder_pubkey,
+        }
+    }
+
+    pub fn fee_recipient(&self) -> Address {
+        match self {
+            DehydratedBidSubmission::Electra(s) => s.message.proposer_fee_recipient,
+            DehydratedBidSubmission::Fulu(s) => s.message.proposer_fee_recipient,
         }
     }
 
