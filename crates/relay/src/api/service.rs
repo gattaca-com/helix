@@ -102,11 +102,11 @@ pub async fn start_api_service<A: Api>(
     let data_api = Arc::new(DataApi::new(validator_preferences.clone(), db.clone()));
 
     let bids_cache: BidsCache =
-        Cache::builder().time_to_idle(Duration::from_secs(300)).max_capacity(10_000).build();
+        Cache::builder().time_to_idle(Duration::from_secs(12)).max_capacity(10_000).build();
 
     let delivered_payloads_cache: DeliveredPayloadsCache = Cache::builder()
         .expire_after(SelectiveExpiry)
-        .time_to_idle(Duration::from_secs(300))
+        .time_to_idle(Duration::from_secs(12))
         .max_capacity(10_000)
         .build();
 
