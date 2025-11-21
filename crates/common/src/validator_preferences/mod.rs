@@ -1,6 +1,6 @@
 use crate::default_bool;
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ValidatorPreferences {
     /// Apply filtering to the beacon block submissions.
     #[serde(default = "default_filtering")]
@@ -21,6 +21,18 @@ pub struct ValidatorPreferences {
 
     #[serde(default)]
     pub disable_inclusion_lists: bool,
+}
+
+impl Default for ValidatorPreferences {
+    fn default() -> Self {
+        Self {
+            filtering: default_filtering(),
+            trusted_builders: None,
+            header_delay: true,
+            delay_ms: None,
+            disable_inclusion_lists: false,
+        }
+    }
 }
 
 const fn default_filtering() -> Filtering {
