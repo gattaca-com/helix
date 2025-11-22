@@ -80,9 +80,10 @@ mod tests {
         let hoodi_domain = hoodi.get_builder_domain();
 
         // Domains should be non-zero
-        assert_ne!(sepolia_domain, Default::default());
-        assert_ne!(holesky_domain, Default::default());
-        assert_ne!(hoodi_domain, Default::default());
+        use alloy_primitives::B256;
+        assert_ne!(sepolia_domain, B256::ZERO);
+        assert_ne!(holesky_domain, B256::ZERO);
+        assert_ne!(hoodi_domain, B256::ZERO);
     }
 
     #[test]

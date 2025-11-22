@@ -301,9 +301,9 @@ mod tests {
         let chain_info = ChainInfo::for_mainnet();
         let max_blobs = chain_info.max_blobs_per_block();
         
-        // Should return a positive number (6 for mainnet after Deneb)
+        // Should return a positive reasonable number (was 6 for Deneb, may increase in future forks)
         assert!(max_blobs > 0);
-        assert!(max_blobs <= 6);
+        assert!(max_blobs <= 16, "max_blobs is {}, expected <= 16", max_blobs);
     }
 
     #[test]

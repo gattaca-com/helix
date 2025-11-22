@@ -370,7 +370,6 @@ mod tests {
     #[test]
     fn test_save_to_file() {
         use std::fs;
-        use std::path::PathBuf;
 
         let temp_dir = std::env::temp_dir();
         let test_file = temp_dir.join(format!("test_save_{}.txt", Uuid::new_v4()));
@@ -389,7 +388,6 @@ mod tests {
     #[test]
     fn test_save_to_file_creates_directory() {
         use std::fs;
-        use std::path::PathBuf;
 
         let temp_dir = std::env::temp_dir();
         let test_dir = temp_dir.join(format!("test_dir_{}", Uuid::new_v4()));

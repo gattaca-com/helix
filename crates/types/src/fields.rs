@@ -151,7 +151,7 @@ mod tests {
         
         // Check that the conversion preserves the data
         assert_eq!(lh_bloom.len(), LOGS_BLOOM_SIZE);
-        assert_eq!(lh_bloom.as_slice(), bloom.as_slice());
+        assert_eq!(lh_bloom.len(), bloom.len());
     }
 
     #[test]

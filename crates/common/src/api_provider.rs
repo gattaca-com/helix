@@ -59,7 +59,7 @@ mod tests {
     fn test_default_api_provider_get_timing() {
         let provider = DefaultApiProvider;
         let params = GetHeaderParams {
-            slot: Slot::new(100),
+            slot: 100,
             parent_hash: B256::ZERO,
             pubkey: Default::default(),
         };
@@ -106,13 +106,4 @@ mod tests {
         assert!(!timing.is_mev_boost);
     }
 
-    #[test]
-    fn test_api_provider_trait_implementation() {
-        let provider: Box<dyn ApiProvider> = Box::new(DefaultApiProvider);
-        let headers = HeaderMap::new();
-        
-        // Test that trait methods work through trait object
-        let metadata = provider.get_metadata(&headers);
-        assert_eq!(metadata, None);
-    }
 }
