@@ -49,3 +49,144 @@ impl Default for RelaySigningContext {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use helix_types::{BlsPublicKey, BlsSignature, ValidatorRegistrationData};
+    use alloy_primitives::Address;
+
+    #[test]
+    fn test_relay_signing_context_new() {
+        let keypair = BlsKeypair::random();
+        let context = Arc::new(ChainInfo::for_mainnet());
+        let expected_pubkey = keypair.pk.serialize().into();
+        
+        let signing_ctx = RelaySigningContext::new(keypair.clone(), context.clone());
+        
+        assert_eq!(signing_ctx.pubkey, expected_pubkey);
+    }
+
+    #[test]
+    fn test_relay_signing_context_pubkey_accessor() {
+        let signing_ctx = RelaySigningContext::default();
+        let pubkey = signing_ctx.pubkey();
+        
+        // Should return reference to the pubkey
+        assert_eq!(pubkey, &signing_ctx.pubkey);
+    }
+
+    #[test]
+    fn test_relay_signing_context_default() {
+        let signing_ctx = RelaySigningContext::default();
+        
+        // Should have a valid keypair and context
+        assert_ne!(signing_ctx.pubkey, BlsPublicKeyBytes::default());
+    }
+
+    #[test]
+    fn test_relay_signing_context_clone() {
+        let signing_ctx1 = RelaySigningContext::default();
+        let signing_ctx2 = signing_ctx1.clone();
+        
+        // Cloned context should have same pubkey
+        assert_eq!(signing_ctx1.pubkey, signing_ctx2.pubkey);
+    }
+
+    #[test]
+    fn test_sign_builder_message() {
+        let signing_ctx = RelaySigningContext::default();
+        let message = ValidatorRegistrationData {
+            fee_recipient: Address::ZERO,
+            gas_limit: 30_000_000,
+            timestamp: 1234567890,
+            pubkey: BlsPublicKeyBytes::default(),
+        };
+        
+        let signature = signing_ctx.sign_builder_message(&message);
+        
+        // Verify signature is valid
+        let domain = signing_ctx.context.builder_domain;
+        let root = message.signing_root(domain);
+        assert!(signature.verify(&signing_ctx.keypair.pk, root));
+    }
+
+    #[test]
+    fn test_sign_relay_message() {
+        let signing_ctx = RelaySigningContext::default();
+        let message = ValidatorRegistrationData {
+            fee_recipient: Address::ZERO,
+            gas_limit: 30_000_000,
+            timestamp: 1234567890,
+            pubkey: BlsPublicKeyBytes::default(),
+        };
+        
+        let signature = signing_ctx.sign_relay_message(&message);
+        
+        // Verify signature is valid with relay domain
+        let root = message.signing_root(RELAY_DOMAIN.into());
+        assert!(signature.verify(&signing_ctx.keypair.pk, root));
+    }
+
+    #[test]
+    fn test_sign_direct() {
+        let signing_ctx = RelaySigningContext::default();
+        let message = B256::random();
+        
+        let signature = signing_ctx.sign(message);
+        
+        // Verify signature
+        assert!(signature.verify(&signing_ctx.keypair.pk, message));
+    }
+
+    #[test]
+    fn test_relay_domain_constant() {
+        // Verify RELAY_DOMAIN is correctly formatted
+        assert_eq!(RELAY_DOMAIN.len(), 32);
+        assert_eq!(&RELAY_DOMAIN[27..], b"relay");
+    }
+
+    #[test]
+    fn test_signing_context_for_different_networks() {
+        let mainnet_ctx = Arc::new(ChainInfo::for_mainnet());
+        let sepolia_ctx = Arc::new(ChainInfo::for_sepolia());
+        
+        let keypair = BlsKeypair::random();
+        
+        let mainnet_signing = RelaySigningContext::new(keypair.clone(), mainnet_ctx.clone());
+        let sepolia_signing = RelaySigningContext::new(keypair.clone(), sepolia_ctx.clone());
+        
+        // Same keypair but different contexts
+        assert_eq!(mainnet_signing.pubkey, sepolia_signing.pubkey);
+        assert_ne!(mainnet_ctx.builder_domain, sepolia_ctx.builder_domain);
+    }
+
+    #[test]
+    fn test_builder_and_relay_signatures_differ() {
+        let signing_ctx = RelaySigningContext::default();
+        let message = ValidatorRegistrationData {
+            fee_recipient: Address::ZERO,
+            gas_limit: 30_000_000,
+            timestamp: 1234567890,
+            pubkey: BlsPublicKeyBytes::default(),
+        };
+        
+        let builder_sig = signing_ctx.sign_builder_message(&message);
+        let relay_sig = signing_ctx.sign_relay_message(&message);
+        
+        // Same message but different domains should produce different signatures
+        assert_ne!(builder_sig, relay_sig);
+    }
+
+    #[test]
+    fn test_signature_deterministic_for_same_message() {
+        let signing_ctx = RelaySigningContext::default();
+        let message = B256::random();
+        
+        let sig1 = signing_ctx.sign(message);
+        let sig2 = signing_ctx.sign(message);
+        
+        // Same message should produce same signature
+        assert_eq!(sig1, sig2);
+    }
+}

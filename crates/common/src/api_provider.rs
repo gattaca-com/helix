@@ -39,3 +39,80 @@ impl ApiProvider for DefaultApiProvider {
         Ok(TimingResult { sleep_time: None, is_mev_boost: false })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use helix_types::Slot;
+    use alloy_primitives::B256;
+
+    #[test]
+    fn test_default_api_provider_get_metadata() {
+        let provider = DefaultApiProvider;
+        let headers = HeaderMap::new();
+        
+        let metadata = provider.get_metadata(&headers);
+        assert_eq!(metadata, None);
+    }
+
+    #[test]
+    fn test_default_api_provider_get_timing() {
+        let provider = DefaultApiProvider;
+        let params = GetHeaderParams {
+            slot: Slot::new(100),
+            parent_hash: B256::ZERO,
+            pubkey: Default::default(),
+        };
+        let headers = HeaderMap::new();
+        let preferences = ValidatorPreferences::default();
+        
+        let result = provider.get_timing(&params, &headers, &preferences, 1000);
+        
+        assert!(result.is_ok());
+        let timing = result.unwrap();
+        assert!(timing.sleep_time.is_none());
+        assert!(!timing.is_mev_boost);
+    }
+
+    #[test]
+    fn test_default_api_provider_clone() {
+        let provider1 = DefaultApiProvider;
+        let provider2 = provider1.clone();
+        
+        // Both should behave the same
+        let headers = HeaderMap::new();
+        assert_eq!(provider1.get_metadata(&headers), provider2.get_metadata(&headers));
+    }
+
+    #[test]
+    fn test_timing_result_with_sleep_time() {
+        let timing = TimingResult {
+            sleep_time: Some(Duration::from_millis(500)),
+            is_mev_boost: true,
+        };
+        
+        assert_eq!(timing.sleep_time, Some(Duration::from_millis(500)));
+        assert!(timing.is_mev_boost);
+    }
+
+    #[test]
+    fn test_timing_result_without_sleep_time() {
+        let timing = TimingResult {
+            sleep_time: None,
+            is_mev_boost: false,
+        };
+        
+        assert_eq!(timing.sleep_time, None);
+        assert!(!timing.is_mev_boost);
+    }
+
+    #[test]
+    fn test_api_provider_trait_implementation() {
+        let provider: Box<dyn ApiProvider> = Box::new(DefaultApiProvider);
+        let headers = HeaderMap::new();
+        
+        // Test that trait methods work through trait object
+        let metadata = provider.get_metadata(&headers);
+        assert_eq!(metadata, None);
+    }
+}

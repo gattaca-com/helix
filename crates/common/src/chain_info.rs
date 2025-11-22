@@ -172,3 +172,160 @@ impl ChainInfo {
         self.context.max_blobs_per_block(epoch) as usize
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_network_display() {
+        assert_eq!(format!("{}", Network::Mainnet), "mainnet");
+        assert_eq!(format!("{}", Network::Sepolia), "sepolia");
+        assert_eq!(format!("{}", Network::Holesky), "holesky");
+        assert_eq!(format!("{}", Network::Hoodi), "hoodi");
+        assert_eq!(
+            format!("{}", Network::Custom("/path/to/config.yaml".to_string())),
+            "custom network with config at `/path/to/config.yaml`"
+        );
+    }
+
+    #[test]
+    fn test_network_default() {
+        let network = Network::default();
+        assert!(matches!(network, Network::Mainnet));
+    }
+
+    #[test]
+    fn test_network_serialization() {
+        let network = Network::Sepolia;
+        let serialized = serde_json::to_string(&network).unwrap();
+        let deserialized: Network = serde_json::from_str(&serialized).unwrap();
+        assert!(matches!(deserialized, Network::Sepolia));
+    }
+
+    #[test]
+    fn test_chain_info_for_mainnet() {
+        let chain_info = ChainInfo::for_mainnet();
+        assert!(matches!(chain_info.network, Network::Mainnet));
+        assert_eq!(chain_info.genesis_time_in_secs, MAINNET_GENESIS_TIME);
+        assert_eq!(chain_info.genesis_validators_root, B256::from(MAINNET_GENESIS_VALIDATOR_ROOT));
+        assert_eq!(chain_info.seconds_per_slot(), 12);
+    }
+
+    #[test]
+    fn test_chain_info_for_sepolia() {
+        let chain_info = ChainInfo::for_sepolia();
+        assert!(matches!(chain_info.network, Network::Sepolia));
+        assert_eq!(chain_info.genesis_time_in_secs, SEPOLIA_GENESIS_TIME);
+        assert_eq!(chain_info.genesis_validators_root, B256::from(SEPOLIA_GENESIS_VALIDATOR_ROOT));
+        assert_eq!(chain_info.seconds_per_slot(), 12);
+    }
+
+    #[test]
+    fn test_chain_info_for_holesky() {
+        let chain_info = ChainInfo::for_holesky();
+        assert!(matches!(chain_info.network, Network::Holesky));
+        assert_eq!(chain_info.genesis_time_in_secs, HOLESKY_GENESIS_TIME);
+        assert_eq!(chain_info.genesis_validators_root, B256::from(HOLESKY_GENESIS_VALIDATOR_ROOT));
+        assert_eq!(chain_info.seconds_per_slot(), 12);
+    }
+
+    #[test]
+    fn test_chain_info_for_hoodi() {
+        let chain_info = ChainInfo::for_hoodi();
+        assert!(matches!(chain_info.network, Network::Hoodi));
+        assert_eq!(chain_info.genesis_time_in_secs, HOODI_GENESIS_TIME);
+        assert_eq!(chain_info.genesis_validators_root, B256::from(HOODI_GENESIS_VALIDATOR_ROOT));
+        assert_eq!(chain_info.seconds_per_slot(), 12);
+    }
+
+    #[test]
+    fn test_chain_info_slots_per_epoch() {
+        let chain_info = ChainInfo::for_mainnet();
+        assert_eq!(chain_info.slots_per_epoch(), 32);
+    }
+
+    #[test]
+    fn test_chain_info_slot_in_epoch() {
+        let chain_info = ChainInfo::for_mainnet();
+        
+        // Test slot 0 should be at position 0
+        assert_eq!(chain_info.slot_in_epoch(Slot::new(0)), 0);
+        
+        // Test slot 31 should be at position 31 (last in epoch)
+        assert_eq!(chain_info.slot_in_epoch(Slot::new(31)), 31);
+        
+        // Test slot 32 should be at position 0 (first in next epoch)
+        assert_eq!(chain_info.slot_in_epoch(Slot::new(32)), 0);
+        
+        // Test slot 64 should be at position 0 (first in epoch 2)
+        assert_eq!(chain_info.slot_in_epoch(Slot::new(64)), 0);
+        
+        // Test arbitrary slot
+        assert_eq!(chain_info.slot_in_epoch(Slot::new(100)), 4); // 100 % 32 = 4
+    }
+
+    #[test]
+    fn test_chain_info_current_slot() {
+        let chain_info = ChainInfo::for_mainnet();
+        let current_slot = chain_info.current_slot();
+        
+        // Current slot should be a reasonable value (not 0, since we're past genesis)
+        assert!(current_slot.as_u64() > 0);
+    }
+
+    #[test]
+    fn test_chain_info_current_fork_name() {
+        let chain_info = ChainInfo::for_mainnet();
+        let fork_name = chain_info.current_fork_name();
+        
+        // Should return some fork name
+        assert!(matches!(
+            fork_name,
+            ForkName::Base | ForkName::Altair | ForkName::Bellatrix | 
+            ForkName::Capella | ForkName::Deneb | ForkName::Electra | ForkName::Fulu
+        ));
+    }
+
+    #[test]
+    fn test_chain_info_fork_at_slot() {
+        let chain_info = ChainInfo::for_mainnet();
+        
+        // Slot 0 should be in Base fork
+        let fork_at_genesis = chain_info.fork_at_slot(Slot::new(0));
+        assert_eq!(fork_at_genesis, ForkName::Base);
+    }
+
+    #[test]
+    fn test_chain_info_max_blobs_per_block() {
+        let chain_info = ChainInfo::for_mainnet();
+        let max_blobs = chain_info.max_blobs_per_block();
+        
+        // Should return a positive number (6 for mainnet after Deneb)
+        assert!(max_blobs > 0);
+        assert!(max_blobs <= 6);
+    }
+
+    #[test]
+    fn test_genesis_validator_roots_are_unique() {
+        let mainnet_root = B256::from(MAINNET_GENESIS_VALIDATOR_ROOT);
+        let sepolia_root = B256::from(SEPOLIA_GENESIS_VALIDATOR_ROOT);
+        let holesky_root = B256::from(HOLESKY_GENESIS_VALIDATOR_ROOT);
+        let hoodi_root = B256::from(HOODI_GENESIS_VALIDATOR_ROOT);
+
+        assert_ne!(mainnet_root, sepolia_root);
+        assert_ne!(mainnet_root, holesky_root);
+        assert_ne!(mainnet_root, hoodi_root);
+        assert_ne!(sepolia_root, holesky_root);
+        assert_ne!(sepolia_root, hoodi_root);
+        assert_ne!(holesky_root, hoodi_root);
+    }
+
+    #[test]
+    fn test_genesis_times_are_unique_and_reasonable() {
+        assert!(MAINNET_GENESIS_TIME > 1_600_000_000); // After 2020
+        assert!(SEPOLIA_GENESIS_TIME > MAINNET_GENESIS_TIME);
+        assert!(HOLESKY_GENESIS_TIME > SEPOLIA_GENESIS_TIME);
+        assert!(HOODI_GENESIS_TIME > HOLESKY_GENESIS_TIME);
+    }
+}
