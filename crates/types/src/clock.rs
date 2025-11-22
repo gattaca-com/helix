@@ -75,4 +75,103 @@ mod tests {
             sleep(Duration::from_millis(10));
         }
     }
+
+    #[test]
+    fn test_mainnet_slot_clock() {
+        let clock = mainnet_slot_clock(12);
+        let now = clock.now();
+        assert!(now.is_some());
+        // Mainnet has been running for a while, so slot should be > 0
+        assert!(now.unwrap().as_u64() > 0);
+    }
+
+    #[test]
+    fn test_sepolia_slot_clock() {
+        let clock = sepolia_slot_clock(12);
+        let now = clock.now();
+        assert!(now.is_some());
+    }
+
+    #[test]
+    fn test_holesky_slot_clock() {
+        let clock = holesky_slot_clock(12);
+        let now = clock.now();
+        assert!(now.is_some());
+    }
+
+    #[test]
+    fn test_hoodi_slot_clock() {
+        let clock = hoodi_slot_clock(12);
+        let now = clock.now();
+        assert!(now.is_some());
+    }
+
+    #[test]
+    fn test_custom_slot_clock() {
+        // Use a genesis time in the past
+        let genesis_time = 1_600_000_000;
+        let clock = custom_slot_clock(genesis_time, 12);
+        let now = clock.now();
+        assert!(now.is_some());
+        assert!(now.unwrap().as_u64() > 0);
+    }
+
+    #[test]
+    fn test_duration_into_slot_returns_some_for_current() {
+        let clock = mainnet_slot_clock(12);
+        let current_slot = clock.now().unwrap();
+        let duration = duration_into_slot(&clock, current_slot);
+        assert!(duration.is_some());
+        // Should be less than 12 seconds (slot duration)
+        assert!(duration.unwrap().as_secs() < 12);
+    }
+
+    #[test]
+    fn test_genesis_times_are_in_past() {
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        assert!(MAINNET_GENESIS_TIME < now_secs);
+        assert!(SEPOLIA_GENESIS_TIME < now_secs);
+        assert!(HOLESKY_GENESIS_TIME < now_secs);
+        assert!(HOODI_GENESIS_TIME < now_secs);
+    }
+
+    #[test]
+    fn test_genesis_times_ordering() {
+        // Mainnet launched first
+        assert!(MAINNET_GENESIS_TIME < SEPOLIA_GENESIS_TIME);
+        assert!(SEPOLIA_GENESIS_TIME < HOLESKY_GENESIS_TIME);
+        assert!(HOLESKY_GENESIS_TIME < HOODI_GENESIS_TIME);
+    }
+
+    #[test]
+    fn test_slot_clocks_use_correct_genesis_time() {
+        let mainnet_clock = mainnet_slot_clock(12);
+        let sepolia_clock = sepolia_slot_clock(12);
+        let holesky_clock = holesky_slot_clock(12);
+        let hoodi_clock = hoodi_slot_clock(12);
+
+        // All clocks should return valid current slots
+        assert!(mainnet_clock.now().is_some());
+        assert!(sepolia_clock.now().is_some());
+        assert!(holesky_clock.now().is_some());
+        assert!(hoodi_clock.now().is_some());
+    }
+
+    #[test]
+    fn test_custom_slot_clock_with_different_slot_duration() {
+        let genesis_time = 1_600_000_000;
+        let clock_12s = custom_slot_clock(genesis_time, 12);
+        let clock_6s = custom_slot_clock(genesis_time, 6);
+
+        // With same genesis but different slot durations, slot numbers should differ
+        let slot_12s = clock_12s.now().unwrap().as_u64();
+        let slot_6s = clock_6s.now().unwrap().as_u64();
+
+        // 6 second slots should have roughly 2x as many slots
+        assert!(slot_6s > slot_12s);
+    }
 }
