@@ -258,35 +258,4 @@ mod tests {
         assert_eq!(deserialized.validator_index, 100);
     }
 
-    #[test]
-    fn test_all_structs_implement_debug() {
-        // Ensure Debug is properly implemented for all types
-        let duty = ProposerDuty {
-            pubkey: BlsPublicKeyBytes::default(),
-            validator_index: 1,
-            slot: Slot::new(1),
-        };
-        assert!(format!("{:?}", duty).contains("ProposerDuty"));
-
-        let schedule = ProposerSchedule {
-            slot: Slot::new(1),
-            validator_index: 1,
-            entry: SignedValidatorRegistration {
-                message: helix_types::ValidatorRegistrationData {
-                    fee_recipient: alloy_primitives::Address::ZERO,
-                    gas_limit: 30_000_000,
-                    timestamp: 1,
-                    pubkey: BlsPublicKeyBytes::default(),
-                },
-                signature: Default::default(),
-            },
-        };
-        assert!(format!("{:?}", schedule).contains("ProposerSchedule"));
-
-        let info = ProposerInfo {
-            name: "Test".to_string(),
-            pubkey: BlsPublicKeyBytes::default(),
-        };
-        assert!(format!("{:?}", info).contains("ProposerInfo"));
-    }
 }

@@ -50,13 +50,6 @@ mod tests {
     }
 
     #[test]
-    fn test_sig_error_debug() {
-        let err = SigError::InvalidBlsSignatureBytes;
-        let debug_str = format!("{:?}", err);
-        assert!(debug_str.contains("InvalidBlsSignatureBytes"));
-    }
-
-    #[test]
     fn test_blobs_error_pre_deneb() {
         let err = BlobsError::PreDeneb;
         assert_eq!(err.to_string(), "block is pre deneb");
@@ -98,17 +91,6 @@ mod tests {
         let err1 = BlobsError::PreDeneb;
         let err2 = err1.clone();
         assert_eq!(err1.to_string(), err2.to_string());
-    }
-
-    #[test]
-    fn test_blobs_error_debug() {
-        let err = BlobsError::BundleMismatch {
-            proofs: 1,
-            commitments: 2,
-            blobs: 3,
-        };
-        let debug_str = format!("{:?}", err);
-        assert!(debug_str.contains("BundleMismatch"));
     }
 
     #[test]

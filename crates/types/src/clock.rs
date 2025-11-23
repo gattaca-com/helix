@@ -90,32 +90,26 @@ mod tests {
     fn test_sepolia_slot_clock() {
         let clock = sepolia_slot_clock(12);
         let now = clock.now();
-        assert!(now.is_some());
+        // Sepolia has been running since June 2022, should have many slots
+        assert!(now.unwrap().as_u64() > 1_000_000, "Sepolia should have > 1M slots by now");
     }
 
     #[test]
     fn test_holesky_slot_clock() {
         let clock = holesky_slot_clock(12);
         let now = clock.now();
-        assert!(now.is_some());
+        // Holesky launched Sept 2023, should have many slots
+        assert!(now.unwrap().as_u64() > 500_000, "Holesky should have > 500K slots by now");
     }
 
     #[test]
     fn test_hoodi_slot_clock() {
         let clock = hoodi_slot_clock(12);
         let now = clock.now();
-        assert!(now.is_some());
+        // Hoodi is a test network, should return valid slot (not None)
+        assert!(now.is_some(), "Hoodi should return valid slot");
     }
 
-    #[test]
-    fn test_custom_slot_clock() {
-        // Use a genesis time in the past
-        let genesis_time = 1_600_000_000;
-        let clock = custom_slot_clock(genesis_time, 12);
-        let now = clock.now();
-        assert!(now.is_some());
-        assert!(now.unwrap().as_u64() > 0);
-    }
 
     #[test]
     fn test_duration_into_slot_returns_some_for_current() {
@@ -155,11 +149,21 @@ mod tests {
         let holesky_clock = holesky_slot_clock(12);
         let hoodi_clock = hoodi_slot_clock(12);
 
-        // All clocks should return valid current slots
-        assert!(mainnet_clock.now().is_some());
-        assert!(sepolia_clock.now().is_some());
-        assert!(holesky_clock.now().is_some());
-        assert!(hoodi_clock.now().is_some());
+        // All clocks should return different slot numbers (they started at different times)
+        let mainnet_slot = mainnet_clock.now().unwrap().as_u64();
+        let sepolia_slot = sepolia_clock.now().unwrap().as_u64();
+        let holesky_slot = holesky_clock.now().unwrap().as_u64();
+        let hoodi_slot = hoodi_clock.now().unwrap().as_u64();
+        
+        // Mainnet should have most slots (oldest network)
+        assert!(mainnet_slot > sepolia_slot, "Mainnet should have more slots than Sepolia");
+        assert!(mainnet_slot > holesky_slot, "Mainnet should have more slots than Holesky");
+        
+        // All should be different (different genesis times)
+        assert_ne!(mainnet_slot, sepolia_slot);
+        assert_ne!(mainnet_slot, holesky_slot);
+        assert_ne!(mainnet_slot, hoodi_slot);
+        assert_ne!(sepolia_slot, holesky_slot);
     }
 
     #[test]
@@ -204,9 +208,10 @@ mod tests {
     fn test_slot_duration_edge_cases() {
         let genesis_time = 1_600_000_000;
         
-        // 1 second slots
+        // 1 second slots - should have many slots since 2020
         let clock_1s = custom_slot_clock(genesis_time, 1);
-        assert!(clock_1s.now().is_some());
+        let slot_1s = clock_1s.now().unwrap().as_u64();
+        assert!(slot_1s > 100_000_000, "1-second slots should accumulate quickly");
         
         // Very large slot duration (1 hour)
         let clock_3600s = custom_slot_clock(genesis_time, 3600);

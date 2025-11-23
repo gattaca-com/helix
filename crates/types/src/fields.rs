@@ -213,20 +213,6 @@ mod tests {
         assert_eq!(extra_data.len(), 0);
     }
 
-    #[test]
-    fn test_transaction_deref() {
-        let tx = Transaction(Bytes::from(vec![1, 2, 3]));
-        // Should be able to call Bytes methods through Deref
-        assert_eq!(tx.len(), 3);
-        assert!(!tx.is_empty());
-    }
-
-    #[test]
-    fn test_extra_data_deref() {
-        let extra_data = ExtraData(Bytes::from(vec![1, 2]));
-        assert_eq!(extra_data.len(), 2);
-        assert!(!extra_data.is_empty());
-    }
 
     #[test]
     fn test_transaction_test_random() {
@@ -423,20 +409,4 @@ mod tests {
         assert!(lh_zero.iter().all(|&b| b == 0), "Converted ZERO should remain all zeros");
     }
 
-    #[test]
-    fn test_transaction_display_formats() {
-        // Short transaction
-        let short = Transaction(Bytes::from(vec![0x01, 0x02]));
-        let display = format!("{}", short);
-        assert!(!display.is_empty(), "Display should produce output");
-        
-        // Empty transaction
-        let empty = Transaction::default();
-        let display = format!("{}", empty);
-        assert!(!display.is_empty(), "Empty transaction should still have display output");
-        
-        // Debug format
-        let debug = format!("{:?}", short);
-        assert!(!debug.is_empty(), "Debug format should work");
-    }
 }

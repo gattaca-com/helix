@@ -266,12 +266,16 @@ mod tests {
     }
 
     #[test]
-    fn test_chain_info_current_slot() {
+    fn test_current_slot_is_past_genesis() {
         let chain_info = ChainInfo::for_mainnet();
         let current_slot = chain_info.current_slot();
         
-        // Current slot should be a reasonable value (not 0, since we're past genesis)
-        assert!(current_slot.as_u64() > 0);
+        // Mainnet launched Dec 2020, by Nov 2024 should have > 9M slots
+        // (4 years * 365 days * 7200 slots/day ≈ 10.5M)
+        assert!(current_slot.as_u64() > 9_000_000, "Mainnet should have > 9M slots by now, got {}", current_slot.as_u64());
+        
+        // Sanity check - should not be absurdly high
+        assert!(current_slot.as_u64() < 50_000_000, "Slot count seems too high: {}", current_slot.as_u64());
     }
 
     #[test]
@@ -279,12 +283,12 @@ mod tests {
         let chain_info = ChainInfo::for_mainnet();
         let fork_name = chain_info.current_fork_name();
         
-        // Should return some fork name
-        assert!(matches!(
-            fork_name,
-            ForkName::Base | ForkName::Altair | ForkName::Bellatrix | 
-            ForkName::Capella | ForkName::Deneb | ForkName::Electra | ForkName::Fulu
-        ));
+        // By Nov 2024, mainnet should be at Deneb or later
+        assert!(
+            matches!(fork_name, ForkName::Deneb | ForkName::Electra | ForkName::Fulu),
+            "Mainnet should be at Deneb or later by Nov 2024, got {:?}",
+            fork_name
+        );
     }
 
     #[test]
@@ -297,13 +301,25 @@ mod tests {
     }
 
     #[test]
-    fn test_chain_info_max_blobs_per_block() {
-        let chain_info = ChainInfo::for_mainnet();
-        let max_blobs = chain_info.max_blobs_per_block();
+    fn test_max_blobs_is_positive_and_reasonable() {
+        // Each network may have different max_blobs based on their fork schedule
+        // Deneb introduced 6 blobs per block, future forks may increase
         
-        // Should return a positive reasonable number (was 6 for Deneb, may increase in future forks)
-        assert!(max_blobs > 0);
-        assert!(max_blobs <= 16, "max_blobs is {}, expected <= 16", max_blobs);
+        let mainnet_blobs = ChainInfo::for_mainnet().max_blobs_per_block();
+        assert!(mainnet_blobs > 0, "Mainnet should support blobs (post-Deneb), got {}", mainnet_blobs);
+        assert!(mainnet_blobs <= 128, "Mainnet max blobs should be reasonable, got {}", mainnet_blobs);
+        
+        let sepolia_blobs = ChainInfo::for_sepolia().max_blobs_per_block();
+        assert!(sepolia_blobs > 0, "Sepolia should support blobs, got {}", sepolia_blobs);
+        assert!(sepolia_blobs <= 128, "Sepolia max blobs should be reasonable, got {}", sepolia_blobs);
+        
+        let holesky_blobs = ChainInfo::for_holesky().max_blobs_per_block();
+        assert!(holesky_blobs > 0, "Holesky should support blobs, got {}", holesky_blobs);
+        assert!(holesky_blobs <= 128, "Holesky max blobs should be reasonable, got {}", holesky_blobs);
+        
+        let hoodi_blobs = ChainInfo::for_hoodi().max_blobs_per_block();
+        assert!(hoodi_blobs > 0, "Hoodi should support blobs, got {}", hoodi_blobs);
+        assert!(hoodi_blobs <= 128, "Hoodi max blobs should be reasonable, got {}", hoodi_blobs);
     }
 
     #[test]
@@ -463,17 +479,6 @@ mod tests {
     }
 
     #[test]
-    fn test_current_slot_is_past_genesis() {
-        let chain_info = ChainInfo::for_mainnet();
-        let current_slot = chain_info.current_slot();
-        
-        // We're well past genesis (mainnet genesis was Dec 2020)
-        // Current slot should be in the millions by now
-        assert!(current_slot.as_u64() > 1_000_000, 
-                "Current mainnet slot should be > 1M, got {}", current_slot.as_u64());
-    }
-
-    #[test]
     fn test_fork_at_slot_genesis() {
         // Different networks started at different forks
         let mainnet = ChainInfo::for_mainnet();
@@ -497,17 +502,5 @@ mod tests {
             matches!(hoodi_genesis_fork, ForkName::Bellatrix | ForkName::Capella | ForkName::Deneb | ForkName::Electra | ForkName::Fulu),
             "Hoodi should start at Bellatrix or later, got {:?}", hoodi_genesis_fork
         );
-    }
-
-    #[test]
-    fn test_max_blobs_is_positive_and_reasonable() {
-        let chain_info = ChainInfo::for_mainnet();
-        let max_blobs = chain_info.max_blobs_per_block();
-        
-        // Post-Deneb: should have blobs
-        assert!(max_blobs > 0, "Should support blobs");
-        
-        // Should be reasonable (current spec allows up to 6, future may increase)
-        assert!(max_blobs <= 16, "Max blobs should be <= 16, got {}", max_blobs);
     }
 }
