@@ -12,7 +12,7 @@ use dashmap::{DashMap, DashSet};
 use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock};
 use http::HeaderValue;
 use parking_lot::RwLock;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::{
     BuilderConfig, BuilderInfo, ProposerInfo,
@@ -332,5 +332,149 @@ mod tests {
 
         let result = cache.kill_switch_enabled();
         assert!(!result, "Kill switch should be disabled");
+    }
+
+    #[tokio::test]
+    pub async fn test_kill_switch_multiple_toggles() {
+        let cache = LocalCache::new();
+
+        // Toggle multiple times
+        for i in 0..10 {
+            if i % 2 == 0 {
+                cache.enable_kill_switch();
+                assert!(cache.kill_switch_enabled(), "Should be enabled on iteration {}", i);
+            } else {
+                cache.disable_kill_switch();
+                assert!(!cache.kill_switch_enabled(), "Should be disabled on iteration {}", i);
+            }
+        }
+    }
+
+    #[tokio::test]
+    pub async fn test_trusted_proposers_empty_list() {
+        let cache = LocalCache::new();
+
+        // Update with empty list
+        cache.update_trusted_proposers(vec![]);
+
+        // No proposers should be trusted
+        let is_trusted = cache.is_trusted_proposer(&get_fixed_pubkey_bytes(0));
+        assert!(!is_trusted, "No proposers should be trusted after empty update");
+    }
+
+    #[tokio::test]
+    pub async fn test_trusted_proposers_additive_behavior() {
+        let cache = LocalCache::new();
+
+        // Add initial set
+        cache.update_trusted_proposers(vec![
+            ProposerInfo {
+                name: "proposer1".to_string(),
+                pubkey: get_fixed_pubkey_bytes(0),
+            },
+        ]);
+
+        assert!(cache.is_trusted_proposer(&get_fixed_pubkey_bytes(0)));
+
+        // Add another set (should be additive, not replace)
+        cache.update_trusted_proposers(vec![
+            ProposerInfo {
+                name: "proposer2".to_string(),
+                pubkey: get_fixed_pubkey_bytes(1),
+            },
+        ]);
+
+        // Both should be trusted (update is additive)
+        assert!(cache.is_trusted_proposer(&get_fixed_pubkey_bytes(0)), 
+                "Old proposer should still be trusted");
+        assert!(cache.is_trusted_proposer(&get_fixed_pubkey_bytes(1)),
+                "New proposer should also be trusted");
+    }
+
+    #[tokio::test]
+    pub async fn test_trusted_proposers_multiple_additions() {
+        let cache = LocalCache::new();
+
+        // Add proposers in multiple batches (test additive behavior with all available indices)
+        for i in 0..5 {
+            cache.update_trusted_proposers(vec![ProposerInfo {
+                name: format!("proposer_{}", i),
+                pubkey: get_fixed_pubkey_bytes(i),
+            }]);
+        }
+
+        // Verify all are trusted
+        for i in 0..5 {
+            assert!(cache.is_trusted_proposer(&get_fixed_pubkey_bytes(i)),
+                    "Proposer {} should be trusted", i);
+        }
+
+        // Verify random pubkey is not trusted
+        let random_pubkey = BlsPublicKey::test_random().serialize().into();
+        assert!(!cache.is_trusted_proposer(&random_pubkey),
+                "Random proposer should not be trusted");
+    }
+
+    #[tokio::test]
+    pub async fn test_trusted_proposers_with_same_name_different_pubkey() {
+        let cache = LocalCache::new();
+
+        // Add proposers with same name but different pubkeys
+        cache.update_trusted_proposers(vec![
+            ProposerInfo {
+                name: "duplicate_name".to_string(),
+                pubkey: get_fixed_pubkey_bytes(0),
+            },
+            ProposerInfo {
+                name: "duplicate_name".to_string(),
+                pubkey: get_fixed_pubkey_bytes(1),
+            },
+        ]);
+
+        // Both should be trusted (indexed by pubkey, not name)
+        assert!(cache.is_trusted_proposer(&get_fixed_pubkey_bytes(0)));
+        assert!(cache.is_trusted_proposer(&get_fixed_pubkey_bytes(1)));
+    }
+
+    #[tokio::test]
+    pub async fn test_local_cache_clone() {
+        let cache1 = LocalCache::new();
+
+        cache1.enable_kill_switch();
+        cache1.update_trusted_proposers(vec![ProposerInfo {
+            name: "test".to_string(),
+            pubkey: get_fixed_pubkey_bytes(0),
+        }]);
+
+        // Clone should share the same underlying data
+        let cache2 = cache1.clone();
+
+        // Changes in cache2 should affect cache1 (they share Arc references)
+        assert!(cache2.kill_switch_enabled(), "Clone should share kill switch state");
+        assert!(cache2.is_trusted_proposer(&get_fixed_pubkey_bytes(0)),
+                "Clone should share trusted proposers");
+
+        cache2.disable_kill_switch();
+        assert!(!cache1.kill_switch_enabled(), "Changes through clone should affect original");
+    }
+
+    #[tokio::test]
+    pub async fn test_trusted_proposers_unicode_names() {
+        let cache = LocalCache::new();
+
+        // Test with Unicode names
+        cache.update_trusted_proposers(vec![
+            ProposerInfo {
+                name: "Validator 验证者 🚀".to_string(),
+                pubkey: get_fixed_pubkey_bytes(0),
+            },
+            ProposerInfo {
+                name: "עברית Ελληνικά Русский".to_string(),
+                pubkey: get_fixed_pubkey_bytes(1),
+            },
+        ]);
+
+        assert!(cache.is_trusted_proposer(&get_fixed_pubkey_bytes(0)));
+        assert!(cache.is_trusted_proposer(&get_fixed_pubkey_bytes(1)));
     }
 }
