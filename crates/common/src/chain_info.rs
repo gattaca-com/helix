@@ -328,4 +328,186 @@ mod tests {
         assert!(HOLESKY_GENESIS_TIME > SEPOLIA_GENESIS_TIME);
         assert!(HOODI_GENESIS_TIME > HOLESKY_GENESIS_TIME);
     }
+
+    #[test]
+    fn test_slot_in_epoch_edge_cases() {
+        let chain_info = ChainInfo::for_mainnet();
+        let slots_per_epoch = chain_info.slots_per_epoch();
+        assert_eq!(slots_per_epoch, 32, "Mainnet should have 32 slots per epoch");
+
+        // Epoch boundaries
+        assert_eq!(chain_info.slot_in_epoch(Slot::new(0)), 0, "First slot of epoch 0");
+        assert_eq!(chain_info.slot_in_epoch(Slot::new(31)), 31, "Last slot of epoch 0");
+        assert_eq!(chain_info.slot_in_epoch(Slot::new(32)), 0, "First slot of epoch 1");
+        assert_eq!(chain_info.slot_in_epoch(Slot::new(63)), 31, "Last slot of epoch 1");
+        assert_eq!(chain_info.slot_in_epoch(Slot::new(64)), 0, "First slot of epoch 2");
+
+        // Large slot numbers
+        let large_slot = Slot::new(1_000_000);
+        let position = chain_info.slot_in_epoch(large_slot);
+        assert!(position < 32, "Position should be < 32, got {}", position);
+        assert_eq!(position, 1_000_000 % 32);
+
+        // Very large slot (near u64 max, but safe for calculation)
+        let very_large = Slot::new(u64::MAX - 100);
+        let position = chain_info.slot_in_epoch(very_large);
+        assert!(position < 32, "Should handle very large slots");
+    }
+
+    #[test]
+    fn test_builder_domain_unique_per_network() {
+        let mainnet = ChainInfo::for_mainnet();
+        let sepolia = ChainInfo::for_sepolia();
+        let holesky = ChainInfo::for_holesky();
+        let hoodi = ChainInfo::for_hoodi();
+
+        // Each network must have a unique builder domain to prevent replay attacks
+        assert_ne!(mainnet.builder_domain, sepolia.builder_domain, 
+                   "Mainnet and Sepolia must have different builder domains");
+        assert_ne!(mainnet.builder_domain, holesky.builder_domain,
+                   "Mainnet and Holesky must have different builder domains");
+        assert_ne!(mainnet.builder_domain, hoodi.builder_domain,
+                   "Mainnet and Hoodi must have different builder domains");
+        assert_ne!(sepolia.builder_domain, holesky.builder_domain,
+                   "Sepolia and Holesky must have different builder domains");
+        assert_ne!(sepolia.builder_domain, hoodi.builder_domain,
+                   "Sepolia and Hoodi must have different builder domains");
+        assert_ne!(holesky.builder_domain, hoodi.builder_domain,
+                   "Holesky and Hoodi must have different builder domains");
+
+        // Builder domains should not be zero (security check)
+        assert_ne!(mainnet.builder_domain, B256::ZERO, "Builder domain should not be zero");
+        assert_ne!(sepolia.builder_domain, B256::ZERO, "Builder domain should not be zero");
+    }
+
+    #[test]
+    fn test_network_serialization_edge_cases() {
+        // Standard networks
+        let networks = vec![
+            Network::Mainnet,
+            Network::Sepolia,
+            Network::Holesky,
+            Network::Hoodi,
+        ];
+
+        for network in networks {
+            let serialized = serde_json::to_string(&network).unwrap();
+            let deserialized: Network = serde_json::from_str(&serialized).unwrap();
+            // Can't use assert_eq! because Network doesn't derive PartialEq
+            let reserialized = serde_json::to_string(&deserialized).unwrap();
+            assert_eq!(serialized, reserialized, "Round trip should be identical");
+        }
+
+        // Custom network with various path formats
+        let custom_paths = vec![
+            "/absolute/path/to/config.yaml",
+            "relative/path/config.yaml",
+            "./local/config.yaml",
+            "../parent/config.yaml",
+            "/path/with spaces/config.yaml",
+            "/path/with-special_chars!@#/config.yaml",
+        ];
+
+        for path in custom_paths {
+            let network = Network::Custom(path.to_string());
+            let serialized = serde_json::to_string(&network).unwrap();
+            let deserialized: Network = serde_json::from_str(&serialized).unwrap();
+            
+            if let Network::Custom(deserialized_path) = deserialized {
+                assert_eq!(deserialized_path, path, "Custom path should round-trip");
+            } else {
+                panic!("Expected Network::Custom, got {:?}", deserialized);
+            }
+        }
+    }
+
+    #[test]
+    fn test_network_display_edge_cases() {
+        // Empty custom path
+        let empty_custom = Network::Custom(String::new());
+        let display = format!("{}", empty_custom);
+        assert!(display.contains("custom network"));
+        assert!(display.contains("``"), "Empty path should show as empty backticks");
+
+        // Very long path
+        let long_path = "a".repeat(1000);
+        let long_custom = Network::Custom(long_path.clone());
+        let display = format!("{}", long_custom);
+        assert!(display.contains(&long_path), "Should display full long path");
+
+        // Path with unicode
+        let unicode_path = "/path/to/配置文件.yaml";
+        let unicode_custom = Network::Custom(unicode_path.to_string());
+        let display = format!("{}", unicode_custom);
+        assert!(display.contains(unicode_path), "Should preserve Unicode in path");
+    }
+
+    #[test]
+    fn test_all_networks_have_consistent_slot_timing() {
+        let mainnet = ChainInfo::for_mainnet();
+        let sepolia = ChainInfo::for_sepolia();
+        let holesky = ChainInfo::for_holesky();
+        let hoodi = ChainInfo::for_hoodi();
+
+        // All Ethereum networks use 12-second slots
+        assert_eq!(mainnet.seconds_per_slot(), 12, "Mainnet should use 12s slots");
+        assert_eq!(sepolia.seconds_per_slot(), 12, "Sepolia should use 12s slots");
+        assert_eq!(holesky.seconds_per_slot(), 12, "Holesky should use 12s slots");
+        assert_eq!(hoodi.seconds_per_slot(), 12, "Hoodi should use 12s slots");
+
+        // All use 32 slots per epoch
+        assert_eq!(mainnet.slots_per_epoch(), 32);
+        assert_eq!(sepolia.slots_per_epoch(), 32);
+        assert_eq!(holesky.slots_per_epoch(), 32);
+        assert_eq!(hoodi.slots_per_epoch(), 32);
+    }
+
+    #[test]
+    fn test_current_slot_is_past_genesis() {
+        let chain_info = ChainInfo::for_mainnet();
+        let current_slot = chain_info.current_slot();
+        
+        // We're well past genesis (mainnet genesis was Dec 2020)
+        // Current slot should be in the millions by now
+        assert!(current_slot.as_u64() > 1_000_000, 
+                "Current mainnet slot should be > 1M, got {}", current_slot.as_u64());
+    }
+
+    #[test]
+    fn test_fork_at_slot_genesis() {
+        // Different networks started at different forks
+        let mainnet = ChainInfo::for_mainnet();
+        assert_eq!(mainnet.fork_at_slot(Slot::new(0)), ForkName::Base,
+                   "Mainnet genesis should be Base fork");
+
+        let sepolia = ChainInfo::for_sepolia();
+        assert_eq!(sepolia.fork_at_slot(Slot::new(0)), ForkName::Base,
+                   "Sepolia genesis should be Base fork");
+
+        // Holesky launched later, starting at Bellatrix (The Merge)
+        let holesky = ChainInfo::for_holesky();
+        assert_eq!(holesky.fork_at_slot(Slot::new(0)), ForkName::Bellatrix,
+                   "Holesky genesis should be Bellatrix fork (launched post-merge)");
+
+        // Hoodi also launched post-merge
+        let hoodi = ChainInfo::for_hoodi();
+        let hoodi_genesis_fork = hoodi.fork_at_slot(Slot::new(0));
+        // Hoodi should be at Bellatrix or later
+        assert!(
+            matches!(hoodi_genesis_fork, ForkName::Bellatrix | ForkName::Capella | ForkName::Deneb | ForkName::Electra | ForkName::Fulu),
+            "Hoodi should start at Bellatrix or later, got {:?}", hoodi_genesis_fork
+        );
+    }
+
+    #[test]
+    fn test_max_blobs_is_positive_and_reasonable() {
+        let chain_info = ChainInfo::for_mainnet();
+        let max_blobs = chain_info.max_blobs_per_block();
+        
+        // Post-Deneb: should have blobs
+        assert!(max_blobs > 0, "Should support blobs");
+        
+        // Should be reasonable (current spec allows up to 6, future may increase)
+        assert!(max_blobs <= 16, "Max blobs should be <= 16, got {}", max_blobs);
+    }
 }

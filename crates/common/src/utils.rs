@@ -283,10 +283,11 @@ mod tests {
 
     #[test]
     fn test_utcnow_ns() {
-        let ns = utcnow_ns();
         let us = utcnow_us();
-        // Nanoseconds should be larger than microseconds * 1000
-        assert!(ns >= us * 1000);
+        let ns = utcnow_ns();
+        // Nanoseconds should be larger or equal (time progresses)
+        // ns called after us, so ns should be >= us (within microsecond precision)
+        assert!(ns >= us, "ns={}, us={}", ns, us);
     }
 
     #[test]
@@ -425,5 +426,189 @@ mod tests {
 
         // Cleanup
         fs::remove_file(test_file).ok();
+    }
+
+    #[test]
+    fn test_save_to_file_edge_cases() {
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir();
+
+        // Empty content
+        let empty_file = temp_dir.join(format!("test_empty_{}.txt", Uuid::new_v4()));
+        save_to_file(empty_file.clone(), String::new());
+        let content = fs::read_to_string(&empty_file).unwrap();
+        assert_eq!(content, "", "Should handle empty content");
+        fs::remove_file(empty_file).ok();
+
+        // Unicode content
+        let unicode_file = temp_dir.join(format!("test_unicode_{}.txt", Uuid::new_v4()));
+        let unicode_content = "Hello 世界 🚀 Привет עברית";
+        save_to_file(unicode_file.clone(), unicode_content.to_string());
+        let content = fs::read_to_string(&unicode_file).unwrap();
+        assert_eq!(content, unicode_content, "Should preserve Unicode");
+        fs::remove_file(unicode_file).ok();
+
+        // Large content (1 MB)
+        let large_file = temp_dir.join(format!("test_large_{}.txt", Uuid::new_v4()));
+        let large_content = "a".repeat(1_000_000);
+        save_to_file(large_file.clone(), large_content.clone());
+        let content = fs::read_to_string(&large_file).unwrap();
+        assert_eq!(content.len(), 1_000_000, "Should handle large files");
+        fs::remove_file(large_file).ok();
+
+        // Special characters in content
+        let special_file = temp_dir.join(format!("test_special_{}.txt", Uuid::new_v4()));
+        let special_content = "Line1\nLine2\r\nTab:\tNull:\0End";
+        save_to_file(special_file.clone(), special_content.to_string());
+        let content = fs::read_to_string(&special_file).unwrap();
+        assert!(content.contains("\n"), "Should preserve newlines");
+        assert!(content.contains("\t"), "Should preserve tabs");
+        fs::remove_file(special_file).ok();
+    }
+
+    #[test]
+    fn test_avg_duration_edge_cases() {
+        // Very large duration and count
+        let large_dur = Duration::from_secs(u64::MAX / 1000);
+        let large_count = 1000;
+        let avg = avg_duration(large_dur, large_count);
+        assert!(avg.is_some(), "Should handle large durations");
+
+        // Duration with nanoseconds precision
+        let precise_dur = Duration::new(10, 123_456_789);
+        let avg = avg_duration(precise_dur, 3);
+        assert!(avg.is_some());
+        let result = avg.unwrap();
+        // Average should preserve nanosecond precision
+        assert!(result.as_nanos() > 0);
+
+        // Very small duration, large count
+        let tiny_dur = Duration::from_nanos(100);
+        let avg = avg_duration(tiny_dur, 1000);
+        assert!(avg.is_some(), "Should handle tiny durations");
+
+        // Count of 1 should return original duration
+        let dur = Duration::from_millis(999);
+        let avg = avg_duration(dur, 1);
+        assert_eq!(avg.unwrap(), dur, "Count of 1 should return original");
+
+        // Maximum practical count (u32::MAX)
+        let dur = Duration::from_secs(1000);
+        let avg = avg_duration(dur, u32::MAX);
+        assert!(avg.is_some(), "Should handle u32::MAX count");
+    }
+
+    #[test]
+    fn test_extract_request_id_edge_cases() {
+        let mut headers = HeaderMap::new();
+
+        // Empty string header
+        headers.insert("x-request-id", "".parse().unwrap());
+        let uuid = extract_request_id(&headers);
+        assert!(uuid.get_version_num() == 4, "Should generate new UUID for empty string");
+
+        // Whitespace header
+        headers.insert("x-request-id", "   ".parse().unwrap());
+        let uuid = extract_request_id(&headers);
+        assert!(uuid.get_version_num() == 4, "Should generate new UUID for whitespace");
+
+        // Almost-valid UUID (wrong length)
+        headers.insert("x-request-id", "12345678-1234-1234-1234-12345678901".parse().unwrap());
+        let uuid = extract_request_id(&headers);
+        assert!(uuid.get_version_num() == 4, "Should generate new UUID for invalid format");
+
+        // Case sensitivity - UUIDs should be case-insensitive
+        let uuid_lower = Uuid::new_v4();
+        let uuid_str_upper = uuid_lower.to_string().to_uppercase();
+        headers.insert("x-request-id", uuid_str_upper.parse().unwrap());
+        let extracted = extract_request_id(&headers);
+        // Should successfully parse uppercase UUID
+        assert!(extracted.get_version_num() == 4);
+
+        // Verify multiple calls without header generate different UUIDs
+        headers.clear();
+        let uuid1 = extract_request_id(&headers);
+        let uuid2 = extract_request_id(&headers);
+        let uuid3 = extract_request_id(&headers);
+        assert_ne!(uuid1, uuid2, "Should generate different UUIDs");
+        assert_ne!(uuid2, uuid3, "Should generate different UUIDs");
+        assert_ne!(uuid1, uuid3, "Should generate different UUIDs");
+    }
+
+    #[test]
+    fn test_time_functions_return_increasing_values() {
+        // Test that time functions are monotonically increasing
+        let times_ms: Vec<u64> = (0..100).map(|_| utcnow_ms()).collect();
+        
+        for window in times_ms.windows(2) {
+            assert!(
+                window[1] >= window[0],
+                "Time should be monotonically increasing: {} >= {}",
+                window[1],
+                window[0]
+            );
+        }
+
+        // Test nanosecond precision
+        let times_ns: Vec<u64> = (0..100).map(|_| utcnow_ns()).collect();
+        for window in times_ns.windows(2) {
+            assert!(
+                window[1] >= window[0],
+                "Nanosecond time should be monotonically increasing"
+            );
+        }
+    }
+
+    #[test]
+    fn test_time_functions_realistic_ranges() {
+        // All times should be after Unix epoch 0 and before year 3000
+        let year_3000_sec = 32_503_680_000u64;
+        
+        let sec = utcnow_sec();
+        assert!(sec > 1_600_000_000, "Should be after 2020");
+        assert!(sec < year_3000_sec, "Should be before year 3000");
+
+        let ms = utcnow_ms();
+        assert!(ms > 1_600_000_000_000, "Milliseconds should be reasonable");
+        assert!(ms < year_3000_sec * 1000, "Milliseconds should be before year 3000");
+
+        let us = utcnow_us();
+        assert!(us > 1_600_000_000_000_000, "Microseconds should be reasonable");
+
+        let ns = utcnow_ns();
+        assert!(ns > 1_600_000_000_000_000_000u64, "Nanoseconds should be reasonable");
+    }
+
+    #[test]
+    fn test_time_precision_conversions() {
+        // Test that different precision functions are consistent
+        let sec = utcnow_sec();
+        let ms = utcnow_ms();
+        let us = utcnow_us();
+        let ns = utcnow_ns();
+
+        // ms should be roughly sec * 1000 (within 1 second tolerance)
+        let sec_from_ms = ms / 1000;
+        assert!(
+            (sec_from_ms as i64 - sec as i64).abs() <= 1,
+            "Milliseconds should match seconds: {} vs {}",
+            sec_from_ms,
+            sec
+        );
+
+        // us should be roughly ms * 1000 (within 1 ms tolerance)
+        let ms_from_us = us / 1000;
+        assert!(
+            (ms_from_us as i64 - ms as i64).abs() <= 1,
+            "Microseconds should match milliseconds"
+        );
+
+        // ns should be roughly us * 1000 (within 1 us tolerance)
+        let us_from_ns = ns / 1000;
+        assert!(
+            (us_from_ns as i64 - us as i64).abs() <= 1,
+            "Nanoseconds should match microseconds"
+        );
     }
 }

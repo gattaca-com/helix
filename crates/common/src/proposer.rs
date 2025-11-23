@@ -135,4 +135,158 @@ mod tests {
         assert!(debug_str.contains("ProposerDuty"));
         assert!(debug_str.contains("123"));
     }
+
+    #[test]
+    fn test_proposer_duty_edge_cases() {
+        // Slot 0 (genesis)
+        let genesis_duty = ProposerDuty {
+            pubkey: BlsPublicKeyBytes::default(),
+            validator_index: 0,
+            slot: Slot::new(0),
+        };
+        let json = serde_json::to_string(&genesis_duty).unwrap();
+        assert!(json.contains("\"validator_index\":\"0\""), "Should quote u64");
+        let deserialized: ProposerDuty = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.slot, Slot::new(0));
+
+        // Maximum validator index
+        let max_validator = ProposerDuty {
+            pubkey: BlsPublicKeyBytes::default(),
+            validator_index: u64::MAX,
+            slot: Slot::new(1000),
+        };
+        let json = serde_json::to_string(&max_validator).unwrap();
+        let deserialized: ProposerDuty = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.validator_index, u64::MAX);
+
+        // Very large slot number
+        let large_slot = ProposerDuty {
+            pubkey: BlsPublicKeyBytes::default(),
+            validator_index: 12345,
+            slot: Slot::new(10_000_000),
+        };
+        let json = serde_json::to_string(&large_slot).unwrap();
+        let deserialized: ProposerDuty = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.slot.as_u64(), 10_000_000);
+    }
+
+    #[test]
+    fn test_proposer_info_name_edge_cases() {
+        // Empty name
+        let empty = ProposerInfo {
+            name: String::new(),
+            pubkey: BlsPublicKeyBytes::default(),
+        };
+        let json = serde_json::to_string(&empty).unwrap();
+        let deserialized: ProposerInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, "");
+
+        // Very long name
+        let long_name = "a".repeat(10_000);
+        let long = ProposerInfo {
+            name: long_name.clone(),
+            pubkey: BlsPublicKeyBytes::default(),
+        };
+        let json = serde_json::to_string(&long).unwrap();
+        let deserialized: ProposerInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name.len(), 10_000);
+
+        // Unicode name
+        let unicode = ProposerInfo {
+            name: "Validator 验证者 🚀".to_string(),
+            pubkey: BlsPublicKeyBytes::default(),
+        };
+        let json = serde_json::to_string(&unicode).unwrap();
+        let deserialized: ProposerInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, "Validator 验证者 🚀");
+
+        // Special characters
+        let special = ProposerInfo {
+            name: "Test\nName\tWith\rSpecial\"Chars".to_string(),
+            pubkey: BlsPublicKeyBytes::default(),
+        };
+        let json = serde_json::to_string(&special).unwrap();
+        let deserialized: ProposerInfo = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.name.contains("\n"));
+        assert!(deserialized.name.contains("\t"));
+    }
+
+    #[test]
+    fn test_proposer_info_equality_with_different_pubkeys() {
+        let pubkey1 = BlsPublicKeyBytes::default();
+        let mut pubkey2_bytes = [0u8; 48];
+        pubkey2_bytes[0] = 1; // Different pubkey
+        let pubkey2 = BlsPublicKeyBytes::from(pubkey2_bytes);
+
+        let info1 = ProposerInfo {
+            name: "Same Name".to_string(),
+            pubkey: pubkey1,
+        };
+
+        let info2 = ProposerInfo {
+            name: "Same Name".to_string(),
+            pubkey: pubkey2,
+        };
+
+        // Same name but different pubkey = not equal
+        assert_ne!(info1, info2, "Should be different with different pubkeys");
+    }
+
+    #[test]
+    fn test_proposer_schedule_slot_validation() {
+        // ProposerSchedule associates a slot with a validator
+        let schedule = ProposerSchedule {
+            slot: Slot::new(32), // First slot of epoch 1
+            validator_index: 100,
+            entry: SignedValidatorRegistration {
+                message: helix_types::ValidatorRegistrationData {
+                    fee_recipient: alloy_primitives::Address::ZERO,
+                    gas_limit: 30_000_000,
+                    timestamp: 1234567890,
+                    pubkey: BlsPublicKeyBytes::default(),
+                },
+                signature: Default::default(),
+            },
+        };
+
+        // Verify slot and validator_index are serialized as expected
+        let json = serde_json::to_string(&schedule).unwrap();
+        assert!(json.contains("\"validator_index\":\"100\""));
+        
+        let deserialized: ProposerSchedule = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.slot, Slot::new(32));
+        assert_eq!(deserialized.validator_index, 100);
+    }
+
+    #[test]
+    fn test_all_structs_implement_debug() {
+        // Ensure Debug is properly implemented for all types
+        let duty = ProposerDuty {
+            pubkey: BlsPublicKeyBytes::default(),
+            validator_index: 1,
+            slot: Slot::new(1),
+        };
+        assert!(format!("{:?}", duty).contains("ProposerDuty"));
+
+        let schedule = ProposerSchedule {
+            slot: Slot::new(1),
+            validator_index: 1,
+            entry: SignedValidatorRegistration {
+                message: helix_types::ValidatorRegistrationData {
+                    fee_recipient: alloy_primitives::Address::ZERO,
+                    gas_limit: 30_000_000,
+                    timestamp: 1,
+                    pubkey: BlsPublicKeyBytes::default(),
+                },
+                signature: Default::default(),
+            },
+        };
+        assert!(format!("{:?}", schedule).contains("ProposerSchedule"));
+
+        let info = ProposerInfo {
+            name: "Test".to_string(),
+            pubkey: BlsPublicKeyBytes::default(),
+        };
+        assert!(format!("{:?}", info).contains("ProposerInfo"));
+    }
 }

@@ -100,38 +100,149 @@ mod tests {
     }
 
     #[test]
-    fn test_sign_builder_message() {
-        let signing_ctx = RelaySigningContext::default();
+    fn test_sign_builder_message_valid_signature() {
+        let keypair = BlsKeypair::random();
+        let chain_info = Arc::new(ChainInfo::for_mainnet());
+        let signing_ctx = RelaySigningContext::new(keypair.clone(), chain_info.clone());
+        
         let message = ValidatorRegistrationData {
             fee_recipient: Address::ZERO,
             gas_limit: 30_000_000,
             timestamp: 1234567890,
-            pubkey: BlsPublicKeyBytes::default(),
+            pubkey: signing_ctx.pubkey,
         };
         
         let signature = signing_ctx.sign_builder_message(&message);
         
-        // Verify signature is valid
-        let domain = signing_ctx.context.builder_domain;
+        // Verify signature is valid with correct domain
+        let domain = chain_info.builder_domain;
         let root = message.signing_root(domain);
-        assert!(signature.verify(&signing_ctx.keypair.pk, root));
+        assert!(signature.verify(&keypair.pk, root), "Signature should verify with correct domain");
     }
 
     #[test]
-    fn test_sign_relay_message() {
-        let signing_ctx = RelaySigningContext::default();
+    fn test_sign_builder_message_wrong_domain_fails() {
+        let keypair = BlsKeypair::random();
+        let chain_info = Arc::new(ChainInfo::for_mainnet());
+        let signing_ctx = RelaySigningContext::new(keypair.clone(), chain_info);
+        
         let message = ValidatorRegistrationData {
             fee_recipient: Address::ZERO,
             gas_limit: 30_000_000,
             timestamp: 1234567890,
-            pubkey: BlsPublicKeyBytes::default(),
+            pubkey: signing_ctx.pubkey,
+        };
+        
+        let signature = signing_ctx.sign_builder_message(&message);
+        
+        // Signature should FAIL verification with wrong domain
+        let wrong_domain = B256::from(*RELAY_DOMAIN);
+        let root = message.signing_root(wrong_domain);
+        assert!(!signature.verify(&keypair.pk, root), "Signature should NOT verify with wrong domain");
+    }
+
+    #[test]
+    fn test_sign_builder_message_wrong_keypair_fails() {
+        let keypair = BlsKeypair::random();
+        let chain_info = Arc::new(ChainInfo::for_mainnet());
+        let signing_ctx = RelaySigningContext::new(keypair, chain_info.clone());
+        
+        let message = ValidatorRegistrationData {
+            fee_recipient: Address::ZERO,
+            gas_limit: 30_000_000,
+            timestamp: 1234567890,
+            pubkey: signing_ctx.pubkey,
+        };
+        
+        let signature = signing_ctx.sign_builder_message(&message);
+        
+        // Signature should FAIL with different keypair
+        let wrong_keypair = BlsKeypair::random();
+        let domain = chain_info.builder_domain;
+        let root = message.signing_root(domain);
+        assert!(!signature.verify(&wrong_keypair.pk, root), "Signature should NOT verify with wrong keypair");
+    }
+
+    #[test]
+    fn test_sign_builder_message_edge_case_gas_limits() {
+        let keypair = BlsKeypair::random();
+        let chain_info = Arc::new(ChainInfo::for_mainnet());
+        let signing_ctx = RelaySigningContext::new(keypair.clone(), chain_info.clone());
+        
+        // Test with minimum gas limit (1)
+        let message_min = ValidatorRegistrationData {
+            fee_recipient: Address::ZERO,
+            gas_limit: 1,
+            timestamp: 1234567890,
+            pubkey: signing_ctx.pubkey,
+        };
+        let sig_min = signing_ctx.sign_builder_message(&message_min);
+        let root_min = message_min.signing_root(chain_info.builder_domain);
+        assert!(sig_min.verify(&keypair.pk, root_min), "Should sign message with gas_limit=1");
+        
+        // Test with maximum gas limit
+        let message_max = ValidatorRegistrationData {
+            fee_recipient: Address::ZERO,
+            gas_limit: u64::MAX,
+            timestamp: 1234567890,
+            pubkey: signing_ctx.pubkey,
+        };
+        let sig_max = signing_ctx.sign_builder_message(&message_max);
+        let root_max = message_max.signing_root(chain_info.builder_domain);
+        assert!(sig_max.verify(&keypair.pk, root_max), "Should sign message with gas_limit=MAX");
+        
+        // Different gas limits should produce different signatures
+        assert_ne!(sig_min, sig_max, "Different gas limits should produce different signatures");
+    }
+
+    #[test]
+    fn test_sign_builder_message_edge_case_timestamps() {
+        let keypair = BlsKeypair::random();
+        let chain_info = Arc::new(ChainInfo::for_mainnet());
+        let signing_ctx = RelaySigningContext::new(keypair.clone(), chain_info.clone());
+        
+        // Test with genesis timestamp
+        let message_genesis = ValidatorRegistrationData {
+            fee_recipient: Address::ZERO,
+            gas_limit: 30_000_000,
+            timestamp: 0,
+            pubkey: signing_ctx.pubkey,
+        };
+        let sig_genesis = signing_ctx.sign_builder_message(&message_genesis);
+        let root_genesis = message_genesis.signing_root(chain_info.builder_domain);
+        assert!(sig_genesis.verify(&keypair.pk, root_genesis), "Should sign message with timestamp=0");
+        
+        // Test with far future timestamp
+        let message_future = ValidatorRegistrationData {
+            fee_recipient: Address::ZERO,
+            gas_limit: 30_000_000,
+            timestamp: u64::MAX,
+            pubkey: signing_ctx.pubkey,
+        };
+        let sig_future = signing_ctx.sign_builder_message(&message_future);
+        let root_future = message_future.signing_root(chain_info.builder_domain);
+        assert!(sig_future.verify(&keypair.pk, root_future), "Should sign message with timestamp=MAX");
+    }
+
+    #[test]
+    fn test_sign_relay_message_uses_relay_domain() {
+        let keypair = BlsKeypair::random();
+        let chain_info = Arc::new(ChainInfo::for_mainnet());
+        let signing_ctx = RelaySigningContext::new(keypair.clone(), chain_info);
+        
+        let message = ValidatorRegistrationData {
+            fee_recipient: Address::ZERO,
+            gas_limit: 30_000_000,
+            timestamp: 1234567890,
+            pubkey: signing_ctx.pubkey,
         };
         
         let signature = signing_ctx.sign_relay_message(&message);
         
-        // Verify signature is valid with relay domain
-        let root = message.signing_root(RELAY_DOMAIN.into());
-        assert!(signature.verify(&signing_ctx.keypair.pk, root));
+        // Verify signature uses RELAY_DOMAIN (not builder domain)
+        let relay_domain = B256::from(*RELAY_DOMAIN);
+        let root = message.signing_root(relay_domain);
+        assert!(signature.verify(&keypair.pk, root), "Relay message should verify with RELAY_DOMAIN");
     }
 
     #[test]
