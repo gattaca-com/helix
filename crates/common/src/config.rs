@@ -1,6 +1,5 @@
 use std::{collections::HashSet, fs::File, path::PathBuf};
 
-use alloy_primitives::B256;
 use clap::Parser;
 use eyre::ensure;
 use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey};
@@ -8,7 +7,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
-use crate::{BuilderInfo, ValidatorPreferences, api::*, chain_info::ChainInfo};
+use crate::{BuilderInfo, ValidatorPreferences, api::*};
 
 static mut LOCAL_DEV: bool = false;
 
@@ -31,8 +30,6 @@ pub struct RelayConfig {
     pub relay_network: RelayNetworkConfig,
     #[serde(default)]
     pub builders: Vec<BuilderConfig>,
-    #[serde(default)]
-    pub network_config: NetworkConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
@@ -72,7 +69,6 @@ impl RelayConfig {
             relays: Default::default(),
             relay_network: Default::default(),
             builders: Default::default(),
-            network_config: Default::default(),
             logging: Default::default(),
             validator_preferences: Default::default(),
             router_config: Default::default(),
@@ -314,58 +310,6 @@ impl RelayNetworkPeerConfig {
 pub struct BuilderConfig {
     pub pub_key: BlsPublicKeyBytes,
     pub builder_info: BuilderInfo,
-}
-
-#[derive(Serialize, Deserialize, Clone, Default)]
-pub enum NetworkConfig {
-    #[default]
-    Mainnet,
-    Sepolia,
-    Holesky,
-    Hoodi,
-    Custom {
-        dir_path: String,
-        genesis_validator_root: B256,
-        genesis_time: u64,
-    },
-}
-
-impl NetworkConfig {
-    pub fn to_chain_info(&self) -> ChainInfo {
-        match self {
-            NetworkConfig::Mainnet => ChainInfo::for_mainnet(),
-            NetworkConfig::Sepolia => ChainInfo::for_sepolia(),
-            NetworkConfig::Holesky => ChainInfo::for_holesky(),
-            NetworkConfig::Hoodi => ChainInfo::for_hoodi(),
-            NetworkConfig::Custom { dir_path, genesis_validator_root, genesis_time } => {
-                ChainInfo::for_custom(dir_path.clone(), *genesis_validator_root, *genesis_time)
-            }
-        }
-    }
-
-    pub fn short_name(&self) -> &str {
-        match self {
-            NetworkConfig::Mainnet => "Mainnet",
-            NetworkConfig::Sepolia => "Sepolia",
-            NetworkConfig::Holesky => "Holesky",
-            NetworkConfig::Hoodi => "Hoodi",
-            NetworkConfig::Custom { .. } => "Custom",
-        }
-    }
-}
-
-impl std::fmt::Display for NetworkConfig {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            NetworkConfig::Mainnet => write!(f, "mainnet"),
-            NetworkConfig::Sepolia => write!(f, "sepolia"),
-            NetworkConfig::Holesky => write!(f, "holesky"),
-            NetworkConfig::Hoodi => write!(f, "hoodi"),
-            NetworkConfig::Custom { dir_path, genesis_validator_root, genesis_time } => {
-                write!(f, "custom ({dir_path}, {genesis_validator_root}, {genesis_time})")
-            }
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]

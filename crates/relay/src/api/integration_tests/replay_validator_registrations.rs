@@ -125,9 +125,8 @@ async fn run() {
         "running registration replays..."
     );
 
-    let beacon_client = BeaconClient::from_config(BeaconClientConfig {
-        url: Url::parse("http://localhost:5052").unwrap(),
-    });
+    let beacon_client =
+        BeaconClient::new(BeaconClientConfig { url: Url::parse("http://localhost:5052").unwrap() });
 
     let (head_event_sender, mut head_event_receiver) =
         tokio::sync::broadcast::channel::<crate::beacon::types::HeadEventData>(100);

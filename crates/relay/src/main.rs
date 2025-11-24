@@ -42,13 +42,10 @@ fn main() {
 
     let keypair = load_keypair();
 
-    let instance_id = config.instance_id.clone().unwrap_or_else(|| {
-        format!(
-            "RelayUnknown_{}_{}",
-            config.network_config.short_name(),
-            config.postgres.region_name
-        )
-    });
+    let instance_id = config
+        .instance_id
+        .clone()
+        .unwrap_or_else(|| format!("RelayUnknown_{}", config.postgres.region_name));
 
     let _guard = block_on(init_tracing_log(
         &config.logging,
@@ -62,18 +59,8 @@ fn main() {
         config.logging.dir_path(),
     );
 
-    info!(
-        instance_id,
-        region = config.postgres.region_name,
-        network =% config.network_config,
-        pubkey =% keypair.pk,
-        "starting relay"
-    );
-
-    info!(cores = ?config.cores, "cores config");
-
     block_on(start_metrics_server(&config));
-    match block_on(run(config, keypair)) {
+    match block_on(run(instance_id, config, keypair)) {
         Ok(_) => info!("relay exited"),
         Err(err) => {
             error!(%err, "relay exited with error");
@@ -82,13 +69,23 @@ fn main() {
     }
 }
 
-async fn run(config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
-    let chain_info = Arc::new(config.network_config.to_chain_info());
+async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
+    let beacon_client = start_beacon_client(&config);
+    let chain_info = beacon_client.load_chain_info().await;
+    let chain_info = Arc::new(chain_info);
+
+    info!(
+        instance_id,
+        region = config.postgres.region_name,
+        network =% chain_info.name,
+        pubkey =% keypair.pk,
+        "starting relay"
+    );
+
     let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info.clone()));
 
     let known_validators_loaded = Arc::new(AtomicBool::default());
 
-    let beacon_client = start_beacon_client(&config);
     let db = start_db_service(&config, known_validators_loaded.clone()).await?;
     let local_cache = start_auctioneer(db.clone()).await?;
 

@@ -154,7 +154,7 @@ mod tests {
             })
             .collect();
 
-        let chain_info = Arc::new(ChainInfo::for_hoodi());
+        let chain_info = Arc::new(ChainInfo::default());
 
         let mut apis_joinset = JoinSet::new();
         let mut network_apis = Vec::with_capacity(n_peers);

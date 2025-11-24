@@ -2,132 +2,36 @@ use std::time::Duration;
 
 use alloy_primitives::B256;
 use helix_types::{
-    ChainSpec, EthSpec, ForkName, HOLESKY_GENESIS_TIME, HOODI_GENESIS_TIME, MAINNET_GENESIS_TIME,
-    MainnetEthSpec, SEPOLIA_GENESIS_TIME, Slot, SlotClock, SlotClockTrait, custom_slot_clock,
-    duration_into_slot, holesky_slot_clock, holesky_spec, hoodi_slot_clock, hoodi_spec,
-    mainnet_slot_clock, sepolia_slot_clock, sepolia_spec, spec_from_file,
+    ChainSpec, EthSpec, ForkName, MAINNET_GENESIS_TIME, MainnetEthSpec, Slot, SlotClock,
+    SlotClockTrait, duration_into_slot, new_slot_clock,
 };
 
 pub(crate) const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
     75, 54, 61, 185, 78, 40, 97, 32, 215, 110, 185, 5, 52, 15, 221, 78, 84, 191, 233, 240, 107,
     243, 63, 246, 207, 90, 210, 127, 81, 27, 254, 149,
 ];
-pub(crate) const SEPOLIA_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
-    216, 234, 23, 31, 60, 148, 174, 162, 30, 188, 66, 161, 237, 97, 5, 42, 207, 63, 146, 9, 192,
-    14, 78, 251, 170, 221, 172, 9, 237, 155, 128, 120,
-];
-pub(crate) const HOLESKY_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
-    145, 67, 170, 124, 97, 90, 127, 113, 21, 226, 182, 170, 195, 25, 192, 53, 41, 223, 130, 66,
-    174, 112, 95, 186, 157, 243, 155, 121, 197, 159, 168, 177,
-];
-
-pub(crate) const HOODI_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
-    33, 47, 19, 252, 77, 240, 120, 182, 203, 125, 178, 40, 241, 200, 48, 117, 102, 220, 236, 249,
-    0, 134, 116, 1, 169, 32, 35, 215, 186, 153, 203, 95,
-];
-
-#[derive(Default, Debug, Clone, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Network {
-    #[default]
-    Mainnet,
-    Sepolia,
-    Holesky,
-    Hoodi,
-    Custom(String),
-}
-
-impl std::fmt::Display for Network {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Mainnet => write!(f, "mainnet"),
-            Self::Sepolia => write!(f, "sepolia"),
-            Self::Holesky => write!(f, "holesky"),
-            Self::Hoodi => write!(f, "hoodi"),
-            Self::Custom(config) => write!(f, "custom network with config at `{config}`"),
-        }
-    }
-}
 
 /// Runtime config with all chain specific information
 #[derive(Clone)]
 pub struct ChainInfo {
-    pub network: Network,
+    pub name: String,
     pub genesis_validators_root: B256,
     // TODO: load this from beacon on startup?
     pub context: ChainSpec,
     pub clock: SlotClock,
-    // TODO: remove?
     pub genesis_time_in_secs: u64,
     pub builder_domain: B256,
 }
 
 impl ChainInfo {
-    pub fn for_mainnet() -> Self {
-        let context = ChainSpec::mainnet();
-        let builder_domain = context.get_builder_domain();
+    pub fn new(spec: ChainSpec, genesis_validators_root: B256, genesis_time_in_secs: u64) -> Self {
+        let name = spec.config_name.clone().expect("spec config name should be set");
+        let clock = new_slot_clock(genesis_time_in_secs, spec.seconds_per_slot);
+        let builder_domain = spec.get_builder_domain();
         Self {
-            network: Network::Mainnet,
-            genesis_validators_root: B256::from(MAINNET_GENESIS_VALIDATOR_ROOT),
-            clock: mainnet_slot_clock(context.seconds_per_slot),
-            context,
-            genesis_time_in_secs: MAINNET_GENESIS_TIME,
-            builder_domain,
-        }
-    }
-
-    pub fn for_sepolia() -> Self {
-        let context = sepolia_spec();
-        let builder_domain = context.get_builder_domain();
-        Self {
-            network: Network::Sepolia,
-            genesis_validators_root: B256::from(SEPOLIA_GENESIS_VALIDATOR_ROOT),
-            clock: sepolia_slot_clock(context.seconds_per_slot),
-            context,
-            genesis_time_in_secs: SEPOLIA_GENESIS_TIME,
-            builder_domain,
-        }
-    }
-
-    pub fn for_holesky() -> Self {
-        let context = holesky_spec();
-        let builder_domain = context.get_builder_domain();
-        Self {
-            network: Network::Holesky,
-            genesis_validators_root: B256::from(HOLESKY_GENESIS_VALIDATOR_ROOT),
-            clock: holesky_slot_clock(context.seconds_per_slot),
-            context,
-            genesis_time_in_secs: HOLESKY_GENESIS_TIME,
-            builder_domain,
-        }
-    }
-
-    pub fn for_hoodi() -> Self {
-        let context = hoodi_spec();
-        let builder_domain = context.get_builder_domain();
-        Self {
-            network: Network::Hoodi,
-            genesis_validators_root: B256::from(HOODI_GENESIS_VALIDATOR_ROOT),
-            clock: hoodi_slot_clock(context.seconds_per_slot),
-            context,
-            genesis_time_in_secs: HOODI_GENESIS_TIME,
-            builder_domain,
-        }
-    }
-
-    pub fn for_custom(
-        config: String,
-        genesis_validators_root: B256,
-        genesis_time_in_secs: u64,
-    ) -> Self {
-        let context = spec_from_file(&config);
-        let network = Network::Custom(config.clone());
-        let clock = custom_slot_clock(genesis_time_in_secs, context.seconds_per_slot);
-        let builder_domain = context.get_builder_domain();
-        Self {
-            network,
+            name,
             genesis_validators_root,
-            context,
+            context: spec,
             clock,
             genesis_time_in_secs,
             builder_domain,
@@ -170,5 +74,12 @@ impl ChainInfo {
     pub fn max_blobs_per_block(&self) -> usize {
         let epoch = self.current_slot().epoch(self.slots_per_epoch());
         self.context.max_blobs_per_block(epoch) as usize
+    }
+}
+
+impl Default for ChainInfo {
+    fn default() -> Self {
+        let spec = ChainSpec::mainnet();
+        Self::new(spec, MAINNET_GENESIS_VALIDATOR_ROOT.into(), MAINNET_GENESIS_TIME)
     }
 }

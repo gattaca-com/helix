@@ -12,7 +12,7 @@ use multi_beacon_client::MultiBeaconClient;
 pub fn start_beacon_client(config: &RelayConfig) -> Arc<MultiBeaconClient> {
     let mut beacon_clients = vec![];
     for cfg in &config.beacon_clients {
-        beacon_clients.push(Arc::new(BeaconClient::from_config(cfg.clone())));
+        beacon_clients.push(Arc::new(BeaconClient::new(cfg.clone())));
     }
 
     let beacon_client = MultiBeaconClient::new(beacon_clients);
