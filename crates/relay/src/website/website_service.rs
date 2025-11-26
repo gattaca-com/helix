@@ -222,18 +222,18 @@ impl WebsiteService {
             link_etherscan: state.website_config.link_etherscan.clone(),
             link_data_api: state.website_config.link_data_api.clone(),
             capella_fork_version: alloy_primitives::hex::encode(
-                state.chain_info.context.capella_fork_version,
+                state.chain_info.spec.capella_fork_version,
             ),
             bellatrix_fork_version: alloy_primitives::hex::encode(
-                state.chain_info.context.bellatrix_fork_version,
+                state.chain_info.spec.bellatrix_fork_version,
             ),
             genesis_fork_version: alloy_primitives::hex::encode(
-                state.chain_info.context.genesis_fork_version,
+                state.chain_info.spec.genesis_fork_version,
             ),
             genesis_validators_root: alloy_primitives::hex::encode(
                 state.chain_info.genesis_validators_root.as_ref() as &[u8],
             ),
-            builder_signing_domain: state.chain_info.context.get_builder_domain().to_string(),
+            builder_signing_domain: state.chain_info.spec.get_builder_domain().to_string(),
         })
     }
 }

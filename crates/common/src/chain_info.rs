@@ -16,8 +16,7 @@ pub(crate) const MAINNET_GENESIS_VALIDATOR_ROOT: [u8; 32] = [
 pub struct ChainInfo {
     pub name: String,
     pub genesis_validators_root: B256,
-    // TODO: load this from beacon on startup?
-    pub context: ChainSpec,
+    pub spec: ChainSpec,
     pub clock: SlotClock,
     pub genesis_time_in_secs: u64,
     pub builder_domain: B256,
@@ -28,18 +27,11 @@ impl ChainInfo {
         let name = spec.config_name.clone().expect("spec config name should be set");
         let clock = new_slot_clock(genesis_time_in_secs, spec.seconds_per_slot);
         let builder_domain = spec.get_builder_domain();
-        Self {
-            name,
-            genesis_validators_root,
-            context: spec,
-            clock,
-            genesis_time_in_secs,
-            builder_domain,
-        }
+        Self { name, genesis_validators_root, spec, clock, genesis_time_in_secs, builder_domain }
     }
 
     pub fn fork_at_slot(&self, slot: Slot) -> ForkName {
-        self.context.fork_name_at_slot::<MainnetEthSpec>(slot)
+        self.spec.fork_name_at_slot::<MainnetEthSpec>(slot)
     }
 
     pub fn current_fork_name(&self) -> ForkName {
@@ -48,7 +40,7 @@ impl ChainInfo {
     }
 
     pub fn seconds_per_slot(&self) -> u64 {
-        self.context.seconds_per_slot
+        self.spec.seconds_per_slot
     }
 
     pub fn slots_per_epoch(&self) -> u64 {
@@ -73,7 +65,7 @@ impl ChainInfo {
 
     pub fn max_blobs_per_block(&self) -> usize {
         let epoch = self.current_slot().epoch(self.slots_per_epoch());
-        self.context.max_blobs_per_block(epoch) as usize
+        self.spec.max_blobs_per_block(epoch) as usize
     }
 }
 

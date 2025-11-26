@@ -12,12 +12,12 @@ pub const RELAY_DOMAIN: &[u8; 32] = b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0
 pub struct RelaySigningContext {
     pub keypair: BlsKeypair,
     pub pubkey: BlsPublicKeyBytes,
-    pub context: Arc<ChainInfo>,
+    pub chain_info: Arc<ChainInfo>,
 }
 
 impl RelaySigningContext {
     pub fn new(keypair: BlsKeypair, context: Arc<ChainInfo>) -> Self {
-        Self { pubkey: keypair.pk.serialize().into(), keypair, context }
+        Self { pubkey: keypair.pk.serialize().into(), keypair, chain_info: context }
     }
 
     pub fn pubkey(&self) -> &BlsPublicKeyBytes {
@@ -25,7 +25,7 @@ impl RelaySigningContext {
     }
 
     pub fn sign_builder_message(&self, msg: &impl SignedRoot) -> BlsSignature {
-        let domain = self.context.builder_domain;
+        let domain = self.chain_info.builder_domain;
         let root = msg.signing_root(domain);
         self.sign(root)
     }
@@ -44,7 +44,7 @@ impl Default for RelaySigningContext {
     fn default() -> Self {
         Self {
             keypair: BlsKeypair::random(),
-            context: ChainInfo::default().into(),
+            chain_info: ChainInfo::default().into(),
             pubkey: BlsPublicKeyBytes::default(),
         }
     }

@@ -64,7 +64,7 @@ impl MultiRelayInclusionListsService {
 
         // Compute duration until first cutoff points
         let duration_into_slot =
-            self.network_api.signing_context.context.duration_into_slot(event.slot.into());
+            self.network_api.signing_context.chain_info.duration_into_slot(event.slot.into());
 
         // Check the slot is not in the future
         if duration_into_slot.is_none() {
@@ -122,7 +122,7 @@ impl MultiRelayInclusionListsService {
 
         // Compute duration until cutoff 2
         let duration_into_slot =
-            self.network_api.signing_context.context.duration_into_slot(event.slot.into());
+            self.network_api.signing_context.chain_info.duration_into_slot(event.slot.into());
         let sleep_time = self.cutoff_2.saturating_sub(duration_into_slot.unwrap_or_default());
 
         if sleep_time.is_zero() {

@@ -509,14 +509,14 @@ fn verify_signed_blinded_block_signature(
         .map_err(|_| SigError::InvalidBlsPubkeyBytes)?;
     let slot = signed_blinded_beacon_block.message().slot();
     let epoch = slot.epoch(chain_info.slots_per_epoch());
-    let fork = chain_info.context.fork_at_epoch(epoch);
+    let fork = chain_info.spec.fork_at_epoch(epoch);
 
     let valid = signed_blinded_beacon_block.verify_signature(
         None,
         &uncompressed_public_key,
         &fork,
         chain_info.genesis_validators_root,
-        &chain_info.context,
+        &chain_info.spec,
     );
 
     if !valid {
