@@ -44,7 +44,7 @@ impl Default for RelaySigningContext {
     fn default() -> Self {
         Self {
             keypair: BlsKeypair::random(),
-            context: ChainInfo::for_mainnet().into(),
+            context: ChainInfo::default().into(),
             pubkey: BlsPublicKeyBytes::default(),
         }
     }

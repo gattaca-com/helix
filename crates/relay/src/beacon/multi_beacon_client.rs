@@ -8,7 +8,9 @@ use std::{
 
 use alloy_primitives::B256;
 use futures::future::join_all;
-use helix_common::{ProposerDuty, ValidatorSummary, metrics::BeaconMetrics, spawn_tracked};
+use helix_common::{
+    ProposerDuty, ValidatorSummary, chain_info::ChainInfo, metrics::BeaconMetrics, spawn_tracked,
+};
 use helix_types::{ForkName, VersionedSignedProposal};
 use tokio::{sync::broadcast::Sender, time::sleep};
 use tracing::error;
@@ -175,6 +177,24 @@ impl MultiBeaconClient {
         Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
     }
 
+    pub async fn get_chain_info(&self) -> Result<ChainInfo, BeaconClientError> {
+        let mut last_error = None;
+
+        for client in self.beacon_clients_by_last_response() {
+            match client.get_chain_info().await {
+                Ok(chain_info) => {
+                    return Ok(chain_info);
+                }
+
+                Err(err) => {
+                    last_error = Some(err);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
+    }
+
     /// Publishes the signed beacon block to multiple beacon clients and returns the result.
     ///
     /// This function publishes a block to all beacon clients.
@@ -220,6 +240,26 @@ impl MultiBeaconClient {
         }
 
         Err(last_error.unwrap_or(BeaconClientError::BeaconNodeUnavailable))
+    }
+
+    /// Panics if it can't fetch the chain info after 1 minute
+    pub async fn load_chain_info(&self) -> ChainInfo {
+        let mut retry = 0;
+        loop {
+            match self.get_chain_info().await {
+                Ok(chain_info) => return chain_info,
+                Err(err) => error!(?err, retry, "failed fetching chain info, retrying.."),
+            };
+
+            retry += 1;
+
+            if retry >= 12 {
+                error!("failed fetching chain info for 1 minute, is any beacon available?");
+                panic!("failed fetching chain info for 1 minute, is any beacon available?");
+            }
+
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
     }
 }
 
