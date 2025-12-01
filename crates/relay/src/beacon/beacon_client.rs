@@ -170,6 +170,11 @@ impl BeaconClient {
                 if body.contains("duplicate block") {
                     return Ok(200);
                 }
+                if body.contains("ExecutionPayloadError(RejectedByExecutionEngine") &&
+                    (body.contains("block hash mismatch") || body.contains("validation_error"))
+                {
+                    return Err(BeaconClientError::BlockValidationFailed(body));
+                }
                 Ok(code)
             }
             _ => {

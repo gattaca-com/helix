@@ -535,6 +535,14 @@ impl State {
                     warn!(curr =% bid_slot, gossip_slot = payload.slot, "received early or late gossip payload");
                 }
             }
+
+            // Builder demotion event
+            (
+                State::Slot { .. } | State::Sorting(_) | State::Broadcasting { .. },
+                Event::BuilderDemotion { slot, builder_pubkey, block_hash, reason },
+            ) => {
+                ctx.handle_builder_demotion(slot, builder_pubkey, block_hash, reason);
+            }
         }
     }
 
