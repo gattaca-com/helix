@@ -2,8 +2,10 @@ use std::{hash::Hasher, sync::Arc};
 
 use alloy_eips::eip7691::MAX_BLOBS_PER_BLOCK_ELECTRA;
 use alloy_primitives::{Address, B256};
+use lh_types::{ForkName, ForkVersionDecode};
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
+use ssz::{Decode, DecodeError};
 use ssz_derive::{Decode, Encode};
 use tree_hash::TreeHash;
 
@@ -15,12 +17,28 @@ use crate::{
 };
 
 /// A bid submission where transactions and blobs may be replaced by hashes instead of payload
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-#[ssz(enum_behaviour = "transparent")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum DehydratedBidSubmission {
     Electra(DehydratedBidSubmissionElectra),
     Fulu(DehydratedBidSubmissionFulu),
+}
+
+impl ForkVersionDecode for DehydratedBidSubmission {
+    fn from_ssz_bytes_by_fork(bytes: &[u8], fork: ForkName) -> Result<Self, DecodeError> {
+        match fork {
+            ForkName::Base |
+            ForkName::Altair |
+            ForkName::Bellatrix |
+            ForkName::Capella |
+            ForkName::Deneb |
+            ForkName::Gloas => Err(DecodeError::NoMatchingVariant),
+            ForkName::Electra => DehydratedBidSubmissionElectra::from_ssz_bytes(bytes)
+                .map(DehydratedBidSubmission::Electra),
+            ForkName::Fulu => DehydratedBidSubmissionFulu::from_ssz_bytes(bytes)
+                .map(DehydratedBidSubmission::Fulu),
+        }
+    }
 }
 
 pub struct HydratedData {
