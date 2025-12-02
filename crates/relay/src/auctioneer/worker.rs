@@ -11,8 +11,9 @@ use helix_common::{
 };
 use helix_types::{
     BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission, ExecPayload,
-    MergeableOrdersWithPref, SigError, SignedBidSubmission, SignedBidSubmissionWithMergingData,
-    SignedBlindedBeaconBlock, SignedValidatorRegistration, SubmissionVersion,
+    ForkName, MergeableOrdersWithPref, SigError, SignedBidSubmission,
+    SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock, SignedValidatorRegistration,
+    SubmissionVersion,
 };
 use http::HeaderValue;
 use tracing::{error, info, info_span, trace};
@@ -274,12 +275,24 @@ impl SubWorker {
                 &self.chain_info,
                 &merge_type,
             )?,
-            Some(SubmissionType::Dehydrated) => {
-                decode_dehydrated(&mut decoder, body, trace, skip_sigverify, &merge_type)?
-            }
+            Some(SubmissionType::Dehydrated) => decode_dehydrated(
+                &mut decoder,
+                body,
+                trace,
+                skip_sigverify,
+                &merge_type,
+                self.chain_info.current_fork_name(),
+            )?,
             None => {
                 if should_hydrate {
-                    decode_dehydrated(&mut decoder, body, trace, skip_sigverify, &merge_type)?
+                    decode_dehydrated(
+                        &mut decoder,
+                        body,
+                        trace,
+                        skip_sigverify,
+                        &merge_type,
+                        self.chain_info.current_fork_name(),
+                    )?
                 } else if has_mergeable_data {
                     decode_merge(
                         &mut decoder,
@@ -404,11 +417,12 @@ fn decode_dehydrated(
     trace: &mut SubmissionTrace,
     skip_sigverify: bool,
     merge_type: &Option<MergeType>,
+    fork: ForkName,
 ) -> Result<(Submission, Option<BlockMergingData>), BuilderApiError> {
     if !skip_sigverify {
         return Err(BuilderApiError::UntrustedBuilderOnDehydratedPayload);
     }
-    let payload: DehydratedBidSubmission = decoder.decode(body)?;
+    let payload: DehydratedBidSubmission = decoder.decode_by_fork(body, fork)?;
     trace.decoded = utcnow_ns();
 
     let merging_data = match merge_type {
