@@ -74,7 +74,7 @@ fn handle_tx_event<P: TransactionPool>(
                 }
             }
         }
-        FullTransactionEvent::Queued(tx_hash) |
+        FullTransactionEvent::Queued(tx_hash, _) |
         FullTransactionEvent::Mined { tx_hash, .. } |
         FullTransactionEvent::Discarded(tx_hash) |
         FullTransactionEvent::Invalid(tx_hash) => {
