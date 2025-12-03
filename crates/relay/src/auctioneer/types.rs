@@ -14,10 +14,10 @@ use helix_common::{
     metrics::BID_CREATION_LATENCY,
 };
 use helix_types::{
-    BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ExecutionPayload, ExecutionRequests,
-    ForkName, GetPayloadResponse, MergeableOrdersWithPref, PayloadAndBlobs, SignedBidSubmission,
-    SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot, SubmissionVersion,
-    VersionedSignedProposal, mock_public_key_bytes,
+    BidAdjustmentData, BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ExecutionPayload,
+    ExecutionRequests, ForkName, GetPayloadResponse, MergeableOrdersWithPref, PayloadAndBlobs,
+    SignedBidSubmission, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot,
+    SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
 };
 use rustc_hash::FxHashMap;
 use ssz_derive::{Decode, Encode};
@@ -46,6 +46,7 @@ pub struct GetPayloadResultData {
 pub struct SubmissionData {
     pub submission: Submission,
     pub merging_data: Option<MergeableOrdersWithPref>,
+    pub bid_adjustments_data: Option<BidAdjustmentData>,
     pub version: SubmissionVersion,
     pub withdrawals_root: B256,
     pub trace: SubmissionTrace,

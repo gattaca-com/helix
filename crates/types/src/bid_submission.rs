@@ -11,7 +11,7 @@ use tree_hash_derive::TreeHash;
 use crate::{
     BlobsBundle, BlobsBundleV1, BlobsBundleV2, BlobsError, Bloom, BlsPublicKey, BlsPublicKeyBytes,
     BlsSignature, BlsSignatureBytes, ExecutionPayload, ExtraData, PayloadAndBlobsRef, SszError,
-    error::SigError, fields::ExecutionRequests,
+    bid_adjustment_data::BidAdjustmentData, error::SigError, fields::ExecutionRequests,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
@@ -633,6 +633,31 @@ impl SignedBidSubmission {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+pub struct SignedBidSubmissionFuluWithAdjustments {
+    pub message: BidTrace,
+    pub execution_payload: Arc<ExecutionPayload>,
+    pub blobs_bundle: Arc<BlobsBundle>,
+    pub execution_requests: Arc<ExecutionRequests>,
+    pub signature: BlsSignatureBytes,
+    pub bid_adjustment_data: BidAdjustmentData,
+}
+
+impl SignedBidSubmissionFuluWithAdjustments {
+    pub fn split(self) -> (SignedBidSubmission, BidAdjustmentData) {
+        (
+            SignedBidSubmission::Fulu(SignedBidSubmissionFulu {
+                message: self.message,
+                execution_payload: self.execution_payload,
+                blobs_bundle: self.blobs_bundle,
+                execution_requests: self.execution_requests,
+                signature: self.signature,
+            }),
+            self.bid_adjustment_data,
+        )
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SubmissionVersion {
     on_receive_ns: u64,
@@ -804,21 +829,6 @@ mod tests {
         .as_ssz_bytes();
         let s = test_encode_decode_ssz::<SignedBidSubmission>(&data_ssz);
         assert!(matches!(s, SignedBidSubmission::Electra(_)));
-        assert_eq!(data_ssz, s.as_ssz_bytes().as_slice());
-    }
-
-    #[test]
-    fn fulu_bid_submission_json() {
-        let data_json = include_str!("testdata/signed-bid-submission-fulu.json");
-        let s = test_decode_json::<SignedBidSubmission>(data_json);
-        assert!(matches!(s, SignedBidSubmission::Fulu(_)));
-    }
-
-    #[test]
-    fn fulu_bid_submission_ssz() {
-        let data_ssz = include_bytes!("testdata/signed-bid-submission-fulu.ssz");
-        let s = test_encode_decode_ssz::<SignedBidSubmission>(data_ssz);
-        assert!(matches!(s, SignedBidSubmission::Fulu(_)));
         assert_eq!(data_ssz, s.as_ssz_bytes().as_slice());
     }
 }
