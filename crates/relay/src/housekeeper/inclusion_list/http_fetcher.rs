@@ -95,6 +95,7 @@ enum InclusionListError {
 
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::Address;
     use helix_types::Transaction;
     use httpmock::{Method::POST, MockServer};
     use reqwest::Url;
@@ -103,7 +104,7 @@ mod tests {
     use super::*;
 
     fn create_test_config(url: Url) -> InclusionListConfig {
-        InclusionListConfig { node_url: url }
+        InclusionListConfig { node_url: url, relay_address: Address::default() }
     }
 
     #[tokio::test]

@@ -6,7 +6,10 @@ use std::{
 use alloy_consensus::{Bytes48, TxEip4844, TxType};
 use alloy_primitives::{B256, U256};
 use bytes::Bytes;
-use helix_common::{RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, utils::utcnow_ms};
+use helix_common::{
+    RelayConfig, api::builder_api::InclusionListWithMetadata, chain_info::ChainInfo,
+    local_cache::LocalCache, utils::utcnow_ms,
+};
 use helix_types::{
     BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
     BlockMergingData, BlsPublicKeyBytes, BundleOrder, KzgCommitment, MergeableBundle,
@@ -90,6 +93,26 @@ impl BlockMerger {
         self.base_blocks.clear();
         self.has_new_base_block = false;
         self.last_merge_request_time_ms = 0;
+    }
+
+    pub fn add_inclusion_list(&mut self, inclusion_list: &InclusionListWithMetadata) {
+        if let Some(il_cfg) = &self.config.inclusion_list {
+            debug!("adding {} inclusion list orders to merging pool", inclusion_list.txs.len());
+
+            inclusion_list.txs.iter().for_each(|o| {
+                self.best_mergeable_orders.order_map.entry(o.bytes.clone().into()).or_insert_with(
+                    || {
+                        self.best_mergeable_orders.has_new_orders = true;
+                        let index = self.best_mergeable_orders.best_orders.len();
+                        self.best_mergeable_orders.best_orders.push(MergeableOrderWithOrigin::new(
+                            il_cfg.relay_address,
+                            o.bytes.clone().into(),
+                        ));
+                        OrderMetadata { value: U256::ZERO, index }
+                    },
+                );
+            });
+        }
     }
 
     pub fn get_header(&self, original_bid: &PayloadHeaderData) -> Option<PayloadHeaderData> {
