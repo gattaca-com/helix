@@ -384,6 +384,7 @@ impl RouterConfig {
             Route::RegisterValidators,
             Route::GetHeader,
             Route::GetPayload,
+            Route::GetPayloadV2,
         ]);
 
         self.replace_condensed_with_real(Route::DataApi, &[
