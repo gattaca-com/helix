@@ -1,3 +1,4 @@
+mod bid_adjustment_data;
 mod bid_submission;
 mod blobs;
 mod block_merging;
@@ -13,6 +14,7 @@ mod validator;
 
 use std::sync::Arc;
 
+pub use bid_adjustment_data::BidAdjustmentData;
 pub use bid_submission::*;
 pub use blobs::*;
 pub use block_merging::*;

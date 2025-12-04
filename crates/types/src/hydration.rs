@@ -12,7 +12,9 @@ use tree_hash::TreeHash;
 use crate::{
     BidTrace, Blob, BlobsBundle, BlobsBundleV1, BlobsBundleV2, BlsPublicKeyBytes,
     BlsSignatureBytes, ExecutionPayload, SignedBidSubmission, SignedBidSubmissionElectra,
-    SignedBidSubmissionFulu, bid_submission,
+    SignedBidSubmissionFulu,
+    bid_adjustment_data::BidAdjustmentData,
+    bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
 };
 
@@ -136,6 +138,48 @@ pub struct DehydratedBidSubmissionFulu {
     execution_requests: Arc<ExecutionRequests>,
     signature: BlsSignatureBytes,
     tx_root: Option<B256>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+pub struct DehydratedBidSubmissionFuluWithAdjustments {
+    message: BidTrace,
+    execution_payload: ExecutionPayload,
+    blobs_bundle: DehydratedBlobsFulu,
+    execution_requests: Arc<ExecutionRequests>,
+    signature: BlsSignatureBytes,
+    tx_root: Option<B256>,
+    bid_adjustment_data: BidAdjustmentData,
+}
+
+impl DehydratedBidSubmissionFuluWithAdjustments {
+    pub fn split(self) -> (DehydratedBidSubmission, BidAdjustmentData) {
+        (
+            DehydratedBidSubmission::Fulu(DehydratedBidSubmissionFulu {
+                message: self.message,
+                execution_payload: self.execution_payload,
+                blobs_bundle: self.blobs_bundle,
+                execution_requests: self.execution_requests,
+                signature: self.signature,
+                tx_root: self.tx_root,
+            }),
+            self.bid_adjustment_data,
+        )
+    }
+}
+
+impl ForkVersionDecode for DehydratedBidSubmissionFuluWithAdjustments {
+    fn from_ssz_bytes_by_fork(bytes: &[u8], fork: ForkName) -> Result<Self, DecodeError> {
+        match fork {
+            ForkName::Base |
+            ForkName::Altair |
+            ForkName::Bellatrix |
+            ForkName::Capella |
+            ForkName::Deneb |
+            ForkName::Gloas |
+            ForkName::Electra => Err(DecodeError::NoMatchingVariant),
+            ForkName::Fulu => DehydratedBidSubmissionFuluWithAdjustments::from_ssz_bytes(bytes),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
