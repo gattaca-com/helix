@@ -268,7 +268,7 @@ impl PostgresDatabaseService {
         self.block_submissions_sender = Some(block_submissions_sender);
         let svc_clone = self.clone();
         tokio::spawn(async move {
-            let mut batch = Vec::with_capacity(1_000);
+            let mut batch = Vec::with_capacity(2_000);
             let mut ticker = tokio::time::interval(Duration::from_secs(5));
             let mut last_slot_processed = 0;
             loop {
@@ -490,98 +490,99 @@ impl PostgresDatabaseService {
 
     async fn _flush_block_submissions(
         &self,
-        batch: &Vec<PendingBlockSubmissionValue>,
+        batch: &[PendingBlockSubmissionValue],
         last_processed_slot: &mut i32,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("flush_block_submissions");
         let client = self.pool.get().await?;
 
-        // Step 1: build structured params for block_submission
-        struct BlockParams {
-            block_number: i32,
-            slot_number: i32,
-            parent_hash: Vec<u8>,
-            block_hash: Vec<u8>,
-            builder_pubkey: Vec<u8>,
-            proposer_pubkey: Vec<u8>,
-            proposer_fee_recipient: Vec<u8>,
-            gas_limit: i32,
-            gas_used: i32,
-            value: PostgresNumeric,
-            num_txs: i32,
-            timestamp: i64,
-            first_seen: i64,
-            region_id: i16,
-            optimistic_version: i16,
-            metadata: Option<String>,
+        const CHUNK_SIZE: usize = 500;
+
+        // chunck writes to avoid too many params in a single query and cause value too large to
+        // transmit error
+        for chunk in batch.chunks(CHUNK_SIZE) {
+            // Step 1: build structured params for block_submission
+            struct BlockParams<'a> {
+                block_number: i32,
+                slot_number: i32,
+                parent_hash: &'a [u8],
+                block_hash: &'a [u8],
+                builder_pubkey: &'a [u8],
+                proposer_pubkey: &'a [u8],
+                proposer_fee_recipient: &'a [u8],
+                gas_limit: i32,
+                gas_used: i32,
+                value: PostgresNumeric,
+                num_txs: i32,
+                timestamp: i64,
+                first_seen: i64,
+                region_id: i16,
+                optimistic_version: i16,
+                metadata: Option<&'a str>,
+            }
+
+            let mut structured_blocks: Vec<BlockParams> = Vec::with_capacity(chunk.len());
+            for item in chunk {
+                structured_blocks.push(BlockParams {
+                    block_number: item.submission.block_number() as i32,
+                    slot_number: item.submission.slot().as_u64() as i32,
+                    parent_hash: item.submission.parent_hash().as_slice(),
+                    block_hash: item.submission.block_hash().as_slice(),
+                    builder_pubkey: item.submission.builder_public_key().as_slice(),
+                    proposer_pubkey: item.submission.proposer_public_key().as_slice(),
+                    proposer_fee_recipient: item.submission.proposer_fee_recipient().as_slice(),
+                    gas_limit: item.submission.gas_limit() as i32,
+                    gas_used: item.submission.gas_used() as i32,
+                    value: PostgresNumeric::from(item.submission.value()),
+                    num_txs: item.submission.num_txs() as i32,
+                    timestamp: item.submission.timestamp() as i64,
+                    first_seen: item.trace.receive as i64,
+                    region_id: self.region,
+                    optimistic_version: item.optimistic_version as i16,
+                    metadata: item.trace.metadata.as_deref(),
+                });
+            }
+
+            // Flatten into SQL params
+            let mut params: Vec<&(dyn ToSql + Sync)> =
+                Vec::with_capacity(structured_blocks.len() * BLOCK_SUBMISSION_FIELD_COUNT);
+            for blk in &structured_blocks {
+                params.push(&blk.block_number);
+                params.push(&blk.slot_number);
+                params.push(&blk.parent_hash);
+                params.push(&blk.block_hash);
+                params.push(&blk.builder_pubkey);
+                params.push(&blk.proposer_pubkey);
+                params.push(&blk.proposer_fee_recipient);
+                params.push(&blk.gas_limit);
+                params.push(&blk.gas_used);
+                params.push(&blk.value);
+                params.push(&blk.num_txs);
+                params.push(&blk.timestamp);
+                params.push(&blk.first_seen);
+                params.push(&blk.region_id);
+                params.push(&blk.optimistic_version);
+                params.push(&blk.metadata);
+            }
+
+            // Build and execute INSERT for this chunk
+            let num_cols = BLOCK_SUBMISSION_FIELD_COUNT;
+            let mut sql = String::from(
+                "INSERT INTO block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen, region_id, optimistic_version, metadata) VALUES ",
+            );
+            let clauses: Vec<String> = (0..structured_blocks.len())
+                .map(|i| {
+                    let start = i * num_cols + 1;
+                    let placeholders: Vec<String> =
+                        (0..num_cols).map(|j| format!("${}", start + j)).collect();
+                    format!("({})", placeholders.join(", "))
+                })
+                .collect();
+            sql.push_str(&clauses.join(", "));
+            client.execute(&sql, &params).await?;
         }
 
-        let mut structured_blocks: Vec<BlockParams> = Vec::with_capacity(batch.len());
-        for item in batch {
-            structured_blocks.push(BlockParams {
-                block_number: item.submission.block_number() as i32,
-                slot_number: item.submission.slot().as_u64() as i32,
-                parent_hash: item.submission.parent_hash().as_slice().to_vec(),
-                block_hash: item.submission.block_hash().as_slice().to_vec(),
-                builder_pubkey: item.submission.builder_public_key().as_slice().to_vec(),
-                proposer_pubkey: item.submission.proposer_public_key().as_slice().to_vec(),
-                proposer_fee_recipient: item
-                    .submission
-                    .proposer_fee_recipient()
-                    .as_slice()
-                    .to_vec(),
-                gas_limit: item.submission.gas_limit() as i32,
-                gas_used: item.submission.gas_used() as i32,
-                value: PostgresNumeric::from(item.submission.value()),
-                num_txs: item.submission.num_txs() as i32,
-                timestamp: item.submission.timestamp() as i64,
-                first_seen: item.trace.receive as i64,
-                region_id: self.region,
-                optimistic_version: item.optimistic_version as i16,
-                metadata: item.trace.metadata.clone(),
-            });
-        }
-
-        // Flatten into SQL params
-        let mut params: Vec<&(dyn ToSql + Sync)> =
-            Vec::with_capacity(structured_blocks.len() * BLOCK_SUBMISSION_FIELD_COUNT);
-        for blk in &structured_blocks {
-            params.push(&blk.block_number);
-            params.push(&blk.slot_number);
-            params.push(&blk.parent_hash);
-            params.push(&blk.block_hash);
-            params.push(&blk.builder_pubkey);
-            params.push(&blk.proposer_pubkey);
-            params.push(&blk.proposer_fee_recipient);
-            params.push(&blk.gas_limit);
-            params.push(&blk.gas_used);
-            params.push(&blk.value);
-            params.push(&blk.num_txs);
-            params.push(&blk.timestamp);
-            params.push(&blk.first_seen);
-            params.push(&blk.region_id);
-            params.push(&blk.optimistic_version);
-            params.push(&blk.metadata);
-        }
-
-        // Build and execute INSERT for block_submission
-        let num_cols = BLOCK_SUBMISSION_FIELD_COUNT;
-        let mut sql = String::from(
-            "INSERT INTO block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen, region_id, optimistic_version, metadata) VALUES ",
-        );
-        let clauses: Vec<String> = (0..structured_blocks.len())
-            .map(|i| {
-                let start = i * num_cols + 1;
-                let placeholders: Vec<String> =
-                    (0..num_cols).map(|j| format!("${}", start + j)).collect();
-                format!("({})", placeholders.join(", "))
-            })
-            .collect();
-        sql.push_str(&clauses.join(", "));
-        client.execute(&sql, &params).await?;
-
-        // Step 2: build structured params for slot_preferences, skipping already processed slots
-        // Collect only new slots
+        // Step 2: build structured params for slot_preferences (process entire batch)
         let mut new_rows: Vec<(i32, Vec<u8>)> = Vec::with_capacity(batch.len());
         let mut tmp_last_processed_slot = *last_processed_slot;
         for item in batch {

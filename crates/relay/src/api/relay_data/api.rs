@@ -132,7 +132,9 @@ impl DataApi {
         }
         data_api.builder_blocks_received_stats.record_total(&params);
 
-        if params.limit.is_none() && params.slot.is_none() {
+        // No need to apply limit for slot/block number based queries as the result set is already
+        // limited and returning less than the full set here would be misleading.
+        if params.limit.is_none() && params.slot.is_none() && params.block_number.is_none() {
             params.limit = Some(500);
         }
 
