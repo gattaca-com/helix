@@ -34,15 +34,14 @@ impl<B: BidAdjustor> Context<B> {
             return Err(ProposerApiError::NoBidPrepared);
         };
 
-        let Some(merged_bid) = self.block_merger.get_header(&original_bid) else {
-            return Ok(original_bid);
-        };
-
-        let Some(adjusted_bid) =
-            self.bid_adjustor.try_apply_adjustments(&merged_bid, &entry.bid_adjustment_data)
-        else {
+        if let Some(merged_bid) = self.block_merger.get_header(&original_bid) {
             return Ok(merged_bid);
         };
+
+        let adjusted_bid = self
+            .bid_adjustor
+            .try_apply_adjustments(&original_bid, &entry.bid_adjustment_data)
+            .unwrap_or(original_bid);
 
         Ok(adjusted_bid)
     }
