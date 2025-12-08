@@ -1,3 +1,4 @@
+mod bid_adjustor;
 mod bid_sorter;
 mod block_merger;
 mod context;
@@ -36,6 +37,7 @@ use tracing::{debug, error, info, info_span, trace, warn};
 pub use types::{Event, GetPayloadResultData, PayloadBidData, PayloadHeaderData};
 use worker::{RegWorker, SubWorker};
 
+pub use crate::auctioneer::bid_adjustor::{BidAdjustor, DefaultBidAdjustor};
 use crate::{
     PostgresDatabaseService,
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
@@ -49,11 +51,12 @@ use crate::{
 };
 
 // TODO: tidy up builder and proposer api state, and spawn in a separate function
-pub fn spawn_workers(
+pub fn spawn_workers<B: BidAdjustor>(
     chain_info: ChainInfo,
     config: RelayConfig,
     db: Arc<PostgresDatabaseService>,
     cache: LocalCache,
+    bid_adjustor: Arc<B>,
     top_bid_tx: tokio::sync::broadcast::Sender<bytes::Bytes>,
     event_channel: (crossbeam_channel::Sender<Event>, crossbeam_channel::Receiver<Event>),
 ) -> (AuctioneerHandle, RegWorkerHandle) {
@@ -94,7 +97,8 @@ pub fn spawn_workers(
 
         let bid_sorter = BidSorter::new(top_bid_tx);
         let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
-        let ctx = Context::new(chain_info, config, sim_manager, db, bid_sorter, cache);
+        let ctx =
+            Context::new(chain_info, config, sim_manager, db, bid_sorter, cache, bid_adjustor);
         let id = format!("auctioneer_{auctioneer_core}");
         let auctioneer = Auctioneer { ctx, state: State::default(), tel: Telemetry::new(id) };
 
@@ -110,13 +114,13 @@ pub fn spawn_workers(
     (AuctioneerHandle::new(sub_worker_tx, event_tx), RegWorkerHandle::new(reg_worker_tx))
 }
 
-struct Auctioneer {
-    ctx: Context,
+struct Auctioneer<B: BidAdjustor> {
+    ctx: Context<B>,
     state: State,
     tel: Telemetry,
 }
 
-impl Auctioneer {
+impl<B: BidAdjustor> Auctioneer<B> {
     fn run(mut self, rx: crossbeam_channel::Receiver<Event>) {
         let _span = info_span!("auctioneer").entered();
         info!("starting");
@@ -163,7 +167,7 @@ impl Default for State {
 // TODO: tokio metrics
 
 impl State {
-    fn step(&mut self, event: Event, ctx: &mut Context, tel: &mut Telemetry) {
+    fn step<B: BidAdjustor>(&mut self, event: Event, ctx: &mut Context<B>, tel: &mut Telemetry) {
         let start = Instant::now();
         let start_state = self.as_str();
         let event_tag = event.as_str();
@@ -182,7 +186,7 @@ impl State {
             .observe(step_dur.as_nanos() as f64 / 1000.);
     }
 
-    fn _step(&mut self, event: Event, ctx: &mut Context) {
+    fn _step<B: BidAdjustor>(&mut self, event: Event, ctx: &mut Context<B>) {
         match (&self, event) {
             ///////////// LIFECYCLE EVENTS (ALWAYS VALID) /////////////
 
@@ -538,13 +542,13 @@ impl State {
         }
     }
 
-    fn process_slot_data(
+    fn process_slot_data<B: BidAdjustor>(
         bid_slot: Slot,
         mut payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,
         registration_data: Option<BuilderGetValidatorsResponseEntry>,
         payload_attributes_update: Option<PayloadAttributesUpdate>,
         il: Option<InclusionListWithMetadata>,
-        ctx: &mut Context,
+        ctx: &mut Context<B>,
     ) -> Self {
         if let Some(update) = payload_attributes_update {
             payload_attributes_map.insert(update.parent_hash, update);
@@ -587,7 +591,10 @@ impl State {
     /// Check whether we received the payload we were waiting for the pending get_payload, this
     /// makes sense to be called only when we add a new payload ie. when receiving a new submission
     /// or from gossip
-    fn maybe_start_broacasting(ctx: &mut Context, slot_data: &SlotData) -> Option<Self> {
+    fn maybe_start_broacasting<B: BidAdjustor>(
+        ctx: &mut Context<B>,
+        slot_data: &SlotData,
+    ) -> Option<Self> {
         let block_hash = ctx.maybe_try_unblind(slot_data)?;
         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
 

@@ -5,10 +5,10 @@ use tracing::{error, warn};
 
 use crate::{
     api::proposer::ProposerApiError,
-    auctioneer::{context::Context, types::GetHeaderResult},
+    auctioneer::{bid_adjustor::BidAdjustor, context::Context, types::GetHeaderResult},
 };
 
-impl Context {
+impl<B: BidAdjustor> Context<B> {
     pub(super) fn handle_get_header(
         &self,
         params: GetHeaderParams,
@@ -34,10 +34,16 @@ impl Context {
             return Err(ProposerApiError::NoBidPrepared);
         };
 
-        if let Some(merged_bid) = self.block_merger.get_header(&original_bid) {
-            return Ok(merged_bid);
-        }
+        let Some(merged_bid) = self.block_merger.get_header(&original_bid) else {
+            return Ok(original_bid);
+        };
 
-        Ok(original_bid)
+        let Some(adjusted_bid) =
+            self.bid_adjustor.try_apply_adjustments(&merged_bid, &entry.bid_adjustment_data)
+        else {
+            return Ok(merged_bid);
+        };
+
+        Ok(adjusted_bid)
     }
 }

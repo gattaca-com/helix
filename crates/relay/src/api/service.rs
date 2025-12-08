@@ -39,6 +39,7 @@ pub async fn start_api_service<A: Api>(
     relay_signing_context: Arc<RelaySigningContext>,
     multi_beacon_client: Arc<MultiBeaconClient>,
     api_provider: Arc<A::ApiProvider>,
+    bid_adjustor: Arc<A::BidAdjustor>,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
@@ -61,6 +62,7 @@ pub async fn start_api_service<A: Api>(
         config.clone(),
         db.clone(),
         Arc::unwrap_or_clone(local_cache.clone()),
+        bid_adjustor,
         top_bid_tx.clone(),
         event_channel,
     );

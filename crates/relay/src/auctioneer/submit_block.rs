@@ -6,7 +6,8 @@ use helix_common::{
     metrics::HYDRATION_CACHE_HITS, record_submission_step,
 };
 use helix_types::{
-    BlockValidationError, MergeableOrdersWithPref, SignedBidSubmission, SubmissionVersion,
+    BidAdjustmentData, BlockValidationError, MergeableOrdersWithPref, SignedBidSubmission,
+    SubmissionVersion,
 };
 use tokio::sync::oneshot;
 use tracing::{error, trace};
@@ -15,6 +16,7 @@ use crate::{
     api::builder::error::BuilderApiError,
     auctioneer::{
         BlockMergeRequest,
+        bid_adjustor::BidAdjustor,
         context::Context,
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
         types::{PayloadEntry, SlotData, Submission, SubmissionData, SubmissionResult},
@@ -22,7 +24,7 @@ use crate::{
     housekeeper::PayloadAttributesUpdate,
 };
 
-impl Context {
+impl<B: BidAdjustor> Context<B> {
     pub(super) fn handle_submission(
         &mut self,
         submission_data: SubmissionData,
@@ -177,6 +179,7 @@ impl Context {
             version: submission_data.version,
             is_top_bid,
             trace: submission_data.trace,
+            bid_adjustment_data: submission_data.bid_adjustment_data,
         };
 
         Ok((validated, optimistic_version, merging_data))
@@ -215,6 +218,7 @@ impl Context {
             validated.submission,
             validated.payload_attributes.withdrawals_root,
             validated.tx_root,
+            validated.bid_adjustment_data,
         );
         self.payloads.insert(block_hash, entry);
     }
@@ -274,6 +278,7 @@ pub struct ValidatedData<'a> {
     pub version: SubmissionVersion,
     pub is_top_bid: bool,
     pub trace: SubmissionTrace,
+    pub bid_adjustment_data: Option<BidAdjustmentData>,
 }
 
 pub struct MergeData {

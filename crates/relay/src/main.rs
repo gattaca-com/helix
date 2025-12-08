@@ -18,8 +18,9 @@ use helix_common::{
     utils::{init_panic_hook, init_tracing_log},
 };
 use helix_relay::{
-    Api, PostgresDatabaseService, RelayNetworkManager, WebsiteService, start_admin_service,
-    start_api_service, start_beacon_client, start_db_service, start_housekeeper,
+    Api, DefaultBidAdjustor, PostgresDatabaseService, RelayNetworkManager, WebsiteService,
+    start_admin_service, start_api_service, start_beacon_client, start_db_service,
+    start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -34,6 +35,7 @@ struct ApiProd;
 
 impl Api for ApiProd {
     type ApiProvider = DefaultApiProvider;
+    type BidAdjustor = DefaultBidAdjustor;
 }
 
 fn main() {
@@ -122,6 +124,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
         relay_signing_context,
         beacon_client,
         Arc::new(DefaultApiProvider {}),
+        Arc::new(DefaultBidAdjustor {}),
         known_validators_loaded,
         terminating.clone(),
         top_bid_tx,

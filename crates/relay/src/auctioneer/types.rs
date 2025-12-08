@@ -46,7 +46,7 @@ pub struct GetPayloadResultData {
 pub struct SubmissionData {
     pub submission: Submission,
     pub merging_data: Option<MergeableOrdersWithPref>,
-    pub bid_adjustments_data: Option<BidAdjustmentData>,
+    pub bid_adjustment_data: Option<BidAdjustmentData>,
     pub version: SubmissionVersion,
     pub withdrawals_root: B256,
     pub trace: SubmissionTrace,
@@ -112,6 +112,7 @@ impl Submission {
 pub struct PayloadEntry {
     pub payload_and_blobs: Arc<PayloadAndBlobs>,
     pub bid_data: PayloadBidData,
+    pub bid_adjustment_data: Option<BidAdjustmentData>,
 }
 
 impl PayloadEntry {
@@ -119,6 +120,7 @@ impl PayloadEntry {
         signed_bid_submission: SignedBidSubmission,
         withdrawals_root: B256,
         tx_root: Option<B256>,
+        bid_adjustment_data: Option<BidAdjustmentData>,
     ) -> Self {
         Self {
             payload_and_blobs: signed_bid_submission.payload_and_blobs_ref().to_owned().into(),
@@ -129,16 +131,26 @@ impl PayloadEntry {
                 value: signed_bid_submission.value(),
                 builder_pubkey: *signed_bid_submission.builder_public_key(),
             },
+            bid_adjustment_data,
         }
     }
 
     pub fn new_gossip(data: BroadcastPayloadParams) -> Self {
-        Self { payload_and_blobs: data.execution_payload, bid_data: data.bid_data }
+        Self {
+            payload_and_blobs: data.execution_payload,
+            bid_data: data.bid_data,
+            bid_adjustment_data: None, // the gossiped bid should already be adjusted (?)
+        }
     }
 
     pub fn to_header_data(&self) -> Option<PayloadHeaderData> {
         let bid_data = self.bid_data.clone();
-        Some(PayloadHeaderData { payload_and_blobs: self.payload_and_blobs.clone(), bid_data })
+        let bid_adjustment_data = self.bid_adjustment_data.clone();
+        Some(PayloadHeaderData {
+            payload_and_blobs: self.payload_and_blobs.clone(),
+            bid_data,
+            bid_adjustment_data,
+        })
     }
 }
 
@@ -146,6 +158,7 @@ impl PayloadEntry {
 pub struct PayloadHeaderData {
     pub payload_and_blobs: Arc<PayloadAndBlobs>,
     pub bid_data: PayloadBidData,
+    pub bid_adjustment_data: Option<BidAdjustmentData>,
 }
 
 impl PayloadHeaderData {

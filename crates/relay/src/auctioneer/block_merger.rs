@@ -8,10 +8,11 @@ use alloy_primitives::{B256, U256};
 use bytes::Bytes;
 use helix_common::{RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, utils::utcnow_ms};
 use helix_types::{
-    BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
-    BlockMergingData, BlsPublicKeyBytes, BundleOrder, KzgCommitment, MergeableBundle,
-    MergeableOrder, MergeableOrderWithOrigin, MergeableOrders, MergeableOrdersWithPref,
-    MergeableTransaction, MergedBlock, Order, PayloadAndBlobs, SignedBidSubmission, Transactions,
+    BidAdjustmentData, BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle,
+    BlobsBundleVersion, BlockMergingData, BlsPublicKeyBytes, BundleOrder, KzgCommitment,
+    MergeableBundle, MergeableOrder, MergeableOrderWithOrigin, MergeableOrders,
+    MergeableOrdersWithPref, MergeableTransaction, MergedBlock, Order, PayloadAndBlobs,
+    SignedBidSubmission, Transactions,
 };
 use tracing::{debug, error, warn};
 
@@ -148,6 +149,7 @@ impl BlockMerger {
         response: BlockMergeResponse,
         original_payload: Arc<PayloadAndBlobs>,
         builder_pubkey: BlsPublicKeyBytes,
+        bid_adjustment_data: Option<BidAdjustmentData>,
     ) -> Result<PayloadEntry, PayloadMergingError> {
         let bid_slot = self.curr_bid_slot;
         let max_blobs_per_block = self.chain_info.max_blobs_per_block();
@@ -216,6 +218,7 @@ impl BlockMerger {
         let new_bid = PayloadHeaderData {
             payload_and_blobs: payload_and_blobs.clone(),
             bid_data: bid_data.clone(),
+            bid_adjustment_data: bid_adjustment_data.clone(),
         };
 
         // Store locally to serve header requests
@@ -223,7 +226,7 @@ impl BlockMerger {
             Some(BestMergedBlock { base_block_time_ms: base_block_data.time_ms, bid: new_bid });
 
         // Return the payload entry to be stored for get payload calls
-        Ok(PayloadEntry { payload_and_blobs, bid_data })
+        Ok(PayloadEntry { payload_and_blobs, bid_data, bid_adjustment_data })
     }
 
     fn update_base_block(&mut self, base_block_hash: &B256, base_block_value: U256) {

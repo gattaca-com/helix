@@ -145,7 +145,7 @@ impl SubWorker {
                         withdrawals_root,
                         version,
                         merging_data,
-                        bid_adjustments_data,
+                        bid_adjustment_data,
                     )) => {
                         tracing::Span::current()
                             .record("bid_slot", tracing::field::display(submission.bid_slot()));
@@ -182,7 +182,7 @@ impl SubWorker {
                             submission,
                             version,
                             merging_data,
-                            bid_adjustments_data,
+                            bid_adjustment_data,
                             withdrawals_root,
                             trace,
                         };
@@ -241,6 +241,7 @@ impl SubWorker {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn handle_block_submission(
         &self,
         headers: http::HeaderMap,
@@ -276,7 +277,7 @@ impl SubWorker {
             "processing payload"
         );
 
-        let (submission, merging_data, bid_adjustments_data) = match submission_type {
+        let (submission, merging_data, bid_adjustment_data) = match submission_type {
             Some(SubmissionType::Default) => decode_default(
                 &mut decoder,
                 body,
@@ -342,7 +343,7 @@ impl SubWorker {
         trace!("withdrawals root done");
 
         let version = SubmissionVersion::new(trace.receive, sequence);
-        Ok((submission, withdrawals_root, version, merging_data, bid_adjustments_data))
+        Ok((submission, withdrawals_root, version, merging_data, bid_adjustment_data))
     }
 
     fn handle_get_payload(
@@ -440,18 +441,18 @@ fn decode_dehydrated(
     skip_sigverify: bool,
     merge_type: &Option<MergeType>,
     fork: ForkName,
-    with_adjustments: bool,
+    with_adjustment: bool,
 ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
     if !skip_sigverify {
         return Err(BuilderApiError::UntrustedBuilderOnDehydratedPayload);
     }
 
-    let (submission, bid_adjustments) = if with_adjustments {
-        let sub_with_adjustments: DehydratedBidSubmissionFuluWithAdjustments =
+    let (submission, bid_adjustment) = if with_adjustment {
+        let sub_with_adjustment: DehydratedBidSubmissionFuluWithAdjustments =
             decoder.decode_by_fork(body, fork)?;
-        let (sub, adjustments_data) = sub_with_adjustments.split();
+        let (sub, adjustment_data) = sub_with_adjustment.split();
 
-        (sub, Some(adjustments_data))
+        (sub, Some(adjustment_data))
     } else {
         let submission: DehydratedBidSubmission = decoder.decode_by_fork(body, fork)?;
 
@@ -474,7 +475,7 @@ fn decode_dehydrated(
         None => None,
     };
 
-    Ok((Submission::Dehydrated(submission), merging_data, bid_adjustments))
+    Ok((Submission::Dehydrated(submission), merging_data, bid_adjustment))
 }
 
 fn decode_merge(
@@ -512,13 +513,13 @@ fn decode_default(
     skip_sigverify: bool,
     chain_info: &ChainInfo,
     merge_type: &Option<MergeType>,
-    with_adjustments: bool,
+    with_adjustment: bool,
 ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
-    let (submission, bid_adjustments) = if with_adjustments {
-        let sub_with_adjustments: SignedBidSubmissionFuluWithAdjustments = decoder.decode(body)?;
-        let (sub, adjustments_data) = sub_with_adjustments.split();
+    let (submission, bid_adjustment) = if with_adjustment {
+        let sub_with_adjustment: SignedBidSubmissionFuluWithAdjustments = decoder.decode(body)?;
+        let (sub, adjustment_data) = sub_with_adjustment.split();
 
-        (sub, Some(adjustments_data))
+        (sub, Some(adjustment_data))
     } else {
         let submission: SignedBidSubmission = decoder.decode(body)?;
 
@@ -541,7 +542,7 @@ fn decode_default(
         None => None,
     };
     verify_and_validate(&mut upgraded, skip_sigverify, chain_info)?;
-    Ok((Submission::Full(upgraded), merging_data, bid_adjustments))
+    Ok((Submission::Full(upgraded), merging_data, bid_adjustment))
 }
 
 fn verify_and_validate(

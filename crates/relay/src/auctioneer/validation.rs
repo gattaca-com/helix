@@ -5,11 +5,11 @@ use helix_types::{
 };
 
 use crate::{
-    auctioneer::{context::Context, types::SlotData},
+    auctioneer::{bid_adjustor::BidAdjustor, context::Context, types::SlotData},
     housekeeper::PayloadAttributesUpdate,
 };
 
-impl Context {
+impl<B: BidAdjustor> Context<B> {
     pub fn validate_submission<'a>(
         &mut self,
         submission: &SignedBidSubmission,
