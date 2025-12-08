@@ -197,7 +197,6 @@ impl<B: BidAdjustor> Context<B> {
 
         let original_payload_and_blobs = original_payload.payload_and_blobs.clone();
         let builder_pubkey = original_payload.bid_data.builder_pubkey;
-        let bid_adjustment_data = original_payload.bid_adjustment_data.clone();
 
         //TODO: this function does a lot of work, should move that work away from the event loop
         let Some(payload) = self
@@ -206,7 +205,6 @@ impl<B: BidAdjustor> Context<B> {
                 response,
                 original_payload_and_blobs,
                 builder_pubkey,
-                bid_adjustment_data,
             )
             .ok()
         else {

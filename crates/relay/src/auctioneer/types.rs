@@ -32,7 +32,7 @@ use crate::{
 };
 
 pub type SubmissionResult = Result<(), BuilderApiError>;
-pub type GetHeaderResult = Result<PayloadHeaderData, ProposerApiError>;
+pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
 
 pub struct GetPayloadResultData {
@@ -109,6 +109,7 @@ impl Submission {
 /// From a SignedBidSubmission, keep only the fields needed to serve get_header and get_payload,
 /// some fields are optional because payloads also arrive via gossip and we only gossip
 /// PayloadAndBlobs
+#[derive(Clone)]
 pub struct PayloadEntry {
     pub payload_and_blobs: Arc<PayloadAndBlobs>,
     pub bid_data: PayloadBidData,
@@ -139,29 +140,10 @@ impl PayloadEntry {
         Self {
             payload_and_blobs: data.execution_payload,
             bid_data: data.bid_data,
-            bid_adjustment_data: None, // the gossiped bid should already be adjusted (?)
+            bid_adjustment_data: None,
         }
     }
 
-    pub fn to_header_data(&self) -> Option<PayloadHeaderData> {
-        let bid_data = self.bid_data.clone();
-        let bid_adjustment_data = self.bid_adjustment_data.clone();
-        Some(PayloadHeaderData {
-            payload_and_blobs: self.payload_and_blobs.clone(),
-            bid_data,
-            bid_adjustment_data,
-        })
-    }
-}
-
-#[derive(Clone)]
-pub struct PayloadHeaderData {
-    pub payload_and_blobs: Arc<PayloadAndBlobs>,
-    pub bid_data: PayloadBidData,
-    pub bid_adjustment_data: Option<BidAdjustmentData>,
-}
-
-impl PayloadHeaderData {
     pub fn value(&self) -> &U256 {
         &self.bid_data.value
     }

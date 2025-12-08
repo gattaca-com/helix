@@ -34,7 +34,7 @@ use helix_types::Slot;
 use rustc_hash::FxHashMap;
 pub use simulator::*;
 use tracing::{debug, error, info, info_span, trace, warn};
-pub use types::{Event, GetPayloadResultData, PayloadBidData, PayloadHeaderData};
+pub use types::{Event, GetPayloadResultData, PayloadBidData, PayloadEntry};
 use worker::{RegWorker, SubWorker};
 
 pub use crate::auctioneer::bid_adjustor::{BidAdjustor, DefaultBidAdjustor};

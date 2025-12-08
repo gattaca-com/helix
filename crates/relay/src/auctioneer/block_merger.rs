@@ -8,17 +8,14 @@ use alloy_primitives::{B256, U256};
 use bytes::Bytes;
 use helix_common::{RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, utils::utcnow_ms};
 use helix_types::{
-    BidAdjustmentData, BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle,
-    BlobsBundleVersion, BlockMergingData, BlsPublicKeyBytes, BundleOrder, KzgCommitment,
-    MergeableBundle, MergeableOrder, MergeableOrderWithOrigin, MergeableOrders,
-    MergeableOrdersWithPref, MergeableTransaction, MergedBlock, Order, PayloadAndBlobs,
-    SignedBidSubmission, Transactions,
+    BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
+    BlockMergingData, BlsPublicKeyBytes, BundleOrder, KzgCommitment, MergeableBundle,
+    MergeableOrder, MergeableOrderWithOrigin, MergeableOrders, MergeableOrdersWithPref,
+    MergeableTransaction, MergedBlock, Order, PayloadAndBlobs, SignedBidSubmission, Transactions,
 };
 use tracing::{debug, error, warn};
 
-use crate::auctioneer::{
-    BlockMergeResponse, PayloadBidData, PayloadHeaderData, types::PayloadEntry,
-};
+use crate::auctioneer::{BlockMergeResponse, PayloadBidData, PayloadEntry};
 
 const MERGE_REQUEST_INTERVAL_MS: u64 = 50;
 
@@ -93,7 +90,7 @@ impl BlockMerger {
         self.last_merge_request_time_ms = 0;
     }
 
-    pub fn get_header(&self, original_bid: &PayloadHeaderData) -> Option<PayloadHeaderData> {
+    pub fn get_header(&self, original_bid: &PayloadEntry) -> Option<PayloadEntry> {
         let entry = self.best_merged_block.as_ref()?;
         if !merged_bid_higher(
             &entry.bid,
@@ -149,7 +146,6 @@ impl BlockMerger {
         response: BlockMergeResponse,
         original_payload: Arc<PayloadAndBlobs>,
         builder_pubkey: BlsPublicKeyBytes,
-        bid_adjustment_data: Option<BidAdjustmentData>,
     ) -> Result<PayloadEntry, PayloadMergingError> {
         let bid_slot = self.curr_bid_slot;
         let max_blobs_per_block = self.chain_info.max_blobs_per_block();
@@ -215,18 +211,20 @@ impl BlockMerger {
             builder_pubkey,
         };
 
-        let new_bid = PayloadHeaderData {
+        let new_bid = PayloadEntry {
             payload_and_blobs: payload_and_blobs.clone(),
             bid_data: bid_data.clone(),
-            bid_adjustment_data: bid_adjustment_data.clone(),
+            bid_adjustment_data: None,
         };
 
         // Store locally to serve header requests
-        self.best_merged_block =
-            Some(BestMergedBlock { base_block_time_ms: base_block_data.time_ms, bid: new_bid });
+        self.best_merged_block = Some(BestMergedBlock {
+            base_block_time_ms: base_block_data.time_ms,
+            bid: new_bid.clone(),
+        });
 
         // Return the payload entry to be stored for get payload calls
-        Ok(PayloadEntry { payload_and_blobs, bid_data, bid_adjustment_data })
+        Ok(new_bid)
     }
 
     fn update_base_block(&mut self, base_block_hash: &B256, base_block_value: U256) {
@@ -251,7 +249,7 @@ struct BaseBlockData {
 
 struct BestMergedBlock {
     base_block_time_ms: u64,
-    bid: PayloadHeaderData,
+    bid: PayloadEntry,
 }
 
 #[derive(Debug, Clone)]
@@ -523,8 +521,8 @@ fn append_merged_blobs(
 }
 
 fn merged_bid_higher(
-    merged_bid: &PayloadHeaderData,
-    original_bid: &PayloadHeaderData,
+    merged_bid: &PayloadEntry,
+    original_bid: &PayloadEntry,
     time: u64,
     max_merged_bid_age_ms: u64,
 ) -> bool {
