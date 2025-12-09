@@ -4,7 +4,7 @@ use clap::Parser;
 use eyre::ensure;
 use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey};
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tracing::error;
 
 use crate::{BuilderInfo, ValidatorPreferences, api::*};
@@ -93,6 +93,12 @@ impl RelayConfig {
     }
 }
 
+impl AsRef<RelayConfig> for RelayConfig {
+    fn as_ref(&self) -> &RelayConfig {
+        self
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct WebsiteConfig {
     #[serde(default)]
@@ -144,16 +150,16 @@ impl Default for WebsiteConfig {
     }
 }
 
-pub fn load_config() -> RelayConfig {
+pub fn load_config<R: AsRef<RelayConfig> + DeserializeOwned>() -> R {
     let start_config = StartConfig::parse();
 
     let file = File::open(&start_config.config)
         .unwrap_or_else(|_| panic!("unable to find config file: '{}'", start_config.config));
 
-    let config: RelayConfig = serde_yaml::from_reader(file).expect("failed to parse config file");
+    let config: R = serde_yaml::from_reader(file).expect("failed to parse config file");
 
     unsafe {
-        LOCAL_DEV = config.is_local_dev;
+        LOCAL_DEV = config.as_ref().is_local_dev;
     }
 
     config

@@ -17,6 +17,7 @@ pub enum BidAdjustmentData {
     GasUsed(BidAdjDataWithGasUsed),
 }
 
+#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Clone)]
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]
@@ -67,7 +68,7 @@ pub struct BidAdjDataWithGasUsed {
     pub placeholder_gas_used: u64,
 }
 
-// // Adjustment data compatible with Ultrasound v2 spec.
+/// Adjustment data compatible with Ultrasound v2 spec.
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Clone)]
 pub struct BidAdjDataV2 {
     pub el_transactions_root: B256,
@@ -89,7 +90,7 @@ pub struct BidAdjDataV2 {
     pub pre_payment_logs_bloom: Bloom,
 }
 
-// // Adjustment data compatible with Ultrasound v2 spec.
+/// Adjustment data compatible with Ultrasound v2 spec.
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Clone)]
 pub struct BidAdjDataV2WithGasUsed {
     pub el_transactions_root: B256,
@@ -110,60 +111,6 @@ pub struct BidAdjDataV2WithGasUsed {
     pub placeholder_receipt_proof: Proof,
     pub pre_payment_logs_bloom: Bloom,
     pub el_placeholder_gas_used: u64,
-}
-
-// Extra adjustment data (extra to v1 in order to support v2).
-#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Clone)]
-pub struct ExtraBidAdjData {
-    pub el_withdrawals_root: B256,
-    pub cl_placeholder_transaction_proof: Vec<B256>,
-    pub pre_payment_logs_bloom: Bloom,
-    #[serde(default)]
-    pub placeholder_gas_used: Option<u64>,
-}
-
-impl<'a> From<(BidAdjustmentData, &'a ExtraBidAdjData)> for BidAdjustmentDataV2 {
-    fn from((adjust, extra): (BidAdjustmentData, &'a ExtraBidAdjData)) -> Self {
-        match adjust {
-            BidAdjustmentData::Original(adjustments) => {
-                BidAdjustmentDataV2::Original(BidAdjDataV2 {
-                    el_transactions_root: adjustments.transactions_root,
-                    el_withdrawals_root: extra.el_withdrawals_root,
-                    builder_address: adjustments.builder_address,
-                    builder_proof: adjustments.builder_proof,
-                    fee_recipient_address: adjustments.fee_recipient_address,
-                    fee_recipient_proof: adjustments.fee_recipient_proof,
-                    fee_payer_address: adjustments.fee_payer_address,
-                    fee_payer_proof: adjustments.fee_payer_proof,
-                    el_placeholder_transaction_proof: adjustments.placeholder_tx_proof,
-                    cl_placeholder_transaction_proof: extra
-                        .cl_placeholder_transaction_proof
-                        .clone(),
-                    placeholder_receipt_proof: adjustments.placeholder_receipt_proof,
-                    pre_payment_logs_bloom: extra.pre_payment_logs_bloom,
-                })
-            }
-            BidAdjustmentData::GasUsed(adjustments) => {
-                BidAdjustmentDataV2::GasUsed(BidAdjDataV2WithGasUsed {
-                    el_transactions_root: adjustments.transactions_root,
-                    el_withdrawals_root: extra.el_withdrawals_root,
-                    builder_address: adjustments.builder_address,
-                    builder_proof: adjustments.builder_proof,
-                    fee_recipient_address: adjustments.fee_recipient_address,
-                    fee_recipient_proof: adjustments.fee_recipient_proof,
-                    fee_payer_address: adjustments.fee_payer_address,
-                    fee_payer_proof: adjustments.fee_payer_proof,
-                    el_placeholder_transaction_proof: adjustments.placeholder_tx_proof,
-                    cl_placeholder_transaction_proof: extra
-                        .cl_placeholder_transaction_proof
-                        .clone(),
-                    placeholder_receipt_proof: adjustments.placeholder_receipt_proof,
-                    pre_payment_logs_bloom: extra.pre_payment_logs_bloom,
-                    el_placeholder_gas_used: adjustments.placeholder_gas_used,
-                })
-            }
-        }
-    }
 }
 
 struct BytesOrArray;
