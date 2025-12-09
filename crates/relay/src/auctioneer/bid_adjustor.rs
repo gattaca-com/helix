@@ -8,6 +8,8 @@ pub trait BidAdjustor: Send + Sync + Clone + 'static {
         bid: &PayloadEntry,
         bid_adjustments_data: &Option<BidAdjustmentData>,
     ) -> Option<PayloadEntry>;
+
+    fn on_new_slot(&mut self, bid_slot: u64);
 }
 
 #[derive(Clone)]
@@ -21,4 +23,6 @@ impl BidAdjustor for DefaultBidAdjustor {
     ) -> Option<PayloadEntry> {
         None
     }
+
+    fn on_new_slot(&mut self, _bid_slot: u64) {}
 }

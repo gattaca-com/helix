@@ -5,8 +5,7 @@ use std::sync::Arc;
 use helix_common::{RelayConfig, api_provider::ApiProvider, local_cache::LocalCache};
 pub use service::start_api_service;
 
-use crate::auctioneer::BidAdjustor;
-pub use crate::auctioneer::DefaultBidAdjustor;
+pub use crate::auctioneer::{BidAdjustor, DefaultBidAdjustor};
 
 pub mod admin_service;
 pub mod builder;
