@@ -14,6 +14,12 @@ pub enum DataApiError {
     LimitReached { limit: u64 },
     #[error("no registration found for validator {pubkey}")]
     ValidatorRegistrationNotFound { pubkey: BlsPublicKeyBytes },
+    #[error("block_number is not supported")]
+    BlockNumberNotSupported,
+    #[error("order_by is not supported")]
+    OrderByNotSupported,
+    #[error("builder_pubkey is not supported")]
+    BuilderPubkeyNotSupported,
     #[error("internal server error")]
     InternalServerError,
 }
@@ -24,7 +30,10 @@ impl IntoResponse for DataApiError {
             DataApiError::SlotAndCursor |
             DataApiError::MissingFilter |
             DataApiError::LimitReached { .. } |
-            DataApiError::ValidatorRegistrationNotFound { .. } => StatusCode::BAD_REQUEST,
+            DataApiError::ValidatorRegistrationNotFound { .. } |
+            DataApiError::BlockNumberNotSupported |
+            DataApiError::OrderByNotSupported |
+            DataApiError::BuilderPubkeyNotSupported => StatusCode::BAD_REQUEST,
 
             DataApiError::InternalServerError => StatusCode::INTERNAL_SERVER_ERROR,
         };

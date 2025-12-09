@@ -141,3 +141,49 @@ pub struct DataAdjustmentsResponse {
 pub struct DataAdjustmentsParams {
     pub slot: Slot,
 }
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub struct ProposerHeaderDeliveredParams {
+    pub slot: Option<u64>,
+    pub cursor: Option<u64>,
+    pub block_hash: Option<B256>,
+    pub block_number: Option<u64>,
+    pub builder_pubkey: Option<BlsPublicKey>,
+    pub proposer_pubkey: Option<BlsPublicKey>,
+    pub limit: Option<u64>,
+    pub order_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProposerHeaderDeliveredResponse {
+    pub slot: Option<Slot>,
+    pub parent_hash: Option<B256>,
+    pub block_hash: Option<B256>,
+    pub proposer_pubkey: Option<BlsPublicKeyBytes>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "quoted_u256_opt")]
+    pub value: Option<U256>,
+}
+
+mod quoted_u256_opt {
+    use alloy_primitives::U256;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &Option<U256>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(v) => serde_utils::quoted_u256::serialize(v, serializer),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<U256>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<String>::deserialize(deserializer)?
+            .map(|s| U256::from_str_radix(&s, 10).map_err(serde::de::Error::custom))
+            .transpose()
+    }
+}
