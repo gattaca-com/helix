@@ -8,8 +8,8 @@ use axum::{
 use helix_common::{
     ValidatorPreferences,
     api::data_api::{
-        BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
-        ReceivedBlocksResponse, ValidatorRegistrationParams,
+        BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerHeaderDeliveredParams,
+        ProposerPayloadDeliveredParams, ReceivedBlocksResponse, ValidatorRegistrationParams,
     },
     metrics,
 };
@@ -182,6 +182,35 @@ impl DataApi {
                     Err(DataApiError::InternalServerError)
                 }
             },
+        }
+    }
+
+    pub async fn proposer_header_delivered(
+        Extension(data_api): Extension<Arc<DataApi>>,
+        Query(mut params): Query<ProposerHeaderDeliveredParams>,
+    ) -> Result<impl IntoResponse, DataApiError> {
+        if params.block_number.is_some() {
+            return Err(DataApiError::BlockNumberNotSupported);
+        }
+        if params.order_by.is_some() {
+            return Err(DataApiError::OrderByNotSupported);
+        }
+        if params.builder_pubkey.is_some() {
+            return Err(DataApiError::BuilderPubkeyNotSupported);
+        }
+        if params.limit.map(|l| l > 200).unwrap_or(false) {
+            return Err(DataApiError::LimitReached { limit: 200 });
+        }
+        if params.limit.is_none() {
+            params.limit = Some(200);
+        }
+
+        match data_api.db.get_proposer_header_delivered(&params).await {
+            Ok(result) => Ok(Json(result)),
+            Err(err) => {
+                warn!(error=%err, "Failed to fetch proposer header delivered");
+                Err(DataApiError::InternalServerError)
+            }
         }
     }
 }

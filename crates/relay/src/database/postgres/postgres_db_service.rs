@@ -7,7 +7,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use alloy_primitives::B256;
+use alloy_primitives::{B256, U256};
 use dashmap::{DashMap, DashSet};
 use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
 use helix_common::{
@@ -16,7 +16,7 @@ use helix_common::{
     ValidatorPreferences, ValidatorSummary,
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
-        data_api::BidFilters,
+        data_api::{BidFilters, ProposerHeaderDeliveredParams, ProposerHeaderDeliveredResponse},
         proposer_api::{GetHeaderParams, ValidatorRegistrationInfo},
     },
     bid_submission::OptimisticVersion,
@@ -1980,6 +1980,7 @@ impl PostgresDatabaseService {
         &self,
         params: GetHeaderParams,
         best_block_hash: B256,
+        value: U256,
         trace: GetHeaderTrace,
         mev_boost: bool,
         user_agent: Option<String>,
@@ -1994,9 +1995,9 @@ impl PostgresDatabaseService {
             .execute(
                 "
                     INSERT INTO get_header
-                        (slot_number, region_id, parent_hash, proposer_pubkey, block_hash, mev_boost, user_agent, receive, validation_complete, best_bid_fetched)
+                        (slot_number, region_id, parent_hash, proposer_pubkey, block_hash, value, mev_boost, user_agent, receive, validation_complete, best_bid_fetched)
                     VALUES
-                        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 ",
                 &[
                     &(params.slot as i32),
@@ -2004,6 +2005,7 @@ impl PostgresDatabaseService {
                     &(params.parent_hash.as_slice()),
                     &(params.pubkey.as_slice()),
                     &(best_block_hash.as_slice()),
+                    &(PostgresNumeric::from(value)),
                     &(mev_boost),
                     &(user_agent),
                     &(trace.receive as i64),
@@ -2175,5 +2177,87 @@ impl PostgresDatabaseService {
         } else {
             Err(errors)
         }
+    }
+
+    #[instrument(skip_all)]
+    pub async fn get_proposer_header_delivered(
+        &self,
+        params: &ProposerHeaderDeliveredParams,
+    ) -> Result<Vec<ProposerHeaderDeliveredResponse>, DatabaseError> {
+        let mut record = DbMetricRecord::new("get_proposer_header_delivered");
+
+        let mut query = String::from(
+            "
+            SELECT
+                slot_number,
+                parent_hash,
+                block_hash,
+                proposer_pubkey,
+                value
+            FROM get_header
+            WHERE 1 = 1
+        ",
+        );
+
+        let mut param_index = 1;
+        let mut db_params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+
+        if let Some(slot) = params.slot {
+            query.push_str(&format!(" AND slot_number = ${param_index}"));
+            db_params.push(Box::new(slot as i32));
+            param_index += 1;
+        }
+
+        if let Some(cursor) = params.cursor {
+            query.push_str(&format!(" AND slot_number < ${param_index}"));
+            db_params.push(Box::new(cursor as i32));
+            param_index += 1;
+        }
+
+        if let Some(block_hash) = params.block_hash {
+            query.push_str(&format!(" AND block_hash = ${param_index}"));
+            db_params.push(Box::new(block_hash.as_slice().to_vec()));
+            param_index += 1;
+        }
+
+        // builder_pubkey filter not supported (not stored in get_header table)
+
+        if let Some(ref proposer_pubkey) = params.proposer_pubkey {
+            query.push_str(&format!(" AND proposer_pubkey = ${param_index}"));
+            db_params.push(Box::new(proposer_pubkey.serialize().to_vec()));
+            param_index += 1;
+        }
+
+        query.push_str(" ORDER BY slot_number DESC");
+
+        if let Some(limit) = params.limit {
+            query.push_str(&format!(" LIMIT ${param_index}"));
+            db_params.push(Box::new(limit as i64));
+        }
+
+        let params_refs: Vec<&(dyn ToSql + Sync)> =
+            db_params.iter().map(|p| &**p as &(dyn ToSql + Sync)).collect();
+
+        let rows = self.pool.get().await?.query(&query, &params_refs[..]).await?;
+
+        let results = rows
+            .iter()
+            .map(|row| ProposerHeaderDeliveredResponse {
+                slot: row.get::<_, Option<i32>>("slot_number").map(|s| s.to_string()),
+                parent_hash: row
+                    .get::<_, Option<Vec<u8>>>("parent_hash")
+                    .map(|h| alloy_primitives::hex::encode_prefixed(&h)),
+                block_hash: row
+                    .get::<_, Option<Vec<u8>>>("block_hash")
+                    .map(|h| alloy_primitives::hex::encode_prefixed(&h)),
+                proposer_pubkey: row
+                    .get::<_, Option<Vec<u8>>>("proposer_pubkey")
+                    .map(|p| alloy_primitives::hex::encode_prefixed(&p)),
+                value: row.get::<_, Option<PostgresNumeric>>("value").map(|v| v.0.to_string()),
+            })
+            .collect();
+
+        record.record_success();
+        Ok(results)
     }
 }
