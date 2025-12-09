@@ -14,13 +14,14 @@ use crate::{
     api::proposer::ProposerApiError,
     auctioneer::{
         PayloadBidData,
+        bid_adjustor::BidAdjustor,
         context::Context,
         types::{GetPayloadResult, GetPayloadResultData, PayloadEntry, PendingPayload, SlotData},
     },
     gossip::BroadcastPayloadParams,
 };
 
-impl Context {
+impl<B: BidAdjustor> Context<B> {
     pub(super) fn handle_gossip_payload(
         &mut self,
         payload: BroadcastPayloadParams,

@@ -17,6 +17,7 @@ use crate::{
     api::builder::error::BuilderApiError,
     auctioneer::{
         BlockMergeResponse,
+        bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
         simulator::manager::{SimulationResult, SimulatorManager},
@@ -39,19 +40,20 @@ pub struct SlotContext {
     pub block_merger: BlockMerger,
 }
 
-pub struct Context {
+pub struct Context<B: BidAdjustor> {
     pub chain_info: ChainInfo,
     pub config: RelayConfig,
     pub cache: LocalCache,
     pub unknown_builder_info: BuilderInfo,
     pub db: Arc<PostgresDatabaseService>,
     pub slot_context: SlotContext,
+    pub bid_adjustor: Arc<B>,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
 const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
 
-impl Context {
+impl<B: BidAdjustor> Context<B> {
     pub fn new(
         chain_info: ChainInfo,
         config: RelayConfig,
@@ -59,6 +61,7 @@ impl Context {
         db: Arc<PostgresDatabaseService>,
         bid_sorter: BidSorter,
         cache: LocalCache,
+        bid_adjustor: Arc<B>,
     ) -> Self {
         let unknown_builder_info = BuilderInfo {
             collateral: U256::ZERO,
@@ -88,7 +91,7 @@ impl Context {
             block_merger,
         };
 
-        Self { chain_info, cache, unknown_builder_info, slot_context, db, config }
+        Self { chain_info, cache, unknown_builder_info, slot_context, db, config, bid_adjustor }
     }
 
     pub fn builder_info(&self, builder: &BlsPublicKeyBytes) -> BuilderInfo {
@@ -212,7 +215,7 @@ impl Context {
     }
 }
 
-impl Deref for Context {
+impl<B: BidAdjustor> Deref for Context<B> {
     type Target = SlotContext;
 
     fn deref(&self) -> &Self::Target {
@@ -220,7 +223,7 @@ impl Deref for Context {
     }
 }
 
-impl DerefMut for Context {
+impl<B: BidAdjustor> DerefMut for Context<B> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.slot_context
     }

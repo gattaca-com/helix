@@ -345,6 +345,17 @@ impl SignedBidSubmission {
         }
     }
 
+    pub fn execution_payload_make_mut(&mut self) -> &mut ExecutionPayload {
+        match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                Arc::make_mut(&mut signed_bid_submission.execution_payload)
+            }
+            SignedBidSubmission::Fulu(signed_bid_submission) => {
+                Arc::make_mut(&mut signed_bid_submission.execution_payload)
+            }
+        }
+    }
+
     pub fn payload_and_blobs_ref(&self) -> PayloadAndBlobsRef<'_> {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => PayloadAndBlobsRef {
@@ -382,6 +393,17 @@ impl SignedBidSubmission {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => &signed_bid_submission.signature,
             SignedBidSubmission::Fulu(signed_bid_submission) => &signed_bid_submission.signature,
+        }
+    }
+
+    pub fn set_signature(&mut self, signature: BlsSignatureBytes) {
+        match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                signed_bid_submission.signature = signature;
+            }
+            SignedBidSubmission::Fulu(signed_bid_submission) => {
+                signed_bid_submission.signature = signature;
+            }
         }
     }
 
@@ -425,6 +447,17 @@ impl SignedBidSubmission {
             }
             SignedBidSubmission::Fulu(signed_bid_submission) => {
                 &signed_bid_submission.message.builder_pubkey
+            }
+        }
+    }
+
+    pub fn set_builder_public_key(&mut self, builder_pubkey: BlsPublicKeyBytes) {
+        match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                signed_bid_submission.message.builder_pubkey = builder_pubkey;
+            }
+            SignedBidSubmission::Fulu(signed_bid_submission) => {
+                signed_bid_submission.message.builder_pubkey = builder_pubkey;
             }
         }
     }

@@ -5,6 +5,8 @@ use std::sync::Arc;
 use helix_common::{RelayConfig, api_provider::ApiProvider, local_cache::LocalCache};
 pub use service::start_api_service;
 
+pub use crate::auctioneer::{BidAdjustor, DefaultBidAdjustor};
+
 pub mod admin_service;
 pub mod builder;
 pub mod integration_tests;
@@ -20,6 +22,7 @@ pub fn start_admin_service(auctioneer: Arc<LocalCache>, config: &RelayConfig) {
 
 pub trait Api: Clone + Send + Sync + 'static {
     type ApiProvider: ApiProvider;
+    type BidAdjustor: BidAdjustor;
 }
 
 pub const HEADER_API_KEY: &str = "x-api-key";

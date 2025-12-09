@@ -14,7 +14,7 @@ mod validator;
 
 use std::sync::Arc;
 
-pub use bid_adjustment_data::BidAdjustmentData;
+pub use bid_adjustment_data::{BidAdjData, BidAdjustmentData};
 pub use bid_submission::*;
 pub use blobs::*;
 pub use block_merging::*;

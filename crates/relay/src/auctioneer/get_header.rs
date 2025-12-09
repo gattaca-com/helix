@@ -5,12 +5,12 @@ use tracing::{error, warn};
 
 use crate::{
     api::proposer::ProposerApiError,
-    auctioneer::{context::Context, types::GetHeaderResult},
+    auctioneer::{bid_adjustor::BidAdjustor, context::Context, types::GetHeaderResult},
 };
 
-impl Context {
+impl<B: BidAdjustor> Context<B> {
     pub(super) fn handle_get_header(
-        &self,
+        &mut self,
         params: GetHeaderParams,
         res_tx: oneshot::Sender<GetHeaderResult>,
     ) {
@@ -18,26 +18,31 @@ impl Context {
         let _ = res_tx.send(self.get_header(params.parent_hash));
     }
 
-    fn get_header(&self, parent_hash: B256) -> GetHeaderResult {
+    fn get_header(&mut self, parent_hash: B256) -> GetHeaderResult {
         let Some(best_block_hash) = self.bid_sorter.get_header(&parent_hash) else {
             warn!(%parent_hash, "no bids for this fork");
             return Err(ProposerApiError::NoBidPrepared);
         };
 
-        let Some(entry) = self.payloads.get(&best_block_hash) else {
+        let Some(original_bid) = self.payloads.get(&best_block_hash) else {
             error!("failed to get payload from bid sorter best, this should never happen!");
-            return Err(ProposerApiError::NoBidPrepared);
-        };
-
-        let Some(original_bid) = entry.to_header_data() else {
-            error!("failed to get header data from payload entry, this should never happen!");
             return Err(ProposerApiError::NoBidPrepared);
         };
 
         if let Some(merged_bid) = self.block_merger.get_header(&original_bid) {
             return Ok(merged_bid);
+        };
+
+        if let Some(adjusted_bid) = self
+            .bid_adjustor
+            .try_apply_adjustments(&original_bid, &original_bid.bid_adjustment_data)
+        {
+            let block_hash = adjusted_bid.block_hash();
+            self.payloads.insert(*block_hash, adjusted_bid.clone().into());
+
+            return Ok(adjusted_bid);
         }
 
-        Ok(original_bid)
+        Ok(original_bid.clone())
     }
 }

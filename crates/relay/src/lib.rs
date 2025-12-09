@@ -8,7 +8,8 @@ mod network;
 mod website;
 
 pub use crate::{
-    api::{Api, start_admin_service, start_api_service},
+    api::{Api, BidAdjustor, DefaultBidAdjustor, start_admin_service, start_api_service},
+    auctioneer::PayloadEntry,
     beacon::start_beacon_client,
     database::{postgres::postgres_db_service::PostgresDatabaseService, start_db_service},
     housekeeper::start_housekeeper,

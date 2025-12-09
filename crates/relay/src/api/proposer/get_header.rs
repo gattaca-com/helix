@@ -59,7 +59,7 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::RequestWrongSlot { request_slot: params.slot, bid_slot });
         }
 
-        // Only return a bid if there is a proposer connected this slot.
+        // Only return a bid if there is a proposer connected to this slot.
         let Some(duty) = duty else {
             debug!("proposer duty not found");
             return Err(ProposerApiError::ProposerNotRegistered);
