@@ -287,6 +287,12 @@ pub enum Event {
         is_synced: bool,
     },
     MergeResult(BlockMergeResult),
+    BuilderDemotion {
+        slot: Slot,
+        builder_pubkey: BlsPublicKeyBytes,
+        block_hash: B256,
+        reason: String,
+    },
 }
 
 impl Event {
@@ -300,6 +306,7 @@ impl Event {
             Event::SimResult(_) => "SimResult",
             Event::SimulatorSync { .. } => "SimulatorSync",
             Event::MergeResult(_) => "MergeResult",
+            Event::BuilderDemotion { .. } => "BuilderDemotion",
         }
     }
 }

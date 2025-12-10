@@ -21,8 +21,8 @@ use tracing::{Instrument, error, info, warn};
 use super::ProposerApi;
 use crate::{
     api::{Api, proposer::error::ProposerApiError},
-    auctioneer::{GetPayloadResultData, PayloadBidData},
-    beacon::types::BroadcastValidation,
+    auctioneer::{Event, GetPayloadResultData, PayloadBidData},
+    beacon::{error::BeaconClientError, types::BroadcastValidation},
     database::SavePayloadParams,
     gossip::{BroadcastGetPayloadParams, BroadcastPayloadParams},
 };
@@ -337,6 +337,25 @@ impl<A: Api> ProposerApi<A> {
                 )
                 .await
             {
+                if matches!(err, BeaconClientError::BlockValidationFailed(..)) {
+                    let builder_pubkey = bid.builder_pubkey;
+                    let reason = format!("Block validation failed: {err}");
+
+                    let _ = self_clone.auctioneer_handle.send_event(Event::BuilderDemotion {
+                        slot,
+                        builder_pubkey,
+                        block_hash,
+                        reason,
+                    });
+
+                    warn!(
+                        %builder_pubkey,
+                        %block_hash,
+                        slot = %slot,
+                        "BuilderDemotion event sent due to BlockValidationFailed"
+                    );
+                }
+
                 error!(%err, "error publishing block");
                 failed_publishing = true;
             };
