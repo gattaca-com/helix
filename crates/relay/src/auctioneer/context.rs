@@ -47,7 +47,7 @@ pub struct Context<B: BidAdjustor> {
     pub unknown_builder_info: BuilderInfo,
     pub db: Arc<PostgresDatabaseService>,
     pub slot_context: SlotContext,
-    pub bid_adjustor: Arc<B>,
+    pub bid_adjustor: B,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
@@ -61,7 +61,7 @@ impl<B: BidAdjustor> Context<B> {
         db: Arc<PostgresDatabaseService>,
         bid_sorter: BidSorter,
         cache: LocalCache,
-        bid_adjustor: Arc<B>,
+        bid_adjustor: B,
     ) -> Self {
         let unknown_builder_info = BuilderInfo {
             collateral: U256::ZERO,
