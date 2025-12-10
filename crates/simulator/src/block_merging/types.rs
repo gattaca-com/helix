@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
 use alloy_eips::{Decodable2718, eip2718::Eip2718Error};
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_rpc_types::{beacon::requests::ExecutionRequestsV4, engine::ExecutionPayloadV3};
-use bytes::Bytes;
 use reth_ethereum::{evm::EthEvmConfig, primitives::SignedTransaction, provider::ProviderError};
 use reth_node_builder::ConfigureEvm;
 use reth_primitives::{NodePrimitives, Recovered};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
+use tracing::debug;
 
 pub(crate) type SignedTx = <<EthEvmConfig as ConfigureEvm>::Primitives as NodePrimitives>::SignedTx;
 pub(crate) type RecoveredTx = Recovered<SignedTx>;
@@ -193,6 +193,7 @@ impl MergeableOrderBytes {
 
 fn recover_transaction(tx_bytes: &Bytes) -> Result<Recovered<SignedTx>, RecoverError> {
     let mut buf = tx_bytes.as_ref();
+    debug!(target: "rpc::relay::block_merging", "Recovering transaction from bytes: {:?}", buf);
     let tx = <SignedTx as Decodable2718>::decode_2718(&mut buf)?;
     // If buffer was not fully consumed, the transaction is invalid.
     if !buf.is_empty() {
@@ -212,6 +213,7 @@ pub(crate) enum RecoverError {
     InvalidSignature,
 }
 
+#[derive(Debug)]
 pub(crate) struct SimulatedOrder {
     pub(crate) order: MergeableOrderRecovered,
     pub(crate) gas_used: u64,

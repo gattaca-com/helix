@@ -3,7 +3,9 @@ use std::{collections::HashMap, sync::Arc};
 use alloy_primitives::Address;
 use async_trait::async_trait;
 use jsonrpsee::{proc_macros::rpc, types::ErrorObject};
+use metrics::Histogram;
 use reth_ethereum::node::core::rpc::result::internal_rpc_err;
+use reth_metrics::Metrics;
 use tokio::sync::oneshot;
 
 use crate::{
@@ -13,6 +15,20 @@ use crate::{
     },
     validation::ValidationApi,
 };
+
+/// Metrics for the `MergingService`
+#[derive(Metrics)]
+#[metrics(scope = "helix.simulator.merging")]
+pub(crate) struct MergingMetrics {
+    /// How long it took from api call to execution
+    pub(crate) prep_to_execute_us: Histogram,
+    /// How long it took to execture the base block
+    pub(crate) execute_base_block: Histogram,
+    /// How long it took to execture the orders
+    pub(crate) execute_merge_orders: Histogram,
+    /// How long it took to finish the merge
+    pub(crate) finish: Histogram,
+}
 
 /// Block merging rpc interface.
 #[rpc(server, namespace = "relay")]
@@ -52,6 +68,7 @@ impl BlockMergingApi {
             disperse_address,
             distribution_config,
             validate_merged_blocks,
+            merging_metrics: MergingMetrics::default(),
         });
 
         Self { inner }
@@ -73,6 +90,7 @@ pub(crate) struct BlockMergingApiInner {
     pub(crate) distribution_config: DistributionConfig,
     /// Whether to validate merged blocks or not
     pub(crate) validate_merged_blocks: bool,
+    pub(crate) merging_metrics: MergingMetrics,
 }
 
 impl core::fmt::Debug for BlockMergingApiInner {
