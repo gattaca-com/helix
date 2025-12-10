@@ -124,7 +124,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
         relay_signing_context,
         beacon_client,
         Arc::new(DefaultApiProvider {}),
-        Arc::new(DefaultBidAdjustor {}),
+        DefaultBidAdjustor {},
         known_validators_loaded,
         terminating.clone(),
         top_bid_tx,

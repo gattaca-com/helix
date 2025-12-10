@@ -29,14 +29,11 @@ impl<B: BidAdjustor> Context<B> {
             return Err(ProposerApiError::NoBidPrepared);
         };
 
-        if let Some(merged_bid) = self.block_merger.get_header(&original_bid) {
+        if let Some(merged_bid) = self.block_merger.get_header(original_bid) {
             return Ok(merged_bid);
         };
 
-        if let Some(adjusted_bid) = self
-            .bid_adjustor
-            .try_apply_adjustments(&original_bid, &original_bid.bid_adjustment_data)
-        {
+        if let Some(adjusted_bid) = self.bid_adjustor.try_apply_adjustments(&original_bid) {
             let block_hash = adjusted_bid.block_hash();
             self.payloads.insert(*block_hash, adjusted_bid.clone().into());
 

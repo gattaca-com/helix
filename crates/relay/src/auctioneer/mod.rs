@@ -56,7 +56,7 @@ pub fn spawn_workers<B: BidAdjustor>(
     config: RelayConfig,
     db: Arc<PostgresDatabaseService>,
     cache: LocalCache,
-    bid_adjustor: Arc<B>,
+    bid_adjustor: B,
     top_bid_tx: tokio::sync::broadcast::Sender<bytes::Bytes>,
     event_channel: (crossbeam_channel::Sender<Event>, crossbeam_channel::Receiver<Event>),
 ) -> (AuctioneerHandle, RegWorkerHandle) {

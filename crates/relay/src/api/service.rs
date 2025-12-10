@@ -39,7 +39,7 @@ pub async fn start_api_service<A: Api>(
     relay_signing_context: Arc<RelaySigningContext>,
     multi_beacon_client: Arc<MultiBeaconClient>,
     api_provider: Arc<A::ApiProvider>,
-    bid_adjustor: Arc<A::BidAdjustor>,
+    bid_adjustor: A::BidAdjustor,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
