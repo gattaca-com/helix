@@ -10,12 +10,11 @@ use helix_types::{
     SubmissionVersion,
 };
 use tokio::sync::oneshot;
-use tracing::{error, trace};
+use tracing::{trace, warn};
 
 use crate::{
     api::builder::error::BuilderApiError,
     auctioneer::{
-        BlockMergeRequest,
         bid_adjustor::BidAdjustor,
         context::Context,
         simulator::{BlockSimRequest, SimulatorRequest, manager::SimulationResult},
@@ -45,7 +44,15 @@ impl<B: BidAdjustor> Context<B> {
                 if self.config.block_merging_config.is_enabled &&
                     let Some(data) = merging_data
                 {
-                    self.request_merged_block(data);
+                    let base_block = data.block_hash;
+                    let is_top_bid = data.is_top_bid;
+                    self.block_merger.insert_merge_data(data);
+                    if is_top_bid {
+                        self.block_merger.update_base_block(base_block);
+                    }
+                    self.request_merged_block();
+                } else {
+                    warn!("Block merging is disabled or no merging data provided");
                 }
             }
 
@@ -73,12 +80,16 @@ impl<B: BidAdjustor> Context<B> {
 
             Ok(_) | Err(_) => {
                 if let Some(res_tx) = res_tx {
-                    self.bid_sorter.sort(
+                    let is_top_bid = self.bid_sorter.sort(
                         result.version,
                         &result.submission,
                         &mut result.trace,
                         false,
                     );
+                    if is_top_bid {
+                        self.block_merger.update_base_block(*result.submission.block_hash());
+                    }
+                    self.request_merged_block();
 
                     let _ = res_tx.send(Ok(()));
                 };
@@ -242,30 +253,8 @@ impl<B: BidAdjustor> Context<B> {
         false
     }
 
-    fn request_merged_block(&mut self, merging_data: MergeData) {
-        self.block_merger.update(
-            merging_data.is_top_bid,
-            &merging_data.block_hash,
-            merging_data.block_value,
-            merging_data.merging_data,
-        );
-
-        if self.block_merger.should_request_merge() {
-            let Some((mergeable_orders, _)) = self.block_merger.fetch_best_mergeable_orders()
-            else {
-                error!("failed to get best mergeable orders, this should never happen!");
-                return;
-            };
-
-            let merge_request = BlockMergeRequest::new(
-                merging_data.slot,
-                merging_data.block_value,
-                merging_data.proposer_fee_recipient,
-                &merging_data.execution_payload,
-                merging_data.parent_beacon_block_root,
-                mergeable_orders,
-            );
-
+    fn request_merged_block(&mut self) {
+        if let Some(merge_request) = self.block_merger.fetch_merge_request() {
             self.sim_manager.handle_merge_request(merge_request);
         }
     }

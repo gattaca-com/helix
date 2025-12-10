@@ -1,21 +1,30 @@
 use std::{
     collections::{HashMap, hash_map::Entry},
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use alloy_consensus::{Bytes48, TxEip4844, TxType};
-use alloy_primitives::{B256, U256};
-use bytes::Bytes;
-use helix_common::{RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, utils::utcnow_ms};
+use alloy_primitives::{Address, B256, Bytes, U256};
+use helix_common::{
+    RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, metrics::MERGE_TRACE_LATENCY,
+    utils::utcnow_ms,
+};
 use helix_types::{
     BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
     BlockMergingData, BlsPublicKeyBytes, BundleOrder, KzgCommitment, MergeableBundle,
-    MergeableOrder, MergeableOrderWithOrigin, MergeableOrders, MergeableOrdersWithPref,
-    MergeableTransaction, MergedBlock, Order, PayloadAndBlobs, SignedBidSubmission, Transactions,
+    MergeableOrder, MergeableOrderWithOrigin, MergeableOrders, MergeableTransaction, MergedBlock,
+    Order, PayloadAndBlobs, SignedBidSubmission, Transactions,
 };
-use tracing::{debug, error, warn};
+use rustc_hash::{FxBuildHasher, FxHashSet};
+use serde_json::json;
+use tracing::{debug, error, info, trace, warn};
+use zstd::zstd_safe::WriteBuf;
 
-use crate::auctioneer::{BlockMergeResponse, PayloadBidData, PayloadEntry};
+use crate::auctioneer::{
+    BlockMergeRequest, BlockMergeRequestRef, BlockMergeResponse, PayloadBidData,
+    submit_block::MergeData, types::PayloadEntry,
+};
 
 const MERGE_REQUEST_INTERVAL_MS: u64 = 50;
 
@@ -54,9 +63,21 @@ pub struct BlockMerger {
     local_cache: LocalCache,
     best_merged_block: Option<BestMergedBlock>,
     best_mergeable_orders: BestMergeableOrders,
-    base_blocks: HashMap<BlockHash, BaseBlockData>,
+    appendable_blocks: HashMap<BlockHash, AppendableBlockData>,
+    base_block: Option<BlockHash>,
     has_new_base_block: bool,
     last_merge_request_time_ms: u64,
+    base_txs_set: FxHashSet<Bytes>,
+    trimmed_orders_buf: Vec<MergeableOrderWithOrigin>,
+    inserted_orders_count: usize,
+    inserted_appendable_blocks_count: usize,
+    updated_base_block_count: usize,
+    fetch_merge_request_count: usize,
+    proceeding_merge_request_count: usize,
+    no_base_block_count: usize,
+    no_appendable_block_data_count: usize,
+    no_additional_orders_count: usize,
+    found_orders_count: usize,
 }
 
 impl BlockMerger {
@@ -73,24 +94,52 @@ impl BlockMerger {
             local_cache,
             best_merged_block: None,
             best_mergeable_orders: BestMergeableOrders::new(),
-            base_blocks: HashMap::new(),
+            appendable_blocks: HashMap::with_capacity(00),
+            base_block: None,
             has_new_base_block: false,
             last_merge_request_time_ms: 0,
+            base_txs_set: FxHashSet::with_capacity_and_hasher(400, FxBuildHasher),
+            trimmed_orders_buf: Vec::with_capacity(400),
+            inserted_orders_count: 0,
+            inserted_appendable_blocks_count: 0,
+            updated_base_block_count: 0,
+            fetch_merge_request_count: 0,
+            proceeding_merge_request_count: 0,
+            no_base_block_count: 0,
+            no_appendable_block_data_count: 0,
+            no_additional_orders_count: 0,
+            found_orders_count: 0,
         }
     }
 }
 
 impl BlockMerger {
     pub fn on_new_slot(&mut self, bid_slot: u64) {
+        info!(old_slot = %self.curr_bid_slot, new_slot = %bid_slot, inserted_appendable_blocks_count = %self.inserted_appendable_blocks_count, inserted_orders_count = %self.inserted_orders_count, updated_base_block_count = %self.updated_base_block_count, fetch_merge_request_count = %self.fetch_merge_request_count, proceeding_merge_request_count = %self.proceeding_merge_request_count, no_base_block_count = %self.no_base_block_count, no_appendable_block_data_count = %self.no_appendable_block_data_count, found_orders_count = %self.found_orders_count, "resetting block merger slot");
         self.curr_bid_slot = bid_slot;
         self.best_merged_block = None;
         self.best_mergeable_orders.reset();
-        self.base_blocks.clear();
+        self.appendable_blocks.clear();
+        self.base_block = None;
         self.has_new_base_block = false;
         self.last_merge_request_time_ms = 0;
+        self.base_txs_set.clear();
+        self.trimmed_orders_buf.clear();
+        self.found_orders_count = 0;
+        self.inserted_orders_count = 0;
+        self.inserted_appendable_blocks_count = 0;
+        self.updated_base_block_count = 0;
+        self.fetch_merge_request_count = 0;
+        self.proceeding_merge_request_count = 0;
+        self.no_base_block_count = 0;
+        self.no_appendable_block_data_count = 0;
+        self.no_additional_orders_count = 0;
+        self.found_orders_count = 0;
     }
 
     pub fn get_header(&self, original_bid: &PayloadEntry) -> Option<PayloadEntry> {
+        trace!("fetching merged header");
+        let start_time = Instant::now();
         let entry = self.best_merged_block.as_ref()?;
         if !merged_bid_higher(
             &entry.bid,
@@ -98,47 +147,125 @@ impl BlockMerger {
             entry.base_block_time_ms,
             self.config.block_merging_config.max_merged_bid_age_ms,
         ) {
+            trace!("merged bid not higher");
             return None;
         }
 
         if entry.bid.payload_and_blobs.execution_payload.parent_hash !=
             original_bid.payload_and_blobs.execution_payload.parent_hash
         {
+            trace!("merged bid parent hash does not match original bid parent hash");
             return None;
         }
 
+        record_step("get_header", start_time.elapsed());
+        trace!("fetched merged header");
         Some(entry.bid.clone())
     }
 
-    pub fn update(
-        &mut self,
-        is_top_bid: bool,
-        block_hash: &B256,
-        block_value: U256,
-        merging_data: MergeableOrdersWithPref,
-    ) {
-        self.best_mergeable_orders.insert_orders(block_value, merging_data.orders);
-
-        if is_top_bid && merging_data.allow_appending {
-            self.update_base_block(block_hash, block_value);
+    pub fn update_base_block(&mut self, base_block: BlockHash) {
+        if let Some(base_block_data) = self.appendable_blocks.get(&base_block) {
+            trace!(%base_block,"updating base block");
+            self.updated_base_block_count += 1;
+            self.base_block = Some(base_block);
+            self.has_new_base_block = true;
+            self.base_txs_set.clear();
+            self.base_txs_set.extend(
+                base_block_data.execution_payload.transactions.iter().map(|tx| tx.0.clone()),
+            );
         }
     }
 
-    pub fn should_request_merge(&self) -> bool {
-        let has_new_data = self.best_mergeable_orders.has_new_orders() ||
-            (self.best_mergeable_orders.has_orders() && self.has_new_base_block);
-        if !has_new_data {
-            return false;
+    pub fn insert_merge_data(&mut self, merging_data: MergeData) {
+        if !merging_data.merging_data.orders.orders.is_empty() {
+            trace!(%merging_data.block_hash,"inserting merge orders from block");
+            self.inserted_orders_count += 1;
+            self.best_mergeable_orders
+                .insert_orders(merging_data.block_value, merging_data.merging_data.orders);
         }
-        utcnow_ms().saturating_sub(self.last_merge_request_time_ms) >= MERGE_REQUEST_INTERVAL_MS
+
+        if merging_data.merging_data.allow_appending {
+            trace!(%merging_data.block_hash,"inserting new appendable block data");
+            self.inserted_appendable_blocks_count += 1;
+            self.insert_appendable_block_data(
+                merging_data.slot,
+                &merging_data.block_hash,
+                merging_data.block_value,
+                merging_data.proposer_fee_recipient,
+                merging_data.parent_beacon_block_root,
+                merging_data.execution_payload,
+            );
+        }
     }
 
-    pub fn fetch_best_mergeable_orders(
-        &mut self,
-    ) -> Option<(&[MergeableOrderWithOrigin], &HashMap<B256, BlobWithMetadata>)> {
+    pub fn fetch_merge_request(&mut self) -> Option<BlockMergeRequest> {
+        trace!("fetching merge request");
+        self.fetch_merge_request_count += 1;
+        if !self.should_request_merge() {
+            trace!("should not request merge");
+            return None;
+        }
+
+        trace!("proceeding with merge request");
+        self.proceeding_merge_request_count += 1;
+
+        let start_time = Instant::now();
+        let Some(base_block_hash) = self.base_block else {
+            error!("no base block set for merge request");
+            self.no_base_block_count += 1;
+            return None;
+        };
+
+        let Some(base_block) = self.appendable_blocks.get(&base_block_hash) else {
+            error!(%base_block_hash, "could not find base block data for merge request");
+            self.no_appendable_block_data_count += 1;
+            return None;
+        };
+
+        self.best_mergeable_orders.has_new_orders = false;
+
+        self.trimmed_orders_buf.clear();
+        self.trimmed_orders_buf.extend(
+            self.best_mergeable_orders
+                .best_orders
+                .iter()
+                .filter(|o| match &o.order {
+                    MergeableOrder::Tx(tx) => {
+                        !self.base_txs_set.contains(tx.transaction.as_slice())
+                    }
+                    MergeableOrder::Bundle(b) => {
+                        !b.transactions.iter().any(|t| self.base_txs_set.contains(t.as_slice()))
+                    }
+                })
+                .cloned(),
+        );
+
+        if self.trimmed_orders_buf.is_empty() {
+            trace!("no additional orders to merge");
+            self.no_additional_orders_count += 1;
+            return None;
+        }
+
+        trace!(count = self.trimmed_orders_buf.len(), "found orders");
+        self.found_orders_count += 1;
+
+        let merge_request = BlockMergeRequest {
+            bid_slot: base_block.slot,
+            request: json!(BlockMergeRequestRef {
+                original_value: base_block.value,
+                proposer_fee_recipient: base_block.proposer_fee_recipient,
+                execution_payload: &base_block.execution_payload,
+                parent_beacon_block_root: base_block.parent_beacon_block_root,
+                merging_data: &self.trimmed_orders_buf,
+            }),
+            block_hash: base_block_hash,
+        };
+
         self.has_new_base_block = false;
         self.last_merge_request_time_ms = utcnow_ms();
-        self.best_mergeable_orders.load()
+        record_step("fetch_merge_request", start_time.elapsed());
+        trace!("fetched merge request");
+        Some(merge_request)
     }
 
     pub fn prepare_merged_payload_for_storage(
@@ -147,10 +274,12 @@ impl BlockMerger {
         original_payload: Arc<PayloadAndBlobs>,
         builder_pubkey: BlsPublicKeyBytes,
     ) -> Result<PayloadEntry, PayloadMergingError> {
+        debug!(?response.builder_inclusions, %response.proposer_value, "preparing merged payload for storage");
+        let start_time = Instant::now();
         let bid_slot = self.curr_bid_slot;
         let max_blobs_per_block = self.chain_info.max_blobs_per_block();
 
-        let base_block_data = match self.base_blocks.get(&response.base_block_hash) {
+        let base_block_data = match self.appendable_blocks.get(&response.base_block_hash) {
             Some(data) => data,
             None => {
                 warn!(%response.base_block_hash, "could not fetch original payload for merged block");
@@ -186,6 +315,8 @@ impl BlockMerger {
             builder_inclusions: response.builder_inclusions,
         });
 
+        trace!(%block_hash, "stored merged block in local cache");
+
         let blobs = &self.best_mergeable_orders.mergeable_blob_bundles;
 
         let mut merged_blobs_bundle = original_payload.blobs_bundle.clone();
@@ -211,6 +342,8 @@ impl BlockMerger {
             builder_pubkey,
         };
 
+        trace!(%block_hash, %response.proposer_value, "blobs appended to merged payload");
+
         let new_bid = PayloadEntry {
             payload_and_blobs: payload_and_blobs.clone(),
             bid_data: bid_data.clone(),
@@ -223,28 +356,63 @@ impl BlockMerger {
             bid: new_bid.clone(),
         });
 
+        record_step("prepare_merged_payload_for_storage", start_time.elapsed());
+
         // Return the payload entry to be stored for get payload calls
         Ok(new_bid)
     }
 
-    fn update_base_block(&mut self, base_block_hash: &B256, base_block_value: U256) {
-        if self.base_blocks.contains_key(base_block_hash) {
+    fn should_request_merge(&self) -> bool {
+        let start_time = Instant::now();
+        let has_new_data = self.best_mergeable_orders.has_new_orders() ||
+            (self.best_mergeable_orders.has_orders() && self.has_new_base_block);
+        if !has_new_data {
+            return false;
+        }
+        let res = utcnow_ms().saturating_sub(self.last_merge_request_time_ms) >=
+            MERGE_REQUEST_INTERVAL_MS;
+        record_step("should_request_merge", start_time.elapsed());
+        res
+    }
+
+    fn insert_appendable_block_data(
+        &mut self,
+        slot: u64,
+        base_block_hash: &B256,
+        base_block_value: U256,
+        proposer_fee_recipient: Address,
+        parent_beacon_block_root: Option<B256>,
+        execution_payload: helix_types::ExecutionPayload,
+    ) {
+        if self.appendable_blocks.contains_key(base_block_hash) {
             return;
         }
 
+        let start_time = Instant::now();
+
         let base_block_time_ms = utcnow_ms();
 
-        let base_block_data =
-            BaseBlockData { time_ms: base_block_time_ms, value: base_block_value };
+        let appendable_block_data = AppendableBlockData {
+            slot,
+            time_ms: base_block_time_ms,
+            value: base_block_value,
+            proposer_fee_recipient,
+            parent_beacon_block_root,
+            execution_payload,
+        };
 
-        self.base_blocks.insert(*base_block_hash, base_block_data);
-        self.has_new_base_block = true;
+        self.appendable_blocks.insert(*base_block_hash, appendable_block_data);
+        record_step("insert_appendable_block", start_time.elapsed());
     }
 }
 
-struct BaseBlockData {
+struct AppendableBlockData {
+    slot: u64,
     time_ms: u64,
     value: U256,
+    proposer_fee_recipient: Address,
+    parent_beacon_block_root: Option<B256>,
+    execution_payload: helix_types::ExecutionPayload,
 }
 
 struct BestMergedBlock {
@@ -282,12 +450,6 @@ impl BestMergeableOrders {
         }
     }
 
-    fn load(&mut self) -> Option<(&[MergeableOrderWithOrigin], &HashMap<B256, BlobWithMetadata>)> {
-        // Reset the new orders flag
-        self.has_new_orders = false;
-        Some((&self.best_orders, &self.mergeable_blob_bundles))
-    }
-
     fn has_new_orders(&self) -> bool {
         self.has_new_orders && !self.best_orders.is_empty()
     }
@@ -300,6 +462,7 @@ impl BestMergeableOrders {
     /// Any duplicates are discarded, unless the bid value is higher than the
     /// existing one, in which case they replace the old order.
     fn insert_orders(&mut self, bid_value: U256, mergeable_orders: MergeableOrders) {
+        let start_time = Instant::now();
         let origin = mergeable_orders.origin;
         // Insert each order into the order map
         mergeable_orders.orders.into_iter().for_each(|o| {
@@ -329,6 +492,7 @@ impl BestMergeableOrders {
         });
         // Insert new blobs
         self.mergeable_blob_bundles.extend(mergeable_orders.blobs);
+        record_step("insert_orders", start_time.elapsed());
     }
 
     pub fn reset(&mut self) {
@@ -345,6 +509,7 @@ pub fn get_mergeable_orders(
     payload: &SignedBidSubmission,
     merging_data: &BlockMergingData,
 ) -> Result<MergeableOrders, OrderValidationError> {
+    let start_time = Instant::now();
     let execution_payload = payload.execution_payload_ref();
     let block_blobs_bundles = payload.blobs_bundle();
     let blob_versioned_hashes: Vec<_> =
@@ -356,11 +521,16 @@ pub fn get_mergeable_orders(
         .merge_orders
         .as_slice()
         .iter()
-        .map(|order| order_to_mergeable(order, txs, &blob_versioned_hashes))
+        .filter_map(|order| match order_to_mergeable(order, txs, &blob_versioned_hashes) {
+            Err(OrderValidationError::EmptyBlobTransaction) => None,
+            Err(OrderValidationError::MissingBlobs) => None,
+            other => Some(other),
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     // Stores all block blobs inside a map keyed by versioned hash
     let blobs = blobs_bundle_to_hashmap(blob_versioned_hashes, &block_blobs_bundles);
+    record_step("get_mergeable_orders", start_time.elapsed());
 
     Ok(MergeableOrders::new(merging_data.builder_address, mergeable_orders, blobs))
 }
@@ -380,9 +550,9 @@ fn order_to_mergeable(
                 validate_blobs(raw_tx, blob_versioned_hashes)?;
             }
 
-            let transaction = Bytes::from(raw_tx.to_vec());
             let mergeable_tx =
-                MergeableTransaction { transaction, can_revert: tx.can_revert }.into();
+                MergeableTransaction { transaction: raw_tx.0.clone(), can_revert: tx.can_revert }
+                    .into();
             Ok(mergeable_tx)
         }
         Order::Bundle(bundle) => {
@@ -404,7 +574,7 @@ fn order_to_mergeable(
                         validate_blobs(raw_tx, blob_versioned_hashes)?;
                     }
 
-                    Ok(Bytes::from_owner(raw_tx.to_vec()))
+                    Ok(raw_tx.0.clone())
                 })
                 .collect::<Result<_, OrderValidationError>>()?;
 
@@ -433,6 +603,7 @@ fn validate_blobs(
     let mut missing_blobs =
         versioned_hashes.iter().map(|h| !blob_versioned_hashes.iter().any(|vh| vh == h));
     if missing_blobs.any(|f| f) {
+        debug!(%num_blobs, num_blob_versioned_hashes=%blob_versioned_hashes.len(), raw_tx=?raw_tx, "blob tx refs blobs not in the block");
         return Err(OrderValidationError::MissingBlobs);
     }
     Ok(())
@@ -530,8 +701,8 @@ fn merged_bid_higher(
     if merged_bid.value() <= original_bid.value() {
         debug!(
             "merged bid {:?} with value {:?} is not higher than regular bid, using regular bid, value = {:?}, block_hash = {:?}",
-            merged_bid.value(),
             merged_bid.block_hash(),
+            merged_bid.value(),
             original_bid.value(),
             original_bid.block_hash()
         );
@@ -558,3 +729,9 @@ fn merged_bid_higher(
     );
     true
 }
+
+pub fn record_step(label: &str, duration: Duration) {
+    let value = duration.as_nanos() as f64 / 1000.;
+    MERGE_TRACE_LATENCY.with_label_values(&[label]).observe(value);
+}
+

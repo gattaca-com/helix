@@ -1,6 +1,6 @@
 use std::{collections::HashMap, hash::Hash};
 
-use alloy_primitives::{Address, B256, U256, bytes::Bytes};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use lh_test_random::TestRandom;
 use lh_types::{ForkName, test_utils::TestRandom};
 use rand::Rng;
