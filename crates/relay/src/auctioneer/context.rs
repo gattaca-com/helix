@@ -169,6 +169,7 @@ impl<B: BidAdjustor> Context<B> {
         self.hydration_cache.clear();
         self.sim_manager.on_new_slot(bid_slot.as_u64());
         self.block_merger.on_new_slot(bid_slot.as_u64());
+        self.bid_adjustor.on_new_slot(bid_slot.as_u64());
 
         // here we need to deallocate a lot of data, taking more than 1s on busy slots
         // this is not a big issue since it 's only at the beginning of the slot, but it blocks the
