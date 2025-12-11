@@ -152,6 +152,10 @@ impl PayloadEntry {
         &self.payload_and_blobs.execution_payload
     }
 
+    pub fn execution_payload_make_mut(&mut self) -> &mut ExecutionPayload {
+        &mut Arc::make_mut(&mut self.payload_and_blobs).execution_payload
+    }
+
     pub fn block_hash(&self) -> &B256 {
         &self.execution_payload().block_hash
     }

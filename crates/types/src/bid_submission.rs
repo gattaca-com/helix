@@ -325,15 +325,6 @@ impl SignedBidSubmission {
         }
     }
 
-    pub fn message_mut(&mut self) -> &mut BidTrace {
-        match self {
-            SignedBidSubmission::Electra(signed_bid_submission) => {
-                &mut signed_bid_submission.message
-            }
-            SignedBidSubmission::Fulu(signed_bid_submission) => &mut signed_bid_submission.message,
-        }
-    }
-
     pub fn execution_payload_ref(&self) -> &ExecutionPayload {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
@@ -341,17 +332,6 @@ impl SignedBidSubmission {
             }
             SignedBidSubmission::Fulu(signed_bid_submission) => {
                 &signed_bid_submission.execution_payload
-            }
-        }
-    }
-
-    pub fn execution_payload_make_mut(&mut self) -> &mut ExecutionPayload {
-        match self {
-            SignedBidSubmission::Electra(signed_bid_submission) => {
-                Arc::make_mut(&mut signed_bid_submission.execution_payload)
-            }
-            SignedBidSubmission::Fulu(signed_bid_submission) => {
-                Arc::make_mut(&mut signed_bid_submission.execution_payload)
             }
         }
     }
