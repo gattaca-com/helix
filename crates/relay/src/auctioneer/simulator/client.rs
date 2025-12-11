@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use alloy_primitives::{Address, U256};
 use helix_common::{SimulatorConfig, simulator::BlockSimError};
 use helix_types::ForkName;
 use reqwest::{
@@ -10,9 +11,9 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tracing::{debug, error};
 
-use crate::auctioneer::simulator::{
+use crate::auctioneer::{JsonRpcError, simulator::{
     BlockMergeRequest, BlockMergeResponse, BlockSimRequest, BlockSimRpcResponse, RpcResult,
-};
+}};
 
 #[derive(Clone)]
 pub struct SimulatorClient {
@@ -108,6 +109,21 @@ impl SimulatorClient {
         Ok(())
     }
 
+    pub async fn balance_request(&self, address: &Address) -> Result<U256, JsonRpcError> {
+        let rpc_payload = json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "eth_getBalance",
+            "params": [address.to_checksum(None), "latest"]
+        });
+
+        let to_send = self.client.post(&self.config.url).json(&rpc_payload);
+        match Self::rpc_request::<RpcResult<U256>>(to_send).await.map_err(|e| JsonRpcError { message: e.to_string() })? {
+            RpcResult::Ok { result } => Ok(result),
+            RpcResult::Err { error } => Err(error),
+        }
+    }
+
     async fn rpc_request<T: DeserializeOwned>(
         to_send: RequestBuilder,
     ) -> Result<T, reqwest::Error> {
@@ -169,5 +185,24 @@ impl SimulatorClient {
             // Still syncing, or unexpected format
             _ => Ok(false),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use alloy_primitives::hex::FromHex;
+    use helix_common::SimulatorConfig;
+
+    #[tokio::test]
+    async fn balance_request() {
+        let sim_client = super::SimulatorClient::new(reqwest::Client::new(), SimulatorConfig { 
+            url: "http://54.175.81.132:8545".into(), 
+            namespace: "relay".into(), 
+            is_merging_simulator: false, 
+            max_concurrent_tasks: 1, 
+        });
+        let builder_address = super::Address::from_hex("0xD9d3A3f47a56a987A8119b15C994Bc126337dd27").unwrap();
+        let builder_balance = sim_client.balance_request(&builder_address).await;
+        println!("{builder_balance:?}");
     }
 }
