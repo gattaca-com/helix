@@ -748,7 +748,6 @@ fn merged_bid_higher(
 }
 
 pub fn record_step(label: &str, duration: Duration) {
-    let value = duration.as_nanos() as f64 / 1000.;
+    let value = duration.as_nanos() as f64 / 1000.0;
     MERGE_TRACE_LATENCY.with_label_values(&[label]).observe(value);
 }
-
