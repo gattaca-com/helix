@@ -120,3 +120,24 @@ pub struct ReceivedBlocksResponse {
 pub struct ValidatorRegistrationParams {
     pub pubkey: BlsPublicKeyBytes,
 }
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub struct ProposerHeaderDeliveredParams {
+    pub slot: Option<u64>,
+    pub cursor: Option<u64>,
+    pub block_hash: Option<B256>,
+    pub block_number: Option<u64>,
+    pub builder_pubkey: Option<BlsPublicKey>,
+    pub proposer_pubkey: Option<BlsPublicKey>,
+    pub limit: Option<u64>,
+    pub order_by: Option<String>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ProposerHeaderDeliveredResponse {
+    pub slot: Option<String>,
+    pub parent_hash: Option<String>,
+    pub block_hash: Option<String>,
+    pub proposer_pubkey: Option<String>,
+    pub value: Option<String>,
+}
