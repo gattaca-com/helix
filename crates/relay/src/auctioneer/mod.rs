@@ -37,7 +37,10 @@ use tracing::{debug, error, info, info_span, trace, warn};
 pub use types::{Event, GetPayloadResultData, PayloadBidData, PayloadEntry};
 use worker::{RegWorker, SubWorker};
 
-pub use crate::auctioneer::bid_adjustor::{BidAdjustor, DefaultBidAdjustor};
+pub use crate::auctioneer::{
+    bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
+    simulator::client::SimulatorClient,
+};
 use crate::{
     PostgresDatabaseService,
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
