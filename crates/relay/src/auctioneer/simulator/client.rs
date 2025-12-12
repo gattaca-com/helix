@@ -11,9 +11,12 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use tracing::{debug, error};
 
-use crate::auctioneer::{JsonRpcError, simulator::{
-    BlockMergeRequest, BlockMergeResponse, BlockSimRequest, BlockSimRpcResponse, RpcResult,
-}};
+use crate::auctioneer::{
+    JsonRpcError,
+    simulator::{
+        BlockMergeRequest, BlockMergeResponse, BlockSimRequest, BlockSimRpcResponse, RpcResult,
+    },
+};
 
 #[derive(Clone)]
 pub struct SimulatorClient {
@@ -118,7 +121,10 @@ impl SimulatorClient {
         });
 
         let to_send = self.client.post(&self.config.url).json(&rpc_payload);
-        match Self::rpc_request::<RpcResult<U256>>(to_send).await.map_err(|e| JsonRpcError { message: e.to_string() })? {
+        match Self::rpc_request::<RpcResult<U256>>(to_send)
+            .await
+            .map_err(|e| JsonRpcError { message: e.to_string() })?
+        {
             RpcResult::Ok { result } => Ok(result),
             RpcResult::Err { error } => Err(error),
         }
@@ -195,13 +201,14 @@ mod test {
 
     #[tokio::test]
     async fn balance_request() {
-        let sim_client = super::SimulatorClient::new(reqwest::Client::new(), SimulatorConfig { 
-            url: "http://54.175.81.132:8545".into(), 
-            namespace: "relay".into(), 
-            is_merging_simulator: false, 
-            max_concurrent_tasks: 1, 
+        let sim_client = super::SimulatorClient::new(reqwest::Client::new(), SimulatorConfig {
+            url: "http://54.175.81.132:8545".into(),
+            namespace: "relay".into(),
+            is_merging_simulator: false,
+            max_concurrent_tasks: 1,
         });
-        let builder_address = super::Address::from_hex("0xD9d3A3f47a56a987A8119b15C994Bc126337dd27").unwrap();
+        let builder_address =
+            super::Address::from_hex("0xD9d3A3f47a56a987A8119b15C994Bc126337dd27").unwrap();
         let builder_balance = sim_client.balance_request(&builder_address).await;
         println!("{builder_balance:?}");
     }
