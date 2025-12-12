@@ -22,7 +22,6 @@ pub fn start_admin_service(auctioneer: Arc<LocalCache>, config: &RelayConfig) {
 
 pub trait Api: Clone + Send + Sync + 'static {
     type ApiProvider: ApiProvider;
-    type BidAdjustor: BidAdjustor;
 }
 
 pub const HEADER_API_KEY: &str = "x-api-key";

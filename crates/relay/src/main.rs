@@ -35,7 +35,6 @@ struct ApiProd;
 
 impl Api for ApiProd {
     type ApiProvider = DefaultApiProvider;
-    type BidAdjustor = DefaultBidAdjustor;
 }
 
 fn main() {
