@@ -4,8 +4,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use alloy_consensus::{Bytes48, TxEip4844, TxType};
+use alloy_consensus::{Bytes48, Transaction, TxEip4844, TxEnvelope, TxType};
 use alloy_primitives::{Address, B256, Bytes, U256};
+use alloy_rlp::Decodable;
 use helix_common::{
     RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, metrics::MERGE_TRACE_LATENCY,
     utils::utcnow_ms,
@@ -54,6 +55,10 @@ pub enum OrderValidationError {
     MissingBlobs,
     #[error("flagged indices reference tx outside of bundle")]
     FlaggedIndicesOutOfBounds,
+    #[error("transaction decode failure")]
+    FailedToDecode(#[from] alloy_rlp::Error),
+    #[error("zero value transaction")]
+    ZeroValue,
 }
 
 pub struct BlockMerger {
@@ -524,6 +529,7 @@ pub fn get_mergeable_orders(
         .filter_map(|order| match order_to_mergeable(order, txs, &blob_versioned_hashes) {
             Err(OrderValidationError::EmptyBlobTransaction) => None,
             Err(OrderValidationError::MissingBlobs) => None,
+            Err(OrderValidationError::ZeroValue) => None,
             other => Some(other),
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -549,6 +555,7 @@ fn order_to_mergeable(
                 // If the tx references bundles not in the block, we drop it
                 validate_blobs(raw_tx, blob_versioned_hashes)?;
             }
+            validate_builder_payment(raw_tx)?;
 
             let mergeable_tx =
                 MergeableTransaction { transaction: raw_tx.0.clone(), can_revert: tx.can_revert }
@@ -607,6 +614,16 @@ fn validate_blobs(
         return Err(OrderValidationError::MissingBlobs);
     }
     Ok(())
+}
+
+fn validate_builder_payment(mut raw_tx: &[u8]) -> Result<(), OrderValidationError> {
+    let tx = TxEnvelope::decode(&mut raw_tx)?;
+    if tx.priority_fee_or_price() == 0 && tx.input().is_empty() {
+        debug!(?tx, "zero value transaction");
+        Err(OrderValidationError::ZeroValue)
+    } else {
+        Ok(())
+    }
 }
 
 fn blobs_bundle_to_hashmap(
@@ -731,6 +748,6 @@ fn merged_bid_higher(
 }
 
 pub fn record_step(label: &str, duration: Duration) {
-    let value = duration.as_nanos() as f64 / 1000.;
+    let value = duration.as_nanos() as f64 / 1000.0;
     MERGE_TRACE_LATENCY.with_label_values(&[label]).observe(value);
 }
