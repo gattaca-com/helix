@@ -140,10 +140,11 @@ async fn push_top_bids(
     debug!("Socket connection closed gracefully.");
 }
 
-/// `push_top_bids_v2` manages a WebSocket connection to continuously send the top auction bids, and proposer getheader call information to a
-/// client.
+/// `push_top_bids_v2` manages a WebSocket connection to continuously send the top auction bids, and
+/// proposer getheader call information to a client.
 ///
-/// - Sends the latest auction bids and proposer getheader call information to the client in ssz format.
+/// - Sends the latest auction bids and proposer getheader call information to the client in ssz
+///   format.
 /// - Sends a ping message every 10 seconds to maintain the connection's liveliness.
 /// - Terminates the connection on sending failures or if a bid stream error occurs, ensuring clean
 ///   disconnection.

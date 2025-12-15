@@ -1,11 +1,18 @@
 use std::{
-    sync::{atomic::Ordering, Arc},
+    sync::{Arc, atomic::Ordering},
     time::{Instant, UNIX_EPOCH},
 };
 
 use axum::{Extension, extract::Path, http::HeaderMap, response::IntoResponse};
 use helix_common::{
-    api::proposer_api::GetHeaderParams, api_provider::{ApiProvider, GetHeaderInfo, TimingResult}, chain_info::ChainInfo, metrics::{BID_SIGNING_LATENCY, HEADER_TIMEOUT_FETCH, HEADER_TIMEOUT_SLEEP}, signing::RelaySigningContext, spawn_tracked, utils::{extract_request_id, utcnow_ms, utcnow_ns}, GetHeaderTrace, RequestTimings
+    GetHeaderTrace, RequestTimings,
+    api::proposer_api::GetHeaderParams,
+    api_provider::{ApiProvider, GetHeaderInfo, TimingResult},
+    chain_info::ChainInfo,
+    metrics::{BID_SIGNING_LATENCY, HEADER_TIMEOUT_FETCH, HEADER_TIMEOUT_SLEEP},
+    signing::RelaySigningContext,
+    spawn_tracked,
+    utils::{extract_request_id, utcnow_ms, utcnow_ns},
 };
 use helix_types::{BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
 use ssz::Encode;
@@ -72,7 +79,14 @@ impl<A: Api> ProposerApi<A> {
             .map_err(ProposerApiError::InvalidGetHeader)?;
 
         if send_getheader_call_to_topbid {
-            let getheader_info = GetHeaderInfo::GetheaderCallMade(std::time::SystemTime::now().duration_since(UNIX_EPOCH).ok().and_then(|d| d.as_millis().try_into().ok()).unwrap_or_default()).as_ssz_bytes(); 
+            let getheader_info = GetHeaderInfo::GetheaderCallMade(
+                std::time::SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .ok()
+                    .and_then(|d| d.as_millis().try_into().ok())
+                    .unwrap_or_default(),
+            )
+            .as_ssz_bytes();
             let _ = proposer_api.getheader_tx.send(getheader_info.into());
         }
 

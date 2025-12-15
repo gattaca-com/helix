@@ -96,7 +96,7 @@ pub async fn start_api_service<A: Api>(
         current_slot_info,
         auctioneer_handle,
         registrations_handle,
-        getheader_call_tx
+        getheader_call_tx,
     ));
 
     tokio::spawn(process_gossip_messages(

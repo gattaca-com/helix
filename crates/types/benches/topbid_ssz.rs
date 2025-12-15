@@ -1,9 +1,10 @@
-use alloy_primitives::{Address, B256, U256};
-use criterion::{criterion_group, criterion_main, Criterion};
-use helix_types::BlsPublicKeyBytes;
-use ssz_derive::{Decode, Encode};
 use std::hint::black_box;
+
+use alloy_primitives::{Address, B256, U256};
+use criterion::{Criterion, criterion_group, criterion_main};
+use helix_types::BlsPublicKeyBytes;
 use ssz::Encode;
+use ssz_derive::{Decode, Encode};
 
 #[derive(Clone, Debug, Encode, Decode)]
 pub struct TopBidUpdate {

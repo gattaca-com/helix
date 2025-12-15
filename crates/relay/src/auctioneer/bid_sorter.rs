@@ -288,8 +288,8 @@ impl BidSorter {
                 continue;
             }
 
-            if let Some((curr, _)) = &state.curr_bid
-                && *curr == demoted
+            if let Some((curr, _)) = &state.curr_bid &&
+                *curr == demoted
             {
                 state.traverse_update_top_bid(self.curr_bid_slot, None, false, &self.top_bid_tx);
             }
