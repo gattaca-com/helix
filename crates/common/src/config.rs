@@ -5,6 +5,7 @@ use eyre::ensure;
 use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey};
 use reqwest::Url;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use teloxide::types::ChatId;
 use tracing::error;
 
 use crate::{BuilderInfo, ValidatorPreferences, api::*};
@@ -219,7 +220,7 @@ pub const fn default_u64<const D: u64>() -> u64 {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AlertsConfig {
     pub telegram_bot_token: String,
-    pub chat_id: i64,
+    pub chat_ids: Vec<ChatId>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
