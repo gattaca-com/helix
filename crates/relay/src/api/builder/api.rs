@@ -19,6 +19,7 @@ pub struct BuilderApi<A: Api> {
     pub relay_config: Arc<RelayConfig>,
     /// Subscriber for TopBid updates, SSZ encoded
     pub top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
+    pub getheader_call_tx: tokio::sync::broadcast::Sender<Bytes>,
     pub auctioneer_handle: AuctioneerHandle,
     pub api_provider: Arc<A::ApiProvider>,
 }
@@ -30,6 +31,7 @@ impl<A: Api> BuilderApi<A> {
         relay_config: RelayConfig,
         curr_slot_info: CurrentSlotInfo,
         top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
+        getheader_call_tx: tokio::sync::broadcast::Sender<Bytes>,
         auctioneer_handle: AuctioneerHandle,
         api_provider: Arc<A::ApiProvider>,
     ) -> Self {
@@ -39,6 +41,7 @@ impl<A: Api> BuilderApi<A> {
             relay_config: Arc::new(relay_config),
             curr_slot_info,
             top_bid_tx,
+            getheader_call_tx,
             auctioneer_handle,
             api_provider,
         }

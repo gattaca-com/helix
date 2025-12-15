@@ -44,6 +44,7 @@ pub async fn start_api_service<A: Api>(
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
     top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
+    getheader_call_tx: tokio::sync::broadcast::Sender<Bytes>,
     event_channel: (crossbeam_channel::Sender<Event>, crossbeam_channel::Receiver<Event>),
     relay_network_api: RelayNetworkApi,
 ) {
@@ -74,6 +75,7 @@ pub async fn start_api_service<A: Api>(
         config.clone(),
         current_slot_info.clone(),
         top_bid_tx,
+        getheader_call_tx.clone(),
         auctioneer_handle.clone(),
         api_provider.clone(),
     );
@@ -94,6 +96,7 @@ pub async fn start_api_service<A: Api>(
         current_slot_info,
         auctioneer_handle,
         registrations_handle,
+        getheader_call_tx
     ));
 
     tokio::spawn(process_gossip_messages(

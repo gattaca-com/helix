@@ -95,6 +95,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
         RelayNetworkManager::new(config.relay_network.clone(), relay_signing_context.clone());
 
     let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
+    let (getheader_call_tx, _) = tokio::sync::broadcast::channel(100);
 
     config.router_config.validate_bid_sorter()?;
 
@@ -127,6 +128,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
         known_validators_loaded,
         terminating.clone(),
         top_bid_tx,
+        getheader_call_tx,
         event_channel,
         relay_network_api.api(),
     ));

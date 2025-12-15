@@ -1,20 +1,14 @@
 use std::{
-    sync::{Arc, atomic::Ordering},
-    time::Instant,
+    sync::{atomic::Ordering, Arc},
+    time::{Instant, UNIX_EPOCH},
 };
 
 use axum::{Extension, extract::Path, http::HeaderMap, response::IntoResponse};
 use helix_common::{
-    GetHeaderTrace, RequestTimings,
-    api::proposer_api::GetHeaderParams,
-    api_provider::{ApiProvider, TimingResult},
-    chain_info::ChainInfo,
-    metrics::{BID_SIGNING_LATENCY, HEADER_TIMEOUT_FETCH, HEADER_TIMEOUT_SLEEP},
-    signing::RelaySigningContext,
-    spawn_tracked,
-    utils::{extract_request_id, utcnow_ms, utcnow_ns},
+    api::proposer_api::GetHeaderParams, api_provider::{ApiProvider, GetHeaderInfo, TimingResult}, chain_info::ChainInfo, metrics::{BID_SIGNING_LATENCY, HEADER_TIMEOUT_FETCH, HEADER_TIMEOUT_SLEEP}, signing::RelaySigningContext, spawn_tracked, utils::{extract_request_id, utcnow_ms, utcnow_ns}, GetHeaderTrace, RequestTimings
 };
 use helix_types::{BuilderBid, ForkName, GetHeaderResponse, SignedBuilderBid};
+use ssz::Encode;
 use tracing::{Instrument, debug, error, info, trace, warn};
 
 use super::ProposerApi;
@@ -72,10 +66,15 @@ impl<A: Api> ProposerApi<A> {
 
         let user_agent = proposer_api.api_provider.get_metadata(&headers);
 
-        let TimingResult { is_mev_boost, sleep_time } = proposer_api
+        let TimingResult { is_mev_boost, sleep_time, send_getheader_call_to_topbid } = proposer_api
             .api_provider
             .get_timing(&params, &headers, &duty.entry.preferences, ms_into_slot)
             .map_err(ProposerApiError::InvalidGetHeader)?;
+
+        if send_getheader_call_to_topbid {
+            let getheader_info = GetHeaderInfo::GetheaderCallMade(std::time::SystemTime::now().duration_since(UNIX_EPOCH).ok().and_then(|d| d.as_millis().try_into().ok()).unwrap_or_default()).as_ssz_bytes(); 
+            let _ = proposer_api.getheader_tx.send(getheader_info.into());
+        }
 
         let mut timing_guard = TimeoutGuard::default();
 
