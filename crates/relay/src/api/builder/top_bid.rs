@@ -150,6 +150,25 @@ pub enum TopBidV2 {
     AuctionOpen(bool),
 }
 
+impl TopBidV2 {
+    pub fn as_ssz_bytes_fast(&self) -> Vec<u8> {
+        const SIZE_TOPBID: usize = 189;
+        const SIZE_AUCTION_OPEN: usize = 2;
+        match self {
+            s @ TopBidV2::TopBid(_) => {
+                let mut v = Vec::with_capacity(SIZE_TOPBID);
+                s.ssz_append(&mut v);
+                v
+            }
+            s @ TopBidV2::AuctionOpen(_) => {
+                let mut v = Vec::with_capacity(SIZE_AUCTION_OPEN);
+                s.ssz_append(&mut v);
+                v
+            }
+        }
+    }
+}
+
 /// `push_top_bids_v2` manages a WebSocket connection to continuously send the top auction bids, and
 /// proposer getheader call information to a client.
 ///
@@ -179,13 +198,13 @@ async fn push_top_bids_v2(
 
             }
             Ok(bid) = bid_stream.recv() => {
-                if socket.send(Message::Binary(TopBidV2::TopBid(bid).as_ssz_bytes().into())).await.is_err() {
+                if socket.send(Message::Binary(TopBidV2::TopBid(bid).as_ssz_bytes_fast().into())).await.is_err() {
                     error!("Failed to send bid. Disconnecting.");
                     break;
                 }
             },
             Ok(getheader) = getheader_call_stream.recv() => {
-                if socket.send(Message::Binary(TopBidV2::AuctionOpen(getheader.called).as_ssz_bytes().into())).await.is_err() {
+                if socket.send(Message::Binary(TopBidV2::AuctionOpen(getheader.called).as_ssz_bytes_fast().into())).await.is_err() {
                     error!("Failed to send bid. Disconnecting.");
                 }
             },
