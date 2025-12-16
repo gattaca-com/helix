@@ -23,7 +23,9 @@ pub use block_merger::OrderValidationError;
 pub use handle::{AuctioneerHandle, RegWorkerHandle};
 use helix_common::{
     RelayConfig,
-    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
+    api::builder_api::{
+        BuilderGetValidatorsResponseEntry, InclusionListWithMetadata, TopBidUpdate,
+    },
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN, WORKER_UTIL},
@@ -60,7 +62,7 @@ pub fn spawn_workers<B: BidAdjustor>(
     db: Arc<PostgresDatabaseService>,
     cache: LocalCache,
     bid_adjustor: B,
-    top_bid_tx: tokio::sync::broadcast::Sender<bytes::Bytes>,
+    top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
     event_channel: (crossbeam_channel::Sender<Event>, crossbeam_channel::Receiver<Event>),
 ) -> (AuctioneerHandle, RegWorkerHandle) {
     let (sub_worker_tx, sub_worker_rx) = crossbeam_channel::bounded(10_000);

@@ -7,11 +7,10 @@ mod types;
 use std::sync::{Arc, atomic::Ordering};
 
 use axum::{Extension, response::IntoResponse};
-use bytes::Bytes;
 pub use error::*;
 use helix_common::{
-    RelayConfig, ValidatorPreferences, alerts::AlertManager, chain_info::ChainInfo,
-    local_cache::LocalCache, signing::RelaySigningContext,
+    RelayConfig, ValidatorPreferences, alerts::AlertManager, api_provider::GetHeaderInfo,
+    chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
 };
 use hyper::StatusCode;
 pub use types::*;
@@ -41,7 +40,7 @@ pub struct ProposerApi<A: Api> {
     pub alert_manager: AlertManager,
     pub auctioneer_handle: AuctioneerHandle,
     pub reg_handle: RegWorkerHandle,
-    pub getheader_tx: tokio::sync::broadcast::Sender<Bytes>,
+    pub getheader_tx: tokio::sync::broadcast::Sender<GetHeaderInfo>,
 }
 
 impl<A: Api> ProposerApi<A> {
@@ -58,7 +57,7 @@ impl<A: Api> ProposerApi<A> {
         curr_slot_info: CurrentSlotInfo,
         auctioneer_handle: AuctioneerHandle,
         reg_handle: RegWorkerHandle,
-        getheader_tx: tokio::sync::broadcast::Sender<Bytes>,
+        getheader_tx: tokio::sync::broadcast::Sender<GetHeaderInfo>,
     ) -> Self {
         Self {
             local_cache,

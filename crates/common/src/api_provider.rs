@@ -20,7 +20,6 @@ pub trait ApiProvider: Send + Sync + Clone + 'static {
 pub struct TimingResult {
     pub sleep_time: Option<Duration>,
     pub is_mev_boost: bool,
-    pub send_getheader_call_to_topbid: bool,
 }
 
 #[derive(Clone)]
@@ -38,18 +37,11 @@ impl ApiProvider for DefaultApiProvider {
         _preferences: &ValidatorPreferences,
         _ms_into_slot: u64,
     ) -> Result<TimingResult, &'static str> {
-        Ok(TimingResult {
-            sleep_time: None,
-            is_mev_boost: false,
-            send_getheader_call_to_topbid: false,
-        })
+        Ok(TimingResult { sleep_time: None, is_mev_boost: false })
     }
 }
 
 #[derive(Clone, Copy, Decode, Encode)]
-#[ssz(enum_behaviour = "union")]
-pub enum GetHeaderInfo {
-    SlotIsEnabled(bool),
-    // timestamp of when the call was received in millis
-    GetheaderCallMade(u64),
+pub struct GetHeaderInfo {
+    pub called: bool,
 }

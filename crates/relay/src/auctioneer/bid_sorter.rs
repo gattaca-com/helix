@@ -4,7 +4,6 @@ use std::{
 };
 
 use alloy_primitives::{Address, B256, U256};
-use bytes::Bytes;
 use helix_common::{
     SubmissionTrace,
     api::builder_api::TopBidUpdate,
@@ -79,7 +78,7 @@ impl ForkState {
         bid_slot: u64,
         trace: Option<&mut SubmissionTrace>,
         is_optimistic: bool,
-        top_bid_tx: &tokio::sync::broadcast::Sender<Bytes>,
+        top_bid_tx: &tokio::sync::broadcast::Sender<TopBidUpdate>,
     ) {
         let mut best = None;
 
@@ -108,7 +107,7 @@ impl ForkState {
         bid: BidEntry,
         trace: Option<&mut SubmissionTrace>,
         is_optimistic: bool,
-        top_bid_tx: &tokio::sync::broadcast::Sender<Bytes>,
+        top_bid_tx: &tokio::sync::broadcast::Sender<TopBidUpdate>,
     ) {
         let now_ns = utcnow_ns();
 
@@ -121,9 +120,7 @@ impl ForkState {
             builder_pubkey,
             fee_recipient: bid.fee_recipient,
             value: bid.value,
-        }
-        .as_ssz_bytes_fast()
-        .into();
+        };
         let _ = top_bid_tx.send(top_bid_update);
         trace!(?builder_pubkey, value =? bid.value, "updating best bid");
         self.curr_bid = Some((builder_pubkey, bid));
@@ -148,7 +145,7 @@ impl ForkState {
 
 pub struct BidSorter {
     /// Sender for ws updates, TopBidUpdate SSZ encoded
-    top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
+    top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
     /// Head slot + 1
     curr_bid_slot: u64,
     /// Parent hash -> fork state
@@ -159,7 +156,7 @@ pub struct BidSorter {
 }
 
 impl BidSorter {
-    pub fn new(top_bid_tx: tokio::sync::broadcast::Sender<Bytes>) -> Self {
+    pub fn new(top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>) -> Self {
         Self {
             top_bid_tx,
             curr_bid_slot: 0,

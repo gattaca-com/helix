@@ -7,8 +7,12 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::StreamExt;
-use helix_common::{self, metrics::TopBidMetrics};
+use helix_common::{
+    self, api::builder_api::TopBidUpdate, api_provider::GetHeaderInfo, metrics::TopBidMetrics,
+};
 use hyper::HeaderMap;
+use ssz::Encode;
+use ssz_derive::{Decode, Encode};
 use tokio::time::{self};
 use tracing::{debug, error};
 
@@ -57,19 +61,8 @@ impl<A: Api> BuilderApi<A> {
     }
 }
 
-async fn top_bids_and_sockets_loop_body(
-    bid_stream: &mut tokio::sync::broadcast::Receiver<Bytes>,
-    socket: &mut WebSocket,
-    interval: &mut time::Interval,
-) -> bool {
+async fn socket_loop_body(socket: &mut WebSocket, interval: &mut time::Interval) -> bool {
     tokio::select! {
-        Ok(bid) = bid_stream.recv() => {
-            if socket.send(Message::Binary(bid)).await.is_err() {
-                error!("Failed to send bid. Disconnecting.");
-                return true;
-            }
-        },
-
         _ = interval.tick() => {
             if socket.send(Message::Ping(Bytes::new())).await.is_err() {
                 error!("Failed to send ping.");
@@ -126,18 +119,35 @@ async fn top_bids_and_sockets_loop_body(
 /// the closure status.
 async fn push_top_bids(
     mut socket: WebSocket,
-    mut bid_stream: tokio::sync::broadcast::Receiver<Bytes>,
+    mut bid_stream: tokio::sync::broadcast::Receiver<TopBidUpdate>,
 ) {
     let _conn = TopBidMetrics::connection();
     let mut interval = time::interval(Duration::from_secs(10));
 
     loop {
-        if top_bids_and_sockets_loop_body(&mut bid_stream, &mut socket, &mut interval).await {
-            break;
-        };
-    }
+        tokio::select! {
+            Ok(bid) = bid_stream.recv() => {
+                if socket.send(Message::Binary(bid.as_ssz_bytes_fast().into())).await.is_err() {
+                    error!("Failed to send bid. Disconnecting.");
+                    break;
+                }
+            },
+            should_break = socket_loop_body(&mut socket, &mut interval) => {
+                if should_break {
+                    break;
+                }
 
+            }
+        }
+    }
     debug!("Socket connection closed gracefully.");
+}
+
+#[derive(Clone, Decode, Encode)]
+#[ssz(enum_behaviour = "union")]
+pub enum TopBidV2 {
+    TopBid(TopBidUpdate),
+    AuctionOpen(bool),
 }
 
 /// `push_top_bids_v2` manages a WebSocket connection to continuously send the top auction bids, and
@@ -154,22 +164,28 @@ async fn push_top_bids(
 /// the closure status.
 async fn push_top_bids_v2(
     mut socket: WebSocket,
-    mut bid_stream: tokio::sync::broadcast::Receiver<Bytes>,
-    mut getheader_call_stream: tokio::sync::broadcast::Receiver<Bytes>,
+    mut bid_stream: tokio::sync::broadcast::Receiver<TopBidUpdate>,
+    mut getheader_call_stream: tokio::sync::broadcast::Receiver<GetHeaderInfo>,
 ) {
     let _conn = TopBidMetrics::connection();
     let mut interval = time::interval(Duration::from_secs(10));
 
     loop {
         tokio::select! {
-            should_kill = top_bids_and_sockets_loop_body(&mut bid_stream, &mut socket, &mut interval) => {
-                if should_kill {
+            should_break = socket_loop_body(&mut socket, &mut interval) => {
+                if should_break {
                     break;
                 }
 
             }
+            Ok(bid) = bid_stream.recv() => {
+                if socket.send(Message::Binary(TopBidV2::TopBid(bid).as_ssz_bytes().into())).await.is_err() {
+                    error!("Failed to send bid. Disconnecting.");
+                    break;
+                }
+            },
             Ok(getheader) = getheader_call_stream.recv() => {
-                if socket.send(Message::Binary(getheader)).await.is_err() {
+                if socket.send(Message::Binary(TopBidV2::AuctionOpen(getheader.called).as_ssz_bytes().into())).await.is_err() {
                     error!("Failed to send bid. Disconnecting.");
                 }
             },
