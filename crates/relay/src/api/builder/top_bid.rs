@@ -81,14 +81,10 @@ async fn socket_loop_body(socket: &mut WebSocket, interval: &mut time::Interval)
                         return true;
                     }
                 },
-                Some(Ok(Message::Pong(_))) => {
+                Some(Ok(Message::Pong(_))) | Some(Ok(Message::Binary(_))) | Some(Ok(Message::Text(_))) => {
                 },
                 Some(Ok(Message::Close(_))) => {
                     return true;
-                },
-                Some(Ok(Message::Binary(_))) => {
-                },
-                Some(Ok(Message::Text(_))) => {
                 },
                 Some(Err(e)) => {
                     error!("Error in WebSocket connection: {}", e);
