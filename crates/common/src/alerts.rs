@@ -17,7 +17,9 @@ pub enum AlertManager {
 impl AlertManager {
     pub fn from_relay_config(cfg: &RelayConfig) -> Self {
         match &cfg.alerts_config {
-            Some(alerts) if !alerts.telegram_bot_token.is_empty() && !alerts.chat_ids.is_empty() => {
+            Some(alerts)
+                if !alerts.telegram_bot_token.is_empty() && !alerts.chat_ids.is_empty() =>
+            {
                 AlertManager::Telegram {
                     bot: Bot::new(&alerts.telegram_bot_token),
                     chat_ids: alerts.chat_ids.clone(),
