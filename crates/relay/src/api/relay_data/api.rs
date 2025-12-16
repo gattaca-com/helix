@@ -194,7 +194,7 @@ impl DataApi {
         match data_api.db.get_block_adjustments_for_slot(params.slot).await {
             Ok(result) => Ok(Json(result)),
             Err(err) => {
-                warn!(error=%err, "Failed to get slot adjustments info");
+                warn!(%err, "Failed to get slot adjustments info");
                 Err(DataApiError::InternalServerError)
             }
         }

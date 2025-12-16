@@ -402,6 +402,7 @@ impl RouterConfig {
             Route::ProposerPayloadDelivered,
             Route::BuilderBidsReceived,
             Route::ValidatorRegistration,
+            Route::DataAdjustments,
         ]);
     }
 

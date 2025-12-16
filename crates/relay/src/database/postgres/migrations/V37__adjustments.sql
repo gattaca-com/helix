@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS "bid_adjustments" (
     "block_number" bigint NOT NULL,
     "delta" numeric(78) NOT NULL,
     "submitted_block_hash" bytea NOT NULL,
-    "submitted_received_at" varchar NOT NULL,
+    "submitted_received_at" timestamptz NOT NULL,
     "submitted_value" numeric(78) NOT NULL,
     "adjusted_block_hash" bytea NOT NULL,
     "adjusted_value" numeric(78) NOT NULL

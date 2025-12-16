@@ -15,7 +15,7 @@ askama.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 bytes.workspace = true
-chrono = { version = "0.4.38", features = ["serde"] }
+chrono.workspace = true
 crossbeam-channel.workspace = true
 dashmap.workspace = true
 deadpool-postgres.workspace = true

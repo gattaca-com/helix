@@ -1,5 +1,3 @@
-use std::num::TryFromIntError;
-
 use deadpool_postgres::PoolError;
 use helix_types::{BlsPublicKey, CryptoError, SszError};
 use thiserror::Error;
@@ -56,7 +54,4 @@ pub enum DatabaseError {
 
     #[error("General error")]
     GeneralError,
-
-    #[error("Overflow error: {0}")]
-    OverflowError(#[from] TryFromIntError),
 }

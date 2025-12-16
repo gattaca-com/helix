@@ -2184,8 +2184,6 @@ impl PostgresDatabaseService {
     ) -> Result<Vec<DataAdjustmentsResponse>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_block_adjustments_for_slot");
 
-        let slot_number = i64::try_from(slot.as_u64())?;
-
         let rows = self
             .pool
             .get()
@@ -2204,7 +2202,7 @@ impl PostgresDatabaseService {
                 FROM bid_adjustments
                 WHERE slot = $1
                 ",
-                &[&slot_number],
+                &[&(slot.as_u64() as i64)],
             )
             .await?;
 
@@ -2218,9 +2216,6 @@ impl PostgresDatabaseService {
         entry: DataAdjustmentsEntry,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("save_bloc_adjustments_data");
-
-        let slot_number = i64::try_from(entry.slot.as_u64())?;
-        let block_number = i64::try_from(entry.block_number)?;
 
         self.pool
             .get()
@@ -2243,9 +2238,9 @@ impl PostgresDatabaseService {
                     ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ",
                 &[
-                    &slot_number,
+                    &(entry.slot.as_u64() as i64),
                     &entry.builder_pubkey.as_slice(),
-                    &block_number,
+                    &(entry.block_number as i64),
                     &PostgresNumeric::from(entry.delta),
                     &entry.submitted_block_hash.as_slice(),
                     &SystemTime::from(entry.submitted_received_at),
