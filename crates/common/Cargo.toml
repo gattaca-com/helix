@@ -13,6 +13,7 @@ alloy-rlp.workspace = true
 axum.workspace = true
 backtrace.workspace = true
 bytes.workspace = true
+chrono = { version = "0.4.38", features = ["serde"] }
 clap.workspace = true
 core_affinity.workspace = true
 dashmap.workspace = true

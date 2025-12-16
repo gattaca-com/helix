@@ -1,4 +1,5 @@
 use alloy_primitives::{Address, B256, U256};
+use chrono::{DateTime, Utc};
 use helix_types::{BlsPublicKey, BlsPublicKeyBytes, Slot};
 use serde::{Deserialize, Serialize};
 
@@ -119,4 +120,24 @@ pub struct ReceivedBlocksResponse {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ValidatorRegistrationParams {
     pub pubkey: BlsPublicKeyBytes,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DataAdjustmentsResponse {
+    pub builder_pubkey: BlsPublicKeyBytes,
+    pub block_number: u64,
+    #[serde(with = "serde_utils::quoted_u256")]
+    pub delta: U256,
+    pub submitted_block_hash: B256,
+    pub submitted_received_at: DateTime<Utc>,
+    #[serde(with = "serde_utils::quoted_u256")]
+    pub submitted_value: U256,
+    pub adjusted_block_hash: B256,
+    #[serde(with = "serde_utils::quoted_u256")]
+    pub adjusted_value: U256,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct DataAdjustmentsParams {
+    pub slot: Slot,
 }

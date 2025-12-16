@@ -358,6 +358,7 @@ impl BlockMerger {
             payload_and_blobs: payload_and_blobs.clone(),
             bid_data: bid_data.clone(),
             bid_adjustment_data: None,
+            submission_version: None,
         };
 
         // Store locally to serve header requests

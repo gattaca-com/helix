@@ -11,19 +11,19 @@ use alloy_primitives::B256;
 use dashmap::{DashMap, DashSet};
 use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
 use helix_common::{
-    BuilderInfo, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace, PostgresConfig,
-    ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace,
-    ValidatorPreferences, ValidatorSummary,
+    BuilderInfo, DataAdjustmentsEntry, Filtering, GetHeaderTrace, GetPayloadTrace,
+    GossipedPayloadTrace, PostgresConfig, ProposerInfo, RelayConfig,
+    SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
-        data_api::BidFilters,
+        data_api::{BidFilters, DataAdjustmentsResponse},
         proposer_api::{GetHeaderParams, ValidatorRegistrationInfo},
     },
     bid_submission::OptimisticVersion,
     metrics::DbMetricRecord,
     utils::utcnow_ms,
 };
-use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SignedValidatorRegistration};
+use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SignedValidatorRegistration, Slot};
 use parking_lot::RwLock;
 use rustc_hash::FxHashSet;
 use tokio::sync::mpsc::Sender;
@@ -2175,5 +2175,88 @@ impl PostgresDatabaseService {
         } else {
             Err(errors)
         }
+    }
+
+    #[instrument(skip_all)]
+    pub async fn get_block_adjustments_for_slot(
+        &self,
+        slot: Slot,
+    ) -> Result<Vec<DataAdjustmentsResponse>, DatabaseError> {
+        let mut record = DbMetricRecord::new("get_block_adjustments_for_slot");
+
+        let slot_number = i64::try_from(slot.as_u64())?;
+
+        let rows = self
+            .pool
+            .get()
+            .await?
+            .query(
+                "
+                SELECT
+                    builder_pubkey,
+                    block_number,
+                    delta,
+                    submitted_block_hash,
+                    submitted_received_at,
+                    submitted_value,
+                    adjusted_block_hash,
+                    adjusted_value
+                FROM bid_adjustments
+                WHERE slot = $1
+                ",
+                &[&slot_number],
+            )
+            .await?;
+
+        record.record_success();
+        parse_rows(rows)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn save_block_adjustments_data(
+        &self,
+        entry: DataAdjustmentsEntry,
+    ) -> Result<(), DatabaseError> {
+        let mut record = DbMetricRecord::new("save_bloc_adjustments_data");
+
+        let slot_number = i64::try_from(entry.slot.as_u64())?;
+        let block_number = i64::try_from(entry.block_number)?;
+
+        self.pool
+            .get()
+            .await?
+            .execute(
+                "
+                INSERT INTO
+                    bid_adjustments (
+                        slot,
+                        builder_pubkey,
+                        block_number,
+                        delta,
+                        submitted_block_hash,
+                        submitted_received_at,
+                        submitted_value,
+                        adjusted_block_hash,
+                        adjusted_value
+                    )
+                VALUES
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ",
+                &[
+                    &slot_number,
+                    &entry.builder_pubkey.as_slice(),
+                    &block_number,
+                    &PostgresNumeric::from(entry.delta),
+                    &entry.submitted_block_hash.as_slice(),
+                    &SystemTime::from(entry.submitted_received_at),
+                    &PostgresNumeric::from(entry.submitted_value),
+                    &entry.adjusted_block_hash.as_slice(),
+                    &PostgresNumeric::from(entry.adjusted_value),
+                ],
+            )
+            .await?;
+
+        record.record_success();
+        Ok(())
     }
 }

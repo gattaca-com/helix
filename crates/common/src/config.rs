@@ -507,6 +507,7 @@ pub enum Route {
     ValidatorRegistration,
     GetInclusionList,
     RelayNetwork,
+    DataAdjustments,
 }
 
 impl Route {
@@ -526,6 +527,7 @@ impl Route {
             }
             Route::BuilderBidsReceived => format!("{PATH_DATA_API}{PATH_BUILDER_BIDS_RECEIVED}"),
             Route::ValidatorRegistration => format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),
+            Route::DataAdjustments => format!("{PATH_DATA_API}{PATH_DATA_ADJUSTMENTS}"),
             Route::All => panic!("All is not a real route"),
             Route::BuilderApi => panic!("BuilderApi is not a real route"),
             Route::ProposerApi => panic!("ProposerApi is not a real route"),

@@ -114,6 +114,7 @@ pub struct PayloadEntry {
     pub payload_and_blobs: Arc<PayloadAndBlobs>,
     pub bid_data: PayloadBidData,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
+    pub submission_version: Option<SubmissionVersion>,
 }
 
 impl PayloadEntry {
@@ -122,6 +123,7 @@ impl PayloadEntry {
         withdrawals_root: B256,
         tx_root: Option<B256>,
         bid_adjustment_data: Option<BidAdjustmentData>,
+        submission_version: SubmissionVersion,
     ) -> Self {
         Self {
             payload_and_blobs: signed_bid_submission.payload_and_blobs_ref().to_owned().into(),
@@ -133,6 +135,7 @@ impl PayloadEntry {
                 builder_pubkey: *signed_bid_submission.builder_public_key(),
             },
             bid_adjustment_data,
+            submission_version: Some(submission_version),
         }
     }
 
@@ -141,6 +144,7 @@ impl PayloadEntry {
             payload_and_blobs: data.execution_payload,
             bid_data: data.bid_data,
             bid_adjustment_data: None,
+            submission_version: None,
         }
     }
 
