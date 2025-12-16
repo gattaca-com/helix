@@ -48,7 +48,3 @@ name = "execution_payload"
 [[bench]]
 harness = false
 name = "signed_bid_submission"
-
-[[bench]]
-harness = false
-name = "topbid_ssz"

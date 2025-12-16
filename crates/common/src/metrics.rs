@@ -357,6 +357,13 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref TOP_BID_CONNECTIONS_V2: Gauge = register_gauge_with_registry!(
+        "top_bid_v2_connections",
+        "Count of top bid v2 connections",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     pub static ref TOP_BID_UPDATE_COUNT: IntCounter = register_int_counter_with_registry!(
         "top_bid_update_count",
         "Count of top bid updates",
@@ -709,6 +716,20 @@ impl TopBidMetrics {
 impl Drop for TopBidMetrics {
     fn drop(&mut self) {
         TOP_BID_CONNECTIONS.dec();
+    }
+}
+pub struct TopBidMetricsV2;
+
+impl TopBidMetricsV2 {
+    pub fn connection() -> Self {
+        TOP_BID_CONNECTIONS_V2.inc();
+        Self {}
+    }
+}
+
+impl Drop for TopBidMetricsV2 {
+    fn drop(&mut self) {
+        TOP_BID_CONNECTIONS_V2.dec();
     }
 }
 

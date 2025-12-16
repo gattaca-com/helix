@@ -8,13 +8,16 @@ use axum::{
 use bytes::Bytes;
 use futures::StreamExt;
 use helix_common::{
-    self, api::builder_api::TopBidUpdate, api_provider::GetHeaderInfo, metrics::TopBidMetrics,
+    self,
+    api::builder_api::TopBidUpdate,
+    api_provider::GetHeaderInfo,
+    metrics::{TopBidMetrics, TopBidMetricsV2},
 };
 use hyper::HeaderMap;
 use ssz::Encode;
 use ssz_derive::{Decode, Encode};
 use tokio::time::{self};
-use tracing::{debug, error};
+use tracing::error;
 
 use super::api::BuilderApi;
 use crate::api::{Api, HEADER_API_KEY, HEADER_API_TOKEN, builder::error::BuilderApiError};
@@ -79,17 +82,13 @@ async fn socket_loop_body(socket: &mut WebSocket, interval: &mut time::Interval)
                     }
                 },
                 Some(Ok(Message::Pong(_))) => {
-                    debug!("Received pong response.");
                 },
                 Some(Ok(Message::Close(_))) => {
-                    debug!("Received close frame.");
                     return true;
                 },
                 Some(Ok(Message::Binary(_))) => {
-                    debug!("Received Binary frame.");
                 },
                 Some(Ok(Message::Text(_))) => {
-                    debug!("Received Text frame.");
                 },
                 Some(Err(e)) => {
                     error!("Error in WebSocket connection: {}", e);
@@ -140,7 +139,7 @@ async fn push_top_bids(
             }
         }
     }
-    debug!("Socket connection closed gracefully.");
+    tracing::debug!("Socket connection closed gracefully.");
 }
 
 #[derive(Clone, Decode, Encode)]
@@ -186,7 +185,7 @@ async fn push_top_bids_v2(
     mut bid_stream: tokio::sync::broadcast::Receiver<TopBidUpdate>,
     mut getheader_call_stream: tokio::sync::broadcast::Receiver<GetHeaderInfo>,
 ) {
-    let _conn = TopBidMetrics::connection();
+    let _conn = TopBidMetricsV2::connection();
     let mut interval = time::interval(Duration::from_secs(10));
 
     loop {
@@ -206,10 +205,11 @@ async fn push_top_bids_v2(
             Ok(getheader) = getheader_call_stream.recv() => {
                 if socket.send(Message::Binary(TopBidV2::AuctionOpen(getheader.called).as_ssz_bytes_fast().into())).await.is_err() {
                     error!("Failed to send bid. Disconnecting.");
+                    break;
                 }
             },
         }
     }
 
-    debug!("Socket connection closed gracefully.");
+    tracing::debug!("Socket connection closed gracefully.");
 }
