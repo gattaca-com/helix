@@ -4,9 +4,9 @@ use std::{
     time::Duration,
 };
 
-use bytes::Bytes;
 use helix_common::{
-    RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
+    RelayConfig, api::builder_api::TopBidUpdate, chain_info::ChainInfo, local_cache::LocalCache,
+    signing::RelaySigningContext,
 };
 use moka::sync::Cache;
 use tracing::{error, info};
@@ -43,7 +43,7 @@ pub async fn start_api_service<A: Api>(
     bid_adjustor: impl BidAdjustor,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
-    top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
+    top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
     event_channel: (crossbeam_channel::Sender<Event>, crossbeam_channel::Receiver<Event>),
     relay_network_api: RelayNetworkApi,
 ) {
