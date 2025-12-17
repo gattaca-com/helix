@@ -328,6 +328,7 @@ pub struct PrimevConfig {
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
+#[serde(tag = "type")]
 pub enum LoggingConfig {
     #[default]
     Console,
