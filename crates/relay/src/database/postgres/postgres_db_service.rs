@@ -2260,8 +2260,6 @@ impl PostgresDatabaseService {
         Ok(())
     }
 
-    // TODO: proposer_send_timestamp_ms is not tracked. To support this, the get_header table
-    // would need to store the timestamp from the proposer's request header.
     #[instrument(skip_all)]
     pub async fn get_proposer_header_delivered(
         &self,
@@ -2278,7 +2276,7 @@ impl PostgresDatabaseService {
                 proposer_pubkey,
                 value
             FROM get_header
-            WHERE 1 = 1
+            WHERE mev_boost = true
         ",
         );
 
