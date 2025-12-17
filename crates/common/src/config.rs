@@ -199,6 +199,9 @@ pub struct BlockMergingConfig {
     /// Maximum age of a merged bid before it is considered stale and discarded.
     #[serde(default = "default_u64::<250>")]
     pub max_merged_bid_age_ms: u64,
+    /// Flag to allow dry run mode.
+    #[serde(default = "default_bool::<false>")]
+    pub is_dry_run: bool,
 }
 
 fn default_port() -> u16 {
