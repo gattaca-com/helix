@@ -26,6 +26,7 @@ axum = { version = "0.8", features = ["matched-path", "ws"] }
 backtrace = "0.3.69"
 blst = { version = "0.3.16", features = ["no-threads"] }
 bytes = "1.10"
+chrono = { features = ["serde"], version = "0.4.38" }
 clap = { version = "4.5", features = ["derive"] }
 core_affinity = "0.8.3"
 criterion = "0.7.0"

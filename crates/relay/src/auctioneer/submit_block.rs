@@ -230,6 +230,7 @@ impl<B: BidAdjustor> Context<B> {
             validated.payload_attributes.withdrawals_root,
             validated.tx_root,
             validated.bid_adjustment_data,
+            validated.version,
         );
         self.payloads.insert(block_hash, entry);
     }

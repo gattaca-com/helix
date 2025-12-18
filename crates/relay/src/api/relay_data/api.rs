@@ -8,8 +8,8 @@ use axum::{
 use helix_common::{
     ValidatorPreferences,
     api::data_api::{
-        BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
-        ReceivedBlocksResponse, ValidatorRegistrationParams,
+        BuilderBlocksReceivedParams, DataAdjustmentsParams, DeliveredPayloadsResponse,
+        ProposerPayloadDeliveredParams, ReceivedBlocksResponse, ValidatorRegistrationParams,
     },
     metrics,
 };
@@ -182,6 +182,21 @@ impl DataApi {
                     Err(DataApiError::InternalServerError)
                 }
             },
+        }
+    }
+
+    // Implements this API: https://docs.ultrasound.money/builders/bid-adjustment#data-api
+    // relay/v1/data/adjustments?slot=123
+    pub async fn data_adjustments(
+        Extension(data_api): Extension<Arc<DataApi>>,
+        Query(params): Query<DataAdjustmentsParams>,
+    ) -> Result<impl IntoResponse, DataApiError> {
+        match data_api.db.get_block_adjustments_for_slot(params.slot).await {
+            Ok(result) => Ok(Json(result)),
+            Err(err) => {
+                warn!(%err, "Failed to get slot adjustments info");
+                Err(DataApiError::InternalServerError)
+            }
         }
     }
 }

@@ -681,6 +681,10 @@ impl SubmissionVersion {
     pub fn new(on_receive_ns: u64, sequence: Option<u64>) -> Self {
         Self { on_receive_ns, sequence }
     }
+
+    pub fn on_receive_ns(&self) -> u64 {
+        self.on_receive_ns
+    }
 }
 
 impl std::fmt::Debug for SubmissionVersion {
