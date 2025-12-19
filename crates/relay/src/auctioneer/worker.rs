@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use alloy_primitives::B256;
 use helix_common::{
-    GetPayloadTrace, SubmissionTrace,
+    GetPayloadTrace, RelayConfig, SubmissionTrace,
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{WORKER_QUEUE_LEN, WORKER_TASK_COUNT, WORKER_TASK_LATENCY_US, WORKER_UTIL},
@@ -11,8 +11,8 @@ use helix_common::{
 };
 use helix_types::{
     BidAdjustmentData, BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission,
-    DehydratedBidSubmissionFuluWithAdjustments, ExecPayload, ForkName, MergeableOrdersWithPref,
-    SigError, SignedBidSubmission, SignedBidSubmissionFuluWithAdjustments,
+    DehydratedBidSubmissionFuluWithAdjustments, ExecPayload, MergeableOrdersWithPref, SigError,
+    SignedBidSubmission, SignedBidSubmissionFuluWithAdjustments,
     SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock, SignedValidatorRegistration,
     SubmissionVersion,
 };
@@ -93,6 +93,7 @@ pub(super) struct SubWorker {
     cache: LocalCache,
     chain_info: ChainInfo,
     tel: Telemetry,
+    config: RelayConfig,
 }
 
 impl SubWorker {
@@ -101,8 +102,16 @@ impl SubWorker {
         tx: crossbeam_channel::Sender<Event>,
         cache: LocalCache,
         chain_info: ChainInfo,
+        config: RelayConfig,
     ) -> Self {
-        Self { id: format!("submission_{id}"), tx, cache, chain_info, tel: Telemetry::default() }
+        Self {
+            id: format!("submission_{id}"),
+            tx,
+            cache,
+            chain_info,
+            tel: Telemetry::default(),
+            config,
+        }
     }
 
     pub(super) fn run(mut self, rx: crossbeam_channel::Receiver<SubWorkerJob>) {
@@ -277,63 +286,30 @@ impl SubWorker {
             "processing payload"
         );
 
+        let flags = DecodeFlags {
+            skip_sigverify,
+            merge_type,
+            with_adjustment: with_adjustments,
+            block_merging_dry_run: self.config.block_merging_config.is_dry_run,
+        };
+
         let (submission, merging_data, bid_adjustment_data) = match submission_type {
-            Some(SubmissionType::Default) => decode_default(
-                &mut decoder,
-                body,
-                trace,
-                skip_sigverify,
-                &self.chain_info,
-                &merge_type,
-                with_adjustments,
-            )?,
-            Some(SubmissionType::Merge) => decode_merge(
-                &mut decoder,
-                body,
-                trace,
-                skip_sigverify,
-                &self.chain_info,
-                &merge_type,
-            )?,
-            Some(SubmissionType::Dehydrated) => decode_dehydrated(
-                &mut decoder,
-                body,
-                trace,
-                skip_sigverify,
-                &merge_type,
-                self.chain_info.current_fork_name(),
-                with_adjustments,
-            )?,
+            Some(SubmissionType::Default) => {
+                decode_default(&mut decoder, body, trace, &self.chain_info, &flags)?
+            }
+            Some(SubmissionType::Merge) => {
+                decode_merge(&mut decoder, body, trace, &self.chain_info, &flags)?
+            }
+            Some(SubmissionType::Dehydrated) => {
+                decode_dehydrated(&mut decoder, body, trace, &self.chain_info, &flags)?
+            }
             None => {
                 if should_hydrate {
-                    decode_dehydrated(
-                        &mut decoder,
-                        body,
-                        trace,
-                        skip_sigverify,
-                        &merge_type,
-                        self.chain_info.current_fork_name(),
-                        with_adjustments,
-                    )?
+                    decode_dehydrated(&mut decoder, body, trace, &self.chain_info, &flags)?
                 } else if has_mergeable_data {
-                    decode_merge(
-                        &mut decoder,
-                        body,
-                        trace,
-                        skip_sigverify,
-                        &self.chain_info,
-                        &merge_type,
-                    )?
+                    decode_merge(&mut decoder, body, trace, &self.chain_info, &flags)?
                 } else {
-                    decode_default(
-                        &mut decoder,
-                        body,
-                        trace,
-                        skip_sigverify,
-                        &self.chain_info,
-                        &merge_type,
-                        with_adjustments,
-                    )?
+                    decode_default(&mut decoder, body, trace, &self.chain_info, &flags)?
                 }
             }
         };
@@ -434,45 +410,55 @@ impl RegWorker {
     }
 }
 
+struct DecodeFlags {
+    skip_sigverify: bool,
+    merge_type: Option<MergeType>,
+    with_adjustment: bool,
+    block_merging_dry_run: bool,
+}
+
 fn decode_dehydrated(
     decoder: &mut SubmissionDecoder,
     body: bytes::Bytes,
     trace: &mut SubmissionTrace,
-    skip_sigverify: bool,
-    merge_type: &Option<MergeType>,
-    fork: ForkName,
-    with_adjustment: bool,
+    chain_info: &ChainInfo,
+    flags: &DecodeFlags,
 ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
-    if !skip_sigverify {
+    if !flags.skip_sigverify {
         return Err(BuilderApiError::UntrustedBuilderOnDehydratedPayload);
     }
 
-    let (submission, bid_adjustment) = if with_adjustment {
+    let (submission, bid_adjustment) = if flags.with_adjustment {
         let sub_with_adjustment: DehydratedBidSubmissionFuluWithAdjustments =
-            decoder.decode_by_fork(body, fork)?;
+            decoder.decode_by_fork(body, chain_info.current_fork_name())?;
         let (sub, adjustment_data) = sub_with_adjustment.split();
 
         (sub, Some(adjustment_data))
     } else {
-        let submission: DehydratedBidSubmission = decoder.decode_by_fork(body, fork)?;
+        let submission: DehydratedBidSubmission =
+            decoder.decode_by_fork(body, chain_info.current_fork_name())?;
 
         (submission, None)
     };
 
     trace.decoded = utcnow_ns();
 
-    let merging_data = match merge_type {
+    let merging_data = match flags.merge_type {
         Some(MergeType::Mergeable) => {
             //Should this return an error instead?
             error!("mergeable dehydrated submissions are not supported");
             None
         }
-        Some(MergeType::AppendOnly) => Some(BlockMergingData {
-            allow_appending: true,
-            builder_address: submission.fee_recipient(),
-            merge_orders: vec![],
-        }),
-        None => None,
+        Some(MergeType::AppendOnly) => {
+            Some(BlockMergingData::append_only(submission.fee_recipient()))
+        }
+        None => {
+            if flags.block_merging_dry_run {
+                Some(BlockMergingData::append_only(submission.fee_recipient()))
+            } else {
+                None
+            }
+        }
     };
 
     Ok((Submission::Dehydrated(submission), merging_data, bid_adjustment))
@@ -482,14 +468,13 @@ fn decode_merge(
     decoder: &mut SubmissionDecoder,
     body: bytes::Bytes,
     trace: &mut SubmissionTrace,
-    skip_sigverify: bool,
     chain_info: &ChainInfo,
-    merge_type: &Option<MergeType>,
+    flags: &DecodeFlags,
 ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
     let sub_with_merging: SignedBidSubmissionWithMergingData = decoder.decode(body)?;
     let mut upgraded = sub_with_merging.maybe_upgrade_to_fulu(chain_info.current_fork_name());
     trace.decoded = utcnow_ns();
-    let merging_data = match merge_type {
+    let merging_data = match flags.merge_type {
         Some(MergeType::Mergeable) => Some(upgraded.merging_data),
         //Handle append-only by creating empty mergeable orders
         //this allows builder to switch between append-only and mergeable without changing
@@ -502,7 +487,7 @@ fn decode_merge(
         }),
         None => Some(upgraded.merging_data),
     };
-    verify_and_validate(&mut upgraded.submission, skip_sigverify, chain_info)?;
+    verify_and_validate(&mut upgraded.submission, flags.skip_sigverify, chain_info)?;
     Ok((Submission::Full(upgraded.submission), merging_data, None))
 }
 
@@ -510,12 +495,10 @@ fn decode_default(
     decoder: &mut SubmissionDecoder,
     body: bytes::Bytes,
     trace: &mut SubmissionTrace,
-    skip_sigverify: bool,
     chain_info: &ChainInfo,
-    merge_type: &Option<MergeType>,
-    with_adjustment: bool,
+    flags: &DecodeFlags,
 ) -> Result<(Submission, Option<BlockMergingData>, Option<BidAdjustmentData>), BuilderApiError> {
-    let (submission, bid_adjustment) = if with_adjustment {
+    let (submission, bid_adjustment) = if flags.with_adjustment {
         let sub_with_adjustment: SignedBidSubmissionFuluWithAdjustments = decoder.decode(body)?;
         let (sub, adjustment_data) = sub_with_adjustment.split();
 
@@ -528,20 +511,24 @@ fn decode_default(
 
     let mut upgraded = submission.maybe_upgrade_to_fulu(chain_info.current_fork_name());
     trace.decoded = utcnow_ns();
-    let merging_data = match merge_type {
+    let merging_data = match flags.merge_type {
         Some(MergeType::Mergeable) => {
             //Should this return an error instead?
             error!("mergeable dehydrated submissions are not supported");
             None
         }
-        Some(MergeType::AppendOnly) => Some(BlockMergingData {
-            allow_appending: true,
-            builder_address: upgraded.fee_recipient(),
-            merge_orders: vec![],
-        }),
-        None => None,
+        Some(MergeType::AppendOnly) => {
+            Some(BlockMergingData::append_only(upgraded.fee_recipient()))
+        }
+        None => {
+            if flags.block_merging_dry_run {
+                Some(BlockMergingData::allow_all(upgraded.fee_recipient(), upgraded.num_txs()))
+            } else {
+                None
+            }
+        }
     };
-    verify_and_validate(&mut upgraded, skip_sigverify, chain_info)?;
+    verify_and_validate(&mut upgraded, flags.skip_sigverify, chain_info)?;
     Ok((Submission::Full(upgraded), merging_data, bid_adjustment))
 }
 

@@ -99,8 +99,16 @@ pub struct BlockMergingData {
 }
 
 impl BlockMergingData {
-    pub fn is_default(&self) -> bool {
-        !self.allow_appending && self.merge_orders.is_empty()
+    pub fn allow_all(builder_address: Address, num_tx: usize) -> Self {
+        let mut merge_orders = Vec::with_capacity(num_tx);
+        for index in 0..num_tx {
+            merge_orders.push(Order::Tx(TransactionOrder { index, can_revert: true }));
+        }
+        Self { allow_appending: true, builder_address, merge_orders }
+    }
+
+    pub fn append_only(builder_address: Address) -> Self {
+        Self { allow_appending: true, builder_address, merge_orders: vec![] }
     }
 }
 

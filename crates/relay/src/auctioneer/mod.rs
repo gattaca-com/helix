@@ -86,7 +86,13 @@ pub fn spawn_workers<B: BidAdjustor>(
 
     if config.is_submission_instance {
         for core in config.cores.sub_workers.clone() {
-            let worker = SubWorker::new(core, event_tx.clone(), cache.clone(), chain_info.clone());
+            let worker = SubWorker::new(
+                core,
+                event_tx.clone(),
+                cache.clone(),
+                chain_info.clone(),
+                config.clone(),
+            );
             let rx = sub_worker_rx.clone();
 
             std::thread::Builder::new()
