@@ -400,6 +400,7 @@ impl RouterConfig {
 
         self.replace_condensed_with_real(Route::DataApi, &[
             Route::ProposerPayloadDelivered,
+            Route::ProposerHeaderDelivered,
             Route::BuilderBidsReceived,
             Route::ValidatorRegistration,
             Route::DataAdjustments,
@@ -504,6 +505,7 @@ pub enum Route {
     GetPayload,
     GetPayloadV2,
     ProposerPayloadDelivered,
+    ProposerHeaderDelivered,
     BuilderBidsReceived,
     ValidatorRegistration,
     GetInclusionList,
@@ -525,6 +527,9 @@ impl Route {
             Route::GetPayloadV2 => format!("{PATH_PROPOSER_API_V2}{PATH_GET_PAYLOAD}"),
             Route::ProposerPayloadDelivered => {
                 format!("{PATH_DATA_API}{PATH_PROPOSER_PAYLOAD_DELIVERED}")
+            }
+            Route::ProposerHeaderDelivered => {
+                format!("{PATH_DATA_API}{PATH_PROPOSER_HEADER_DELIVERED}")
             }
             Route::BuilderBidsReceived => format!("{PATH_DATA_API}{PATH_BUILDER_BIDS_RECEIVED}"),
             Route::ValidatorRegistration => format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),

@@ -119,7 +119,14 @@ impl<A: Api> ProposerApi<A> {
         spawn_tracked!(
             async move {
                 if let Err(err) = db
-                    .save_get_header_call(params, bid_block_hash, trace, is_mev_boost, user_agent)
+                    .save_get_header_call(
+                        params,
+                        bid_block_hash,
+                        value,
+                        trace,
+                        is_mev_boost,
+                        user_agent,
+                    )
                     .await
                 {
                     error!(%err, "error saving get header call to database");
