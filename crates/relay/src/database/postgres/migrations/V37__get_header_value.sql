@@ -1,1 +1,0 @@
-ALTER TABLE get_header ADD COLUMN value NUMERIC;
