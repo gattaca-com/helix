@@ -438,6 +438,7 @@ impl BlockMergingApi {
         Ex: BlockExecutor<Transaction = SignedTx, Evm = Ev> + 'a,
         Ev: Evm<DB = &'a mut CachedRethDb<'a>> + 'a,
     {
+        info!(target: "rpc::relay::block_merging", ?updated_revenues, "Preparing to append payment tx");
         let distributed_value: U256 = updated_revenues.values().sum();
         let calldata = encode_disperse_eth_calldata(updated_revenues);
 
@@ -471,7 +472,7 @@ impl BlockMergingApi {
             access_list: Default::default(),
             input: calldata.into(),
         };
-        trace!(target: "rpc::relay::block_merging", ?disperse_tx, "Signing payment tx");
+        info!(target: "rpc::relay::block_merging", ?disperse_tx, "Signing payment tx");
 
         let signed_disperse_tx = sign_transaction(signer, disperse_tx)?;
 
