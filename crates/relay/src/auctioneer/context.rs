@@ -214,6 +214,38 @@ impl<B: BidAdjustor> Context<B> {
         };
         self.payloads.insert(block_hash, payload);
     }
+
+    pub fn handle_builder_demotion(
+        &mut self,
+        slot: Slot,
+        builder_pubkey: BlsPublicKeyBytes,
+        block_hash: B256,
+        reason: String,
+    ) {
+        if self.cache.demote_builder(&builder_pubkey) {
+            warn!(%builder_pubkey, %block_hash, "builder demoted due to block validation failure");
+
+            let db = self.db.clone();
+            let failsafe = self.sim_manager.failsafe_triggered.clone();
+            let slot_u64 = slot.as_u64();
+
+            spawn_tracked!(async move {
+                if let Err(err) =
+                    db.db_demote_builder(slot_u64, &builder_pubkey, &block_hash, reason).await
+                {
+                    failsafe.store(true, Ordering::Relaxed);
+                    error!(
+                        %builder_pubkey,
+                        %err,
+                        %block_hash,
+                        "failed to persist builder demotion in DB — pausing optimistic submissions"
+                    );
+                }
+            });
+        } else {
+            warn!(%reason, %builder_pubkey, %block_hash, "builder already demoted, skipping demotion");
+        }
+    }
 }
 
 impl<B: BidAdjustor> Deref for Context<B> {

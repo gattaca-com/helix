@@ -29,6 +29,9 @@ pub enum BeaconClientError {
 
     #[error("block integration failed")]
     BlockIntegrationFailed,
+
+    #[error("block validation failed: {0}")]
+    BlockValidationFailed(String),
 }
 
 impl IntoResponse for BeaconClientError {

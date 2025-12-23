@@ -84,6 +84,11 @@ impl AuctioneerHandle {
         trace!("sending to worker");
         self.auctioneer.try_send(Event::GossipPayload(req)).map_err(|_| ChannelFull)
     }
+
+    pub fn send_event(&self, event: Event) -> Result<(), ChannelFull> {
+        trace!("sending event to auctioneer: {:?}", event.as_str());
+        self.auctioneer.try_send(event).map_err(|_| ChannelFull)
+    }
 }
 
 pub struct ChannelFull;
