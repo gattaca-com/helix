@@ -36,7 +36,8 @@ impl<B: BidAdjustor> Context<B> {
         };
 
         if self.adjustments_enabled.load(Ordering::Relaxed) {
-            if let Some(adjusted_bid) = self.bid_adjustor.try_apply_adjustments(original_bid) {
+            if let Some(adjusted_bid) = self.bid_adjustor.try_apply_adjustments(original_bid, false)
+            {
                 let block_hash = adjusted_bid.block_hash();
                 self.payloads.insert(*block_hash, adjusted_bid.clone());
 

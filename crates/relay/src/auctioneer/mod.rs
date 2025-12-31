@@ -108,8 +108,16 @@ pub fn spawn_workers<B: BidAdjustor>(
 
         let bid_sorter = BidSorter::new(top_bid_tx);
         let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
-        let ctx =
-            Context::new(chain_info, config, sim_manager, db, bid_sorter, cache, bid_adjustor);
+        let ctx = Context::new(
+            chain_info,
+            config,
+            sim_manager,
+            db,
+            bid_sorter,
+            cache,
+            bid_adjustor,
+            event_tx.clone(),
+        );
         let id = format!("auctioneer_{auctioneer_core}");
         let auctioneer = Auctioneer { ctx, state: State::default(), tel: Telemetry::new(id) };
 
@@ -336,6 +344,29 @@ impl State {
             // late merge result
             (State::Broadcasting { .. } | State::Slot { .. }, Event::MergeResult((id, _))) => {
                 ctx.handle_simulation_result((id, None));
+            }
+
+            // Dry run adjusting & validating bids
+            (_, Event::DryRunAdjustments) => {
+                let Some(best_block_hash) = ctx.bid_sorter.get_any_header() else {
+                    warn!("adjustments dry run - no bids present yet");
+                    return;
+                };
+
+                let Some(original_bid) = ctx.payloads.get(&best_block_hash) else {
+                    error!(
+                        "adjustments dry run - failed to get payload from bid sorter, this should never happen!"
+                    );
+                    return;
+                };
+
+                if let Some(adjusted_bid) =
+                    ctx.bid_adjustor.try_apply_adjustments(original_bid, true)
+                {
+                    if let Some(sim_request) = adjusted_bid.into_sim_request() {
+                        ctx.sim_manager.handle_sim_request(sim_request);
+                    }
+                }
             }
 
             ///////////// VALID STATES / EVENTS /////////////

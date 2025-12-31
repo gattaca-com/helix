@@ -19,7 +19,7 @@ use tracing::{error, info, warn};
 use crate::{
     api::builder::error::BuilderApiError,
     auctioneer::{
-        BlockMergeResponse,
+        BlockMergeResponse, Event,
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
@@ -59,6 +59,7 @@ const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
 const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
 
 const DB_CHECK_INTERVAL_SEC: u64 = 5;
+const ADJUSTMENTS_DRY_RUN_INTERVAL_SEC: u64 = 2;
 
 impl<B: BidAdjustor> Context<B> {
     pub fn new(
@@ -69,6 +70,7 @@ impl<B: BidAdjustor> Context<B> {
         bid_sorter: BidSorter,
         cache: LocalCache,
         bid_adjustor: B,
+        auctioneer: crossbeam_channel::Sender<Event>,
     ) -> Self {
         let unknown_builder_info = BuilderInfo {
             collateral: U256::ZERO,
@@ -106,6 +108,8 @@ impl<B: BidAdjustor> Context<B> {
             adjustments_enabled.clone(),
             adjustments_failsafe_trigger.clone(),
         );
+
+        Self::spawn_adjustments_dry_run_task(auctioneer);
 
         Self {
             chain_info,
@@ -275,6 +279,21 @@ impl<B: BidAdjustor> Context<B> {
                 match db.check_adjustments_enabled().await {
                     Ok(value) => flag.store(value, Ordering::Relaxed),
                     Err(e) => tracing::error!("failed to check adjustments_enabled flag: {}", e),
+                }
+            }
+        });
+    }
+
+    fn spawn_adjustments_dry_run_task(auctioneer: crossbeam_channel::Sender<Event>) {
+        spawn_tracked!(async move {
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(ADJUSTMENTS_DRY_RUN_INTERVAL_SEC));
+            loop {
+                interval.tick().await;
+
+                // TODO: does this need to run if adjustments are disabled?
+                if let Err(e) = auctioneer.try_send(Event::DryRunAdjustments) {
+                    error!("failed to send adjustments dry run request: {}", e);
                 }
             }
         });

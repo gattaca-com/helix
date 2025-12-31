@@ -401,6 +401,7 @@ pub enum Event {
         is_synced: bool,
     },
     MergeResult(BlockMergeResult),
+    DryRunAdjustments,
 }
 
 impl Event {
@@ -414,6 +415,7 @@ impl Event {
             Event::SimResult(_) => "SimResult",
             Event::SimulatorSync { .. } => "SimulatorSync",
             Event::MergeResult(_) => "MergeResult",
+            Event::DryRunAdjustments => "DryRunAdjustments",
         }
     }
 }
