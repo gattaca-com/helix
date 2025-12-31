@@ -156,8 +156,8 @@ impl BlockMerger {
             return None;
         }
 
-        if entry.bid.payload_and_blobs.execution_payload.parent_hash !=
-            original_bid.payload_and_blobs.execution_payload.parent_hash
+        if entry.bid.payload_and_blobs().execution_payload.parent_hash !=
+            original_bid.payload_and_blobs().execution_payload.parent_hash
         {
             trace!("merged bid parent hash does not match original bid parent hash");
             return None;
@@ -281,7 +281,7 @@ impl BlockMerger {
     pub fn prepare_merged_payload_for_storage(
         &mut self,
         response: BlockMergeResponse,
-        original_payload: Arc<PayloadAndBlobs>,
+        original_payload: PayloadAndBlobs,
         builder_pubkey: BlsPublicKeyBytes,
     ) -> Result<PayloadEntry, PayloadMergingError> {
         debug!(?response.builder_inclusions, %response.proposer_value, "preparing merged payload for storage");
@@ -329,7 +329,7 @@ impl BlockMerger {
 
         let blobs = &self.best_mergeable_orders.mergeable_blob_bundles;
 
-        let mut merged_blobs_bundle = original_payload.blobs_bundle.clone();
+        let mut merged_blobs_bundle = original_payload.blobs_bundle.as_ref().to_owned();
         append_merged_blobs(
             &mut merged_blobs_bundle,
             blobs,
@@ -339,10 +339,10 @@ impl BlockMerger {
 
         let withdrawals_root = response.execution_payload.withdrawals_root();
 
-        let payload_and_blobs = Arc::new(PayloadAndBlobs {
-            execution_payload: response.execution_payload,
-            blobs_bundle: merged_blobs_bundle,
-        });
+        let payload_and_blobs = PayloadAndBlobs {
+            execution_payload: Arc::new(response.execution_payload),
+            blobs_bundle: Arc::new(merged_blobs_bundle),
+        };
 
         let bid_data = PayloadBidData {
             withdrawals_root,
@@ -354,12 +354,7 @@ impl BlockMerger {
 
         trace!(%block_hash, %response.proposer_value, "blobs appended to merged payload");
 
-        let new_bid = PayloadEntry {
-            payload_and_blobs: payload_and_blobs.clone(),
-            bid_data: bid_data.clone(),
-            bid_adjustment_data: None,
-            submission_version: None,
-        };
+        let new_bid = PayloadEntry::new_gossip(payload_and_blobs, bid_data);
 
         // Store locally to serve header requests
         self.best_merged_block = Some(BestMergedBlock {

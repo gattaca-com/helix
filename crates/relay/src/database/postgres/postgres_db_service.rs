@@ -536,7 +536,7 @@ impl PostgresDatabaseService {
                     proposer_fee_recipient: item.submission.proposer_fee_recipient().as_slice(),
                     gas_limit: item.submission.gas_limit() as i32,
                     gas_used: item.submission.gas_used() as i32,
-                    value: PostgresNumeric::from(item.submission.value()),
+                    value: PostgresNumeric::from(*item.submission.value()),
                     num_txs: item.submission.num_txs() as i32,
                     timestamp: item.submission.timestamp() as i64,
                     first_seen: item.trace.receive as i64,
@@ -2340,5 +2340,38 @@ impl PostgresDatabaseService {
 
         record.record_success();
         Ok(results)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn disable_adjustments(&self) -> Result<(), DatabaseError> {
+        let mut record = DbMetricRecord::new("disable_adjustments");
+
+        let mut client = self.high_priority_pool.get().await?;
+        let transaction = client.transaction().await?;
+
+        transaction.execute("UPDATE relay_info SET adjustments_enabled = FALSE", &[]).await?;
+
+        record.record_success();
+        Ok(())
+    }
+
+    pub async fn check_adjustments_enabled(&self) -> Result<bool, DatabaseError> {
+        let mut record = DbMetricRecord::new("check_adjustments_enabled");
+
+        let rows = self
+            .pool
+            .get()
+            .await?
+            .query("SELECT adjustments_enabled FROM relay_info LIMIT 1", &[])
+            .await?;
+
+        let enabled = rows
+            .iter()
+            .map(|row| row.get::<_, bool>("adjustments_enabled"))
+            .next()
+            .unwrap_or(false);
+
+        record.record_success();
+        Ok(enabled)
     }
 }

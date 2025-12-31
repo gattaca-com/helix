@@ -176,7 +176,7 @@ impl<B: BidAdjustor> Context<B> {
             is_top_bid,
             slot: submission.slot().as_u64(),
             block_hash: *submission.block_hash(),
-            block_value: submission.value(),
+            block_value: *submission.value(),
             proposer_fee_recipient: *submission.proposer_fee_recipient(),
             parent_beacon_block_root: payload_attributes.parent_beacon_block_root,
             execution_payload: submission.execution_payload_ref().clone(),
@@ -202,14 +202,12 @@ impl<B: BidAdjustor> Context<B> {
         res_tx: Option<oneshot::Sender<SubmissionResult>>,
         slot_data: &SlotData,
     ) {
-        let inclusion_list = slot_data.il.clone();
-
         let request = BlockSimRequest::new(
             slot_data.registration_data.entry.registration.message.gas_limit,
             &validated.submission,
             slot_data.registration_data.entry.preferences.clone(),
             validated.payload_attributes.parent_beacon_block_root,
-            inclusion_list,
+            slot_data.il.clone(),
         );
 
         let req = SimulatorRequest {
@@ -231,6 +229,9 @@ impl<B: BidAdjustor> Context<B> {
             validated.tx_root,
             validated.bid_adjustment_data,
             validated.version,
+            validated.trace,
+            slot_data.into(),
+            validated.payload_attributes.parent_beacon_block_root,
         );
         self.payloads.insert(block_hash, entry);
     }

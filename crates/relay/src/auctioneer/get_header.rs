@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use alloy_primitives::B256;
 use helix_common::api::proposer_api::GetHeaderParams;
 use tokio::sync::oneshot;
@@ -33,11 +35,17 @@ impl<B: BidAdjustor> Context<B> {
             return Ok(merged_bid);
         };
 
-        if let Some(adjusted_bid) = self.bid_adjustor.try_apply_adjustments(original_bid) {
-            let block_hash = adjusted_bid.block_hash();
-            self.payloads.insert(*block_hash, adjusted_bid.clone());
+        if self.adjustments_enabled.load(Ordering::Relaxed) {
+            if let Some(adjusted_bid) = self.bid_adjustor.try_apply_adjustments(original_bid) {
+                let block_hash = adjusted_bid.block_hash();
+                self.payloads.insert(*block_hash, adjusted_bid.clone());
 
-            return Ok(adjusted_bid);
+                if let Some(sim_request) = adjusted_bid.into_sim_request() {
+                    self.sim_manager.handle_sim_request(sim_request);
+                }
+
+                return Ok(adjusted_bid);
+            }
         }
 
         Ok(original_bid.clone())

@@ -1,6 +1,9 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::{Arc, atomic::Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 
@@ -48,6 +51,7 @@ pub struct Context<B: BidAdjustor> {
     pub db: Arc<PostgresDatabaseService>,
     pub slot_context: SlotContext,
     pub bid_adjustor: B,
+    pub adjustments_enabled: Arc<AtomicBool>,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
@@ -91,7 +95,18 @@ impl<B: BidAdjustor> Context<B> {
             block_merger,
         };
 
-        Self { chain_info, cache, unknown_builder_info, slot_context, db, config, bid_adjustor }
+        let adjustments_enabled = Arc::new(AtomicBool::new(true));
+
+        Self {
+            chain_info,
+            cache,
+            unknown_builder_info,
+            slot_context,
+            db,
+            config,
+            bid_adjustor,
+            adjustments_enabled,
+        }
     }
 
     pub fn builder_info(&self, builder: &BlsPublicKeyBytes) -> BuilderInfo {
@@ -117,7 +132,18 @@ impl<B: BidAdjustor> Context<B> {
         if let Err(err) = result.result.as_ref() &&
             err.is_demotable()
         {
-            if self.cache.demote_builder(&builder) {
+            if self.payloads.get(&block_hash).is_some_and(|bid| bid.is_adjusted()) {
+                warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Disabling adjustments...");
+
+                let db = self.db.clone();
+                let adjustments_enabled = self.adjustments_enabled.clone();
+                spawn_tracked!(async move {
+                    if let Err(err) = db.disable_adjustments().await {
+                        error!(%block_hash, %err, "failed to disable adjustments in database, pulling the failsafe trigger");
+                        adjustments_enabled.store(false, Ordering::Relaxed);
+                    }
+                });
+            } else if self.cache.demote_builder(&builder) {
                 warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
 
                 SimulatorMetrics::demotion_count();
@@ -196,8 +222,8 @@ impl<B: BidAdjustor> Context<B> {
             return;
         };
 
-        let original_payload_and_blobs = original_payload.payload_and_blobs.clone();
-        let builder_pubkey = original_payload.bid_data.builder_pubkey;
+        let original_payload_and_blobs = original_payload.payload_and_blobs();
+        let builder_pubkey = original_payload.bid_data().builder_pubkey;
 
         //TODO: this function does a lot of work, should move that work away from the event loop
         let Some(payload) = self

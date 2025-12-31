@@ -10,7 +10,7 @@ use tree_hash_derive::TreeHash;
 
 use crate::{
     BlobsBundle, BlobsBundleV1, BlobsBundleV2, BlobsError, Bloom, BlsPublicKey, BlsPublicKeyBytes,
-    BlsSignature, BlsSignatureBytes, ExecutionPayload, ExtraData, PayloadAndBlobsRef, SszError,
+    BlsSignature, BlsSignatureBytes, ExecutionPayload, ExtraData, PayloadAndBlobs, SszError,
     bid_adjustment_data::BidAdjustmentData, error::SigError, fields::ExecutionRequests,
 };
 
@@ -325,6 +325,15 @@ impl SignedBidSubmission {
         }
     }
 
+    pub fn message_mut(&mut self) -> &mut BidTrace {
+        match self {
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                &mut signed_bid_submission.message
+            }
+            SignedBidSubmission::Fulu(signed_bid_submission) => &mut signed_bid_submission.message,
+        }
+    }
+
     pub fn execution_payload_ref(&self) -> &ExecutionPayload {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
@@ -336,15 +345,26 @@ impl SignedBidSubmission {
         }
     }
 
-    pub fn payload_and_blobs_ref(&self) -> PayloadAndBlobsRef<'_> {
+    pub fn execution_payload_make_mut(&mut self) -> &mut ExecutionPayload {
         match self {
-            SignedBidSubmission::Electra(signed_bid_submission) => PayloadAndBlobsRef {
-                execution_payload: self.execution_payload_ref(),
-                blobs_bundle: &signed_bid_submission.blobs_bundle,
+            SignedBidSubmission::Electra(signed_bid_submission) => {
+                Arc::make_mut(&mut signed_bid_submission.execution_payload)
+            }
+            SignedBidSubmission::Fulu(signed_bid_submission) => {
+                Arc::make_mut(&mut signed_bid_submission.execution_payload)
+            }
+        }
+    }
+
+    pub fn payload_and_blobs(&self) -> PayloadAndBlobs {
+        match self {
+            SignedBidSubmission::Electra(sub) => PayloadAndBlobs {
+                execution_payload: sub.execution_payload.clone(),
+                blobs_bundle: sub.blobs_bundle.clone(),
             },
-            SignedBidSubmission::Fulu(signed_bid_submission) => PayloadAndBlobsRef {
-                execution_payload: self.execution_payload_ref(),
-                blobs_bundle: &signed_bid_submission.blobs_bundle,
+            SignedBidSubmission::Fulu(sub) => PayloadAndBlobs {
+                execution_payload: sub.execution_payload.clone(),
+                blobs_bundle: sub.blobs_bundle.clone(),
             },
         }
     }
@@ -486,12 +506,14 @@ impl SignedBidSubmission {
         }
     }
 
-    pub fn value(&self) -> U256 {
+    pub fn value(&self) -> &U256 {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
-                signed_bid_submission.message.value
+                &signed_bid_submission.message.value
             }
-            SignedBidSubmission::Fulu(signed_bid_submission) => signed_bid_submission.message.value,
+            SignedBidSubmission::Fulu(signed_bid_submission) => {
+                &signed_bid_submission.message.value
+            }
         }
     }
 

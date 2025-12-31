@@ -36,7 +36,7 @@ use helix_types::Slot;
 use rustc_hash::FxHashMap;
 pub use simulator::*;
 use tracing::{debug, error, info, info_span, trace, warn};
-pub use types::{Event, GetPayloadResultData, PayloadBidData, PayloadEntry};
+pub use types::{Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SubmissionPayload};
 use worker::{RegWorker, SubWorker};
 
 pub use crate::auctioneer::{
@@ -397,12 +397,12 @@ impl State {
 
                 if let Some(local) = ctx.payloads.get(&block_hash) {
                     if let Some(block_hash) = ctx.handle_get_payload(
-                        local.payload_and_blobs.clone(),
+                        local.payload_and_blobs(),
                         *blinded,
                         trace,
                         res_tx,
                         slot_data,
-                        local.bid_data.clone(),
+                        local.bid_data(),
                     ) {
                         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
                         *self = State::Broadcasting { slot_data: slot_data.clone(), block_hash }

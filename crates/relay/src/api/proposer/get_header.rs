@@ -136,8 +136,8 @@ impl<A: Api> ProposerApi<A> {
         );
 
         let fork = proposer_api.chain_info.current_fork_name();
-        let payload_and_blobs = bid.payload_and_blobs.clone();
-        let bid_data = bid.bid_data.clone();
+        let payload_and_blobs = bid.payload_and_blobs();
+        let bid_data = bid.bid_data();
         let bid = bid.into_builder_bid_slow();
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
 
