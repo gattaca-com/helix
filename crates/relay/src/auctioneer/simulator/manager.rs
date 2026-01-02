@@ -269,6 +269,7 @@ impl SimulatorManager {
 
         self.last_bid_slot = bid_slot;
         self.requests.clear(bid_slot);
+        self.priority_requests.clear(bid_slot);
         let now = Instant::now();
         for s in self.simulators.iter_mut() {
             if s.paused_until.is_some_and(|until| until < now) {

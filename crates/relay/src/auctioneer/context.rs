@@ -298,7 +298,6 @@ impl<B: BidAdjustor> Context<B> {
                                 value
                             );
                         }
-                        flag.store(value, Ordering::Relaxed)
                     }
                     Err(e) => tracing::error!("failed to check adjustments_enabled flag: {}", e),
                 }

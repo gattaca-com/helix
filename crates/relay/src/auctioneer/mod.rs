@@ -347,26 +347,23 @@ impl State {
 
             // Dry run adjustments to validate bids throughout the slot
             // to be able to disable them before get_header is called
-            (
-                State::Broadcasting { slot_data, .. } | State::Sorting(slot_data),
-                Event::DryRunAdjustments,
-            ) => {
-                Self::dry_run_adjustments(ctx, slot_data);
-            }
+            (State::Sorting(slot_data), Event::DryRunAdjustments) => {
+                let Some(best_block_hash) = ctx.bid_sorter.get_any_top_bid() else {
+                    warn!("adjustments dry run - no bids present yet");
+                    return;
+                };
 
-            (
-                State::Slot { bid_slot, registration_data, payload_attributes_map, il },
-                Event::DryRunAdjustments,
-            ) => {
-                if let Some(registration_data) = registration_data {
-                    let slot_data = SlotData {
-                        bid_slot: bid_slot.clone(),
-                        registration_data: registration_data.clone(),
-                        payload_attributes_map: payload_attributes_map.clone(),
-                        current_fork: ForkName::latest(),
-                        il: il.clone(),
-                    };
-                    Self::dry_run_adjustments(ctx, &slot_data);
+                let Some(original_bid) = ctx.payloads.get(&best_block_hash) else {
+                    error!(
+                        "adjustments dry run - failed to get payload from bid sorter, this should never happen!"
+                    );
+                    return;
+                };
+
+                if let Some((_, sim_request)) =
+                    ctx.bid_adjustor.try_apply_adjustments(original_bid, slot_data, true)
+                {
+                    ctx.sim_manager.handle_sim_request(sim_request, true);
                 }
             }
 
@@ -582,6 +579,8 @@ impl State {
                     warn!(curr =% bid_slot, gossip_slot = payload.slot, "received early or late gossip payload");
                 }
             }
+
+            (State::Slot { .. } | State::Broadcasting { .. }, Event::DryRunAdjustments) => {}
         }
     }
 
@@ -644,26 +643,6 @@ impl State {
         // Note that we may still fail to actually broacast the block after we change State, eg. if
         // the request came to late, or if we fail to broadcast the block
         Some(State::Broadcasting { slot_data: slot_data.clone(), block_hash })
-    }
-
-    fn dry_run_adjustments<B: BidAdjustor>(ctx: &mut Context<B>, slot_data: &SlotData) {
-        let Some(best_block_hash) = ctx.bid_sorter.get_any_top_bid() else {
-            warn!("adjustments dry run - no bids present yet");
-            return;
-        };
-
-        let Some(original_bid) = ctx.payloads.get(&best_block_hash) else {
-            error!(
-                "adjustments dry run - failed to get payload from bid sorter, this should never happen!"
-            );
-            return;
-        };
-
-        if let Some((_, sim_request)) =
-            ctx.bid_adjustor.try_apply_adjustments(original_bid, slot_data, true)
-        {
-            ctx.sim_manager.handle_sim_request(sim_request, true);
-        }
     }
 }
 
