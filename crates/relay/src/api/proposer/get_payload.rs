@@ -351,7 +351,7 @@ impl<A: Api> ProposerApi<A> {
                 .save_delivered_payload_info(
                     slot.as_u64(),
                     payload_clone,
-                    bid,
+                    &bid,
                     proposer_public_key,
                     proposer_fee_recipient,
                     &trace_clone,
@@ -434,7 +434,7 @@ impl<A: Api> ProposerApi<A> {
         &self,
         slot: u64,
         payload: PayloadAndBlobs,
-        bid: PayloadBidData,
+        bid: &PayloadBidData,
         proposer_public_key: BlsPublicKeyBytes,
         proposer_fee_recipient: Address,
         trace: &GetPayloadTrace,

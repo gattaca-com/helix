@@ -220,7 +220,7 @@ impl<B: BidAdjustor> Context<B> {
             version: validated.version,
         };
 
-        self.sim_manager.handle_sim_request(req);
+        self.sim_manager.handle_sim_request(req, false);
 
         let block_hash = *validated.submission.block_hash();
         let entry = PayloadEntry::new_submission(
@@ -230,7 +230,6 @@ impl<B: BidAdjustor> Context<B> {
             validated.bid_adjustment_data,
             validated.version,
             validated.trace,
-            slot_data.into(),
             validated.payload_attributes.parent_beacon_block_root,
         );
         self.payloads.insert(block_hash, entry);

@@ -369,13 +369,13 @@ impl SignedBidSubmission {
         }
     }
 
-    pub fn execution_requests(&self) -> Arc<ExecutionRequests> {
+    pub fn execution_requests_ref(&self) -> &Arc<ExecutionRequests> {
         match self {
             SignedBidSubmission::Electra(signed_bid_submission) => {
-                signed_bid_submission.execution_requests.clone()
+                &signed_bid_submission.execution_requests
             }
             SignedBidSubmission::Fulu(signed_bid_submission) => {
-                signed_bid_submission.execution_requests.clone()
+                &signed_bid_submission.execution_requests
             }
         }
     }

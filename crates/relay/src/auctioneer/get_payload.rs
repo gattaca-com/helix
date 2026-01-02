@@ -88,7 +88,7 @@ impl<B: BidAdjustor> Context<B> {
                 trace,
                 res_tx,
                 slot_data,
-                local.bid_data(),
+                local.bid_data_ref().to_owned(),
             )
         } else {
             self.pending_payload = Some(pending);

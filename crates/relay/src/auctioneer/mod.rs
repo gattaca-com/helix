@@ -32,25 +32,24 @@ use helix_common::{
     record_submission_step,
     utils::pin_thread_to_core,
 };
-use helix_types::Slot;
+use helix_types::{ForkName, Slot};
 use rustc_hash::FxHashMap;
 pub use simulator::*;
 use tracing::{debug, error, info, info_span, trace, warn};
-pub use types::{Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SubmissionPayload};
+pub use types::{
+    Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, SubmissionPayload,
+};
 use worker::{RegWorker, SubWorker};
 
 pub use crate::auctioneer::{
     bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
-    simulator::client::SimulatorClient,
+    simulator::{SimulatorRequest, client::SimulatorClient},
 };
 use crate::{
     PostgresDatabaseService,
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::{
-        bid_sorter::BidSorter,
-        context::Context,
-        manager::SimulatorManager,
-        types::{PendingPayload, SlotData},
+        bid_sorter::BidSorter, context::Context, manager::SimulatorManager, types::PendingPayload,
     },
     housekeeper::PayloadAttributesUpdate,
 };
@@ -346,26 +345,28 @@ impl State {
                 ctx.handle_simulation_result((id, None));
             }
 
-            // Dry run adjusting & validating bids
-            (_, Event::DryRunAdjustments) => {
-                let Some(best_block_hash) = ctx.bid_sorter.get_any_top_bid() else {
-                    warn!("adjustments dry run - no bids present yet");
-                    return;
-                };
+            // Dry run adjustments to validate bids throughout the slot
+            // to be able to disable them before get_header is called
+            (
+                State::Broadcasting { slot_data, .. } | State::Sorting(slot_data),
+                Event::DryRunAdjustments,
+            ) => {
+                Self::dry_run_adjustments(ctx, slot_data);
+            }
 
-                let Some(original_bid) = ctx.payloads.get(&best_block_hash) else {
-                    error!(
-                        "adjustments dry run - failed to get payload from bid sorter, this should never happen!"
-                    );
-                    return;
-                };
-
-                if let Some(adjusted_bid) =
-                    ctx.bid_adjustor.try_apply_adjustments(original_bid, true)
-                {
-                    if let Some(sim_request) = adjusted_bid.into_sim_request() {
-                        ctx.sim_manager.handle_sim_request(sim_request);
-                    }
+            (
+                State::Slot { bid_slot, registration_data, payload_attributes_map, il },
+                Event::DryRunAdjustments,
+            ) => {
+                if let Some(registration_data) = registration_data {
+                    let slot_data = SlotData {
+                        bid_slot: bid_slot.clone(),
+                        registration_data: registration_data.clone(),
+                        payload_attributes_map: payload_attributes_map.clone(),
+                        current_fork: ForkName::latest(),
+                        il: il.clone(),
+                    };
+                    Self::dry_run_adjustments(ctx, &slot_data);
                 }
             }
 
@@ -411,7 +412,7 @@ impl State {
                     warn!(req =% params.pubkey, this =% slot_data.registration_data.entry.registration.message.pubkey, "get header for mismatched proposer");
                     let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
                 } else {
-                    ctx.handle_get_header(params, res_tx)
+                    ctx.handle_get_header(params, slot_data, res_tx)
                 }
 
                 trace!("finished processing");
@@ -433,7 +434,7 @@ impl State {
                         trace,
                         res_tx,
                         slot_data,
-                        local.bid_data(),
+                        local.bid_data_ref().to_owned(),
                     ) {
                         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
                         *self = State::Broadcasting { slot_data: slot_data.clone(), block_hash }
@@ -643,6 +644,26 @@ impl State {
         // Note that we may still fail to actually broacast the block after we change State, eg. if
         // the request came to late, or if we fail to broadcast the block
         Some(State::Broadcasting { slot_data: slot_data.clone(), block_hash })
+    }
+
+    fn dry_run_adjustments<B: BidAdjustor>(ctx: &mut Context<B>, slot_data: &SlotData) {
+        let Some(best_block_hash) = ctx.bid_sorter.get_any_top_bid() else {
+            warn!("adjustments dry run - no bids present yet");
+            return;
+        };
+
+        let Some(original_bid) = ctx.payloads.get(&best_block_hash) else {
+            error!(
+                "adjustments dry run - failed to get payload from bid sorter, this should never happen!"
+            );
+            return;
+        };
+
+        if let Some((_, sim_request)) =
+            ctx.bid_adjustor.try_apply_adjustments(original_bid, slot_data, true)
+        {
+            ctx.sim_manager.handle_sim_request(sim_request, true);
+        }
     }
 }
 

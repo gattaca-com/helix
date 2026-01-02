@@ -6,7 +6,7 @@ use std::{
 
 use alloy_primitives::{B256, U256};
 use helix_common::{
-    GetPayloadTrace, SubmissionTrace, ValidatorPreferences,
+    GetPayloadTrace, SubmissionTrace,
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         proposer_api::GetHeaderParams,
@@ -20,15 +20,14 @@ use helix_types::{
     SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
 };
 use rustc_hash::FxHashMap;
+use serde::Serialize;
 use ssz_derive::{Decode, Encode};
 use tokio::sync::oneshot;
 use tracing::debug;
 
 use crate::{
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
-    auctioneer::{
-        BlockMergeResult, BlockSimRequest, SimulatorRequest, simulator::manager::SimulationResult,
-    },
+    auctioneer::{BlockMergeResult, simulator::manager::SimulationResult},
     gossip::BroadcastPayloadParams,
     housekeeper::PayloadAttributesUpdate,
 };
@@ -109,7 +108,7 @@ impl Submission {
 }
 
 #[derive(Clone)]
-pub struct GossipedPayload {
+pub struct GossipPayload {
     pub payload_and_blobs: PayloadAndBlobs,
     pub bid_data: PayloadBidData,
 }
@@ -123,14 +122,13 @@ pub struct SubmissionPayload {
     pub is_adjusted: bool,
     pub submission_version: SubmissionVersion,
     pub submission_trace: SubmissionTrace,
-    pub slot_data: SimSlotData,
     pub parent_beacon_block_root: Option<B256>,
 }
 
 #[derive(Clone)]
 pub enum PayloadEntry {
     Submission(SubmissionPayload),
-    Gossip(GossipedPayload),
+    Gossip(GossipPayload),
 }
 
 impl PayloadEntry {
@@ -141,7 +139,6 @@ impl PayloadEntry {
         bid_adjustment_data: Option<BidAdjustmentData>,
         submission_version: SubmissionVersion,
         submission_trace: SubmissionTrace,
-        slot_data: SimSlotData,
         parent_beacon_block_root: Option<B256>,
     ) -> Self {
         Self::Submission(SubmissionPayload {
@@ -152,21 +149,16 @@ impl PayloadEntry {
             is_adjusted: false,
             submission_version,
             submission_trace,
-            slot_data,
             parent_beacon_block_root,
         })
     }
 
     pub fn new_gossip(payload_and_blobs: PayloadAndBlobs, bid_data: PayloadBidData) -> Self {
-        Self::Gossip(GossipedPayload { payload_and_blobs, bid_data })
+        Self::Gossip(GossipPayload { payload_and_blobs, bid_data })
     }
 
     pub fn is_adjusted(&self) -> bool {
-        if let Self::Submission(s) = self {
-            return s.is_adjusted;
-        }
-
-        return false;
+        matches!(self, Self::Submission(s) if s.is_adjusted)
     }
 
     pub fn value(&self) -> &U256 {
@@ -183,16 +175,23 @@ impl PayloadEntry {
         }
     }
 
-    pub fn bid_data(&self) -> PayloadBidData {
+    pub fn parent_hash(&self) -> &B256 {
         match &self {
-            Self::Submission(s) => PayloadBidData {
-                withdrawals_root: s.withdrawals_root,
-                tx_root: s.tx_root,
-                execution_requests: s.signed_bid_submission.execution_requests().clone(),
-                value: *s.signed_bid_submission.value(),
-                builder_pubkey: *s.signed_bid_submission.builder_public_key(),
+            Self::Submission(s) => &s.signed_bid_submission.execution_payload_ref().parent_hash,
+            Self::Gossip(s) => &s.payload_and_blobs.execution_payload.parent_hash,
+        }
+    }
+
+    pub fn bid_data_ref(&self) -> PayloadBidDataRef<'_> {
+        match &self {
+            Self::Submission(s) => PayloadBidDataRef {
+                withdrawals_root: &s.withdrawals_root,
+                tx_root: &s.tx_root,
+                execution_requests: s.signed_bid_submission.execution_requests_ref(),
+                value: s.signed_bid_submission.value(),
+                builder_pubkey: s.signed_bid_submission.builder_public_key(),
             },
-            Self::Gossip(s) => s.bid_data.clone(),
+            Self::Gossip(s) => PayloadBidDataRef::from(&s.bid_data),
         }
     }
 
@@ -222,18 +221,18 @@ impl PayloadEntry {
             Self::Submission(s) => (
                 Some(s.withdrawals_root),
                 s.tx_root,
-                s.signed_bid_submission.execution_requests().clone(),
-                s.signed_bid_submission.payload_and_blobs().blobs_bundle.commitments().clone(),
+                s.signed_bid_submission.execution_requests_ref().clone(),
+                s.signed_bid_submission.blobs_bundle().commitments().to_owned(),
             ),
             Self::Gossip(s) => (
                 None,
                 None,
                 s.bid_data.execution_requests.clone(),
-                s.payload_and_blobs.blobs_bundle.commitments().clone(),
+                s.payload_and_blobs.blobs_bundle.commitments().to_owned(),
             ),
         };
 
-        let header = self.execution_payload().clone().to_header(withdrawals_root, tx_root);
+        let header = self.execution_payload().to_header(withdrawals_root, tx_root);
 
         let bid = BuilderBid {
             header,
@@ -248,33 +247,6 @@ impl PayloadEntry {
 
         bid
     }
-
-    pub fn into_sim_request(&self) -> Option<SimulatorRequest> {
-        match &self {
-            Self::Gossip(_) => None,
-            Self::Submission(bid) => {
-                let request = BlockSimRequest::new(
-                    bid.slot_data.gas_limit,
-                    &bid.signed_bid_submission,
-                    bid.slot_data.validator_preferences.clone(),
-                    bid.parent_beacon_block_root,
-                    bid.slot_data.inclusion_list.clone(),
-                );
-
-                let request = SimulatorRequest {
-                    request,
-                    is_top_bid: true,
-                    res_tx: None,
-                    submission: bid.signed_bid_submission.clone(),
-                    trace: bid.submission_trace.clone(),
-                    tx_root: bid.tx_root,
-                    version: bid.submission_version,
-                };
-
-                Some(request)
-            }
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -284,6 +256,38 @@ pub struct PayloadBidData {
     pub execution_requests: Arc<ExecutionRequests>,
     pub value: U256,
     pub builder_pubkey: BlsPublicKeyBytes,
+}
+
+#[derive(Clone, PartialEq, Debug, Encode, Serialize)]
+pub struct PayloadBidDataRef<'a> {
+    pub withdrawals_root: &'a B256,
+    pub tx_root: &'a Option<B256>,
+    pub execution_requests: &'a Arc<ExecutionRequests>,
+    pub value: &'a U256,
+    pub builder_pubkey: &'a BlsPublicKeyBytes,
+}
+
+impl<'a> From<&'a PayloadBidData> for PayloadBidDataRef<'a> {
+    fn from(bid_data: &'a PayloadBidData) -> Self {
+        Self {
+            withdrawals_root: &bid_data.withdrawals_root,
+            tx_root: &bid_data.tx_root,
+            execution_requests: &bid_data.execution_requests,
+            value: &bid_data.value,
+            builder_pubkey: &bid_data.builder_pubkey,
+        }
+    }
+}
+
+impl PayloadBidDataRef<'_> {
+    pub fn to_owned(&self) -> PayloadBidData {
+        let withdrawals_root = self.withdrawals_root.clone();
+        let tx_root = self.tx_root.clone();
+        let execution_requests = self.execution_requests.clone();
+        let value = *self.value;
+        let builder_pubkey = self.builder_pubkey.clone();
+        PayloadBidData { withdrawals_root, tx_root, execution_requests, value, builder_pubkey }
+    }
 }
 
 pub enum SubWorkerJob {
@@ -324,23 +328,6 @@ pub struct SlotData {
     pub current_fork: ForkName,
     /// Inclusion list
     pub il: Option<InclusionListWithMetadata>,
-}
-
-#[derive(Clone)]
-pub struct SimSlotData {
-    pub gas_limit: u64,
-    pub validator_preferences: ValidatorPreferences,
-    pub inclusion_list: Option<InclusionListWithMetadata>,
-}
-
-impl From<&SlotData> for SimSlotData {
-    fn from(data: &SlotData) -> Self {
-        Self {
-            gas_limit: data.registration_data.entry.registration.message.gas_limit.clone(),
-            validator_preferences: data.registration_data.entry.preferences.clone(),
-            inclusion_list: data.il.clone(),
-        }
-    }
 }
 
 // cpu "intensive" stuff is:

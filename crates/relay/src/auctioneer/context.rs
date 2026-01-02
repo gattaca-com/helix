@@ -58,8 +58,8 @@ pub struct Context<B: BidAdjustor> {
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
 const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
 
-const DB_CHECK_INTERVAL_SEC: u64 = 5;
-const ADJUSTMENTS_DRY_RUN_INTERVAL_SEC: u64 = 2;
+const DB_CHECK_INTERVAL_SEC: u64 = 1;
+const ADJUSTMENTS_DRY_RUN_INTERVAL_MS: u64 = 500;
 
 impl<B: BidAdjustor> Context<B> {
     pub fn new(
@@ -147,26 +147,30 @@ impl<B: BidAdjustor> Context<B> {
         if let Err(err) = result.result.as_ref() &&
             err.is_demotable()
         {
-            if self.adjustments_enabled.load(Ordering::Relaxed) &&
-                self.payloads.get(&block_hash).is_some_and(|bid| bid.is_adjusted())
-            {
-                warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Disabling adjustments...");
+            if self.payloads.get(&block_hash).is_some_and(|bid| bid.is_adjusted()) {
+                warn!(%builder, %block_hash, %err, "block simulation resulted in an error. Disabling adjustments...");
 
-                SimulatorMetrics::disable_adjustments();
-                self.adjustments_enabled.store(false, Ordering::Relaxed);
+                if !self.adjustments_enabled.load(Ordering::Relaxed) {
+                    warn!(%builder, %block_hash, %err, "adjustments already disabled");
+                } else {
+                    SimulatorMetrics::disable_adjustments();
+                    self.adjustments_enabled.store(false, Ordering::Relaxed);
 
-                let db = self.db.clone();
-                let failsafe_trigger = self.adjustments_failsafe_trigger.clone();
-                spawn_tracked!(async move {
-                    if let Err(err) = db.disable_adjustments().await {
-                        failsafe_trigger.store(true, Ordering::Relaxed);
-                        error!(%block_hash, %err, "failed to disable adjustments in database, pulling the failsafe trigger");
-                        alert_discord(&format!(
-                            "{} {} failed to disable adjustments in database, pulling the failsafe trigger",
-                            err, block_hash
-                        ));
-                    }
-                });
+                    let db = self.db.clone();
+                    let failsafe_trigger = self.adjustments_failsafe_trigger.clone();
+                    let adjustments_enabled = self.adjustments_enabled.clone();
+                    spawn_tracked!(async move {
+                        if let Err(err) = db.disable_adjustments().await {
+                            failsafe_trigger.store(true, Ordering::Relaxed);
+                            adjustments_enabled.store(false, Ordering::Relaxed);
+                            error!(%block_hash, %err, "failed to disable adjustments in database, pulling the failsafe trigger");
+                            alert_discord(&format!(
+                                "{} {} failed to disable adjustments in database, pulling the failsafe trigger",
+                                err, block_hash
+                            ));
+                        }
+                    });
+                }
             } else if self.cache.demote_builder(&builder) {
                 warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
 
@@ -251,7 +255,7 @@ impl<B: BidAdjustor> Context<B> {
         };
 
         let original_payload_and_blobs = original_payload.payload_and_blobs();
-        let builder_pubkey = original_payload.bid_data().builder_pubkey;
+        let builder_pubkey = original_payload.bid_data_ref().builder_pubkey.clone();
 
         //TODO: this function does a lot of work, should move that work away from the event loop
         let Some(payload) = self
@@ -285,7 +289,17 @@ impl<B: BidAdjustor> Context<B> {
                 }
 
                 match db.check_adjustments_enabled().await {
-                    Ok(value) => flag.store(value, Ordering::Relaxed),
+                    Ok(value) => {
+                        let previous = flag.swap(value, Ordering::Relaxed);
+                        if previous != value {
+                            tracing::info!(
+                                "adjustments enabled flag changed from {} to {}",
+                                previous,
+                                value
+                            );
+                        }
+                        flag.store(value, Ordering::Relaxed)
+                    }
                     Err(e) => tracing::error!("failed to check adjustments_enabled flag: {}", e),
                 }
             }
@@ -298,7 +312,7 @@ impl<B: BidAdjustor> Context<B> {
     ) {
         spawn_tracked!(async move {
             let mut interval =
-                tokio::time::interval(Duration::from_secs(ADJUSTMENTS_DRY_RUN_INTERVAL_SEC));
+                tokio::time::interval(Duration::from_millis(ADJUSTMENTS_DRY_RUN_INTERVAL_MS));
             loop {
                 interval.tick().await;
 

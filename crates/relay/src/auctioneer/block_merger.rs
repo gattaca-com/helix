@@ -156,9 +156,7 @@ impl BlockMerger {
             return None;
         }
 
-        if entry.bid.payload_and_blobs().execution_payload.parent_hash !=
-            original_bid.payload_and_blobs().execution_payload.parent_hash
-        {
+        if entry.bid.parent_hash() != original_bid.parent_hash() {
             trace!("merged bid parent hash does not match original bid parent hash");
             return None;
         }
