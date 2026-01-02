@@ -348,7 +348,7 @@ impl State {
 
             // Dry run adjusting & validating bids
             (_, Event::DryRunAdjustments) => {
-                let Some(best_block_hash) = ctx.bid_sorter.get_any_header() else {
+                let Some(best_block_hash) = ctx.bid_sorter.get_any_top_bid() else {
                     warn!("adjustments dry run - no bids present yet");
                     return;
                 };

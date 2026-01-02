@@ -10,7 +10,7 @@ use std::{
 use alloy_primitives::{B256, U256};
 use helix_common::{
     BuilderInfo, RelayConfig, chain_info::ChainInfo, local_cache::LocalCache,
-    metrics::SimulatorMetrics, spawn_tracked,
+    metrics::SimulatorMetrics, spawn_tracked, utils::alert_discord,
 };
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
 use rustc_hash::FxHashMap;
@@ -159,8 +159,12 @@ impl<B: BidAdjustor> Context<B> {
                 let failsafe_trigger = self.adjustments_failsafe_trigger.clone();
                 spawn_tracked!(async move {
                     if let Err(err) = db.disable_adjustments().await {
-                        error!(%block_hash, %err, "failed to disable adjustments in database, pulling the failsafe trigger");
                         failsafe_trigger.store(true, Ordering::Relaxed);
+                        error!(%block_hash, %err, "failed to disable adjustments in database, pulling the failsafe trigger");
+                        alert_discord(&format!(
+                            "{} {} failed to disable adjustments in database, pulling the failsafe trigger",
+                            err, block_hash
+                        ));
                     }
                 });
             } else if self.cache.demote_builder(&builder) {
@@ -179,6 +183,10 @@ impl<B: BidAdjustor> Context<B> {
                     {
                         failsafe_triggered.store(true, Ordering::Relaxed);
                         error!(%builder, %err, %block_hash, "failed to demote builder in database! Pausing all optmistic submissions");
+                        alert_discord(&format!(
+                            "{} {} {} failed to demote builder in database! Pausing all optmistic submissions",
+                            builder, err, block_hash
+                        ));
                     }
                 });
             } else {
