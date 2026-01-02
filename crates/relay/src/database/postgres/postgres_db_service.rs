@@ -2205,7 +2205,7 @@ impl PostgresDatabaseService {
                     adjusted_block_hash,
                     adjusted_value
                 FROM bid_adjustments
-                WHERE slot = $1
+                WHERE slot = $1 AND COALESCE(is_dry_run, FALSE) = FALSE
                 ",
                 &[&(slot.as_u64() as i64)],
             )
@@ -2220,7 +2220,7 @@ impl PostgresDatabaseService {
         &self,
         entry: DataAdjustmentsEntry,
     ) -> Result<(), DatabaseError> {
-        let mut record = DbMetricRecord::new("save_bloc_adjustments_data");
+        let mut record = DbMetricRecord::new("save_block_adjustments_data");
 
         self.pool
             .get()
@@ -2237,10 +2237,11 @@ impl PostgresDatabaseService {
                         submitted_received_at,
                         submitted_value,
                         adjusted_block_hash,
-                        adjusted_value
+                        adjusted_value,
+                        is_dry_run
                     )
                 VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ",
                 &[
                     &(entry.slot.as_u64() as i64),
@@ -2252,6 +2253,7 @@ impl PostgresDatabaseService {
                     &PostgresNumeric::from(entry.submitted_value),
                     &entry.adjusted_block_hash.as_slice(),
                     &PostgresNumeric::from(entry.adjusted_value),
+                    &entry.is_dry_run,
                 ],
             )
             .await?;
