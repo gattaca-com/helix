@@ -12,7 +12,7 @@ use helix_types::{
 };
 use tokio::sync::oneshot;
 
-use crate::auctioneer::types::SubmissionResult;
+use crate::{SlotData, SubmissionPayload, auctioneer::types::SubmissionResult};
 
 pub mod client;
 pub mod manager;
@@ -49,7 +49,7 @@ impl BlockSimRequest {
             apply_blacklist: proposer_preferences.filtering.is_regional(),
             proposer_preferences,
             blobs_bundle: Some(block.blobs_bundle().clone()),
-            execution_requests: Some(block.execution_requests()),
+            execution_requests: Some(block.execution_requests_ref().clone()),
             parent_beacon_block_root,
             inclusion_list,
         }
@@ -119,6 +119,26 @@ pub struct SimulatorRequest {
 }
 
 impl SimulatorRequest {
+    pub fn new(bid: &SubmissionPayload, slot_data: &SlotData) -> Self {
+        let request = BlockSimRequest::new(
+            slot_data.registration_data.entry.registration.message.gas_limit,
+            &bid.signed_bid_submission,
+            slot_data.registration_data.entry.preferences.clone(),
+            bid.parent_beacon_block_root,
+            slot_data.il.clone(),
+        );
+
+        Self {
+            request,
+            is_top_bid: true,
+            res_tx: None,
+            submission: bid.signed_bid_submission.clone(),
+            trace: bid.submission_trace.clone(),
+            tx_root: bid.tx_root,
+            version: bid.submission_version,
+        }
+    }
+
     pub fn on_receive_ns(&self) -> u64 {
         self.trace.receive
     }

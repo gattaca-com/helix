@@ -14,4 +14,5 @@ pub struct DataAdjustmentsEntry {
     pub submitted_value: U256,
     pub adjusted_block_hash: B256,
     pub adjusted_value: U256,
+    pub is_dry_run: bool,
 }

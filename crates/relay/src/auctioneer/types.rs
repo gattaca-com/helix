@@ -20,6 +20,7 @@ use helix_types::{
     SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
 };
 use rustc_hash::FxHashMap;
+use serde::Serialize;
 use ssz_derive::{Decode, Encode};
 use tokio::sync::oneshot;
 use tracing::debug;
@@ -106,15 +107,28 @@ impl Submission {
     }
 }
 
-/// From a SignedBidSubmission, keep only the fields needed to serve get_header and get_payload,
-/// some fields are optional because payloads also arrive via gossip and we only gossip
-/// PayloadAndBlobs
 #[derive(Clone)]
-pub struct PayloadEntry {
-    pub payload_and_blobs: Arc<PayloadAndBlobs>,
+pub struct GossipPayload {
+    pub payload_and_blobs: PayloadAndBlobs,
     pub bid_data: PayloadBidData,
+}
+
+#[derive(Clone)]
+pub struct SubmissionPayload {
+    pub signed_bid_submission: SignedBidSubmission,
+    pub withdrawals_root: B256,
+    pub tx_root: Option<B256>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
-    pub submission_version: Option<SubmissionVersion>,
+    pub is_adjusted: bool,
+    pub submission_version: SubmissionVersion,
+    pub submission_trace: SubmissionTrace,
+    pub parent_beacon_block_root: Option<B256>,
+}
+
+#[derive(Clone)]
+pub enum PayloadEntry {
+    Submission(SubmissionPayload),
+    Gossip(GossipPayload),
 }
 
 impl PayloadEntry {
@@ -124,40 +138,75 @@ impl PayloadEntry {
         tx_root: Option<B256>,
         bid_adjustment_data: Option<BidAdjustmentData>,
         submission_version: SubmissionVersion,
+        submission_trace: SubmissionTrace,
+        parent_beacon_block_root: Option<B256>,
     ) -> Self {
-        Self {
-            payload_and_blobs: signed_bid_submission.payload_and_blobs_ref().to_owned().into(),
-            bid_data: PayloadBidData {
-                withdrawals_root,
-                tx_root,
-                execution_requests: signed_bid_submission.execution_requests().clone(),
-                value: signed_bid_submission.value(),
-                builder_pubkey: *signed_bid_submission.builder_public_key(),
-            },
+        Self::Submission(SubmissionPayload {
+            signed_bid_submission,
+            withdrawals_root,
+            tx_root,
             bid_adjustment_data,
-            submission_version: Some(submission_version),
-        }
+            is_adjusted: false,
+            submission_version,
+            submission_trace,
+            parent_beacon_block_root,
+        })
     }
 
-    pub fn new_gossip(data: BroadcastPayloadParams) -> Self {
-        Self {
-            payload_and_blobs: data.execution_payload,
-            bid_data: data.bid_data,
-            bid_adjustment_data: None,
-            submission_version: None,
-        }
+    pub fn new_gossip(payload_and_blobs: PayloadAndBlobs, bid_data: PayloadBidData) -> Self {
+        Self::Gossip(GossipPayload { payload_and_blobs, bid_data })
+    }
+
+    pub fn is_adjusted(&self) -> bool {
+        matches!(self, Self::Submission(s) if s.is_adjusted)
     }
 
     pub fn value(&self) -> &U256 {
-        &self.bid_data.value
+        match &self {
+            Self::Submission(s) => s.signed_bid_submission.value(),
+            Self::Gossip(s) => &s.bid_data.value,
+        }
+    }
+
+    pub fn payload_and_blobs(&self) -> PayloadAndBlobs {
+        match &self {
+            Self::Submission(s) => s.signed_bid_submission.payload_and_blobs(),
+            Self::Gossip(s) => s.payload_and_blobs.clone(),
+        }
+    }
+
+    pub fn parent_hash(&self) -> &B256 {
+        match &self {
+            Self::Submission(s) => &s.signed_bid_submission.execution_payload_ref().parent_hash,
+            Self::Gossip(s) => &s.payload_and_blobs.execution_payload.parent_hash,
+        }
+    }
+
+    pub fn bid_data_ref(&self) -> PayloadBidDataRef<'_> {
+        match &self {
+            Self::Submission(s) => PayloadBidDataRef {
+                withdrawals_root: &s.withdrawals_root,
+                tx_root: &s.tx_root,
+                execution_requests: s.signed_bid_submission.execution_requests_ref(),
+                value: s.signed_bid_submission.value(),
+                builder_pubkey: s.signed_bid_submission.builder_public_key(),
+            },
+            Self::Gossip(s) => PayloadBidDataRef::from(&s.bid_data),
+        }
     }
 
     pub fn execution_payload(&self) -> &ExecutionPayload {
-        &self.payload_and_blobs.execution_payload
+        match self {
+            Self::Submission(bid) => bid.signed_bid_submission.execution_payload_ref(),
+            Self::Gossip(bid) => &bid.payload_and_blobs.execution_payload,
+        }
     }
 
     pub fn execution_payload_make_mut(&mut self) -> &mut ExecutionPayload {
-        &mut Arc::make_mut(&mut self.payload_and_blobs).execution_payload
+        match self {
+            Self::Submission(bid) => bid.signed_bid_submission.execution_payload_make_mut(),
+            Self::Gossip(bid) => Arc::make_mut(&mut bid.payload_and_blobs.execution_payload),
+        }
     }
 
     pub fn block_hash(&self) -> &B256 {
@@ -168,16 +217,28 @@ impl PayloadEntry {
     pub fn into_builder_bid_slow(self) -> BuilderBid {
         let start = Instant::now();
 
-        let header = self
-            .payload_and_blobs
-            .execution_payload
-            .to_header(Some(self.bid_data.withdrawals_root), self.bid_data.tx_root);
+        let (withdrawals_root, tx_root, execution_requests, commitments) = match &self {
+            Self::Submission(s) => (
+                Some(s.withdrawals_root),
+                s.tx_root,
+                s.signed_bid_submission.execution_requests_ref().clone(),
+                s.signed_bid_submission.blobs_bundle().commitments().to_owned(),
+            ),
+            Self::Gossip(s) => (
+                None,
+                None,
+                s.bid_data.execution_requests.clone(),
+                s.payload_and_blobs.blobs_bundle.commitments().to_owned(),
+            ),
+        };
+
+        let header = self.execution_payload().to_header(withdrawals_root, tx_root);
 
         let bid = BuilderBid {
             header,
-            blob_kzg_commitments: self.payload_and_blobs.blobs_bundle.commitments().clone(),
-            value: self.bid_data.value,
-            execution_requests: self.bid_data.execution_requests,
+            blob_kzg_commitments: commitments,
+            value: *self.value(),
+            execution_requests,
             pubkey: mock_public_key_bytes(),
         };
 
@@ -195,6 +256,38 @@ pub struct PayloadBidData {
     pub execution_requests: Arc<ExecutionRequests>,
     pub value: U256,
     pub builder_pubkey: BlsPublicKeyBytes,
+}
+
+#[derive(Clone, PartialEq, Debug, Encode, Serialize)]
+pub struct PayloadBidDataRef<'a> {
+    pub withdrawals_root: &'a B256,
+    pub tx_root: &'a Option<B256>,
+    pub execution_requests: &'a Arc<ExecutionRequests>,
+    pub value: &'a U256,
+    pub builder_pubkey: &'a BlsPublicKeyBytes,
+}
+
+impl<'a> From<&'a PayloadBidData> for PayloadBidDataRef<'a> {
+    fn from(bid_data: &'a PayloadBidData) -> Self {
+        Self {
+            withdrawals_root: &bid_data.withdrawals_root,
+            tx_root: &bid_data.tx_root,
+            execution_requests: &bid_data.execution_requests,
+            value: &bid_data.value,
+            builder_pubkey: &bid_data.builder_pubkey,
+        }
+    }
+}
+
+impl PayloadBidDataRef<'_> {
+    pub fn to_owned(&self) -> PayloadBidData {
+        let withdrawals_root = self.withdrawals_root.clone();
+        let tx_root = self.tx_root.clone();
+        let execution_requests = self.execution_requests.clone();
+        let value = *self.value;
+        let builder_pubkey = self.builder_pubkey.clone();
+        PayloadBidData { withdrawals_root, tx_root, execution_requests, value, builder_pubkey }
+    }
 }
 
 pub enum SubWorkerJob {
@@ -295,6 +388,7 @@ pub enum Event {
         is_synced: bool,
     },
     MergeResult(BlockMergeResult),
+    DryRunAdjustments,
 }
 
 impl Event {
@@ -308,6 +402,7 @@ impl Event {
             Event::SimResult(_) => "SimResult",
             Event::SimulatorSync { .. } => "SimulatorSync",
             Event::MergeResult(_) => "MergeResult",
+            Event::DryRunAdjustments => "DryRunAdjustments",
         }
     }
 }
