@@ -109,7 +109,7 @@ impl<B: BidAdjustor> Context<B> {
             adjustments_failsafe_trigger.clone(),
         );
 
-        Self::spawn_adjustments_dry_run_task(auctioneer);
+        Self::spawn_adjustments_dry_run_task(auctioneer, adjustments_enabled.clone());
 
         Self {
             chain_info,
@@ -284,14 +284,20 @@ impl<B: BidAdjustor> Context<B> {
         });
     }
 
-    fn spawn_adjustments_dry_run_task(auctioneer: crossbeam_channel::Sender<Event>) {
+    fn spawn_adjustments_dry_run_task(
+        auctioneer: crossbeam_channel::Sender<Event>,
+        adjustments_enabled: Arc<AtomicBool>,
+    ) {
         spawn_tracked!(async move {
             let mut interval =
                 tokio::time::interval(Duration::from_secs(ADJUSTMENTS_DRY_RUN_INTERVAL_SEC));
             loop {
                 interval.tick().await;
 
-                // TODO: does this need to run if adjustments are disabled?
+                if !adjustments_enabled.load(Ordering::Relaxed) {
+                    return;
+                }
+
                 if let Err(e) = auctioneer.try_send(Event::DryRunAdjustments) {
                     error!("failed to send adjustments dry run request: {}", e);
                 }
