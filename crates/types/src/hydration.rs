@@ -333,6 +333,7 @@ impl DehydratedBidSubmissionFulu {
                 hasher.write(last_slice);
                 let hash = hasher.finish();
                 order_cache.transactions.insert(hash, tx.clone());
+                trace!("Inserted tx into cache: index {}, hash {}", index, hash);
             };
         }
 
