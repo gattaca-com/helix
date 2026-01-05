@@ -58,8 +58,8 @@ pub struct Context<B: BidAdjustor> {
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
 const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
 
-const DB_CHECK_INTERVAL_SEC: u64 = 1;
-const ADJUSTMENTS_DRY_RUN_INTERVAL_MS: u64 = 500;
+const DB_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+const ADJUSTMENTS_DRY_RUN_INTERVAL: Duration = Duration::from_millis(500);
 
 impl<B: BidAdjustor> Context<B> {
     pub fn new(
@@ -279,7 +279,7 @@ impl<B: BidAdjustor> Context<B> {
         failsafe_triggered: Arc<AtomicBool>,
     ) {
         spawn_tracked!(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(DB_CHECK_INTERVAL_SEC));
+            let mut interval = tokio::time::interval(DB_CHECK_INTERVAL);
             loop {
                 interval.tick().await;
 
@@ -310,8 +310,7 @@ impl<B: BidAdjustor> Context<B> {
         adjustments_enabled: Arc<AtomicBool>,
     ) {
         spawn_tracked!(async move {
-            let mut interval =
-                tokio::time::interval(Duration::from_millis(ADJUSTMENTS_DRY_RUN_INTERVAL_MS));
+            let mut interval = tokio::time::interval(ADJUSTMENTS_DRY_RUN_INTERVAL);
             loop {
                 interval.tick().await;
 
