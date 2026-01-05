@@ -29,7 +29,7 @@ use helix_common::{
 use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SignedValidatorRegistration, Slot};
 use parking_lot::RwLock;
 use rustc_hash::FxHashSet;
-use tokio::sync::mpsc::Sender;
+use tokio::sync::{mpsc::Sender, oneshot};
 use tokio_postgres::{NoTls, types::ToSql};
 use tracing::{error, info, instrument, warn};
 
@@ -45,6 +45,128 @@ use crate::database::{
         BidSubmissionDocument, BuilderInfoDocument, DeliveredPayloadDocument, SavePayloadParams,
     },
 };
+
+pub enum DbRequest {
+    GetValidatorRegistration {
+        pub_key: BlsPublicKeyBytes,
+        response: oneshot::Sender<Result<SignedValidatorRegistrationEntry, DatabaseError>>,
+    },
+    GetValidatorRegistrations {
+        response: oneshot::Sender<Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError>>,
+    },
+    GetValidatorRegistrationsForPubKeys {
+        pub_keys: Vec<BlsPublicKeyBytes>,
+        response: oneshot::Sender<Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError>>,
+    },
+    GetProposerDuties {
+        response: oneshot::Sender<Result<Vec<BuilderGetValidatorsResponseEntry>, DatabaseError>>,
+    },
+    GetValidatorPreferences {
+        pub_key: BlsPublicKeyBytes,
+        response: oneshot::Sender<Result<Option<ValidatorPreferences>, DatabaseError>>,
+    },
+    UpdateValidatorPreferences {
+        pub_key: BlsPublicKeyBytes,
+        preferences: ValidatorPreferences,
+        response: oneshot::Sender<Result<(), DatabaseError>>,
+    },
+    GetPoolValidators {
+        pool_name: String,
+        response: oneshot::Sender<Result<Vec<BlsPublicKeyBytes>, DatabaseError>>,
+    },
+    GetValidatorPoolName {
+        api_key: String,
+        response: oneshot::Sender<Result<Option<String>, DatabaseError>>,
+    },
+    SaveTooLateGetPayload {
+        slot: u64,
+        proposer_pub_key: BlsPublicKeyBytes,
+        payload_hash: B256,
+        message_received: u64,
+        payload_fetched: u64,
+        response: oneshot::Sender<Result<(), DatabaseError>>,
+    },
+    SaveDeliveredPayload {
+        params: SavePayloadParams,
+        response: oneshot::Sender<Result<(), DatabaseError>>,
+    },
+    StoreBuilderInfo {
+        builder_pub_key: BlsPublicKeyBytes,
+        builder_info: BuilderInfo,
+        response: oneshot::Sender<Result<(), DatabaseError>>,
+    },
+    StoreBuildersInfo {
+        builders: Vec<BuilderInfoDocument>,
+        response: oneshot::Sender<Result<(), DatabaseError>>,
+    },
+    GetAllBuilderInfos {
+        response: oneshot::Sender<Result<Vec<BuilderInfoDocument>, DatabaseError>>,
+    },
+    CheckBuilderApiKey {
+        api_key: String,
+        response: oneshot::Sender<Result<bool, DatabaseError>>,
+    },
+    DbDemoteBuilder {
+        slot: u64,
+        builder_pub_key: BlsPublicKeyBytes,
+        block_hash: B256,
+        reason: String,
+        response: oneshot::Sender<Result<(), DatabaseError>>,
+    },
+    GetBids {
+        filters: BidFilters,
+        validator_preferences: Arc<ValidatorPreferences>,
+        response: oneshot::Sender<Result<Vec<BidSubmissionDocument>, DatabaseError>>,
+    },
+    GetDeliveredPayloads {
+        filters: BidFilters,
+        validator_preferences: Arc<ValidatorPreferences>,
+        response: oneshot::Sender<Result<Vec<DeliveredPayloadDocument>, DatabaseError>>,
+    },
+    SaveGetHeaderCall {
+        params: GetHeaderParams,
+        best_block_hash: B256,
+        value: U256,
+        trace: GetHeaderTrace,
+        mev_boost: bool,
+        user_agent: Option<String>,
+        response: oneshot::Sender<Result<(), DatabaseError>>,
+    },
+    SaveFailedGetPayload {
+        slot: u64,
+        block_hash: B256,
+        error: String,
+        trace: GetPayloadTrace,
+        response: oneshot::Sender<Result<(), DatabaseError>>,
+    },
+    SaveGossipedPayloadTrace {
+        block_hash: B256,
+        trace: GossipedPayloadTrace,
+        response: oneshot::Sender<Result<(), DatabaseError>>,
+    },
+    GetTrustedProposers {
+        response: oneshot::Sender<Result<Vec<ProposerInfo>, DatabaseError>>,
+    },
+    SaveInclusionList {
+        inclusion_list: InclusionListWithMetadata,
+        slot: u64,
+        block_parent_hash: B256,
+        proposer_pubkey: BlsPublicKeyBytes,
+        response: oneshot::Sender<Result<(), Vec<DatabaseError>>>,
+    },
+    GetBlockAdjustmentsForSlot {
+        slot: Slot,
+        response: oneshot::Sender<Result<Vec<DataAdjustmentsResponse>, DatabaseError>>,
+    },
+    SaveBlockAdjustmentsData {
+        entry: DataAdjustmentsEntry,
+        response: oneshot::Sender<Result<(), DatabaseError>>,
+    },
+    GetProposerHeaderDelivered {
+        params: ProposerHeaderDeliveredParams,
+        response: oneshot::Sender<Result<Vec<ProposerHeaderDeliveredResponse>, DatabaseError>>,
+    },
+}
 
 struct PendingBlockSubmissionValue {
     pub submission: SignedBidSubmission,
@@ -225,9 +347,31 @@ impl PostgresDatabaseService {
         }
     }
 
-    pub async fn start_processors(&mut self) {
+    pub async fn start_processors(&mut self, db_request_receiver: crossbeam_channel::Receiver<DbRequest>) {
         self.start_registration_processor().await;
         self.start_block_submission_processor().await;
+        self.start_db_request_processor(db_request_receiver).await;
+    }
+
+    pub async fn start_db_request_processor(&mut self, receiver: crossbeam_channel::Receiver<DbRequest>) {
+        let svc_clone = self.clone();
+
+        tokio::spawn(async move {
+            loop {
+                match receiver.recv() {
+                    Ok(request) => {
+                        let svc = svc_clone.clone();
+                        tokio::spawn(async move {
+                            svc.handle_db_request(request).await;
+                        });
+                    }
+                    Err(e) => {
+                        error!("DB request receiver error: {}", e);
+                        break;
+                    }
+                }
+            }
+        });
     }
 
     pub async fn start_registration_processor(&self) {
@@ -306,6 +450,112 @@ impl PostgresDatabaseService {
                 }
             }
         });
+    }
+
+        async fn handle_db_request(&self, request: DbRequest) {
+        match request {
+            DbRequest::GetValidatorRegistration { pub_key, response } => {
+                let result = self.get_validator_registration(&pub_key).await;
+                let _ = response.send(result);
+            }
+            DbRequest::GetValidatorRegistrations { response } => {
+                let result = self.get_validator_registrations().await;
+                let _ = response.send(result);
+            }
+            DbRequest::GetValidatorRegistrationsForPubKeys { pub_keys, response } => {
+                let pub_key_refs: Vec<&BlsPublicKeyBytes> = pub_keys.iter().collect();
+                let result = self.get_validator_registrations_for_pub_keys(&pub_key_refs).await;
+                let _ = response.send(result);
+            }
+            DbRequest::GetProposerDuties { response } => {
+                let result = self.get_proposer_duties().await;
+                let _ = response.send(result);
+            }
+            DbRequest::GetValidatorPreferences { pub_key, response } => {
+                let result = self.get_validator_preferences(&pub_key).await;
+                let _ = response.send(result);
+            }
+            DbRequest::UpdateValidatorPreferences { pub_key, preferences, response } => {
+                let result = self.update_validator_preferences(&pub_key, &preferences).await;
+                let _ = response.send(result);
+            }
+            DbRequest::GetPoolValidators { pool_name, response } => {
+                let result = self.get_pool_validators(&pool_name).await;
+                let _ = response.send(result);
+            }
+            DbRequest::GetValidatorPoolName { api_key, response } => {
+                let result = self.get_validator_pool_name(&api_key).await;
+                let _ = response.send(result);
+            }
+            DbRequest::SaveTooLateGetPayload { slot, proposer_pub_key, payload_hash, message_received, payload_fetched, response } => {
+                let result = self.save_too_late_get_payload(slot, &proposer_pub_key, &payload_hash, message_received, payload_fetched).await;
+                let _ = response.send(result);
+            }
+            DbRequest::SaveDeliveredPayload { params, response } => {
+                let result = self.save_delivered_payload(&params).await;
+                let _ = response.send(result);
+            }
+            DbRequest::StoreBuilderInfo { builder_pub_key, builder_info, response } => {
+                let result = self.store_builder_info(&builder_pub_key, &builder_info).await;
+                let _ = response.send(result);
+            }
+            DbRequest::StoreBuildersInfo { builders, response } => {
+                let result = self.store_builders_info(&builders).await;
+                let _ = response.send(result);
+            }
+            DbRequest::GetAllBuilderInfos { response } => {
+                let result = self.get_all_builder_infos().await;
+                let _ = response.send(result);
+            }
+            DbRequest::CheckBuilderApiKey { api_key, response } => {
+                let result = self.check_builder_api_key(&api_key).await;
+                let _ = response.send(result);
+            }
+            DbRequest::DbDemoteBuilder { slot, builder_pub_key, block_hash, reason, response } => {
+                let result = self.db_demote_builder(slot, &builder_pub_key, &block_hash, reason).await;
+                let _ = response.send(result);
+            }
+            DbRequest::GetBids { filters, validator_preferences, response } => {
+                let result = self.get_bids(&filters, validator_preferences).await;
+                let _ = response.send(result);
+            }
+            DbRequest::GetDeliveredPayloads { filters, validator_preferences, response } => {
+                let result = self.get_delivered_payloads(&filters, validator_preferences).await;
+                let _ = response.send(result);
+            }
+            DbRequest::SaveGetHeaderCall { params, best_block_hash, value, trace, mev_boost, user_agent, response } => {
+                let result = self.save_get_header_call(params, best_block_hash, value, trace, mev_boost, user_agent).await;
+                let _ = response.send(result);
+            }
+            DbRequest::SaveFailedGetPayload { slot, block_hash, error, trace, response } => {
+                let result = self.save_failed_get_payload(slot, block_hash, error, trace).await;
+                let _ = response.send(result);
+            }
+            DbRequest::SaveGossipedPayloadTrace { block_hash, trace, response } => {
+                let result = self.save_gossiped_payload_trace(block_hash, trace).await;
+                let _ = response.send(result);
+            }
+            DbRequest::GetTrustedProposers { response } => {
+                let result = self.get_trusted_proposers().await;
+                let _ = response.send(result);
+            }
+            DbRequest::SaveInclusionList { inclusion_list, slot, block_parent_hash, proposer_pubkey, response } => {
+                let result = self.save_inclusion_list(&inclusion_list, slot, &block_parent_hash, &proposer_pubkey).await;
+                let _ = response.send(result);
+            }
+            DbRequest::GetBlockAdjustmentsForSlot { slot, response } => {
+                let result = self.get_block_adjustments_for_slot(slot).await;
+                let _ = response.send(result);
+            }
+            DbRequest::SaveBlockAdjustmentsData { entry, response } => {
+                let result = self.save_block_adjustments_data(entry).await;
+                let _ = response.send(result);
+            }
+            DbRequest::GetProposerHeaderDelivered { params, response } => {
+                let result = self.get_proposer_header_delivered(&params).await;
+                let _ = response.send(result);
+            }
+        }
     }
 
     async fn _save_validator_registrations(

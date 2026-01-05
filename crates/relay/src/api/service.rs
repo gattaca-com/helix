@@ -12,7 +12,6 @@ use moka::sync::Cache;
 use tracing::{error, info};
 
 use crate::{
-    BidAdjustor,
     api::{
         Api,
         builder::api::BuilderApi,
@@ -20,7 +19,7 @@ use crate::{
         relay_data::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry},
         router::build_router,
     },
-    auctioneer::{Event, spawn_workers},
+    auctioneer::{AuctioneerHandle, RegWorkerHandle},
     beacon::multi_beacon_client::MultiBeaconClient,
     database::postgres::postgres_db_service::PostgresDatabaseService,
     gossip::{GrpcGossiperClientManager, process_gossip_messages},
@@ -29,7 +28,6 @@ use crate::{
 };
 
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub async fn start_api_service<A: Api>(
     mut config: RelayConfig,
@@ -40,11 +38,11 @@ pub async fn start_api_service<A: Api>(
     relay_signing_context: Arc<RelaySigningContext>,
     multi_beacon_client: Arc<MultiBeaconClient>,
     api_provider: Arc<A::ApiProvider>,
-    bid_adjustor: impl BidAdjustor,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
     top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
-    event_channel: (crossbeam_channel::Sender<Event>, crossbeam_channel::Receiver<Event>),
+    auctioneer_handle: AuctioneerHandle,
+    registrations_handle: RegWorkerHandle,
     relay_network_api: RelayNetworkApi,
 ) {
     let gossiper = Arc::new(
@@ -56,17 +54,6 @@ pub async fn start_api_service<A: Api>(
     let validator_preferences = Arc::new(config.validator_preferences.clone());
 
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
-
-    // spawn auctioneer
-    let (auctioneer_handle, registrations_handle) = spawn_workers(
-        Arc::unwrap_or_clone(chain_info.clone()),
-        config.clone(),
-        db.clone(),
-        Arc::unwrap_or_clone(local_cache.clone()),
-        bid_adjustor,
-        top_bid_tx.clone(),
-        event_channel,
-    );
 
     let builder_api = BuilderApi::<A>::new(
         local_cache.clone(),

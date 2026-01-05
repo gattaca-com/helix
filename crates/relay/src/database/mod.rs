@@ -14,9 +14,12 @@ use helix_common::{RelayConfig, is_local_dev};
 use postgres::postgres_db_service::PostgresDatabaseService;
 pub use types::*;
 
+use crate::database::postgres::postgres_db_service::DbRequest;
+
 pub async fn start_db_service(
     config: &RelayConfig,
     known_validators_loaded: Arc<AtomicBool>,
+    db_request_receiver: crossbeam_channel::Receiver<DbRequest>,
 ) -> eyre::Result<Arc<PostgresDatabaseService>> {
     let mut postgres_db = PostgresDatabaseService::from_relay_config(config).await;
 
@@ -53,7 +56,7 @@ pub async fn start_db_service(
     }
 
     //postgres_db.load_validator_registrations().await;
-    postgres_db.start_processors().await;
+    postgres_db.start_processors(db_request_receiver).await;
 
     Ok(Arc::new(postgres_db))
 }

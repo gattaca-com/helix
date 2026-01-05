@@ -18,9 +18,7 @@ use helix_common::{
     utils::{init_panic_hook, init_tracing_log},
 };
 use helix_relay::{
-    Api, DefaultBidAdjustor, PostgresDatabaseService, RelayNetworkManager, WebsiteService,
-    start_admin_service, start_api_service, start_beacon_client, start_db_service,
-    start_housekeeper,
+    Api, DefaultBidAdjustor, PostgresDatabaseService, RelayNetworkManager, WebsiteService, spawn_workers, start_admin_service, start_api_service, start_beacon_client, start_db_service, start_housekeeper
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -86,8 +84,9 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
     let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info.clone()));
 
     let known_validators_loaded = Arc::new(AtomicBool::default());
+    let (db_request_sender, db_request_receiver) = crossbeam_channel::unbounded();
 
-    let db = start_db_service(&config, known_validators_loaded.clone()).await?;
+    let db = start_db_service(&config, known_validators_loaded.clone(), db_request_receiver).await?;
     let local_cache = start_auctioneer(db.clone()).await?;
 
     let event_channel = crossbeam_channel::bounded(10_000);
@@ -112,6 +111,17 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
     let terminating = Arc::new(AtomicBool::default());
 
+    // spawn auctioneer
+    let (auctioneer_handle, registrations_handle) = spawn_workers(
+        Arc::unwrap_or_clone(chain_info.clone()),
+        config.clone(),
+        db_request_sender.clone(),
+        Arc::unwrap_or_clone(local_cache.clone()),
+        DefaultBidAdjustor {},
+        top_bid_tx.clone(),
+        event_channel,
+    );
+
     start_admin_service(local_cache.clone(), &config);
 
     tokio::spawn(start_api_service::<ApiProd>(
@@ -123,11 +133,12 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
         relay_signing_context,
         beacon_client,
         Arc::new(DefaultApiProvider {}),
-        DefaultBidAdjustor {},
+        
         known_validators_loaded,
         terminating.clone(),
         top_bid_tx,
-        event_channel,
+        auctioneer_handle.clone(),
+        registrations_handle.clone(),
         relay_network_api.api(),
     ));
 

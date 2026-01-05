@@ -44,22 +44,18 @@ pub use crate::auctioneer::{
     simulator::client::SimulatorClient,
 };
 use crate::{
-    PostgresDatabaseService,
-    api::{builder::error::BuilderApiError, proposer::ProposerApiError},
-    auctioneer::{
+    api::{builder::error::BuilderApiError, proposer::ProposerApiError}, auctioneer::{
         bid_sorter::BidSorter,
         context::Context,
         manager::SimulatorManager,
         types::{PendingPayload, SlotData},
-    },
-    housekeeper::PayloadAttributesUpdate,
+    }, database::postgres::postgres_db_service::DbRequest, housekeeper::PayloadAttributesUpdate
 };
 
-// TODO: tidy up builder and proposer api state, and spawn in a separate function
 pub fn spawn_workers<B: BidAdjustor>(
     chain_info: ChainInfo,
     config: RelayConfig,
-    db: Arc<PostgresDatabaseService>,
+    db_channel: crossbeam_channel::Sender<DbRequest>,
     cache: LocalCache,
     bid_adjustor: B,
     top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
