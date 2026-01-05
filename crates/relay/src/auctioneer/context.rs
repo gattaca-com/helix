@@ -1,13 +1,16 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::{Arc, atomic::Ordering},
-    time::Instant,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use alloy_primitives::{B256, U256};
 use helix_common::{
     BuilderInfo, RelayConfig, chain_info::ChainInfo, local_cache::LocalCache,
-    metrics::SimulatorMetrics, spawn_tracked,
+    metrics::SimulatorMetrics, spawn_tracked, utils::alert_discord,
 };
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
 use rustc_hash::FxHashMap;
@@ -16,7 +19,7 @@ use tracing::{error, info, warn};
 use crate::{
     api::builder::error::BuilderApiError,
     auctioneer::{
-        BlockMergeResponse,
+        BlockMergeResponse, Event,
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
@@ -48,10 +51,15 @@ pub struct Context<B: BidAdjustor> {
     pub db: Arc<PostgresDatabaseService>,
     pub slot_context: SlotContext,
     pub bid_adjustor: B,
+    pub adjustments_enabled: Arc<AtomicBool>,
+    pub adjustments_failsafe_trigger: Arc<AtomicBool>,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
 const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
+
+const DB_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+const ADJUSTMENTS_DRY_RUN_INTERVAL: Duration = Duration::from_millis(500);
 
 impl<B: BidAdjustor> Context<B> {
     pub fn new(
@@ -62,6 +70,7 @@ impl<B: BidAdjustor> Context<B> {
         bid_sorter: BidSorter,
         cache: LocalCache,
         bid_adjustor: B,
+        auctioneer: crossbeam_channel::Sender<Event>,
     ) -> Self {
         let unknown_builder_info = BuilderInfo {
             collateral: U256::ZERO,
@@ -91,7 +100,28 @@ impl<B: BidAdjustor> Context<B> {
             block_merger,
         };
 
-        Self { chain_info, cache, unknown_builder_info, slot_context, db, config, bid_adjustor }
+        let adjustments_enabled = Arc::new(AtomicBool::new(false));
+        let adjustments_failsafe_trigger = Arc::new(AtomicBool::new(false));
+
+        Self::spawn_check_flag_task(
+            db.clone(),
+            adjustments_enabled.clone(),
+            adjustments_failsafe_trigger.clone(),
+        );
+
+        Self::spawn_adjustments_dry_run_task(auctioneer, adjustments_enabled.clone());
+
+        Self {
+            chain_info,
+            cache,
+            unknown_builder_info,
+            slot_context,
+            db,
+            config,
+            bid_adjustor,
+            adjustments_enabled,
+            adjustments_failsafe_trigger,
+        }
     }
 
     pub fn builder_info(&self, builder: &BlsPublicKeyBytes) -> BuilderInfo {
@@ -117,7 +147,31 @@ impl<B: BidAdjustor> Context<B> {
         if let Err(err) = result.result.as_ref() &&
             err.is_demotable()
         {
-            if self.cache.demote_builder(&builder) {
+            if self.payloads.get(&block_hash).is_some_and(|bid| bid.is_adjusted()) {
+                warn!(%builder, %block_hash, %err, "block simulation resulted in an error. Disabling adjustments...");
+
+                if !self.adjustments_enabled.load(Ordering::Relaxed) {
+                    warn!(%builder, %block_hash, %err, "adjustments already disabled");
+                } else {
+                    SimulatorMetrics::disable_adjustments();
+                    self.adjustments_enabled.store(false, Ordering::Relaxed);
+
+                    let db = self.db.clone();
+                    let failsafe_trigger = self.adjustments_failsafe_trigger.clone();
+                    let adjustments_enabled = self.adjustments_enabled.clone();
+                    spawn_tracked!(async move {
+                        if let Err(err) = db.disable_adjustments().await {
+                            failsafe_trigger.store(true, Ordering::Relaxed);
+                            adjustments_enabled.store(false, Ordering::Relaxed);
+                            error!(%block_hash, %err, "failed to disable adjustments in database, pulling the failsafe trigger");
+                            alert_discord(&format!(
+                                "{} {} failed to disable adjustments in database, pulling the failsafe trigger",
+                                err, block_hash
+                            ));
+                        }
+                    });
+                }
+            } else if self.cache.demote_builder(&builder) {
                 warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
 
                 SimulatorMetrics::demotion_count();
@@ -133,6 +187,10 @@ impl<B: BidAdjustor> Context<B> {
                     {
                         failsafe_triggered.store(true, Ordering::Relaxed);
                         error!(%builder, %err, %block_hash, "failed to demote builder in database! Pausing all optmistic submissions");
+                        alert_discord(&format!(
+                            "{} {} {} failed to demote builder in database! Pausing all optmistic submissions",
+                            builder, err, block_hash
+                        ));
                     }
                 });
             } else {
@@ -196,8 +254,8 @@ impl<B: BidAdjustor> Context<B> {
             return;
         };
 
-        let original_payload_and_blobs = original_payload.payload_and_blobs.clone();
-        let builder_pubkey = original_payload.bid_data.builder_pubkey;
+        let original_payload_and_blobs = original_payload.payload_and_blobs();
+        let builder_pubkey = original_payload.bid_data_ref().builder_pubkey.clone();
 
         //TODO: this function does a lot of work, should move that work away from the event loop
         let Some(payload) = self
@@ -213,6 +271,58 @@ impl<B: BidAdjustor> Context<B> {
             return;
         };
         self.payloads.insert(block_hash, payload);
+    }
+
+    fn spawn_check_flag_task(
+        db: Arc<PostgresDatabaseService>,
+        flag: Arc<AtomicBool>,
+        failsafe_triggered: Arc<AtomicBool>,
+    ) {
+        spawn_tracked!(async move {
+            let mut interval = tokio::time::interval(DB_CHECK_INTERVAL);
+            loop {
+                interval.tick().await;
+
+                if failsafe_triggered.load(Ordering::Relaxed) {
+                    flag.store(false, Ordering::Relaxed);
+                    return;
+                }
+
+                match db.check_adjustments_enabled().await {
+                    Ok(value) => {
+                        let previous = flag.swap(value, Ordering::Relaxed);
+                        if previous != value {
+                            tracing::info!(
+                                "adjustments enabled flag changed from {} to {}",
+                                previous,
+                                value
+                            );
+                        }
+                    }
+                    Err(e) => tracing::error!("failed to check adjustments_enabled flag: {}", e),
+                }
+            }
+        });
+    }
+
+    fn spawn_adjustments_dry_run_task(
+        auctioneer: crossbeam_channel::Sender<Event>,
+        adjustments_enabled: Arc<AtomicBool>,
+    ) {
+        spawn_tracked!(async move {
+            let mut interval = tokio::time::interval(ADJUSTMENTS_DRY_RUN_INTERVAL);
+            loop {
+                interval.tick().await;
+
+                if !adjustments_enabled.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                if let Err(e) = auctioneer.try_send(Event::DryRunAdjustments) {
+                    error!("failed to send adjustments dry run request: {}", e);
+                }
+            }
+        });
     }
 }
 
