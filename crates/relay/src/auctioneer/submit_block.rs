@@ -3,14 +3,14 @@ use std::time::Instant;
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
     self, BuilderInfo, SubmissionTrace, bid_submission::OptimisticVersion,
-    metrics::HYDRATION_CACHE_HITS, record_submission_step,
+    metrics::HYDRATION_CACHE_HITS, record_submission_step, spawn_tracked,
 };
 use helix_types::{
     BidAdjustmentData, BlockValidationError, MergeableOrdersWithPref, SignedBidSubmission,
     SubmissionVersion,
 };
 use tokio::sync::oneshot;
-use tracing::{trace, warn};
+use tracing::{error, trace, warn};
 
 use crate::{
     api::builder::error::BuilderApiError,
@@ -220,7 +220,18 @@ impl<B: BidAdjustor> Context<B> {
             version: validated.version,
         };
 
+        let sub_clone = validated.submission.clone();
+        let trace_clone = validated.trace.clone();
+        let opt_version = req.optimistic_version();
+
         self.sim_manager.handle_sim_request(req, false);
+
+        let db = self.db.clone();
+        spawn_tracked!(async move {
+            if let Err(err) = db.store_block_submission(sub_clone, trace_clone, opt_version).await {
+                error!(%err, "failed to store block submission")
+            }
+        });
 
         let block_hash = *validated.submission.block_hash();
         let entry = PayloadEntry::new_submission(

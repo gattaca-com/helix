@@ -32,7 +32,7 @@ use helix_common::{
     record_submission_step,
     utils::pin_thread_to_core,
 };
-use helix_types::{ForkName, Slot};
+use helix_types::Slot;
 use rustc_hash::FxHashMap;
 pub use simulator::*;
 use tracing::{debug, error, info, info_span, trace, warn};

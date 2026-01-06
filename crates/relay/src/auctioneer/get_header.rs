@@ -40,8 +40,8 @@ impl<B: BidAdjustor> Context<B> {
             return Ok(merged_bid);
         };
 
-        if self.adjustments_enabled.load(Ordering::Relaxed) {
-            if let Some((adjusted_bid, sim_request)) =
+        if self.adjustments_enabled.load(Ordering::Relaxed)
+            && let Some((adjusted_bid, sim_request)) =
                 self.bid_adjustor.try_apply_adjustments(original_bid, slot_data, false)
             {
                 let block_hash = adjusted_bid.block_hash();
@@ -51,7 +51,6 @@ impl<B: BidAdjustor> Context<B> {
 
                 return Ok(adjusted_bid);
             }
-        }
 
         Ok(original_bid.clone())
     }

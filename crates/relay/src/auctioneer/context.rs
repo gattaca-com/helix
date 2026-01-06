@@ -62,6 +62,8 @@ const DB_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const ADJUSTMENTS_DRY_RUN_INTERVAL: Duration = Duration::from_millis(500);
 
 impl<B: BidAdjustor> Context<B> {
+    // TODO: refactor to accept fewer parameters
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         chain_info: ChainInfo,
         config: RelayConfig,
@@ -198,16 +200,6 @@ impl<B: BidAdjustor> Context<B> {
             }
         };
 
-        let db = self.db.clone();
-        spawn_tracked!(async move {
-            if let Err(err) = db
-                .store_block_submission(result.submission, result.trace, result.optimistic_version)
-                .await
-            {
-                error!(%err, "failed to store block submission")
-            }
-        });
-
         if let Some(res_tx) = result.res_tx {
             // submission was initially valid but by the time sim finished the slot already
             // progressed
@@ -255,7 +247,7 @@ impl<B: BidAdjustor> Context<B> {
         };
 
         let original_payload_and_blobs = original_payload.payload_and_blobs();
-        let builder_pubkey = original_payload.bid_data_ref().builder_pubkey.clone();
+        let builder_pubkey = *original_payload.bid_data_ref().builder_pubkey;
 
         //TODO: this function does a lot of work, should move that work away from the event loop
         let Some(payload) = self
