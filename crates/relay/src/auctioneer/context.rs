@@ -14,7 +14,7 @@ use helix_common::{
 };
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
 use rustc_hash::FxHashMap;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     api::builder::error::BuilderApiError,
@@ -144,11 +144,17 @@ impl<B: BidAdjustor> Context<B> {
         let builder = *result.submission.builder_public_key();
         let block_hash = *result.submission.block_hash();
 
+        let is_adjusted = self.payloads.get(&block_hash).is_some_and(|bid| bid.is_adjusted());
+
         if let Err(err) = result.result.as_ref() &&
             err.is_demotable()
         {
-            if self.payloads.get(&block_hash).is_some_and(|bid| bid.is_adjusted()) {
+            if is_adjusted {
                 warn!(%builder, %block_hash, %err, "block simulation resulted in an error. Disabling adjustments...");
+                debug!(
+                    "invalid adjusted block header: {:?}",
+                    result.submission.execution_payload_ref().to_header(None, None)
+                );
 
                 if !self.adjustments_enabled.load(Ordering::Relaxed) {
                     warn!(%builder, %block_hash, %err, "adjustments already disabled");
@@ -198,10 +204,19 @@ impl<B: BidAdjustor> Context<B> {
             }
         };
 
+        if is_adjusted {
+            debug!(%builder, %block_hash,"adjusted block passed simulator validation!");
+        }
+
         let db = self.db.clone();
         spawn_tracked!(async move {
             if let Err(err) = db
-                .store_block_submission(result.submission, result.trace, result.optimistic_version)
+                .store_block_submission(
+                    result.submission,
+                    result.trace,
+                    result.optimistic_version,
+                    is_adjusted,
+                )
                 .await
             {
                 error!(%err, "failed to store block submission")
@@ -314,9 +329,9 @@ impl<B: BidAdjustor> Context<B> {
             loop {
                 interval.tick().await;
 
-                if !adjustments_enabled.load(Ordering::Relaxed) {
-                    return;
-                }
+                // if !adjustments_enabled.load(Ordering::Relaxed) {
+                //     return;
+                // }
 
                 if let Err(e) = auctioneer.try_send(Event::DryRunAdjustments) {
                     error!("failed to send adjustments dry run request: {}", e);
