@@ -217,7 +217,10 @@ impl ValidationApi {
         // update the cached reads
         self.update_cached_reads(parent_header_hash, request_cache).await;
 
-        self.consensus.validate_block_post_execution(&block, &output)?;
+        self.consensus.validate_block_post_execution(&block, &output).inspect_err(|e| {
+            let last_receipt = output.receipts.last().map(|r| r.with_bloom_ref());
+            tracing::error!(?e, "post execution validation failed. Last tx receipt: {last_receipt:?}");
+        })?;
 
         self.ensure_payment(&block, &output, &message)?;
 
