@@ -219,7 +219,7 @@ impl ValidationApi {
 
         self.consensus.validate_block_post_execution(&block, &output).inspect_err(|e| {
             let last_receipt = output.receipts.last().map(|r| r.with_bloom_ref());
-            tracing::error!(?e, "post execution validation failed. Last tx receipt: {last_receipt:?}");
+            tracing::error!(?e, block_hash=?message.block_hash, "post execution validation failed. Last tx receipt: {last_receipt:?}");
         })?;
 
         self.ensure_payment(&block, &output, &message)?;
