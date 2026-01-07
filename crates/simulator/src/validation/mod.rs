@@ -36,7 +36,9 @@ use reth_ethereum::{
     storage::{BlockReaderIdExt, HeaderProvider, StateProviderFactory},
 };
 use reth_metrics::{Metrics, metrics::Gauge};
-use reth_node_builder::{BlockBody, ConfigureEvm, PayloadValidator};
+use reth_node_builder::{
+    Block as BuilderBlock, BlockBody, ConfigureEvm, NewPayloadError, PayloadValidator,
+};
 use reth_primitives::EthereumHardforks;
 use reth_tasks::TaskExecutor;
 use revm::{Database, database::State};
@@ -505,9 +507,9 @@ impl ValidationApi {
         &self,
         request: ExtendedValidationRequestV5,
     ) -> Result<(), ValidationApiError> {
-        let block = self.payload_validator.ensure_well_formed_payload(ExecutionData {
-            payload: ExecutionPayload::V3(request.base.request.execution_payload),
-            sidecar: ExecutionPayloadSidecar::v4(
+        let (payload, sidecar) = (
+            ExecutionPayload::V3(request.base.request.execution_payload),
+            ExecutionPayloadSidecar::v4(
                 CancunPayloadFields {
                     parent_beacon_block_root: request.base.parent_beacon_block_root,
                     versioned_hashes: self
@@ -519,7 +521,33 @@ impl ValidationApi {
                     ),
                 },
             ),
-        })?;
+        );
+
+        let block: RecoveredBlock<
+            alloy_consensus::Block<alloy_consensus::EthereumTxEnvelope<alloy_consensus::TxEip4844>>,
+        > = payload
+            .try_into_block_with_sidecar(&sidecar)
+            .map_err(|e| ValidationApiError::Payload(e.into()))?
+            .seal_slow()
+            .try_recover()
+            .map_err(|e| NewPayloadError::Other(e.into()))?;
+
+        // let block:
+        // RecoveredBlock<alloy_consensus::Block<alloy_consensus::EthereumTxEnvelope<alloy_consensus::TxEip4844>>>
+        // = self.payload_validator.ensure_well_formed_payload(ExecutionData {     payload:
+        // ExecutionPayload::V3(request.base.request.execution_payload),     sidecar:
+        // ExecutionPayloadSidecar::v4(         CancunPayloadFields {
+        //             parent_beacon_block_root: request.base.parent_beacon_block_root,
+        //             versioned_hashes: self
+        //                 .validate_blobs_bundle_v2(request.base.request.blobs_bundle)?,
+        //         },
+        //         PraguePayloadFields {
+        //             requests: RequestsOrHash::Requests(
+        //                 request.base.request.execution_requests.to_requests(),
+        //             ),
+        //         },
+        //     ),
+        // })?;
 
         // Check block size as per EIP-7934 (only applies when Osaka hardfork is active)
         let chain_spec = self.provider.chain_spec();
