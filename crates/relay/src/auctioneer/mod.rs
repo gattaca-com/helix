@@ -14,7 +14,6 @@ mod worker;
 
 use std::{
     cmp::Ordering,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -26,7 +25,6 @@ use helix_common::{
     api::builder_api::{
         BuilderGetValidatorsResponseEntry, InclusionListWithMetadata, TopBidUpdate,
     },
-    chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN, WORKER_UTIL},
     record_submission_step,
@@ -44,18 +42,20 @@ pub use crate::auctioneer::{
     simulator::client::SimulatorClient,
 };
 use crate::{
-    api::{builder::error::BuilderApiError, proposer::ProposerApiError}, auctioneer::{
+    api::{builder::error::BuilderApiError, proposer::ProposerApiError},
+    auctioneer::{
         bid_sorter::BidSorter,
         context::Context,
         manager::SimulatorManager,
         types::{PendingPayload, SlotData},
-    }, database::postgres::postgres_db_service::DbRequest, housekeeper::PayloadAttributesUpdate
+    },
+    database::dbservice::DbService,
+    housekeeper::PayloadAttributesUpdate,
 };
 
 pub fn spawn_workers<B: BidAdjustor>(
-    chain_info: ChainInfo,
     config: RelayConfig,
-    db_channel: crossbeam_channel::Sender<DbRequest>,
+    db: DbService,
     cache: LocalCache,
     bid_adjustor: B,
     top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
@@ -67,7 +67,7 @@ pub fn spawn_workers<B: BidAdjustor>(
 
     if config.is_registration_instance {
         for core in config.cores.reg_workers.clone() {
-            let worker = RegWorker::new(core, chain_info.clone());
+            let worker = RegWorker::new(core, cache.clone());
             let rx = reg_worker_rx.clone();
 
             std::thread::Builder::new()
@@ -82,13 +82,7 @@ pub fn spawn_workers<B: BidAdjustor>(
 
     if config.is_submission_instance {
         for core in config.cores.sub_workers.clone() {
-            let worker = SubWorker::new(
-                core,
-                event_tx.clone(),
-                cache.clone(),
-                chain_info.clone(),
-                config.clone(),
-            );
+            let worker = SubWorker::new(core, event_tx.clone(), cache.clone(), config.clone());
             let rx = sub_worker_rx.clone();
 
             std::thread::Builder::new()
@@ -104,8 +98,7 @@ pub fn spawn_workers<B: BidAdjustor>(
 
         let bid_sorter = BidSorter::new(top_bid_tx);
         let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
-        let ctx =
-            Context::new(chain_info, config, sim_manager, db, bid_sorter, cache, bid_adjustor);
+        let ctx = Context::new(config, sim_manager, db, bid_sorter, cache, bid_adjustor);
         let id = format!("auctioneer_{auctioneer_core}");
         let auctioneer = Auctioneer { ctx, state: State::default(), tel: Telemetry::new(id) };
 
@@ -563,7 +556,8 @@ impl State {
 
         match (registration_data, payload_attributes_map.is_empty()) {
             (Some(registration_data), false) => {
-                let current_fork = ctx.chain_info.fork_at_slot(bid_slot);
+                let chain_info = ctx.cache.get_chain_info().expect("chain info should be cached");
+                let current_fork = chain_info.fork_at_slot(bid_slot);
 
                 info!(%bid_slot, attributes = payload_attributes_map.len(), "processed slot data, start sorting");
 

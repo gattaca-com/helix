@@ -1,17 +1,13 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::{Arc, atomic::Ordering},
     time::Instant,
 };
 
 use alloy_primitives::{B256, U256};
-use helix_common::{
-    BuilderInfo, RelayConfig, chain_info::ChainInfo, local_cache::LocalCache,
-    metrics::SimulatorMetrics, spawn_tracked,
-};
+use helix_common::{BuilderInfo, RelayConfig, local_cache::LocalCache, metrics::SimulatorMetrics};
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
 use rustc_hash::FxHashMap;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::{
     api::builder::error::BuilderApiError,
@@ -23,7 +19,7 @@ use crate::{
         simulator::manager::{SimulationResult, SimulatorManager},
         types::{PayloadEntry, PendingPayload},
     },
-    database::postgres::postgres_db_service::PostgresDatabaseService,
+    database::dbservice::DbService,
 };
 
 // Context that is only valid for a given slot
@@ -41,11 +37,10 @@ pub struct SlotContext {
 }
 
 pub struct Context<B: BidAdjustor> {
-    pub chain_info: ChainInfo,
     pub config: RelayConfig,
     pub cache: LocalCache,
     pub unknown_builder_info: BuilderInfo,
-    pub db: Arc<PostgresDatabaseService>,
+    pub db: DbService,
     pub slot_context: SlotContext,
     pub bid_adjustor: B,
 }
@@ -55,10 +50,9 @@ const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
 
 impl<B: BidAdjustor> Context<B> {
     pub fn new(
-        chain_info: ChainInfo,
         config: RelayConfig,
         sim_manager: SimulatorManager,
-        db: Arc<PostgresDatabaseService>,
+        db: DbService,
         bid_sorter: BidSorter,
         cache: LocalCache,
         bid_adjustor: B,
@@ -72,7 +66,7 @@ impl<B: BidAdjustor> Context<B> {
             api_key: None,
         };
 
-        let block_merger = BlockMerger::new(0, chain_info.clone(), cache.clone(), config.clone());
+        let block_merger = BlockMerger::new(0, cache.clone(), config.clone());
 
         let slot_context = SlotContext {
             sim_manager,
@@ -91,7 +85,7 @@ impl<B: BidAdjustor> Context<B> {
             block_merger,
         };
 
-        Self { chain_info, cache, unknown_builder_info, slot_context, db, config, bid_adjustor }
+        Self { cache, unknown_builder_info, slot_context, db, config, bid_adjustor }
     }
 
     pub fn builder_info(&self, builder: &BlsPublicKeyBytes) -> BuilderInfo {
@@ -124,31 +118,19 @@ impl<B: BidAdjustor> Context<B> {
 
                 let reason = err.to_string();
                 let bid_slot = result.submission.slot();
-                let failsafe_triggered = self.sim_manager.failsafe_triggered.clone();
-
-                let db = self.db.clone();
-                spawn_tracked!(async move {
-                    if let Err(err) =
-                        db.db_demote_builder(bid_slot.as_u64(), &builder, &block_hash, reason).await
-                    {
-                        failsafe_triggered.store(true, Ordering::Relaxed);
-                        error!(%builder, %err, %block_hash, "failed to demote builder in database! Pausing all optmistic submissions");
-                    }
-                });
+                self.db.db_demote_builder(
+                    bid_slot.as_u64(),
+                    builder,
+                    block_hash,
+                    reason,
+                    self.sim_manager.failsafe_triggered.clone(),
+                );
             } else {
                 warn!(%err, %builder, %block_hash, "builder already demoted, skipping demotion");
             }
         };
 
-        let db = self.db.clone();
-        spawn_tracked!(async move {
-            if let Err(err) = db
-                .store_block_submission(result.submission, result.trace, result.optimistic_version)
-                .await
-            {
-                error!(%err, "failed to store block submission")
-            }
-        });
+        self.db.store_block_submission(result.submission, result.trace, result.optimistic_version);
 
         if let Some(res_tx) = result.res_tx {
             // submission was initially valid but by the time sim finished the slot already

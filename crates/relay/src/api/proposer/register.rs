@@ -58,7 +58,7 @@ impl<A: Api> ProposerApi<A> {
         let api_key = headers.get(HEADER_API_KEY).and_then(|key| key.to_str().ok());
 
         let pool_name = match api_key {
-            Some(api_key) => match proposer_api.db.get_validator_pool_name(api_key).await? {
+            Some(api_key) => match proposer_api.local_cache.get_validator_pool_name(api_key) {
                 Some(pool_name) => Some(pool_name),
                 None => {
                     warn!("Invalid api key provided");
@@ -119,7 +119,7 @@ impl<A: Api> ProposerApi<A> {
         let mut skipped_registrations = 0;
 
         let registrations_to_check: Vec<_> = {
-            let known_validators_guard = proposer_api.db.known_validators_cache().read();
+            let known_validators_guard = proposer_api.local_cache.known_validators_cache.read();
             registrations
                 .into_iter()
                 .filter(|reg| {
@@ -131,7 +131,7 @@ impl<A: Api> ProposerApi<A> {
                     }
                 })
                 .filter(|reg| {
-                    if proposer_api.db.is_registration_update_required(reg) {
+                    if proposer_api.local_cache.is_registration_update_required(reg) {
                         true
                     } else {
                         skipped_registrations += 1;
@@ -208,7 +208,11 @@ impl<A: Api> ProposerApi<A> {
                 }
             });
 
-        proposer_api.db.save_validator_registrations(registrations_to_save, pool_name, user_agent);
+        proposer_api.local_cache.save_validator_registrations(
+            registrations_to_save,
+            pool_name,
+            user_agent,
+        );
 
         info!(
             ?process_time,

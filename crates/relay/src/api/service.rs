@@ -21,7 +21,7 @@ use crate::{
     },
     auctioneer::{AuctioneerHandle, RegWorkerHandle},
     beacon::multi_beacon_client::MultiBeaconClient,
-    database::postgres::postgres_db_service::PostgresDatabaseService,
+    database::dbservice::DbService,
     gossip::{GrpcGossiperClientManager, process_gossip_messages},
     housekeeper::CurrentSlotInfo,
     network::api::RelayNetworkApi,
@@ -31,7 +31,7 @@ pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn start_api_service<A: Api>(
     mut config: RelayConfig,
-    db: Arc<PostgresDatabaseService>,
+    db: DbService,
     local_cache: Arc<LocalCache>,
     current_slot_info: CurrentSlotInfo,
     chain_info: Arc<ChainInfo>,

@@ -2,34 +2,33 @@ use std::{
     ops::DerefMut,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, SystemTime},
 };
 
 use alloy_primitives::{B256, U256};
-use dashmap::{DashMap, DashSet};
 use deadpool_postgres::{Config, GenericClient, ManagerConfig, Pool, RecyclingMethod};
 use helix_common::{
-    BuilderInfo, DataAdjustmentsEntry, Filtering, GetHeaderTrace, GetPayloadTrace,
-    GossipedPayloadTrace, PostgresConfig, ProposerInfo, RelayConfig,
-    SignedValidatorRegistrationEntry, SubmissionTrace, ValidatorPreferences, ValidatorSummary,
+    DataAdjustmentsEntry, Filtering, GetHeaderTrace, GetPayloadTrace, GossipedPayloadTrace,
+    PostgresConfig, ProposerInfo, RelayConfig, SignedValidatorRegistrationEntry, SubmissionTrace,
+    ValidatorPreferences, ValidatorSummary,
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         data_api::{
             BidFilters, DataAdjustmentsResponse, ProposerHeaderDeliveredParams,
             ProposerHeaderDeliveredResponse,
         },
-        proposer_api::{GetHeaderParams, ValidatorRegistrationInfo},
+        proposer_api::GetHeaderParams,
     },
     bid_submission::OptimisticVersion,
+    local_cache::LocalCache,
     metrics::DbMetricRecord,
     utils::utcnow_ms,
 };
-use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SignedValidatorRegistration, Slot};
-use parking_lot::RwLock;
+use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, Slot};
 use rustc_hash::FxHashSet;
-use tokio::sync::{mpsc::Sender, oneshot};
+use tokio::sync::oneshot;
 use tokio_postgres::{NoTls, types::ToSql};
 use tracing::{error, info, instrument, warn};
 
@@ -51,32 +50,9 @@ pub enum DbRequest {
         pub_key: BlsPublicKeyBytes,
         response: oneshot::Sender<Result<SignedValidatorRegistrationEntry, DatabaseError>>,
     },
-    GetValidatorRegistrations {
-        response: oneshot::Sender<Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError>>,
-    },
     GetValidatorRegistrationsForPubKeys {
         pub_keys: Vec<BlsPublicKeyBytes>,
         response: oneshot::Sender<Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError>>,
-    },
-    GetProposerDuties {
-        response: oneshot::Sender<Result<Vec<BuilderGetValidatorsResponseEntry>, DatabaseError>>,
-    },
-    GetValidatorPreferences {
-        pub_key: BlsPublicKeyBytes,
-        response: oneshot::Sender<Result<Option<ValidatorPreferences>, DatabaseError>>,
-    },
-    UpdateValidatorPreferences {
-        pub_key: BlsPublicKeyBytes,
-        preferences: ValidatorPreferences,
-        response: oneshot::Sender<Result<(), DatabaseError>>,
-    },
-    GetPoolValidators {
-        pool_name: String,
-        response: oneshot::Sender<Result<Vec<BlsPublicKeyBytes>, DatabaseError>>,
-    },
-    GetValidatorPoolName {
-        api_key: String,
-        response: oneshot::Sender<Result<Option<String>, DatabaseError>>,
     },
     SaveTooLateGetPayload {
         slot: u64,
@@ -84,34 +60,19 @@ pub enum DbRequest {
         payload_hash: B256,
         message_received: u64,
         payload_fetched: u64,
-        response: oneshot::Sender<Result<(), DatabaseError>>,
     },
     SaveDeliveredPayload {
         params: SavePayloadParams,
-        response: oneshot::Sender<Result<(), DatabaseError>>,
-    },
-    StoreBuilderInfo {
-        builder_pub_key: BlsPublicKeyBytes,
-        builder_info: BuilderInfo,
-        response: oneshot::Sender<Result<(), DatabaseError>>,
     },
     StoreBuildersInfo {
         builders: Vec<BuilderInfoDocument>,
-        response: oneshot::Sender<Result<(), DatabaseError>>,
-    },
-    GetAllBuilderInfos {
-        response: oneshot::Sender<Result<Vec<BuilderInfoDocument>, DatabaseError>>,
-    },
-    CheckBuilderApiKey {
-        api_key: String,
-        response: oneshot::Sender<Result<bool, DatabaseError>>,
     },
     DbDemoteBuilder {
         slot: u64,
         builder_pub_key: BlsPublicKeyBytes,
         block_hash: B256,
         reason: String,
-        response: oneshot::Sender<Result<(), DatabaseError>>,
+        failsafe_triggered: Arc<AtomicBool>,
     },
     GetBids {
         filters: BidFilters,
@@ -130,19 +91,16 @@ pub enum DbRequest {
         trace: GetHeaderTrace,
         mev_boost: bool,
         user_agent: Option<String>,
-        response: oneshot::Sender<Result<(), DatabaseError>>,
     },
     SaveFailedGetPayload {
         slot: u64,
         block_hash: B256,
         error: String,
         trace: GetPayloadTrace,
-        response: oneshot::Sender<Result<(), DatabaseError>>,
     },
     SaveGossipedPayloadTrace {
         block_hash: B256,
         trace: GossipedPayloadTrace,
-        response: oneshot::Sender<Result<(), DatabaseError>>,
     },
     GetTrustedProposers {
         response: oneshot::Sender<Result<Vec<ProposerInfo>, DatabaseError>>,
@@ -152,7 +110,6 @@ pub enum DbRequest {
         slot: u64,
         block_parent_hash: B256,
         proposer_pubkey: BlsPublicKeyBytes,
-        response: oneshot::Sender<Result<(), Vec<DatabaseError>>>,
     },
     GetBlockAdjustmentsForSlot {
         slot: Slot,
@@ -160,15 +117,20 @@ pub enum DbRequest {
     },
     SaveBlockAdjustmentsData {
         entry: DataAdjustmentsEntry,
-        response: oneshot::Sender<Result<(), DatabaseError>>,
     },
     GetProposerHeaderDelivered {
         params: ProposerHeaderDeliveredParams,
         response: oneshot::Sender<Result<Vec<ProposerHeaderDeliveredResponse>, DatabaseError>>,
     },
+    SetKnownValidators {
+        known_validators: Vec<ValidatorSummary>,
+    },
+    SetProposerDuties {
+        duties: Vec<BuilderGetValidatorsResponseEntry>,
+    },
 }
 
-struct PendingBlockSubmissionValue {
+pub struct PendingBlockSubmissionValue {
     pub submission: SignedBidSubmission,
     pub trace: SubmissionTrace,
     pub optimistic_version: OptimisticVersion,
@@ -207,18 +169,17 @@ struct TrustedProposerParams {
 
 #[derive(Clone)]
 pub struct PostgresDatabaseService {
-    validator_registration_cache: Arc<DashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>>,
-    pending_validator_registrations: Arc<DashSet<BlsPublicKeyBytes>>,
-    block_submissions_sender: Option<Sender<PendingBlockSubmissionValue>>,
-    known_validators_cache: Arc<RwLock<FxHashSet<BlsPublicKeyBytes>>>,
-    validator_pool_cache: Arc<DashMap<String, String>>,
     region: i16,
     pub pool: Arc<Pool>,
     pub high_priority_pool: Arc<Pool>,
+    pub local_cache: Arc<LocalCache>,
 }
 
 impl PostgresDatabaseService {
-    pub async fn from_relay_config(relay_config: &RelayConfig) -> Self {
+    pub async fn from_relay_config(
+        relay_config: &RelayConfig,
+        local_cache: Arc<LocalCache>,
+    ) -> Self {
         let mut cfg = Config::new();
         cfg.host = Some(relay_config.postgres.hostname.clone());
         cfg.port = Some(relay_config.postgres.port);
@@ -248,14 +209,10 @@ impl PostgresDatabaseService {
         };
 
         PostgresDatabaseService {
-            validator_registration_cache: Arc::new(DashMap::new()),
-            pending_validator_registrations: Arc::new(DashSet::new()),
-            block_submissions_sender: None,
-            known_validators_cache: Arc::new(RwLock::new(new_validator_set())),
-            validator_pool_cache: Arc::new(DashMap::new()),
             region: relay_config.postgres.region,
             pool: Arc::new(pool),
             high_priority_pool: Arc::new(high_priority_pool),
+            local_cache,
         }
     }
 
@@ -313,16 +270,36 @@ impl PostgresDatabaseService {
     pub async fn load_known_validators(&self) {
         let mut record = DbMetricRecord::new("load_known_validators");
 
-        let client = self.pool.get().await.unwrap();
-        let rows = client.query("SELECT * FROM known_validators", &[]).await.unwrap();
+        let client = match self.pool.get().await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("Error getting client from pool: {}", e);
+                return;
+            }
+        };
+
+        let rows = match client.query("SELECT * FROM known_validators", &[]).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                error!("Error querying known_validators: {}", e);
+                return;
+            }
+        };
+
         let mut set = new_validator_set();
         for row in rows {
             let public_key: BlsPublicKeyBytes =
-                parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("public_key")).unwrap();
+                match parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("public_key")) {
+                    Ok(pk) => pk,
+                    Err(e) => {
+                        error!("Error parsing public key: {}", e);
+                        continue;
+                    }
+                };
             set.insert(public_key);
         }
 
-        *self.known_validators_cache.write() = set;
+        *self.local_cache.known_validators_cache.write() = set;
 
         record.record_success();
     }
@@ -335,7 +312,8 @@ impl PostgresDatabaseService {
             Ok(entries) => {
                 let num_entries = entries.len();
                 entries.into_iter().for_each(|entry| {
-                    self.validator_registration_cache
+                    self.local_cache
+                        .validator_registration_cache
                         .insert(entry.registration_info.registration.message.pubkey, entry);
                 });
                 info!("Loaded {} validator registrations", num_entries);
@@ -347,13 +325,20 @@ impl PostgresDatabaseService {
         }
     }
 
-    pub async fn start_processors(&mut self, db_request_receiver: crossbeam_channel::Receiver<DbRequest>) {
+    pub async fn start_processors(
+        &mut self,
+        db_request_receiver: crossbeam_channel::Receiver<DbRequest>,
+        block_submission_receiver: crossbeam_channel::Receiver<PendingBlockSubmissionValue>,
+    ) {
         self.start_registration_processor().await;
-        self.start_block_submission_processor().await;
+        self.start_block_submission_processor(block_submission_receiver).await;
         self.start_db_request_processor(db_request_receiver).await;
     }
 
-    pub async fn start_db_request_processor(&mut self, receiver: crossbeam_channel::Receiver<DbRequest>) {
+    pub async fn start_db_request_processor(
+        &mut self,
+        receiver: crossbeam_channel::Receiver<DbRequest>,
+    ) {
         let svc_clone = self.clone();
 
         tokio::spawn(async move {
@@ -380,12 +365,13 @@ impl PostgresDatabaseService {
         tokio::spawn(async move {
             loop {
                 interval.tick().await;
-                match self_clone.pending_validator_registrations.len() {
+                match self_clone.local_cache.pending_validator_registrations.len() {
                     0 => continue,
                     _ => {
                         let mut entries = Vec::new();
-                        for key in self_clone.pending_validator_registrations.iter() {
-                            if let Some(entry) = self_clone.validator_registration_cache.get(&*key)
+                        for key in self_clone.local_cache.pending_validator_registrations.iter() {
+                            if let Some(entry) =
+                                self_clone.local_cache.validator_registration_cache.get(&*key)
                             {
                                 entries.push(entry.clone());
                             }
@@ -393,7 +379,7 @@ impl PostgresDatabaseService {
                         match self_clone._save_validator_registrations(&entries).await {
                             Ok(_) => {
                                 for entry in entries.iter() {
-                                    self_clone.pending_validator_registrations.remove(
+                                    self_clone.local_cache.pending_validator_registrations.remove(
                                         &entry.registration_info.registration.message.pubkey,
                                     );
                                 }
@@ -409,10 +395,10 @@ impl PostgresDatabaseService {
         });
     }
 
-    pub async fn start_block_submission_processor(&mut self) {
-        let (block_submissions_sender, mut block_submissions_receiver) =
-            tokio::sync::mpsc::channel(10_000);
-        self.block_submissions_sender = Some(block_submissions_sender);
+    pub async fn start_block_submission_processor(
+        &mut self,
+        batch_receiver: crossbeam_channel::Receiver<PendingBlockSubmissionValue>,
+    ) {
         let svc_clone = self.clone();
         tokio::spawn(async move {
             let mut batch = Vec::with_capacity(2_000);
@@ -420,10 +406,12 @@ impl PostgresDatabaseService {
             let mut last_slot_processed = 0;
             loop {
                 tokio::select! {
-                    Some(item) = block_submissions_receiver.recv() => {
-                        batch.push(item);
-                    }
                     _ = ticker.tick() => {
+                        // Drain all available messages from the crossbeam channel
+                        while let Ok(item) = batch_receiver.try_recv() {
+                            batch.push(item);
+                        }
+
                         if !batch.is_empty() {
 
                             let mut retry_count = 0;
@@ -452,14 +440,25 @@ impl PostgresDatabaseService {
         });
     }
 
-        async fn handle_db_request(&self, request: DbRequest) {
+    pub async fn load_builder_infos(&self, local_cache: Arc<LocalCache>) {
+        let mut record = DbMetricRecord::new("load_builder_infos");
+
+        match self.get_all_builder_infos().await {
+            Ok(builder_infos) => {
+                local_cache.update_builder_infos(&builder_infos, true);
+                info!("Loaded {} builder infos", builder_infos.len());
+                record.record_success();
+            }
+            Err(e) => {
+                error!("Error loading builder infos: {}", e);
+            }
+        }
+    }
+
+    async fn handle_db_request(&self, request: DbRequest) {
         match request {
             DbRequest::GetValidatorRegistration { pub_key, response } => {
                 let result = self.get_validator_registration(&pub_key).await;
-                let _ = response.send(result);
-            }
-            DbRequest::GetValidatorRegistrations { response } => {
-                let result = self.get_validator_registrations().await;
                 let _ = response.send(result);
             }
             DbRequest::GetValidatorRegistrationsForPubKeys { pub_keys, response } => {
@@ -467,53 +466,49 @@ impl PostgresDatabaseService {
                 let result = self.get_validator_registrations_for_pub_keys(&pub_key_refs).await;
                 let _ = response.send(result);
             }
-            DbRequest::GetProposerDuties { response } => {
-                let result = self.get_proposer_duties().await;
-                let _ = response.send(result);
+            DbRequest::SaveTooLateGetPayload {
+                slot,
+                proposer_pub_key,
+                payload_hash,
+                message_received,
+                payload_fetched,
+            } => {
+                if let Err(err) = self
+                    .save_too_late_get_payload(
+                        slot,
+                        &proposer_pub_key,
+                        &payload_hash,
+                        message_received,
+                        payload_fetched,
+                    )
+                    .await
+                {
+                    error!(%err, "failed to save too late get payload");
+                }
             }
-            DbRequest::GetValidatorPreferences { pub_key, response } => {
-                let result = self.get_validator_preferences(&pub_key).await;
-                let _ = response.send(result);
+            DbRequest::SaveDeliveredPayload { params } => {
+                if let Err(err) = self.save_delivered_payload(&params).await {
+                    error!(%err, "error saving payload to database");
+                }
             }
-            DbRequest::UpdateValidatorPreferences { pub_key, preferences, response } => {
-                let result = self.update_validator_preferences(&pub_key, &preferences).await;
-                let _ = response.send(result);
+            DbRequest::StoreBuildersInfo { builders } => {
+                if let Err(err) = self.store_builders_info(&builders).await {
+                    error!(%err, "failed to store builders info");
+                }
             }
-            DbRequest::GetPoolValidators { pool_name, response } => {
-                let result = self.get_pool_validators(&pool_name).await;
-                let _ = response.send(result);
-            }
-            DbRequest::GetValidatorPoolName { api_key, response } => {
-                let result = self.get_validator_pool_name(&api_key).await;
-                let _ = response.send(result);
-            }
-            DbRequest::SaveTooLateGetPayload { slot, proposer_pub_key, payload_hash, message_received, payload_fetched, response } => {
-                let result = self.save_too_late_get_payload(slot, &proposer_pub_key, &payload_hash, message_received, payload_fetched).await;
-                let _ = response.send(result);
-            }
-            DbRequest::SaveDeliveredPayload { params, response } => {
-                let result = self.save_delivered_payload(&params).await;
-                let _ = response.send(result);
-            }
-            DbRequest::StoreBuilderInfo { builder_pub_key, builder_info, response } => {
-                let result = self.store_builder_info(&builder_pub_key, &builder_info).await;
-                let _ = response.send(result);
-            }
-            DbRequest::StoreBuildersInfo { builders, response } => {
-                let result = self.store_builders_info(&builders).await;
-                let _ = response.send(result);
-            }
-            DbRequest::GetAllBuilderInfos { response } => {
-                let result = self.get_all_builder_infos().await;
-                let _ = response.send(result);
-            }
-            DbRequest::CheckBuilderApiKey { api_key, response } => {
-                let result = self.check_builder_api_key(&api_key).await;
-                let _ = response.send(result);
-            }
-            DbRequest::DbDemoteBuilder { slot, builder_pub_key, block_hash, reason, response } => {
-                let result = self.db_demote_builder(slot, &builder_pub_key, &block_hash, reason).await;
-                let _ = response.send(result);
+            DbRequest::DbDemoteBuilder {
+                slot,
+                builder_pub_key,
+                block_hash,
+                reason,
+                failsafe_triggered,
+            } => {
+                if let Err(err) =
+                    self.db_demote_builder(slot, &builder_pub_key, &block_hash, reason).await
+                {
+                    error!(%err, "error demoting builder in database triggering failsafe: stopping all optimistic submissions");
+                    failsafe_triggered.store(true, Ordering::Relaxed);
+                }
             }
             DbRequest::GetBids { filters, validator_preferences, response } => {
                 let result = self.get_bids(&filters, validator_preferences).await;
@@ -523,37 +518,83 @@ impl PostgresDatabaseService {
                 let result = self.get_delivered_payloads(&filters, validator_preferences).await;
                 let _ = response.send(result);
             }
-            DbRequest::SaveGetHeaderCall { params, best_block_hash, value, trace, mev_boost, user_agent, response } => {
-                let result = self.save_get_header_call(params, best_block_hash, value, trace, mev_boost, user_agent).await;
-                let _ = response.send(result);
+            DbRequest::SaveGetHeaderCall {
+                params,
+                best_block_hash,
+                value,
+                trace,
+                mev_boost,
+                user_agent,
+            } => {
+                if let Err(err) = self
+                    .save_get_header_call(
+                        params,
+                        best_block_hash,
+                        value,
+                        trace,
+                        mev_boost,
+                        user_agent,
+                    )
+                    .await
+                {
+                    error!(%err, "error saving get header call to database");
+                }
             }
-            DbRequest::SaveFailedGetPayload { slot, block_hash, error, trace, response } => {
-                let result = self.save_failed_get_payload(slot, block_hash, error, trace).await;
-                let _ = response.send(result);
+            DbRequest::SaveFailedGetPayload { slot, block_hash, error, trace } => {
+                if let Err(err) = self.save_failed_get_payload(slot, block_hash, error, trace).await
+                {
+                    error!(err = ?err, "error saving failed get payload");
+                }
             }
-            DbRequest::SaveGossipedPayloadTrace { block_hash, trace, response } => {
-                let result = self.save_gossiped_payload_trace(block_hash, trace).await;
-                let _ = response.send(result);
+            DbRequest::SaveGossipedPayloadTrace { block_hash, trace } => {
+                if let Err(err) = self.save_gossiped_payload_trace(block_hash, trace).await {
+                    error!(%err, "failed to store gossiped payload trace")
+                }
             }
             DbRequest::GetTrustedProposers { response } => {
                 let result = self.get_trusted_proposers().await;
                 let _ = response.send(result);
             }
-            DbRequest::SaveInclusionList { inclusion_list, slot, block_parent_hash, proposer_pubkey, response } => {
-                let result = self.save_inclusion_list(&inclusion_list, slot, &block_parent_hash, &proposer_pubkey).await;
-                let _ = response.send(result);
+            DbRequest::SaveInclusionList {
+                inclusion_list,
+                slot,
+                block_parent_hash,
+                proposer_pubkey,
+            } => {
+                if let Err(err) = self
+                    .save_inclusion_list(
+                        &inclusion_list,
+                        slot,
+                        &block_parent_hash,
+                        &proposer_pubkey,
+                    )
+                    .await
+                {
+                    error!(%slot, "failed to save inclusion list Errors: {:?}", err);
+                }
             }
             DbRequest::GetBlockAdjustmentsForSlot { slot, response } => {
                 let result = self.get_block_adjustments_for_slot(slot).await;
                 let _ = response.send(result);
             }
-            DbRequest::SaveBlockAdjustmentsData { entry, response } => {
-                let result = self.save_block_adjustments_data(entry).await;
-                let _ = response.send(result);
+            DbRequest::SaveBlockAdjustmentsData { entry } => {
+                if let Err(err) = self.save_block_adjustments_data(entry).await {
+                    error!(%err, "failed to save block adjustments data");
+                }
             }
             DbRequest::GetProposerHeaderDelivered { params, response } => {
                 let result = self.get_proposer_header_delivered(&params).await;
                 let _ = response.send(result);
+            }
+            DbRequest::SetKnownValidators { known_validators } => {
+                if let Err(err) = self.set_known_validators(known_validators).await {
+                    error!(%err, "failed to set known validators");
+                }
+            }
+            DbRequest::SetProposerDuties { duties } => {
+                if let Err(err) = self.set_proposer_duties(duties).await {
+                    error!(%err, "failed to set proposer duties");
+                }
             }
         }
     }
@@ -891,59 +932,15 @@ impl Default for PostgresDatabaseService {
         let high_priority_pool = cfg.create_pool(None, NoTls).unwrap();
 
         PostgresDatabaseService {
-            validator_registration_cache: Arc::new(DashMap::new()),
-            pending_validator_registrations: Arc::new(DashSet::new()),
-            block_submissions_sender: None,
-            known_validators_cache: Arc::new(RwLock::new(new_validator_set())),
-            validator_pool_cache: Arc::new(DashMap::new()),
             region: 1,
             pool: Arc::new(pool),
             high_priority_pool: Arc::new(high_priority_pool),
+            local_cache: Arc::new(LocalCache::new()),
         }
     }
 }
 
 impl PostgresDatabaseService {
-    /// Assume the entries are already validated
-    pub fn save_validator_registrations(
-        &self,
-        entries: impl Iterator<Item = ValidatorRegistrationInfo>,
-        pool_name: Option<String>,
-        user_agent: Option<String>,
-    ) {
-        for entry in entries {
-            self.pending_validator_registrations.insert(entry.registration.message.pubkey);
-            self.validator_registration_cache.insert(
-                entry.registration.message.pubkey,
-                SignedValidatorRegistrationEntry::new(
-                    entry.clone(),
-                    pool_name.clone(),
-                    user_agent.clone(),
-                ),
-            );
-        }
-    }
-
-    pub fn is_registration_update_required(
-        &self,
-        registration: &SignedValidatorRegistration,
-    ) -> bool {
-        if let Some(existing_entry) =
-            self.validator_registration_cache.get(&registration.message.pubkey) &&
-            existing_entry.registration_info.registration.message.timestamp >=
-                registration.message.timestamp.saturating_sub(60 * 60) &&
-            existing_entry.registration_info.registration.message.fee_recipient ==
-                registration.message.fee_recipient &&
-            existing_entry.registration_info.registration.message.gas_limit ==
-                registration.message.gas_limit
-        {
-            // do registration once per hour, unless fee recipient / gas limit has changed
-
-            return false;
-        }
-        true
-    }
-
     #[instrument(skip_all)]
     pub async fn get_validator_registration(
         &self,
@@ -987,7 +984,7 @@ impl PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    pub async fn get_validator_registrations(
+    async fn get_validator_registrations(
         &self,
     ) -> Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_validator_registrations");
@@ -1118,177 +1115,6 @@ impl PostgresDatabaseService {
         Ok(())
     }
 
-    #[instrument(skip_all)]
-    pub async fn get_proposer_duties(
-        &self,
-    ) -> Result<Vec<BuilderGetValidatorsResponseEntry>, DatabaseError> {
-        let mut record = DbMetricRecord::new("get_proposer_duties");
-
-        let rows = self
-            .high_priority_pool
-            .get()
-            .await?
-            .query(
-                "
-                            SELECT * FROM proposer_duties
-                            INNER JOIN validator_registrations
-                            ON proposer_duties.public_key = validator_registrations.public_key
-                            INNER JOIN validator_preferences
-                            ON proposer_duties.public_key = validator_preferences.public_key
-                            WHERE validator_registrations.active = true
-                        ",
-                &[],
-            )
-            .await?;
-
-        record.record_success();
-        parse_rows(rows)
-    }
-
-    #[instrument(skip_all)]
-    pub async fn get_validator_preferences(
-        &self,
-        pub_key: &BlsPublicKeyBytes,
-    ) -> Result<Option<ValidatorPreferences>, DatabaseError> {
-        let mut record = DbMetricRecord::new("get_validator_preferences");
-
-        if let Some(cached_entry) = self.validator_registration_cache.get(pub_key) {
-            record.record_success();
-            return Ok(Some(cached_entry.registration_info.preferences.clone()));
-        }
-
-        let rows = self
-            .pool
-            .get()
-            .await?
-            .query(
-                "
-                SELECT
-                    validator_preferences.filtering,
-                    validator_preferences.trusted_builders,
-                    validator_preferences.header_delay,
-                    validator_preferences.delay_ms,
-                    validator_preferences.disable_inclusion_lists
-                FROM validator_preferences
-                WHERE validator_preferences.public_key = $1
-                ",
-                &[&(pub_key.as_slice())],
-            )
-            .await?;
-
-        let result = if rows.is_empty() {
-            None
-        } else {
-            let prefs: ValidatorPreferences = parse_row(&rows[0])?;
-            Some(prefs)
-        };
-
-        record.record_success();
-        Ok(result)
-    }
-
-    pub async fn update_validator_preferences(
-        &self,
-        pub_key: &BlsPublicKeyBytes,
-        preferences: &ValidatorPreferences,
-    ) -> Result<(), DatabaseError> {
-        let mut record = DbMetricRecord::new("update_validator_preferences");
-
-        let mut client = self.pool.get().await?;
-        let transaction = client.transaction().await?;
-
-        let trusted_builders: Option<Vec<String>> =
-            preferences.trusted_builders.as_ref().map(|builders| builders.to_vec());
-
-        let filtering_value: i16 = match preferences.filtering {
-            helix_common::Filtering::Regional => 1,
-            helix_common::Filtering::Global => 0,
-        };
-
-        transaction
-            .execute(
-                "
-                INSERT INTO validator_preferences (
-                    public_key,
-                    filtering,
-                    trusted_builders,
-                    header_delay,
-                    delay_ms,
-                    disable_inclusion_lists,
-                    manual_override
-                ) VALUES ($1, $2, $3, $4, $5, $6, TRUE)
-                ON CONFLICT (public_key) 
-                DO UPDATE SET
-                    filtering = EXCLUDED.filtering,
-                    trusted_builders = EXCLUDED.trusted_builders,
-                    header_delay = EXCLUDED.header_delay,
-                    delay_ms = EXCLUDED.delay_ms,
-                    disable_inclusion_lists = EXCLUDED.disable_inclusion_lists,
-                    manual_override = TRUE
-                ",
-                &[
-                    &pub_key.as_slice(),
-                    &filtering_value,
-                    &trusted_builders,
-                    &preferences.header_delay,
-                    &preferences.delay_ms.map(|v| v as i64),
-                    &preferences.disable_inclusion_lists,
-                ],
-            )
-            .await?;
-
-        transaction.commit().await?;
-
-        if let Some(mut cached_entry) = self.validator_registration_cache.get_mut(pub_key) {
-            cached_entry.registration_info.preferences = preferences.clone();
-        }
-
-        record.record_success();
-
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    pub async fn get_pool_validators(
-        &self,
-        pool_name: &str,
-    ) -> Result<Vec<BlsPublicKeyBytes>, DatabaseError> {
-        let mut record = DbMetricRecord::new("get_pool_validators");
-
-        let rows = self
-            .pool
-            .get()
-            .await?
-            .query(
-                "
-                SELECT public_key
-                FROM trusted_proposers
-                WHERE name = $1
-                ",
-                &[&pool_name],
-            )
-            .await?;
-
-        let mut validators = Vec::new();
-        for row in rows {
-            let pubkey_bytes: Vec<u8> = row.try_get("public_key")?;
-
-            if pubkey_bytes.len() == 48 {
-                let mut key = [0u8; 48];
-                key.copy_from_slice(&pubkey_bytes);
-                validators.push(BlsPublicKeyBytes::from(key));
-            } else {
-                error!(
-                    length = pubkey_bytes.len(),
-                    "Invalid validator pubkey length in trusted_proposers"
-                );
-            }
-        }
-
-        record.record_success();
-        Ok(validators)
-    }
-
     pub async fn set_known_validators(
         &self,
         known_validators: Vec<ValidatorSummary>,
@@ -1302,7 +1128,7 @@ impl PostgresDatabaseService {
         let keys_to_remove: Vec<BlsPublicKeyBytes>;
 
         {
-            let mut curr_known_guard = self.known_validators_cache.write();
+            let mut curr_known_guard = self.local_cache.known_validators_cache.write();
             info!("Known validators: current cache size: {:?}", curr_known_guard.len());
 
             keys_to_add = new_keys_set.difference(&curr_known_guard).cloned().collect();
@@ -1357,54 +1183,32 @@ impl PostgresDatabaseService {
         Ok(())
     }
 
-    pub fn known_validators_cache(&self) -> &Arc<RwLock<FxHashSet<BlsPublicKeyBytes>>> {
-        &self.known_validators_cache
-    }
-
     #[instrument(skip_all)]
-    pub async fn get_validator_pool_name(
-        &self,
-        api_key: &str,
-    ) -> Result<Option<String>, DatabaseError> {
-        let mut record = DbMetricRecord::new("get_validator_pool_name");
+    pub async fn load_validator_pools(&self) {
+        let mut record = DbMetricRecord::new("load_validator_pools");
 
-        let client = self.high_priority_pool.get().await?;
-
-        if self.validator_pool_cache.is_empty() {
-            let rows = client.query("SELECT * FROM validator_pools", &[]).await?;
-            for row in rows {
-                let api_key: String = row.get::<&str, &str>("api_key").to_string();
-                let name: String = row.get::<&str, &str>("name").to_string();
-                self.validator_pool_cache.insert(api_key, name);
+        let client = match self.high_priority_pool.get().await {
+            Ok(client) => client,
+            Err(e) => {
+                error!("Error getting client from pool: {}", e);
+                return;
             }
-        }
-
-        if self.validator_pool_cache.contains_key(api_key) {
-            return Ok(self.validator_pool_cache.get(api_key).map(|f| f.clone()));
-        }
-
-        let api_key = api_key.to_string();
-        let rows = match client
-            .query("SELECT * FROM validator_pools WHERE api_key = $1", &[&api_key])
-            .await
-        {
+        };
+        let rows = match client.query("SELECT * FROM validator_pools", &[]).await {
             Ok(rows) => rows,
             Err(e) => {
                 error!("Error querying validator_pools: {}", e);
-                return Err(DatabaseError::from(e));
+                return;
             }
         };
 
-        if rows.is_empty() {
-            return Ok(None);
+        for row in rows {
+            let api_key: String = row.get::<&str, &str>("api_key").to_string();
+            let name: String = row.get::<&str, &str>("name").to_string();
+            self.local_cache.validator_pool_cache.insert(api_key, name);
         }
 
-        let name: String = rows[0].get("name");
-
-        self.validator_pool_cache.insert(api_key.to_string(), name.clone());
-
         record.record_success();
-        Ok(Some(name))
     }
 
     #[instrument(skip_all)]
@@ -1615,62 +1419,6 @@ impl PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    pub async fn store_block_submission(
-        &self,
-        submission: SignedBidSubmission,
-        trace: SubmissionTrace,
-        optimistic_version: OptimisticVersion,
-    ) -> Result<(), DatabaseError> {
-        let mut record = DbMetricRecord::new("store_block_submission");
-        if let Some(sender) = &self.block_submissions_sender {
-            sender
-                .send(PendingBlockSubmissionValue { submission, trace, optimistic_version })
-                .await
-                .map_err(|_| DatabaseError::ChannelSendError)?;
-        } else {
-            return Err(DatabaseError::ChannelSendError);
-        }
-        record.record_success();
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
-    pub async fn store_builder_info(
-        &self,
-        builder_pub_key: &BlsPublicKeyBytes,
-        builder_info: &BuilderInfo,
-    ) -> Result<(), DatabaseError> {
-        let mut record = DbMetricRecord::new("store_builder_info");
-
-        info!("Storing builder info for {:?}", builder_pub_key);
-
-        self.pool
-            .get()
-            .await?
-            .execute(
-                "
-                    INSERT INTO builder_info (public_key, collateral, is_optimistic, is_optimistic_for_regional_filtering, builder_id, builder_ids)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    ON CONFLICT (public_key)
-                    DO UPDATE SET
-                        builder_ids = array_concat_uniq(COALESCE(builder_info.builder_ids, '{}'::character varying[]), EXCLUDED.builder_ids)
-                ",
-                &[
-                    &(builder_pub_key.as_slice()),
-                    &(PostgresNumeric::from(builder_info.collateral)),
-                    &(builder_info.is_optimistic),
-                    &(builder_info.is_optimistic_for_regional_filtering),
-                    &(builder_info.builder_id),
-                    &(builder_info.builder_ids),
-                ],
-            )
-            .await?;
-
-        record.record_success();
-        Ok(())
-    }
-
-    #[instrument(skip_all)]
     pub async fn store_builders_info(
         &self,
         builders: &[BuilderInfoDocument],
@@ -1759,7 +1507,7 @@ impl PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    pub async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError> {
+    async fn get_all_builder_infos(&self) -> Result<Vec<BuilderInfoDocument>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_all_builder_infos");
 
         let rows =
@@ -1767,18 +1515,6 @@ impl PostgresDatabaseService {
 
         record.record_success();
         parse_rows(rows)
-    }
-
-    #[instrument(skip_all)]
-    pub async fn check_builder_api_key(&self, api_key: &str) -> Result<bool, DatabaseError> {
-        let mut record = DbMetricRecord::new("check_builder_api_key");
-
-        let client = self.high_priority_pool.get().await?;
-        let rows =
-            client.query("SELECT * FROM builder_info WHERE api_key = $1", &[&(api_key)]).await?;
-
-        record.record_success();
-        Ok(!rows.is_empty())
     }
 
     #[instrument(skip_all)]
