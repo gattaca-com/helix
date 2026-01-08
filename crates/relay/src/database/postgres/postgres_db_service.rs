@@ -50,9 +50,10 @@ struct PendingBlockSubmissionValue {
     pub submission: SignedBidSubmission,
     pub trace: SubmissionTrace,
     pub optimistic_version: OptimisticVersion,
+    pub is_adjusted: bool,
 }
 
-const BLOCK_SUBMISSION_FIELD_COUNT: usize = 16;
+const BLOCK_SUBMISSION_FIELD_COUNT: usize = 17;
 const MAINNET_VALIDATOR_COUNT: usize = 1_100_000;
 static DELIVERED_PAYLOADS_MIG_SLOT: AtomicU64 = AtomicU64::new(0);
 
@@ -522,6 +523,7 @@ impl PostgresDatabaseService {
                 region_id: i16,
                 optimistic_version: i16,
                 metadata: Option<&'a str>,
+                is_adjusted: bool,
             }
 
             let mut structured_blocks: Vec<BlockParams> = Vec::with_capacity(chunk.len());
@@ -536,13 +538,14 @@ impl PostgresDatabaseService {
                     proposer_fee_recipient: item.submission.proposer_fee_recipient().as_slice(),
                     gas_limit: item.submission.gas_limit() as i32,
                     gas_used: item.submission.gas_used() as i32,
-                    value: PostgresNumeric::from(item.submission.value()),
+                    value: PostgresNumeric::from(*item.submission.value()),
                     num_txs: item.submission.num_txs() as i32,
                     timestamp: item.submission.timestamp() as i64,
                     first_seen: item.trace.receive as i64,
                     region_id: self.region,
                     optimistic_version: item.optimistic_version as i16,
                     metadata: item.trace.metadata.as_deref(),
+                    is_adjusted: item.is_adjusted,
                 });
             }
 
@@ -566,12 +569,13 @@ impl PostgresDatabaseService {
                 params.push(&blk.region_id);
                 params.push(&blk.optimistic_version);
                 params.push(&blk.metadata);
+                params.push(&blk.is_adjusted);
             }
 
             // Build and execute INSERT for this chunk
             let num_cols = BLOCK_SUBMISSION_FIELD_COUNT;
             let mut sql = String::from(
-                "INSERT INTO block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen, region_id, optimistic_version, metadata) VALUES ",
+                "INSERT INTO block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen, region_id, optimistic_version, metadata, is_adjusted) VALUES ",
             );
             let clauses: Vec<String> = (0..structured_blocks.len())
                 .map(|i| {
@@ -1370,11 +1374,17 @@ impl PostgresDatabaseService {
         submission: SignedBidSubmission,
         trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,
+        is_adjusted: bool,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_block_submission");
         if let Some(sender) = &self.block_submissions_sender {
             sender
-                .send(PendingBlockSubmissionValue { submission, trace, optimistic_version })
+                .send(PendingBlockSubmissionValue {
+                    submission,
+                    trace,
+                    optimistic_version,
+                    is_adjusted,
+                })
                 .await
                 .map_err(|_| DatabaseError::ChannelSendError)?;
         } else {
@@ -2205,7 +2215,7 @@ impl PostgresDatabaseService {
                     adjusted_block_hash,
                     adjusted_value
                 FROM bid_adjustments
-                WHERE slot = $1
+                WHERE slot = $1 AND COALESCE(is_dry_run, FALSE) = FALSE
                 ",
                 &[&(slot.as_u64() as i64)],
             )
@@ -2220,7 +2230,7 @@ impl PostgresDatabaseService {
         &self,
         entry: DataAdjustmentsEntry,
     ) -> Result<(), DatabaseError> {
-        let mut record = DbMetricRecord::new("save_bloc_adjustments_data");
+        let mut record = DbMetricRecord::new("save_block_adjustments_data");
 
         self.pool
             .get()
@@ -2237,10 +2247,11 @@ impl PostgresDatabaseService {
                         submitted_received_at,
                         submitted_value,
                         adjusted_block_hash,
-                        adjusted_value
+                        adjusted_value,
+                        is_dry_run
                     )
                 VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ",
                 &[
                     &(entry.slot.as_u64() as i64),
@@ -2252,6 +2263,7 @@ impl PostgresDatabaseService {
                     &PostgresNumeric::from(entry.submitted_value),
                     &entry.adjusted_block_hash.as_slice(),
                     &PostgresNumeric::from(entry.adjusted_value),
+                    &entry.is_dry_run,
                 ],
             )
             .await?;
@@ -2340,5 +2352,39 @@ impl PostgresDatabaseService {
 
         record.record_success();
         Ok(results)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn disable_adjustments(&self) -> Result<(), DatabaseError> {
+        let mut record = DbMetricRecord::new("disable_adjustments");
+
+        self.high_priority_pool
+            .get()
+            .await?
+            .execute("UPDATE relay_info SET adjustments_enabled = FALSE", &[])
+            .await?;
+
+        record.record_success();
+        Ok(())
+    }
+
+    pub async fn check_adjustments_enabled(&self) -> Result<bool, DatabaseError> {
+        let mut record = DbMetricRecord::new("check_adjustments_enabled");
+
+        let rows = self
+            .pool
+            .get()
+            .await?
+            .query("SELECT adjustments_enabled FROM relay_info LIMIT 1", &[])
+            .await?;
+
+        let enabled = rows
+            .iter()
+            .map(|row| row.get::<_, bool>("adjustments_enabled"))
+            .next()
+            .unwrap_or(false);
+
+        record.record_success();
+        Ok(enabled)
     }
 }

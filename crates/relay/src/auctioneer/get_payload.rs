@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use alloy_primitives::B256;
 use helix_common::GetPayloadTrace;
 use helix_types::{
@@ -38,7 +36,7 @@ impl<B: BidAdjustor> Context<B> {
         }
 
         let block_hash = payload.execution_payload.execution_payload.block_hash;
-        let entry = PayloadEntry::new_gossip(payload);
+        let entry = PayloadEntry::new_gossip(payload.execution_payload, payload.bid_data);
         self.payloads.entry(block_hash).or_insert(entry);
     }
 
@@ -46,7 +44,7 @@ impl<B: BidAdjustor> Context<B> {
     #[must_use]
     pub(super) fn handle_get_payload(
         &mut self,
-        local: Arc<PayloadAndBlobs>,
+        local: PayloadAndBlobs,
         blinded: SignedBlindedBeaconBlock,
         trace: GetPayloadTrace,
         res_tx: oneshot::Sender<GetPayloadResult>,
@@ -85,12 +83,12 @@ impl<B: BidAdjustor> Context<B> {
             info!("found payload for pending get_payload");
             let PendingPayload { blinded, res_tx, trace, .. } = pending;
             self.handle_get_payload(
-                local.payload_and_blobs.clone(),
+                local.payload_and_blobs(),
                 blinded,
                 trace,
                 res_tx,
                 slot_data,
-                local.bid_data.clone(),
+                local.bid_data_ref().to_owned(),
             )
         } else {
             self.pending_payload = Some(pending);
@@ -101,7 +99,7 @@ impl<B: BidAdjustor> Context<B> {
     fn get_payload(
         &self,
         blinded: SignedBlindedBeaconBlock,
-        local: Arc<PayloadAndBlobs>,
+        local: PayloadAndBlobs,
         trace: GetPayloadTrace,
         slot_data: &SlotData,
     ) -> Result<(GetPayloadResponse, VersionedSignedProposal, GetPayloadTrace), ProposerApiError>
@@ -152,7 +150,7 @@ impl<B: BidAdjustor> Context<B> {
     pub fn unblind(
         &self,
         blinded: SignedBlindedBeaconBlock,
-        local: Arc<PayloadAndBlobs>,
+        local: PayloadAndBlobs,
         slot_data: &SlotData,
     ) -> Result<(GetPayloadResponse, VersionedSignedProposal), ProposerApiError> {
         match blinded {

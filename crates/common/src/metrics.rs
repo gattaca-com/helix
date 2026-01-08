@@ -255,6 +255,12 @@ lazy_static! {
     )
     .unwrap();
 
+    static ref ADJUSTMENTS_DISABLED_COUNT: IntCounter = register_int_counter_with_registry!(
+        "adjustments_disabled_count_total",
+        "Count of adjustments disablments",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 
     static ref SIMULATOR_SYNC: GaugeVec = register_gauge_vec_with_registry!(
         "simulator_synced",
@@ -737,6 +743,10 @@ impl SimulatorMetrics {
 
     pub fn demotion_count() {
         BUILDER_DEMOTION_COUNT.inc();
+    }
+
+    pub fn disable_adjustments() {
+        ADJUSTMENTS_DISABLED_COUNT.inc();
     }
 
     pub fn simulator_sync(simulator: &str, is_synced: bool) {
