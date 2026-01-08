@@ -2348,10 +2348,11 @@ impl PostgresDatabaseService {
     pub async fn disable_adjustments(&self) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("disable_adjustments");
 
-        let mut client = self.high_priority_pool.get().await?;
-        let transaction = client.transaction().await?;
-
-        transaction.execute("UPDATE relay_info SET adjustments_enabled = FALSE", &[]).await?;
+        self.high_priority_pool
+            .get()
+            .await?
+            .execute("UPDATE relay_info SET adjustments_enabled = FALSE", &[])
+            .await?;
 
         record.record_success();
         Ok(())
