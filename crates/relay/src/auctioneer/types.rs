@@ -125,6 +125,7 @@ pub struct SubmissionPayload {
     pub parent_beacon_block_root: Option<B256>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone)]
 pub enum PayloadEntry {
     Submission(SubmissionPayload),
@@ -281,11 +282,11 @@ impl<'a> From<&'a PayloadBidData> for PayloadBidDataRef<'a> {
 
 impl PayloadBidDataRef<'_> {
     pub fn to_owned(&self) -> PayloadBidData {
-        let withdrawals_root = self.withdrawals_root.clone();
-        let tx_root = self.tx_root.clone();
+        let withdrawals_root = *self.withdrawals_root;
+        let tx_root = *self.tx_root;
         let execution_requests = self.execution_requests.clone();
         let value = *self.value;
-        let builder_pubkey = self.builder_pubkey.clone();
+        let builder_pubkey = *self.builder_pubkey;
         PayloadBidData { withdrawals_root, tx_root, execution_requests, value, builder_pubkey }
     }
 }

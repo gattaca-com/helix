@@ -15,13 +15,12 @@ use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, warn};
 
-use crate::{
-    api::service::SIMULATOR_REQUEST_TIMEOUT,
-    auctioneer::{
-        simulator::{BlockMergeRequest, SimulatorRequest, client::SimulatorClient},
-        types::{Event, SubmissionResult},
-    },
+use crate::auctioneer::{
+    simulator::{BlockMergeRequest, SimulatorRequest, client::SimulatorClient},
+    types::{Event, SubmissionResult},
 };
+
+pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Default)]
 struct LocalTelemetry {

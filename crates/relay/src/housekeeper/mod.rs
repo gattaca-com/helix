@@ -19,8 +19,8 @@ pub use slot_info::CurrentSlotInfo;
 use tokio::sync::broadcast;
 
 use crate::{
-    auctioneer::Event, beacon::multi_beacon_client::MultiBeaconClient,
-    database::postgres::postgres_db_service::PostgresDatabaseService, network::RelayNetworkManager,
+    DbService, auctioneer::Event, beacon::multi_beacon_client::MultiBeaconClient,
+    network::RelayNetworkManager,
 };
 
 const HEAD_EVENT_CHANNEL_SIZE: usize = 100;
@@ -28,7 +28,7 @@ const PAYLOAD_ATTRIBUTE_CHANNEL_SIZE: usize = 300;
 
 /// Start housekeeper and chain updater
 pub async fn start_housekeeper(
-    db: Arc<PostgresDatabaseService>,
+    db: DbService,
     auctioneer: Arc<LocalCache>,
     config: &RelayConfig,
     beacon_client: Arc<MultiBeaconClient>,

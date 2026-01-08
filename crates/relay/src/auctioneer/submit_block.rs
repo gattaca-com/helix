@@ -116,7 +116,8 @@ impl<B: BidAdjustor> Context<B> {
             Submission::Dehydrated(dehydrated) => {
                 trace!("hydrating submission");
                 let start = Instant::now();
-                let max_blobs_per_block = self.chain_info.max_blobs_per_block();
+                let chain_info = self.cache.get_chain_info().expect("chain info should be cached");
+                let max_blobs_per_block = chain_info.max_blobs_per_block();
 
                 let hydrated =
                     dehydrated.hydrate(&mut self.hydration_cache, max_blobs_per_block)?;

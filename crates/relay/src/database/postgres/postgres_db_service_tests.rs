@@ -210,56 +210,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_save_and_get_builder_info() {
-        run_setup().await;
-
-        let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
-
-        let public_key = BlsPublicKey::deserialize(&alloy_primitives::hex!("8C266FD5CB50B5D9431DAA69C4BE17BC9A79A85D172112DA09E0AC3E2D0DCF785021D49B6DF57827D6BC61EBA086A507")).unwrap().serialize().into();
-        let builder_info = helix_common::BuilderInfo {
-            collateral: U256::from(10000000000000000000u64),
-            is_optimistic: false,
-            is_optimistic_for_regional_filtering: false,
-            builder_id: None,
-            builder_ids: Some(vec!["test3".to_string()]),
-            api_key: None,
-        };
-
-        let result = db_service.store_builder_info(&public_key, &builder_info).await;
-        assert!(result.is_ok());
-
-        let result = db_service.get_all_builder_infos().await.unwrap();
-        assert!(result.len() == 1);
-        assert!(result[0].pub_key == public_key);
-    }
-
-    #[tokio::test]
-    async fn test_demotion() {
-        run_setup().await;
-
-        let db_service = PostgresDatabaseService::new(&test_config(), 0).unwrap();
-
-        let key = BlsSecretKey::random();
-        let public_key = key.public_key().serialize().into();
-
-        let builder_info = helix_common::BuilderInfo {
-            collateral: Default::default(),
-            is_optimistic: false,
-            is_optimistic_for_regional_filtering: false,
-            builder_id: None,
-            builder_ids: None,
-            api_key: None,
-        };
-
-        let result = db_service.store_builder_info(&public_key, &builder_info).await;
-        assert!(result.is_ok());
-
-        let result =
-            db_service.db_demote_builder(0, &public_key, &Default::default(), "".to_string()).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
     async fn test_store_block_submission() -> Result<(), Box<dyn std::error::Error>> {
         run_setup().await;
 

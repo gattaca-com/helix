@@ -19,13 +19,13 @@ use tokio::sync::{Mutex, broadcast};
 use tracing::{Instrument, debug, error, info, warn};
 
 use crate::{
+    DbService,
     auctioneer::Event,
     beacon::{
         error::BeaconClientError,
         multi_beacon_client::MultiBeaconClient,
         types::{HeadEventData, StateId},
     },
-    database::postgres::postgres_db_service::PostgresDatabaseService,
     housekeeper::{
         EthereumPrimevService, error::HousekeeperError, inclusion_list::InclusionListService,
     },
@@ -49,7 +49,6 @@ struct HousekeeperSlots {
     refreshed_validators: Arc<AtomicU64>,
     trusted_proposers: Arc<AtomicU64>,
     // updating can take >> slot time, so we avoid concurrent updates by locking the mutex
-    updating_builder_infos: Arc<Mutex<()>>,
     updating_proposer_duties: Arc<Mutex<()>>,
     updating_refreshed_validators: Arc<Mutex<()>>,
     updating_trusted_proposers: Arc<Mutex<()>>,
@@ -90,19 +89,18 @@ impl HousekeeperSlots {
 /// will sync through db.
 #[derive(Clone)]
 pub struct Housekeeper {
-    db: Arc<PostgresDatabaseService>,
+    db: DbService,
     beacon_client: Arc<MultiBeaconClient>,
     auctioneer: Arc<LocalCache>,
     chain_info: Arc<ChainInfo>,
     primev_service: Option<EthereumPrimevService>,
     slots: HousekeeperSlots,
     inclusion_list_service: Option<InclusionListService>,
-    local_builders: Vec<BuilderConfig>,
 }
 
 impl Housekeeper {
     pub fn new(
-        db: Arc<PostgresDatabaseService>,
+        db: DbService,
         beacon_client: Arc<MultiBeaconClient>,
         auctioneer: Arc<LocalCache>,
         config: &RelayConfig,
@@ -132,7 +130,6 @@ impl Housekeeper {
             primev_service,
             slots: HousekeeperSlots::default(),
             inclusion_list_service,
-            local_builders: config.builders.clone(),
         }
     }
 
@@ -238,25 +235,6 @@ impl Housekeeper {
             }
         }
 
-        // builder info updated every slot
-        let housekeeper = self.clone();
-        task::spawn(
-            file!(),
-            line!(),
-            async move {
-                let Ok(_guard) = housekeeper.slots.updating_builder_infos.try_lock() else {
-                    warn!("builder info update already in progress");
-                    return;
-                };
-                let start = Instant::now();
-                if let Err(err) = housekeeper.sync_builder_info_changes().await {
-                    error!(%err, "failed to sync builder info changes");
-                }
-                info!(duration = ?start.elapsed(), "sync builder info task completed");
-            }
-            .in_current_span(),
-        );
-
         // trusted proposers
         if self.should_update_trusted_proposers(head_slot.as_u64()) {
             if is_local_dev() {
@@ -360,21 +338,7 @@ impl Housekeeper {
         let validators = self.beacon_client.get_state_validators(StateId::Head).await?;
         debug!(validators = validators.len(), duration = ?start.elapsed(), "fetched validators");
 
-        self.db.set_known_validators(validators).await?;
-
-        Ok(())
-    }
-
-    /// Synchronizes builder information changes.
-    async fn sync_builder_info_changes(&self) -> Result<(), HousekeeperError> {
-        let mut builder_infos = self.db.get_all_builder_infos().await?;
-        debug!(builder_infos = builder_infos.len(), "updating builder infos");
-
-        if is_local_dev() {
-            builder_infos.extend_from_slice(self.local_builders.as_slice());
-        }
-
-        self.auctioneer.update_builder_infos(&builder_infos, true);
+        self.db.set_known_validators(validators);
 
         Ok(())
     }
@@ -434,7 +398,7 @@ impl Housekeeper {
         if is_local_dev() {
             warn!("skipping proposer duty update in db");
         } else {
-            self.db.set_proposer_duties(formatted_proposer_duties).await?;
+            self.db.set_proposer_duties(formatted_proposer_duties);
         }
 
         Ok(())
@@ -449,7 +413,7 @@ impl Housekeeper {
     async fn primev_update_with_duties(
         primev_service: EthereumPrimevService,
         auctioneer: Arc<LocalCache>,
-        db: Arc<PostgresDatabaseService>,
+        db: DbService,
         proposer_duties: Vec<ProposerDuty>,
     ) -> Result<(), HousekeeperError> {
         let primev_validators =
@@ -517,7 +481,7 @@ impl Housekeeper {
 
         auctioneer.update_builder_infos(&primev_builders_config, false);
 
-        db.store_builders_info(primev_builders_config.as_slice()).await?;
+        db.store_builders_info(primev_builders_config);
 
         Ok(())
     }
@@ -534,7 +498,14 @@ impl Housekeeper {
     /// It will also update the `refreshed_trusted_proposers_slot` to the current `head_slot`.
     async fn update_trusted_proposers(&self) -> Result<(), HousekeeperError> {
         let start = Instant::now();
-        let proposer_whitelist = self.db.get_trusted_proposers().await?;
+        let receiver = match self.db.get_trusted_proposers() {
+            Ok(rec) => rec,
+            Err(err) => {
+                warn!(error=%err, "Failed to send to channel");
+                return Err(HousekeeperError::Database(err));
+            }
+        };
+        let proposer_whitelist = receiver.await??;
         debug!(proposer_whitelist = proposer_whitelist.len(), duration = ?start.elapsed(), "fetched trusted proposers");
         self.auctioneer.update_trusted_proposers(proposer_whitelist);
 
@@ -558,8 +529,18 @@ impl Housekeeper {
         pubkeys: &[&BlsPublicKeyBytes],
     ) -> Result<HashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>, HousekeeperError>
     {
-        let registrations: Vec<SignedValidatorRegistrationEntry> =
-            self.db.get_validator_registrations_for_pub_keys(pubkeys).await?;
+        let receiver = match self
+            .db
+            .get_validator_registrations_for_pub_keys(pubkeys.iter().map(|&pk| *pk).collect())
+        {
+            Ok(rec) => rec,
+            Err(err) => {
+                warn!(error=%err, "Failed to send to channel");
+                return Err(HousekeeperError::Database(err));
+            }
+        };
+
+        let registrations: Vec<SignedValidatorRegistrationEntry> = receiver.await??;
 
         let registrations =
             registrations.into_iter().map(|entry| (*entry.public_key(), entry)).collect();

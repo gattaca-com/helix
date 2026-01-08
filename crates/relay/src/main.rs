@@ -9,6 +9,7 @@ use std::{
 use eyre::eyre;
 use helix_common::{
     RelayConfig,
+    api::builder_api::TopBidUpdate,
     api_provider::DefaultApiProvider,
     load_config, load_keypair,
     local_cache::LocalCache,
@@ -18,8 +19,9 @@ use helix_common::{
     utils::{init_panic_hook, init_tracing_log},
 };
 use helix_relay::{
-    Api, DefaultBidAdjustor, PostgresDatabaseService, RelayNetworkManager, WebsiteService,
-    start_admin_service, start_api_service, start_beacon_client, start_db_service,
+    Api, AuctioneerHandle, DbRequest, DbService, DefaultBidAdjustor, Event,
+    PendingBlockSubmissionValue, RegWorkerHandle, RelayNetworkManager, WebsiteService,
+    spawn_workers, start_admin_service, start_api_service, start_beacon_client, start_db_service,
     start_housekeeper,
 };
 use helix_types::BlsKeypair;
@@ -60,8 +62,39 @@ fn main() {
         config.logging.dir_path(),
     );
 
+    let (db_request_sender, db_request_receiver) = crossbeam_channel::bounded(10_000);
+    let (db_batch_request_sender, db_batch_request_receiver) = crossbeam_channel::bounded(10_000);
+    let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
+    let event_channel = crossbeam_channel::bounded(10_000);
+    let event_tx = event_channel.0.clone();
+
+    let db = DbService::new(db_request_sender.clone(), db_batch_request_sender.clone());
+    let local_cache = LocalCache::new();
+
+    // spawn auctioneer
+    let (auctioneer_handle, registrations_handle) = spawn_workers(
+        config.clone(),
+        db.clone(),
+        local_cache.clone(),
+        DefaultBidAdjustor {},
+        top_bid_tx.clone(),
+        event_channel,
+    );
+
     block_on(start_metrics_server(&config));
-    match block_on(run(instance_id, config, keypair)) {
+    match block_on(start_network_services(
+        instance_id,
+        config,
+        keypair,
+        db,
+        local_cache,
+        auctioneer_handle,
+        registrations_handle,
+        db_request_receiver,
+        db_batch_request_receiver,
+        top_bid_tx,
+        event_tx,
+    )) {
         Ok(_) => info!("relay exited"),
         Err(err) => {
             error!(%err, "relay exited with error");
@@ -70,10 +103,25 @@ fn main() {
     }
 }
 
-async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> eyre::Result<()> {
+#[allow(clippy::too_many_arguments)]
+async fn start_network_services(
+    instance_id: String,
+    config: RelayConfig,
+    keypair: BlsKeypair,
+    db: DbService,
+    mut local_cache: LocalCache,
+    auctioneer_handle: AuctioneerHandle,
+    registrations_handle: RegWorkerHandle,
+    db_request_receiver: crossbeam_channel::Receiver<DbRequest>,
+    db_batch_request_receiver: crossbeam_channel::Receiver<PendingBlockSubmissionValue>,
+    top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
+    event_channel: crossbeam_channel::Sender<Event>,
+) -> eyre::Result<()> {
     let beacon_client = start_beacon_client(&config);
     let chain_info = beacon_client.load_chain_info().await;
     let chain_info = Arc::new(chain_info);
+    local_cache.set_chain_info(chain_info.clone());
+    let local_cache = Arc::new(local_cache);
 
     info!(
         instance_id,
@@ -87,14 +135,17 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
     let known_validators_loaded = Arc::new(AtomicBool::default());
 
-    let db = start_db_service(&config, known_validators_loaded.clone()).await?;
-    let local_cache = start_auctioneer(db.clone()).await?;
+    let pg_db = start_db_service(
+        &config,
+        known_validators_loaded.clone(),
+        db_request_receiver,
+        db_batch_request_receiver,
+        local_cache.clone(),
+    )
+    .await?;
 
-    let event_channel = crossbeam_channel::bounded(10_000);
     let relay_network_api =
         RelayNetworkManager::new(config.relay_network.clone(), relay_signing_context.clone());
-
-    let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
 
     config.router_config.validate_bid_sorter()?;
 
@@ -104,7 +155,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
         &config,
         beacon_client.clone(),
         chain_info.clone(),
-        event_channel.0.clone(),
+        event_channel,
         relay_network_api.clone(),
     )
     .await
@@ -123,18 +174,18 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
         relay_signing_context,
         beacon_client,
         Arc::new(DefaultApiProvider {}),
-        DefaultBidAdjustor {},
         known_validators_loaded,
         terminating.clone(),
         top_bid_tx,
-        event_channel,
+        auctioneer_handle.clone(),
+        registrations_handle.clone(),
         relay_network_api.api(),
     ));
 
     let termination_grace_period = config.router_config.shutdown_delay_ms;
 
     if config.website.enabled {
-        tokio::spawn(WebsiteService::run_loop(config, db));
+        tokio::spawn(WebsiteService::run_loop(config, pg_db));
     }
 
     // wait for SIGTERM or SIGINT
@@ -156,15 +207,4 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
     }
 
     Ok(())
-}
-
-pub async fn start_auctioneer(db: Arc<PostgresDatabaseService>) -> eyre::Result<Arc<LocalCache>> {
-    let auctioneer = Arc::new(LocalCache::new());
-    let auctioneer_clone = auctioneer.clone();
-    tokio::spawn(async move {
-        let builder_infos = db.get_all_builder_infos().await.expect("failed to load builder infos");
-        auctioneer_clone.update_builder_infos(&builder_infos, true);
-    });
-
-    Ok(auctioneer)
 }

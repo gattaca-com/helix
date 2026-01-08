@@ -9,17 +9,22 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use dashmap::{DashMap, DashSet};
-use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock};
+use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock, SignedValidatorRegistration};
 use http::HeaderValue;
 use parking_lot::RwLock;
+use rustc_hash::FxHashSet;
 use tracing::{error, info};
 
 use crate::{
-    BuilderConfig, BuilderInfo, ProposerInfo,
-    api::builder_api::{
-        BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
-        SlotCoordinate,
+    BuilderConfig, BuilderInfo, ProposerInfo, SignedValidatorRegistrationEntry,
+    api::{
+        builder_api::{
+            BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
+            SlotCoordinate,
+        },
+        proposer_api::ValidatorRegistrationInfo,
     },
+    chain_info::ChainInfo,
 };
 
 const ESTIMATED_TRUSTED_PROPOSERS: usize = 200_000;
@@ -94,6 +99,14 @@ pub struct LocalCache {
     kill_switch: Arc<AtomicBool>,
     proposer_duties: Arc<RwLock<Vec<BuilderGetValidatorsResponseEntry>>>,
     merged_blocks: Arc<DashMap<B256, MergedBlock>>,
+    pub validator_registration_cache:
+        Arc<DashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>>,
+    pub pending_validator_registrations: Arc<DashSet<BlsPublicKeyBytes>>,
+    pub known_validators_cache: Arc<RwLock<FxHashSet<BlsPublicKeyBytes>>>,
+    pub validator_pool_cache: Arc<DashMap<String, String>>,
+    chain_info: Option<Arc<ChainInfo>>,
+    pub adjustments_enabled: Arc<AtomicBool>,
+    pub adjustments_failsafe_trigger: Arc<AtomicBool>,
 }
 
 impl LocalCache {
@@ -106,6 +119,12 @@ impl LocalCache {
         let kill_switch = Arc::new(AtomicBool::new(false));
         let proposer_duties = Arc::new(RwLock::new(Vec::new()));
         let merged_blocks = Arc::new(DashMap::with_capacity(1000));
+        let validator_registration_cache = Arc::new(DashMap::new());
+        let pending_validator_registrations = Arc::new(DashSet::new());
+        let known_validators_cache = Arc::new(RwLock::new(FxHashSet::default()));
+        let validator_pool_cache = Arc::new(DashMap::new());
+        let adjustments_enabled = Arc::new(AtomicBool::new(false));
+        let adjustments_failsafe_trigger = Arc::new(AtomicBool::new(false));
 
         Self {
             inclusion_list: Default::default(),
@@ -116,6 +135,13 @@ impl LocalCache {
             kill_switch,
             proposer_duties,
             merged_blocks,
+            validator_registration_cache,
+            pending_validator_registrations,
+            known_validators_cache,
+            validator_pool_cache,
+            chain_info: None,
+            adjustments_enabled,
+            adjustments_failsafe_trigger,
         }
     }
 
@@ -237,6 +263,58 @@ impl LocalCache {
 
     pub fn get_merged_block(&self, block_hash: &B256) -> Option<MergedBlock> {
         self.merged_blocks.get(block_hash).map(|b| b.value().clone())
+    }
+
+    pub fn is_registration_update_required(
+        &self,
+        registration: &SignedValidatorRegistration,
+    ) -> bool {
+        if let Some(existing_entry) =
+            self.validator_registration_cache.get(&registration.message.pubkey) &&
+            existing_entry.registration_info.registration.message.timestamp >=
+                registration.message.timestamp.saturating_sub(60 * 60) &&
+            existing_entry.registration_info.registration.message.fee_recipient ==
+                registration.message.fee_recipient &&
+            existing_entry.registration_info.registration.message.gas_limit ==
+                registration.message.gas_limit
+        {
+            // do registration once per hour, unless fee recipient / gas limit has changed
+
+            return false;
+        }
+        true
+    }
+
+    /// Assume the entries are already validated
+    pub fn save_validator_registrations(
+        &self,
+        entries: impl Iterator<Item = ValidatorRegistrationInfo>,
+        pool_name: Option<String>,
+        user_agent: Option<String>,
+    ) {
+        for entry in entries {
+            self.pending_validator_registrations.insert(entry.registration.message.pubkey);
+            self.validator_registration_cache.insert(
+                entry.registration.message.pubkey,
+                SignedValidatorRegistrationEntry::new(
+                    entry.clone(),
+                    pool_name.clone(),
+                    user_agent.clone(),
+                ),
+            );
+        }
+    }
+
+    pub fn get_validator_pool_name(&self, api_key: &str) -> Option<String> {
+        self.validator_pool_cache.get(api_key).map(|v| v.value().clone())
+    }
+
+    pub fn get_chain_info(&self) -> Option<Arc<ChainInfo>> {
+        self.chain_info.clone()
+    }
+
+    pub fn set_chain_info(&mut self, chain_info: Arc<ChainInfo>) {
+        self.chain_info = Some(chain_info);
     }
 }
 
