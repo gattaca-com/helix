@@ -827,7 +827,7 @@ impl PostgresDatabaseService {
                     proposer_fee_recipient: item.submission.proposer_fee_recipient().as_slice(),
                     gas_limit: item.submission.gas_limit() as i32,
                     gas_used: item.submission.gas_used() as i32,
-                    value: PostgresNumeric::from(item.submission.value()),
+                    value: PostgresNumeric::from(*item.submission.value()),
                     num_txs: item.submission.num_txs() as i32,
                     timestamp: item.submission.timestamp() as i64,
                     first_seen: item.trace.receive as i64,
@@ -2191,7 +2191,7 @@ impl PostgresDatabaseService {
                     adjusted_block_hash,
                     adjusted_value
                 FROM bid_adjustments
-                WHERE slot = $1
+                WHERE slot = $1 AND COALESCE(is_dry_run, FALSE) = FALSE
                 ",
                 &[&(slot.as_u64() as i64)],
             )
@@ -2206,7 +2206,7 @@ impl PostgresDatabaseService {
         &self,
         entry: DataAdjustmentsEntry,
     ) -> Result<(), DatabaseError> {
-        let mut record = DbMetricRecord::new("save_bloc_adjustments_data");
+        let mut record = DbMetricRecord::new("save_block_adjustments_data");
 
         self.pool
             .get()
@@ -2223,10 +2223,11 @@ impl PostgresDatabaseService {
                         submitted_received_at,
                         submitted_value,
                         adjusted_block_hash,
-                        adjusted_value
+                        adjusted_value,
+                        is_dry_run
                     )
                 VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ",
                 &[
                     &(entry.slot.as_u64() as i64),
@@ -2238,6 +2239,7 @@ impl PostgresDatabaseService {
                     &PostgresNumeric::from(entry.submitted_value),
                     &entry.adjusted_block_hash.as_slice(),
                     &PostgresNumeric::from(entry.adjusted_value),
+                    &entry.is_dry_run,
                 ],
             )
             .await?;
@@ -2326,5 +2328,38 @@ impl PostgresDatabaseService {
 
         record.record_success();
         Ok(results)
+    }
+
+    #[instrument(skip_all)]
+    pub async fn disable_adjustments(&self) -> Result<(), DatabaseError> {
+        let mut record = DbMetricRecord::new("disable_adjustments");
+
+        let mut client = self.high_priority_pool.get().await?;
+        let transaction = client.transaction().await?;
+
+        transaction.execute("UPDATE relay_info SET adjustments_enabled = FALSE", &[]).await?;
+
+        record.record_success();
+        Ok(())
+    }
+
+    pub async fn check_adjustments_enabled(&self) -> Result<bool, DatabaseError> {
+        let mut record = DbMetricRecord::new("check_adjustments_enabled");
+
+        let rows = self
+            .pool
+            .get()
+            .await?
+            .query("SELECT adjustments_enabled FROM relay_info LIMIT 1", &[])
+            .await?;
+
+        let enabled = rows
+            .iter()
+            .map(|row| row.get::<_, bool>("adjustments_enabled"))
+            .next()
+            .unwrap_or(false);
+
+        record.record_success();
+        Ok(enabled)
     }
 }

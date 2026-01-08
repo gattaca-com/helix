@@ -343,7 +343,7 @@ impl<A: Api> ProposerApi<A> {
                 .save_delivered_payload_info(
                     slot.as_u64(),
                     payload_clone,
-                    bid,
+                    &bid,
                     proposer_public_key,
                     proposer_fee_recipient,
                     &trace_clone,
@@ -425,8 +425,8 @@ impl<A: Api> ProposerApi<A> {
     async fn save_delivered_payload_info(
         &self,
         slot: u64,
-        payload: Arc<PayloadAndBlobs>,
-        bid: PayloadBidData,
+        payload: PayloadAndBlobs,
+        bid: &PayloadBidData,
         proposer_public_key: BlsPublicKeyBytes,
         proposer_fee_recipient: Address,
         trace: &GetPayloadTrace,
@@ -440,7 +440,7 @@ impl<A: Api> ProposerApi<A> {
             proposer_pub_key: proposer_public_key,
             value: bid.value,
             proposer_fee_recipient,
-            payload: payload.clone(),
+            payload,
             latency_trace: trace,
             user_agent,
             filtering,

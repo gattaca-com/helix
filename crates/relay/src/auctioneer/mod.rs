@@ -30,24 +30,23 @@ use helix_common::{
     record_submission_step,
     utils::pin_thread_to_core,
 };
-use helix_types::Slot;
+use helix_types::{ForkName, Slot};
 use rustc_hash::FxHashMap;
 pub use simulator::*;
 use tracing::{debug, error, info, info_span, trace, warn};
-pub use types::{Event, GetPayloadResultData, PayloadBidData, PayloadEntry};
+pub use types::{
+    Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, SubmissionPayload,
+};
 use worker::{RegWorker, SubWorker};
 
 pub use crate::auctioneer::{
     bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
-    simulator::client::SimulatorClient,
+    simulator::{SimulatorRequest, client::SimulatorClient},
 };
 use crate::{
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::{
-        bid_sorter::BidSorter,
-        context::Context,
-        manager::SimulatorManager,
-        types::{PendingPayload, SlotData},
+        bid_sorter::BidSorter, context::Context, manager::SimulatorManager, types::PendingPayload,
     },
     database::dbservice::DbService,
     housekeeper::PayloadAttributesUpdate,
@@ -98,7 +97,16 @@ pub fn spawn_workers<B: BidAdjustor>(
 
         let bid_sorter = BidSorter::new(top_bid_tx);
         let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
-        let ctx = Context::new(config, sim_manager, db, bid_sorter, cache, bid_adjustor);
+        let ctx = Context::new(
+            chain_info,
+            config,
+            sim_manager,
+            db,
+            bid_sorter,
+            cache,
+            bid_adjustor,
+            event_tx.clone(),
+        );
         let id = format!("auctioneer_{auctioneer_core}");
         let auctioneer = Auctioneer { ctx, state: State::default(), tel: Telemetry::new(id) };
 
@@ -327,6 +335,28 @@ impl State {
                 ctx.handle_simulation_result((id, None));
             }
 
+            // Dry run adjustments to validate bids throughout the slot
+            // to be able to disable them before get_header is called
+            (State::Sorting(slot_data), Event::DryRunAdjustments) => {
+                let Some(best_block_hash) = ctx.bid_sorter.get_any_top_bid() else {
+                    warn!("adjustments dry run - no bids present yet");
+                    return;
+                };
+
+                let Some(original_bid) = ctx.payloads.get(&best_block_hash) else {
+                    error!(
+                        "adjustments dry run - failed to get payload from bid sorter, this should never happen!"
+                    );
+                    return;
+                };
+
+                if let Some((_, sim_request)) =
+                    ctx.bid_adjustor.try_apply_adjustments(original_bid, slot_data, true)
+                {
+                    ctx.sim_manager.handle_sim_request(sim_request, true);
+                }
+            }
+
             ///////////// VALID STATES / EVENTS /////////////
 
             // submission
@@ -369,7 +399,7 @@ impl State {
                     warn!(req =% params.pubkey, this =% slot_data.registration_data.entry.registration.message.pubkey, "get header for mismatched proposer");
                     let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
                 } else {
-                    ctx.handle_get_header(params, res_tx)
+                    ctx.handle_get_header(params, slot_data, res_tx)
                 }
 
                 trace!("finished processing");
@@ -386,12 +416,12 @@ impl State {
 
                 if let Some(local) = ctx.payloads.get(&block_hash) {
                     if let Some(block_hash) = ctx.handle_get_payload(
-                        local.payload_and_blobs.clone(),
+                        local.payload_and_blobs(),
                         *blinded,
                         trace,
                         res_tx,
                         slot_data,
-                        local.bid_data.clone(),
+                        local.bid_data_ref().to_owned(),
                     ) {
                         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
                         *self = State::Broadcasting { slot_data: slot_data.clone(), block_hash }
@@ -539,6 +569,8 @@ impl State {
                     warn!(curr =% bid_slot, gossip_slot = payload.slot, "received early or late gossip payload");
                 }
             }
+
+            (State::Slot { .. } | State::Broadcasting { .. }, Event::DryRunAdjustments) => {}
         }
     }
 
