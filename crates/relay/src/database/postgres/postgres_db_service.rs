@@ -50,9 +50,10 @@ struct PendingBlockSubmissionValue {
     pub submission: SignedBidSubmission,
     pub trace: SubmissionTrace,
     pub optimistic_version: OptimisticVersion,
+    pub is_adjusted: bool,
 }
 
-const BLOCK_SUBMISSION_FIELD_COUNT: usize = 16;
+const BLOCK_SUBMISSION_FIELD_COUNT: usize = 17;
 const MAINNET_VALIDATOR_COUNT: usize = 1_100_000;
 static DELIVERED_PAYLOADS_MIG_SLOT: AtomicU64 = AtomicU64::new(0);
 
@@ -522,6 +523,7 @@ impl PostgresDatabaseService {
                 region_id: i16,
                 optimistic_version: i16,
                 metadata: Option<&'a str>,
+                is_adjusted: bool,
             }
 
             let mut structured_blocks: Vec<BlockParams> = Vec::with_capacity(chunk.len());
@@ -543,6 +545,7 @@ impl PostgresDatabaseService {
                     region_id: self.region,
                     optimistic_version: item.optimistic_version as i16,
                     metadata: item.trace.metadata.as_deref(),
+                    is_adjusted: item.is_adjusted,
                 });
             }
 
@@ -566,12 +569,13 @@ impl PostgresDatabaseService {
                 params.push(&blk.region_id);
                 params.push(&blk.optimistic_version);
                 params.push(&blk.metadata);
+                params.push(&blk.is_adjusted);
             }
 
             // Build and execute INSERT for this chunk
             let num_cols = BLOCK_SUBMISSION_FIELD_COUNT;
             let mut sql = String::from(
-                "INSERT INTO block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen, region_id, optimistic_version, metadata) VALUES ",
+                "INSERT INTO block_submission (block_number, slot_number, parent_hash, block_hash, builder_pubkey, proposer_pubkey, proposer_fee_recipient, gas_limit, gas_used, value, num_txs, timestamp, first_seen, region_id, optimistic_version, metadata, is_adjusted) VALUES ",
             );
             let clauses: Vec<String> = (0..structured_blocks.len())
                 .map(|i| {
@@ -1370,11 +1374,17 @@ impl PostgresDatabaseService {
         submission: SignedBidSubmission,
         trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,
+        is_adjusted: bool,
     ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("store_block_submission");
         if let Some(sender) = &self.block_submissions_sender {
             sender
-                .send(PendingBlockSubmissionValue { submission, trace, optimistic_version })
+                .send(PendingBlockSubmissionValue {
+                    submission,
+                    trace,
+                    optimistic_version,
+                    is_adjusted,
+                })
                 .await
                 .map_err(|_| DatabaseError::ChannelSendError)?;
         } else {

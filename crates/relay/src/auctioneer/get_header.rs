@@ -44,8 +44,7 @@ impl<B: BidAdjustor> Context<B> {
             if let Some((adjusted_bid, sim_request)) =
                 self.bid_adjustor.try_apply_adjustments(original_bid, slot_data, false)
             {
-                let block_hash = adjusted_bid.block_hash();
-                self.payloads.insert(*block_hash, adjusted_bid.clone());
+                self.payloads.insert(*adjusted_bid.block_hash(), adjusted_bid.clone());
 
                 self.sim_manager.handle_sim_request(sim_request, true);
 
