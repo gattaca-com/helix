@@ -1,21 +1,16 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::atomic::Ordering,
     time::{Duration, Instant},
 };
 
 use alloy_primitives::{B256, U256};
 use helix_common::{
-    BuilderInfo, RelayConfig, chain_info::ChainInfo, local_cache::LocalCache,
-    metrics::SimulatorMetrics, spawn_tracked, utils::alert_discord,
+    BuilderInfo, RelayConfig, local_cache::LocalCache, metrics::SimulatorMetrics, spawn_tracked,
 };
-use helix_common::{BuilderInfo, RelayConfig, local_cache::LocalCache, metrics::SimulatorMetrics};
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
 use rustc_hash::FxHashMap;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::{
     api::builder::error::BuilderApiError,
@@ -51,14 +46,11 @@ pub struct Context<B: BidAdjustor> {
     pub db: DbService,
     pub slot_context: SlotContext,
     pub bid_adjustor: B,
-    pub adjustments_enabled: Arc<AtomicBool>,
-    pub adjustments_failsafe_trigger: Arc<AtomicBool>,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
 const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
 
-const DB_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const ADJUSTMENTS_DRY_RUN_INTERVAL: Duration = Duration::from_millis(500);
 
 impl<B: BidAdjustor> Context<B> {
@@ -99,28 +91,9 @@ impl<B: BidAdjustor> Context<B> {
             block_merger,
         };
 
-        let adjustments_enabled = Arc::new(AtomicBool::new(false));
-        let adjustments_failsafe_trigger = Arc::new(AtomicBool::new(false));
+        Self::spawn_adjustments_dry_run_task(auctioneer, cache.clone());
 
-        Self::spawn_check_flag_task(
-            db.clone(),
-            adjustments_enabled.clone(),
-            adjustments_failsafe_trigger.clone(),
-        );
-
-        Self::spawn_adjustments_dry_run_task(auctioneer, adjustments_enabled.clone());
-
-        Self {
-            chain_info,
-            cache,
-            unknown_builder_info,
-            slot_context,
-            db,
-            config,
-            bid_adjustor,
-            adjustments_enabled,
-            adjustments_failsafe_trigger,
-        }
+        Self { cache, unknown_builder_info, slot_context, db, config, bid_adjustor }
     }
 
     pub fn builder_info(&self, builder: &BlsPublicKeyBytes) -> BuilderInfo {
@@ -149,26 +122,15 @@ impl<B: BidAdjustor> Context<B> {
             if self.payloads.get(&block_hash).is_some_and(|bid| bid.is_adjusted()) {
                 warn!(%builder, %block_hash, %err, "block simulation resulted in an error. Disabling adjustments...");
 
-                if !self.adjustments_enabled.load(Ordering::Relaxed) {
+                if !self.cache.adjustments_enabled.load(Ordering::Relaxed) {
                     warn!(%builder, %block_hash, %err, "adjustments already disabled");
                 } else {
                     SimulatorMetrics::disable_adjustments();
-                    self.adjustments_enabled.store(false, Ordering::Relaxed);
-
+                    self.cache.adjustments_enabled.store(false, Ordering::Relaxed);
                     let db = self.db.clone();
-                    let failsafe_trigger = self.adjustments_failsafe_trigger.clone();
-                    let adjustments_enabled = self.adjustments_enabled.clone();
-                    spawn_tracked!(async move {
-                        if let Err(err) = db.disable_adjustments().await {
-                            failsafe_trigger.store(true, Ordering::Relaxed);
-                            adjustments_enabled.store(false, Ordering::Relaxed);
-                            error!(%block_hash, %err, "failed to disable adjustments in database, pulling the failsafe trigger");
-                            alert_discord(&format!(
-                                "{} {} failed to disable adjustments in database, pulling the failsafe trigger",
-                                err, block_hash
-                            ));
-                        }
-                    });
+                    let failsafe_trigger = self.cache.adjustments_failsafe_trigger.clone();
+                    let adjustments_enabled = self.cache.adjustments_enabled.clone();
+                    db.disable_adjustments(block_hash, failsafe_trigger, adjustments_enabled);
                 }
             } else if self.cache.demote_builder(&builder) {
                 warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
@@ -178,20 +140,13 @@ impl<B: BidAdjustor> Context<B> {
                 let reason = err.to_string();
                 let bid_slot = result.submission.slot();
                 let failsafe_triggered = self.sim_manager.failsafe_triggered.clone();
-
-                let db = self.db.clone();
-                spawn_tracked!(async move {
-                    if let Err(err) =
-                        db.db_demote_builder(bid_slot.as_u64(), &builder, &block_hash, reason).await
-                    {
-                        failsafe_triggered.store(true, Ordering::Relaxed);
-                        error!(%builder, %err, %block_hash, "failed to demote builder in database! Pausing all optmistic submissions");
-                        alert_discord(&format!(
-                            "{} {} {} failed to demote builder in database! Pausing all optmistic submissions",
-                            builder, err, block_hash
-                        ));
-                    }
-                });
+                self.db.db_demote_builder(
+                    bid_slot.as_u64(),
+                    builder,
+                    block_hash,
+                    reason,
+                    failsafe_triggered,
+                );
             } else {
                 warn!(%err, %builder, %block_hash, "builder already demoted, skipping demotion");
             }
@@ -246,7 +201,7 @@ impl<B: BidAdjustor> Context<B> {
         };
 
         let original_payload_and_blobs = original_payload.payload_and_blobs();
-        let builder_pubkey = original_payload.bid_data_ref().builder_pubkey.clone();
+        let builder_pubkey = *original_payload.bid_data_ref().builder_pubkey;
 
         //TODO: this function does a lot of work, should move that work away from the event loop
         let Some(payload) = self
@@ -264,48 +219,16 @@ impl<B: BidAdjustor> Context<B> {
         self.payloads.insert(block_hash, payload);
     }
 
-    fn spawn_check_flag_task(
-        db: Arc<PostgresDatabaseService>,
-        flag: Arc<AtomicBool>,
-        failsafe_triggered: Arc<AtomicBool>,
-    ) {
-        spawn_tracked!(async move {
-            let mut interval = tokio::time::interval(DB_CHECK_INTERVAL);
-            loop {
-                interval.tick().await;
-
-                if failsafe_triggered.load(Ordering::Relaxed) {
-                    flag.store(false, Ordering::Relaxed);
-                    return;
-                }
-
-                match db.check_adjustments_enabled().await {
-                    Ok(value) => {
-                        let previous = flag.swap(value, Ordering::Relaxed);
-                        if previous != value {
-                            tracing::info!(
-                                "adjustments enabled flag changed from {} to {}",
-                                previous,
-                                value
-                            );
-                        }
-                    }
-                    Err(e) => tracing::error!("failed to check adjustments_enabled flag: {}", e),
-                }
-            }
-        });
-    }
-
     fn spawn_adjustments_dry_run_task(
         auctioneer: crossbeam_channel::Sender<Event>,
-        adjustments_enabled: Arc<AtomicBool>,
+        cache: LocalCache,
     ) {
         spawn_tracked!(async move {
             let mut interval = tokio::time::interval(ADJUSTMENTS_DRY_RUN_INTERVAL);
             loop {
                 interval.tick().await;
 
-                if !adjustments_enabled.load(Ordering::Relaxed) {
+                if !cache.adjustments_enabled.load(Ordering::Relaxed) {
                     return;
                 }
 

@@ -24,7 +24,7 @@ use helix_common::{
     bid_submission::OptimisticVersion,
     local_cache::LocalCache,
     metrics::DbMetricRecord,
-    utils::utcnow_ms,
+    utils::{alert_discord, utcnow_ms},
 };
 use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, Slot};
 use rustc_hash::FxHashSet;
@@ -128,6 +128,11 @@ pub enum DbRequest {
     SetProposerDuties {
         duties: Vec<BuilderGetValidatorsResponseEntry>,
     },
+    DisableAdjustments {
+        block_hash: B256,
+        failsafe_trigger: Arc<AtomicBool>,
+        adjustments_enabled: Arc<AtomicBool>,
+    },
 }
 
 pub struct PendingBlockSubmissionValue {
@@ -138,6 +143,7 @@ pub struct PendingBlockSubmissionValue {
 
 const BLOCK_SUBMISSION_FIELD_COUNT: usize = 16;
 const MAINNET_VALIDATOR_COUNT: usize = 1_100_000;
+const DB_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 static DELIVERED_PAYLOADS_MIG_SLOT: AtomicU64 = AtomicU64::new(0);
 
 fn new_validator_set() -> FxHashSet<BlsPublicKeyBytes> {
@@ -333,6 +339,39 @@ impl PostgresDatabaseService {
         self.start_registration_processor().await;
         self.start_block_submission_processor(block_submission_receiver).await;
         self.start_db_request_processor(db_request_receiver).await;
+        self.start_check_flag_task();
+    }
+
+    fn start_check_flag_task(&mut self) {
+        let svc_clone = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(DB_CHECK_INTERVAL);
+            loop {
+                interval.tick().await;
+
+                if svc_clone.local_cache.adjustments_failsafe_trigger.load(Ordering::Relaxed) {
+                    svc_clone.local_cache.adjustments_enabled.store(false, Ordering::Relaxed);
+                    return;
+                }
+
+                match svc_clone.check_adjustments_enabled().await {
+                    Ok(value) => {
+                        let previous = svc_clone
+                            .local_cache
+                            .adjustments_enabled
+                            .swap(value, Ordering::Relaxed);
+                        if previous != value {
+                            tracing::info!(
+                                "adjustments enabled flag changed from {} to {}",
+                                previous,
+                                value
+                            );
+                        }
+                    }
+                    Err(e) => tracing::error!("failed to check adjustments_enabled flag: {}", e),
+                }
+            }
+        });
     }
 
     pub async fn start_db_request_processor(
@@ -508,6 +547,10 @@ impl PostgresDatabaseService {
                 {
                     error!(%err, "error demoting builder in database triggering failsafe: stopping all optimistic submissions");
                     failsafe_triggered.store(true, Ordering::Relaxed);
+                    alert_discord(&format!(
+                        "{} {} {} failed to demote builder in database! Pausing all optmistic submissions",
+                        builder_pub_key, err, block_hash
+                    ));
                 }
             }
             DbRequest::GetBids { filters, validator_preferences, response } => {
@@ -594,6 +637,17 @@ impl PostgresDatabaseService {
             DbRequest::SetProposerDuties { duties } => {
                 if let Err(err) = self.set_proposer_duties(duties).await {
                     error!(%err, "failed to set proposer duties");
+                }
+            }
+            DbRequest::DisableAdjustments { block_hash, failsafe_trigger, adjustments_enabled } => {
+                if let Err(err) = self.disable_adjustments().await {
+                    failsafe_trigger.store(true, Ordering::Relaxed);
+                    adjustments_enabled.store(false, Ordering::Relaxed);
+                    error!(%block_hash, %err, "failed to disable adjustments in database, pulling the failsafe trigger");
+                    alert_discord(&format!(
+                        "{} {} failed to disable adjustments in database, pulling the failsafe trigger",
+                        err, block_hash
+                    ));
                 }
             }
         }

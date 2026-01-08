@@ -16,6 +16,7 @@ use helix_common::{
         proposer_api::GetHeaderParams,
     },
     bid_submission::OptimisticVersion,
+    utils::alert_discord,
 };
 use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, Slot};
 use tokio::sync::oneshot;
@@ -120,6 +121,10 @@ impl DbService {
         }) {
             error!(%err, "failed to send DbDemoteBuilder request triggering failsafe: stopping all optimistic submissions");
             failsafe_triggered.store(true, Ordering::Relaxed);
+            alert_discord(&format!(
+                "{} {} {} failed to demote builder in database! Pausing all optmistic submissions",
+                builder_pub_key, err, block_hash
+            ));
         }
     }
 
@@ -281,6 +286,26 @@ impl DbService {
     pub fn set_proposer_duties(&self, duties: Vec<BuilderGetValidatorsResponseEntry>) {
         if let Err(err) = self.sender.try_send(DbRequest::SetProposerDuties { duties }) {
             error!(%err, "failed to send SetProposerDuties request");
+        }
+    }
+
+    pub fn disable_adjustments(
+        &self,
+        block_hash: B256,
+        failsafe_trigger: Arc<AtomicBool>,
+        adjustments_enabled: Arc<AtomicBool>,
+    ) {
+        if let Err(err) = self.sender.try_send(DbRequest::DisableAdjustments {
+            block_hash,
+            failsafe_trigger: failsafe_trigger.clone(),
+            adjustments_enabled: adjustments_enabled.clone(),
+        }) {
+            error!(%err, "failed to send DisableAdjustments request triggering failsafe: stopping all adjustments");
+            failsafe_trigger.store(true, Ordering::Relaxed);
+            alert_discord(&format!(
+                "{} {} failed to disable adjustments in database! Pausing all adjustments",
+                block_hash, err
+            ));
         }
     }
 }

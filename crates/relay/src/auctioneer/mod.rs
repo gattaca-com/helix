@@ -30,7 +30,7 @@ use helix_common::{
     record_submission_step,
     utils::pin_thread_to_core,
 };
-use helix_types::{ForkName, Slot};
+use helix_types::Slot;
 use rustc_hash::FxHashMap;
 pub use simulator::*;
 use tracing::{debug, error, info, info_span, trace, warn};
@@ -98,7 +98,6 @@ pub fn spawn_workers<B: BidAdjustor>(
         let bid_sorter = BidSorter::new(top_bid_tx);
         let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
         let ctx = Context::new(
-            chain_info,
             config,
             sim_manager,
             db,

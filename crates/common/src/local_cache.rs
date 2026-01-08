@@ -105,6 +105,8 @@ pub struct LocalCache {
     pub known_validators_cache: Arc<RwLock<FxHashSet<BlsPublicKeyBytes>>>,
     pub validator_pool_cache: Arc<DashMap<String, String>>,
     chain_info: Option<Arc<ChainInfo>>,
+    pub adjustments_enabled: Arc<AtomicBool>,
+    pub adjustments_failsafe_trigger: Arc<AtomicBool>,
 }
 
 impl LocalCache {
@@ -121,6 +123,8 @@ impl LocalCache {
         let pending_validator_registrations = Arc::new(DashSet::new());
         let known_validators_cache = Arc::new(RwLock::new(FxHashSet::default()));
         let validator_pool_cache = Arc::new(DashMap::new());
+        let adjustments_enabled = Arc::new(AtomicBool::new(false));
+        let adjustments_failsafe_trigger = Arc::new(AtomicBool::new(false));
 
         Self {
             inclusion_list: Default::default(),
@@ -136,6 +140,8 @@ impl LocalCache {
             known_validators_cache,
             validator_pool_cache,
             chain_info: None,
+            adjustments_enabled,
+            adjustments_failsafe_trigger,
         }
     }
 
