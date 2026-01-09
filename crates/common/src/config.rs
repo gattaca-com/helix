@@ -404,6 +404,7 @@ impl RouterConfig {
             Route::BuilderBidsReceived,
             Route::ValidatorRegistration,
             Route::DataAdjustments,
+            Route::MergedBlocks,
         ]);
     }
 
@@ -511,6 +512,7 @@ pub enum Route {
     GetInclusionList,
     RelayNetwork,
     DataAdjustments,
+    MergedBlocks,
 }
 
 impl Route {
@@ -534,6 +536,7 @@ impl Route {
             Route::BuilderBidsReceived => format!("{PATH_DATA_API}{PATH_BUILDER_BIDS_RECEIVED}"),
             Route::ValidatorRegistration => format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),
             Route::DataAdjustments => format!("{PATH_DATA_API}{PATH_DATA_ADJUSTMENTS}"),
+            Route::MergedBlocks => format!("{PATH_DATA_API}{PATH_MERGED_BLOCKS}"),
             Route::All => panic!("All is not a real route"),
             Route::BuilderApi => panic!("BuilderApi is not a real route"),
             Route::ProposerApi => panic!("ProposerApi is not a real route"),

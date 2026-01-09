@@ -302,6 +302,7 @@ impl ValidationApi {
         message: &BidTrace,
     ) -> Result<(), ValidationApiError> {
         if header.hash() != message.block_hash {
+            tracing::error!("Block hash mismatch: {message:?}, {header:?}");
             Err(ValidationApiError::BlockHashMismatch(GotExpected {
                 got: message.block_hash,
                 expected: header.hash(),

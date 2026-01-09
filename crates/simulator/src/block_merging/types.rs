@@ -270,7 +270,7 @@ pub struct BlockMergeResponseV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuilderInclusionResult {
     pub revenue: U256,
-    pub tx_count: usize,
+    pub txs: Vec<B256>,
 }
 
 #[cfg(test)]

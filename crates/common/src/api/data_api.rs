@@ -153,6 +153,10 @@ pub struct ProposerHeaderDeliveredParams {
     pub limit: Option<u64>,
     pub order_by: Option<String>,
 }
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub struct MergedBlockParams {
+    pub slot: Slot,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProposerHeaderDeliveredResponse {

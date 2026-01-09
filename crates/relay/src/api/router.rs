@@ -74,6 +74,7 @@ pub fn build_router<A: Api>(
             Route::ValidatorRegistration => get(DataApi::validator_registration),
             Route::GetInclusionList => get(BuilderApi::<A>::get_inclusion_list),
             Route::DataAdjustments => get(DataApi::data_adjustments),
+            Route::MergedBlocks => get(DataApi::merged_blocks),
             Route::RelayNetwork => any(RelayNetworkApi::connect),
             Route::All | Route::BuilderApi | Route::ProposerApi | Route::DataApi => {
                 panic!(
