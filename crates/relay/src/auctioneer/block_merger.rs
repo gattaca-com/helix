@@ -312,6 +312,7 @@ impl BlockMerger {
         self.local_cache.save_merged_block(MergedBlock {
             slot: bid_slot,
             block_number: response.execution_payload.block_number,
+            original_block_hash: response.base_block_hash,
             block_hash,
             original_value: base_block_data.value,
             merged_value: response.proposer_value,

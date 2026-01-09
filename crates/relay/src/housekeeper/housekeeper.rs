@@ -7,12 +7,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use alloy_eips::merge::EPOCH_SLOTS;
+use alloy_eips::merge::{self, EPOCH_SLOTS};
 use alloy_primitives::{B256, U256};
 use helix_common::{
-    BuilderConfig, BuilderInfo, ProposerDuty, RelayConfig, SignedValidatorRegistrationEntry,
-    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, is_local_dev,
-    local_cache::LocalCache, task, utils::utcnow_dur,
+    BuilderConfig, BuilderInfo, ProposerDuty, RelayConfig, SignedValidatorRegistrationEntry, api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, is_local_dev, local_cache::LocalCache, spawn_tracked, task, utils::utcnow_dur
 };
 use helix_types::{BlsPublicKeyBytes, Epoch, Slot, SlotClockTrait};
 use tokio::sync::{Mutex, broadcast};
@@ -53,6 +51,7 @@ struct HousekeeperSlots {
     updating_proposer_duties: Arc<Mutex<()>>,
     updating_refreshed_validators: Arc<Mutex<()>>,
     updating_trusted_proposers: Arc<Mutex<()>>,
+    saving_merged_blocks: Arc<Mutex<()>>,
 }
 
 impl HousekeeperSlots {
@@ -256,6 +255,22 @@ impl Housekeeper {
             }
             .in_current_span(),
         );
+
+        // save merged blocks
+        let housekeeper = self.clone();
+        spawn_tracked!(async move {
+            let Ok(_guard) = housekeeper.slots.saving_merged_blocks.try_lock() else {
+                warn!("merged blocks save already in progress");
+                return;
+            };
+            let start = Instant::now();
+            let merged_blocks = housekeeper.auctioneer.get_merged_blocks();
+            if let Err(err) = housekeeper.db.save_merged_blocks(&merged_blocks).await {
+                error!(%err, "failed to save merged blocks");
+            }
+            housekeeper.auctioneer.clear_merged_blocks();
+            info!(duration = ?start.elapsed(), "save merged blocks task completed");
+        });
 
         // trusted proposers
         if self.should_update_trusted_proposers(head_slot.as_u64()) {

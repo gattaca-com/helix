@@ -217,13 +217,14 @@ impl MergeableOrderWithOrigin {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BuilderInclusionResult {
     pub revenue: U256,
-    pub tx_count: usize,
+    pub txs: Vec<B256>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct MergedBlock {
     pub slot: u64,
     pub block_number: u64,
+    pub original_block_hash: B256,
     pub block_hash: B256,
     pub original_value: U256,
     pub merged_value: U256,
@@ -243,7 +244,7 @@ impl MergedBlock {
         let builder_inclusions = self
             .builder_inclusions
             .iter()
-            .map(|(address, res)| format!("*{}*: {}", res.tx_count, address,))
+            .map(|(address, res)| format!("*{}*: {}", res.txs.len(), address,))
             .collect::<Vec<_>>()
             .join("\n");
         format!(

@@ -26,7 +26,7 @@ use helix_common::{
     metrics::DbMetricRecord,
     utils::utcnow_ms,
 };
-use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SignedValidatorRegistration, Slot};
+use helix_types::{BlsPublicKeyBytes, MergedBlock, SignedBidSubmission, SignedValidatorRegistration, Slot};
 use parking_lot::RwLock;
 use rustc_hash::FxHashSet;
 use tokio::sync::mpsc::Sender;
@@ -2387,4 +2387,139 @@ impl PostgresDatabaseService {
         record.record_success();
         Ok(enabled)
     }
+
+    #[instrument(skip_all)]
+    pub async fn save_merged_blocks(&self, merged_blocks: &[MergedBlock]) -> Result<(), DatabaseError> {
+        let mut record = DbMetricRecord::new("save_merged_blocks");
+
+        if merged_blocks.is_empty() {
+            record.record_success();
+            return Ok(());
+        }
+
+        let client = self.pool.get().await?;
+        struct MergedBlockParams<'a> {
+            slot: i64,
+            block_number: i64,
+            original_block_hash: &'a [u8],
+            block_hash: &'a [u8],
+            original_value: PostgresNumeric,
+            merged_value: PostgresNumeric,
+            original_tx_count: i32,
+            merged_tx_count: i32,
+            original_blob_count: i32,
+            merged_blob_count: i32,
+            builder_inclusions: String,
+            inserted_at: SystemTime,
+        }
+
+        let mut structured_blocks = Vec::with_capacity(merged_blocks.len());
+        for block in merged_blocks {
+            let builder_inclusions_json = serde_json::to_string(&block.builder_inclusions)
+                .map_err(|e| DatabaseError::SerdeJsonError(e))?;
+
+            structured_blocks.push(MergedBlockParams {
+                slot: block.slot as i64,
+                block_number: block.block_number as i64,
+                original_block_hash: block.original_block_hash.as_slice(),
+                block_hash: block.block_hash.as_slice(),
+                original_value: PostgresNumeric::from(block.original_value),
+                merged_value: PostgresNumeric::from(block.merged_value),
+                original_tx_count: block.original_tx_count as i32,
+                merged_tx_count: block.merged_tx_count as i32,
+                original_blob_count: block.original_blob_count as i32,
+                merged_blob_count: block.merged_blob_count as i32,
+                builder_inclusions: builder_inclusions_json,
+                inserted_at: SystemTime::now(),
+            });
+        }
+
+        // Flatten into SQL params
+        const FIELD_COUNT: usize = 12;
+        let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(structured_blocks.len() * FIELD_COUNT);
+        for block in &structured_blocks {
+            params.push(&block.slot);
+            params.push(&block.block_number);
+            params.push(&block.original_block_hash);
+            params.push(&block.block_hash);
+            params.push(&block.original_value);
+            params.push(&block.merged_value);
+            params.push(&block.original_tx_count);
+            params.push(&block.merged_tx_count);
+            params.push(&block.original_blob_count);
+            params.push(&block.merged_blob_count);
+            params.push(&block.builder_inclusions);
+            params.push(&block.inserted_at);
+        }
+
+        let mut sql = String::from(
+            "INSERT INTO merged_blocks (
+                slot,
+                block_number,
+                original_block_hash,
+                block_hash,
+                original_value,
+                merged_value,
+                original_tx_count,
+                merged_tx_count,
+                original_blob_count,
+                merged_blob_count,
+                builder_inclusions,
+                inserted_at
+            ) VALUES "
+        );
+
+        let values_clauses: Vec<String> = (0..structured_blocks.len())
+            .map(|i| {
+                let start = i * FIELD_COUNT + 1;
+                let placeholders: Vec<String> = (0..FIELD_COUNT)
+                    .map(|j| format!("${}", start + j))
+                    .collect();
+                format!("({})", placeholders.join(", "))
+            })
+            .collect();
+
+        sql.push_str(&values_clauses.join(", "));
+
+        client.execute(&sql, &params).await?;
+
+        record.record_success();
+        Ok(())
+    }
+
+    pub async fn get_merged_blocks_for_slot(
+        &self,
+        slot: Slot,
+    ) -> Result<Vec<MergedBlock>, DatabaseError> {
+        let mut record = DbMetricRecord::new("get_merged_blocks_for_slot");
+
+        let rows = self
+            .pool
+            .get()
+            .await?
+            .query(
+                "
+                SELECT
+                    slot,
+                    block_number,
+                    original_block_hash,
+                    block_hash,
+                    original_value,
+                    merged_value,
+                    original_tx_count,
+                    merged_tx_count,
+                    original_blob_count,
+                    merged_blob_count,
+                    builder_inclusions,
+                    inserted_at
+                FROM merged_blocks
+                WHERE slot = $1
+                ",
+                &[&(slot.as_u64() as i64)],
+            )
+            .await?;
+        record.record_success();
+        parse_rows(rows)
+    }
+
 }
