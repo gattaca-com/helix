@@ -220,7 +220,7 @@ pub struct BuilderInclusionResult {
     pub txs: Vec<B256>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct MergedBlock {
     pub slot: u64,
     pub block_number: u64,

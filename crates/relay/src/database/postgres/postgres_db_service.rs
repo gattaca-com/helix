@@ -2398,11 +2398,11 @@ impl PostgresDatabaseService {
         }
 
         let client = self.pool.get().await?;
-        struct MergedBlockParams {
+        struct MergedBlockParams<'a> {
             slot: i64,
             block_number: i64,
-            original_block_hash: Vec<u8>,
-            block_hash: Vec<u8>,
+            original_block_hash: &'a [u8],
+            block_hash: &'a [u8],
             original_value: PostgresNumeric,
             merged_value: PostgresNumeric,
             original_tx_count: i32,
@@ -2421,8 +2421,8 @@ impl PostgresDatabaseService {
             structured_blocks.push(MergedBlockParams {
                 slot: block.slot as i64,
                 block_number: block.block_number as i64,
-                original_block_hash: block.original_block_hash.as_slice().to_vec(),
-                block_hash: block.block_hash.as_slice().to_vec(),
+                original_block_hash: block.original_block_hash.as_slice(),
+                block_hash: block.block_hash.as_slice(),
                 original_value: PostgresNumeric::from(block.original_value),
                 merged_value: PostgresNumeric::from(block.merged_value),
                 original_tx_count: block.original_tx_count as i32,

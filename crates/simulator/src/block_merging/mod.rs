@@ -781,10 +781,12 @@ where
         let SimulatedOrder { order, should_be_included, builder_payment, .. } = simulated_order;
 
         // Append the bundle
-        let mut txs = vec![];
+        
         // We can't avoid re-execution here due to the BlockBuilder API
-        for (tx, _) in
-            order.into_transactions().into_iter().zip(should_be_included).filter(|(_, sbi)| *sbi)
+        let transactions = order.into_transactions();
+        let mut txs = Vec::with_capacity(transactions.len());
+        for (tx, _) in transactions.into_iter().zip(should_be_included).filter(|(_, sbi)| *sbi)
+            
         {
             txs.push(*tx.tx_hash());
             builder.append_transaction(tx)?;

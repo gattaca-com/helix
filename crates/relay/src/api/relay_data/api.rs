@@ -232,7 +232,7 @@ impl DataApi {
         Extension(data_api): Extension<Arc<DataApi>>,
         Query(params): Query<MergedBlockParams>,
     ) -> Result<impl IntoResponse, DataApiError> {
-        match data_api.db.get_block_adjustments_for_slot(params.slot).await {
+        match data_api.db.get_merged_blocks_for_slot(params.slot).await {
             Ok(result) => Ok(Json(result)),
             Err(err) => {
                 warn!(%err, "Failed to get merged blocks info");
