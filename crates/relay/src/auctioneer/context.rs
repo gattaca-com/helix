@@ -331,7 +331,7 @@ impl<B: BidAdjustor> Context<B> {
                 interval.tick().await;
 
                 if !adjustments_enabled.load(Ordering::Relaxed) {
-                    return;
+                    continue;
                 }
 
                 if let Err(e) = auctioneer.try_send(Event::DryRunAdjustments) {
