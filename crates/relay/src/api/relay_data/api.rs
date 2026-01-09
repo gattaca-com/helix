@@ -8,9 +8,7 @@ use axum::{
 use helix_common::{
     ValidatorPreferences,
     api::data_api::{
-        BuilderBlocksReceivedParams, DataAdjustmentsParams, DeliveredPayloadsResponse,
-        ProposerHeaderDeliveredParams, ProposerPayloadDeliveredParams, ReceivedBlocksResponse,
-        ValidatorRegistrationParams,
+        BuilderBlocksReceivedParams, DataAdjustmentsParams, DeliveredPayloadsResponse, MergedBlockParams, ProposerHeaderDeliveredParams, ProposerPayloadDeliveredParams, ReceivedBlocksResponse, ValidatorRegistrationParams
     },
     metrics,
 };
@@ -225,6 +223,19 @@ impl DataApi {
             Ok(result) => Ok(Json(result)),
             Err(err) => {
                 warn!(error=%err, "Failed to fetch proposer header delivered");
+                Err(DataApiError::InternalServerError)
+            }
+        }
+    }
+
+    pub async fn merged_blocks(
+        Extension(data_api): Extension<Arc<DataApi>>,
+        Query(params): Query<MergedBlockParams>,
+    ) -> Result<impl IntoResponse, DataApiError> {
+        match data_api.db.get_block_adjustments_for_slot(params.slot).await {
+            Ok(result) => Ok(Json(result)),
+            Err(err) => {
+                warn!(%err, "Failed to get merged blocks info");
                 Err(DataApiError::InternalServerError)
             }
         }
