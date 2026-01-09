@@ -26,7 +26,9 @@ use helix_common::{
     metrics::DbMetricRecord,
     utils::utcnow_ms,
 };
-use helix_types::{BlsPublicKeyBytes, MergedBlock, SignedBidSubmission, SignedValidatorRegistration, Slot};
+use helix_types::{
+    BlsPublicKeyBytes, MergedBlock, SignedBidSubmission, SignedValidatorRegistration, Slot,
+};
 use parking_lot::RwLock;
 use rustc_hash::FxHashSet;
 use tokio::sync::mpsc::Sender;
@@ -2389,7 +2391,10 @@ impl PostgresDatabaseService {
     }
 
     #[instrument(skip_all)]
-    pub async fn save_merged_blocks(&self, merged_blocks: &[MergedBlock]) -> Result<(), DatabaseError> {
+    pub async fn save_merged_blocks(
+        &self,
+        merged_blocks: &[MergedBlock],
+    ) -> Result<(), DatabaseError> {
         let mut record = DbMetricRecord::new("save_merged_blocks");
 
         if merged_blocks.is_empty() {
@@ -2416,7 +2421,7 @@ impl PostgresDatabaseService {
         let mut structured_blocks = Vec::with_capacity(merged_blocks.len());
         for block in merged_blocks {
             let builder_inclusions_json = serde_json::to_string(&block.builder_inclusions)
-                .map_err(|e| DatabaseError::SerdeJsonError(e))?;
+                .map_err(DatabaseError::SerdeJsonError)?;
 
             structured_blocks.push(MergedBlockParams {
                 slot: block.slot as i64,
@@ -2436,7 +2441,8 @@ impl PostgresDatabaseService {
 
         // Flatten into SQL params
         const FIELD_COUNT: usize = 12;
-        let mut params: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(structured_blocks.len() * FIELD_COUNT);
+        let mut params: Vec<&(dyn ToSql + Sync)> =
+            Vec::with_capacity(structured_blocks.len() * FIELD_COUNT);
         for block in &structured_blocks {
             params.push(&block.slot);
             params.push(&block.block_number);
@@ -2466,15 +2472,14 @@ impl PostgresDatabaseService {
                 merged_blob_count,
                 builder_inclusions,
                 inserted_at
-            ) VALUES "
+            ) VALUES ",
         );
 
         let values_clauses: Vec<String> = (0..structured_blocks.len())
             .map(|i| {
                 let start = i * FIELD_COUNT + 1;
-                let placeholders: Vec<String> = (0..FIELD_COUNT)
-                    .map(|j| format!("${}", start + j))
-                    .collect();
+                let placeholders: Vec<String> =
+                    (0..FIELD_COUNT).map(|j| format!("${}", start + j)).collect();
                 format!("({})", placeholders.join(", "))
             })
             .collect();
@@ -2521,5 +2526,4 @@ impl PostgresDatabaseService {
         record.record_success();
         parse_rows(rows)
     }
-
 }

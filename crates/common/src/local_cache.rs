@@ -12,7 +12,7 @@ use dashmap::{DashMap, DashSet};
 use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock};
 use http::HeaderValue;
 use parking_lot::RwLock;
-use tracing::{error, info};
+use tracing::error;
 
 use crate::{
     BuilderConfig, BuilderInfo, ProposerInfo,

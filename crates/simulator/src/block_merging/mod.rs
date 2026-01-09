@@ -37,7 +37,8 @@ use reth_node_builder::{
 };
 use reth_primitives::{GotExpected, Recovered};
 use revm::{
-    DatabaseCommit, DatabaseRef, database::{CacheDB, State}
+    DatabaseCommit, DatabaseRef,
+    database::{CacheDB, State},
 };
 use tracing::{debug, info, warn};
 
@@ -781,13 +782,11 @@ where
         let SimulatedOrder { order, should_be_included, builder_payment, .. } = simulated_order;
 
         // Append the bundle
-        
+
         // We can't avoid re-execution here due to the BlockBuilder API
         let transactions = order.into_transactions();
         let mut txs = Vec::with_capacity(transactions.len());
-        for (tx, _) in transactions.into_iter().zip(should_be_included).filter(|(_, sbi)| *sbi)
-            
-        {
+        for (tx, _) in transactions.into_iter().zip(should_be_included).filter(|(_, sbi)| *sbi) {
             txs.push(*tx.tx_hash());
             builder.append_transaction(tx)?;
         }
@@ -799,7 +798,7 @@ where
                 v.revenue += builder_payment;
                 v.txs.extend(txs.clone());
             })
-            .or_insert(BuilderInclusionResult { revenue: builder_payment, txs: txs } );
+            .or_insert(BuilderInclusionResult { revenue: builder_payment, txs });
     }
     Ok(revenues)
 }

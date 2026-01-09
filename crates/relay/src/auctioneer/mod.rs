@@ -363,8 +363,7 @@ impl State {
                 if let Some((adjusted_block, sim_request)) =
                     ctx.bid_adjustor.try_apply_adjustments(original_bid, slot_data, true)
                 {
-                    ctx.payloads.insert(*adjusted_block.block_hash(), adjusted_block);
-                    ctx.sim_manager.handle_sim_request(sim_request, true);
+                    ctx.store_data_and_sim(sim_request, adjusted_block, true);
                 }
             }
 

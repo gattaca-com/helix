@@ -8,7 +8,9 @@ use axum::{
 use helix_common::{
     ValidatorPreferences,
     api::data_api::{
-        BuilderBlocksReceivedParams, DataAdjustmentsParams, DeliveredPayloadsResponse, MergedBlockParams, ProposerHeaderDeliveredParams, ProposerPayloadDeliveredParams, ReceivedBlocksResponse, ValidatorRegistrationParams
+        BuilderBlocksReceivedParams, DataAdjustmentsParams, DeliveredPayloadsResponse,
+        MergedBlockParams, ProposerHeaderDeliveredParams, ProposerPayloadDeliveredParams,
+        ReceivedBlocksResponse, ValidatorRegistrationParams,
     },
     metrics,
 };
