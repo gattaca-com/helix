@@ -8,7 +8,8 @@ use helix_common::{
     },
 };
 use helix_types::{
-    BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, MergedBlock, SignedValidatorRegistration, ValidatorRegistration
+    BidTrace, BlsPublicKeyBytes, BlsSignatureBytes, MergedBlock, SignedValidatorRegistration,
+    ValidatorRegistration,
 };
 
 use crate::database::{
@@ -267,15 +268,19 @@ impl FromRow for MergedBlock {
         Self: Sized,
     {
         let builder_inclusions_str = row.get::<&str, &str>("builder_inclusions");
-        let builder_inclusions = serde_json::from_str(builder_inclusions_str)
-            .map_err(|e| DatabaseError::SerdeJsonError(e))?;
+        let builder_inclusions =
+            serde_json::from_str(builder_inclusions_str).map_err(DatabaseError::SerdeJsonError)?;
 
         Ok(MergedBlock {
             slot: parse_i64_to_u64(row.get::<&str, i64>("slot"))?,
             block_number: parse_i64_to_u64(row.get::<&str, i64>("block_number"))?,
-            original_block_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("original_block_hash"))?,
+            original_block_hash: parse_bytes_to_hash(
+                row.get::<&str, &[u8]>("original_block_hash"),
+            )?,
             block_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("block_hash"))?,
-            original_value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("original_value")),
+            original_value: parse_numeric_to_u256(
+                row.get::<&str, PostgresNumeric>("original_value"),
+            ),
             merged_value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("merged_value")),
             original_tx_count: parse_i32_to_usize(row.get::<&str, i32>("original_tx_count"))?,
             merged_tx_count: parse_i32_to_usize(row.get::<&str, i32>("merged_tx_count"))?,
@@ -284,7 +289,6 @@ impl FromRow for MergedBlock {
             builder_inclusions,
         })
     }
-    
 }
 
 pub fn parse_timestamptz_to_u64(timestamp: std::time::SystemTime) -> Result<u64, DatabaseError> {

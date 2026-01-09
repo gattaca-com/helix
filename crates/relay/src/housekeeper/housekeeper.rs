@@ -7,10 +7,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use alloy_eips::merge::{self, EPOCH_SLOTS};
+use alloy_eips::merge::EPOCH_SLOTS;
 use alloy_primitives::{B256, U256};
 use helix_common::{
-    BuilderConfig, BuilderInfo, ProposerDuty, RelayConfig, SignedValidatorRegistrationEntry, api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, is_local_dev, local_cache::LocalCache, spawn_tracked, task, utils::utcnow_dur
+    BuilderConfig, BuilderInfo, ProposerDuty, RelayConfig, SignedValidatorRegistrationEntry,
+    api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, is_local_dev,
+    local_cache::LocalCache, spawn_tracked, task, utils::utcnow_dur,
 };
 use helix_types::{BlsPublicKeyBytes, Epoch, Slot, SlotClockTrait};
 use tokio::sync::{Mutex, broadcast};

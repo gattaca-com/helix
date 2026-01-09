@@ -205,26 +205,9 @@ impl<B: BidAdjustor> Context<B> {
                     warn!(%err, %builder, %block_hash, "builder already demoted, skipping demotion");
                 }
             }
-        } else {
-            if is_adjusted {
-                debug!(%builder, %block_hash,"adjusted block passed simulator validation!");
-            }
+        } else if is_adjusted {
+            debug!(%builder, %block_hash,"adjusted block passed simulator validation!");
         }
-
-        let db = self.db.clone();
-        spawn_tracked!(async move {
-            if let Err(err) = db
-                .store_block_submission(
-                    result.submission,
-                    result.trace,
-                    result.optimistic_version,
-                    is_adjusted,
-                )
-                .await
-            {
-                error!(%err, "failed to store block submission")
-            }
-        });
 
         if let Some(res_tx) = result.res_tx {
             // submission was initially valid but by the time sim finished the slot already
