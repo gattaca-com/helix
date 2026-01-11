@@ -216,11 +216,12 @@ impl MergeableOrderWithOrigin {
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BuilderInclusionResult {
+    #[serde(with = "serde_utils::quoted_u256")]
     pub revenue: U256,
     pub txs: Vec<B256>,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct MergedBlock {
     pub slot: u64,
     pub block_number: u64,

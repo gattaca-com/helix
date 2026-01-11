@@ -17,8 +17,8 @@ use helix_common::{
     api::{
         builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
         data_api::{
-            BidFilters, DataAdjustmentsResponse, ProposerHeaderDeliveredParams,
-            ProposerHeaderDeliveredResponse,
+            BidFilters, DataAdjustmentsResponse, MergedBlockResponse,
+            ProposerHeaderDeliveredParams, ProposerHeaderDeliveredResponse,
         },
         proposer_api::{GetHeaderParams, ValidatorRegistrationInfo},
     },
@@ -2495,7 +2495,7 @@ impl PostgresDatabaseService {
     pub async fn get_merged_blocks_for_slot(
         &self,
         slot: Slot,
-    ) -> Result<Vec<MergedBlock>, DatabaseError> {
+    ) -> Result<Vec<MergedBlockResponse>, DatabaseError> {
         let mut record = DbMetricRecord::new("get_merged_blocks_for_slot");
 
         let rows = self
