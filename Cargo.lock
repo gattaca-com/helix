@@ -5105,6 +5105,7 @@ dependencies = [
  "dashmap 5.5.3",
  "derive_more 2.1.0",
  "futures",
+ "helix-types",
  "jsonrpsee",
  "metrics 0.24.3",
  "reqwest 0.11.27",

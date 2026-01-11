@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use alloy_eips::{Decodable2718, eip2718::Eip2718Error};
 use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_rpc_types::{beacon::requests::ExecutionRequestsV4, engine::ExecutionPayloadV3};
+use helix_types::BuilderInclusionResult;
 use reth_ethereum::{evm::EthEvmConfig, primitives::SignedTransaction, provider::ProviderError};
 use reth_node_builder::ConfigureEvm;
 use reth_primitives::{NodePrimitives, Recovered};
@@ -264,13 +265,6 @@ pub struct BlockMergeResponseV1 {
     /// Total value for the proposer
     pub proposer_value: U256,
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
-}
-
-#[serde_as]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BuilderInclusionResult {
-    pub revenue: U256,
-    pub txs: Vec<B256>,
 }
 
 #[cfg(test)]

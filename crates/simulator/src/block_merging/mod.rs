@@ -16,6 +16,7 @@ use alloy_rpc_types::{
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolCall, sol};
+use helix_types::BuilderInclusionResult;
 use reth_ethereum::{
     Block, EthPrimitives,
     chainspec::EthChainSpec,
@@ -47,7 +48,7 @@ use crate::{
     block_merging::{
         error::BlockMergingApiError,
         types::{
-            BlockMergeRequestV1, BlockMergeResponseV1, BuilderInclusionResult, DistributionConfig,
+            BlockMergeRequestV1, BlockMergeResponseV1, DistributionConfig,
             MergeableOrderBytes, MergeableOrderRecovered, RecoveredTx, SignedTx, SimulatedOrder,
             SimulationError,
         },
