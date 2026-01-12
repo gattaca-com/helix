@@ -239,6 +239,7 @@ impl BlockMerger {
                 .iter()
                 .filter(|o| match &o.order {
                     MergeableOrder::Tx(tx) => {
+                        trace!(raw_tx = ?tx.transaction, "removeing tx from merge request, tx already in base block");
                         !self.base_txs_set.contains(tx.transaction.as_slice())
                     }
                     MergeableOrder::Bundle(b) => {
@@ -550,6 +551,7 @@ fn order_to_mergeable(
                 return Err(OrderValidationError::InvalidTxIndex { got: tx.index, len: txs.len() });
             };
             if is_blob_transaction(raw_tx) {
+                trace!(raw_tx = ?raw_tx, "validating blob transaction");
                 // If the tx references bundles not in the block, we drop it
                 validate_blobs(raw_tx, blob_versioned_hashes)?;
             }
@@ -616,6 +618,7 @@ fn validate_blobs(
 
 fn validate_builder_payment(mut raw_tx: &[u8]) -> Result<(), OrderValidationError> {
     let tx = TxEnvelope::decode(&mut raw_tx)?;
+    trace!(?tx, "validating builder payment");
     if tx.priority_fee_or_price() == 0 && tx.input().is_empty() {
         debug!(?tx, "zero value transaction");
         Err(OrderValidationError::ZeroValue)
