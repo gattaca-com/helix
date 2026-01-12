@@ -535,7 +535,10 @@ pub fn get_mergeable_orders(
         .as_slice()
         .iter()
         .filter_map(|order| match order_to_mergeable(order, txs, &blob_versioned_hashes) {
-            Err(_) => None,
+            Err(err) => {
+                debug!(?order, ?err, "dropping invalid order during mergeable orders extraction");
+                None
+            }
             other => Some(other),
         })
         .collect::<Result<Vec<_>, _>>()?;
