@@ -551,7 +551,6 @@ fn order_to_mergeable(
                 return Err(OrderValidationError::InvalidTxIndex { got: tx.index, len: txs.len() });
             };
             if is_blob_transaction(raw_tx) {
-                trace!(raw_tx = ?raw_tx, "validating blob transaction");
                 // If the tx references bundles not in the block, we drop it
                 validate_blobs(raw_tx, blob_versioned_hashes)?;
             }
@@ -618,7 +617,6 @@ fn validate_blobs(
 
 fn validate_builder_payment(mut raw_tx: &[u8]) -> Result<(), OrderValidationError> {
     let tx = TxEnvelope::decode(&mut raw_tx)?;
-    trace!(?tx, "validating builder payment");
     if tx.priority_fee_or_price() == 0 && tx.input().is_empty() {
         debug!(?tx, "zero value transaction");
         Err(OrderValidationError::ZeroValue)
@@ -656,10 +654,16 @@ fn blobs_bundle_to_hashmap(
         .collect()
 }
 
-fn is_blob_transaction(raw_tx: &[u8]) -> bool {
+fn is_blob_transaction(raw_tx: &Bytes) -> bool {
     // First byte is always the transaction type, or >= 0xc0 for legacy
     // (source: https://eips.ethereum.org/EIPS/eip-2718)
-    raw_tx.first().is_some_and(|&b| b == TxType::Eip4844)
+    let is_blob = raw_tx.first().is_some_and(|&b| b == TxType::Eip4844);
+    if is_blob {
+        trace!(raw_tx = ?raw_tx, "identified blob transaction");
+    } else {
+        trace!(raw_tx = ?raw_tx, "identified non-blob transaction");
+    }
+    is_blob
 }
 
 fn get_tx_versioned_hashes(mut raw_tx: &[u8]) -> Vec<B256> {
