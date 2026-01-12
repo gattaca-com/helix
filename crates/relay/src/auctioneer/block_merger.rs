@@ -239,11 +239,18 @@ impl BlockMerger {
                 .iter()
                 .filter(|o| match &o.order {
                     MergeableOrder::Tx(tx) => {
-                        trace!(raw_tx = ?tx.transaction, "removeing tx from merge request, tx already in base block");
+                        if is_blob_transaction(&tx.transaction) {
+                            trace!(tx = ?tx.transaction, "blob transaction in best mergeable orders tx");
+                        }
                         !self.base_txs_set.contains(tx.transaction.as_slice())
                     }
                     MergeableOrder::Bundle(b) => {
-                        !b.transactions.iter().any(|t| self.base_txs_set.contains(t.as_slice()))
+                        !b.transactions.iter().any(|t| {
+                            if is_blob_transaction(t) {
+                                trace!(tx = ?t, "blob transaction in best mergeable orders bundle");
+                            }
+                            self.base_txs_set.contains(t.as_slice())
+                        })
                     }
                 })
                 .cloned(),
@@ -552,6 +559,7 @@ fn order_to_mergeable(
             };
             if is_blob_transaction(raw_tx) {
                 // If the tx references bundles not in the block, we drop it
+                trace!(raw_tx = ?raw_tx, "validating blob transaction in order");
                 validate_blobs(raw_tx, blob_versioned_hashes)?;
             }
             validate_builder_payment(raw_tx)?;
@@ -577,6 +585,7 @@ fn order_to_mergeable(
 
                     if is_blob_transaction(raw_tx) {
                         // If the tx references bundles not in the block, we drop the bundle
+                        trace!(raw_tx = ?raw_tx, "validating blob transaction in bundle order");
                         validate_blobs(raw_tx, blob_versioned_hashes)?;
                     }
 
@@ -657,13 +666,7 @@ fn blobs_bundle_to_hashmap(
 fn is_blob_transaction(raw_tx: &Bytes) -> bool {
     // First byte is always the transaction type, or >= 0xc0 for legacy
     // (source: https://eips.ethereum.org/EIPS/eip-2718)
-    let is_blob = raw_tx.first().is_some_and(|&b| b == TxType::Eip4844);
-    if is_blob {
-        trace!(raw_tx = ?raw_tx, "identified blob transaction");
-    } else {
-        trace!(raw_tx = ?raw_tx, "identified non-blob transaction");
-    }
-    is_blob
+    raw_tx.first().is_some_and(|&b| b == TxType::Eip4844)
 }
 
 fn get_tx_versioned_hashes(mut raw_tx: &[u8]) -> Vec<B256> {
