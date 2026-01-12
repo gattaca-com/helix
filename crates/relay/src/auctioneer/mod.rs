@@ -360,7 +360,7 @@ impl State {
                     return;
                 };
 
-                if let Some((adjusted_block, sim_request)) =
+                if let Some((adjusted_block, sim_request, _)) =
                     ctx.bid_adjustor.try_apply_adjustments(original_bid, slot_data, true)
                 {
                     ctx.store_data_and_sim(sim_request, adjusted_block, true);
