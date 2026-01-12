@@ -5,7 +5,7 @@ use std::{
 };
 
 use alloy_consensus::{Bytes48, Transaction, TxEip4844, TxEnvelope, TxType};
-use alloy_primitives::{Address, B256, Bytes, U256};
+use alloy_primitives::{Address, B256, Bytes, U256, hex};
 use alloy_rlp::Decodable;
 use helix_common::{
     RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, metrics::MERGE_TRACE_LATENCY,
@@ -673,10 +673,22 @@ fn is_blob_transaction(raw_tx: &Bytes) -> bool {
 }
 
 fn get_tx_versioned_hashes(mut raw_tx: &[u8]) -> Vec<B256> {
-    use alloy_consensus::transaction::RlpEcdsaDecodableTx;
-    TxEip4844::rlp_decode_with_signature(&mut raw_tx)
-        .map(|(b, _)| b.blob_versioned_hashes)
-        .unwrap_or(vec![])
+    let tx = match TxEnvelope::decode(&mut raw_tx) {
+        Ok(tx) => tx,
+        Err(err) => {
+            warn!(?err, "failed to decode transaction for versioned hash extraction");
+            return vec![];
+        },
+    };
+    match tx {
+        TxEnvelope::Eip4844(tx_eip4844) => {
+            match tx_eip4844.blob_versioned_hashes() {
+                Some(vhs) => vhs.to_vec(),
+                None => vec![],
+            }
+        }
+        _ => vec![],
+    }
 }
 
 fn calculate_versioned_hash(commitment: Bytes48) -> B256 {
