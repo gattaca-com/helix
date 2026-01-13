@@ -13,11 +13,18 @@ pub type Proof = Vec<Vec<u8>>;
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]
 pub enum BidAdjustmentData {
+    V1(BidAdjustmentDataV1),
+    V2(BidAdjustmentDataV2),
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Clone)]
+#[ssz(enum_behaviour = "transparent")]
+#[serde(untagged)]
+pub enum BidAdjustmentDataV1 {
     Original(BidAdjData),
     GasUsed(BidAdjDataWithGasUsed),
 }
 
-#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Clone)]
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]

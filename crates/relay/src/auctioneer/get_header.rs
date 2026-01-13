@@ -40,15 +40,18 @@ impl<B: BidAdjustor> Context<B> {
             return Ok(merged_bid);
         };
 
+        let original_bid = original_bid.clone();
         if self.adjustments_enabled.load(Ordering::Relaxed) &&
-            let Some((adjusted_bid, sim_request)) =
-                self.bid_adjustor.try_apply_adjustments(original_bid, slot_data, false)
+            let Some((adjusted_bid, sim_request, is_adjustable_slot)) =
+                self.bid_adjustor.try_apply_adjustments(&original_bid, slot_data, false)
         {
             self.store_data_and_sim(sim_request, adjusted_bid.clone(), true);
 
-            return Ok(adjusted_bid);
+            if is_adjustable_slot {
+                return Ok(adjusted_bid);
+            }
         }
 
-        Ok(original_bid.clone())
+        Ok(original_bid)
     }
 }

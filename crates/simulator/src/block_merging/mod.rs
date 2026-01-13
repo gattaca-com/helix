@@ -48,9 +48,8 @@ use crate::{
     block_merging::{
         error::BlockMergingApiError,
         types::{
-            BlockMergeRequestV1, BlockMergeResponseV1, DistributionConfig,
-            MergeableOrderBytes, MergeableOrderRecovered, RecoveredTx, SignedTx, SimulatedOrder,
-            SimulationError,
+            BlockMergeRequestV1, BlockMergeResponseV1, DistributionConfig, MergeableOrderBytes,
+            MergeableOrderRecovered, RecoveredTx, SignedTx, SimulatedOrder, SimulationError,
         },
     },
     common::CachedRethDb,
