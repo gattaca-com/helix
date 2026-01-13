@@ -17,7 +17,6 @@ pub enum BidAdjustmentData {
     V2(BidAdjustmentDataV2),
 }
 
-
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Clone)]
 #[ssz(enum_behaviour = "transparent")]
 #[serde(untagged)]
