@@ -91,7 +91,6 @@ pub(super) struct SubWorker {
     id: String,
     tx: crossbeam_channel::Sender<Event>,
     cache: LocalCache,
-    chain_info: ChainInfo,
     tel: Telemetry,
     config: RelayConfig,
 }
@@ -101,17 +100,9 @@ impl SubWorker {
         id: usize,
         tx: crossbeam_channel::Sender<Event>,
         cache: LocalCache,
-        chain_info: ChainInfo,
         config: RelayConfig,
     ) -> Self {
-        Self {
-            id: format!("submission_{id}"),
-            tx,
-            cache,
-            chain_info,
-            tel: Telemetry::default(),
-            config,
-        }
+        Self { id: format!("submission_{id}"), tx, cache, tel: Telemetry::default(), config }
     }
 
     pub(super) fn run(mut self, rx: crossbeam_channel::Receiver<SubWorkerJob>) {
@@ -293,23 +284,25 @@ impl SubWorker {
             block_merging_dry_run: self.config.block_merging_config.is_dry_run,
         };
 
+        let chain_info = self.cache.get_chain_info().expect("chain info should be cached");
+
         let (submission, merging_data, bid_adjustment_data) = match submission_type {
             Some(SubmissionType::Default) => {
-                decode_default(&mut decoder, body, trace, &self.chain_info, &flags)?
+                decode_default(&mut decoder, body, trace, &chain_info, &flags)?
             }
             Some(SubmissionType::Merge) => {
-                decode_merge(&mut decoder, body, trace, &self.chain_info, &flags)?
+                decode_merge(&mut decoder, body, trace, &chain_info, &flags)?
             }
             Some(SubmissionType::Dehydrated) => {
-                decode_dehydrated(&mut decoder, body, trace, &self.chain_info, &flags)?
+                decode_dehydrated(&mut decoder, body, trace, &chain_info, &flags)?
             }
             None => {
                 if should_hydrate {
-                    decode_dehydrated(&mut decoder, body, trace, &self.chain_info, &flags)?
+                    decode_dehydrated(&mut decoder, body, trace, &chain_info, &flags)?
                 } else if has_mergeable_data {
-                    decode_merge(&mut decoder, body, trace, &self.chain_info, &flags)?
+                    decode_merge(&mut decoder, body, trace, &chain_info, &flags)?
                 } else {
-                    decode_default(&mut decoder, body, trace, &self.chain_info, &flags)?
+                    decode_default(&mut decoder, body, trace, &chain_info, &flags)?
                 }
             }
         };
@@ -329,7 +322,8 @@ impl SubWorker {
         _trace: &mut GetPayloadTrace,
     ) -> Result<(SignedBlindedBeaconBlock, B256), ProposerApiError> {
         trace!("verifying signature");
-        verify_signed_blinded_block_signature(&self.chain_info, &blinded_block, proposer_pubkey)?;
+        let chain_info = self.cache.get_chain_info().expect("chain info should be cached");
+        verify_signed_blinded_block_signature(&chain_info, &blinded_block, proposer_pubkey)?;
         trace!("signature verified");
 
         let block_hash = blinded_block
@@ -347,13 +341,13 @@ impl SubWorker {
 /// Worker to process registrations verifications
 pub(super) struct RegWorker {
     id: String,
-    chain_info: ChainInfo,
+    local_cache: LocalCache,
     tel: Telemetry,
 }
 
 impl RegWorker {
-    pub(super) fn new(id: usize, chain_info: ChainInfo) -> Self {
-        Self { id: format!("registration_{id}"), chain_info, tel: Default::default() }
+    pub(super) fn new(id: usize, local_cache: LocalCache) -> Self {
+        Self { id: format!("registration_{id}"), local_cache, tel: Default::default() }
     }
 
     pub(super) fn run(mut self, rx: crossbeam_channel::Receiver<RegWorkerJob>) {
@@ -396,7 +390,9 @@ impl RegWorker {
             }
 
             let start = Instant::now();
-            let valid = validate_registration(&self.chain_info, &regs[i]);
+            let chain_info =
+                self.local_cache.get_chain_info().expect("chain info should be cached");
+            let valid = validate_registration(&chain_info, &regs[i]);
             res.push((i, valid.is_ok()));
 
             WORKER_TASK_COUNT.with_label_values(&["Registration", &self.id]).inc();

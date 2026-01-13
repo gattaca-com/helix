@@ -19,13 +19,13 @@ use tokio::sync::{Mutex, broadcast};
 use tracing::{Instrument, debug, error, info, warn};
 
 use crate::{
+    DbHandle,
     auctioneer::Event,
     beacon::{
         error::BeaconClientError,
         multi_beacon_client::MultiBeaconClient,
         types::{HeadEventData, StateId},
     },
-    database::postgres::postgres_db_service::PostgresDatabaseService,
     housekeeper::{
         EthereumPrimevService, error::HousekeeperError, inclusion_list::InclusionListService,
     },
@@ -33,8 +33,6 @@ use crate::{
 };
 
 const PROPOSER_DUTIES_UPDATE_FREQ: u64 = 1;
-
-const TRUSTED_PROPOSERS_UPDATE_FREQ: u64 = 5;
 
 const CUTOFF_TIME: Duration = Duration::from_secs(4);
 
@@ -47,12 +45,9 @@ struct HousekeeperSlots {
     head: Arc<AtomicU64>,
     proposer_duties: Arc<AtomicU64>,
     refreshed_validators: Arc<AtomicU64>,
-    trusted_proposers: Arc<AtomicU64>,
     // updating can take >> slot time, so we avoid concurrent updates by locking the mutex
-    updating_builder_infos: Arc<Mutex<()>>,
     updating_proposer_duties: Arc<Mutex<()>>,
     updating_refreshed_validators: Arc<Mutex<()>>,
-    updating_trusted_proposers: Arc<Mutex<()>>,
 }
 
 impl HousekeeperSlots {
@@ -74,12 +69,6 @@ impl HousekeeperSlots {
     fn update_refreshed_validators(&self, head_slot: Slot) {
         self.refreshed_validators.store(head_slot.as_u64(), Ordering::Relaxed);
     }
-    fn trusted_proposers(&self) -> u64 {
-        self.trusted_proposers.load(Ordering::Relaxed)
-    }
-    fn update_trusted_proposers(&self, head_slot: Slot) {
-        self.trusted_proposers.store(head_slot.as_u64(), Ordering::Relaxed);
-    }
 }
 
 /// Housekeeper Service.
@@ -90,19 +79,18 @@ impl HousekeeperSlots {
 /// will sync through db.
 #[derive(Clone)]
 pub struct Housekeeper {
-    db: Arc<PostgresDatabaseService>,
+    db: DbHandle,
     beacon_client: Arc<MultiBeaconClient>,
     auctioneer: Arc<LocalCache>,
     chain_info: Arc<ChainInfo>,
     primev_service: Option<EthereumPrimevService>,
     slots: HousekeeperSlots,
     inclusion_list_service: Option<InclusionListService>,
-    local_builders: Vec<BuilderConfig>,
 }
 
 impl Housekeeper {
     pub fn new(
-        db: Arc<PostgresDatabaseService>,
+        db: DbHandle,
         beacon_client: Arc<MultiBeaconClient>,
         auctioneer: Arc<LocalCache>,
         config: &RelayConfig,
@@ -132,7 +120,6 @@ impl Housekeeper {
             primev_service,
             slots: HousekeeperSlots::default(),
             inclusion_list_service,
-            local_builders: config.builders.clone(),
         }
     }
 
@@ -237,52 +224,6 @@ impl Housekeeper {
                 );
             }
         }
-
-        // builder info updated every slot
-        let housekeeper = self.clone();
-        task::spawn(
-            file!(),
-            line!(),
-            async move {
-                let Ok(_guard) = housekeeper.slots.updating_builder_infos.try_lock() else {
-                    warn!("builder info update already in progress");
-                    return;
-                };
-                let start = Instant::now();
-                if let Err(err) = housekeeper.sync_builder_info_changes().await {
-                    error!(%err, "failed to sync builder info changes");
-                }
-                info!(duration = ?start.elapsed(), "sync builder info task completed");
-            }
-            .in_current_span(),
-        );
-
-        // trusted proposers
-        if self.should_update_trusted_proposers(head_slot.as_u64()) {
-            if is_local_dev() {
-                warn!("skipping refresh of trusted proposers")
-            } else {
-                let housekeeper = self.clone();
-                task::spawn(
-                    file!(),
-                    line!(),
-                    async move {
-                        let Ok(_guard) = housekeeper.slots.updating_trusted_proposers.try_lock() else {
-                            warn!("trusted proposer update already in progress");
-                            return;
-                        };
-                        let start = Instant::now();
-                        if let Err(err) = housekeeper.update_trusted_proposers().await {
-                            error!(%err, "failed to update trusted proposers");
-                        } else {
-                            housekeeper.slots.update_trusted_proposers(head_slot);
-                        }
-                        info!(duration = ?start.elapsed(), "update trusted proposers task completed");
-                    }
-                    .in_current_span(),
-                );
-            }
-        }
     }
 
     #[tracing::instrument(skip_all, name = "update_proposer_duties", fields(epoch = %epoch))]
@@ -360,21 +301,7 @@ impl Housekeeper {
         let validators = self.beacon_client.get_state_validators(StateId::Head).await?;
         debug!(validators = validators.len(), duration = ?start.elapsed(), "fetched validators");
 
-        self.db.set_known_validators(validators).await?;
-
-        Ok(())
-    }
-
-    /// Synchronizes builder information changes.
-    async fn sync_builder_info_changes(&self) -> Result<(), HousekeeperError> {
-        let mut builder_infos = self.db.get_all_builder_infos().await?;
-        debug!(builder_infos = builder_infos.len(), "updating builder infos");
-
-        if is_local_dev() {
-            builder_infos.extend_from_slice(self.local_builders.as_slice());
-        }
-
-        self.auctioneer.update_builder_infos(&builder_infos, true);
+        self.db.set_known_validators(validators);
 
         Ok(())
     }
@@ -434,7 +361,7 @@ impl Housekeeper {
         if is_local_dev() {
             warn!("skipping proposer duty update in db");
         } else {
-            self.db.set_proposer_duties(formatted_proposer_duties).await?;
+            self.db.set_proposer_duties(formatted_proposer_duties);
         }
 
         Ok(())
@@ -449,7 +376,7 @@ impl Housekeeper {
     async fn primev_update_with_duties(
         primev_service: EthereumPrimevService,
         auctioneer: Arc<LocalCache>,
-        db: Arc<PostgresDatabaseService>,
+        db: DbHandle,
         proposer_duties: Vec<ProposerDuty>,
     ) -> Result<(), HousekeeperError> {
         let primev_validators =
@@ -517,26 +444,7 @@ impl Housekeeper {
 
         auctioneer.update_builder_infos(&primev_builders_config, false);
 
-        db.store_builders_info(primev_builders_config.as_slice()).await?;
-
-        Ok(())
-    }
-
-    fn should_update_trusted_proposers(&self, head_slot: u64) -> bool {
-        let last_updated = self.slots.trusted_proposers();
-        head_slot.is_multiple_of(TRUSTED_PROPOSERS_UPDATE_FREQ) ||
-            head_slot.saturating_sub(last_updated) >= TRUSTED_PROPOSERS_UPDATE_FREQ
-    }
-
-    /// Update the proposer whitelist.
-    ///
-    /// This function will fetch the proposer whitelist from the database and update the auctioneer.
-    /// It will also update the `refreshed_trusted_proposers_slot` to the current `head_slot`.
-    async fn update_trusted_proposers(&self) -> Result<(), HousekeeperError> {
-        let start = Instant::now();
-        let proposer_whitelist = self.db.get_trusted_proposers().await?;
-        debug!(proposer_whitelist = proposer_whitelist.len(), duration = ?start.elapsed(), "fetched trusted proposers");
-        self.auctioneer.update_trusted_proposers(proposer_whitelist);
+        db.store_builders_info(primev_builders_config);
 
         Ok(())
     }
@@ -555,12 +463,11 @@ impl Housekeeper {
     /// Fetch validator registrations for `pub_keys` from database.
     async fn fetch_signed_validator_registrations(
         &self,
-        pubkeys: &[&BlsPublicKeyBytes],
+        pubkeys: &[BlsPublicKeyBytes],
     ) -> Result<HashMap<BlsPublicKeyBytes, SignedValidatorRegistrationEntry>, HousekeeperError>
     {
         let registrations: Vec<SignedValidatorRegistrationEntry> =
-            self.db.get_validator_registrations_for_pub_keys(pubkeys).await?;
-
+            self.auctioneer.get_validator_registrations_for_pub_keys(pubkeys);
         let registrations =
             registrations.into_iter().map(|entry| (*entry.public_key(), entry)).collect();
 
@@ -576,8 +483,8 @@ impl Housekeeper {
         HousekeeperError,
     > {
         let proposer_duties = self.fetch_duties(epoch.as_u64()).await?;
-        let pubkeys: Vec<&BlsPublicKeyBytes> =
-            proposer_duties.iter().map(|duty| &duty.pubkey).collect();
+        let pubkeys: Vec<BlsPublicKeyBytes> =
+            proposer_duties.iter().map(|duty| duty.pubkey).collect();
         let signed_validator_registrations =
             self.fetch_signed_validator_registrations(&pubkeys).await?;
 

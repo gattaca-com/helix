@@ -124,13 +124,12 @@ impl<A: Api> ProposerApi<A> {
             Ok(get_payload_response) => Ok(axum::Json(get_payload_response)),
             Err(err) => {
                 // Save error to DB
-                if let Err(err) = proposer_api
-                    .db
-                    .save_failed_get_payload(slot.into(), block_hash, err.to_string(), trace)
-                    .await
-                {
-                    error!(err = ?err, "error saving failed get payload");
-                }
+                proposer_api.db.save_failed_get_payload(
+                    slot.into(),
+                    block_hash,
+                    err.to_string(),
+                    trace,
+                );
 
                 Err(err)
             }
@@ -220,13 +219,12 @@ impl<A: Api> ProposerApi<A> {
             Ok(_get_payload_response) => Ok(StatusCode::ACCEPTED),
             Err(err) => {
                 // Save error to DB
-                if let Err(err) = proposer_api
-                    .db
-                    .save_failed_get_payload(slot.into(), block_hash, err.to_string(), trace)
-                    .await
-                {
-                    error!(err = ?err, "error saving failed get payload");
-                }
+                proposer_api.db.save_failed_get_payload(
+                    slot.into(),
+                    block_hash,
+                    err.to_string(),
+                    trace,
+                );
 
                 Err(err)
             }
@@ -293,19 +291,13 @@ impl<A: Api> ProposerApi<A> {
             warn!(error = %err, "get_payload was sent too late");
 
             // Save too late request to db for debugging
-            if let Err(err) = self
-                .db
-                .save_too_late_get_payload(
-                    (head_slot + 1).into(),
-                    &proposer_public_key,
-                    &block_hash,
-                    trace.receive,
-                    trace.payload_fetched,
-                )
-                .await
-            {
-                error!(%err, "failed to save too late get payload");
-            }
+            self.db.save_too_late_get_payload(
+                (head_slot + 1).into(),
+                proposer_public_key,
+                block_hash,
+                trace.receive,
+                trace.payload_fetched,
+            );
 
             return Err(err);
         }
@@ -351,7 +343,7 @@ impl<A: Api> ProposerApi<A> {
                 .save_delivered_payload_info(
                     slot.as_u64(),
                     payload_clone,
-                    bid,
+                    &bid,
                     proposer_public_key,
                     proposer_fee_recipient,
                     &trace_clone,
@@ -433,15 +425,14 @@ impl<A: Api> ProposerApi<A> {
     async fn save_delivered_payload_info(
         &self,
         slot: u64,
-        payload: Arc<PayloadAndBlobs>,
-        bid: PayloadBidData,
+        payload: PayloadAndBlobs,
+        bid: &PayloadBidData,
         proposer_public_key: BlsPublicKeyBytes,
         proposer_fee_recipient: Address,
         trace: &GetPayloadTrace,
         user_agent: Option<String>,
         filtering: Filtering,
     ) {
-        let db = self.db.clone();
         let trace = *trace;
         let params = SavePayloadParams {
             slot,
@@ -449,16 +440,13 @@ impl<A: Api> ProposerApi<A> {
             proposer_pub_key: proposer_public_key,
             value: bid.value,
             proposer_fee_recipient,
-            payload: payload.clone(),
+            payload,
             latency_trace: trace,
             user_agent,
             filtering,
         };
-        spawn_tracked!(async move {
-            if let Err(err) = db.save_delivered_payload(&params).await {
-                error!(%err, "error saving payload to database");
-            }
-        });
+
+        self.db.save_delivered_payload(params);
     }
 
     pub(crate) async fn gossip_payload(

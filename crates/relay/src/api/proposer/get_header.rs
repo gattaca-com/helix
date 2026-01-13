@@ -115,29 +115,18 @@ impl<A: Api> ProposerApi<A> {
         let bid_block_hash = *bid.block_hash();
         let value = *bid.value();
 
-        let db = proposer_api.db.clone();
-        spawn_tracked!(
-            async move {
-                if let Err(err) = db
-                    .save_get_header_call(
-                        params,
-                        bid_block_hash,
-                        value,
-                        trace,
-                        is_mev_boost,
-                        user_agent,
-                    )
-                    .await
-                {
-                    error!(%err, "error saving get header call to database");
-                }
-            }
-            .in_current_span()
+        proposer_api.db.save_get_header_call(
+            params,
+            bid_block_hash,
+            value,
+            trace,
+            is_mev_boost,
+            user_agent,
         );
 
         let fork = proposer_api.chain_info.current_fork_name();
-        let payload_and_blobs = bid.payload_and_blobs.clone();
-        let bid_data = bid.bid_data.clone();
+        let payload_and_blobs = bid.payload_and_blobs();
+        let bid_data = bid.bid_data_ref().to_owned();
         let bid = bid.into_builder_bid_slow();
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
 

@@ -1,13 +1,12 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::{Arc, atomic::Ordering},
-    time::Instant,
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
 };
 
 use alloy_primitives::{B256, U256};
 use helix_common::{
-    BuilderInfo, RelayConfig, chain_info::ChainInfo, local_cache::LocalCache,
-    metrics::SimulatorMetrics, spawn_tracked,
+    BuilderInfo, RelayConfig, local_cache::LocalCache, metrics::SimulatorMetrics, spawn_tracked,
 };
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
 use rustc_hash::FxHashMap;
@@ -16,14 +15,14 @@ use tracing::{error, info, warn};
 use crate::{
     api::builder::error::BuilderApiError,
     auctioneer::{
-        BlockMergeResponse,
+        BlockMergeResponse, Event,
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
         simulator::manager::{SimulationResult, SimulatorManager},
         types::{PayloadEntry, PendingPayload},
     },
-    database::postgres::postgres_db_service::PostgresDatabaseService,
+    database::handle::DbHandle,
 };
 
 // Context that is only valid for a given slot
@@ -41,11 +40,10 @@ pub struct SlotContext {
 }
 
 pub struct Context<B: BidAdjustor> {
-    pub chain_info: ChainInfo,
     pub config: RelayConfig,
     pub cache: LocalCache,
     pub unknown_builder_info: BuilderInfo,
-    pub db: Arc<PostgresDatabaseService>,
+    pub db: DbHandle,
     pub slot_context: SlotContext,
     pub bid_adjustor: B,
 }
@@ -53,15 +51,17 @@ pub struct Context<B: BidAdjustor> {
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
 const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
 
+const ADJUSTMENTS_DRY_RUN_INTERVAL: Duration = Duration::from_millis(500);
+
 impl<B: BidAdjustor> Context<B> {
     pub fn new(
-        chain_info: ChainInfo,
         config: RelayConfig,
         sim_manager: SimulatorManager,
-        db: Arc<PostgresDatabaseService>,
+        db: DbHandle,
         bid_sorter: BidSorter,
         cache: LocalCache,
         bid_adjustor: B,
+        auctioneer: crossbeam_channel::Sender<Event>,
     ) -> Self {
         let unknown_builder_info = BuilderInfo {
             collateral: U256::ZERO,
@@ -72,7 +72,7 @@ impl<B: BidAdjustor> Context<B> {
             api_key: None,
         };
 
-        let block_merger = BlockMerger::new(0, chain_info.clone(), cache.clone(), config.clone());
+        let block_merger = BlockMerger::new(0, cache.clone(), config.clone());
 
         let slot_context = SlotContext {
             sim_manager,
@@ -91,7 +91,9 @@ impl<B: BidAdjustor> Context<B> {
             block_merger,
         };
 
-        Self { chain_info, cache, unknown_builder_info, slot_context, db, config, bid_adjustor }
+        Self::spawn_adjustments_dry_run_task(auctioneer, cache.clone());
+
+        Self { cache, unknown_builder_info, slot_context, db, config, bid_adjustor }
     }
 
     pub fn builder_info(&self, builder: &BlsPublicKeyBytes) -> BuilderInfo {
@@ -117,7 +119,20 @@ impl<B: BidAdjustor> Context<B> {
         if let Err(err) = result.result.as_ref() &&
             err.is_demotable()
         {
-            if self.cache.demote_builder(&builder) {
+            if self.payloads.get(&block_hash).is_some_and(|bid| bid.is_adjusted()) {
+                warn!(%builder, %block_hash, %err, "block simulation resulted in an error. Disabling adjustments...");
+
+                if !self.cache.adjustments_enabled.load(Ordering::Relaxed) {
+                    warn!(%builder, %block_hash, %err, "adjustments already disabled");
+                } else {
+                    SimulatorMetrics::disable_adjustments();
+                    self.cache.adjustments_enabled.store(false, Ordering::Relaxed);
+                    let db = self.db.clone();
+                    let failsafe_trigger = self.cache.adjustments_failsafe_trigger.clone();
+                    let adjustments_enabled = self.cache.adjustments_enabled.clone();
+                    db.disable_adjustments(block_hash, failsafe_trigger, adjustments_enabled);
+                }
+            } else if self.cache.demote_builder(&builder) {
                 warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
 
                 SimulatorMetrics::demotion_count();
@@ -125,30 +140,19 @@ impl<B: BidAdjustor> Context<B> {
                 let reason = err.to_string();
                 let bid_slot = result.submission.slot();
                 let failsafe_triggered = self.sim_manager.failsafe_triggered.clone();
-
-                let db = self.db.clone();
-                spawn_tracked!(async move {
-                    if let Err(err) =
-                        db.db_demote_builder(bid_slot.as_u64(), &builder, &block_hash, reason).await
-                    {
-                        failsafe_triggered.store(true, Ordering::Relaxed);
-                        error!(%builder, %err, %block_hash, "failed to demote builder in database! Pausing all optmistic submissions");
-                    }
-                });
+                self.db.db_demote_builder(
+                    bid_slot.as_u64(),
+                    builder,
+                    block_hash,
+                    reason,
+                    failsafe_triggered,
+                );
             } else {
                 warn!(%err, %builder, %block_hash, "builder already demoted, skipping demotion");
             }
         };
 
-        let db = self.db.clone();
-        spawn_tracked!(async move {
-            if let Err(err) = db
-                .store_block_submission(result.submission, result.trace, result.optimistic_version)
-                .await
-            {
-                error!(%err, "failed to store block submission")
-            }
-        });
+        self.db.store_block_submission(result.submission, result.trace, result.optimistic_version);
 
         if let Some(res_tx) = result.res_tx {
             // submission was initially valid but by the time sim finished the slot already
@@ -196,8 +200,8 @@ impl<B: BidAdjustor> Context<B> {
             return;
         };
 
-        let original_payload_and_blobs = original_payload.payload_and_blobs.clone();
-        let builder_pubkey = original_payload.bid_data.builder_pubkey;
+        let original_payload_and_blobs = original_payload.payload_and_blobs();
+        let builder_pubkey = *original_payload.bid_data_ref().builder_pubkey;
 
         //TODO: this function does a lot of work, should move that work away from the event loop
         let Some(payload) = self
@@ -213,6 +217,26 @@ impl<B: BidAdjustor> Context<B> {
             return;
         };
         self.payloads.insert(block_hash, payload);
+    }
+
+    fn spawn_adjustments_dry_run_task(
+        auctioneer: crossbeam_channel::Sender<Event>,
+        cache: LocalCache,
+    ) {
+        spawn_tracked!(async move {
+            let mut interval = tokio::time::interval(ADJUSTMENTS_DRY_RUN_INTERVAL);
+            loop {
+                interval.tick().await;
+
+                if !cache.adjustments_enabled.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                if let Err(e) = auctioneer.try_send(Event::DryRunAdjustments) {
+                    error!("failed to send adjustments dry run request: {}", e);
+                }
+            }
+        });
     }
 }
 

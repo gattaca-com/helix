@@ -7,6 +7,7 @@ use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
 use ssz::{Decode, DecodeError};
 use ssz_derive::{Decode, Encode};
+use tracing::trace;
 use tree_hash::TreeHash;
 
 use crate::{
@@ -217,7 +218,7 @@ impl DehydratedBidSubmissionElectra {
                 let bytes = tx.as_ref().try_into().unwrap();
                 let hash = u64::from_le_bytes(bytes);
                 let Some(cached_tx) = order_cache.transactions.get(&hash) else {
-                    last_err = Err(HydrationError::UnknownTxHash { index });
+                    last_err = Err(HydrationError::UnknownTxHash { index, hash });
                     continue;
                 };
 
@@ -238,6 +239,7 @@ impl DehydratedBidSubmissionElectra {
                 hasher.write(last_slice);
                 let hash = hasher.finish();
                 order_cache.transactions.insert(hash, tx.clone());
+                trace!("Inserted tx into cache: index {}, hash {}", index, hash);
             };
         }
 
@@ -310,7 +312,7 @@ impl DehydratedBidSubmissionFulu {
                 let bytes = tx.as_ref().try_into().unwrap();
                 let hash = u64::from_le_bytes(bytes);
                 let Some(cached_tx) = order_cache.transactions.get(&hash) else {
-                    last_err = Err(HydrationError::UnknownTxHash { index });
+                    last_err = Err(HydrationError::UnknownTxHash { index, hash });
                     continue;
                 };
 
@@ -331,6 +333,7 @@ impl DehydratedBidSubmissionFulu {
                 hasher.write(last_slice);
                 let hash = hasher.finish();
                 order_cache.transactions.insert(hash, tx.clone());
+                trace!("Inserted tx into cache: index {}, hash {}", index, hash);
             };
         }
 
@@ -436,8 +439,8 @@ impl Default for HydrationCache {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HydrationError {
-    #[error("unkown tx: index {index}")]
-    UnknownTxHash { index: usize },
+    #[error("unkown tx: index {index}, hash {hash}")]
+    UnknownTxHash { index: usize, hash: u64 },
 
     #[error("invalid tx bytes: length {length}, index {index}")]
     InvalidTxLength { length: usize, index: usize },

@@ -19,7 +19,7 @@ use crate::{
     api::{Api, router::Terminating},
     auctioneer::{AuctioneerHandle, RegWorkerHandle},
     beacon::multi_beacon_client::MultiBeaconClient,
-    database::postgres::postgres_db_service::PostgresDatabaseService,
+    database::handle::DbHandle,
     gossip::GrpcGossiperClientManager,
     housekeeper::CurrentSlotInfo,
 };
@@ -27,7 +27,7 @@ use crate::{
 #[derive(Clone)]
 pub struct ProposerApi<A: Api> {
     pub local_cache: Arc<LocalCache>,
-    pub db: Arc<PostgresDatabaseService>,
+    pub db: DbHandle,
     pub gossiper: Arc<GrpcGossiperClientManager>,
     pub multi_beacon_client: Arc<MultiBeaconClient>,
     pub api_provider: Arc<A::ApiProvider>,
@@ -45,7 +45,7 @@ pub struct ProposerApi<A: Api> {
 impl<A: Api> ProposerApi<A> {
     pub fn new(
         local_cache: Arc<LocalCache>,
-        db: Arc<PostgresDatabaseService>,
+        db: DbHandle,
         gossiper: Arc<GrpcGossiperClientManager>,
         api_provider: Arc<A::ApiProvider>,
         signing_context: Arc<RelaySigningContext>,

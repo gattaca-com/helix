@@ -40,7 +40,7 @@ use revm::{
     DatabaseCommit, DatabaseRef,
     database::{CacheDB, State},
 };
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, warn};
 
 pub(crate) use crate::block_merging::api::{BlockMergingApi, BlockMergingApiServer};
 use crate::{

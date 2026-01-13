@@ -8,8 +8,7 @@ use alloy_consensus::{Bytes48, Transaction, TxEip4844, TxEnvelope, TxType};
 use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_rlp::Decodable;
 use helix_common::{
-    RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, metrics::MERGE_TRACE_LATENCY,
-    utils::utcnow_ms,
+    RelayConfig, local_cache::LocalCache, metrics::MERGE_TRACE_LATENCY, utils::utcnow_ms,
 };
 use helix_types::{
     BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
@@ -64,7 +63,6 @@ pub enum OrderValidationError {
 pub struct BlockMerger {
     curr_bid_slot: u64,
     config: RelayConfig,
-    chain_info: ChainInfo,
     local_cache: LocalCache,
     best_merged_block: Option<BestMergedBlock>,
     best_mergeable_orders: BestMergeableOrders,
@@ -86,16 +84,10 @@ pub struct BlockMerger {
 }
 
 impl BlockMerger {
-    pub fn new(
-        curr_bid_slot: u64,
-        chain_info: ChainInfo,
-        local_cache: LocalCache,
-        config: RelayConfig,
-    ) -> Self {
+    pub fn new(curr_bid_slot: u64, local_cache: LocalCache, config: RelayConfig) -> Self {
         Self {
             curr_bid_slot,
             config,
-            chain_info,
             local_cache,
             best_merged_block: None,
             best_mergeable_orders: BestMergeableOrders::new(),
@@ -156,9 +148,7 @@ impl BlockMerger {
             return None;
         }
 
-        if entry.bid.payload_and_blobs.execution_payload.parent_hash !=
-            original_bid.payload_and_blobs.execution_payload.parent_hash
-        {
+        if entry.bid.parent_hash() != original_bid.parent_hash() {
             trace!("merged bid parent hash does not match original bid parent hash");
             return None;
         }
@@ -281,13 +271,17 @@ impl BlockMerger {
     pub fn prepare_merged_payload_for_storage(
         &mut self,
         response: BlockMergeResponse,
-        original_payload: Arc<PayloadAndBlobs>,
+        original_payload: PayloadAndBlobs,
         builder_pubkey: BlsPublicKeyBytes,
     ) -> Result<PayloadEntry, PayloadMergingError> {
         debug!(?response.builder_inclusions, %response.proposer_value, "preparing merged payload for storage");
         let start_time = Instant::now();
         let bid_slot = self.curr_bid_slot;
-        let max_blobs_per_block = self.chain_info.max_blobs_per_block();
+        let max_blobs_per_block = self
+            .local_cache
+            .get_chain_info()
+            .expect("chain info should be cached")
+            .max_blobs_per_block();
 
         let base_block_data = match self.appendable_blocks.get(&response.base_block_hash) {
             Some(data) => data,
@@ -329,7 +323,7 @@ impl BlockMerger {
 
         let blobs = &self.best_mergeable_orders.mergeable_blob_bundles;
 
-        let mut merged_blobs_bundle = original_payload.blobs_bundle.clone();
+        let mut merged_blobs_bundle = original_payload.blobs_bundle.as_ref().to_owned();
         append_merged_blobs(
             &mut merged_blobs_bundle,
             blobs,
@@ -339,10 +333,10 @@ impl BlockMerger {
 
         let withdrawals_root = response.execution_payload.withdrawals_root();
 
-        let payload_and_blobs = Arc::new(PayloadAndBlobs {
-            execution_payload: response.execution_payload,
-            blobs_bundle: merged_blobs_bundle,
-        });
+        let payload_and_blobs = PayloadAndBlobs {
+            execution_payload: Arc::new(response.execution_payload),
+            blobs_bundle: Arc::new(merged_blobs_bundle),
+        };
 
         let bid_data = PayloadBidData {
             withdrawals_root,
@@ -354,12 +348,7 @@ impl BlockMerger {
 
         trace!(%block_hash, %response.proposer_value, "blobs appended to merged payload");
 
-        let new_bid = PayloadEntry {
-            payload_and_blobs: payload_and_blobs.clone(),
-            bid_data: bid_data.clone(),
-            bid_adjustment_data: None,
-            submission_version: None,
-        };
+        let new_bid = PayloadEntry::new_gossip(payload_and_blobs, bid_data);
 
         // Store locally to serve header requests
         self.best_merged_block = Some(BestMergedBlock {

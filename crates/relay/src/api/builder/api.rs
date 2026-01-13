@@ -4,8 +4,8 @@ use axum::{Extension, http::StatusCode, response::IntoResponse};
 use helix_common::{RelayConfig, api::builder_api::TopBidUpdate, local_cache::LocalCache};
 
 use crate::{
-    api::Api, auctioneer::AuctioneerHandle,
-    database::postgres::postgres_db_service::PostgresDatabaseService, housekeeper::CurrentSlotInfo,
+    api::Api, auctioneer::AuctioneerHandle, database::handle::DbHandle,
+    housekeeper::CurrentSlotInfo,
 };
 
 pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB
@@ -13,7 +13,7 @@ pub(crate) const MAX_PAYLOAD_LENGTH: usize = 1024 * 1024 * 20; // 20MB
 #[derive(Clone)]
 pub struct BuilderApi<A: Api> {
     pub local_cache: Arc<LocalCache>,
-    pub db: Arc<PostgresDatabaseService>,
+    pub db: DbHandle,
     pub curr_slot_info: CurrentSlotInfo,
     pub relay_config: Arc<RelayConfig>,
     /// Subscriber for TopBid updates, SSZ encoded
@@ -25,7 +25,7 @@ pub struct BuilderApi<A: Api> {
 impl<A: Api> BuilderApi<A> {
     pub fn new(
         local_cache: Arc<LocalCache>,
-        db: Arc<PostgresDatabaseService>,
+        db: DbHandle,
         relay_config: RelayConfig,
         curr_slot_info: CurrentSlotInfo,
         top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,

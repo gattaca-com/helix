@@ -15,13 +15,12 @@ use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion};
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, warn};
 
-use crate::{
-    api::service::SIMULATOR_REQUEST_TIMEOUT,
-    auctioneer::{
-        simulator::{BlockMergeRequest, SimulatorRequest, client::SimulatorClient},
-        types::{Event, SubmissionResult},
-    },
+use crate::auctioneer::{
+    simulator::{BlockMergeRequest, SimulatorRequest, client::SimulatorClient},
+    types::{Event, SubmissionResult},
 };
+
+pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Default)]
 struct LocalTelemetry {
@@ -58,6 +57,7 @@ pub struct SimulationResultInner {
 pub struct SimulatorManager {
     simulators: Vec<SimulatorClient>,
     requests: PendingRquests,
+    priority_requests: PendingRquests,
     last_bid_slot: u64,
     local_telemetry: LocalTelemetry,
     sim_result_tx: crossbeam_channel::Sender<Event>,
@@ -81,6 +81,7 @@ impl SimulatorManager {
             .collect();
 
         let requests = PendingRquests::with_capacity(200);
+        let priority_requests = PendingRquests::with_capacity(30);
 
         if !is_local_dev() {
             spawn_tracked!({
@@ -105,6 +106,7 @@ impl SimulatorManager {
         Self {
             simulators,
             requests,
+            priority_requests,
 
             last_bid_slot: 0,
             local_telemetry: LocalTelemetry::default(),
@@ -129,13 +131,15 @@ impl SimulatorManager {
         self.accept_optimistic = new;
     }
 
-    pub fn handle_sim_request(&mut self, req: SimulatorRequest) {
+    pub fn handle_sim_request(&mut self, req: SimulatorRequest, fast_track: bool) {
         assert_eq!(req.bid_slot(), self.last_bid_slot);
 
         self.local_telemetry.sims_reqs += 1;
         if let Some(id) = self.next_sim_client() {
             self.local_telemetry.sims_sent_immediately += 1;
             self.spawn_sim(id, req)
+        } else if fast_track {
+            self.priority_requests.store(req, &mut self.local_telemetry)
         } else {
             self.requests.store(req, &mut self.local_telemetry)
         }
@@ -174,7 +178,7 @@ impl SimulatorManager {
         sim.paused_until = sim.paused_until.max(paused_until); // keep highest pause
 
         if let Some(id) = self.next_sim_client() &&
-            let Some(req) = self.requests.next_req()
+            let Some(req) = self.priority_requests.next_req().or(self.requests.next_req())
         {
             self.spawn_sim(id, req);
         }
@@ -264,6 +268,7 @@ impl SimulatorManager {
 
         self.last_bid_slot = bid_slot;
         self.requests.clear(bid_slot);
+        self.priority_requests.clear(bid_slot);
         let now = Instant::now();
         for s in self.simulators.iter_mut() {
             if s.paused_until.is_some_and(|until| until < now) {
