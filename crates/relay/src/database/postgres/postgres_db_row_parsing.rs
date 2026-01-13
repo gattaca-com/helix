@@ -3,7 +3,8 @@ use chrono::{DateTime, Utc};
 use helix_common::{
     BuilderInfo, Filtering, ProposerInfo, SignedValidatorRegistrationEntry, ValidatorPreferences,
     api::{
-        builder_api::BuilderGetValidatorsResponseEntry, data_api::DataAdjustmentsResponse,
+        builder_api::BuilderGetValidatorsResponseEntry,
+        data_api::{DataAdjustmentsResponse, MergedBlockResponse},
         proposer_api::ValidatorRegistrationInfo,
     },
 };
@@ -258,6 +259,35 @@ impl FromRow for DataAdjustmentsResponse {
             adjusted_value: parse_numeric_to_u256(
                 row.get::<&str, PostgresNumeric>("adjusted_value"),
             ),
+        })
+    }
+}
+
+impl FromRow for MergedBlockResponse {
+    fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let builder_inclusions_str = row.get::<&str, &str>("builder_inclusions");
+        let builder_inclusions =
+            serde_json::from_str(builder_inclusions_str).map_err(DatabaseError::SerdeJsonError)?;
+
+        Ok(MergedBlockResponse {
+            slot: parse_i64_to_u64(row.get::<&str, i64>("slot"))?,
+            block_number: parse_i64_to_u64(row.get::<&str, i64>("block_number"))?,
+            original_block_hash: parse_bytes_to_hash(
+                row.get::<&str, &[u8]>("original_block_hash"),
+            )?,
+            block_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("block_hash"))?,
+            original_value: parse_numeric_to_u256(
+                row.get::<&str, PostgresNumeric>("original_value"),
+            ),
+            merged_value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("merged_value")),
+            original_tx_count: parse_i32_to_u64(row.get::<&str, i32>("original_tx_count"))?,
+            merged_tx_count: parse_i32_to_u64(row.get::<&str, i32>("merged_tx_count"))?,
+            original_blob_count: parse_i32_to_u64(row.get::<&str, i32>("original_blob_count"))?,
+            merged_blob_count: parse_i32_to_u64(row.get::<&str, i32>("merged_blob_count"))?,
+            builder_inclusions,
         })
     }
 }

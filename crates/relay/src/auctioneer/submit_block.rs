@@ -3,14 +3,14 @@ use std::time::Instant;
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
     self, BuilderInfo, SubmissionTrace, bid_submission::OptimisticVersion,
-    metrics::HYDRATION_CACHE_HITS, record_submission_step,
+    metrics::HYDRATION_CACHE_HITS, record_submission_step, spawn_tracked,
 };
 use helix_types::{
     BidAdjustmentData, BlockValidationError, MergeableOrdersWithPref, SignedBidSubmission,
     SubmissionVersion,
 };
 use tokio::sync::oneshot;
-use tracing::{trace, warn};
+use tracing::{error, trace, warn};
 
 use crate::{
     api::builder::error::BuilderApiError,
@@ -39,7 +39,8 @@ impl<B: BidAdjustor> Context<B> {
                     Some(res_tx)
                 };
 
-                self.simulate_and_store(validated, res_tx, slot_data);
+                let (req, entry) = self.prep_data_to_store_and_sim(validated, res_tx, slot_data);
+                self.store_data_and_sim(req, entry, false);
 
                 if self.config.block_merging_config.is_enabled &&
                     let Some(data) = merging_data
@@ -197,12 +198,12 @@ impl<B: BidAdjustor> Context<B> {
         Ok((validated, optimistic_version, merging_data))
     }
 
-    fn simulate_and_store(
+    fn prep_data_to_store_and_sim(
         &mut self,
         validated: ValidatedData,
         res_tx: Option<oneshot::Sender<SubmissionResult>>,
         slot_data: &SlotData,
-    ) {
+    ) -> (SimulatorRequest, PayloadEntry) {
         let request = BlockSimRequest::new(
             slot_data.registration_data.entry.registration.message.gas_limit,
             &validated.submission,
@@ -221,9 +222,6 @@ impl<B: BidAdjustor> Context<B> {
             version: validated.version,
         };
 
-        self.sim_manager.handle_sim_request(req, false);
-
-        let block_hash = *validated.submission.block_hash();
         let entry = PayloadEntry::new_submission(
             validated.submission,
             validated.payload_attributes.withdrawals_root,
@@ -233,7 +231,34 @@ impl<B: BidAdjustor> Context<B> {
             validated.trace,
             validated.payload_attributes.parent_beacon_block_root,
         );
+
+        (req, entry)
+    }
+
+    pub fn store_data_and_sim(
+        &mut self,
+        req: SimulatorRequest,
+        entry: PayloadEntry,
+        fast_track: bool,
+    ) {
+        let is_adjusted = entry.is_adjusted();
+        let block_hash = *req.submission.block_hash();
         self.payloads.insert(block_hash, entry);
+
+        let sub_clone = req.submission.clone();
+        let trace_clone = req.trace.clone();
+        let opt_version = req.optimistic_version();
+
+        let db = self.db.clone();
+        spawn_tracked!(async move {
+            if let Err(err) =
+                db.store_block_submission(sub_clone, trace_clone, opt_version, is_adjusted).await
+            {
+                error!(%err, "failed to store block submission")
+            }
+        });
+
+        self.sim_manager.handle_sim_request(req, fast_track);
     }
 
     fn should_process_optimistically(

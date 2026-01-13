@@ -16,6 +16,7 @@ use alloy_rpc_types::{
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolCall, sol};
+use helix_types::BuilderInclusionResult;
 use reth_ethereum::{
     Block, EthPrimitives,
     chainspec::EthChainSpec,
@@ -47,7 +48,7 @@ use crate::{
     block_merging::{
         error::BlockMergingApiError,
         types::{
-            BlockMergeRequestV1, BlockMergeResponseV1, BuilderInclusionResult, DistributionConfig,
+            BlockMergeRequestV1, BlockMergeResponseV1, DistributionConfig,
             MergeableOrderBytes, MergeableOrderRecovered, RecoveredTx, SignedTx, SimulatedOrder,
             SimulationError,
         },
@@ -784,9 +785,10 @@ where
         // Append the bundle
 
         // We can't avoid re-execution here due to the BlockBuilder API
-        for (tx, _) in
-            order.into_transactions().into_iter().zip(should_be_included).filter(|(_, sbi)| *sbi)
-        {
+        let transactions = order.into_transactions();
+        let mut txs = Vec::with_capacity(transactions.len());
+        for (tx, _) in transactions.into_iter().zip(should_be_included).filter(|(_, sbi)| *sbi) {
+            txs.push(*tx.tx_hash());
             builder.append_transaction(tx)?;
         }
 
@@ -795,9 +797,9 @@ where
             .entry(origin)
             .and_modify(|v: &mut BuilderInclusionResult| {
                 v.revenue += builder_payment;
-                v.tx_count += 1;
+                v.txs.extend(txs.clone());
             })
-            .or_insert(BuilderInclusionResult { revenue: builder_payment, tx_count: 1 });
+            .or_insert(BuilderInclusionResult { revenue: builder_payment, txs });
     }
     Ok(revenues)
 }
@@ -920,7 +922,7 @@ mod tests {
         let values = vec![U256::from(10000), U256::from(30000)];
 
         let revenues = HashMap::from_iter(addresses.iter().cloned().zip(
-            values.iter().cloned().map(|v| BuilderInclusionResult { revenue: v, tx_count: 1 }),
+            values.iter().cloned().map(|v| BuilderInclusionResult { revenue: v, txs: vec![] }),
         ));
         let updated_revenues = prepare_revenues(
             &distribution_config,
@@ -967,7 +969,7 @@ mod tests {
         let values = vec![U256::from(7), U256::from(5)];
 
         let revenues = HashMap::from_iter(addresses.iter().cloned().zip(
-            values.iter().cloned().map(|v| BuilderInclusionResult { revenue: v, tx_count: 1 }),
+            values.iter().cloned().map(|v| BuilderInclusionResult { revenue: v, txs: vec![] }),
         ));
         let updated_revenues = prepare_revenues(
             &distribution_config,

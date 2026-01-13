@@ -13,7 +13,7 @@ use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock, SignedValidatorRe
 use http::HeaderValue;
 use parking_lot::RwLock;
 use rustc_hash::FxHashSet;
-use tracing::{error, info};
+use tracing::error;
 
 use crate::{
     BuilderConfig, BuilderInfo, ProposerInfo, SignedValidatorRegistrationEntry,
@@ -252,11 +252,6 @@ impl LocalCache {
         self.proposer_duties.read().clone()
     }
 
-    pub fn process_slot(&self, head_slot: u64) {
-        info!(head_slot, "Processing new slot in local cache, clearing old data");
-        self.merged_blocks.clear();
-    }
-
     pub fn save_merged_block(&self, merged_block: MergedBlock) {
         self.merged_blocks.insert(merged_block.block_hash(), merged_block);
     }
@@ -328,6 +323,14 @@ impl LocalCache {
             }
         }
         registrations
+    }
+
+    pub fn get_merged_blocks(&self) -> Vec<MergedBlock> {
+        self.merged_blocks.iter().map(|b| b.value().clone()).collect()
+    }
+
+    pub fn clear_merged_blocks(&self) {
+        self.merged_blocks.clear();
     }
 }
 

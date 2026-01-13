@@ -5,7 +5,7 @@ use std::{
 };
 
 use alloy_consensus::{Bytes48, Transaction, TxEip4844, TxEnvelope, TxType};
-use alloy_primitives::{Address, B256, Bytes, U256};
+use alloy_primitives::{Address, B256, Bytes, U256, hex};
 use alloy_rlp::Decodable;
 use helix_common::{
     RelayConfig, local_cache::LocalCache, metrics::MERGE_TRACE_LATENCY, utils::utcnow_ms,
@@ -231,10 +231,18 @@ impl BlockMerger {
                 .iter()
                 .filter(|o| match &o.order {
                     MergeableOrder::Tx(tx) => {
+                        if is_blob_transaction(&tx.transaction) {
+                            trace!(tx = ?tx.transaction, "blob transaction in best mergeable orders tx");
+                        }
                         !self.base_txs_set.contains(tx.transaction.as_slice())
                     }
                     MergeableOrder::Bundle(b) => {
-                        !b.transactions.iter().any(|t| self.base_txs_set.contains(t.as_slice()))
+                        !b.transactions.iter().any(|t| {
+                            if is_blob_transaction(t) {
+                                trace!(tx = ?t, "blob transaction in best mergeable orders bundle");
+                            }
+                            self.base_txs_set.contains(t.as_slice())
+                        })
                     }
                 })
                 .cloned(),
@@ -308,6 +316,7 @@ impl BlockMerger {
         self.local_cache.save_merged_block(MergedBlock {
             slot: bid_slot,
             block_number: response.execution_payload.block_number,
+            original_block_hash: response.base_block_hash,
             block_hash,
             original_value: base_block_data.value,
             merged_value: response.proposer_value,
@@ -522,7 +531,10 @@ pub fn get_mergeable_orders(
         .as_slice()
         .iter()
         .filter_map(|order| match order_to_mergeable(order, txs, &blob_versioned_hashes) {
-            Err(_) => None,
+            Err(err) => {
+                debug!(?order, ?err, "dropping invalid order during mergeable orders extraction");
+                None
+            }
             other => Some(other),
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -546,6 +558,7 @@ fn order_to_mergeable(
             };
             if is_blob_transaction(raw_tx) {
                 // If the tx references bundles not in the block, we drop it
+                trace!(raw_tx = ?raw_tx, "validating blob transaction in order");
                 validate_blobs(raw_tx, blob_versioned_hashes)?;
             }
             validate_builder_payment(raw_tx)?;
@@ -571,6 +584,7 @@ fn order_to_mergeable(
 
                     if is_blob_transaction(raw_tx) {
                         // If the tx references bundles not in the block, we drop the bundle
+                        trace!(raw_tx = ?raw_tx, "validating blob transaction in bundle order");
                         validate_blobs(raw_tx, blob_versioned_hashes)?;
                     }
 
@@ -648,17 +662,29 @@ fn blobs_bundle_to_hashmap(
         .collect()
 }
 
-fn is_blob_transaction(raw_tx: &[u8]) -> bool {
+fn is_blob_transaction(raw_tx: &Bytes) -> bool {
     // First byte is always the transaction type, or >= 0xc0 for legacy
     // (source: https://eips.ethereum.org/EIPS/eip-2718)
     raw_tx.first().is_some_and(|&b| b == TxType::Eip4844)
 }
 
 fn get_tx_versioned_hashes(mut raw_tx: &[u8]) -> Vec<B256> {
-    use alloy_consensus::transaction::RlpEcdsaDecodableTx;
-    TxEip4844::rlp_decode_with_signature(&mut raw_tx)
-        .map(|(b, _)| b.blob_versioned_hashes)
-        .unwrap_or(vec![])
+    let tx = match TxEnvelope::decode(&mut raw_tx) {
+        Ok(tx) => tx,
+        Err(err) => {
+            warn!(?err, "failed to decode transaction for versioned hash extraction");
+            return vec![];
+        },
+    };
+    match tx {
+        TxEnvelope::Eip4844(tx_eip4844) => {
+            match tx_eip4844.blob_versioned_hashes() {
+                Some(vhs) => vhs.to_vec(),
+                None => vec![],
+            }
+        }
+        _ => vec![],
+    }
 }
 
 fn calculate_versioned_hash(commitment: Bytes48) -> B256 {

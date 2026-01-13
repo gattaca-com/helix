@@ -37,6 +37,9 @@ use tracing::{debug, error, info, info_span, trace, warn};
 pub use types::{
     Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, SubmissionPayload,
 };
+pub use types::{
+    Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, SubmissionPayload,
+};
 use worker::{RegWorker, SubWorker};
 
 pub use crate::auctioneer::{
@@ -349,10 +352,10 @@ impl State {
                     return;
                 };
 
-                if let Some((_, sim_request)) =
+                if let Some((adjusted_block, sim_request)) =
                     ctx.bid_adjustor.try_apply_adjustments(original_bid, slot_data, true)
                 {
-                    ctx.sim_manager.handle_sim_request(sim_request, true);
+                    ctx.store_data_and_sim(sim_request, adjusted_block, true);
                 }
             }
 

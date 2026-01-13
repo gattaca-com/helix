@@ -12,7 +12,7 @@ use alloy_primitives::{B256, U256};
 use helix_common::{
     BuilderConfig, BuilderInfo, ProposerDuty, RelayConfig, SignedValidatorRegistrationEntry,
     api::builder_api::BuilderGetValidatorsResponseEntry, chain_info::ChainInfo, is_local_dev,
-    local_cache::LocalCache, task, utils::utcnow_dur,
+    local_cache::LocalCache, spawn_tracked, task, utils::utcnow_dur,
 };
 use helix_types::{BlsPublicKeyBytes, Epoch, Slot, SlotClockTrait};
 use tokio::sync::{Mutex, broadcast};
@@ -48,6 +48,8 @@ struct HousekeeperSlots {
     // updating can take >> slot time, so we avoid concurrent updates by locking the mutex
     updating_proposer_duties: Arc<Mutex<()>>,
     updating_refreshed_validators: Arc<Mutex<()>>,
+    updating_trusted_proposers: Arc<Mutex<()>>,
+    saving_merged_blocks: Arc<Mutex<()>>,
 }
 
 impl HousekeeperSlots {
@@ -219,6 +221,68 @@ impl Housekeeper {
                             housekeeper.slots.update_refreshed_validators(head_slot);
                         }
                         info!(duration = ?start.elapsed(), "refresh validators task completed");
+                    }
+                    .in_current_span(),
+                );
+            }
+        }
+
+        // builder info updated every slot
+        let housekeeper = self.clone();
+        task::spawn(
+            file!(),
+            line!(),
+            async move {
+                let Ok(_guard) = housekeeper.slots.updating_builder_infos.try_lock() else {
+                    warn!("builder info update already in progress");
+                    return;
+                };
+                let start = Instant::now();
+                if let Err(err) = housekeeper.sync_builder_info_changes().await {
+                    error!(%err, "failed to sync builder info changes");
+                }
+                info!(duration = ?start.elapsed(), "sync builder info task completed");
+            }
+            .in_current_span(),
+        );
+
+        // save merged blocks
+        let housekeeper = self.clone();
+        spawn_tracked!(async move {
+            let Ok(_guard) = housekeeper.slots.saving_merged_blocks.try_lock() else {
+                warn!("merged blocks save already in progress");
+                return;
+            };
+            let start = Instant::now();
+            let merged_blocks = housekeeper.auctioneer.get_merged_blocks();
+            if let Err(err) = housekeeper.db.save_merged_blocks(&merged_blocks).await {
+                error!(%err, "failed to save merged blocks");
+            }
+            housekeeper.auctioneer.clear_merged_blocks();
+            info!(duration = ?start.elapsed(), "save merged blocks task completed");
+        });
+
+        // trusted proposers
+        if self.should_update_trusted_proposers(head_slot.as_u64()) {
+            if is_local_dev() {
+                warn!("skipping refresh of trusted proposers")
+            } else {
+                let housekeeper = self.clone();
+                task::spawn(
+                    file!(),
+                    line!(),
+                    async move {
+                        let Ok(_guard) = housekeeper.slots.updating_trusted_proposers.try_lock() else {
+                            warn!("trusted proposer update already in progress");
+                            return;
+                        };
+                        let start = Instant::now();
+                        if let Err(err) = housekeeper.update_trusted_proposers().await {
+                            error!(%err, "failed to update trusted proposers");
+                        } else {
+                            housekeeper.slots.update_trusted_proposers(head_slot);
+                        }
+                        info!(duration = ?start.elapsed(), "update trusted proposers task completed");
                     }
                     .in_current_span(),
                 );

@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use alloy_primitives::{Address, B256, U256};
 use chrono::{DateTime, Utc};
-use helix_types::{BlsPublicKey, BlsPublicKeyBytes, Slot};
+use helix_types::{BlsPublicKey, BlsPublicKeyBytes, BuilderInclusionResult, Slot};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -152,6 +154,34 @@ pub struct ProposerHeaderDeliveredParams {
     pub proposer_pubkey: Option<BlsPublicKey>,
     pub limit: Option<u64>,
     pub order_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct MergedBlockResponse {
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub slot: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub block_number: u64,
+    pub original_block_hash: B256,
+    pub block_hash: B256,
+    #[serde(with = "serde_utils::quoted_u256")]
+    pub original_value: U256,
+    #[serde(with = "serde_utils::quoted_u256")]
+    pub merged_value: U256,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub original_tx_count: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub merged_tx_count: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub original_blob_count: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub merged_blob_count: u64,
+    pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub struct MergedBlockParams {
+    pub slot: Slot,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
