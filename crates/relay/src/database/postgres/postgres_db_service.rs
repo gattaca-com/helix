@@ -26,11 +26,8 @@ use helix_common::{
     metrics::DbMetricRecord,
     utils::{alert_discord, utcnow_ms},
 };
-use helix_types::{
-    BlsPublicKeyBytes, MergedBlock, SignedBidSubmission, Slot,
-};
+use helix_types::{BlsPublicKeyBytes, MergedBlock, SignedBidSubmission, Slot};
 use rustc_hash::FxHashSet;
-use tokio::sync::oneshot;
 use tokio_postgres::{NoTls, types::ToSql};
 use tracing::{error, info, instrument, warn};
 
@@ -48,14 +45,6 @@ use crate::database::{
 };
 
 pub enum DbRequest {
-    GetValidatorRegistration {
-        pub_key: BlsPublicKeyBytes,
-        response: oneshot::Sender<Result<SignedValidatorRegistrationEntry, DatabaseError>>,
-    },
-    GetValidatorRegistrationsForPubKeys {
-        pub_keys: Vec<BlsPublicKeyBytes>,
-        response: oneshot::Sender<Result<Vec<SignedValidatorRegistrationEntry>, DatabaseError>>,
-    },
     SaveTooLateGetPayload {
         slot: u64,
         proposer_pub_key: BlsPublicKeyBytes,
@@ -76,16 +65,6 @@ pub enum DbRequest {
         reason: String,
         failsafe_triggered: Arc<AtomicBool>,
     },
-    GetBids {
-        filters: BidFilters,
-        validator_preferences: Arc<ValidatorPreferences>,
-        response: oneshot::Sender<Result<Vec<BidSubmissionDocument>, DatabaseError>>,
-    },
-    GetDeliveredPayloads {
-        filters: BidFilters,
-        validator_preferences: Arc<ValidatorPreferences>,
-        response: oneshot::Sender<Result<Vec<DeliveredPayloadDocument>, DatabaseError>>,
-    },
     SaveGetHeaderCall {
         params: GetHeaderParams,
         best_block_hash: B256,
@@ -104,25 +83,14 @@ pub enum DbRequest {
         block_hash: B256,
         trace: GossipedPayloadTrace,
     },
-    GetTrustedProposers {
-        response: oneshot::Sender<Result<Vec<ProposerInfo>, DatabaseError>>,
-    },
     SaveInclusionList {
         inclusion_list: InclusionListWithMetadata,
         slot: u64,
         block_parent_hash: B256,
         proposer_pubkey: BlsPublicKeyBytes,
     },
-    GetBlockAdjustmentsForSlot {
-        slot: Slot,
-        response: oneshot::Sender<Result<Vec<DataAdjustmentsResponse>, DatabaseError>>,
-    },
     SaveBlockAdjustmentsData {
         entry: DataAdjustmentsEntry,
-    },
-    GetProposerHeaderDelivered {
-        params: ProposerHeaderDeliveredParams,
-        response: oneshot::Sender<Result<Vec<ProposerHeaderDeliveredResponse>, DatabaseError>>,
     },
     SetKnownValidators {
         known_validators: Vec<ValidatorSummary>,
@@ -134,6 +102,9 @@ pub enum DbRequest {
         block_hash: B256,
         failsafe_trigger: Arc<AtomicBool>,
         adjustments_enabled: Arc<AtomicBool>,
+    },
+    SaveMergedBlocks {
+        blocks: Vec<MergedBlock>,
     },
 }
 
@@ -515,15 +486,6 @@ impl PostgresDatabaseService {
 
     async fn handle_db_request(&self, request: DbRequest) {
         match request {
-            DbRequest::GetValidatorRegistration { pub_key, response } => {
-                let result = self.get_validator_registration(&pub_key).await;
-                let _ = response.send(result);
-            }
-            DbRequest::GetValidatorRegistrationsForPubKeys { pub_keys, response } => {
-                let pub_key_refs: Vec<&BlsPublicKeyBytes> = pub_keys.iter().collect();
-                let result = self.get_validator_registrations_for_pub_keys(&pub_key_refs).await;
-                let _ = response.send(result);
-            }
             DbRequest::SaveTooLateGetPayload {
                 slot,
                 proposer_pub_key,
@@ -572,14 +534,6 @@ impl PostgresDatabaseService {
                     ));
                 }
             }
-            DbRequest::GetBids { filters, validator_preferences, response } => {
-                let result = self.get_bids(&filters, validator_preferences).await;
-                let _ = response.send(result);
-            }
-            DbRequest::GetDeliveredPayloads { filters, validator_preferences, response } => {
-                let result = self.get_delivered_payloads(&filters, validator_preferences).await;
-                let _ = response.send(result);
-            }
             DbRequest::SaveGetHeaderCall {
                 params,
                 best_block_hash,
@@ -613,10 +567,6 @@ impl PostgresDatabaseService {
                     error!(%err, "failed to store gossiped payload trace")
                 }
             }
-            DbRequest::GetTrustedProposers { response } => {
-                let result = self.get_trusted_proposers().await;
-                let _ = response.send(result);
-            }
             DbRequest::SaveInclusionList {
                 inclusion_list,
                 slot,
@@ -635,18 +585,10 @@ impl PostgresDatabaseService {
                     error!(%slot, "failed to save inclusion list Errors: {:?}", err);
                 }
             }
-            DbRequest::GetBlockAdjustmentsForSlot { slot, response } => {
-                let result = self.get_block_adjustments_for_slot(slot).await;
-                let _ = response.send(result);
-            }
             DbRequest::SaveBlockAdjustmentsData { entry } => {
                 if let Err(err) = self.save_block_adjustments_data(entry).await {
                     error!(%err, "failed to save block adjustments data");
                 }
-            }
-            DbRequest::GetProposerHeaderDelivered { params, response } => {
-                let result = self.get_proposer_header_delivered(&params).await;
-                let _ = response.send(result);
             }
             DbRequest::SetKnownValidators { known_validators } => {
                 if let Err(err) = self.set_known_validators(known_validators).await {
@@ -667,6 +609,11 @@ impl PostgresDatabaseService {
                         "{} {} failed to disable adjustments in database, pulling the failsafe trigger",
                         err, block_hash
                     ));
+                }
+            }
+            DbRequest::SaveMergedBlocks { blocks } => {
+                if let Err(err) = self.save_merged_blocks(&blocks).await {
+                    error!(%err, "failed to save merged blocks");
                 }
             }
         }

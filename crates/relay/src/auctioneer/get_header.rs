@@ -1,7 +1,5 @@
 use std::sync::atomic::Ordering;
 
-use std::sync::atomic::Ordering;
-
 use alloy_primitives::B256;
 use helix_common::api::proposer_api::GetHeaderParams;
 use tokio::sync::oneshot;
@@ -42,7 +40,7 @@ impl<B: BidAdjustor> Context<B> {
             return Ok(merged_bid);
         };
 
-        if self.adjustments_enabled.load(Ordering::Relaxed) &&
+        if self.cache.adjustments_enabled.load(Ordering::Relaxed) &&
             let Some((adjusted_bid, sim_request)) =
                 self.bid_adjustor.try_apply_adjustments(original_bid, slot_data, false)
         {

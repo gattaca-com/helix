@@ -37,9 +37,6 @@ use tracing::{debug, error, info, info_span, trace, warn};
 pub use types::{
     Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, SubmissionPayload,
 };
-pub use types::{
-    Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, SubmissionPayload,
-};
 use worker::{RegWorker, SubWorker};
 
 pub use crate::auctioneer::{

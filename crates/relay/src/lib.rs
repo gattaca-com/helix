@@ -12,7 +12,7 @@ pub use crate::{
     auctioneer::{
         AuctioneerHandle, Event, PayloadEntry, RegWorkerHandle, SimulatorClient, SimulatorRequest,
         SlotData, SubmissionPayload, spawn_workers,
-    , SimulatorRequest, SlotData, SubmissionPayload},
+    },
     beacon::start_beacon_client,
     database::{
         DbRequest, PendingBlockSubmissionValue, handle::DbHandle,

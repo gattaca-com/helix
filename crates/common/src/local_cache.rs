@@ -30,6 +30,7 @@ use crate::{
 const ESTIMATED_TRUSTED_PROPOSERS: usize = 200_000;
 const ESTIMATED_BUILDER_INFOS_UPPER_BOUND: usize = 1000;
 const MAX_PRIMEV_PROPOSERS: usize = 64;
+const VALIDATOR_REGISTRATION_UPDATE_INTERVAL: u64 = 60 * 60; // 1 hour in seconds
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuctioneerError {
@@ -117,12 +118,15 @@ impl LocalCache {
         let trusted_proposers = Arc::new(DashMap::with_capacity(ESTIMATED_TRUSTED_PROPOSERS));
         let primev_proposers = Arc::new(DashSet::with_capacity(MAX_PRIMEV_PROPOSERS));
         let kill_switch = Arc::new(AtomicBool::new(false));
-        let proposer_duties = Arc::new(RwLock::new(Vec::new()));
+        let proposer_duties = Arc::new(RwLock::new(Vec::with_capacity(1000)));
         let merged_blocks = Arc::new(DashMap::with_capacity(1000));
-        let validator_registration_cache = Arc::new(DashMap::new());
-        let pending_validator_registrations = Arc::new(DashSet::new());
-        let known_validators_cache = Arc::new(RwLock::new(FxHashSet::default()));
-        let validator_pool_cache = Arc::new(DashMap::new());
+        let validator_registration_cache = Arc::new(DashMap::with_capacity(1_8000_000));
+        let pending_validator_registrations = Arc::new(DashSet::with_capacity(20_000));
+        let known_validators_cache = Arc::new(RwLock::new(FxHashSet::with_capacity_and_hasher(
+            1_200_000,
+            Default::default(),
+        )));
+        let validator_pool_cache = Arc::new(DashMap::with_capacity(1000));
         let adjustments_enabled = Arc::new(AtomicBool::new(false));
         let adjustments_failsafe_trigger = Arc::new(AtomicBool::new(false));
 
@@ -267,7 +271,10 @@ impl LocalCache {
         if let Some(existing_entry) =
             self.validator_registration_cache.get(&registration.message.pubkey) &&
             existing_entry.registration_info.registration.message.timestamp >=
-                registration.message.timestamp.saturating_sub(60 * 60) &&
+                registration
+                    .message
+                    .timestamp
+                    .saturating_sub(VALIDATOR_REGISTRATION_UPDATE_INTERVAL) &&
             existing_entry.registration_info.registration.message.fee_recipient ==
                 registration.message.fee_recipient &&
             existing_entry.registration_info.registration.message.gas_limit ==

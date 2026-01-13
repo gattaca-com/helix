@@ -674,15 +674,13 @@ fn get_tx_versioned_hashes(mut raw_tx: &[u8]) -> Vec<B256> {
         Err(err) => {
             warn!(?err, "failed to decode transaction for versioned hash extraction");
             return vec![];
-        },
+        }
     };
     match tx {
-        TxEnvelope::Eip4844(tx_eip4844) => {
-            match tx_eip4844.blob_versioned_hashes() {
-                Some(vhs) => vhs.to_vec(),
-                None => vec![],
-            }
-        }
+        TxEnvelope::Eip4844(tx_eip4844) => match tx_eip4844.blob_versioned_hashes() {
+            Some(vhs) => vhs.to_vec(),
+            None => vec![],
+        },
         _ => vec![],
     }
 }

@@ -14,7 +14,7 @@ use helix_common::{
     bid_submission::OptimisticVersion,
     utils::alert_discord,
 };
-use helix_types::{BlsPublicKeyBytes, SignedBidSubmission};
+use helix_types::{BlsPublicKeyBytes, MergedBlock, SignedBidSubmission};
 use tracing::error;
 
 use crate::database::{
@@ -96,11 +96,13 @@ impl DbHandle {
         submission: SignedBidSubmission,
         trace: SubmissionTrace,
         optimistic_version: OptimisticVersion,
+        is_adjusted: bool,
     ) {
         if let Err(err) = self.batch_sender.send(PendingBlockSubmissionValue {
             submission,
             trace,
             optimistic_version,
+            is_adjusted,
         }) {
             error!(%err, "failed to store block submission");
         }
@@ -201,6 +203,12 @@ impl DbHandle {
                 "{} {} failed to disable adjustments in database! Pausing all adjustments",
                 block_hash, err
             ));
+        }
+    }
+
+    pub fn save_merged_blocks(&self, blocks: Vec<MergedBlock>) {
+        if let Err(err) = self.sender.try_send(DbRequest::SaveMergedBlocks { blocks }) {
+            error!(%err, "failed to send SaveMergedBlocks request");
         }
     }
 }
