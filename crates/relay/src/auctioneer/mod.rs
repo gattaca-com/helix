@@ -28,7 +28,10 @@ use helix_common::{
     },
     chain_info::ChainInfo,
     local_cache::LocalCache,
-    metrics::{STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN, WORKER_UTIL},
+    metrics::{
+        BID_ADJUSTMENT_LATENCY, STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN,
+        WORKER_UTIL,
+    },
     record_submission_step,
     utils::pin_thread_to_core,
 };
@@ -360,9 +363,15 @@ impl State {
                     return;
                 };
 
-                if let Some((adjusted_block, sim_request, _, _)) =
+                let start = Instant::now();
+
+                if let Some((adjusted_block, sim_request, _, strategy)) =
                     ctx.bid_adjustor.try_apply_adjustments(original_bid, slot_data, true)
                 {
+                    BID_ADJUSTMENT_LATENCY
+                        .with_label_values(&[strategy])
+                        .observe(start.elapsed().as_micros() as f64);
+
                     ctx.store_data_and_sim(sim_request, adjusted_block, true);
                 }
             }

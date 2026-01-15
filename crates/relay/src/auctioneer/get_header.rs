@@ -43,11 +43,11 @@ impl<B: BidAdjustor> Context<B> {
         let original_bid = original_bid.clone();
         if self.adjustments_enabled.load(Ordering::Relaxed) {
             let start = Instant::now();
-            if let Some((adjusted_bid, sim_request, is_adjustable_slot, label)) =
+            if let Some((adjusted_bid, sim_request, is_adjustable_slot, strategy)) =
                 self.bid_adjustor.try_apply_adjustments(&original_bid, slot_data, false)
             {
                 BID_ADJUSTMENT_LATENCY
-                    .with_label_values(&[label])
+                    .with_label_values(&[strategy])
                     .observe(start.elapsed().as_micros() as f64);
 
                 self.store_data_and_sim(sim_request, adjusted_bid.clone(), true);
