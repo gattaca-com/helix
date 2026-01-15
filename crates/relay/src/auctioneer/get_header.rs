@@ -1,7 +1,7 @@
-use std::sync::atomic::Ordering;
+use std::{sync::atomic::Ordering, time::Instant};
 
 use alloy_primitives::B256;
-use helix_common::api::proposer_api::GetHeaderParams;
+use helix_common::{api::proposer_api::GetHeaderParams, metrics::BID_ADJUSTMENT_LATENCY};
 use tokio::sync::oneshot;
 use tracing::{error, warn};
 
@@ -41,14 +41,20 @@ impl<B: BidAdjustor> Context<B> {
         };
 
         let original_bid = original_bid.clone();
-        if self.adjustments_enabled.load(Ordering::Relaxed) &&
-            let Some((adjusted_bid, sim_request, is_adjustable_slot)) =
+        if self.adjustments_enabled.load(Ordering::Relaxed) {
+            let start = Instant::now();
+            if let Some((adjusted_bid, sim_request, is_adjustable_slot, strategy)) =
                 self.bid_adjustor.try_apply_adjustments(&original_bid, slot_data, false)
-        {
-            self.store_data_and_sim(sim_request, adjusted_bid.clone(), true);
+            {
+                BID_ADJUSTMENT_LATENCY
+                    .with_label_values(&[strategy])
+                    .observe(start.elapsed().as_micros() as f64);
 
-            if is_adjustable_slot {
-                return Ok(adjusted_bid);
+                self.store_data_and_sim(sim_request, adjusted_bid.clone(), true);
+
+                if is_adjustable_slot {
+                    return Ok(adjusted_bid);
+                }
             }
         }
 
