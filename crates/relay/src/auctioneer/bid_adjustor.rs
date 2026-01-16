@@ -6,7 +6,7 @@ pub trait BidAdjustor: Send + Sync + 'static {
         bid: &PayloadEntry,
         slot_data: &SlotData,
         is_dry_run: bool,
-    ) -> Option<(PayloadEntry, SimulatorRequest, bool)>;
+    ) -> Option<(PayloadEntry, SimulatorRequest, bool, &str)>;
 
     fn on_new_slot(&mut self, bid_slot: u64);
 }
@@ -19,7 +19,7 @@ impl BidAdjustor for DefaultBidAdjustor {
         _bid: &PayloadEntry,
         _slot_data: &SlotData,
         _is_dry_run: bool,
-    ) -> Option<(PayloadEntry, SimulatorRequest, bool)> {
+    ) -> Option<(PayloadEntry, SimulatorRequest, bool, &str)> {
         None
     }
 
