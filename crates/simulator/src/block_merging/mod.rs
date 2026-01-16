@@ -5,7 +5,7 @@ use std::{
 
 use alloy_consensus::{SignableTransaction, Transaction, TxEip1559};
 use alloy_eips::{eip7685::RequestsOrHash, eip7840::BlobParams};
-use alloy_primitives::{Address, B256, TxHash, U256, U512};
+use alloy_primitives::{Address, B256, TxHash, U256, U512, keccak256};
 use alloy_rpc_types::{
     beacon::{relay::BidTrace, requests::ExecutionRequestsV4},
     engine::{
@@ -15,7 +15,7 @@ use alloy_rpc_types::{
 };
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
-use alloy_sol_types::{SolCall, sol};
+use alloy_sol_types::{SolCall, SolValue, sol};
 use helix_types::BuilderInclusionResult;
 use reth_ethereum::{
     Block, EthPrimitives,
@@ -40,6 +40,7 @@ use reth_primitives::{GotExpected, Recovered};
 use revm::{
     DatabaseCommit, DatabaseRef,
     database::{CacheDB, State},
+    state::AccountInfo,
 };
 use tracing::{debug, info, warn};
 
@@ -58,6 +59,8 @@ use crate::{
 mod api;
 mod error;
 pub(crate) mod types;
+
+const DELEGATE_CALL: u8 = 1;
 
 impl BlockMergingApi {
     /// Core logic for appending additional transactions to a block.
@@ -195,10 +198,8 @@ impl BlockMergingApi {
         );
 
         // Check we have collateral for this builder
-        let Some(types::PrivateKeySigner(signer)) =
-            self.builder_collateral_map.get(&beneficiary).as_ref()
-        else {
-            return Err(BlockMergingApiError::NoSignerForBuilder(beneficiary));
+        let Some(builder_safe) = self.builder_collateral_map.get(&beneficiary) else {
+            return Err(BlockMergingApiError::NoSafeForBuilder(beneficiary));
         };
 
         // Check that block has proposer payment, otherwise reject it.
@@ -399,7 +400,7 @@ impl BlockMergingApi {
 
         self.append_payment_tx(
             &mut builder,
-            signer,
+            *builder_safe,
             &updated_revenues,
             distribution_gas_limit,
             block_base_fee_per_gas.into(),
@@ -428,7 +429,7 @@ impl BlockMergingApi {
     fn append_payment_tx<'a, BB, Ex, Ev>(
         &self,
         builder: &mut BlockBuilder<BB>,
-        signer: &PrivateKeySigner,
+        safe: Address,
         updated_revenues: &HashMap<Address, U256>,
         distribution_gas_limit: u64,
         block_base_fee_per_gas: u128,
@@ -439,46 +440,44 @@ impl BlockMergingApi {
         Ev: Evm<DB = &'a mut CachedRethDb<'a>> + 'a,
     {
         info!(target: "rpc::relay::block_merging", ?updated_revenues, "Preparing to append payment tx");
-        let distributed_value: U256 = updated_revenues.values().sum();
-        let calldata = encode_disperse_eth_calldata(updated_revenues);
 
-        // Get the chain ID from the configured provider
-        let chain_id = self.validation.provider.chain_spec().chain_id();
+        let Some(safe_info) = builder.get_state().basic_ref(safe)? else {
+            return Err(BlockMergingApiError::EmptyBuilderSafe(safe));
+        };
 
+        let calldata = encode_multisend_calldata(
+            updated_revenues,
+            safe,
+            &safe_info,
+            self.multisend_contract,
+            U256::from(distribution_gas_limit),
+            self.validation.provider.chain_spec().chain_id(),
+            &self.relay_signer.0,
+        )?;
+
+        let signer = &self.relay_signer.0;
         let signer_address = signer.address();
-
         let Some(signer_info) = builder.get_state().basic_ref(signer_address)? else {
             return Err(BlockMergingApiError::EmptyBuilderSignerAccount(signer_address));
         };
 
-        // Check there's enough balance for the payment.
-        if signer_info.balance < distributed_value {
-            return Err(BlockMergingApiError::NoBalanceInBuilderSigner {
-                address: signer_address,
-                current: signer_info.balance,
-                required: distributed_value,
-            });
-        }
-        let nonce = signer_info.nonce;
-
-        let disperse_tx = TxEip1559 {
-            chain_id,
-            nonce,
+        let multisend_tx = TxEip1559 {
+            chain_id: self.validation.provider.chain_spec().chain_id(),
+            nonce: signer_info.nonce,
             gas_limit: distribution_gas_limit,
             max_fee_per_gas: block_base_fee_per_gas,
             max_priority_fee_per_gas: 0,
-            to: self.disperse_address.into(),
-            value: distributed_value,
+            to: safe.into(),
+            value: U256::ZERO,
             access_list: Default::default(),
             input: calldata.into(),
         };
-        info!(target: "rpc::relay::block_merging", ?disperse_tx, "Signing payment tx");
 
-        let signed_disperse_tx = sign_transaction(signer, disperse_tx)?;
+        info!(target: "rpc::relay::block_merging", ?multisend_tx, "Signing payment tx");
+        let signed_multisend_tx = sign_transaction(signer, multisend_tx)?;
 
-        // Execute the disperse transaction
-        let is_success = builder.append_transaction(signed_disperse_tx)?;
-
+        // Execute the multisend transaction
+        let is_success = builder.append_transaction(signed_multisend_tx)?;
         if !is_success {
             return Err(BlockMergingApiError::RevenueAllocationReverted);
         }
@@ -499,15 +498,149 @@ fn sign_transaction(
     Ok(recovered_signed_tx)
 }
 
-/// Encodes a call to `disperseEther(address[],uint256[])` with the given recipients and values.
-pub(crate) fn encode_disperse_eth_calldata(value_by_recipient: &HashMap<Address, U256>) -> Vec<u8> {
+fn sign_safe_transaction(signer: &PrivateKeySigner, safe_tx_hash: B256) -> Vec<u8> {
+    let signature =
+        signer.sign_hash_sync(&safe_tx_hash).expect("signer is local and private key is valid");
+
+    // Format signature for Safe (r, s, v)
+    let mut sig_bytes = Vec::with_capacity(65);
+    sig_bytes.extend_from_slice(&signature.r().to_be_bytes::<32>());
+    sig_bytes.extend_from_slice(&signature.s().to_be_bytes::<32>());
+    // Convert y_parity (bool) to v byte: 27 + y_parity (0 or 1)
+    sig_bytes.push(27 + signature.v() as u8);
+
+    sig_bytes
+}
+
+pub(crate) fn encode_multisend_calldata(
+    value_by_recipient: &HashMap<Address, U256>,
+    safe: Address,
+    safe_info: &AccountInfo,
+    multisend_call_only: Address,
+    safe_tx_gas: U256,
+    chain_id: u64,
+    safe_owner_signer: &PrivateKeySigner,
+) -> Result<Vec<u8>, BlockMergingApiError> {
     sol! {
-        function disperseEther(address[] recipients, uint256[] values) external payable;
+        function multiSend(bytes transactions) external payable;
+
+        function execTransaction(
+            address to,
+            uint256 value,
+            bytes data,
+            uint8 operation,
+            uint256 safeTxGas,
+            uint256 baseGas,
+            uint256 gasPrice,
+            address gasToken,
+            address refundReceiver,
+            bytes signatures
+        ) external returns (bool);
     }
 
-    let (recipients, values) = value_by_recipient.iter().unzip();
+    let multisend_payload = build_multisend_payload(value_by_recipient);
+    let multisend_calldata = multiSendCall { transactions: multisend_payload.into() }.abi_encode();
+    let total_value: U256 = value_by_recipient.values().sum();
 
-    disperseEtherCall { recipients, values }.abi_encode()
+    if safe_info.balance < total_value {
+        return Err(BlockMergingApiError::NoBalanceInBuilderSafe {
+            address: safe,
+            current: safe_info.balance,
+            required: total_value,
+        });
+    }
+
+    let safe_tx_hash = compute_safe_tx_hash(
+        safe,
+        multisend_call_only,
+        total_value,
+        &multisend_calldata,
+        safe_tx_gas,
+        safe_info.nonce,
+        chain_id,
+    );
+
+    let sig_bytes = sign_safe_transaction(safe_owner_signer, safe_tx_hash);
+
+    let call_data = execTransactionCall {
+        to: multisend_call_only,
+        value: total_value,
+        data: multisend_calldata.into(),
+        operation: DELEGATE_CALL,
+        safeTxGas: safe_tx_gas,
+        baseGas: U256::ZERO,
+        gasPrice: U256::ZERO,
+        gasToken: Address::ZERO,
+        refundReceiver: Address::ZERO,
+        signatures: sig_bytes.into(),
+    }
+    .abi_encode();
+    Ok(call_data)
+}
+
+fn build_multisend_payload(value_by_recipient: &HashMap<Address, U256>) -> Vec<u8> {
+    let mut payload = Vec::with_capacity(value_by_recipient.len() * 85);
+
+    for (recipient, amount) in value_by_recipient {
+        // operation = CALL (0)
+        payload.push(0u8);
+
+        // to (20 bytes)
+        payload.extend_from_slice(recipient.as_slice());
+
+        // value (uint256)
+        payload.extend_from_slice(&amount.to_be_bytes::<32>());
+
+        // calldata length = 0
+        payload.extend_from_slice(&U256::ZERO.to_be_bytes::<32>());
+    }
+
+    payload
+}
+
+fn compute_safe_tx_hash(
+    safe: Address,
+    to: Address,
+    value: U256,
+    data: &[u8],
+    safe_tx_gas: U256,
+    nonce: u64,
+    chain_id: u64,
+) -> B256 {
+    let domain_separator = {
+        let domain_type_hash = keccak256("EIP712Domain(uint256 chainId,address verifyingContract)");
+        keccak256((domain_type_hash, U256::from(chain_id), safe).abi_encode())
+    };
+
+    let safe_tx_type_hash = keccak256(
+        "SafeTx(address to,uint256 value,bytes data,uint8 operation,uint256 safeTxGas,uint256 baseGas,uint256 gasPrice,address gasToken,address refundReceiver,uint256 nonce)",
+    );
+
+    let data_hash = keccak256(data);
+
+    // Encode Safe transaction data
+    let safe_tx_hash = keccak256(
+        (
+            safe_tx_type_hash,
+            to,
+            value,
+            data_hash,
+            U256::from(DELEGATE_CALL),
+            safe_tx_gas,
+            U256::ZERO,    // baseGas
+            U256::ZERO,    // gasPrice
+            Address::ZERO, // gasToken
+            Address::ZERO, // refundReceiver
+            U256::from(nonce),
+        )
+            .abi_encode(),
+    );
+
+    // EIP-712 final hash
+    keccak256(
+        ([0x19u8, 0x01u8].as_slice(), domain_separator.as_slice(), safe_tx_hash.as_slice())
+            .abi_encode(),
+    )
 }
 
 /// Computes revenue distribution, splitting merged block revenue

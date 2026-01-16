@@ -127,7 +127,7 @@ struct CliExt {
     pub relay_fee_recipient: Address,
 
     #[arg(long)]
-    pub disperse_address: Address,
+    pub multisend_contract: Address,
 
     #[arg(long)]
     pub validate_merged_blocks: bool,
@@ -142,8 +142,8 @@ impl From<CliExt> for BlockMergingConfig {
         BlockMergingConfig {
             builder_collateral_map,
             relay_fee_recipient: cli.relay_fee_recipient,
+            multisend_contract: cli.multisend_contract,
             distribution_config: Default::default(),
-            disperse_address: cli.disperse_address,
             validate_merged_blocks: cli.validate_merged_blocks,
         }
     }

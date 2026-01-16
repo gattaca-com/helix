@@ -4,8 +4,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use alloy_consensus::{Bytes48, Transaction, TxEip4844, TxEnvelope, TxType};
-use alloy_primitives::{Address, B256, Bytes, U256, hex};
+use alloy_consensus::{Bytes48, Transaction, TxEnvelope, TxType};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_rlp::Decodable;
 use helix_common::{
     RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, metrics::MERGE_TRACE_LATENCY,
