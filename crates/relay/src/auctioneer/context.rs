@@ -230,22 +230,25 @@ impl<B: BidAdjustor> Context<B> {
         self.block_merger.on_new_slot(bid_slot.as_u64());
         self.bid_adjustor.on_new_slot(bid_slot.as_u64());
 
-        // here we need to deallocate a lot of data, taking more than 1s on busy slots
-        // this is not a big issue since it 's only at the beginning of the slot, but it blocks the
-        // full event loop, which is not ideal. An alternative would be to use a buffer and
-        // overwrite the buffer slots, keeping only a block hash -> index map, however that
-        // would require us to estimate a hard upper limit on payloads received, or risk causing a
-        // missed slot
-        let payloads_to_drop = std::mem::replace(
-            &mut self.payloads,
-            FxHashMap::with_capacity_and_hasher(EXPECTED_PAYLOADS_PER_SLOT, Default::default()),
-        );
-        std::thread::spawn(move || {
-            let to_drop = payloads_to_drop.len();
-            let start = Instant::now();
-            drop(payloads_to_drop);
-            info!("dropped {} payloads in {:?}", to_drop, start.elapsed())
-        });
+        if self.payloads.len() > 0 {
+            // here we need to deallocate a lot of data, taking more than 1s on busy slots
+            // this is not a big issue since it 's only at the beginning of the slot, but it blocks
+            // the full event loop, which is not ideal. An alternative would be to use a
+            // buffer and overwrite the buffer slots, keeping only a block hash -> index
+            // map, however that would require us to estimate a hard upper limit on
+            // payloads received, or risk causing a missed slot
+
+            let payloads_to_drop = std::mem::replace(
+                &mut self.payloads,
+                FxHashMap::with_capacity_and_hasher(EXPECTED_PAYLOADS_PER_SLOT, Default::default()),
+            );
+            std::thread::spawn(move || {
+                let to_drop = payloads_to_drop.len();
+                let start = Instant::now();
+                drop(payloads_to_drop);
+                info!("dropped {} payloads in {:?}", to_drop, start.elapsed())
+            });
+        }
     }
 
     pub fn handle_merge_response(&mut self, response: BlockMergeResponse) {
