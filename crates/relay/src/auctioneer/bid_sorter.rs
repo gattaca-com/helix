@@ -206,10 +206,6 @@ impl BidSorter {
         self.forks.get(parent_hash).and_then(|s| s.curr_bid.as_ref().map(|b| b.1.block_hash))
     }
 
-    pub fn get_any_top_bid(&self) -> Option<B256> {
-        self.forks.iter().next().and_then(|(_, s)| s.curr_bid.as_ref().map(|b| b.1.block_hash))
-    }
-
     fn process_header(
         &mut self,
         new_pubkey: BlsPublicKeyBytes,

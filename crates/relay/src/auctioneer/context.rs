@@ -19,7 +19,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     api::builder::error::BuilderApiError,
     auctioneer::{
-        BlockMergeResponse, Event,
+        BlockMergeResponse,
         bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
@@ -53,13 +53,13 @@ pub struct Context<B: BidAdjustor> {
     pub bid_adjustor: B,
     pub adjustments_enabled: Arc<AtomicBool>,
     pub adjustments_failsafe_trigger: Arc<AtomicBool>,
+    pub completed_dry_run: bool,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
 const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
 
 const DB_CHECK_INTERVAL: Duration = Duration::from_secs(1);
-const ADJUSTMENTS_DRY_RUN_INTERVAL: Duration = Duration::from_millis(500);
 
 impl<B: BidAdjustor> Context<B> {
     // TODO: refactor to accept fewer parameters
@@ -72,7 +72,6 @@ impl<B: BidAdjustor> Context<B> {
         bid_sorter: BidSorter,
         cache: LocalCache,
         bid_adjustor: B,
-        auctioneer: crossbeam_channel::Sender<Event>,
     ) -> Self {
         let unknown_builder_info = BuilderInfo {
             collateral: U256::ZERO,
@@ -111,8 +110,6 @@ impl<B: BidAdjustor> Context<B> {
             adjustments_failsafe_trigger.clone(),
         );
 
-        Self::spawn_adjustments_dry_run_task(auctioneer, adjustments_enabled.clone());
-
         Self {
             chain_info,
             cache,
@@ -123,6 +120,7 @@ impl<B: BidAdjustor> Context<B> {
             bid_adjustor,
             adjustments_enabled,
             adjustments_failsafe_trigger,
+            completed_dry_run: false,
         }
     }
 
@@ -223,6 +221,7 @@ impl<B: BidAdjustor> Context<B> {
                 .res_tx
                 .send(Err(crate::api::proposer::ProposerApiError::NoExecutionPayloadFound));
         }
+        self.completed_dry_run = false;
         self.bid_sorter.process_slot(bid_slot.as_u64());
         self.version.clear();
         self.hydration_cache.clear();
@@ -304,26 +303,6 @@ impl<B: BidAdjustor> Context<B> {
                         }
                     }
                     Err(e) => tracing::error!("failed to check adjustments_enabled flag: {}", e),
-                }
-            }
-        });
-    }
-
-    fn spawn_adjustments_dry_run_task(
-        auctioneer: crossbeam_channel::Sender<Event>,
-        adjustments_enabled: Arc<AtomicBool>,
-    ) {
-        spawn_tracked!(async move {
-            let mut interval = tokio::time::interval(ADJUSTMENTS_DRY_RUN_INTERVAL);
-            loop {
-                interval.tick().await;
-
-                if !adjustments_enabled.load(Ordering::Relaxed) {
-                    continue;
-                }
-
-                if let Err(e) = auctioneer.try_send(Event::DryRunAdjustments) {
-                    error!("failed to send adjustments dry run request: {}", e);
                 }
             }
         });

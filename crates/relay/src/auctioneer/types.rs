@@ -162,6 +162,10 @@ impl PayloadEntry {
         matches!(self, Self::Submission(s) if s.is_adjusted)
     }
 
+    pub fn is_adjustable(&self) -> bool {
+        matches!(self, Self::Submission(s) if s.bid_adjustment_data.is_some())
+    }
+
     pub fn value(&self) -> &U256 {
         match &self {
             Self::Submission(s) => s.signed_bid_submission.value(),
@@ -389,7 +393,6 @@ pub enum Event {
         is_synced: bool,
     },
     MergeResult(BlockMergeResult),
-    DryRunAdjustments,
 }
 
 impl Event {
@@ -403,7 +406,6 @@ impl Event {
             Event::SimResult(_) => "SimResult",
             Event::SimulatorSync { .. } => "SimulatorSync",
             Event::MergeResult(_) => "MergeResult",
-            Event::DryRunAdjustments => "DryRunAdjustments",
         }
     }
 }
