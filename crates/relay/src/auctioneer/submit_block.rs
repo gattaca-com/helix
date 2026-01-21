@@ -2,8 +2,10 @@ use std::time::Instant;
 
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
-    self, BuilderInfo, SubmissionTrace, bid_submission::OptimisticVersion,
-    metrics::HYDRATION_CACHE_HITS, record_submission_step, spawn_tracked,
+    self, BuilderInfo, SubmissionTrace,
+    bid_submission::OptimisticVersion,
+    metrics::{BID_ADJUSTMENT_LATENCY, HYDRATION_CACHE_HITS},
+    record_submission_step, spawn_tracked,
 };
 use helix_types::{
     BidAdjustmentData, BlockValidationError, MergeableOrdersWithPref, SignedBidSubmission,
@@ -40,6 +42,22 @@ impl<B: BidAdjustor> Context<B> {
                 };
 
                 let (req, entry) = self.prep_data_to_store_and_sim(validated, res_tx, slot_data);
+
+                if !self.completed_dry_run && entry.is_adjustable() {
+                    let start = Instant::now();
+                    if let Some((adjusted_block, sim_request, _, strategy)) =
+                        self.bid_adjustor.try_apply_adjustments(&entry, slot_data, true)
+                    {
+                        self.completed_dry_run = true;
+
+                        BID_ADJUSTMENT_LATENCY
+                            .with_label_values(&[strategy])
+                            .observe(start.elapsed().as_micros() as f64);
+
+                        self.store_data_and_sim(sim_request, adjusted_block, true);
+                    }
+                }
+
                 self.store_data_and_sim(req, entry, false);
 
                 if self.config.block_merging_config.is_enabled &&

@@ -28,10 +28,7 @@ use helix_common::{
     },
     chain_info::ChainInfo,
     local_cache::LocalCache,
-    metrics::{
-        BID_ADJUSTMENT_LATENCY, STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN,
-        WORKER_UTIL,
-    },
+    metrics::{STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN, WORKER_UTIL},
     record_submission_step,
     utils::pin_thread_to_core,
 };
@@ -110,16 +107,8 @@ pub fn spawn_workers<B: BidAdjustor>(
 
         let bid_sorter = BidSorter::new(top_bid_tx);
         let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
-        let ctx = Context::new(
-            chain_info,
-            config,
-            sim_manager,
-            db,
-            bid_sorter,
-            cache,
-            bid_adjustor,
-            event_tx.clone(),
-        );
+        let ctx =
+            Context::new(chain_info, config, sim_manager, db, bid_sorter, cache, bid_adjustor);
         let id = format!("auctioneer_{auctioneer_core}");
         let auctioneer = Auctioneer { ctx, state: State::default(), tel: Telemetry::new(id) };
 
@@ -348,34 +337,6 @@ impl State {
                 ctx.handle_simulation_result((id, None));
             }
 
-            // Dry run adjustments to validate bids throughout the slot
-            // to be able to disable them before get_header is called
-            (State::Sorting(slot_data), Event::DryRunAdjustments) => {
-                let Some(best_block_hash) = ctx.bid_sorter.get_any_top_bid() else {
-                    warn!("adjustments dry run - no bids present yet");
-                    return;
-                };
-
-                let Some(original_bid) = ctx.payloads.get(&best_block_hash) else {
-                    error!(
-                        "adjustments dry run - failed to get payload from bid sorter, this should never happen!"
-                    );
-                    return;
-                };
-
-                let start = Instant::now();
-
-                if let Some((adjusted_block, sim_request, _, strategy)) =
-                    ctx.bid_adjustor.try_apply_adjustments(original_bid, slot_data, true)
-                {
-                    BID_ADJUSTMENT_LATENCY
-                        .with_label_values(&[strategy])
-                        .observe(start.elapsed().as_micros() as f64);
-
-                    ctx.store_data_and_sim(sim_request, adjusted_block, true);
-                }
-            }
-
             ///////////// VALID STATES / EVENTS /////////////
 
             // submission
@@ -588,8 +549,6 @@ impl State {
                     warn!(curr =% bid_slot, gossip_slot = payload.slot, "received early or late gossip payload");
                 }
             }
-
-            (State::Slot { .. } | State::Broadcasting { .. }, Event::DryRunAdjustments) => {}
         }
     }
 
