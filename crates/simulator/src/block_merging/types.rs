@@ -16,16 +16,15 @@ pub(crate) type RecoveredTx = Recovered<SignedTx>;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct BlockMergingConfig {
-    /// Builder coinbase -> collateral signer. The base block coinbase will accrue fees and
+    /// Builder coinbase -> collateral safe. The base block coinbase will accrue fees and
     /// disperse from its collateral address
-    pub builder_collateral_map: HashMap<Address, PrivateKeySigner>,
+    pub builder_collateral_map: HashMap<Address, Address>,
     /// Address for the relay's share of fees
     pub relay_fee_recipient: Address,
+    /// The multisend contract address.
+    pub multisend_contract: Address,
     /// Configuration for revenue distribution.
     pub distribution_config: DistributionConfig,
-    /// Address of disperse contract.
-    /// It must have a `disperseEther(address[],uint256[])` function.
-    pub disperse_address: Address,
     /// Whether to validate merged blocks or not
     pub validate_merged_blocks: bool,
 }
@@ -36,6 +35,14 @@ pub(crate) struct BlockMergingConfig {
 pub(crate) struct PrivateKeySigner(
     #[serde_as(as = "DisplayFromStr")] pub(crate) alloy_signer_local::PrivateKeySigner,
 );
+
+pub fn load_signer() -> PrivateKeySigner {
+    let signing_key_str = std::env::var("RELAY_KEY").expect("could not find RELAY_KEY in env");
+    let signing_key = signing_key_str
+        .parse::<alloy_signer_local::PrivateKeySigner>()
+        .expect("failed to parse RELAY_KEY");
+    PrivateKeySigner(signing_key)
+}
 
 /// Configuration for revenue distribution among different parties.
 /// The total basis points is 10000, which means each participant
@@ -194,7 +201,6 @@ impl MergeableOrderBytes {
 
 fn recover_transaction(tx_bytes: &Bytes) -> Result<Recovered<SignedTx>, RecoverError> {
     let mut buf = tx_bytes.as_ref();
-    debug!(target: "rpc::relay::block_merging", "Recovering transaction from bytes: {:?}", buf);
     let tx = <SignedTx as Decodable2718>::decode_2718(&mut buf)?;
     // If buffer was not fully consumed, the transaction is invalid.
     if !buf.is_empty() {
