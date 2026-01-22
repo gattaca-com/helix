@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{sync::atomic::Ordering, time::Instant};
 
 use alloy_primitives::{Address, B256, U256};
 use helix_common::{
@@ -43,7 +43,10 @@ impl<B: BidAdjustor> Context<B> {
 
                 let (req, entry) = self.prep_data_to_store_and_sim(validated, res_tx, slot_data);
 
-                if !self.completed_dry_run && entry.is_adjustable() {
+                if !self.completed_dry_run &&
+                    entry.is_adjustable() &&
+                    self.adjustments_enabled.load(Ordering::Relaxed)
+                {
                     let start = Instant::now();
                     if let Some((adjusted_block, sim_request, _, strategy)) =
                         self.bid_adjustor.try_apply_adjustments(&entry, slot_data, true)
