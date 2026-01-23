@@ -11,7 +11,7 @@ use tokio::sync::oneshot;
 use crate::{
     block_merging::types::{
         BlockMergeRequestV1, BlockMergeResponseV1, BlockMergingConfig, DistributionConfig,
-        PrivateKeySigner,
+        PrivateKeySigner, load_signer,
     },
     validation::ValidationApi,
 };
@@ -53,7 +53,7 @@ impl BlockMergingApi {
     pub fn new(validation: ValidationApi, config: BlockMergingConfig) -> Self {
         let BlockMergingConfig {
             relay_fee_recipient,
-            disperse_address,
+            multisend_contract,
             distribution_config,
             validate_merged_blocks,
             builder_collateral_map,
@@ -61,11 +61,14 @@ impl BlockMergingApi {
 
         distribution_config.validate();
 
+        let relay_signer = load_signer();
+
         let inner = Arc::new(BlockMergingApiInner {
             validation,
             relay_fee_recipient,
+            relay_signer,
             builder_collateral_map,
-            disperse_address,
+            multisend_contract,
             distribution_config,
             validate_merged_blocks,
             merging_metrics: MergingMetrics::default(),
@@ -80,12 +83,13 @@ pub(crate) struct BlockMergingApiInner {
     pub(crate) validation: ValidationApi,
     /// The address to send relay revenue to.
     pub(crate) relay_fee_recipient: Address,
-    /// Builder coinbase -> collateral signer. The base block coinbase will accrue fees and
+    /// The relay signing key
+    pub(crate) relay_signer: PrivateKeySigner,
+    /// Builder coinbase -> collateral safe. The base block coinbase will accrue fees and
     /// disperse from its collateral address
-    pub(crate) builder_collateral_map: HashMap<Address, PrivateKeySigner>,
-    /// Address of disperse contract.
-    /// It must have a `disperseEther(address[],uint256[])` function.
-    pub(crate) disperse_address: Address,
+    pub(crate) builder_collateral_map: HashMap<Address, Address>,
+    /// The multisend contract address.
+    pub(crate) multisend_contract: Address,
     /// Configuration for revenue distribution.
     pub(crate) distribution_config: DistributionConfig,
     /// Whether to validate merged blocks or not

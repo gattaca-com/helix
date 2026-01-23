@@ -27,8 +27,8 @@ pub(crate) enum BlockMergingApiError {
     BlockContext,
     #[error("failed to decode execution requests")]
     ExecutionRequests,
-    #[error("no signer found for builder: {_0}")]
-    NoSignerForBuilder(Address),
+    #[error("no safe found for builder: {_0}")]
+    NoSafeForBuilder(Address),
     #[error("could not find a proposer payment tx")]
     MissingProposerPayment,
     #[error("could not verify proposer payment tx")]
@@ -41,8 +41,10 @@ pub(crate) enum BlockMergingApiError {
     ZeroRevenueForWinningBuilder,
     #[error("signer account is empty: {_0}")]
     EmptyBuilderSignerAccount(Address),
-    #[error("signer ({address}) does not have enough balance: {current} < {required}")]
-    NoBalanceInBuilderSigner { address: Address, current: U256, required: U256 },
+    #[error("safe account is empty: {_0}")]
+    EmptyBuilderSafe(Address),
+    #[error("safe ({address}) does not have enough balance: {current} < {required}")]
+    NoBalanceInBuilderSafe { address: Address, current: U256, required: U256 },
     #[error("revenue allocation tx reverted")]
     RevenueAllocationReverted,
     #[error("reached blob limit")]
@@ -60,7 +62,7 @@ impl From<BlockMergingApiError> for ErrorObject<'static> {
         match error {
             BlockMergingApiError::MissingProposerPayment |
             BlockMergingApiError::InvalidProposerPayment |
-            BlockMergingApiError::NoSignerForBuilder(_) |
+            BlockMergingApiError::NoSafeForBuilder(_) |
             BlockMergingApiError::NotEnoughGasForPayment(_) |
             BlockMergingApiError::InvalidSignatureInBaseBlock => {
                 invalid_params_rpc_err(error.to_string())
@@ -75,7 +77,8 @@ impl From<BlockMergingApiError> for ErrorObject<'static> {
             BlockMergingApiError::ZeroRevenueForWinningBuilder |
             BlockMergingApiError::ZeroMergedBlockRevenue |
             BlockMergingApiError::EmptyBuilderSignerAccount(_) |
-            BlockMergingApiError::NoBalanceInBuilderSigner { .. } |
+            BlockMergingApiError::EmptyBuilderSafe(_) |
+            BlockMergingApiError::NoBalanceInBuilderSafe { .. } |
             BlockMergingApiError::BuilderBalanceDeltaMismatch(_) |
             BlockMergingApiError::Provider(_) => internal_rpc_err(error.to_string()),
 
