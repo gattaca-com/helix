@@ -57,6 +57,8 @@ pub struct RelayConfig {
     pub cores: CoresConfig,
     #[serde(default = "default_bool::<true>")]
     pub gossip_payload_on_header: bool,
+    #[serde(default = "default_u16::<4040>")]
+    pub api_port: u16,
 }
 
 impl RelayConfig {
@@ -90,6 +92,7 @@ impl RelayConfig {
                 reg_workers: vec![],
             },
             gossip_payload_on_header: false,
+            api_port: 4040,
         }
     }
 }
@@ -182,7 +185,7 @@ pub fn load_keypair() -> BlsKeypair {
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct PostgresConfig {
     pub hostname: String,
-    #[serde(default = "default_port")]
+    #[serde(default = "default_u16::<5432>")]
     pub port: u16,
     pub db_name: String,
     pub user: String,
@@ -204,8 +207,8 @@ pub struct BlockMergingConfig {
     pub is_dry_run: bool,
 }
 
-fn default_port() -> u16 {
-    5432
+pub const fn default_u16<const U: u16>() -> u16 {
+    U
 }
 
 pub const fn default_bool<const B: bool>() -> bool {
