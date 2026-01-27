@@ -25,7 +25,8 @@ use reth_ethereum::{
         primitives::{
             Evm, EvmEnvFor, EvmError,
             block::{BlockExecutionError, BlockExecutor},
-            execute::BlockBuilder as RethBlockBuilder, tx,
+            execute::BlockBuilder as RethBlockBuilder,
+            tx,
         },
         revm::{cached::CachedReads, database::StateProviderDatabase},
     },
@@ -38,7 +39,10 @@ use reth_node_builder::{
 };
 use reth_primitives::{GotExpected, Recovered};
 use revm::{
-    DatabaseCommit, DatabaseRef, database::{CacheDB, State}, interpreter::gas, state::AccountInfo
+    DatabaseCommit, DatabaseRef,
+    database::{CacheDB, State},
+    interpreter::gas,
+    state::AccountInfo,
 };
 use tracing::{debug, info, warn};
 
@@ -388,7 +392,8 @@ impl BlockMergingApi {
             return Err(BlockMergingApiError::ZeroRevenueForWinningBuilder);
         }
 
-        let remaining_gas = MAX_TX_GAS_LIMIT_OSAKA.min(header.gas_limit.saturating_sub(builder.gas_used));
+        let remaining_gas =
+            MAX_TX_GAS_LIMIT_OSAKA.min(header.gas_limit.saturating_sub(builder.gas_used));
 
         self.append_payment_tx(
             &mut builder,
@@ -1012,7 +1017,6 @@ where
             Ok(result) => {
                 let tx_gas_used = result.result.gas_used();
                 if result.result.is_success() || can_revert {
-
                     if gas_used + tx_gas_used > available_gas {
                         if !can_be_dropped {
                             return Err(SimulationError::OutOfBlockGas);

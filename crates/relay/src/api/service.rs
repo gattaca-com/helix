@@ -125,7 +125,8 @@ pub async fn start_api_service<A: Api>(
         terminating,
     );
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:4040").await.unwrap();
+    let listener =
+        tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config.api_port)).await.unwrap();
     match axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await {
         Ok(_) => info!("Server exited successfully"),
         Err(e) => error!("Server exited with error: {e}"),
