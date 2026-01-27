@@ -12,7 +12,7 @@ use helix_types::{
     SubmissionVersion,
 };
 use tokio::sync::oneshot;
-use tracing::{error, trace, warn};
+use tracing::{error, trace};
 
 use crate::{
     api::builder::error::BuilderApiError,
@@ -73,8 +73,6 @@ impl<B: BidAdjustor> Context<B> {
                         self.block_merger.update_base_block(base_block);
                     }
                     self.request_merged_block();
-                } else {
-                    warn!("Block merging is disabled or no merging data provided");
                 }
             }
 

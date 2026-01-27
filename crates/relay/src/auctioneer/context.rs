@@ -229,7 +229,7 @@ impl<B: BidAdjustor> Context<B> {
         self.block_merger.on_new_slot(bid_slot.as_u64());
         self.bid_adjustor.on_new_slot(bid_slot.as_u64());
 
-        if self.payloads.len() > 0 {
+        if !self.payloads.is_empty() {
             // here we need to deallocate a lot of data, taking more than 1s on busy slots
             // this is not a big issue since it 's only at the beginning of the slot, but it blocks
             // the full event loop, which is not ideal. An alternative would be to use a
