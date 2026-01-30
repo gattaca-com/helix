@@ -116,6 +116,7 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                         .get::<&str, Option<i64>>("delay_ms")
                         .and_then(|v| parse_i64_to_u64(v).ok()),
                     disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
+                    disable_optimistic: row.get::<&str, bool>("disable_optimistic"),
                 },
             },
         })
@@ -135,6 +136,7 @@ impl FromRow for ValidatorPreferences {
                 .get::<&str, Option<i64>>("delay_ms")
                 .and_then(|v| parse_i64_to_u64(v).ok()),
             disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
+            disable_optimistic: row.get::<&str, bool>("disable_optimistic"),
         })
     }
 }
@@ -212,6 +214,7 @@ impl FromRow for SignedValidatorRegistrationEntry {
                         .get::<&str, Option<i64>>("delay_ms")
                         .and_then(|v| parse_i64_to_u64(v).ok()),
                     disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
+                    disable_optimistic: row.get::<&str, bool>("disable_optimistic"),
                 },
             },
             inserted_at: parse_timestamptz_to_u64(

@@ -21,6 +21,9 @@ pub struct ValidatorPreferences {
 
     #[serde(default)]
     pub disable_inclusion_lists: bool,
+
+    #[serde(default)]
+    pub disable_optimistic: bool,
 }
 
 impl Default for ValidatorPreferences {
@@ -31,6 +34,7 @@ impl Default for ValidatorPreferences {
             header_delay: true,
             delay_ms: None,
             disable_inclusion_lists: false,
+            disable_optimistic: false,
         }
     }
 }
@@ -72,6 +76,7 @@ pub struct BuilderValidatorPreferences {
     pub censoring: bool,
     pub filtering: Filtering,
     pub trusted_builders: Option<Vec<String>>,
+    pub disable_optimistic: bool,
 }
 
 impl From<ValidatorPreferences> for BuilderValidatorPreferences {
@@ -80,6 +85,7 @@ impl From<ValidatorPreferences> for BuilderValidatorPreferences {
             censoring: preferences.filtering.is_regional(),
             filtering: preferences.filtering,
             trusted_builders: preferences.trusted_builders.clone(),
+            disable_optimistic: preferences.disable_optimistic,
         }
     }
 }
@@ -92,6 +98,7 @@ fn test_validator_preferences_serde() {
         header_delay: false,
         delay_ms: Some(1000),
         disable_inclusion_lists: true,
+        disable_optimistic: true,
     };
 
     let json = serde_json::to_string(&preferences).unwrap();
