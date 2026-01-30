@@ -2250,10 +2250,11 @@ impl PostgresDatabaseService {
                         submitted_value,
                         adjusted_block_hash,
                         adjusted_value,
-                        is_dry_run
+                        is_dry_run,
+                        metadata
                     )
                 VALUES
-                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ",
                 &[
                     &(entry.slot.as_u64() as i64),
@@ -2266,6 +2267,7 @@ impl PostgresDatabaseService {
                     &entry.adjusted_block_hash.as_slice(),
                     &PostgresNumeric::from(entry.adjusted_value),
                     &entry.is_dry_run,
+                    &entry.metadata,
                 ],
             )
             .await?;
