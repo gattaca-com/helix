@@ -75,6 +75,7 @@ impl<A: Api> ProposerApi<A> {
             header_delay: proposer_api.validator_preferences.header_delay,
             delay_ms: proposer_api.validator_preferences.delay_ms,
             disable_inclusion_lists: proposer_api.validator_preferences.disable_inclusion_lists,
+            disable_optimistic: proposer_api.validator_preferences.disable_optimistic,
         };
 
         let preferences_header = headers.get("x-preferences");
@@ -106,6 +107,10 @@ impl<A: Api> ProposerApi<A> {
 
             if let Some(header_delay) = preferences.header_delay {
                 validator_preferences.header_delay = header_delay;
+            }
+
+            if let Some(disable_optimistic) = preferences.disable_optimistic {
+                validator_preferences.disable_optimistic = disable_optimistic;
             }
         }
 

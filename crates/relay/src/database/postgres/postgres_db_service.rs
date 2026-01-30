@@ -79,6 +79,7 @@ struct PreferenceParams {
     trusted_builders: Option<Vec<String>>,
     header_delay: bool,
     disable_inclusion_lists: bool,
+    disable_optimistic: bool,
 }
 
 struct TrustedProposerParams {
@@ -370,6 +371,7 @@ impl PostgresDatabaseService {
                         .registration_info
                         .preferences
                         .disable_inclusion_lists,
+                    disable_optimistic: entry.registration_info.preferences.disable_optimistic,
                 });
 
                 if name.is_some() {
@@ -426,15 +428,16 @@ impl PostgresDatabaseService {
                         &tuple.trusted_builders,
                         &tuple.header_delay,
                         &tuple.disable_inclusion_lists,
+                        &tuple.disable_optimistic,
                     ]
                 })
                 .collect();
 
             // Construct the SQL statement with multiple VALUES clauses
             let mut sql = String::from(
-                "INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay, disable_inclusion_lists) VALUES ",
+                "INSERT INTO validator_preferences (public_key, filtering, trusted_builders, header_delay, disable_inclusion_lists, disable_optimistic) VALUES ",
             );
-            let num_params_per_row = 5;
+            let num_params_per_row = 6;
             let values_clauses: Vec<String> = (0..params.len() / num_params_per_row)
                 .map(|row| {
                     let placeholders: Vec<String> = (1..=num_params_per_row)
@@ -447,11 +450,12 @@ impl PostgresDatabaseService {
             // Join the values clauses and append them to the SQL statement
             sql.push_str(&values_clauses.join(", "));
             sql.push_str(
-                " ON CONFLICT (public_key) DO UPDATE SET 
-                            filtering = excluded.filtering, 
-                            trusted_builders = excluded.trusted_builders, 
+                " ON CONFLICT (public_key) DO UPDATE SET
+                            filtering = excluded.filtering,
+                            trusted_builders = excluded.trusted_builders,
                             header_delay = excluded.header_delay,
-                            disable_inclusion_lists = excluded.disable_inclusion_lists
+                            disable_inclusion_lists = excluded.disable_inclusion_lists,
+                            disable_optimistic = excluded.disable_optimistic
                         WHERE validator_preferences.manual_override = FALSE",
             );
 
@@ -971,15 +975,17 @@ impl PostgresDatabaseService {
                     header_delay,
                     delay_ms,
                     disable_inclusion_lists,
+                    disable_optimistic,
                     manual_override
-                ) VALUES ($1, $2, $3, $4, $5, $6, TRUE)
-                ON CONFLICT (public_key) 
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE)
+                ON CONFLICT (public_key)
                 DO UPDATE SET
                     filtering = EXCLUDED.filtering,
                     trusted_builders = EXCLUDED.trusted_builders,
                     header_delay = EXCLUDED.header_delay,
                     delay_ms = EXCLUDED.delay_ms,
                     disable_inclusion_lists = EXCLUDED.disable_inclusion_lists,
+                    disable_optimistic = EXCLUDED.disable_optimistic,
                     manual_override = TRUE
                 ",
                 &[
@@ -989,6 +995,7 @@ impl PostgresDatabaseService {
                     &preferences.header_delay,
                     &preferences.delay_ms.map(|v| v as i64),
                     &preferences.disable_inclusion_lists,
+                    &preferences.disable_optimistic,
                 ],
             )
             .await?;

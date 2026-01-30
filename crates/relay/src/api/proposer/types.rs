@@ -18,4 +18,7 @@ pub struct PreferencesHeader {
     /// Allows validators to express a preference for whether a delay should be applied to get
     /// headers or not.
     pub header_delay: Option<bool>,
+
+    /// Allows validators to opt out of optimistic bid submissions.
+    pub disable_optimistic: Option<bool>,
 }
