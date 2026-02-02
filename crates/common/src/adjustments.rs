@@ -15,4 +15,5 @@ pub struct DataAdjustmentsEntry {
     pub adjusted_block_hash: B256,
     pub adjusted_value: U256,
     pub is_dry_run: bool,
+    pub metadata: serde_json::Value,
 }
