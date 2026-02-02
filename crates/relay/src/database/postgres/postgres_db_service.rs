@@ -727,6 +727,7 @@ impl PostgresDatabaseService {
                     validator_preferences.trusted_builders,
                     validator_preferences.header_delay,
                     validator_preferences.disable_inclusion_lists,
+                    validator_preferences.disable_optimistic,
                     validator_registrations.inserted_at,
                     validator_registrations.user_agent,
                     validator_preferences.delay_ms
