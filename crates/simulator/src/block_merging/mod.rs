@@ -26,7 +26,6 @@ use reth_ethereum::{
             Evm, EvmEnvFor, EvmError,
             block::{BlockExecutionError, BlockExecutor},
             execute::BlockBuilder as RethBlockBuilder,
-            tx,
         },
         revm::{cached::CachedReads, database::StateProviderDatabase},
     },
@@ -41,7 +40,6 @@ use reth_primitives::{GotExpected, Recovered};
 use revm::{
     DatabaseCommit, DatabaseRef,
     database::{CacheDB, State},
-    interpreter::gas,
     state::AccountInfo,
 };
 use tracing::{debug, info, warn};
