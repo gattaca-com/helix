@@ -23,7 +23,7 @@ use helix_common::{
         proposer_api::{GetHeaderParams, ValidatorRegistrationInfo},
     },
     bid_submission::OptimisticVersion,
-    metrics::DbMetricRecord,
+    metrics::{CACHE_SIZE, DbMetricRecord},
     utils::utcnow_ms,
 };
 use helix_types::{
@@ -206,6 +206,10 @@ impl PostgresDatabaseService {
 
         *self.known_validators_cache.write() = set;
 
+        CACHE_SIZE
+            .with_label_values(&["known_validators"])
+            .set(self.known_validators_cache.read().len() as f64);
+
         record.record_success();
     }
 
@@ -221,6 +225,7 @@ impl PostgresDatabaseService {
                         .insert(entry.registration_info.registration.message.pubkey, entry);
                 });
                 info!("Loaded {} validator registrations", num_entries);
+                CACHE_SIZE.with_label_values(&["validator_registrations"]).set(num_entries as f64);
                 record.record_success();
             }
             Err(e) => {
@@ -258,6 +263,12 @@ impl PostgresDatabaseService {
                                     );
                                 }
                                 info!("Saved {} validator registrations", entries.len());
+                                CACHE_SIZE
+                                    .with_label_values(&["pending_registrations"])
+                                    .set(self_clone.pending_validator_registrations.len() as f64);
+                                CACHE_SIZE
+                                    .with_label_values(&["validator_registrations"])
+                                    .set(self_clone.validator_registration_cache.len() as f64);
                             }
                             Err(e) => {
                                 error!("Error saving validator registrations: {}", e);

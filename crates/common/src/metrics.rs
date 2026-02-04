@@ -356,6 +356,14 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref CACHE_SIZE: GaugeVec = register_gauge_vec_with_registry!(
+        "cache_size",
+        "Number of entries in cache",
+        &["cache"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     pub static ref TOP_BID_CONNECTIONS: Gauge = register_gauge_with_registry!(
         "top_bid_connections",
         "Count of top bid connections",

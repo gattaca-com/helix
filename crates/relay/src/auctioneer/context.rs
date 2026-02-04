@@ -9,8 +9,12 @@ use std::{
 
 use alloy_primitives::{B256, U256};
 use helix_common::{
-    BuilderInfo, RelayConfig, chain_info::ChainInfo, local_cache::LocalCache,
-    metrics::SimulatorMetrics, spawn_tracked, utils::alert_discord,
+    BuilderInfo, RelayConfig,
+    chain_info::ChainInfo,
+    local_cache::LocalCache,
+    metrics::{CACHE_SIZE, SimulatorMetrics},
+    spawn_tracked,
+    utils::alert_discord,
 };
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
 use rustc_hash::FxHashMap;
@@ -223,6 +227,20 @@ impl<B: BidAdjustor> Context<B> {
         }
         self.completed_dry_run = false;
         self.bid_sorter.process_slot(bid_slot.as_u64());
+
+        // record cache sizes before clearing
+        CACHE_SIZE.with_label_values(&["payloads"]).set(self.payloads.len() as f64);
+        CACHE_SIZE.with_label_values(&["submission_versions"]).set(self.version.len() as f64);
+        CACHE_SIZE
+            .with_label_values(&["hydration_builders"])
+            .set(self.hydration_cache.builder_count() as f64);
+        CACHE_SIZE
+            .with_label_values(&["hydration_transactions"])
+            .set(self.hydration_cache.tx_count() as f64);
+        CACHE_SIZE
+            .with_label_values(&["hydration_blobs"])
+            .set(self.hydration_cache.blob_count() as f64);
+
         self.version.clear();
         self.hydration_cache.clear();
         self.sim_manager.on_new_slot(bid_slot.as_u64());
