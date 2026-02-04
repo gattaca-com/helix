@@ -429,6 +429,18 @@ impl HydrationCache {
             c.clear();
         }
     }
+
+    pub fn builder_count(&self) -> usize {
+        self.caches.len()
+    }
+
+    pub fn tx_count(&self) -> usize {
+        self.caches.values().map(|c| c.transactions.len()).sum()
+    }
+
+    pub fn blob_count(&self) -> usize {
+        self.caches.values().map(|c| c.blobs_electra.len() + c.blobs_fulu.len()).sum()
+    }
 }
 
 impl Default for HydrationCache {
