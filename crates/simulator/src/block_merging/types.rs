@@ -9,7 +9,6 @@ use reth_node_builder::ConfigureEvm;
 use reth_primitives::{NodePrimitives, Recovered};
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
-use tracing::debug;
 
 pub(crate) type SignedTx = <<EthEvmConfig as ConfigureEvm>::Primitives as NodePrimitives>::SignedTx;
 pub(crate) type RecoveredTx = Recovered<SignedTx>;

@@ -10,7 +10,7 @@ use eyre::eyre;
 use helix_common::{
     RelayConfig,
     api_provider::DefaultApiProvider,
-    load_config, load_keypair,
+    expect_env_var, load_config, load_keypair,
     local_cache::LocalCache,
     metrics::start_metrics_server,
     signing::RelaySigningContext,
@@ -29,6 +29,8 @@ use tracing::{error, info};
 
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
+
+const ADMIN_TOKEN_ENV_VAR: &'static str = "ADMIN_TOKEN";
 
 #[derive(Clone)]
 struct ApiProd;
@@ -112,7 +114,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
     let terminating = Arc::new(AtomicBool::default());
 
-    start_admin_service(local_cache.clone(), &config);
+    start_admin_service(local_cache.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));
 
     tokio::spawn(start_api_service::<ApiProd>(
         config.clone(),

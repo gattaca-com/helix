@@ -1,15 +1,15 @@
 use std::{net::SocketAddr, sync::Arc};
 
 use axum::{Extension, Router, http::StatusCode, response::IntoResponse, routing::post};
-use helix_common::{RelayConfig, local_cache::LocalCache};
+use helix_common::local_cache::LocalCache;
 use tower_http::validate_request::ValidateRequestHeaderLayer;
 use tracing::{error, info};
 
-pub async fn run_admin_service(auctioneer: Arc<LocalCache>, config: RelayConfig) {
+pub async fn run_admin_service(auctioneer: Arc<LocalCache>, admin_token: String) {
     let router = Router::new()
         .route("/admin/v1/killswitch", post(enable_kill_switch).delete(disable_kill_switch))
         .layer(Extension(auctioneer))
-        .layer(ValidateRequestHeaderLayer::bearer(&config.admin_token));
+        .layer(ValidateRequestHeaderLayer::bearer(&admin_token));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:4050").await.unwrap();
     match axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await {
@@ -39,7 +39,7 @@ async fn disable_kill_switch(
 mod test {
     use std::sync::Arc;
 
-    use helix_common::{config, local_cache::LocalCache};
+    use helix_common::local_cache::LocalCache;
     use serial_test::serial;
 
     use crate::api::admin_service::run_admin_service;
@@ -49,9 +49,8 @@ mod test {
     async fn test_admin_service() {
         let auctioneer = Arc::new(LocalCache::new_test());
 
-        let mut config = config::RelayConfig::empty_for_test();
-        config.admin_token = "test_token".into();
-        tokio::spawn(run_admin_service(auctioneer.clone(), config));
+        let admin_token = "test_token".into();
+        tokio::spawn(run_admin_service(auctioneer.clone(), admin_token));
         tokio::time::sleep(std::time::Duration::from_secs(1)).await; // wait for server to start
         let client = reqwest::Client::new();
 
@@ -79,9 +78,8 @@ mod test {
     async fn test_admin_service_unauthorized() {
         let auctioneer = Arc::new(LocalCache::new_test());
 
-        let mut config = config::RelayConfig::empty_for_test();
-        config.admin_token = "test_token".into();
-        tokio::spawn(run_admin_service(auctioneer.clone(), config));
+        let admin_token = "test_token".into();
+        tokio::spawn(run_admin_service(auctioneer.clone(), admin_token));
         tokio::time::sleep(std::time::Duration::from_secs(1)).await; // wait for server to start
         let client = reqwest::Client::new();
 

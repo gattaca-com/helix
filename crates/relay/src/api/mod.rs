@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use helix_common::{RelayConfig, api_provider::ApiProvider, local_cache::LocalCache};
+use helix_common::{api_provider::ApiProvider, local_cache::LocalCache};
 pub use service::start_api_service;
 
 pub use crate::auctioneer::{BidAdjustor, DefaultBidAdjustor};
@@ -16,8 +16,8 @@ pub mod relay_data;
 pub mod router;
 pub mod service;
 
-pub fn start_admin_service(auctioneer: Arc<LocalCache>, config: &RelayConfig) {
-    tokio::spawn(admin_service::run_admin_service(auctioneer, config.clone()));
+pub fn start_admin_service(auctioneer: Arc<LocalCache>, admin_token: String) {
+    tokio::spawn(admin_service::run_admin_service(auctioneer, admin_token));
 }
 
 pub trait Api: Clone + Send + Sync + 'static {

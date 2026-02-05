@@ -23,6 +23,7 @@ use helix_common::{
         proposer_api::{GetHeaderParams, ValidatorRegistrationInfo},
     },
     bid_submission::OptimisticVersion,
+    expect_env_var,
     metrics::{CACHE_SIZE, DbMetricRecord},
     utils::utcnow_ms,
 };
@@ -58,6 +59,7 @@ struct PendingBlockSubmissionValue {
 const BLOCK_SUBMISSION_FIELD_COUNT: usize = 17;
 const MAINNET_VALIDATOR_COUNT: usize = 1_100_000;
 static DELIVERED_PAYLOADS_MIG_SLOT: AtomicU64 = AtomicU64::new(0);
+const POSTGRES_PASSWORD_ENV_VAR: &'static str = "POSTGRES_PASSWORD";
 
 fn new_validator_set() -> FxHashSet<BlsPublicKeyBytes> {
     FxHashSet::with_capacity_and_hasher(MAINNET_VALIDATOR_COUNT, Default::default())
@@ -106,7 +108,7 @@ impl PostgresDatabaseService {
         cfg.port = Some(relay_config.postgres.port);
         cfg.dbname = Some(relay_config.postgres.db_name.clone());
         cfg.user = Some(relay_config.postgres.user.clone());
-        cfg.password = Some(relay_config.postgres.password.clone());
+        cfg.password = Some(expect_env_var(POSTGRES_PASSWORD_ENV_VAR));
         cfg.manager = Some(ManagerConfig { recycling_method: RecyclingMethod::Fast });
 
         let pool = loop {
@@ -129,7 +131,7 @@ impl PostgresDatabaseService {
             }
         };
 
-        PostgresDatabaseService {
+        Self {
             validator_registration_cache: Arc::new(DashMap::new()),
             pending_validator_registrations: Arc::new(DashSet::new()),
             block_submissions_sender: None,

@@ -4,7 +4,6 @@ postgres:
   port: 5432
   db_name: postgres
   user: postgres
-  password: password
   region: 0
   region_name: "LOCAL"
 broadcasters:

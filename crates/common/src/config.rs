@@ -1,4 +1,4 @@
-use std::{collections::HashSet, fs::File, path::PathBuf};
+use std::{collections::HashSet, env, fs::File, path::PathBuf};
 
 use clap::Parser;
 use eyre::ensure;
@@ -50,7 +50,6 @@ pub struct RelayConfig {
     pub inclusion_list: Option<InclusionListConfig>,
     pub is_submission_instance: bool,
     pub is_registration_instance: bool,
-    pub admin_token: String,
     #[serde(default)]
     is_local_dev: bool,
     /// Cores configuration, recommended to be set for production use
@@ -83,7 +82,6 @@ impl RelayConfig {
             inclusion_list: Default::default(),
             is_submission_instance: Default::default(),
             is_registration_instance: Default::default(),
-            admin_token: Default::default(),
             is_local_dev: Default::default(),
             cores: CoresConfig {
                 auctioneer: 1,
@@ -169,8 +167,12 @@ pub fn load_config<R: AsRef<RelayConfig> + DeserializeOwned>() -> R {
     config
 }
 
+pub fn expect_env_var(env_var: &str) -> String {
+    env::var(env_var).expect(&format!("{} should be set", env_var))
+}
+
 pub fn load_keypair() -> BlsKeypair {
-    let signing_key_str = std::env::var("RELAY_KEY").expect("could not find RELAY_KEY in env");
+    let signing_key_str = expect_env_var("RELAY_KEY");
     let signing_key_bytes =
         alloy_primitives::hex::decode(signing_key_str).expect("invalid RELAY_KEY bytes");
 
@@ -189,7 +191,6 @@ pub struct PostgresConfig {
     pub port: u16,
     pub db_name: String,
     pub user: String,
-    pub password: String,
     pub region: i16,
     pub region_name: String,
 }
