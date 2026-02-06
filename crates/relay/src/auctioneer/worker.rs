@@ -1,6 +1,10 @@
 use std::time::{Duration, Instant};
 
 use alloy_primitives::B256;
+use flux::{
+    tile::{Tile, TileName},
+    utils::{ShortTypename, short_typename},
+};
 use helix_common::{
     GetPayloadTrace, RelayConfig, SubmissionTrace,
     chain_info::ChainInfo,
@@ -17,9 +21,10 @@ use helix_types::{
     SubmissionVersion,
 };
 use http::HeaderValue;
-use tracing::{error, info, info_span, trace};
+use tracing::{error, trace};
 
 use crate::{
+    HelixSpine,
     api::{
         HEADER_API_KEY, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_SEQUENCE,
         HEADER_WITH_ADJUSTMENTS, builder::error::BuilderApiError, proposer::ProposerApiError,
@@ -87,9 +92,11 @@ impl Default for Telemetry {
 }
 
 // TODO: spans
-pub(super) struct SubWorker {
-    id: String,
+pub struct SubWorker {
+    core_id: usize,
+    id: ShortTypename,
     tx: crossbeam_channel::Sender<Event>,
+    rx: crossbeam_channel::Receiver<SubWorkerJob>,
     cache: LocalCache,
     chain_info: ChainInfo,
     tel: Telemetry,
@@ -98,48 +105,15 @@ pub(super) struct SubWorker {
 
 impl SubWorker {
     pub fn new(
-        id: usize,
+        core_id: usize,
         tx: crossbeam_channel::Sender<Event>,
+        rx: crossbeam_channel::Receiver<SubWorkerJob>,
         cache: LocalCache,
         chain_info: ChainInfo,
         config: RelayConfig,
     ) -> Self {
-        Self {
-            id: format!("submission_{id}"),
-            tx,
-            cache,
-            chain_info,
-            tel: Telemetry::default(),
-            config,
-        }
-    }
-
-    pub(super) fn run(mut self, rx: crossbeam_channel::Receiver<SubWorkerJob>) {
-        let _span = info_span!("worker", id = self.id).entered();
-        info!("starting");
-
-        loop {
-            for task in rx.try_iter() {
-                self.handle_task(task);
-            }
-
-            self.tel.telemetry(&self.id, "submission", &rx);
-        }
-    }
-
-    fn handle_task(&mut self, task: SubWorkerJob) {
-        let start_task = Instant::now();
-        let task_name = task.as_str();
-
-        self._handle_task(task);
-
-        let task_dur = start_task.elapsed();
-        self.tel.loop_worked += task_dur;
-
-        WORKER_TASK_COUNT.with_label_values(&[task_name, &self.id]).inc();
-        WORKER_TASK_LATENCY_US
-            .with_label_values(&[task_name, &self.id])
-            .observe(task_dur.as_micros() as f64);
+        let id = ShortTypename::from_str_truncate(&format!("submission_{core_id}"));
+        Self { core_id, id, tx, rx, cache, chain_info, tel: Telemetry::default(), config }
     }
 
     fn _handle_task(&self, task: SubWorkerJob) {
@@ -239,7 +213,7 @@ impl SubWorker {
                             })
                             .is_err()
                         {
-                            error!("failed sending get_payload to auctioneer");
+                            error!("failed to send get_payload to auctioneer");
                         };
                     }
                     Err(err) => {
@@ -344,29 +318,48 @@ impl SubWorker {
     }
 }
 
+impl Tile<HelixSpine> for SubWorker {
+    fn loop_body(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
+        for task in self.rx.try_iter() {
+            let start_task = Instant::now();
+            let task_name = task.as_str();
+
+            self._handle_task(task);
+
+            let task_dur = start_task.elapsed();
+            self.tel.loop_worked += task_dur;
+
+            WORKER_TASK_COUNT.with_label_values(&[task_name, &self.id]).inc();
+            WORKER_TASK_LATENCY_US
+                .with_label_values(&[task_name, &self.id])
+                .observe(task_dur.as_micros() as f64);
+        }
+
+        self.tel.telemetry(&self.id, "submission", &self.rx);
+    }
+
+    fn name(&self) -> TileName {
+        TileName::from_str_truncate(&format!("{}_{}", short_typename::<Self>(), self.core_id))
+    }
+}
+
 /// Worker to process registrations verifications
-pub(super) struct RegWorker {
-    id: String,
+pub struct RegWorker {
+    core_id: usize,
+    id: ShortTypename,
     chain_info: ChainInfo,
     tel: Telemetry,
+    rx: crossbeam_channel::Receiver<RegWorkerJob>,
 }
 
 impl RegWorker {
-    pub(super) fn new(id: usize, chain_info: ChainInfo) -> Self {
-        Self { id: format!("registration_{id}"), chain_info, tel: Default::default() }
-    }
-
-    pub(super) fn run(mut self, rx: crossbeam_channel::Receiver<RegWorkerJob>) {
-        let _span = info_span!("worker", id = self.id).entered();
-        info!("starting");
-
-        loop {
-            if let Ok(task) = rx.recv_timeout(Duration::from_millis(50)) {
-                self.handle_task(task);
-            }
-
-            self.tel.telemetry(&self.id, "registration", &rx);
-        }
+    pub fn new(
+        core_id: usize,
+        chain_info: ChainInfo,
+        rx: crossbeam_channel::Receiver<RegWorkerJob>,
+    ) -> Self {
+        let id = ShortTypename::from_str_truncate(&format!("registration_{core_id}"));
+        Self { core_id, id, chain_info, tel: Default::default(), rx }
     }
 
     fn handle_task(&mut self, task: RegWorkerJob) {
@@ -407,6 +400,20 @@ impl RegWorker {
 
         let _ = res_tx.send(res);
         true
+    }
+}
+
+impl Tile<HelixSpine> for RegWorker {
+    fn loop_body(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
+        if let Ok(task) = self.rx.recv_timeout(Duration::from_millis(50)) {
+            self.handle_task(task);
+        }
+
+        self.tel.telemetry(&self.id, "registration", &self.rx);
+    }
+
+    fn name(&self) -> TileName {
+        TileName::from_str_truncate(&format!("{}_{}", short_typename::<Self>(), self.core_id))
     }
 }
 
