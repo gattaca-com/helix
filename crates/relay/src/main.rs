@@ -29,6 +29,7 @@ use helix_relay::{
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
+use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info};
 
 #[global_allocator]
@@ -90,7 +91,6 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
     let known_validators_loaded = Arc::new(AtomicBool::default());
     let db = start_db_service(&config, known_validators_loaded.clone()).await?;
-
     let local_cache = start_local_cache_reloader(db.clone()).await?;
 
     let relay_signing_context = Arc::new(RelaySigningContext::new(keypair, chain_info.clone()));
@@ -100,7 +100,8 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
     config.router_config.validate_bid_sorter()?;
 
-    start_admin_service(local_cache.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));
+    let (sub_worker_tx, sub_worker_rx) = crossbeam_channel::bounded(10_000);
+    let (reg_worker_tx, reg_worker_rx) = crossbeam_channel::bounded(100_000);
 
     let (event_tx, event_rx) = crossbeam_channel::bounded(10_000);
 
@@ -116,42 +117,39 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
     .await
     .map_err(|e| eyre!("housekeeper init: {e}"))?;
 
-    let (sub_worker_tx, sub_worker_rx) = crossbeam_channel::bounded(10_000);
-    let (reg_worker_tx, reg_worker_rx) = crossbeam_channel::bounded(100_000);
-
-    let auctioneer_handle = AuctioneerHandle::new(sub_worker_tx, event_tx.clone());
-    let registrations_handle = RegWorkerHandle::new(reg_worker_tx);
-
-    let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
-
     let terminating = Arc::new(AtomicBool::default());
-
-    start_api_service::<ApiProd>(
-        config.clone(),
-        db.clone(),
-        local_cache.clone(),
-        current_slot_info,
-        chain_info.clone(),
-        relay_signing_context,
-        beacon_client,
-        Arc::new(DefaultApiProvider {}),
-        known_validators_loaded,
-        terminating.clone(),
-        top_bid_tx.clone(),
-        relay_network_api.api(),
-        auctioneer_handle,
-        registrations_handle,
-    );
-
-    if config.website.enabled {
-        tokio::spawn(WebsiteService::run_loop(config.clone(), db.clone()));
-    }
-
     let termination_grace_period = config.router_config.shutdown_delay_ms;
 
     let spine = HelixSpine::new(None);
-    // TODO: on panic?
     spine.start(None, |spine| {
+        start_admin_service(local_cache.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));
+
+        let auctioneer_handle = AuctioneerHandle::new(sub_worker_tx, event_tx.clone());
+        let registrations_handle = RegWorkerHandle::new(reg_worker_tx);
+
+        let (top_bid_tx, _) = tokio::sync::broadcast::channel(100);
+
+        start_api_service::<ApiProd>(
+            config.clone(),
+            db.clone(),
+            local_cache.clone(),
+            current_slot_info,
+            chain_info.clone(),
+            relay_signing_context,
+            beacon_client,
+            Arc::new(DefaultApiProvider {}),
+            known_validators_loaded,
+            terminating.clone(),
+            top_bid_tx.clone(),
+            relay_network_api.api(),
+            auctioneer_handle,
+            registrations_handle,
+        );
+
+        if config.website.enabled {
+            tokio::spawn(WebsiteService::run_loop(config.clone(), db.clone()));
+        }
+
         if config.is_registration_instance {
             for core in config.cores.reg_workers.clone() {
                 let worker =
@@ -194,6 +192,13 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             );
         }
     });
+
+    let mut sigint = signal(SignalKind::interrupt())?;
+    let mut sigterm = signal(SignalKind::terminate())?;
+    tokio::select! {
+        _ = sigint.recv() => {}
+        _ = sigterm.recv() => {}
+    }
 
     terminating.store(true, Ordering::Relaxed);
 
