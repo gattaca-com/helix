@@ -59,7 +59,7 @@ struct PendingBlockSubmissionValue {
 const BLOCK_SUBMISSION_FIELD_COUNT: usize = 17;
 const MAINNET_VALIDATOR_COUNT: usize = 1_100_000;
 static DELIVERED_PAYLOADS_MIG_SLOT: AtomicU64 = AtomicU64::new(0);
-const POSTGRES_PASSWORD_ENV_VAR: &'static str = "POSTGRES_PASSWORD";
+const POSTGRES_PASSWORD_ENV_VAR: &str = "POSTGRES_PASSWORD";
 
 fn new_validator_set() -> FxHashSet<BlsPublicKeyBytes> {
     FxHashSet::with_capacity_and_hasher(MAINNET_VALIDATOR_COUNT, Default::default())

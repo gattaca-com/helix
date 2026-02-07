@@ -30,7 +30,7 @@ use tracing::{error, info};
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
-const ADMIN_TOKEN_ENV_VAR: &'static str = "ADMIN_TOKEN";
+const ADMIN_TOKEN_ENV_VAR: &str = "ADMIN_TOKEN";
 
 #[derive(Clone)]
 struct ApiProd;
