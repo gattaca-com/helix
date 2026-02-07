@@ -7,7 +7,7 @@ resolver = "2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/gattaca-com/helix"
-rust-version = "1.90.0"
+rust-version = "1.91.0"
 version = "0.0.1"
 
 [workspace.dependencies]
@@ -40,6 +40,7 @@ ethereum_ssz_derive = "0.9"
 ethers = "2.0.14"
 eyre = "0.6.12"
 flate2 = "1.0"
+flux = { git = "https://github.com/gattaca-com/flux" }
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
 helix-common = { path = "crates/common" }

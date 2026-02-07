@@ -25,6 +25,7 @@ ethereum_ssz_derive.workspace = true
 ethers.workspace = true
 eyre.workspace = true
 flate2.workspace = true
+flux.workspace = true
 futures.workspace = true
 helix-common.workspace = true
 helix-types.workspace = true

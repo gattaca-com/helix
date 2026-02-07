@@ -20,128 +20,89 @@ use std::{
 
 use alloy_primitives::B256;
 pub use block_merger::OrderValidationError;
+use flux::tile::Tile;
 pub use handle::{AuctioneerHandle, RegWorkerHandle};
 use helix_common::{
     RelayConfig,
-    api::builder_api::{
-        BuilderGetValidatorsResponseEntry, InclusionListWithMetadata, TopBidUpdate,
-    },
+    api::builder_api::{BuilderGetValidatorsResponseEntry, InclusionListWithMetadata},
     chain_info::ChainInfo,
     local_cache::LocalCache,
     metrics::{STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN, WORKER_UTIL},
     record_submission_step,
-    utils::pin_thread_to_core,
 };
 use helix_types::Slot;
 use rustc_hash::FxHashMap;
 pub use simulator::*;
-use tracing::{debug, error, info, info_span, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 pub use types::{
     Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, SubmissionPayload,
 };
-use worker::{RegWorker, SubWorker};
+pub use worker::{RegWorker, SubWorker};
 
 pub use crate::auctioneer::{
     bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
-    simulator::{SimulatorRequest, client::SimulatorClient},
+    bid_sorter::BidSorter,
+    context::Context,
+    simulator::{SimulatorRequest, client::SimulatorClient, manager::SimulatorManager},
 };
 use crate::{
-    PostgresDatabaseService,
+    HelixSpine, PostgresDatabaseService,
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
-    auctioneer::{
-        bid_sorter::BidSorter, context::Context, manager::SimulatorManager, types::PendingPayload,
-    },
+    auctioneer::types::PendingPayload,
     housekeeper::PayloadAttributesUpdate,
 };
 
-// TODO: tidy up builder and proposer api state, and spawn in a separate function
-pub fn spawn_workers<B: BidAdjustor>(
-    chain_info: ChainInfo,
-    config: RelayConfig,
-    db: Arc<PostgresDatabaseService>,
-    cache: LocalCache,
-    bid_adjustor: B,
-    top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
-    event_channel: (crossbeam_channel::Sender<Event>, crossbeam_channel::Receiver<Event>),
-) -> (AuctioneerHandle, RegWorkerHandle) {
-    let (sub_worker_tx, sub_worker_rx) = crossbeam_channel::bounded(10_000);
-    let (reg_worker_tx, reg_worker_rx) = crossbeam_channel::bounded(100_000);
-    let (event_tx, event_rx) = event_channel;
-
-    if config.is_registration_instance {
-        for core in config.cores.reg_workers.clone() {
-            let worker = RegWorker::new(core, chain_info.clone());
-            let rx = reg_worker_rx.clone();
-
-            std::thread::Builder::new()
-                .name(format!("worker-{core}"))
-                .spawn(move || {
-                    pin_thread_to_core(core);
-                    worker.run(rx)
-                })
-                .unwrap();
-        }
-    }
-
-    if config.is_submission_instance {
-        for core in config.cores.sub_workers.clone() {
-            let worker = SubWorker::new(
-                core,
-                event_tx.clone(),
-                cache.clone(),
-                chain_info.clone(),
-                config.clone(),
-            );
-            let rx = sub_worker_rx.clone();
-
-            std::thread::Builder::new()
-                .name(format!("worker-{core}"))
-                .spawn(move || {
-                    pin_thread_to_core(core);
-                    worker.run(rx)
-                })
-                .unwrap();
-        }
-
-        let auctioneer_core = config.cores.auctioneer;
-
-        let bid_sorter = BidSorter::new(top_bid_tx);
-        let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
-        let ctx =
-            Context::new(chain_info, config, sim_manager, db, bid_sorter, cache, bid_adjustor);
-        let id = format!("auctioneer_{auctioneer_core}");
-        let auctioneer = Auctioneer { ctx, state: State::default(), tel: Telemetry::new(id) };
-
-        std::thread::Builder::new()
-            .name("auctioneer".to_string())
-            .spawn(move || {
-                pin_thread_to_core(auctioneer_core);
-                auctioneer.run(event_rx)
-            })
-            .unwrap();
-    }
-
-    (AuctioneerHandle::new(sub_worker_tx, event_tx), RegWorkerHandle::new(reg_worker_tx))
-}
-
-struct Auctioneer<B: BidAdjustor> {
+pub struct Auctioneer<B: BidAdjustor> {
     ctx: Context<B>,
     state: State,
     tel: Telemetry,
+    event_rx: crossbeam_channel::Receiver<Event>,
 }
 
 impl<B: BidAdjustor> Auctioneer<B> {
-    fn run(mut self, rx: crossbeam_channel::Receiver<Event>) {
-        let _span = info_span!("auctioneer").entered();
-        info!("starting");
+    pub fn new(
+        chain_info: ChainInfo,
+        config: RelayConfig,
+        db: Arc<PostgresDatabaseService>,
+        bid_sorter: BidSorter,
+        local_cache: LocalCache,
+        bid_adjustor: B,
+        event_tx: crossbeam_channel::Sender<Event>,
+        event_rx: crossbeam_channel::Receiver<Event>,
+        id: usize,
+    ) -> Self {
+        let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
 
-        loop {
-            for evt in rx.try_iter() {
-                self.state.step(evt, &mut self.ctx, &mut self.tel);
-            }
-
-            self.tel.telemetry(&rx);
+        let ctx = Context::new(
+            chain_info,
+            config,
+            sim_manager,
+            db,
+            bid_sorter,
+            local_cache,
+            bid_adjustor,
+        );
+        Self {
+            ctx,
+            state: State::default(),
+            tel: Telemetry::new(format!("auctioneer_{id}")),
+            event_rx,
         }
+    }
+}
+
+impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
+    fn loop_body(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
+        for event in self.event_rx.try_iter() {
+            self.state.step(event, &mut self.ctx, &mut self.tel);
+        }
+
+        self.tel.telemetry(&self.event_rx);
+    }
+
+    fn try_init(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
+        info!("starting");
+        true
     }
 }
 
