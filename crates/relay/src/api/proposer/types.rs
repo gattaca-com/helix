@@ -1,4 +1,4 @@
-use helix_common::Filtering;
+use helix_common::{Filtering, ValidatorPreferences};
 
 pub const GET_HEADER_REQUEST_CUTOFF_MS: i64 = 3200;
 
@@ -21,4 +21,26 @@ pub struct PreferencesHeader {
 
     /// Allows validators to opt out of optimistic bid submissions.
     pub disable_optimistic: Option<bool>,
+}
+
+impl PreferencesHeader {
+    pub fn apply(self, prefs: &mut ValidatorPreferences) {
+        if let Some(filtering) = self.filtering {
+            prefs.filtering = filtering;
+        } else if let Some(censoring) = self.censoring {
+            prefs.filtering = match censoring {
+                true => Filtering::Regional,
+                false => Filtering::Global,
+            };
+        }
+        if let Some(trusted_builders) = self.trusted_builders {
+            prefs.trusted_builders = Some(trusted_builders);
+        }
+        if let Some(header_delay) = self.header_delay {
+            prefs.header_delay = header_delay;
+        }
+        if let Some(disable_optimistic) = self.disable_optimistic {
+            prefs.disable_optimistic = disable_optimistic;
+        }
+    }
 }
