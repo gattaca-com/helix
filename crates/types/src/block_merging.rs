@@ -9,7 +9,7 @@ use smallvec::SmallVec;
 use ssz_derive::{Decode, Encode};
 
 use crate::{
-    Blob, SignedBidSubmission,
+    Blob, SignedBidSubmission, Transaction,
     fields::{KzgCommitment, KzgProof},
 };
 
@@ -129,6 +129,12 @@ impl From<MergeableTransaction> for MergeableOrder {
 impl From<MergeableBundle> for MergeableOrder {
     fn from(bundle: MergeableBundle) -> Self {
         MergeableOrder::Bundle(bundle)
+    }
+}
+
+impl From<Transaction> for MergeableOrder {
+    fn from(tx: Transaction) -> Self {
+        MergeableOrder::Tx(MergeableTransaction { transaction: tx.0.into(), can_revert: true })
     }
 }
 

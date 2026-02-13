@@ -1,5 +1,6 @@
 use std::{collections::HashSet, env, fs::File, path::PathBuf};
 
+use alloy_primitives::Address;
 use clap::Parser;
 use eyre::ensure;
 use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey};
@@ -557,6 +558,7 @@ fn default_duration() -> u64 {
 #[derive(Clone, Deserialize, Serialize)]
 pub struct InclusionListConfig {
     pub node_url: Url,
+    pub relay_address: Address,
 }
 
 #[cfg(test)]

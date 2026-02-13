@@ -525,6 +525,10 @@ impl State {
             payload_attributes_map.insert(update.parent_hash, update);
         }
 
+        if let Some(il) = &il {
+            ctx.block_merger.add_inclusion_list(il);
+        }
+
         match (registration_data, payload_attributes_map.is_empty()) {
             (Some(registration_data), false) => {
                 let current_fork = ctx.chain_info.fork_at_slot(bid_slot);
