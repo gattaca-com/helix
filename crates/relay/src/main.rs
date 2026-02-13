@@ -175,7 +175,8 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             }
 
             let auctioneer_core = config.cores.auctioneer;
-            let sock_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.tcp_port));
+            let sock_addr =
+                SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.tcp_port));
             let block_submission_tcp_listener = BidSubmissionTcpListener::new(
                 sock_addr,
                 auctioneer_handle,
