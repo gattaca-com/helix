@@ -8,7 +8,8 @@ use alloy_consensus::{Bytes48, Transaction, TxEnvelope, TxType};
 use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_rlp::Decodable;
 use helix_common::{
-    RelayConfig, api::builder_api::InclusionListWithMetadata, chain_info::ChainInfo, local_cache::LocalCache, metrics::MERGE_TRACE_LATENCY, utils::utcnow_ms
+    RelayConfig, api::builder_api::InclusionListWithMetadata, chain_info::ChainInfo,
+    local_cache::LocalCache, metrics::MERGE_TRACE_LATENCY, utils::utcnow_ms,
 };
 use helix_types::{
     BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
