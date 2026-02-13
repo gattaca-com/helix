@@ -1,3 +1,4 @@
+mod bid_adjustment_data;
 mod bid_submission;
 mod blobs;
 mod block_merging;
@@ -11,8 +12,9 @@ mod test_utils;
 mod utils;
 mod validator;
 
-use std::sync::Arc;
-
+pub use bid_adjustment_data::{
+    BidAdjData, BidAdjDataV2, BidAdjustmentData, BidAdjustmentDataV1, BidAdjustmentDataV2,
+};
 pub use bid_submission::*;
 pub use blobs::*;
 pub use block_merging::*;
@@ -83,7 +85,7 @@ pub type BlindedPayload = lh_types::payload::BlindedPayload<MainnetEthSpec>;
 pub type BlindedPayloadRef<'a> = lh_types::payload::BlindedPayloadRef<'a, MainnetEthSpec>;
 
 /// Response object of POST `/eth/v1/builder/blinded_blocks`
-pub type GetPayloadResponse = lh_types::ForkVersionedResponse<Arc<PayloadAndBlobs>>;
+pub type GetPayloadResponse = lh_types::ForkVersionedResponse<PayloadAndBlobs>;
 
 // Registration
 pub type ValidatorRegistration = validator::ValidatorRegistrationData;

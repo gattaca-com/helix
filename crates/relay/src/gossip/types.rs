@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use helix_types::{
     BlsPublicKeyBytes, ForkName, ForkVersionDecode, PayloadAndBlobs, SignedBlindedBeaconBlock,
 };
@@ -58,7 +56,7 @@ fn decode_ssz_signed_blinded_beacon_block(
 
 #[derive(Clone, Debug)]
 pub struct BroadcastPayloadParams {
-    pub execution_payload: Arc<PayloadAndBlobs>,
+    pub execution_payload: PayloadAndBlobs,
     pub slot: u64,
     pub proposer_pub_key: BlsPublicKeyBytes,
     pub bid_data: PayloadBidData,
@@ -106,10 +104,10 @@ impl BroadcastPayloadParams {
 fn decode_ssz_payload_and_blobs(
     bytes: &[u8],
     fork_name: Option<ForkName>,
-) -> Result<Arc<PayloadAndBlobs>, ssz::DecodeError> {
+) -> Result<PayloadAndBlobs, ssz::DecodeError> {
     if let Some(fork_name) = fork_name {
         let payload = PayloadAndBlobs::from_ssz_bytes_by_fork(bytes, fork_name)?;
-        return Ok(Arc::new(payload));
+        return Ok(payload);
     }
 
     Err(ssz::DecodeError::NoMatchingVariant)

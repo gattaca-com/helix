@@ -4,14 +4,15 @@ use std::{
     time::Duration,
 };
 
-use bytes::Bytes;
 use helix_common::{
-    RelayConfig, chain_info::ChainInfo, local_cache::LocalCache, signing::RelaySigningContext,
+    RelayConfig, api::builder_api::TopBidUpdate, chain_info::ChainInfo, local_cache::LocalCache,
+    signing::RelaySigningContext,
 };
 use moka::sync::Cache;
 use tracing::{error, info};
 
 use crate::{
+    AuctioneerHandle, RegWorkerHandle,
     api::{
         Api,
         builder::api::BuilderApi,
@@ -19,7 +20,6 @@ use crate::{
         relay_data::{BidsCache, DataApi, DeliveredPayloadsCache, SelectiveExpiry},
         router::build_router,
     },
-    auctioneer::{Event, spawn_workers},
     beacon::multi_beacon_client::MultiBeaconClient,
     database::postgres::postgres_db_service::PostgresDatabaseService,
     gossip::{GrpcGossiperClientManager, process_gossip_messages},
@@ -30,7 +30,41 @@ use crate::{
 pub(crate) const API_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SIMULATOR_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 
-pub async fn start_api_service<A: Api>(
+pub fn start_api_service<A: Api>(
+    config: RelayConfig,
+    db: Arc<PostgresDatabaseService>,
+    local_cache: Arc<LocalCache>,
+    current_slot_info: CurrentSlotInfo,
+    chain_info: Arc<ChainInfo>,
+    relay_signing_context: Arc<RelaySigningContext>,
+    multi_beacon_client: Arc<MultiBeaconClient>,
+    api_provider: Arc<A::ApiProvider>,
+    known_validators_loaded: Arc<AtomicBool>,
+    terminating: Arc<AtomicBool>,
+    top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
+    relay_network_api: RelayNetworkApi,
+    auctioneer_handle: AuctioneerHandle,
+    registrations_handle: RegWorkerHandle,
+) {
+    tokio::spawn(run_api_service::<A>(
+        config.clone(),
+        db.clone(),
+        local_cache.clone(),
+        current_slot_info,
+        chain_info.clone(),
+        relay_signing_context,
+        multi_beacon_client,
+        api_provider,
+        known_validators_loaded,
+        terminating.clone(),
+        top_bid_tx.clone(),
+        relay_network_api,
+        auctioneer_handle,
+        registrations_handle,
+    ));
+}
+
+pub async fn run_api_service<A: Api>(
     mut config: RelayConfig,
     db: Arc<PostgresDatabaseService>,
     local_cache: Arc<LocalCache>,
@@ -41,9 +75,10 @@ pub async fn start_api_service<A: Api>(
     api_provider: Arc<A::ApiProvider>,
     known_validators_loaded: Arc<AtomicBool>,
     terminating: Arc<AtomicBool>,
-    top_bid_tx: tokio::sync::broadcast::Sender<Bytes>,
-    event_channel: (crossbeam_channel::Sender<Event>, crossbeam_channel::Receiver<Event>),
+    top_bid_tx: tokio::sync::broadcast::Sender<TopBidUpdate>,
     relay_network_api: RelayNetworkApi,
+    auctioneer_handle: AuctioneerHandle,
+    registrations_handle: RegWorkerHandle,
 ) {
     let gossiper = Arc::new(
         GrpcGossiperClientManager::new(config.relays.iter().map(|cfg| cfg.url.clone()).collect())
@@ -54,16 +89,6 @@ pub async fn start_api_service<A: Api>(
     let validator_preferences = Arc::new(config.validator_preferences.clone());
 
     let (gossip_sender, gossip_receiver) = tokio::sync::mpsc::channel(10_000);
-
-    // spawn auctioneer
-    let (auctioneer_handle, registrations_handle) = spawn_workers(
-        Arc::unwrap_or_clone(chain_info.clone()),
-        config.clone(),
-        db.clone(),
-        Arc::unwrap_or_clone(local_cache.clone()),
-        top_bid_tx.clone(),
-        event_channel,
-    );
 
     let builder_api = BuilderApi::<A>::new(
         local_cache.clone(),
@@ -122,7 +147,8 @@ pub async fn start_api_service<A: Api>(
         terminating,
     );
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:4040").await.unwrap();
+    let listener =
+        tokio::net::TcpListener::bind(format!("0.0.0.0:{}", config.api_port)).await.unwrap();
     match axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await {
         Ok(_) => info!("Server exited successfully"),
         Err(e) => error!("Server exited with error: {e}"),

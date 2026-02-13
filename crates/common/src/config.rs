@@ -1,11 +1,12 @@
-use std::{collections::HashSet, fs::File, path::PathBuf};
+use std::{collections::HashSet, env, fs::File, path::PathBuf};
 
 use alloy_primitives::Address;
 use clap::Parser;
 use eyre::ensure;
 use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey};
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use teloxide::types::ChatId;
 use tracing::error;
 
 use crate::{BuilderInfo, ValidatorPreferences, api::*};
@@ -50,13 +51,14 @@ pub struct RelayConfig {
     pub inclusion_list: Option<InclusionListConfig>,
     pub is_submission_instance: bool,
     pub is_registration_instance: bool,
-    pub admin_token: String,
     #[serde(default)]
     is_local_dev: bool,
     /// Cores configuration, recommended to be set for production use
     pub cores: CoresConfig,
     #[serde(default = "default_bool::<true>")]
     pub gossip_payload_on_header: bool,
+    #[serde(default = "default_u16::<4040>")]
+    pub api_port: u16,
 }
 
 impl RelayConfig {
@@ -81,7 +83,6 @@ impl RelayConfig {
             inclusion_list: Default::default(),
             is_submission_instance: Default::default(),
             is_registration_instance: Default::default(),
-            admin_token: Default::default(),
             is_local_dev: Default::default(),
             cores: CoresConfig {
                 auctioneer: 1,
@@ -90,7 +91,14 @@ impl RelayConfig {
                 reg_workers: vec![],
             },
             gossip_payload_on_header: false,
+            api_port: 4040,
         }
+    }
+}
+
+impl AsRef<RelayConfig> for RelayConfig {
+    fn as_ref(&self) -> &RelayConfig {
+        self
     }
 }
 
@@ -145,23 +153,27 @@ impl Default for WebsiteConfig {
     }
 }
 
-pub fn load_config() -> RelayConfig {
+pub fn load_config<R: AsRef<RelayConfig> + DeserializeOwned>() -> R {
     let start_config = StartConfig::parse();
 
     let file = File::open(&start_config.config)
         .unwrap_or_else(|_| panic!("unable to find config file: '{}'", start_config.config));
 
-    let config: RelayConfig = serde_yaml::from_reader(file).expect("failed to parse config file");
+    let config: R = serde_yaml::from_reader(file).expect("failed to parse config file");
 
     unsafe {
-        LOCAL_DEV = config.is_local_dev;
+        LOCAL_DEV = config.as_ref().is_local_dev;
     }
 
     config
 }
 
+pub fn expect_env_var(env_var: &str) -> String {
+    env::var(env_var).expect(&format!("{} should be set", env_var))
+}
+
 pub fn load_keypair() -> BlsKeypair {
-    let signing_key_str = std::env::var("RELAY_KEY").expect("could not find RELAY_KEY in env");
+    let signing_key_str = expect_env_var("RELAY_KEY");
     let signing_key_bytes =
         alloy_primitives::hex::decode(signing_key_str).expect("invalid RELAY_KEY bytes");
 
@@ -176,11 +188,10 @@ pub fn load_keypair() -> BlsKeypair {
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct PostgresConfig {
     pub hostname: String,
-    #[serde(default = "default_port")]
+    #[serde(default = "default_u16::<5432>")]
     pub port: u16,
     pub db_name: String,
     pub user: String,
-    pub password: String,
     pub region: i16,
     pub region_name: String,
 }
@@ -193,10 +204,13 @@ pub struct BlockMergingConfig {
     /// Maximum age of a merged bid before it is considered stale and discarded.
     #[serde(default = "default_u64::<250>")]
     pub max_merged_bid_age_ms: u64,
+    /// Flag to allow dry run mode.
+    #[serde(default = "default_bool::<false>")]
+    pub is_dry_run: bool,
 }
 
-fn default_port() -> u16 {
-    5432
+pub const fn default_u16<const U: u16>() -> u16 {
+    U
 }
 
 pub const fn default_bool<const B: bool>() -> bool {
@@ -214,7 +228,7 @@ pub const fn default_u64<const D: u64>() -> u64 {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AlertsConfig {
     pub telegram_bot_token: String,
-    pub chat_id: i64,
+    pub chat_ids: Vec<ChatId>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -322,6 +336,7 @@ pub struct PrimevConfig {
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
+#[serde(tag = "type")]
 pub enum LoggingConfig {
     #[default]
     Console,
@@ -385,12 +400,16 @@ impl RouterConfig {
             Route::RegisterValidators,
             Route::GetHeader,
             Route::GetPayload,
+            Route::GetPayloadV2,
         ]);
 
         self.replace_condensed_with_real(Route::DataApi, &[
             Route::ProposerPayloadDelivered,
+            Route::ProposerHeaderDelivered,
             Route::BuilderBidsReceived,
             Route::ValidatorRegistration,
+            Route::DataAdjustments,
+            Route::MergedBlocks,
         ]);
     }
 
@@ -492,10 +511,13 @@ pub enum Route {
     GetPayload,
     GetPayloadV2,
     ProposerPayloadDelivered,
+    ProposerHeaderDelivered,
     BuilderBidsReceived,
     ValidatorRegistration,
     GetInclusionList,
     RelayNetwork,
+    DataAdjustments,
+    MergedBlocks,
 }
 
 impl Route {
@@ -513,8 +535,13 @@ impl Route {
             Route::ProposerPayloadDelivered => {
                 format!("{PATH_DATA_API}{PATH_PROPOSER_PAYLOAD_DELIVERED}")
             }
+            Route::ProposerHeaderDelivered => {
+                format!("{PATH_DATA_API}{PATH_PROPOSER_HEADER_DELIVERED}")
+            }
             Route::BuilderBidsReceived => format!("{PATH_DATA_API}{PATH_BUILDER_BIDS_RECEIVED}"),
             Route::ValidatorRegistration => format!("{PATH_DATA_API}{PATH_VALIDATOR_REGISTRATION}"),
+            Route::DataAdjustments => format!("{PATH_DATA_API}{PATH_DATA_ADJUSTMENTS}"),
+            Route::MergedBlocks => format!("{PATH_DATA_API}{PATH_MERGED_BLOCKS}"),
             Route::All => panic!("All is not a real route"),
             Route::BuilderApi => panic!("BuilderApi is not a real route"),
             Route::ProposerApi => panic!("ProposerApi is not a real route"),

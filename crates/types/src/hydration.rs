@@ -2,25 +2,46 @@ use std::{hash::Hasher, sync::Arc};
 
 use alloy_eips::eip7691::MAX_BLOBS_PER_BLOCK_ELECTRA;
 use alloy_primitives::{Address, B256};
+use lh_types::{ForkName, ForkVersionDecode};
 use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
+use ssz::{Decode, DecodeError};
 use ssz_derive::{Decode, Encode};
+use tracing::trace;
 use tree_hash::TreeHash;
 
 use crate::{
     BidTrace, Blob, BlobsBundle, BlobsBundleV1, BlobsBundleV2, BlsPublicKeyBytes,
     BlsSignatureBytes, ExecutionPayload, SignedBidSubmission, SignedBidSubmissionElectra,
-    SignedBidSubmissionFulu, bid_submission,
+    SignedBidSubmissionFulu,
+    bid_adjustment_data::BidAdjustmentData,
+    bid_submission,
     fields::{ExecutionRequests, KzgCommitment, KzgProof, Transaction},
 };
 
 /// A bid submission where transactions and blobs may be replaced by hashes instead of payload
-#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
-#[ssz(enum_behaviour = "transparent")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum DehydratedBidSubmission {
     Electra(DehydratedBidSubmissionElectra),
     Fulu(DehydratedBidSubmissionFulu),
+}
+
+impl ForkVersionDecode for DehydratedBidSubmission {
+    fn from_ssz_bytes_by_fork(bytes: &[u8], fork: ForkName) -> Result<Self, DecodeError> {
+        match fork {
+            ForkName::Base |
+            ForkName::Altair |
+            ForkName::Bellatrix |
+            ForkName::Capella |
+            ForkName::Deneb |
+            ForkName::Gloas => Err(DecodeError::NoMatchingVariant),
+            ForkName::Electra => DehydratedBidSubmissionElectra::from_ssz_bytes(bytes)
+                .map(DehydratedBidSubmission::Electra),
+            ForkName::Fulu => DehydratedBidSubmissionFulu::from_ssz_bytes(bytes)
+                .map(DehydratedBidSubmission::Fulu),
+        }
+    }
 }
 
 pub struct HydratedData {
@@ -121,6 +142,48 @@ pub struct DehydratedBidSubmissionFulu {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+pub struct DehydratedBidSubmissionFuluWithAdjustments {
+    message: BidTrace,
+    execution_payload: ExecutionPayload,
+    blobs_bundle: DehydratedBlobsFulu,
+    execution_requests: Arc<ExecutionRequests>,
+    signature: BlsSignatureBytes,
+    tx_root: Option<B256>,
+    bid_adjustment_data: BidAdjustmentData,
+}
+
+impl DehydratedBidSubmissionFuluWithAdjustments {
+    pub fn split(self) -> (DehydratedBidSubmission, BidAdjustmentData) {
+        (
+            DehydratedBidSubmission::Fulu(DehydratedBidSubmissionFulu {
+                message: self.message,
+                execution_payload: self.execution_payload,
+                blobs_bundle: self.blobs_bundle,
+                execution_requests: self.execution_requests,
+                signature: self.signature,
+                tx_root: self.tx_root,
+            }),
+            self.bid_adjustment_data,
+        )
+    }
+}
+
+impl ForkVersionDecode for DehydratedBidSubmissionFuluWithAdjustments {
+    fn from_ssz_bytes_by_fork(bytes: &[u8], fork: ForkName) -> Result<Self, DecodeError> {
+        match fork {
+            ForkName::Base |
+            ForkName::Altair |
+            ForkName::Bellatrix |
+            ForkName::Capella |
+            ForkName::Deneb |
+            ForkName::Gloas |
+            ForkName::Electra => Err(DecodeError::NoMatchingVariant),
+            ForkName::Fulu => DehydratedBidSubmissionFuluWithAdjustments::from_ssz_bytes(bytes),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 struct DehydratedBlobsFulu {
     commitments: Vec<KzgCommitment>,
     new_items: Vec<BlobItemFulu>,
@@ -155,7 +218,7 @@ impl DehydratedBidSubmissionElectra {
                 let bytes = tx.as_ref().try_into().unwrap();
                 let hash = u64::from_le_bytes(bytes);
                 let Some(cached_tx) = order_cache.transactions.get(&hash) else {
-                    last_err = Err(HydrationError::UnknownTxHash { index });
+                    last_err = Err(HydrationError::UnknownTxHash { index, hash });
                     continue;
                 };
 
@@ -176,6 +239,7 @@ impl DehydratedBidSubmissionElectra {
                 hasher.write(last_slice);
                 let hash = hasher.finish();
                 order_cache.transactions.insert(hash, tx.clone());
+                trace!("Inserted tx into cache: index {}, hash {}", index, hash);
             };
         }
 
@@ -248,7 +312,7 @@ impl DehydratedBidSubmissionFulu {
                 let bytes = tx.as_ref().try_into().unwrap();
                 let hash = u64::from_le_bytes(bytes);
                 let Some(cached_tx) = order_cache.transactions.get(&hash) else {
-                    last_err = Err(HydrationError::UnknownTxHash { index });
+                    last_err = Err(HydrationError::UnknownTxHash { index, hash });
                     continue;
                 };
 
@@ -269,6 +333,7 @@ impl DehydratedBidSubmissionFulu {
                 hasher.write(last_slice);
                 let hash = hasher.finish();
                 order_cache.transactions.insert(hash, tx.clone());
+                trace!("Inserted tx into cache: index {}, hash {}", index, hash);
             };
         }
 
@@ -364,6 +429,18 @@ impl HydrationCache {
             c.clear();
         }
     }
+
+    pub fn builder_count(&self) -> usize {
+        self.caches.len()
+    }
+
+    pub fn tx_count(&self) -> usize {
+        self.caches.values().map(|c| c.transactions.len()).sum()
+    }
+
+    pub fn blob_count(&self) -> usize {
+        self.caches.values().map(|c| c.blobs_electra.len() + c.blobs_fulu.len()).sum()
+    }
 }
 
 impl Default for HydrationCache {
@@ -374,8 +451,8 @@ impl Default for HydrationCache {
 
 #[derive(Debug, thiserror::Error)]
 pub enum HydrationError {
-    #[error("unkown tx: index {index}")]
-    UnknownTxHash { index: usize },
+    #[error("unkown tx: index {index}, hash {hash}")]
+    UnknownTxHash { index: usize, hash: u64 },
 
     #[error("invalid tx bytes: length {length}, index {index}")]
     InvalidTxLength { length: usize, index: usize },

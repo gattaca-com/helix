@@ -1,22 +1,30 @@
 use std::{
     ops::{Deref, DerefMut},
-    sync::{Arc, atomic::Ordering},
-    time::Instant,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use alloy_primitives::{B256, U256};
 use helix_common::{
-    BuilderInfo, RelayConfig, chain_info::ChainInfo, local_cache::LocalCache,
-    metrics::SimulatorMetrics, spawn_tracked,
+    BuilderInfo, RelayConfig,
+    chain_info::ChainInfo,
+    local_cache::LocalCache,
+    metrics::{CACHE_SIZE, SimulatorMetrics},
+    spawn_tracked,
+    utils::alert_discord,
 };
 use helix_types::{BlsPublicKeyBytes, HydrationCache, Slot, SubmissionVersion};
 use rustc_hash::FxHashMap;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     api::builder::error::BuilderApiError,
     auctioneer::{
         BlockMergeResponse,
+        bid_adjustor::BidAdjustor,
         bid_sorter::BidSorter,
         block_merger::BlockMerger,
         simulator::manager::{SimulationResult, SimulatorManager},
@@ -39,19 +47,27 @@ pub struct SlotContext {
     pub block_merger: BlockMerger,
 }
 
-pub struct Context {
+pub struct Context<B: BidAdjustor> {
     pub chain_info: ChainInfo,
     pub config: RelayConfig,
     pub cache: LocalCache,
     pub unknown_builder_info: BuilderInfo,
     pub db: Arc<PostgresDatabaseService>,
     pub slot_context: SlotContext,
+    pub bid_adjustor: B,
+    pub adjustments_enabled: Arc<AtomicBool>,
+    pub adjustments_failsafe_trigger: Arc<AtomicBool>,
+    pub completed_dry_run: bool,
 }
 
 const EXPECTED_PAYLOADS_PER_SLOT: usize = 5000;
 const EXPECTED_BUILDERS_PER_SLOT: usize = 200;
 
-impl Context {
+const DB_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+
+impl<B: BidAdjustor> Context<B> {
+    // TODO: refactor to accept fewer parameters
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         chain_info: ChainInfo,
         config: RelayConfig,
@@ -59,6 +75,7 @@ impl Context {
         db: Arc<PostgresDatabaseService>,
         bid_sorter: BidSorter,
         cache: LocalCache,
+        bid_adjustor: B,
     ) -> Self {
         let unknown_builder_info = BuilderInfo {
             collateral: U256::ZERO,
@@ -88,7 +105,27 @@ impl Context {
             block_merger,
         };
 
-        Self { chain_info, cache, unknown_builder_info, slot_context, db, config }
+        let adjustments_enabled = Arc::new(AtomicBool::new(false));
+        let adjustments_failsafe_trigger = Arc::new(AtomicBool::new(false));
+
+        Self::spawn_check_flag_task(
+            db.clone(),
+            adjustments_enabled.clone(),
+            adjustments_failsafe_trigger.clone(),
+        );
+
+        Self {
+            chain_info,
+            cache,
+            unknown_builder_info,
+            slot_context,
+            db,
+            config,
+            bid_adjustor,
+            adjustments_enabled,
+            adjustments_failsafe_trigger,
+            completed_dry_run: false,
+        }
     }
 
     pub fn builder_info(&self, builder: &BlsPublicKeyBytes) -> BuilderInfo {
@@ -111,41 +148,68 @@ impl Context {
         let builder = *result.submission.builder_public_key();
         let block_hash = *result.submission.block_hash();
 
-        if let Err(err) = result.result.as_ref() &&
-            err.is_demotable()
-        {
-            if self.cache.demote_builder(&builder) {
-                warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
+        let is_adjusted = self.payloads.get(&block_hash).is_some_and(|bid| bid.is_adjusted());
 
-                SimulatorMetrics::demotion_count();
+        if let Err(err) = result.result.as_ref() {
+            if err.is_demotable() {
+                if is_adjusted {
+                    warn!(%builder, %block_hash, %err, "block simulation resulted in an error. Disabling adjustments...");
+                    debug!(
+                        "invalid adjusted block header: {:?}",
+                        result.submission.execution_payload_ref().to_header(None, None)
+                    );
 
-                let reason = err.to_string();
-                let bid_slot = result.submission.slot();
-                let failsafe_triggered = self.sim_manager.failsafe_triggered.clone();
+                    if !self.adjustments_enabled.load(Ordering::Relaxed) {
+                        warn!(%block_hash, "adjustments already disabled");
+                    } else {
+                        SimulatorMetrics::disable_adjustments();
+                        self.adjustments_enabled.store(false, Ordering::Relaxed);
 
-                let db = self.db.clone();
-                spawn_tracked!(async move {
-                    if let Err(err) =
-                        db.db_demote_builder(bid_slot.as_u64(), &builder, &block_hash, reason).await
-                    {
-                        failsafe_triggered.store(true, Ordering::Relaxed);
-                        error!(%builder, %err, %block_hash, "failed to demote builder in database! Pausing all optmistic submissions");
+                        let db = self.db.clone();
+                        let failsafe_trigger = self.adjustments_failsafe_trigger.clone();
+                        let adjustments_enabled = self.adjustments_enabled.clone();
+                        spawn_tracked!(async move {
+                            if let Err(err) = db.disable_adjustments().await {
+                                failsafe_trigger.store(true, Ordering::Relaxed);
+                                adjustments_enabled.store(false, Ordering::Relaxed);
+                                error!(%block_hash, %err, "failed to disable adjustments in database, pulling the failsafe trigger");
+                                alert_discord(&format!(
+                                    "{} {} failed to disable adjustments in database, pulling the failsafe trigger",
+                                    err, block_hash
+                                ));
+                            }
+                        });
                     }
-                });
-            } else {
-                warn!(%err, %builder, %block_hash, "builder already demoted, skipping demotion");
-            }
-        };
+                } else if self.cache.demote_builder(&builder) {
+                    warn!(%builder, %block_hash, %err, "Block simulation resulted in an error. Demoting builder...");
 
-        let db = self.db.clone();
-        spawn_tracked!(async move {
-            if let Err(err) = db
-                .store_block_submission(result.submission, result.trace, result.optimistic_version)
-                .await
-            {
-                error!(%err, "failed to store block submission")
+                    SimulatorMetrics::demotion_count();
+
+                    let reason = err.to_string();
+                    let bid_slot = result.submission.slot();
+                    let failsafe_triggered = self.sim_manager.failsafe_triggered.clone();
+
+                    let db = self.db.clone();
+                    spawn_tracked!(async move {
+                        if let Err(err) = db
+                            .db_demote_builder(bid_slot.as_u64(), &builder, &block_hash, reason)
+                            .await
+                        {
+                            failsafe_triggered.store(true, Ordering::Relaxed);
+                            error!(%builder, %err, %block_hash, "failed to demote builder in database! Pausing all optmistic submissions");
+                            alert_discord(&format!(
+                                "{} {} {} failed to demote builder in database! Pausing all optmistic submissions",
+                                builder, err, block_hash
+                            ));
+                        }
+                    });
+                } else {
+                    warn!(%err, %builder, %block_hash, "builder already demoted, skipping demotion");
+                }
             }
-        });
+        } else if is_adjusted {
+            debug!(%builder, %block_hash,"adjusted block passed simulator validation!");
+        }
 
         if let Some(res_tx) = result.res_tx {
             // submission was initially valid but by the time sim finished the slot already
@@ -161,28 +225,47 @@ impl Context {
                 .res_tx
                 .send(Err(crate::api::proposer::ProposerApiError::NoExecutionPayloadFound));
         }
+        self.completed_dry_run = false;
         self.bid_sorter.process_slot(bid_slot.as_u64());
+
+        // record cache sizes before clearing
+        CACHE_SIZE.with_label_values(&["payloads"]).set(self.payloads.len() as f64);
+        CACHE_SIZE.with_label_values(&["submission_versions"]).set(self.version.len() as f64);
+        CACHE_SIZE
+            .with_label_values(&["hydration_builders"])
+            .set(self.hydration_cache.builder_count() as f64);
+        CACHE_SIZE
+            .with_label_values(&["hydration_transactions"])
+            .set(self.hydration_cache.tx_count() as f64);
+        CACHE_SIZE
+            .with_label_values(&["hydration_blobs"])
+            .set(self.hydration_cache.blob_count() as f64);
+
         self.version.clear();
         self.hydration_cache.clear();
         self.sim_manager.on_new_slot(bid_slot.as_u64());
         self.block_merger.on_new_slot(bid_slot.as_u64());
+        self.bid_adjustor.on_new_slot(bid_slot.as_u64());
 
-        // here we need to deallocate a lot of data, taking more than 1s on busy slots
-        // this is not a big issue since it 's only at the beginning of the slot, but it blocks the
-        // full event loop, which is not ideal. An alternative would be to use a buffer and
-        // overwrite the buffer slots, keeping only a block hash -> index map, however that
-        // would require us to estimate a hard upper limit on payloads received, or risk causing a
-        // missed slot
-        let payloads_to_drop = std::mem::replace(
-            &mut self.payloads,
-            FxHashMap::with_capacity_and_hasher(EXPECTED_PAYLOADS_PER_SLOT, Default::default()),
-        );
-        std::thread::spawn(move || {
-            let to_drop = payloads_to_drop.len();
-            let start = Instant::now();
-            drop(payloads_to_drop);
-            info!("dropped {} payloads in {:?}", to_drop, start.elapsed())
-        });
+        if !self.payloads.is_empty() {
+            // here we need to deallocate a lot of data, taking more than 1s on busy slots
+            // this is not a big issue since it 's only at the beginning of the slot, but it blocks
+            // the full event loop, which is not ideal. An alternative would be to use a
+            // buffer and overwrite the buffer slots, keeping only a block hash -> index
+            // map, however that would require us to estimate a hard upper limit on
+            // payloads received, or risk causing a missed slot
+
+            let payloads_to_drop = std::mem::replace(
+                &mut self.payloads,
+                FxHashMap::with_capacity_and_hasher(EXPECTED_PAYLOADS_PER_SLOT, Default::default()),
+            );
+            std::thread::spawn(move || {
+                let to_drop = payloads_to_drop.len();
+                let start = Instant::now();
+                drop(payloads_to_drop);
+                info!("dropped {} payloads in {:?}", to_drop, start.elapsed())
+            });
+        }
     }
 
     pub fn handle_merge_response(&mut self, response: BlockMergeResponse) {
@@ -192,8 +275,8 @@ impl Context {
             return;
         };
 
-        let original_payload_and_blobs = original_payload.payload_and_blobs.clone();
-        let builder_pubkey = original_payload.bid_data.builder_pubkey;
+        let original_payload_and_blobs = original_payload.payload_and_blobs();
+        let builder_pubkey = *original_payload.bid_data_ref().builder_pubkey;
 
         //TODO: this function does a lot of work, should move that work away from the event loop
         let Some(payload) = self
@@ -210,9 +293,41 @@ impl Context {
         };
         self.payloads.insert(block_hash, payload);
     }
+
+    fn spawn_check_flag_task(
+        db: Arc<PostgresDatabaseService>,
+        flag: Arc<AtomicBool>,
+        failsafe_triggered: Arc<AtomicBool>,
+    ) {
+        spawn_tracked!(async move {
+            let mut interval = tokio::time::interval(DB_CHECK_INTERVAL);
+            loop {
+                interval.tick().await;
+
+                if failsafe_triggered.load(Ordering::Relaxed) {
+                    flag.store(false, Ordering::Relaxed);
+                    return;
+                }
+
+                match db.check_adjustments_enabled().await {
+                    Ok(value) => {
+                        let previous = flag.swap(value, Ordering::Relaxed);
+                        if previous != value {
+                            tracing::info!(
+                                "adjustments enabled flag changed from {} to {}",
+                                previous,
+                                value
+                            );
+                        }
+                    }
+                    Err(e) => tracing::error!("failed to check adjustments_enabled flag: {}", e),
+                }
+            }
+        });
+    }
 }
 
-impl Deref for Context {
+impl<B: BidAdjustor> Deref for Context<B> {
     type Target = SlotContext;
 
     fn deref(&self) -> &Self::Target {
@@ -220,7 +335,7 @@ impl Deref for Context {
     }
 }
 
-impl DerefMut for Context {
+impl<B: BidAdjustor> DerefMut for Context<B> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.slot_context
     }

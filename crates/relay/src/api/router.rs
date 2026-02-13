@@ -69,9 +69,12 @@ pub fn build_router<A: Api>(
             Route::GetPayload => post(ProposerApi::<A>::get_payload),
             Route::GetPayloadV2 => post(ProposerApi::<A>::get_payload_v2),
             Route::ProposerPayloadDelivered => get(DataApi::proposer_payload_delivered),
+            Route::ProposerHeaderDelivered => get(DataApi::proposer_header_delivered),
             Route::BuilderBidsReceived => get(DataApi::builder_bids_received),
             Route::ValidatorRegistration => get(DataApi::validator_registration),
             Route::GetInclusionList => get(BuilderApi::<A>::get_inclusion_list),
+            Route::DataAdjustments => get(DataApi::data_adjustments),
+            Route::MergedBlocks => get(DataApi::merged_blocks),
             Route::RelayNetwork => any(RelayNetworkApi::connect),
             Route::All | Route::BuilderApi | Route::ProposerApi | Route::DataApi => {
                 panic!(

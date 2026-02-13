@@ -7,7 +7,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::StreamExt;
-use helix_common::{self, metrics::TopBidMetrics};
+use helix_common::{self, api::builder_api::TopBidUpdate, metrics::TopBidMetrics};
 use hyper::HeaderMap;
 use tokio::time::{self};
 use tracing::{debug, error};
@@ -50,7 +50,7 @@ impl<A: Api> BuilderApi<A> {
 /// the closure status.
 async fn push_top_bids(
     mut socket: WebSocket,
-    mut bid_stream: tokio::sync::broadcast::Receiver<Bytes>,
+    mut bid_stream: tokio::sync::broadcast::Receiver<TopBidUpdate>,
 ) {
     let _conn = TopBidMetrics::connection();
     let mut interval = time::interval(Duration::from_secs(10));
@@ -58,7 +58,7 @@ async fn push_top_bids(
     loop {
         tokio::select! {
             Ok(bid) = bid_stream.recv() => {
-                if socket.send(Message::Binary(bid)).await.is_err() {
+                if socket.send(Message::Binary(bid.as_ssz_bytes_fast().into())).await.is_err() {
                     error!("Failed to send bid. Disconnecting.");
                     break;
                 }

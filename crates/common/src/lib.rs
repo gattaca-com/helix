@@ -1,3 +1,4 @@
+pub mod adjustments;
 pub mod alerts;
 pub mod api;
 pub mod api_provider;
@@ -16,6 +17,7 @@ pub mod utils;
 pub mod validator;
 pub mod validator_preferences;
 
+pub use adjustments::*;
 pub use builder_info::*;
 pub use config::*;
 pub use proposer::*;

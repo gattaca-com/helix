@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use alloy_primitives::{Address, B256, U256};
-use helix_types::{BlsPublicKey, BlsPublicKeyBytes, Slot};
+use chrono::{DateTime, Utc};
+use helix_types::{BlsPublicKey, BlsPublicKeyBytes, BuilderInclusionResult, Slot};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, Default, Clone)]
@@ -119,4 +122,98 @@ pub struct ReceivedBlocksResponse {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ValidatorRegistrationParams {
     pub pubkey: BlsPublicKeyBytes,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct DataAdjustmentsResponse {
+    pub builder_pubkey: BlsPublicKeyBytes,
+    pub block_number: u64,
+    #[serde(with = "serde_utils::quoted_u256")]
+    pub delta: U256,
+    pub submitted_block_hash: B256,
+    pub submitted_received_at: DateTime<Utc>,
+    #[serde(with = "serde_utils::quoted_u256")]
+    pub submitted_value: U256,
+    pub adjusted_block_hash: B256,
+    #[serde(with = "serde_utils::quoted_u256")]
+    pub adjusted_value: U256,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct DataAdjustmentsParams {
+    pub slot: Slot,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub struct ProposerHeaderDeliveredParams {
+    pub slot: Option<u64>,
+    pub cursor: Option<u64>,
+    pub block_hash: Option<B256>,
+    pub block_number: Option<u64>,
+    pub builder_pubkey: Option<BlsPublicKey>,
+    pub proposer_pubkey: Option<BlsPublicKey>,
+    pub limit: Option<u64>,
+    pub order_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct MergedBlockResponse {
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub slot: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub block_number: u64,
+    pub original_block_hash: B256,
+    pub block_hash: B256,
+    #[serde(with = "serde_utils::quoted_u256")]
+    pub original_value: U256,
+    #[serde(with = "serde_utils::quoted_u256")]
+    pub merged_value: U256,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub original_tx_count: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub merged_tx_count: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub original_blob_count: u64,
+    #[serde(with = "serde_utils::quoted_u64")]
+    pub merged_blob_count: u64,
+    pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+pub struct MergedBlockParams {
+    pub slot: Slot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProposerHeaderDeliveredResponse {
+    pub slot: Option<Slot>,
+    pub parent_hash: Option<B256>,
+    pub block_hash: Option<B256>,
+    pub proposer_pubkey: Option<BlsPublicKeyBytes>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "quoted_u256_opt")]
+    pub value: Option<U256>,
+}
+
+mod quoted_u256_opt {
+    use alloy_primitives::U256;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &Option<U256>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(v) => serde_utils::quoted_u256::serialize(v, serializer),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<U256>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<String>::deserialize(deserializer)?
+            .map(|s| U256::from_str_radix(&s, 10).map_err(serde::de::Error::custom))
+            .transpose()
+    }
 }

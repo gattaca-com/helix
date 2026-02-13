@@ -1,6 +1,6 @@
 use std::{collections::HashMap, hash::Hash};
 
-use alloy_primitives::{Address, B256, U256, bytes::Bytes};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use lh_test_random::TestRandom;
 use lh_types::{ForkName, test_utils::TestRandom};
 use rand::Rng;
@@ -99,8 +99,16 @@ pub struct BlockMergingData {
 }
 
 impl BlockMergingData {
-    pub fn is_default(&self) -> bool {
-        !self.allow_appending && self.merge_orders.is_empty()
+    pub fn allow_all(builder_address: Address, num_tx: usize) -> Self {
+        let mut merge_orders = Vec::with_capacity(num_tx);
+        for index in 0..num_tx {
+            merge_orders.push(Order::Tx(TransactionOrder { index, can_revert: true }));
+        }
+        Self { allow_appending: true, builder_address, merge_orders }
+    }
+
+    pub fn append_only(builder_address: Address) -> Self {
+        Self { allow_appending: true, builder_address, merge_orders: vec![] }
     }
 }
 
@@ -214,14 +222,16 @@ impl MergeableOrderWithOrigin {
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BuilderInclusionResult {
+    #[serde(with = "serde_utils::quoted_u256")]
     pub revenue: U256,
-    pub tx_count: usize,
+    pub txs: Vec<B256>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct MergedBlock {
     pub slot: u64,
     pub block_number: u64,
+    pub original_block_hash: B256,
     pub block_hash: B256,
     pub original_value: U256,
     pub merged_value: U256,
@@ -241,7 +251,7 @@ impl MergedBlock {
         let builder_inclusions = self
             .builder_inclusions
             .iter()
-            .map(|(address, res)| format!("*{}*: {}", res.tx_count, address,))
+            .map(|(address, res)| format!("*{}*: {}", res.txs.len(), address,))
             .collect::<Vec<_>>()
             .join("\n");
         format!(

@@ -59,7 +59,7 @@ impl<A: Api> ProposerApi<A> {
             return Err(ProposerApiError::RequestWrongSlot { request_slot: params.slot, bid_slot });
         }
 
-        // Only return a bid if there is a proposer connected this slot.
+        // Only return a bid if there is a proposer connected to this slot.
         let Some(duty) = duty else {
             debug!("proposer duty not found");
             return Err(ProposerApiError::ProposerNotRegistered);
@@ -119,7 +119,14 @@ impl<A: Api> ProposerApi<A> {
         spawn_tracked!(
             async move {
                 if let Err(err) = db
-                    .save_get_header_call(params, bid_block_hash, trace, is_mev_boost, user_agent)
+                    .save_get_header_call(
+                        params,
+                        bid_block_hash,
+                        value,
+                        trace,
+                        is_mev_boost,
+                        user_agent,
+                    )
                     .await
                 {
                     error!(%err, "error saving get header call to database");
@@ -129,8 +136,8 @@ impl<A: Api> ProposerApi<A> {
         );
 
         let fork = proposer_api.chain_info.current_fork_name();
-        let payload_and_blobs = bid.payload_and_blobs.clone();
-        let bid_data = bid.bid_data.clone();
+        let payload_and_blobs = bid.payload_and_blobs();
+        let bid_data = bid.bid_data_ref().to_owned();
         let bid = bid.into_builder_bid_slow();
         let signed_bid = resign_builder_bid(bid, &proposer_api.signing_context, fork);
 

@@ -1,8 +1,11 @@
 use alloy_primitives::{Address, B256, U256};
+use chrono::{DateTime, Utc};
 use helix_common::{
     BuilderInfo, Filtering, ProposerInfo, SignedValidatorRegistrationEntry, ValidatorPreferences,
     api::{
-        builder_api::BuilderGetValidatorsResponseEntry, proposer_api::ValidatorRegistrationInfo,
+        builder_api::BuilderGetValidatorsResponseEntry,
+        data_api::{DataAdjustmentsResponse, MergedBlockResponse},
+        proposer_api::ValidatorRegistrationInfo,
     },
 };
 use helix_types::{
@@ -113,6 +116,7 @@ impl FromRow for BuilderGetValidatorsResponseEntry {
                         .get::<&str, Option<i64>>("delay_ms")
                         .and_then(|v| parse_i64_to_u64(v).ok()),
                     disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
+                    disable_optimistic: row.get::<&str, bool>("disable_optimistic"),
                 },
             },
         })
@@ -132,6 +136,7 @@ impl FromRow for ValidatorPreferences {
                 .get::<&str, Option<i64>>("delay_ms")
                 .and_then(|v| parse_i64_to_u64(v).ok()),
             disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
+            disable_optimistic: row.get::<&str, bool>("disable_optimistic"),
         })
     }
 }
@@ -209,6 +214,7 @@ impl FromRow for SignedValidatorRegistrationEntry {
                         .get::<&str, Option<i64>>("delay_ms")
                         .and_then(|v| parse_i64_to_u64(v).ok()),
                     disable_inclusion_lists: row.get::<&str, bool>("disable_inclusion_lists"),
+                    disable_optimistic: row.get::<&str, bool>("disable_optimistic"),
                 },
             },
             inserted_at: parse_timestamptz_to_u64(
@@ -232,11 +238,72 @@ impl FromRow for ProposerInfo {
     }
 }
 
+impl FromRow for DataAdjustmentsResponse {
+    fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError>
+    where
+        Self: Sized,
+    {
+        Ok(DataAdjustmentsResponse {
+            builder_pubkey: parse_bytes_to_pubkey_bytes(row.get::<&str, &[u8]>("builder_pubkey"))?,
+            block_number: parse_i64_to_u64(row.get::<&str, i64>("block_number"))?,
+            delta: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("delta")),
+            submitted_block_hash: parse_bytes_to_hash(
+                row.get::<&str, &[u8]>("submitted_block_hash"),
+            )?,
+            submitted_received_at: parse_timestamptz_to_datetime(
+                row.get::<&str, std::time::SystemTime>("submitted_received_at"),
+            ),
+            submitted_value: parse_numeric_to_u256(
+                row.get::<&str, PostgresNumeric>("submitted_value"),
+            ),
+            adjusted_block_hash: parse_bytes_to_hash(
+                row.get::<&str, &[u8]>("adjusted_block_hash"),
+            )?,
+            adjusted_value: parse_numeric_to_u256(
+                row.get::<&str, PostgresNumeric>("adjusted_value"),
+            ),
+        })
+    }
+}
+
+impl FromRow for MergedBlockResponse {
+    fn from_row(row: &tokio_postgres::Row) -> Result<Self, DatabaseError>
+    where
+        Self: Sized,
+    {
+        let builder_inclusions_str = row.get::<&str, &str>("builder_inclusions");
+        let builder_inclusions =
+            serde_json::from_str(builder_inclusions_str).map_err(DatabaseError::SerdeJsonError)?;
+
+        Ok(MergedBlockResponse {
+            slot: parse_i64_to_u64(row.get::<&str, i64>("slot"))?,
+            block_number: parse_i64_to_u64(row.get::<&str, i64>("block_number"))?,
+            original_block_hash: parse_bytes_to_hash(
+                row.get::<&str, &[u8]>("original_block_hash"),
+            )?,
+            block_hash: parse_bytes_to_hash(row.get::<&str, &[u8]>("block_hash"))?,
+            original_value: parse_numeric_to_u256(
+                row.get::<&str, PostgresNumeric>("original_value"),
+            ),
+            merged_value: parse_numeric_to_u256(row.get::<&str, PostgresNumeric>("merged_value")),
+            original_tx_count: parse_i32_to_u64(row.get::<&str, i32>("original_tx_count"))?,
+            merged_tx_count: parse_i32_to_u64(row.get::<&str, i32>("merged_tx_count"))?,
+            original_blob_count: parse_i32_to_u64(row.get::<&str, i32>("original_blob_count"))?,
+            merged_blob_count: parse_i32_to_u64(row.get::<&str, i32>("merged_blob_count"))?,
+            builder_inclusions,
+        })
+    }
+}
+
 pub fn parse_timestamptz_to_u64(timestamp: std::time::SystemTime) -> Result<u64, DatabaseError> {
     timestamp
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| DatabaseError::RowParsingError(Box::new(e)))
         .map(|duration| duration.as_secs())
+}
+
+pub fn parse_timestamptz_to_datetime(timestamp: std::time::SystemTime) -> DateTime<Utc> {
+    timestamp.into()
 }
 
 pub fn parse_bool_to_bool(value: bool) -> Result<bool, DatabaseError> {

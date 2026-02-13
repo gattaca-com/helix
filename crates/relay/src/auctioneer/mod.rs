@@ -1,3 +1,4 @@
+mod bid_adjustor;
 mod bid_sorter;
 mod block_merger;
 mod context;
@@ -19,6 +20,7 @@ use std::{
 
 use alloy_primitives::B256;
 pub use block_merger::OrderValidationError;
+use flux::tile::Tile;
 pub use handle::{AuctioneerHandle, RegWorkerHandle};
 use helix_common::{
     RelayConfig,
@@ -27,107 +29,80 @@ use helix_common::{
     local_cache::LocalCache,
     metrics::{STATE_TRANSITION_COUNT, STATE_TRANSITION_LATENCY, WORKER_QUEUE_LEN, WORKER_UTIL},
     record_submission_step,
-    utils::pin_thread_to_core,
 };
 use helix_types::Slot;
 use rustc_hash::FxHashMap;
 pub use simulator::*;
-use tracing::{debug, error, info, info_span, trace, warn};
-pub use types::{Event, GetPayloadResultData, PayloadBidData, PayloadHeaderData};
-use worker::{RegWorker, SubWorker};
+use tracing::{debug, error, info, trace, warn};
+pub use types::{
+    Event, GetPayloadResultData, PayloadBidData, PayloadEntry, SlotData, SubmissionPayload,
+};
+pub use worker::{RegWorker, SubWorker};
 
+pub use crate::auctioneer::{
+    bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
+    bid_sorter::BidSorter,
+    context::Context,
+    simulator::{SimulatorRequest, client::SimulatorClient, manager::SimulatorManager},
+};
 use crate::{
-    PostgresDatabaseService,
+    HelixSpine, PostgresDatabaseService,
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
-    auctioneer::{
-        bid_sorter::BidSorter,
-        context::Context,
-        manager::SimulatorManager,
-        types::{PendingPayload, SlotData},
-    },
+    auctioneer::types::PendingPayload,
     housekeeper::PayloadAttributesUpdate,
 };
 
-// TODO: tidy up builder and proposer api state, and spawn in a separate function
-pub fn spawn_workers(
-    chain_info: ChainInfo,
-    config: RelayConfig,
-    db: Arc<PostgresDatabaseService>,
-    cache: LocalCache,
-    top_bid_tx: tokio::sync::broadcast::Sender<bytes::Bytes>,
-    event_channel: (crossbeam_channel::Sender<Event>, crossbeam_channel::Receiver<Event>),
-) -> (AuctioneerHandle, RegWorkerHandle) {
-    let (sub_worker_tx, sub_worker_rx) = crossbeam_channel::bounded(10_000);
-    let (reg_worker_tx, reg_worker_rx) = crossbeam_channel::bounded(100_000);
-    let (event_tx, event_rx) = event_channel;
-
-    if config.is_registration_instance {
-        for core in config.cores.reg_workers.clone() {
-            let worker = RegWorker::new(core, chain_info.clone());
-            let rx = reg_worker_rx.clone();
-
-            std::thread::Builder::new()
-                .name(format!("worker-{core}"))
-                .spawn(move || {
-                    pin_thread_to_core(core);
-                    worker.run(rx)
-                })
-                .unwrap();
-        }
-    }
-
-    if config.is_submission_instance {
-        for core in config.cores.sub_workers.clone() {
-            let worker = SubWorker::new(core, event_tx.clone(), cache.clone(), chain_info.clone());
-            let rx = sub_worker_rx.clone();
-
-            std::thread::Builder::new()
-                .name(format!("worker-{core}"))
-                .spawn(move || {
-                    pin_thread_to_core(core);
-                    worker.run(rx)
-                })
-                .unwrap();
-        }
-
-        let auctioneer_core = config.cores.auctioneer;
-
-        let bid_sorter = BidSorter::new(top_bid_tx);
-        let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
-        let ctx = Context::new(chain_info, config, sim_manager, db, bid_sorter, cache);
-        let id = format!("auctioneer_{auctioneer_core}");
-        let auctioneer = Auctioneer { ctx, state: State::default(), tel: Telemetry::new(id) };
-
-        std::thread::Builder::new()
-            .name("auctioneer".to_string())
-            .spawn(move || {
-                pin_thread_to_core(auctioneer_core);
-                auctioneer.run(event_rx)
-            })
-            .unwrap();
-    }
-
-    (AuctioneerHandle::new(sub_worker_tx, event_tx), RegWorkerHandle::new(reg_worker_tx))
-}
-
-struct Auctioneer {
-    ctx: Context,
+pub struct Auctioneer<B: BidAdjustor> {
+    ctx: Context<B>,
     state: State,
     tel: Telemetry,
+    event_rx: crossbeam_channel::Receiver<Event>,
 }
 
-impl Auctioneer {
-    fn run(mut self, rx: crossbeam_channel::Receiver<Event>) {
-        let _span = info_span!("auctioneer").entered();
-        info!("starting");
+impl<B: BidAdjustor> Auctioneer<B> {
+    pub fn new(
+        chain_info: ChainInfo,
+        config: RelayConfig,
+        db: Arc<PostgresDatabaseService>,
+        bid_sorter: BidSorter,
+        local_cache: LocalCache,
+        bid_adjustor: B,
+        event_tx: crossbeam_channel::Sender<Event>,
+        event_rx: crossbeam_channel::Receiver<Event>,
+        id: usize,
+    ) -> Self {
+        let sim_manager = SimulatorManager::new(config.simulators.clone(), event_tx.clone());
 
-        loop {
-            for evt in rx.try_iter() {
-                self.state.step(evt, &mut self.ctx, &mut self.tel);
-            }
-
-            self.tel.telemetry(&rx);
+        let ctx = Context::new(
+            chain_info,
+            config,
+            sim_manager,
+            db,
+            bid_sorter,
+            local_cache,
+            bid_adjustor,
+        );
+        Self {
+            ctx,
+            state: State::default(),
+            tel: Telemetry::new(format!("auctioneer_{id}")),
+            event_rx,
         }
+    }
+}
+
+impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
+    fn loop_body(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
+        for event in self.event_rx.try_iter() {
+            self.state.step(event, &mut self.ctx, &mut self.tel);
+        }
+
+        self.tel.telemetry(&self.event_rx);
+    }
+
+    fn try_init(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) -> bool {
+        info!("starting");
+        true
     }
 }
 
@@ -163,7 +138,7 @@ impl Default for State {
 // TODO: tokio metrics
 
 impl State {
-    fn step(&mut self, event: Event, ctx: &mut Context, tel: &mut Telemetry) {
+    fn step<B: BidAdjustor>(&mut self, event: Event, ctx: &mut Context<B>, tel: &mut Telemetry) {
         let start = Instant::now();
         let start_state = self.as_str();
         let event_tag = event.as_str();
@@ -182,7 +157,7 @@ impl State {
             .observe(step_dur.as_nanos() as f64 / 1000.);
     }
 
-    fn _step(&mut self, event: Event, ctx: &mut Context) {
+    fn _step<B: BidAdjustor>(&mut self, event: Event, ctx: &mut Context<B>) {
         match (&self, event) {
             ///////////// LIFECYCLE EVENTS (ALWAYS VALID) /////////////
 
@@ -365,7 +340,7 @@ impl State {
                     warn!(req =% params.pubkey, this =% slot_data.registration_data.entry.registration.message.pubkey, "get header for mismatched proposer");
                     let _ = res_tx.send(Err(ProposerApiError::NoBidPrepared));
                 } else {
-                    ctx.handle_get_header(params, res_tx)
+                    ctx.handle_get_header(params, slot_data, res_tx)
                 }
 
                 trace!("finished processing");
@@ -382,12 +357,12 @@ impl State {
 
                 if let Some(local) = ctx.payloads.get(&block_hash) {
                     if let Some(block_hash) = ctx.handle_get_payload(
-                        local.payload_and_blobs.clone(),
+                        local.payload_and_blobs(),
                         *blinded,
                         trace,
                         res_tx,
                         slot_data,
-                        local.bid_data.clone(),
+                        local.bid_data_ref().to_owned(),
                     ) {
                         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
                         *self = State::Broadcasting { slot_data: slot_data.clone(), block_hash }
@@ -423,13 +398,13 @@ impl State {
                 }
             }
 
-            (State::Sorting(_), Event::MergeResult((id, result))) => {
+            (State::Sorting(slot_data), Event::MergeResult((id, result))) => {
                 match result {
                     Ok(response) => {
                         ctx.handle_merge_response(response);
                     }
                     Err(err) => {
-                        error!(%err, bid_slot =% id, "failed to merge block");
+                        error!(%err, bid_slot =% slot_data.bid_slot, "failed to merge block");
                     }
                 }
 
@@ -538,13 +513,13 @@ impl State {
         }
     }
 
-    fn process_slot_data(
+    fn process_slot_data<B: BidAdjustor>(
         bid_slot: Slot,
         mut payload_attributes_map: FxHashMap<B256, PayloadAttributesUpdate>,
         registration_data: Option<BuilderGetValidatorsResponseEntry>,
         payload_attributes_update: Option<PayloadAttributesUpdate>,
         il: Option<InclusionListWithMetadata>,
-        ctx: &mut Context,
+        ctx: &mut Context<B>,
     ) -> Self {
         if let Some(update) = payload_attributes_update {
             payload_attributes_map.insert(update.parent_hash, update);
@@ -591,7 +566,10 @@ impl State {
     /// Check whether we received the payload we were waiting for the pending get_payload, this
     /// makes sense to be called only when we add a new payload ie. when receiving a new submission
     /// or from gossip
-    fn maybe_start_broacasting(ctx: &mut Context, slot_data: &SlotData) -> Option<Self> {
+    fn maybe_start_broacasting<B: BidAdjustor>(
+        ctx: &mut Context<B>,
+        slot_data: &SlotData,
+    ) -> Option<Self> {
         let block_hash = ctx.maybe_try_unblind(slot_data)?;
         info!(bid_slot =% slot_data.bid_slot, %block_hash, "broadcasting block");
 

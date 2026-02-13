@@ -255,6 +255,12 @@ lazy_static! {
     )
     .unwrap();
 
+    static ref ADJUSTMENTS_DISABLED_COUNT: IntCounter = register_int_counter_with_registry!(
+        "adjustments_disabled_count_total",
+        "Count of adjustments disablments",
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
 
     static ref SIMULATOR_SYNC: GaugeVec = register_gauge_vec_with_registry!(
         "simulator_synced",
@@ -350,6 +356,14 @@ lazy_static! {
     )
     .unwrap();
 
+    pub static ref CACHE_SIZE: GaugeVec = register_gauge_vec_with_registry!(
+        "cache_size",
+        "Number of entries in cache",
+        &["cache"],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
     pub static ref TOP_BID_CONNECTIONS: Gauge = register_gauge_with_registry!(
         "top_bid_connections",
         "Count of top bid connections",
@@ -421,6 +435,15 @@ lazy_static! {
     pub static ref GET_PAYLOAD_TRACE_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
         "get_payload_trace_latency_us",
         "Latency of get payload trace for each step",
+        &["step"],
+        vec![1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 25_000., 50_000., 100_000., 500_000., 1_000_000., 5_000_000., 10_000_000., 50_000_000., 100_000_000.,],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref MERGE_TRACE_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
+        "block_merge_trace_latency_us",
+        "Latency of block merge trace for each step",
         &["step"],
         vec![1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 25_000., 50_000., 100_000., 500_000., 1_000_000., 5_000_000., 10_000_000., 50_000_000., 100_000_000.,],
         &RELAY_METRICS_REGISTRY
@@ -563,6 +586,41 @@ lazy_static! {
         "Length of worker queue",
         &["type"],
         vec![0., 1., 5., 10., 15., 25., 50., 100., 500., 1_000., 2_500.0,  5_000., 7_500., 10_000., 25_000., 50_000., 100_000.,],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref BID_ADJUSTMENT_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
+        "bid_adjustment_latency_us",
+        "Latency of adjusting bids in us",
+        &["strategy"],
+        vec![1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 25_000., 50_000., 100_000., 500_000., 1_000_000., 5_000_000., 10_000_000., 50_000_000., 100_000_000.,],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref BID_ADJUSTMENT_CALCULATION_LATENCY: HistogramVec = register_histogram_vec_with_registry!(
+        "bid_adjustment_calculation_latency_us",
+        "Latency of calculating adjustment value in us",
+        &["strategy"],
+        vec![1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 25_000., 50_000., 100_000., 500_000., 1_000_000., 5_000_000., 10_000_000., 50_000_000., 100_000_000.,],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref BID_ADJUSTMENT_APPLICATION_LATENCY: Histogram = register_histogram_with_registry!(
+        "bid_adjustment_application_latency_us",
+        "Latency of applying bid adjustments in us",
+        vec![1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 25_000., 50_000., 100_000., 500_000., 1_000_000., 5_000_000., 10_000_000., 50_000_000., 100_000_000.,],
+        &RELAY_METRICS_REGISTRY
+    )
+    .unwrap();
+
+    pub static ref BID_ADJUSTMENT_APPLICATION_LATENCY_V2: HistogramVec = register_histogram_vec_with_registry!(
+        "bid_adjustment_application_latency_v2_us",
+        "Latency of applying bid adjustments in us",
+        &["type"],
+        vec![1., 5., 10., 15., 25., 50., 100., 250., 500., 1_000., 5_000., 10_000., 25_000., 50_000., 100_000., 500_000., 1_000_000., 5_000_000., 10_000_000., 50_000_000., 100_000_000.,],
         &RELAY_METRICS_REGISTRY
     )
     .unwrap();
@@ -728,6 +786,10 @@ impl SimulatorMetrics {
 
     pub fn demotion_count() {
         BUILDER_DEMOTION_COUNT.inc();
+    }
+
+    pub fn disable_adjustments() {
+        ADJUSTMENTS_DISABLED_COUNT.inc();
     }
 
     pub fn simulator_sync(simulator: &str, is_synced: bool) {

@@ -2,11 +2,11 @@ use std::sync::{Arc, atomic::Ordering};
 
 use axum::{
     Extension,
-    extract::Json,
+    extract::{Json, Query},
     http::{HeaderMap, StatusCode},
 };
 use helix_common::{
-    Filtering, ValidatorPreferences,
+    ValidatorPreferences,
     api::proposer_api::ValidatorRegistrationInfo,
     api_provider::ApiProvider,
     metrics::{
@@ -44,6 +44,7 @@ impl<A: Api> ProposerApi<A> {
         Extension(proposer_api): Extension<Arc<ProposerApi<A>>>,
         Extension(KnownValidatorsLoaded(known_validators_loaded)): Extension<KnownValidatorsLoaded>,
         headers: HeaderMap,
+        Query(query_prefs): Query<PreferencesHeader>,
         Json(registrations): Json<Vec<SignedValidatorRegistration>>,
     ) -> Result<StatusCode, ProposerApiError> {
         if registrations.is_empty() {
@@ -75,6 +76,7 @@ impl<A: Api> ProposerApi<A> {
             header_delay: proposer_api.validator_preferences.header_delay,
             delay_ms: proposer_api.validator_preferences.delay_ms,
             disable_inclusion_lists: proposer_api.validator_preferences.disable_inclusion_lists,
+            disable_optimistic: proposer_api.validator_preferences.disable_optimistic,
         };
 
         let preferences_header = headers.get("x-preferences");
@@ -89,25 +91,11 @@ impl<A: Api> ProposerApi<A> {
         };
 
         if let Some(preferences) = preferences {
-            // Overwrite preferences if they are provided
-
-            if let Some(filtering) = preferences.filtering {
-                validator_preferences.filtering = filtering;
-            } else if let Some(censoring) = preferences.censoring {
-                validator_preferences.filtering = match censoring {
-                    true => Filtering::Regional,
-                    false => Filtering::Global,
-                };
-            }
-
-            if let Some(trusted_builders) = preferences.trusted_builders {
-                validator_preferences.trusted_builders = Some(trusted_builders);
-            }
-
-            if let Some(header_delay) = preferences.header_delay {
-                validator_preferences.header_delay = header_delay;
-            }
+            preferences.apply(&mut validator_preferences);
         }
+
+        // Query params override (applied after header)
+        query_prefs.apply(&mut validator_preferences);
 
         let user_agent = proposer_api.api_provider.get_metadata(&headers);
 

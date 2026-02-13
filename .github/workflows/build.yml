@@ -1,6 +1,7 @@
 name: build
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, develop]
 
@@ -49,9 +50,9 @@ jobs:
           push: true
           file: ./relay.Dockerfile
           tags: |
-            ghcr.io/gattaca-com/helix-relay:${{ env.IMAGE_NAME }}
-          cache-from: type=registry,ref=ghcr.io/gattaca-com/helix-relay:buildcache
-          cache-to: type=registry,ref=ghcr.io/gattaca-com/helix-relay:buildcache,mode=max
+            ghcr.io/${{ github.repository_owner }}/helix-relay:${{ env.IMAGE_NAME }}
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/helix-relay:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/helix-relay:buildcache,mode=max
 
   build-simulator:
     runs-on: ubuntu-latest
@@ -90,6 +91,6 @@ jobs:
           push: true
           file: ./simulator.Dockerfile
           tags: |
-            ghcr.io/gattaca-com/helix-simulator:${{ env.IMAGE_NAME }}
-          cache-from: type=registry,ref=ghcr.io/gattaca-com/helix-simulator:buildcache
-          cache-to: type=registry,ref=ghcr.io/gattaca-com/helix-simulator:buildcache,mode=max
+            ghcr.io/${{ github.repository_owner }}/helix-simulator:${{ env.IMAGE_NAME }}
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/helix-simulator:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/helix-simulator:buildcache,mode=max

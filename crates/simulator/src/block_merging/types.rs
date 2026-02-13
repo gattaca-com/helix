@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use alloy_eips::{Decodable2718, eip2718::Eip2718Error};
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_rpc_types::{beacon::requests::ExecutionRequestsV4, engine::ExecutionPayloadV3};
-use bytes::Bytes;
+use helix_types::BuilderInclusionResult;
 use reth_ethereum::{evm::EthEvmConfig, primitives::SignedTransaction, provider::ProviderError};
 use reth_node_builder::ConfigureEvm;
 use reth_primitives::{NodePrimitives, Recovered};
@@ -15,16 +15,15 @@ pub(crate) type RecoveredTx = Recovered<SignedTx>;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct BlockMergingConfig {
-    /// Builder coinbase -> collateral signer. The base block coinbase will accrue fees and
+    /// Builder coinbase -> collateral safe. The base block coinbase will accrue fees and
     /// disperse from its collateral address
-    pub builder_collateral_map: HashMap<Address, PrivateKeySigner>,
+    pub builder_collateral_map: HashMap<Address, Address>,
     /// Address for the relay's share of fees
     pub relay_fee_recipient: Address,
+    /// The multisend contract address.
+    pub multisend_contract: Address,
     /// Configuration for revenue distribution.
     pub distribution_config: DistributionConfig,
-    /// Address of disperse contract.
-    /// It must have a `disperseEther(address[],uint256[])` function.
-    pub disperse_address: Address,
     /// Whether to validate merged blocks or not
     pub validate_merged_blocks: bool,
 }
@@ -35,6 +34,14 @@ pub(crate) struct BlockMergingConfig {
 pub(crate) struct PrivateKeySigner(
     #[serde_as(as = "DisplayFromStr")] pub(crate) alloy_signer_local::PrivateKeySigner,
 );
+
+pub fn load_signer() -> PrivateKeySigner {
+    let signing_key_str = std::env::var("RELAY_KEY").expect("could not find RELAY_KEY in env");
+    let signing_key = signing_key_str
+        .parse::<alloy_signer_local::PrivateKeySigner>()
+        .expect("failed to parse RELAY_KEY");
+    PrivateKeySigner(signing_key)
+}
 
 /// Configuration for revenue distribution among different parties.
 /// The total basis points is 10000, which means each participant
@@ -212,6 +219,7 @@ pub(crate) enum RecoverError {
     InvalidSignature,
 }
 
+#[derive(Debug)]
 pub(crate) struct SimulatedOrder {
     pub(crate) order: MergeableOrderRecovered,
     pub(crate) gas_used: u64,
@@ -262,13 +270,6 @@ pub struct BlockMergeResponseV1 {
     /// Total value for the proposer
     pub proposer_value: U256,
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
-}
-
-#[serde_as]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BuilderInclusionResult {
-    pub revenue: U256,
-    pub tx_count: usize,
 }
 
 #[cfg(test)]

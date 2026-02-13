@@ -10,7 +10,7 @@ use helix_common::metrics::{
     SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
     SUBMISSION_DECOMPRESSED_BYTES,
 };
-use helix_types::BlsPublicKeyBytes;
+use helix_types::{BlsPublicKeyBytes, ForkName, ForkVersionDecode};
 use http::{
     HeaderMap, HeaderValue,
     header::{CONTENT_ENCODING, CONTENT_TYPE},
@@ -204,6 +204,25 @@ impl SubmissionDecoder {
         let start = Instant::now();
         let payload: T = match self.encoding {
             Encoding::Ssz => T::from_ssz_bytes(&body).map_err(BuilderApiError::SszDecode)?,
+            Encoding::Json => serde_json::from_slice(&body)?,
+        };
+
+        self.decode_latency = start.elapsed().saturating_sub(self.decompress_latency);
+        self.record_metrics();
+
+        Ok(payload)
+    }
+
+    pub fn decode_by_fork<T: ForkVersionDecode + DeserializeOwned>(
+        &mut self,
+        body: Bytes,
+        fork: ForkName,
+    ) -> Result<T, BuilderApiError> {
+        let start = Instant::now();
+        let payload: T = match self.encoding {
+            Encoding::Ssz => {
+                T::from_ssz_bytes_by_fork(&body, fork).map_err(BuilderApiError::SszDecode)?
+            }
             Encoding::Json => serde_json::from_slice(&body)?,
         };
 

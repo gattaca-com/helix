@@ -8,7 +8,8 @@ use axum::{
 use helix_common::{
     ValidatorPreferences,
     api::data_api::{
-        BuilderBlocksReceivedParams, DeliveredPayloadsResponse, ProposerPayloadDeliveredParams,
+        BuilderBlocksReceivedParams, DataAdjustmentsParams, DeliveredPayloadsResponse,
+        MergedBlockParams, ProposerHeaderDeliveredParams, ProposerPayloadDeliveredParams,
         ReceivedBlocksResponse, ValidatorRegistrationParams,
     },
     metrics,
@@ -132,7 +133,9 @@ impl DataApi {
         }
         data_api.builder_blocks_received_stats.record_total(&params);
 
-        if params.limit.is_none() && params.slot.is_none() {
+        // No need to apply limit for slot/block number based queries as the result set is already
+        // limited and returning less than the full set here would be misleading.
+        if params.limit.is_none() && params.slot.is_none() && params.block_number.is_none() {
             params.limit = Some(500);
         }
 
@@ -180,6 +183,63 @@ impl DataApi {
                     Err(DataApiError::InternalServerError)
                 }
             },
+        }
+    }
+
+    // Implements this API: https://docs.ultrasound.money/builders/bid-adjustment#data-api
+    // relay/v1/data/adjustments?slot=123
+    pub async fn data_adjustments(
+        Extension(data_api): Extension<Arc<DataApi>>,
+        Query(params): Query<DataAdjustmentsParams>,
+    ) -> Result<impl IntoResponse, DataApiError> {
+        match data_api.db.get_block_adjustments_for_slot(params.slot).await {
+            Ok(result) => Ok(Json(result)),
+            Err(err) => {
+                warn!(%err, "Failed to get slot adjustments info");
+                Err(DataApiError::InternalServerError)
+            }
+        }
+    }
+
+    pub async fn proposer_header_delivered(
+        Extension(data_api): Extension<Arc<DataApi>>,
+        Query(mut params): Query<ProposerHeaderDeliveredParams>,
+    ) -> Result<impl IntoResponse, DataApiError> {
+        if params.block_number.is_some() {
+            return Err(DataApiError::BlockNumberNotSupported);
+        }
+        if params.order_by.is_some() {
+            return Err(DataApiError::OrderByNotSupported);
+        }
+        if params.builder_pubkey.is_some() {
+            return Err(DataApiError::BuilderPubkeyNotSupported);
+        }
+        if params.limit.map(|l| l > 200).unwrap_or(false) {
+            return Err(DataApiError::LimitReached { limit: 200 });
+        }
+        if params.limit.is_none() {
+            params.limit = Some(200);
+        }
+
+        match data_api.db.get_proposer_header_delivered(&params).await {
+            Ok(result) => Ok(Json(result)),
+            Err(err) => {
+                warn!(error=%err, "Failed to fetch proposer header delivered");
+                Err(DataApiError::InternalServerError)
+            }
+        }
+    }
+
+    pub async fn merged_blocks(
+        Extension(data_api): Extension<Arc<DataApi>>,
+        Query(params): Query<MergedBlockParams>,
+    ) -> Result<impl IntoResponse, DataApiError> {
+        match data_api.db.get_merged_blocks_for_slot(params.slot).await {
+            Ok(result) => Ok(Json(result)),
+            Err(err) => {
+                warn!(%err, "Failed to get merged blocks info");
+                Err(DataApiError::InternalServerError)
+            }
         }
     }
 }

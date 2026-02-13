@@ -21,7 +21,7 @@ use crate::{
 };
 
 // Do not accept slots more than 60 seconds in the future
-const MAX_DISTANCE_FOR_FUTURE_SLOT: u64 = 60;
+const MAX_DISTANCE_FOR_SLOT_SEC: u64 = 30;
 const CUTOFF_TIME: u64 = 4;
 
 /// Payload for a new payload attribute event sent to subscribers.
@@ -174,15 +174,18 @@ impl ChainEventUpdater {
 
         info!(head_slot =% slot, "processing slot");
 
-        // Validate this isn't a faulty head slot
         let slot_timestamp =
             self.chain_info.genesis_time_in_secs + (slot * self.chain_info.seconds_per_slot());
-        if slot_timestamp > utcnow_sec() + MAX_DISTANCE_FOR_FUTURE_SLOT {
+
+        let now = utcnow_sec();
+        if slot_timestamp < now - MAX_DISTANCE_FOR_SLOT_SEC {
+            warn!(head_slot = slot, "slot is too old");
+            return;
+        } else if slot_timestamp > now + MAX_DISTANCE_FOR_SLOT_SEC {
             warn!(head_slot = slot, "slot is too far in the future");
             return;
         }
 
-        // Log missed slots
         if self.head_slot != 0 {
             for s in (self.head_slot + 1)..slot {
                 warn!(missed_slot = s, "missed slot");
@@ -230,7 +233,6 @@ impl ChainEventUpdater {
         let update = SlotUpdate { slot: slot.into(), new_duties: Some(new_duties), next_duty };
 
         self.curr_slot_info.handle_new_slot(update, &self.chain_info);
-        self.local_cache.process_slot(slot);
     }
 
     // Handles a new payload attributes event

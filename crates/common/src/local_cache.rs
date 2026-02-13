@@ -12,7 +12,7 @@ use dashmap::{DashMap, DashSet};
 use helix_types::{BlsPublicKeyBytes, CryptoError, MergedBlock};
 use http::HeaderValue;
 use parking_lot::RwLock;
-use tracing::{error, info};
+use tracing::error;
 
 use crate::{
     BuilderConfig, BuilderInfo, ProposerInfo,
@@ -20,6 +20,7 @@ use crate::{
         BuilderGetValidatorsResponseEntry, InclusionListWithKey, InclusionListWithMetadata,
         SlotCoordinate,
     },
+    metrics::CACHE_SIZE,
 };
 
 const ESTIMATED_TRUSTED_PROPOSERS: usize = 200_000;
@@ -174,12 +175,18 @@ impl LocalCache {
 
             self.builder_info_cache.insert(builder_info.pub_key, builder_info.builder_info.clone());
         }
+
+        CACHE_SIZE.with_label_values(&["builder_info"]).set(self.builder_info_cache.len() as f64);
+        CACHE_SIZE.with_label_values(&["api_keys"]).set(self.api_key_cache.len() as f64);
     }
 
     pub fn update_trusted_proposers(&self, proposer_whitelist: Vec<ProposerInfo>) {
         for proposer in &proposer_whitelist {
             self.trusted_proposers.insert(proposer.pubkey, proposer.clone());
         }
+        CACHE_SIZE
+            .with_label_values(&["trusted_proposers"])
+            .set(self.trusted_proposers.len() as f64);
     }
 
     pub fn is_trusted_proposer(&self, proposer_pub_key: &BlsPublicKeyBytes) -> bool {
@@ -226,17 +233,22 @@ impl LocalCache {
         self.proposer_duties.read().clone()
     }
 
-    pub fn process_slot(&self, head_slot: u64) {
-        info!(head_slot, "Processing new slot in local cache, clearing old data");
-        self.merged_blocks.clear();
-    }
-
     pub fn save_merged_block(&self, merged_block: MergedBlock) {
         self.merged_blocks.insert(merged_block.block_hash(), merged_block);
+        CACHE_SIZE.with_label_values(&["merged_blocks"]).set(self.merged_blocks.len() as f64);
     }
 
     pub fn get_merged_block(&self, block_hash: &B256) -> Option<MergedBlock> {
         self.merged_blocks.get(block_hash).map(|b| b.value().clone())
+    }
+
+    pub fn get_merged_blocks(&self) -> Vec<MergedBlock> {
+        self.merged_blocks.iter().map(|b| b.value().clone()).collect()
+    }
+
+    pub fn clear_merged_blocks(&self) {
+        self.merged_blocks.clear();
+        CACHE_SIZE.with_label_values(&["merged_blocks"]).set(0.0);
     }
 }
 
