@@ -47,7 +47,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn test_admin_service() {
-        let auctioneer = Arc::new(LocalCache::new_test());
+        let auctioneer = Arc::new(LocalCache::new());
 
         let admin_token = "test_token".into();
         tokio::spawn(run_admin_service(auctioneer.clone(), admin_token));
@@ -76,7 +76,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn test_admin_service_unauthorized() {
-        let auctioneer = Arc::new(LocalCache::new_test());
+        let auctioneer = Arc::new(LocalCache::new());
 
         let admin_token = "test_token".into();
         tokio::spawn(run_admin_service(auctioneer.clone(), admin_token));

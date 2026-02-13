@@ -27,12 +27,17 @@ use tracing::debug;
 
 use crate::{
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
-    auctioneer::{BlockMergeResult, simulator::manager::SimulationResult},
+    auctioneer::{
+        BlockMergeResult,
+        decoder::{Compression, Encoding},
+        simulator::manager::SimulationResult,
+    },
     gossip::BroadcastPayloadParams,
     housekeeper::PayloadAttributesUpdate,
+    tcp_bid_recv::types::BidSubmissionHeader,
 };
 
-pub type SubmissionResult = Result<(), BuilderApiError>;
+pub type SubmissionResult = (u64, Result<(), BuilderApiError>);
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
 
@@ -44,7 +49,9 @@ pub struct GetPayloadResultData {
     pub bid: PayloadBidData,
 }
 
+#[derive(Clone, Debug)]
 pub struct SubmissionData {
+    pub request_id: u64,
     pub submission: Submission,
     pub merging_data: Option<MergeableOrdersWithPref>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
@@ -62,7 +69,7 @@ impl Deref for SubmissionData {
 }
 
 #[allow(clippy::large_enum_variant)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Submission {
     // received after sigverify
     Full(SignedBidSubmission),
@@ -297,12 +304,17 @@ impl PayloadBidDataRef<'_> {
 
 pub enum SubWorkerJob {
     BlockSubmission {
-        headers: http::HeaderMap,
+        header: BidSubmissionHeader,
+        sequence: Option<u64>,
+        encoding: Encoding,
+        api_key: Option<String>,
+        compression: Compression,
         body: bytes::Bytes,
         trace: SubmissionTrace, // TODO: replace this with better tracing
         res_tx: oneshot::Sender<SubmissionResult>,
         span: tracing::Span,
         sent_at: Instant,
+        skip_sigverify: bool,
     },
 
     GetPayload {

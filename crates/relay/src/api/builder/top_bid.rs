@@ -22,7 +22,11 @@ impl<A: Api> BuilderApi<A> {
         headers: HeaderMap,
         ws: WebSocketUpgrade,
     ) -> Result<impl IntoResponse, BuilderApiError> {
-        let Some(api_key) = headers.get(HEADER_API_KEY).or_else(|| headers.get(HEADER_API_TOKEN))
+        let Some(api_key) = headers
+            .get(HEADER_API_KEY)
+            .or(headers.get(HEADER_API_TOKEN))
+            .map(|key| key.to_str().ok())
+            .flatten()
         else {
             return Err(BuilderApiError::InvalidApiKey);
         };
