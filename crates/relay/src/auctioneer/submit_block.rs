@@ -32,10 +32,11 @@ impl<B: BidAdjustor> Context<B> {
         res_tx: oneshot::Sender<SubmissionResult>,
         slot_data: &SlotData,
     ) {
+        let request_id = submission_data.request_id;
         match self.validate_and_sort(submission_data, slot_data) {
             Ok((validated, optimistic_version, merging_data)) => {
                 let res_tx = if optimistic_version.is_optimistic() {
-                    let _ = res_tx.send(Ok(()));
+                    let _ = res_tx.send((request_id, Ok(())));
                     None
                 } else {
                     Some(res_tx)
@@ -77,7 +78,7 @@ impl<B: BidAdjustor> Context<B> {
             }
 
             Err(err) => {
-                let _ = res_tx.send(Err(err));
+                let _ = res_tx.send((request_id, Err(err)));
             }
         }
     }
@@ -94,7 +95,10 @@ impl<B: BidAdjustor> Context<B> {
             Err(err) if err.is_demotable() => {
                 self.bid_sorter.demote(*result.submission.builder_public_key());
                 if let Some(res_tx) = res_tx {
-                    let _ = res_tx.send(Err(BuilderApiError::BlockSimulation(err.clone())));
+                    let _ = res_tx.send((
+                        result.request_id,
+                        Err(BuilderApiError::BlockSimulation(err.clone())),
+                    ));
                 };
             }
 
@@ -111,7 +115,7 @@ impl<B: BidAdjustor> Context<B> {
                     }
                     self.request_merged_block();
 
-                    let _ = res_tx.send(Ok(()));
+                    let _ = res_tx.send((result.request_id, Ok(())));
                 };
             }
         }
@@ -204,6 +208,7 @@ impl<B: BidAdjustor> Context<B> {
         });
 
         let validated = ValidatedData {
+            request_id: submission_data.request_id,
             submission,
             tx_root: maybe_tx_root,
             payload_attributes,
@@ -231,6 +236,7 @@ impl<B: BidAdjustor> Context<B> {
         );
 
         let req = SimulatorRequest {
+            submission_request_id: validated.request_id,
             request,
             is_top_bid: validated.is_top_bid,
             res_tx,
@@ -310,6 +316,7 @@ impl<B: BidAdjustor> Context<B> {
 }
 
 pub struct ValidatedData<'a> {
+    pub request_id: u64,
     pub submission: SignedBidSubmission,
     pub tx_root: Option<B256>,
     pub payload_attributes: &'a PayloadAttributesUpdate,

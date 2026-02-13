@@ -59,6 +59,10 @@ pub struct RelayConfig {
     pub gossip_payload_on_header: bool,
     #[serde(default = "default_u16::<4040>")]
     pub api_port: u16,
+    #[serde(default = "default_u16::<4041>")]
+    pub tcp_port: u16,
+    #[serde(default = "default_usize::<512>")]
+    pub tcp_max_connections: usize,
 }
 
 impl RelayConfig {
@@ -89,9 +93,12 @@ impl RelayConfig {
                 tokio: vec![],
                 sub_workers: vec![],
                 reg_workers: vec![],
+                tcp_bid_submissions_tile: 2,
             },
             gossip_payload_on_header: false,
             api_port: 4040,
+            tcp_port: 4041,
+            tcp_max_connections: Default::default(),
         }
     }
 }
@@ -134,6 +141,7 @@ pub struct CoresConfig {
     pub sub_workers: Vec<usize>,
     /// Registrations
     pub reg_workers: Vec<usize>,
+    pub tcp_bid_submissions_tile: usize,
 }
 
 impl Default for WebsiteConfig {

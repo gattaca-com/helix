@@ -1,4 +1,5 @@
 use std::{
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -22,10 +23,10 @@ use helix_common::{
     utils::{init_panic_hook, init_tracing_log},
 };
 use helix_relay::{
-    Api, Auctioneer, AuctioneerHandle, BidSorter, DefaultBidAdjustor, HelixSpine,
-    PostgresDatabaseService, RegWorker, RegWorkerHandle, RelayNetworkManager, SubWorker,
-    WebsiteService, start_admin_service, start_api_service, start_beacon_client, start_db_service,
-    start_housekeeper,
+    Api, Auctioneer, AuctioneerHandle, BidSorter, BidSubmissionTcpListener, DefaultBidAdjustor,
+    HelixSpine, PostgresDatabaseService, RegWorker, RegWorkerHandle, RelayNetworkManager,
+    SubWorker, WebsiteService, start_admin_service, start_api_service, start_beacon_client,
+    start_db_service, start_housekeeper,
 };
 use helix_types::BlsKeypair;
 use tikv_jemallocator::Jemalloc;
@@ -121,7 +122,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
     let termination_grace_period = config.router_config.shutdown_delay_ms;
 
     let spine = HelixSpine::new(None);
-    spine.start(None, |spine| {
+    spine.start(None, Some(Duration::from_millis(termination_grace_period)), |spine| {
         start_admin_service(local_cache.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));
 
         let auctioneer_handle = AuctioneerHandle::new(sub_worker_tx, event_tx.clone());
@@ -142,7 +143,7 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             terminating.clone(),
             top_bid_tx.clone(),
             relay_network_api.api(),
-            auctioneer_handle,
+            auctioneer_handle.clone(),
             registrations_handle,
         );
 
@@ -174,6 +175,22 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
             }
 
             let auctioneer_core = config.cores.auctioneer;
+            let sock_addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, config.tcp_port));
+            let block_submission_tcp_listener = BidSubmissionTcpListener::new(
+                sock_addr,
+                auctioneer_handle,
+                local_cache.api_key_cache.clone(),
+                config.tcp_max_connections,
+            );
+            attach_tile(
+                block_submission_tcp_listener,
+                spine,
+                TileConfig::new(
+                    config.cores.tcp_bid_submissions_tile,
+                    flux::utils::ThreadPriority::High,
+                ),
+            );
+
             let auctioneer = Auctioneer::new(
                 chain_info.as_ref().clone(),
                 config,

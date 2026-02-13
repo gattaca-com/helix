@@ -59,7 +59,7 @@ impl WebsiteService {
         });
 
         let chain_updater = ChainEventUpdater::new(
-            Arc::new(LocalCache::new_test()),
+            Arc::new(LocalCache::new()),
             chain_info,
             current_slot_info,
             crossbeam_channel::bounded(0).0,

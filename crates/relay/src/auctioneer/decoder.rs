@@ -15,7 +15,7 @@ use http::{
     HeaderMap, HeaderValue,
     header::{CONTENT_ENCODING, CONTENT_TYPE},
 };
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use ssz::Decode;
 use strum::{AsRefStr, EnumString};
 use tracing::trace;
@@ -24,9 +24,13 @@ use zstd::{
     zstd_safe::{CONTENTSIZE_ERROR, CONTENTSIZE_UNKNOWN, get_frame_content_size},
 };
 
-use crate::api::{
-    HEADER_MERGE_TYPE, HEADER_SUBMISSION_TYPE,
-    builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
+use crate::{
+    api::{
+        HEADER_API_KEY, HEADER_API_TOKEN, HEADER_HYDRATE, HEADER_IS_MERGEABLE, HEADER_MERGE_TYPE,
+        HEADER_SEQUENCE, HEADER_SUBMISSION_TYPE, HEADER_WITH_ADJUSTMENTS,
+        builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
+    },
+    tcp_bid_recv::{BidSubmissionHeader, types::BidSubmissionFlags},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, AsRefStr)]
@@ -44,29 +48,92 @@ impl SubmissionType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, AsRefStr)]
+#[repr(u8)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, EnumString, AsRefStr)]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 pub enum MergeType {
-    Mergeable,
-    AppendOnly,
+    #[default]
+    None = 0,
+    Mergeable = 1,
+    AppendOnly = 2,
 }
 
 impl MergeType {
-    pub fn from_headers(header_map: &HeaderMap) -> Option<Self> {
-        let merge_type = header_map.get(HEADER_MERGE_TYPE)?.to_str().ok()?;
-        merge_type.parse().ok()
+    pub fn from_headers(header_map: &HeaderMap) -> Self {
+        match header_map.get(HEADER_MERGE_TYPE) {
+            None => {
+                if matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
+                {
+                    MergeType::Mergeable
+                } else {
+                    MergeType::None
+                }
+            }
+            Some(merge_type) => {
+                merge_type.to_str().ok().map(|t| t.parse().ok()).flatten().unwrap_or_default()
+            }
+        }
+    }
+
+    pub fn is_some(&self) -> bool {
+        *self != MergeType::None
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Compression {
-    None,
-    Gzip,
-    Zstd,
+impl TryFrom<u8> for MergeType {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Mergeable),
+            2 => Ok(Self::AppendOnly),
+            _ => Err(()),
+        }
+    }
+}
+
+#[repr(u8)]
+#[derive(
+    Debug, Eq, PartialEq, Clone, Copy, Serialize, Deserialize, Hash, PartialOrd, Ord, Default,
+)]
+pub enum Compression {
+    #[default]
+    None = 0,
+    Gzip = 1,
+    Zstd = 2,
+}
+
+impl Compression {
+    pub fn string(&self) -> String {
+        match &self {
+            Compression::None => "none".into(),
+            Compression::Gzip => "gzip".into(),
+            Compression::Zstd => "zstd".into(),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match &self {
+            Compression::None => "none",
+            Compression::Gzip => "gzip",
+            Compression::Zstd => "zstd",
+        }
+    }
+}
+
+impl std::fmt::Display for Compression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", match self {
+            Compression::None => "NONE",
+            Compression::Gzip => "GZIP",
+            Compression::Zstd => "ZSTD",
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
-enum Encoding {
+pub enum Encoding {
     Json,
     Ssz,
 }
@@ -85,23 +152,7 @@ pub struct SubmissionDecoder {
 }
 
 impl SubmissionDecoder {
-    pub fn from_headers(header_map: &HeaderMap) -> Self {
-        const GZIP_HEADER: HeaderValue = HeaderValue::from_static("gzip");
-        const ZSTD_HEADER: HeaderValue = HeaderValue::from_static("zstd");
-
-        let compression = match header_map.get(CONTENT_ENCODING) {
-            Some(header) if header == GZIP_HEADER => Compression::Gzip,
-            Some(header) if header == ZSTD_HEADER => Compression::Zstd,
-            _ => Compression::None,
-        };
-
-        const SSZ_HEADER: HeaderValue = HeaderValue::from_static("application/octet-stream");
-
-        let encoding = match header_map.get(CONTENT_TYPE) {
-            Some(header) if header == SSZ_HEADER => Encoding::Ssz,
-            _ => Encoding::Json,
-        };
-
+    pub fn new(compression: Compression, encoding: Encoding) -> Self {
         Self {
             compression,
             encoding,
@@ -233,11 +284,7 @@ impl SubmissionDecoder {
     }
 
     fn record_metrics(&self) {
-        let compression_label = match self.compression {
-            Compression::None => "none",
-            Compression::Gzip => "gzip",
-            Compression::Zstd => "zstd",
-        };
+        let compression_label = self.compression.as_str();
         SUBMISSION_BY_COMPRESSION.with_label_values(&[compression_label]).inc();
 
         if self.compression != Compression::None {
@@ -260,7 +307,7 @@ impl SubmissionDecoder {
                     .observe(error)
             }
         }
-        // Record encoding type
+
         let encoding_label = match self.encoding {
             Encoding::Json => "json",
             Encoding::Ssz => "ssz",
@@ -297,6 +344,70 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
     } else {
         None
     }
+}
+
+pub fn headers_map_to_bid_submission_header(
+    headers: http::header::HeaderMap,
+) -> (BidSubmissionHeader, Option<u64>, Encoding, Compression, Option<String>) {
+    let mut flags = BidSubmissionFlags::default();
+
+    if matches!(headers.get(HEADER_WITH_ADJUSTMENTS), Some(header) if header == HeaderValue::from_static("true"))
+    {
+        flags.set(BidSubmissionFlags::WITH_ADJUSTMENTS, true);
+    }
+    if headers.get(HEADER_HYDRATE).is_some() {
+        flags.set(BidSubmissionFlags::IS_DEHYDRATED, true);
+    }
+
+    if let Some(submission_type) = SubmissionType::from_headers(&headers) {
+        match submission_type {
+            SubmissionType::Dehydrated => {
+                flags.set(BidSubmissionFlags::IS_DEHYDRATED, true);
+            }
+            SubmissionType::Merge => {
+                // TODO @nina
+                // flags.set(BidSubmissionFlags::WITH_MERGEABLE_DATA, true);
+            }
+            SubmissionType::Default => {}
+        }
+    }
+
+    let sequence_number = headers
+        .get(HEADER_SEQUENCE)
+        .and_then(|seq| seq.to_str().ok())
+        .and_then(|seq| seq.parse::<u64>().ok());
+
+    const GZIP_HEADER: HeaderValue = HeaderValue::from_static("gzip");
+    const ZSTD_HEADER: HeaderValue = HeaderValue::from_static("zstd");
+
+    let compression = match headers.get(CONTENT_ENCODING) {
+        Some(header) if header == GZIP_HEADER => Compression::Gzip,
+        Some(header) if header == ZSTD_HEADER => Compression::Zstd,
+        _ => Compression::None,
+    };
+
+    const SSZ_HEADER: HeaderValue = HeaderValue::from_static("application/octet-stream");
+
+    let encoding = match headers.get(CONTENT_TYPE) {
+        Some(header) if header == SSZ_HEADER => Encoding::Ssz,
+        _ => Encoding::Json,
+    };
+
+    let merge_type = MergeType::from_headers(&headers);
+
+    let api_key = headers
+        .get(HEADER_API_KEY)
+        .or(headers.get(HEADER_API_TOKEN))
+        .map(|key| key.to_str().map(|key| key.to_owned()).ok())
+        .flatten();
+
+    let header = BidSubmissionHeader {
+        sequence_number: sequence_number.unwrap_or_default(),
+        merge_type,
+        flags,
+    };
+
+    (header, sequence_number, encoding, compression, api_key)
 }
 
 #[cfg(test)]

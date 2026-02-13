@@ -41,6 +41,7 @@ struct LocalTelemetry {
 pub type SimulationResult = (usize, Option<SimulationResultInner>);
 pub struct SimulationResultInner {
     pub result: Result<(), BlockSimError>,
+    pub request_id: u64,
     // Some if not optimistic
     pub res_tx: Option<oneshot::Sender<SubmissionResult>>,
     // TODO: move up
@@ -230,6 +231,7 @@ impl SimulatorManager {
             let result = (
                 id,
                 Some(SimulationResultInner {
+                    request_id: req.submission_request_id,
                     result: res,
                     paused_until,
                     res_tx: req.res_tx,

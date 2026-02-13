@@ -6,6 +6,7 @@ mod gossip;
 mod housekeeper;
 mod network;
 mod spine;
+mod tcp_bid_recv;
 mod website;
 
 pub use crate::{
@@ -13,12 +14,13 @@ pub use crate::{
     auctioneer::{
         Auctioneer, AuctioneerHandle, BidSorter, Context, PayloadEntry, RegWorker, RegWorkerHandle,
         SimulatorClient, SimulatorManager, SimulatorRequest, SlotData, SubWorker,
-        SubmissionPayload,
+        SubmissionPayload, SubmissionResult,
     },
     beacon::start_beacon_client,
     database::{postgres::postgres_db_service::PostgresDatabaseService, start_db_service},
     housekeeper::start_housekeeper,
     network::RelayNetworkManager,
     spine::HelixSpine,
+    tcp_bid_recv::BidSubmissionTcpListener,
     website::WebsiteService,
 };

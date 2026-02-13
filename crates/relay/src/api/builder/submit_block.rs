@@ -8,14 +8,17 @@ use http::HeaderMap;
 use tracing::{error, trace};
 
 use super::api::BuilderApi;
-use crate::api::{Api, builder::error::BuilderApiError};
+use crate::{
+    api::{Api, builder::error::BuilderApiError},
+    auctioneer::headers_map_to_bid_submission_header,
+};
 
 impl<A: Api> BuilderApi<A> {
     /// Implements this API: <https://flashbots.github.io/relay-specs/#/Builder/submitBlock>
     #[tracing::instrument(skip_all, err(level = tracing::Level::TRACE),
         fields(
-        id =% extract_request_id(&headers),
-        slot = tracing::field::Empty, // submission slot
+        id = tracing::field::Empty,
+        slot = tracing::field::Empty,
         builder_pubkey = tracing::field::Empty,
         builder_id = tracing::field::Empty,
         block_hash = tracing::field::Empty,
@@ -26,18 +29,33 @@ impl<A: Api> BuilderApi<A> {
         headers: HeaderMap,
         body: bytes::Bytes,
     ) -> Result<(), BuilderApiError> {
+        let request_id = extract_request_id(&headers);
+
+        tracing::Span::current().record("id", tracing::field::display(request_id));
+
         trace!("start handler");
 
         let mut trace = SubmissionTrace::init_from_timings(timings);
         trace.metadata = api.api_provider.get_metadata(&headers);
 
-        let Ok(rx) = api.auctioneer_handle.block_submission(headers, body, trace) else {
+        let (header, sequence, encoding, compression, api_key) =
+            headers_map_to_bid_submission_header(headers);
+        let Ok(rx) = api.auctioneer_handle.block_submission(
+            header,
+            sequence,
+            encoding,
+            compression,
+            api_key,
+            body,
+            trace,
+            false,
+        ) else {
             error!("failed sending request to worker");
             return Err(BuilderApiError::InternalError);
         };
 
         let res = match rx.await {
-            Ok(res) => res,
+            Ok((_, res)) => res,
             Err(_) => Err(BuilderApiError::RequestTimeout),
         };
 

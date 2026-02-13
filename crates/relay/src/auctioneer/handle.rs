@@ -2,15 +2,18 @@ use std::{ops::Range, sync::Arc, time::Instant};
 
 use helix_common::{GetPayloadTrace, SubmissionTrace, api::proposer_api::GetHeaderParams};
 use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, SignedValidatorRegistration};
-use http::HeaderMap;
 use tokio::sync::oneshot;
 use tracing::trace;
 
 use crate::{
-    auctioneer::types::{
-        Event, GetHeaderResult, GetPayloadResult, RegWorkerJob, SubWorkerJob, SubmissionResult,
+    auctioneer::{
+        decoder::{Compression, Encoding},
+        types::{
+            Event, GetHeaderResult, GetPayloadResult, RegWorkerJob, SubWorkerJob, SubmissionResult,
+        },
     },
     gossip::BroadcastPayloadParams,
+    tcp_bid_recv::BidSubmissionHeader,
 };
 
 #[derive(Clone)]
@@ -29,20 +32,30 @@ impl AuctioneerHandle {
 
     pub fn block_submission(
         &self,
-        headers: HeaderMap,
+        header: BidSubmissionHeader,
+        sequence: Option<u64>,
+        encoding: Encoding,
+        compression: Compression,
+        api_key: Option<String>,
         body: bytes::Bytes,
         trace: SubmissionTrace,
+        skip_sigverify: bool,
     ) -> Result<oneshot::Receiver<SubmissionResult>, ChannelFull> {
         let (tx, rx) = oneshot::channel();
         trace!("sending to worker");
         self.worker
             .try_send(SubWorkerJob::BlockSubmission {
-                headers,
+                header,
+                sequence,
+                encoding,
+                compression,
+                api_key,
                 body,
                 trace,
                 res_tx: tx,
                 span: tracing::Span::current(),
                 sent_at: Instant::now(),
+                skip_sigverify,
             })
             .map_err(|_| ChannelFull)?;
         Ok(rx)

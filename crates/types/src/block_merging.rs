@@ -180,6 +180,7 @@ pub struct BlobWithMetadataV2 {
     pub blob: Blob,
 }
 
+#[derive(Clone, Debug)]
 pub struct MergeableOrdersWithPref {
     pub allow_appending: bool,
     pub orders: MergeableOrders,
