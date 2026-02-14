@@ -132,6 +132,10 @@ impl<A: Api> ProposerApi<A> {
         REGISTRATIONS_UNKNOWN.inc_by(unknown_registrations);
         REGISTRATIONS_SKIPPED.inc_by(skipped_registrations);
 
+        if unknown_registrations > 0 {
+            return Err(ProposerApiError::UnknownValidatorsRegistration);
+        }
+
         if registrations_to_check.is_empty() {
             return Ok(StatusCode::OK);
         }
