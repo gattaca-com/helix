@@ -160,7 +160,11 @@ impl SimulatorManager {
             spawn_tracked!(async move {
                 debug!(bid_slot = %req.bid_slot, block_hash = %req.block_hash, "sending merge request");
                 let res = SimulatorClient::do_merge_request(&req, to_send).await;
-                timer.stop_and_record();
+                if res.is_ok() {
+                    timer.stop_and_record();
+                } else {
+                    timer.stop_and_discard();
+                }
                 SimulatorMetrics::block_merge_status(res.is_ok());
 
                 let result = (id, res);
