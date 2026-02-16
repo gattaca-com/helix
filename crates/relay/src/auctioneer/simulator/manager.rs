@@ -11,7 +11,7 @@ use helix_common::{
     SimulatorConfig, SubmissionTrace, bid_submission::OptimisticVersion, is_local_dev,
     metrics::SimulatorMetrics, record_submission_step, simulator::BlockSimError, spawn_tracked,
 };
-use helix_types::{BlsPublicKeyBytes, SeqNum, SignedBidSubmission, SubmissionVersion};
+use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion};
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -19,7 +19,7 @@ use crate::{
     auctioneer::{
         BlockSubResultSender,
         simulator::{BlockMergeRequest, SimulatorRequest, client::SimulatorClient},
-        types::{Event, SubmissionResult},
+        types::{Event, SubmissionRef, SubmissionResult},
     },
 };
 
@@ -41,7 +41,7 @@ struct LocalTelemetry {
 pub type SimulationResult = (usize, Option<SimulationResultInner>);
 pub struct SimulationResultInner {
     pub result: Result<(), BlockSimError>,
-    pub request_id: SeqNum,
+    pub submission_ref: SubmissionRef,
     // Some if not optimistic
     pub res_tx: Option<BlockSubResultSender<SubmissionResult>>,
     // TODO: move up
@@ -231,7 +231,7 @@ impl SimulatorManager {
             let result = (
                 id,
                 Some(SimulationResultInner {
-                    request_id: req.submission_request_id,
+                    submission_ref: req.submission_ref,
                     result: res,
                     paused_until,
                     res_tx: req.res_tx,

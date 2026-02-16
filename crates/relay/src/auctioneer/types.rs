@@ -5,6 +5,7 @@ use std::{
 };
 
 use alloy_primitives::{B256, U256};
+use flux_network::Token;
 use helix_common::{
     GetPayloadTrace, SubmissionTrace,
     api::{
@@ -37,7 +38,13 @@ use crate::{
     tcp_bid_recv::types::BidSubmissionHeader,
 };
 
-pub type SubmissionResult = (SeqNum, Result<(), BuilderApiError>);
+#[derive(Clone, Copy, Debug)]
+pub struct SubmissionRef {
+    pub seq_num: Option<SeqNum>,
+    pub token: Option<Token>,
+}
+
+pub type SubmissionResult = (SubmissionRef, Result<(), BuilderApiError>);
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
 
@@ -78,7 +85,7 @@ pub struct GetPayloadResultData {
 
 #[derive(Clone, Debug)]
 pub struct SubmissionData {
-    pub request_id: SeqNum,
+    pub submission_ref: SubmissionRef,
     pub submission: Submission,
     pub merging_data: Option<MergeableOrdersWithPref>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
@@ -331,8 +338,8 @@ impl PayloadBidDataRef<'_> {
 
 pub enum SubWorkerJob {
     BlockSubmission {
+        submission_ref: SubmissionRef,
         header: BidSubmissionHeader,
-        sequence: Option<SeqNum>,
         encoding: Encoding,
         api_key: Option<String>,
         compression: Compression,

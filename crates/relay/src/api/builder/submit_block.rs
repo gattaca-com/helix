@@ -38,14 +38,14 @@ impl<A: Api> BuilderApi<A> {
         let mut trace = SubmissionTrace::init_from_timings(timings);
         trace.metadata = api.api_provider.get_metadata(&headers);
 
-        let (header, sequence, encoding, compression, api_key) =
+        let (header, submission_ref, encoding, compression, api_key) =
             headers_map_to_bid_submission_header(headers);
         let (tx, rx) = tokio::sync::oneshot::channel();
         if api
             .auctioneer_handle
             .block_submission(
+                submission_ref,
                 header,
-                sequence,
                 encoding,
                 compression,
                 api_key,

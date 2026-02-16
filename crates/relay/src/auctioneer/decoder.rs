@@ -10,7 +10,7 @@ use helix_common::metrics::{
     SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
     SUBMISSION_DECOMPRESSED_BYTES,
 };
-use helix_types::{BlsPublicKeyBytes, ForkName, ForkVersionDecode, SeqNum};
+use helix_types::{BlsPublicKeyBytes, ForkName, ForkVersionDecode};
 use http::{
     HeaderMap, HeaderValue,
     header::{CONTENT_ENCODING, CONTENT_TYPE},
@@ -30,6 +30,7 @@ use crate::{
         HEADER_SEQUENCE, HEADER_SUBMISSION_TYPE, HEADER_WITH_ADJUSTMENTS,
         builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
     },
+    auctioneer::SubmissionRef,
     tcp_bid_recv::{BidSubmissionHeader, types::BidSubmissionFlags},
 };
 
@@ -349,7 +350,7 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
 
 pub fn headers_map_to_bid_submission_header(
     headers: http::header::HeaderMap,
-) -> (BidSubmissionHeader, Option<SeqNum>, Encoding, Compression, Option<String>) {
+) -> (BidSubmissionHeader, SubmissionRef, Encoding, Compression, Option<String>) {
     let mut flags = BidSubmissionFlags::default();
 
     if matches!(headers.get(HEADER_WITH_ADJUSTMENTS), Some(header) if header == HeaderValue::from_static("true"))
@@ -365,7 +366,7 @@ pub fn headers_map_to_bid_submission_header(
         flags.set(BidSubmissionFlags::IS_DEHYDRATED, true);
     }
 
-    let sequence_number = headers
+    let seq_num = headers
         .get(HEADER_SEQUENCE)
         .and_then(|seq| seq.to_str().ok())
         .and_then(|seq| seq.parse::<u128>().ok());
@@ -393,13 +394,12 @@ pub fn headers_map_to_bid_submission_header(
         .or(headers.get(HEADER_API_TOKEN))
         .and_then(|key| key.to_str().map(|key| key.to_owned()).ok());
 
-    let header = BidSubmissionHeader {
-        sequence_number: sequence_number.unwrap_or_default(),
-        merge_type,
-        flags,
-    };
+    let header =
+        BidSubmissionHeader { sequence_number: seq_num.unwrap_or_default(), merge_type, flags };
 
-    (header, sequence_number, encoding, compression, api_key)
+    let submission_ref = SubmissionRef { seq_num, token: None };
+
+    (header, submission_ref, encoding, compression, api_key)
 }
 
 #[cfg(test)]

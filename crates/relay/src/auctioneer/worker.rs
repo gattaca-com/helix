@@ -116,8 +116,8 @@ impl SubWorker {
     fn _handle_task(&self, task: SubWorkerJob) {
         match task {
             SubWorkerJob::BlockSubmission {
+                submission_ref,
                 header,
-                sequence,
                 encoding,
                 compression,
                 api_key,
@@ -131,10 +131,9 @@ impl SubWorker {
                 record_submission_step("worker_recv", sent_at.elapsed());
                 let guard = span.enter();
                 trace!("received by worker");
-                let request_id = header.sequence_number;
                 match self.handle_block_submission(
                     header,
-                    sequence,
+                    submission_ref.seq_num,
                     api_key,
                     encoding,
                     compression,
@@ -185,7 +184,7 @@ impl SubWorker {
                         };
 
                         let submission_data = SubmissionData {
-                            request_id,
+                            submission_ref,
                             submission,
                             version,
                             merging_data,
@@ -207,7 +206,7 @@ impl SubWorker {
                     }
 
                     Err(err) => {
-                        res_tx.try_send((request_id, Err(err)));
+                        res_tx.try_send((submission_ref, Err(err)));
                     }
                 }
             }

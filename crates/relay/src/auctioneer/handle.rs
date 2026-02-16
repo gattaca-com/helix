@@ -1,9 +1,7 @@
 use std::{ops::Range, sync::Arc, time::Instant};
 
 use helix_common::{GetPayloadTrace, SubmissionTrace, api::proposer_api::GetHeaderParams};
-use helix_types::{
-    BlsPublicKeyBytes, SeqNum, SignedBlindedBeaconBlock, SignedValidatorRegistration,
-};
+use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, SignedValidatorRegistration};
 use tokio::sync::oneshot;
 use tracing::trace;
 
@@ -12,7 +10,7 @@ use crate::{
         decoder::{Compression, Encoding},
         types::{
             BlockSubResultSender, Event, GetHeaderResult, GetPayloadResult, RegWorkerJob,
-            SubWorkerJob, SubmissionResult,
+            SubWorkerJob, SubmissionRef, SubmissionResult,
         },
     },
     gossip::BroadcastPayloadParams,
@@ -35,8 +33,8 @@ impl AuctioneerHandle {
 
     pub fn block_submission(
         &self,
+        submission_ref: SubmissionRef,
         header: BidSubmissionHeader,
-        sequence: Option<SeqNum>,
         encoding: Encoding,
         compression: Compression,
         api_key: Option<String>,
@@ -48,8 +46,8 @@ impl AuctioneerHandle {
         trace!("sending to worker");
         self.worker
             .try_send(SubWorkerJob::BlockSubmission {
+                submission_ref,
                 header,
-                sequence,
                 encoding,
                 compression,
                 api_key,

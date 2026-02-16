@@ -7,14 +7,14 @@ use flux_network::{
     Token,
     tcp::{SendBehavior, TcpConnector, TcpTelemetry},
 };
-use helix_common::SubmissionTrace;
+use helix_common::{SubmissionTrace, utils::utcnow_ns};
 use helix_types::{BlsPublicKeyBytes, SeqNum};
 use ssz::{Decode, Encode};
 use uuid::Uuid;
 
 use crate::{
     AuctioneerHandle, HelixSpine, SubmissionResult,
-    auctioneer::{BlockSubResultSender, Encoding},
+    auctioneer::{BlockSubResultSender, Encoding, SubmissionRef},
     tcp_bid_recv::types::{BidSubmission, BidSubmissionResponse, RegistrationMsg},
 };
 
@@ -33,7 +33,6 @@ pub struct BidSubmissionTcpListener {
     rx: Receiver<SubmissionResult>,
     tx: Sender<SubmissionResult>,
 
-    in_flight: HashMap<SeqNum, Token>,
     to_disconnect: Vec<Token>,
     registered: HashMap<Token, BlsPublicKeyBytes>,
     submission_errors: Vec<(Token, Option<SeqNum>, BidSubmissionError)>,
@@ -60,7 +59,6 @@ impl BidSubmissionTcpListener {
             api_key_cache,
             rx,
             tx,
-            in_flight: HashMap::with_capacity(max_connections),
             to_disconnect: Vec::with_capacity(max_connections),
             registered: HashMap::with_capacity(max_connections),
             submission_errors: Vec::with_capacity(max_connections),
@@ -76,6 +74,7 @@ impl BidSubmissionTcpListener {
         block_hash = tracing::field::Empty,
     ))]
     fn accept_bid_submission(
+        submission_ref: SubmissionRef,
         tx: Sender<SubmissionResult>,
         auctioneer_handle: &AuctioneerHandle,
         bid: BidSubmission,
@@ -83,15 +82,18 @@ impl BidSubmissionTcpListener {
     ) -> Result<(), BidSubmissionError> {
         let compression = bid.header.compression();
 
+        let now = utcnow_ns();
+        let trace = SubmissionTrace { receive: now, read_body: now, ..Default::default() };
+
         auctioneer_handle
             .block_submission(
+                submission_ref,
                 bid.header,
-                Some(bid.header.sequence_number),
                 Encoding::Ssz,
                 compression,
                 None,
                 bid.data,
-                SubmissionTrace::default(),
+                trace,
                 BlockSubResultSender::Shared(tx),
                 Some(expected_pubkey),
             )
@@ -119,24 +121,26 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                     match BidSubmission::try_from(msg) {
                         Ok(bid) => {
                             let request_id = bid.header.sequence_number;
-                            match Self::accept_bid_submission(self.tx.clone(), &self.auctioneer_handle, bid, *expected_pubkey) {
-                                Ok(_) => {
-                                    self.in_flight.insert(request_id, token);
-                                }
-                                Err(e) => {
-                                    tracing::error!(err=%e, "failed to send bid submission to worker");
-                                    self.submission_errors.push((token, Some(request_id), e));
-                                }
+                            let submission_ref =
+                                SubmissionRef { seq_num: Some(request_id), token: Some(token) };
+                            if let Err(e) = Self::accept_bid_submission(
+                                submission_ref,
+                                self.tx.clone(),
+                                &self.auctioneer_handle,
+                                bid,
+                                *expected_pubkey,
+                            ) {
+                                tracing::error!(err=%e, "failed to send bid submission to worker");
+                                self.submission_errors.push((token, Some(request_id), e));
                             }
-                        },
+                        }
                         Err(e) => {
                             tracing::error!(err=%e, "failed to deserialize the bid");
                             self.submission_errors.push((token, None, e));
                         }
                     };
                 } else {
-                    let registration_message =
-                        RegistrationMsg::from_ssz_bytes(msg);
+                    let registration_message = RegistrationMsg::from_ssz_bytes(msg);
                     match registration_message {
                         Ok(msg) => {
                             let api_key = Uuid::from_bytes(msg.api_key).to_string();
@@ -176,14 +180,18 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
             });
         }
 
-        for (seq_num, result) in self.rx.try_iter() {
-            if let Some(token) = self.in_flight.remove(&seq_num) {
+        for (submission_ref, result) in self.rx.try_iter() {
+            if let (Some(token), Some(seq_num)) = (submission_ref.token, submission_ref.seq_num) {
                 self.listener.write_or_enqueue_with(SendBehavior::Single(token), |buffer| {
                     BidSubmissionResponse::from_builder_api_error(seq_num, &result)
                         .ssz_append(buffer);
                 });
             } else {
-                tracing::error!(id=%seq_num, "connection token not found for submission result: {:?}", result);
+                tracing::error!(
+                    "submission ref {:?} not found for submission result: {:?}",
+                    submission_ref,
+                    result
+                );
             }
         }
     }

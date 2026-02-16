@@ -7,11 +7,14 @@ use helix_common::{
 };
 use helix_types::{
     BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BuilderInclusionResult,
-    ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin, SeqNum, SignedBidSubmission,
+    ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin, SignedBidSubmission,
     SubmissionVersion,
 };
 
-use crate::auctioneer::{BlockSubResultSender, types::SubmissionResult};
+use crate::auctioneer::{
+    BlockSubResultSender,
+    types::{SubmissionRef, SubmissionResult},
+};
 
 pub mod client;
 pub mod manager;
@@ -110,7 +113,7 @@ pub struct SimulatorRequest {
     pub is_top_bid: bool,
     pub version: SubmissionVersion,
     pub submission: SignedBidSubmission,
-    pub submission_request_id: SeqNum,
+    pub submission_ref: SubmissionRef,
     /// None if optimistic
     pub res_tx: Option<BlockSubResultSender<SubmissionResult>>,
     pub trace: SubmissionTrace,
