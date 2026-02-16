@@ -45,7 +45,7 @@ pub use crate::auctioneer::{
     context::Context,
     decoder::{Compression, Encoding, MergeType, headers_map_to_bid_submission_header},
     simulator::{SimulatorRequest, client::SimulatorClient, manager::SimulatorManager},
-    types::SubmissionResult, // move to types?
+    types::{BlockSubResultSender, SubmissionResult}, // move to types?
 };
 use crate::{
     HelixSpine, PostgresDatabaseService,
@@ -96,7 +96,7 @@ impl<B: BidAdjustor> Auctioneer<B> {
 impl<B: BidAdjustor> Tile<HelixSpine> for Auctioneer<B> {
     fn loop_body(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
         for event in self.event_rx.try_iter() {
-            self.state.step(event, &mut self.ctx, &mut self.tel, _adapter);
+            self.state.step(event, &mut self.ctx, &mut self.tel);
         }
 
         self.tel.telemetry(&self.event_rx);
@@ -140,18 +140,12 @@ impl Default for State {
 // TODO: tokio metrics
 
 impl State {
-    fn step<B: BidAdjustor>(
-        &mut self,
-        event: Event,
-        ctx: &mut Context<B>,
-        tel: &mut Telemetry,
-        _adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
-    ) {
+    fn step<B: BidAdjustor>(&mut self, event: Event, ctx: &mut Context<B>, tel: &mut Telemetry) {
         let start = Instant::now();
         let start_state = self.as_str();
         let event_tag = event.as_str();
 
-        self._step(event, ctx, _adapter);
+        self._step(event, ctx);
 
         let end_state = self.as_str();
         let step_dur = start.elapsed();
@@ -165,12 +159,7 @@ impl State {
             .observe(step_dur.as_nanos() as f64 / 1000.);
     }
 
-    fn _step<B: BidAdjustor>(
-        &mut self,
-        event: Event,
-        ctx: &mut Context<B>,
-        _adapter: &mut flux::spine::SpineAdapter<HelixSpine>,
-    ) {
+    fn _step<B: BidAdjustor>(&mut self, event: Event, ctx: &mut Context<B>) {
         match (&self, event) {
             ///////////// LIFECYCLE EVENTS (ALWAYS VALID) /////////////
 
@@ -431,7 +420,7 @@ impl State {
                 State::Broadcasting { slot_data: slot_ctx, .. },
                 Event::Submission { submission_data, res_tx, .. },
             ) => {
-                let _ = res_tx.send((
+                res_tx.try_send((
                     submission_data.request_id,
                     Err(BuilderApiError::DeliveringPayload {
                         bid_slot: submission_data.bid_slot(),
@@ -483,12 +472,12 @@ impl State {
             (State::Slot { bid_slot, .. }, Event::Submission { res_tx, submission_data, .. }) => {
                 if submission_data.bid_slot() == bid_slot.as_u64() {
                     // either not registered or waiting for full data from housekepper
-                    let _ = res_tx.send((
+                    res_tx.try_send((
                         submission_data.request_id,
                         Err(BuilderApiError::ProposerDutyNotFound),
                     ));
                 } else {
-                    let _ = res_tx.send((
+                    res_tx.try_send((
                         submission_data.request_id,
                         Err(BuilderApiError::BidValidation(
                             helix_types::BlockValidationError::SubmissionForWrongSlot {

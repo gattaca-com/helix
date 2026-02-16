@@ -16,7 +16,7 @@ use helix_common::{
 use helix_types::{
     BidAdjustmentData, BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ExecutionPayload,
     ExecutionRequests, ForkName, GetPayloadResponse, MergeableOrdersWithPref, PayloadAndBlobs,
-    SignedBidSubmission, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot,
+    SeqNum, SignedBidSubmission, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot,
     SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
 };
 use rustc_hash::FxHashMap;
@@ -37,9 +37,36 @@ use crate::{
     tcp_bid_recv::types::BidSubmissionHeader,
 };
 
-pub type SubmissionResult = (u64, Result<(), BuilderApiError>);
+pub type SubmissionResult = (SeqNum, Result<(), BuilderApiError>);
 pub type GetHeaderResult = Result<PayloadEntry, ProposerApiError>;
 pub type GetPayloadResult = Result<GetPayloadResultData, ProposerApiError>;
+
+pub enum BlockSubResultSender<T> {
+    OneShot(oneshot::Sender<T>),
+    Shared(crossbeam_channel::Sender<T>),
+}
+
+impl<T> BlockSubResultSender<T> {
+    pub fn try_send(self, data: T) {
+        match self {
+            Self::OneShot(tx) => {
+                let _ = tx.send(data);
+            }
+            Self::Shared(tx) => {
+                if let Err(e) = tx.try_send(data) {
+                    tracing::error!(err=%e, "failed to send submission result to worker");
+                }
+            }
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        match self {
+            Self::OneShot(tx) => tx.is_closed(),
+            Self::Shared(_) => false,
+        }
+    }
+}
 
 pub struct GetPayloadResultData {
     pub to_proposer: GetPayloadResponse,
@@ -51,7 +78,7 @@ pub struct GetPayloadResultData {
 
 #[derive(Clone, Debug)]
 pub struct SubmissionData {
-    pub request_id: u64,
+    pub request_id: SeqNum,
     pub submission: Submission,
     pub merging_data: Option<MergeableOrdersWithPref>,
     pub bid_adjustment_data: Option<BidAdjustmentData>,
@@ -305,16 +332,16 @@ impl PayloadBidDataRef<'_> {
 pub enum SubWorkerJob {
     BlockSubmission {
         header: BidSubmissionHeader,
-        sequence: Option<u64>,
+        sequence: Option<SeqNum>,
         encoding: Encoding,
         api_key: Option<String>,
         compression: Compression,
         body: bytes::Bytes,
         trace: SubmissionTrace, // TODO: replace this with better tracing
-        res_tx: oneshot::Sender<SubmissionResult>,
+        res_tx: BlockSubResultSender<SubmissionResult>,
         span: tracing::Span,
         sent_at: Instant,
-        skip_sigverify: bool,
+        expected_pubkey: Option<BlsPublicKeyBytes>,
     },
 
     GetPayload {
@@ -379,7 +406,7 @@ pub enum Event {
     },
     Submission {
         submission_data: SubmissionData,
-        res_tx: oneshot::Sender<SubmissionResult>,
+        res_tx: BlockSubResultSender<SubmissionResult>,
         span: tracing::Span,
         sent_at: Instant,
     },

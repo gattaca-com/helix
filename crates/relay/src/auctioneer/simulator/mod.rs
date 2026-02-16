@@ -7,12 +7,11 @@ use helix_common::{
 };
 use helix_types::{
     BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BuilderInclusionResult,
-    ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin, SignedBidSubmission,
+    ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin, SeqNum, SignedBidSubmission,
     SubmissionVersion,
 };
-use tokio::sync::oneshot;
 
-use crate::auctioneer::types::SubmissionResult;
+use crate::auctioneer::{BlockSubResultSender, types::SubmissionResult};
 
 pub mod client;
 pub mod manager;
@@ -111,9 +110,9 @@ pub struct SimulatorRequest {
     pub is_top_bid: bool,
     pub version: SubmissionVersion,
     pub submission: SignedBidSubmission,
-    pub submission_request_id: u64,
+    pub submission_request_id: SeqNum,
     /// None if optimistic
-    pub res_tx: Option<oneshot::Sender<SubmissionResult>>,
+    pub res_tx: Option<BlockSubResultSender<SubmissionResult>>,
     pub trace: SubmissionTrace,
     // only Some for dehydrated submissions
     pub tx_root: Option<B256>,

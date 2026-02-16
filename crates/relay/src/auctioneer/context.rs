@@ -214,7 +214,7 @@ impl<B: BidAdjustor> Context<B> {
         if let Some(res_tx) = result.res_tx {
             // submission was initially valid but by the time sim finished the slot already
             // progressed
-            let _ = res_tx.send((result.request_id, Err(BuilderApiError::SimOnNextSlot)));
+            res_tx.try_send((result.request_id, Err(BuilderApiError::SimOnNextSlot)));
         }
     }
 

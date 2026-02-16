@@ -41,8 +41,8 @@ ethereum_ssz_derive = "0.9"
 ethers = "2.0.14"
 eyre = "0.6.12"
 flate2 = "1.0"
-flux = { git = "https://github.com/gattaca-com/flux" }
-flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux" }
+flux = { git = "https://github.com/gattaca-com/flux", rev = "7b043e20c33cf3d23a0c1a8e06fc06298c010662"}
+flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "7b043e20c33cf3d23a0c1a8e06fc06298c010662" }
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
 helix-common = { path = "crates/common" }

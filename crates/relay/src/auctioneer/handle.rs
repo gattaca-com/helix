@@ -1,7 +1,9 @@
 use std::{ops::Range, sync::Arc, time::Instant};
 
 use helix_common::{GetPayloadTrace, SubmissionTrace, api::proposer_api::GetHeaderParams};
-use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, SignedValidatorRegistration};
+use helix_types::{
+    BlsPublicKeyBytes, SeqNum, SignedBlindedBeaconBlock, SignedValidatorRegistration,
+};
 use tokio::sync::oneshot;
 use tracing::trace;
 
@@ -9,7 +11,8 @@ use crate::{
     auctioneer::{
         decoder::{Compression, Encoding},
         types::{
-            Event, GetHeaderResult, GetPayloadResult, RegWorkerJob, SubWorkerJob, SubmissionResult,
+            BlockSubResultSender, Event, GetHeaderResult, GetPayloadResult, RegWorkerJob,
+            SubWorkerJob, SubmissionResult,
         },
     },
     gossip::BroadcastPayloadParams,
@@ -33,15 +36,15 @@ impl AuctioneerHandle {
     pub fn block_submission(
         &self,
         header: BidSubmissionHeader,
-        sequence: Option<u64>,
+        sequence: Option<SeqNum>,
         encoding: Encoding,
         compression: Compression,
         api_key: Option<String>,
         body: bytes::Bytes,
         trace: SubmissionTrace,
-        skip_sigverify: bool,
-    ) -> Result<oneshot::Receiver<SubmissionResult>, ChannelFull> {
-        let (tx, rx) = oneshot::channel();
+        res_tx: BlockSubResultSender<SubmissionResult>,
+        expected_pubkey: Option<BlsPublicKeyBytes>,
+    ) -> Result<(), ChannelFull> {
         trace!("sending to worker");
         self.worker
             .try_send(SubWorkerJob::BlockSubmission {
@@ -52,13 +55,12 @@ impl AuctioneerHandle {
                 api_key,
                 body,
                 trace,
-                res_tx: tx,
+                res_tx,
                 span: tracing::Span::current(),
                 sent_at: Instant::now(),
-                skip_sigverify,
+                expected_pubkey,
             })
-            .map_err(|_| ChannelFull)?;
-        Ok(rx)
+            .map_err(|_| ChannelFull)
     }
 
     pub fn get_header(

@@ -14,6 +14,8 @@ use crate::{
     bid_adjustment_data::BidAdjustmentData, error::SigError, fields::ExecutionRequests,
 };
 
+pub type SeqNum = u128;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
 #[serde(deny_unknown_fields)]
 pub struct BidTrace {
@@ -696,11 +698,11 @@ impl SignedBidSubmissionFuluWithAdjustments {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SubmissionVersion {
     on_receive_ns: u64,
-    sequence: Option<u64>,
+    sequence: Option<SeqNum>,
 }
 
 impl SubmissionVersion {
-    pub fn new(on_receive_ns: u64, sequence: Option<u64>) -> Self {
+    pub fn new(on_receive_ns: u64, sequence: Option<SeqNum>) -> Self {
         Self { on_receive_ns, sequence }
     }
 

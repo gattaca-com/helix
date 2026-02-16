@@ -11,13 +11,13 @@ use helix_common::{
     SimulatorConfig, SubmissionTrace, bid_submission::OptimisticVersion, is_local_dev,
     metrics::SimulatorMetrics, record_submission_step, simulator::BlockSimError, spawn_tracked,
 };
-use helix_types::{BlsPublicKeyBytes, SignedBidSubmission, SubmissionVersion};
-use tokio::sync::oneshot;
+use helix_types::{BlsPublicKeyBytes, SeqNum, SignedBidSubmission, SubmissionVersion};
 use tracing::{debug, error, info, warn};
 
 use crate::{
     api::service::SIMULATOR_REQUEST_TIMEOUT,
     auctioneer::{
+        BlockSubResultSender,
         simulator::{BlockMergeRequest, SimulatorRequest, client::SimulatorClient},
         types::{Event, SubmissionResult},
     },
@@ -41,9 +41,9 @@ struct LocalTelemetry {
 pub type SimulationResult = (usize, Option<SimulationResultInner>);
 pub struct SimulationResultInner {
     pub result: Result<(), BlockSimError>,
-    pub request_id: u64,
+    pub request_id: SeqNum,
     // Some if not optimistic
-    pub res_tx: Option<oneshot::Sender<SubmissionResult>>,
+    pub res_tx: Option<BlockSubResultSender<SubmissionResult>>,
     // TODO: move up
     pub paused_until: Option<Instant>,
     pub submission: SignedBidSubmission,

@@ -119,10 +119,10 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
     .map_err(|e| eyre!("housekeeper init: {e}"))?;
 
     let terminating = Arc::new(AtomicBool::default());
-    let termination_grace_period = config.router_config.shutdown_delay_ms;
+    let termination_grace_period = Duration::from_millis(config.router_config.shutdown_delay_ms);
 
     let spine = HelixSpine::new(None);
-    spine.start(None, Some(Duration::from_millis(termination_grace_period)), |spine| {
+    spine.start(None, Some(termination_grace_period), |spine| {
         start_admin_service(local_cache.clone(), expect_env_var(ADMIN_TOKEN_ENV_VAR));
 
         let auctioneer_handle = AuctioneerHandle::new(sub_worker_tx, event_tx.clone());
@@ -220,10 +220,10 @@ async fn run(instance_id: String, config: RelayConfig, keypair: BlsKeypair) -> e
 
     terminating.store(true, Ordering::Relaxed);
 
-    if termination_grace_period != 0 {
-        tracing::info!("Pausing for {termination_grace_period}ms before exit");
+    if !termination_grace_period.is_zero() {
+        tracing::info!("Pausing for {}ms before exit", termination_grace_period.as_millis());
 
-        tokio::time::sleep(Duration::from_millis(termination_grace_period)).await;
+        tokio::time::sleep(termination_grace_period).await;
     }
 
     Ok(())

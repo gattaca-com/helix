@@ -10,7 +10,7 @@ use tracing::{error, trace};
 use super::api::BuilderApi;
 use crate::{
     api::{Api, builder::error::BuilderApiError},
-    auctioneer::headers_map_to_bid_submission_header,
+    auctioneer::{BlockSubResultSender, headers_map_to_bid_submission_header},
 };
 
 impl<A: Api> BuilderApi<A> {
@@ -40,19 +40,25 @@ impl<A: Api> BuilderApi<A> {
 
         let (header, sequence, encoding, compression, api_key) =
             headers_map_to_bid_submission_header(headers);
-        let Ok(rx) = api.auctioneer_handle.block_submission(
-            header,
-            sequence,
-            encoding,
-            compression,
-            api_key,
-            body,
-            trace,
-            false,
-        ) else {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if api
+            .auctioneer_handle
+            .block_submission(
+                header,
+                sequence,
+                encoding,
+                compression,
+                api_key,
+                body,
+                trace,
+                BlockSubResultSender::OneShot(tx),
+                None,
+            )
+            .is_err()
+        {
             error!("failed sending request to worker");
             return Err(BuilderApiError::InternalError);
-        };
+        }
 
         let res = match rx.await {
             Ok((_, res)) => res,

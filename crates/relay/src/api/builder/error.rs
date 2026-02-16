@@ -1,6 +1,6 @@
 use axum::response::{IntoResponse, Response};
 use helix_common::{local_cache::AuctioneerError, simulator::BlockSimError};
-use helix_types::{BlockValidationError, HydrationError, SigError};
+use helix_types::{BlockValidationError, BlsPublicKeyBytes, HydrationError, SigError};
 use http::StatusCode;
 
 use crate::{auctioneer::OrderValidationError, database::error::DatabaseError};
@@ -60,6 +60,11 @@ pub enum BuilderApiError {
 
     #[error("internal error")]
     InternalError,
+
+    #[error(
+        "submission pubkey doesn't match registration message pubkey; expected: {0}, receieved: {1}"
+    )]
+    InvalidBuilderPubkey(BlsPublicKeyBytes, BlsPublicKeyBytes),
 }
 
 impl IntoResponse for BuilderApiError {
@@ -75,6 +80,7 @@ impl IntoResponse for BuilderApiError {
             BuilderApiError::SigError(_) |
             BuilderApiError::SimOnNextSlot |
             BuilderApiError::MergeableOrdersNotFound(_) |
+            BuilderApiError::InvalidBuilderPubkey(_, _) |
             BuilderApiError::DeliveringPayload { .. } => StatusCode::BAD_REQUEST,
 
             BuilderApiError::InvalidApiKey |

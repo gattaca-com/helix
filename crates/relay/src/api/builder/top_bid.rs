@@ -25,8 +25,7 @@ impl<A: Api> BuilderApi<A> {
         let Some(api_key) = headers
             .get(HEADER_API_KEY)
             .or(headers.get(HEADER_API_TOKEN))
-            .map(|key| key.to_str().ok())
-            .flatten()
+            .and_then(|key| key.to_str().ok())
         else {
             return Err(BuilderApiError::InvalidApiKey);
         };

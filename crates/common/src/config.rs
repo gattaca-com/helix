@@ -98,7 +98,7 @@ impl RelayConfig {
             gossip_payload_on_header: false,
             api_port: 4040,
             tcp_port: 4041,
-            tcp_max_connections: Default::default(),
+            tcp_max_connections: 512,
         }
     }
 }

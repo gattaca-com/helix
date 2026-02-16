@@ -15,8 +15,8 @@ use helix_common::{
 };
 use helix_types::{
     BidAdjustmentData, BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission,
-    DehydratedBidSubmissionFuluWithAdjustments, ExecPayload, MergeableOrdersWithPref, SigError,
-    SignedBidSubmission, SignedBidSubmissionFuluWithAdjustments,
+    DehydratedBidSubmissionFuluWithAdjustments, ExecPayload, MergeableOrdersWithPref, SeqNum,
+    SigError, SignedBidSubmission, SignedBidSubmissionFuluWithAdjustments,
     SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock, SignedValidatorRegistration,
     SubmissionVersion,
 };
@@ -126,7 +126,7 @@ impl SubWorker {
                 res_tx,
                 span,
                 sent_at,
-                skip_sigverify,
+                expected_pubkey,
             } => {
                 record_submission_step("worker_recv", sent_at.elapsed());
                 let guard = span.enter();
@@ -136,9 +136,9 @@ impl SubWorker {
                     header,
                     sequence,
                     api_key,
-                    skip_sigverify,
                     encoding,
                     compression,
+                    expected_pubkey,
                     body,
                     &mut trace,
                 ) {
@@ -207,7 +207,7 @@ impl SubWorker {
                     }
 
                     Err(err) => {
-                        let _ = res_tx.send((request_id, Err(err)));
+                        res_tx.try_send((request_id, Err(err)));
                     }
                 }
             }
@@ -252,11 +252,11 @@ impl SubWorker {
     fn handle_block_submission(
         &self,
         header: BidSubmissionHeader,
-        sequence: Option<u64>,
+        sequence: Option<SeqNum>,
         api_key: Option<String>,
-        mut skip_sigverify: bool,
         encoding: Encoding,
         compression: Compression,
+        expected_pubkey: Option<BlsPublicKeyBytes>,
         body: bytes::Bytes,
         trace: &mut SubmissionTrace,
     ) -> Result<
@@ -271,10 +271,15 @@ impl SubWorker {
         let is_dehydrated = header.flags.is_dehydrated();
 
         let builder_pubkey = decoder.extract_builder_pubkey(body.as_ref(), with_mergeable_data)?;
-        if !skip_sigverify {
-            skip_sigverify = api_key
-                .is_some_and(|api_key| self.cache.validate_api_key(&api_key, &builder_pubkey));
-        }
+        let skip_sigverify = if let Some(expected_pubkey) = expected_pubkey {
+            if builder_pubkey != expected_pubkey {
+                return Err(BuilderApiError::InvalidBuilderPubkey(expected_pubkey, builder_pubkey));
+            }
+
+            true
+        } else {
+            api_key.is_some_and(|api_key| self.cache.validate_api_key(&api_key, &builder_pubkey))
+        };
 
         trace!(
             ?sequence,

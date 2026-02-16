@@ -10,7 +10,7 @@ use helix_common::metrics::{
     SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
     SUBMISSION_DECOMPRESSED_BYTES,
 };
-use helix_types::{BlsPublicKeyBytes, ForkName, ForkVersionDecode};
+use helix_types::{BlsPublicKeyBytes, ForkName, ForkVersionDecode, SeqNum};
 use http::{
     HeaderMap, HeaderValue,
     header::{CONTENT_ENCODING, CONTENT_TYPE},
@@ -59,10 +59,11 @@ pub enum MergeType {
 }
 
 impl MergeType {
-    pub fn from_headers(header_map: &HeaderMap) -> Self {
+    pub fn from_headers(header_map: &HeaderMap, sub_type: Option<SubmissionType>) -> Self {
         match header_map.get(HEADER_MERGE_TYPE) {
             None => {
-                if matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
+                if sub_type.is_some_and(|sub_type| sub_type == SubmissionType::Merge) ||
+                    matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
                 {
                     MergeType::Mergeable
                 } else {
@@ -70,7 +71,7 @@ impl MergeType {
                 }
             }
             Some(merge_type) => {
-                merge_type.to_str().ok().map(|t| t.parse().ok()).flatten().unwrap_or_default()
+                merge_type.to_str().ok().and_then(|t| t.parse().ok()).unwrap_or_default()
             }
         }
     }
@@ -348,7 +349,7 @@ fn gzip_size_hint(buf: &[u8]) -> Option<usize> {
 
 pub fn headers_map_to_bid_submission_header(
     headers: http::header::HeaderMap,
-) -> (BidSubmissionHeader, Option<u64>, Encoding, Compression, Option<String>) {
+) -> (BidSubmissionHeader, Option<SeqNum>, Encoding, Compression, Option<String>) {
     let mut flags = BidSubmissionFlags::default();
 
     if matches!(headers.get(HEADER_WITH_ADJUSTMENTS), Some(header) if header == HeaderValue::from_static("true"))
@@ -359,23 +360,15 @@ pub fn headers_map_to_bid_submission_header(
         flags.set(BidSubmissionFlags::IS_DEHYDRATED, true);
     }
 
-    if let Some(submission_type) = SubmissionType::from_headers(&headers) {
-        match submission_type {
-            SubmissionType::Dehydrated => {
-                flags.set(BidSubmissionFlags::IS_DEHYDRATED, true);
-            }
-            SubmissionType::Merge => {
-                // TODO @nina
-                // flags.set(BidSubmissionFlags::WITH_MERGEABLE_DATA, true);
-            }
-            SubmissionType::Default => {}
-        }
+    let submission_type = SubmissionType::from_headers(&headers);
+    if submission_type.is_some_and(|sub_type| sub_type == SubmissionType::Dehydrated) {
+        flags.set(BidSubmissionFlags::IS_DEHYDRATED, true);
     }
 
     let sequence_number = headers
         .get(HEADER_SEQUENCE)
         .and_then(|seq| seq.to_str().ok())
-        .and_then(|seq| seq.parse::<u64>().ok());
+        .and_then(|seq| seq.parse::<u128>().ok());
 
     const GZIP_HEADER: HeaderValue = HeaderValue::from_static("gzip");
     const ZSTD_HEADER: HeaderValue = HeaderValue::from_static("zstd");
@@ -393,13 +386,12 @@ pub fn headers_map_to_bid_submission_header(
         _ => Encoding::Json,
     };
 
-    let merge_type = MergeType::from_headers(&headers);
+    let merge_type = MergeType::from_headers(&headers, submission_type);
 
     let api_key = headers
         .get(HEADER_API_KEY)
         .or(headers.get(HEADER_API_TOKEN))
-        .map(|key| key.to_str().map(|key| key.to_owned()).ok())
-        .flatten();
+        .and_then(|key| key.to_str().map(|key| key.to_owned()).ok());
 
     let header = BidSubmissionHeader {
         sequence_number: sequence_number.unwrap_or_default(),
