@@ -24,7 +24,7 @@ impl<A: Api> BuilderApi<A> {
     ) -> Result<impl IntoResponse, BuilderApiError> {
         let Some(api_key) = headers
             .get(HEADER_API_KEY)
-            .or(headers.get(HEADER_API_TOKEN))
+            .or_else(|| headers.get(HEADER_API_TOKEN))
             .and_then(|key| key.to_str().ok())
         else {
             return Err(BuilderApiError::InvalidApiKey);
