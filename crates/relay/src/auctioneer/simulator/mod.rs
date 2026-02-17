@@ -64,6 +64,7 @@ pub struct BlockMergeRequestRef<'a> {
     pub execution_payload: &'a ExecutionPayload,
     pub parent_beacon_block_root: Option<B256>,
     pub merging_data: &'a [MergeableOrderWithOrigin],
+    pub trace: MergedBlockTrace,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -73,8 +74,6 @@ pub struct BlockMergeRequest {
     pub request: serde_json::Value,
     /// The block hash of the execution payload
     pub block_hash: B256,
-    /// The trace of the merged block
-    pub trace: MergedBlockTrace,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]

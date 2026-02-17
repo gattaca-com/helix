@@ -297,14 +297,14 @@ impl BlockMerger {
                 execution_payload: &base_block.execution_payload,
                 parent_beacon_block_root: base_block.parent_beacon_block_root,
                 merging_data: &self.trimmed_orders_buf,
+                trace: MergedBlockTrace {
+                    request_time_ns: utcnow_ns(),
+                    sim_start_time_ns: 0,
+                    sim_end_time_ns: 0,
+                    finalize_time_ns: 0,
+                },
             }),
             block_hash: base_block_hash,
-            trace: MergedBlockTrace {
-                request_time_ns: utcnow_ns(),
-                sim_start_time_ns: 0,
-                sim_end_time_ns: 0,
-                finalize_time_ns: 0,
-            },
         };
 
         self.has_new_base_block = false;
