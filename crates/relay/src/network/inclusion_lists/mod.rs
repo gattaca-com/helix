@@ -30,23 +30,24 @@ mod tests {
     use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 
     use alloy_consensus::{TxEip1559, TxEnvelope};
-    use alloy_primitives::Signature;
+    use alloy_primitives::{Signature, hex::FromHex};
     use alloy_rlp::Encodable as _;
     use axum::{Extension, Router, routing::any};
     use helix_common::{
         RelayNetworkConfig, RelayNetworkPeerConfig, api::builder_api::InclusionList,
         chain_info::ChainInfo, signing::RelaySigningContext, utils::utcnow_sec,
     };
-    use helix_types::{BlsKeypair, BlsSecretKey, Transaction};
+    use helix_types::{BlsKeypair, BlsPublicKey, BlsPublicKeyBytes, BlsSecretKey, Transaction};
     use rand::{Rng as _, SeedableRng, rngs::SmallRng, seq::IndexedRandom};
-    use tokio::task::JoinSet;
+    use tokio::{task::JoinSet, time::sleep};
     use tracing::{error, info};
     use tree_hash::TreeHash;
+    use url::Url;
 
-    use crate::network::{
+    use crate::{auctioneer::manager, network::{
         RelayNetworkManager, api::RelayNetworkApi,
-        inclusion_lists::consensus::INCLUSION_LIST_MAX_BYTES,
-    };
+        inclusion_lists::consensus::INCLUSION_LIST_MAX_BYTES, messages::{HelloMessage, NetworkMessageType},
+    }};
 
     const RELAY_CONNECT_PATH: &str = "/relay/v1/network";
 
@@ -149,7 +150,7 @@ mod tests {
         // We generate a single config, since peers won't connect to themselves
         network_config.peers = (0..n_peers)
             .map(|i| RelayNetworkPeerConfig {
-                url: format!("ws://127.0.0.1:{}", ports[i]).parse().unwrap(),
+                url: Some(format!("ws://127.0.0.1:{}", ports[i]).parse().unwrap()),
                 pubkey: keypairs[i].pk.serialize().into(),
             })
             .collect();
@@ -250,5 +251,29 @@ mod tests {
         }
 
         apis_joinset.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn connection_test() {
+        let binding = Default::default();
+        let _guard =
+            helix_common::utils::init_tracing_log(&binding, "", Default::default());
+        let key_pair = BlsKeypair::random();
+        let context = Arc::new(ChainInfo::default());
+        let signing_context = Arc::new(RelaySigningContext::new(key_pair, context));
+        let peer_config = RelayNetworkPeerConfig {
+            url: Some(Url::parse("ws://localhost:4040/relay/v1/network").unwrap()),
+            pubkey: BlsPublicKeyBytes::from_hex("0xaa58208899c6105603b74396734a6263cc7d947f444f396a90f7b7d3e65d102aec7e5e5291b27e08d02c50a050825c2f").unwrap(),
+        };
+        let network_config = RelayNetworkConfig {
+            is_enabled: true,
+            peers: vec![peer_config],
+            cutoff_1_ms: 2000,
+            cutoff_2_ms: 4000
+        };
+        let manager = RelayNetworkManager::new(network_config, signing_context);
+
+        sleep(Duration::from_secs(40)).await;
+
     }
 }

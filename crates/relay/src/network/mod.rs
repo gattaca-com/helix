@@ -54,16 +54,16 @@ impl RelayNetworkManager {
         this.network_config.validate();
 
         for peer_config in &this.network_config.peers {
-            let peer_pubkey = peer_config.pubkey;
-            // Append path to URL and convert to a request ahead of time
-            let url =
-                peer_config.url.join(PATH_RELAY_NETWORK).expect("could not append path to URL");
-            let request = url_to_client_event(url.as_str());
-
-            // If the peer's pubkey is less than ours, don't try to connect.
-            // Imposing an order on the pubkeys prevents redundant connections between peers.
-            if peer_pubkey > this.signing_context.pubkey {
-                tokio::spawn(this.clone().connect_to_peer(request, peer_pubkey));
+            if let Some(url) = &peer_config.url {
+                url.join(PATH_RELAY_NETWORK)
+                    .expect("joining relay network path to peer URL should succeed");
+                let request = url_to_client_event(url.as_str());
+                
+                let manager_clone = this.clone();
+                let pubkey = peer_config.pubkey;
+                tokio::spawn(async move {
+                    manager_clone.connect_to_peer(request, pubkey).await;
+                });
             }
         }
         tokio::spawn(this.clone().run_event_handling_loop(api_events_rx));

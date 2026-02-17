@@ -300,7 +300,7 @@ impl RelayNetworkConfig {
 pub struct RelayNetworkPeerConfig {
     /// The URL of the peer.
     /// A valid URL is of the form 'ws://<peer-url>'
-    pub url: Url,
+    pub url: Option<Url>,
     /// The BLS public key of the peer, to verify its identity.
     pub pubkey: BlsPublicKeyBytes,
 }
@@ -314,10 +314,11 @@ impl RelayNetworkPeerConfig {
             )
             .expect("pubkey should be valid");
 
-        let has_ws_scheme = ["ws", "wss"].contains(&self.url.scheme());
-        let has_port = self.url.port().is_some();
-
-        assert!(has_ws_scheme || has_port, "peer URL must have ws/wss scheme or a specific port");
+        if let Some(url) = &self.url {
+            let has_ws_scheme = ["ws", "wss"].contains(&url.scheme());
+            let has_port = url.port().is_some();
+            assert!(has_ws_scheme || has_port, "peer URL must have ws/wss scheme or a specific port");
+        }
     }
 }
 
