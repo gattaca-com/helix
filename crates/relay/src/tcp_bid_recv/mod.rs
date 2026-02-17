@@ -5,7 +5,7 @@ use dashmap::DashMap;
 use flux::{spine::FluxSpine, tile::Tile};
 use flux_network::{
     Token,
-    tcp::{SendBehavior, TcpConnector, TcpTelemetry},
+    tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
 };
 use helix_common::{SubmissionTrace, utils::utcnow_ns};
 use helix_types::{BlsPublicKeyBytes, SeqNum};
@@ -108,17 +108,16 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
     }
 
     fn loop_body(&mut self, _adapter: &mut flux::spine::SpineAdapter<HelixSpine>) {
-        self.listener.poll_with(
-            |connection| {
-                tracing::trace!(
-                    "connected to new peer {:?} with token {:?}",
-                    connection.peer_addr,
-                    connection.incoming_stream
-                );
-            },
-            |token, msg, _| {
+        self.listener.poll_with(|event| match event {
+            PollEvent::Accept { listener: _, stream, peer_addr } => {
+                tracing::trace!("connected to new peer {:?} with token {:?}", peer_addr, stream);
+            }
+            PollEvent::Disconnect { token } => {
+                self.registered.remove(&token);
+            }
+            PollEvent::Message { token, payload, .. } => {
                 if let Some(expected_pubkey) = self.registered.get(&token) {
-                    match BidSubmission::try_from(msg) {
+                    match BidSubmission::try_from(payload) {
                         Ok(bid) => {
                             let request_id = bid.header.sequence_number;
                             let submission_ref =
@@ -140,7 +139,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         }
                     };
                 } else {
-                    let registration_message = RegistrationMsg::from_ssz_bytes(msg);
+                    let registration_message = RegistrationMsg::from_ssz_bytes(payload);
                     match registration_message {
                         Ok(msg) => {
                             let api_key = Uuid::from_bytes(msg.api_key).to_string();
@@ -165,8 +164,8 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
                         }
                     }
                 }
-            },
-        );
+            }
+        });
 
         for token in self.to_disconnect.drain(..) {
             self.listener.disconnect(token);
@@ -182,9 +181,10 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
 
         for (submission_ref, result) in self.rx.try_iter() {
             if let (Some(token), Some(seq_num)) = (submission_ref.token, submission_ref.seq_num) {
+                let response = BidSubmissionResponse::from_builder_api_error(seq_num, &result);
+
                 self.listener.write_or_enqueue_with(SendBehavior::Single(token), |buffer| {
-                    BidSubmissionResponse::from_builder_api_error(seq_num, &result)
-                        .ssz_append(buffer);
+                    response.ssz_append(buffer);
                 });
             } else {
                 tracing::error!(
