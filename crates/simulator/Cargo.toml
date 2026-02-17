@@ -21,6 +21,7 @@ clap.workspace = true
 dashmap.workspace = true
 derive_more.workspace = true
 futures.workspace = true
+helix-common.workspace = true
 helix-types.workspace = true
 jsonrpsee.workspace = true
 metrics.workspace = true

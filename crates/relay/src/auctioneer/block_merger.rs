@@ -8,14 +8,18 @@ use alloy_consensus::{Bytes48, Transaction, TxEnvelope, TxType};
 use alloy_primitives::{Address, B256, Bytes, U256};
 use alloy_rlp::Decodable;
 use helix_common::{
-    RelayConfig, api::builder_api::InclusionListWithMetadata, chain_info::ChainInfo,
-    local_cache::LocalCache, metrics::MERGE_TRACE_LATENCY, utils::utcnow_ms,
+    RelayConfig,
+    api::builder_api::InclusionListWithMetadata,
+    chain_info::ChainInfo,
+    local_cache::LocalCache,
+    metrics::MERGE_TRACE_LATENCY,
+    utils::{utcnow_ms, utcnow_ns},
 };
 use helix_types::{
     BlobWithMetadata, BlobWithMetadataV1, BlobWithMetadataV2, BlobsBundle, BlobsBundleVersion,
     BlockMergingData, BlsPublicKeyBytes, BundleOrder, KzgCommitment, MergeableBundle,
     MergeableOrder, MergeableOrderWithOrigin, MergeableOrders, MergeableTransaction, MergedBlock,
-    Order, PayloadAndBlobs, SignedBidSubmission, Transactions,
+    MergedBlockTrace, Order, PayloadAndBlobs, SignedBidSubmission, Transactions,
 };
 use rustc_hash::{FxBuildHasher, FxHashSet};
 use serde_json::json;
@@ -295,6 +299,12 @@ impl BlockMerger {
                 merging_data: &self.trimmed_orders_buf,
             }),
             block_hash: base_block_hash,
+            trace: MergedBlockTrace {
+                request_time_ns: utcnow_ns(),
+                sim_start_time_ns: 0,
+                sim_end_time_ns: 0,
+                finalize_time_ns: 0,
+            },
         };
 
         self.has_new_base_block = false;
@@ -337,6 +347,9 @@ impl BlockMerger {
 
         let block_hash = response.execution_payload.block_hash;
 
+        let mut trace = response.trace;
+        trace.finalize_time_ns = utcnow_ns();
+
         self.local_cache.save_merged_block(MergedBlock {
             slot: bid_slot,
             block_number: response.execution_payload.block_number,
@@ -350,6 +363,7 @@ impl BlockMerger {
             merged_blob_count: original_payload.blobs_bundle.blobs().len() +
                 response.appended_blobs.len(),
             builder_inclusions: response.builder_inclusions,
+            trace,
         });
 
         trace!(%block_hash, "stored merged block in local cache");

@@ -44,10 +44,15 @@ mod tests {
     use tree_hash::TreeHash;
     use url::Url;
 
-    use crate::{auctioneer::manager, network::{
-        RelayNetworkManager, api::RelayNetworkApi,
-        inclusion_lists::consensus::INCLUSION_LIST_MAX_BYTES, messages::{HelloMessage, NetworkMessageType},
-    }};
+    use crate::{
+        auctioneer::manager,
+        network::{
+            RelayNetworkManager,
+            api::RelayNetworkApi,
+            inclusion_lists::consensus::INCLUSION_LIST_MAX_BYTES,
+            messages::{HelloMessage, NetworkMessageType},
+        },
+    };
 
     const RELAY_CONNECT_PATH: &str = "/relay/v1/network";
 
@@ -256,8 +261,7 @@ mod tests {
     #[tokio::test]
     async fn connection_test() {
         let binding = Default::default();
-        let _guard =
-            helix_common::utils::init_tracing_log(&binding, "", Default::default());
+        let _guard = helix_common::utils::init_tracing_log(&binding, "", Default::default());
         let key_pair = BlsKeypair::random();
         let context = Arc::new(ChainInfo::default());
         let signing_context = Arc::new(RelaySigningContext::new(key_pair, context));
@@ -269,11 +273,10 @@ mod tests {
             is_enabled: true,
             peers: vec![peer_config],
             cutoff_1_ms: 2000,
-            cutoff_2_ms: 4000
+            cutoff_2_ms: 4000,
         };
         let manager = RelayNetworkManager::new(network_config, signing_context);
 
         sleep(Duration::from_secs(40)).await;
-
     }
 }

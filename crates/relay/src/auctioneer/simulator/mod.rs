@@ -7,8 +7,8 @@ use helix_common::{
 };
 use helix_types::{
     BidTrace, BlobsBundle, BlsPublicKeyBytes, BlsSignatureBytes, BuilderInclusionResult,
-    ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin, SignedBidSubmission,
-    SubmissionVersion,
+    ExecutionPayload, ExecutionRequests, MergeableOrderWithOrigin, MergedBlockTrace,
+    SignedBidSubmission, SubmissionVersion,
 };
 use tokio::sync::oneshot;
 
@@ -73,6 +73,8 @@ pub struct BlockMergeRequest {
     pub request: serde_json::Value,
     /// The block hash of the execution payload
     pub block_hash: B256,
+    /// The trace of the merged block
+    pub trace: MergedBlockTrace,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -104,6 +106,7 @@ pub struct BlockMergeResponse {
     /// Total value for the proposer
     pub proposer_value: U256,
     pub builder_inclusions: HashMap<Address, BuilderInclusionResult>,
+    pub trace: MergedBlockTrace,
 }
 
 pub struct SimulatorRequest {

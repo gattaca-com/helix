@@ -2438,6 +2438,10 @@ impl PostgresDatabaseService {
             original_blob_count: i32,
             merged_blob_count: i32,
             builder_inclusions: String,
+            request_time_ns: i64,
+            sim_start_time_ns: i64,
+            sim_end_time_ns: i64,
+            finalize_time_ns: i64,
             inserted_at: SystemTime,
         }
 
@@ -2458,12 +2462,16 @@ impl PostgresDatabaseService {
                 original_blob_count: block.original_blob_count as i32,
                 merged_blob_count: block.merged_blob_count as i32,
                 builder_inclusions: builder_inclusions_json,
+                request_time_ns: block.trace.request_time_ns as i64,
+                sim_start_time_ns: block.trace.sim_start_time_ns as i64,
+                sim_end_time_ns: block.trace.sim_end_time_ns as i64,
+                finalize_time_ns: block.trace.finalize_time_ns as i64,
                 inserted_at: SystemTime::now(),
             });
         }
 
         // Flatten into SQL params
-        const FIELD_COUNT: usize = 12;
+        const FIELD_COUNT: usize = 16;
         let mut params: Vec<&(dyn ToSql + Sync)> =
             Vec::with_capacity(structured_blocks.len() * FIELD_COUNT);
         for block in &structured_blocks {
@@ -2478,6 +2486,10 @@ impl PostgresDatabaseService {
             params.push(&block.original_blob_count);
             params.push(&block.merged_blob_count);
             params.push(&block.builder_inclusions);
+            params.push(&block.request_time_ns);
+            params.push(&block.sim_start_time_ns);
+            params.push(&block.sim_end_time_ns);
+            params.push(&block.finalize_time_ns);
             params.push(&block.inserted_at);
         }
 
@@ -2494,6 +2506,10 @@ impl PostgresDatabaseService {
                 original_blob_count,
                 merged_blob_count,
                 builder_inclusions,
+                request_time_ns,
+                sim_start_time_ns,
+                sim_end_time_ns,
+                finalize_time_ns,
                 inserted_at
             ) VALUES ",
         );

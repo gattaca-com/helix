@@ -58,7 +58,7 @@ impl RelayNetworkManager {
                 url.join(PATH_RELAY_NETWORK)
                     .expect("joining relay network path to peer URL should succeed");
                 let request = url_to_client_event(url.as_str());
-                
+
                 let manager_clone = this.clone();
                 let pubkey = peer_config.pubkey;
                 tokio::spawn(async move {

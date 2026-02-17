@@ -16,7 +16,8 @@ use alloy_rpc_types::{
 use alloy_signer::SignerSync;
 use alloy_signer_local::PrivateKeySigner;
 use alloy_sol_types::{SolCall, SolValue, sol};
-use helix_types::BuilderInclusionResult;
+use helix_common::utils::utcnow_ns;
+use helix_types::{BuilderInclusionResult, MergedBlockTrace};
 use reth_ethereum::{
     Block, EthPrimitives,
     chainspec::EthChainSpec,
@@ -96,6 +97,7 @@ impl BlockMergingApi {
                 parent_beacon_block_root,
                 request.merging_data,
                 start_time,
+                request.trace,
             )
             .await?;
 
@@ -167,6 +169,7 @@ impl BlockMergingApi {
         parent_beacon_block_root: B256,
         merging_data: Vec<MergeableOrderBytes>,
         start_time: Instant,
+        mut trace: MergedBlockTrace,
     ) -> Result<(BlockMergeResponseV1, Vec<B256>, CachedReads), BlockMergingApiError> {
         let validation = &self.validation;
 
@@ -254,6 +257,8 @@ impl BlockMergingApi {
 
         let parent_header = validation.get_parent_header(parent_hash)?;
 
+        trace.sim_start_time_ns = utcnow_ns();
+
         // Execute the base block
         let evm_env = evm_config
             .next_evm_env(&parent_header, &new_block_attrs)
@@ -325,6 +330,8 @@ impl BlockMergingApi {
             count=%simulated_orders.len(),
             "Finished simulating orders",
         );
+
+        trace.sim_end_time_ns = utcnow_ns();
 
         self.merging_metrics.execute_merge_orders.record(start_time.elapsed());
         let start_time = Instant::now();
@@ -418,6 +425,7 @@ impl BlockMergingApi {
             appended_blobs: built_block.appended_blob_versioned_hashes,
             proposer_value: proposer_added_value + original_value,
             builder_inclusions: revenues,
+            trace,
         };
         Ok((response, built_block.blob_versioned_hashes, request_cache))
     }
