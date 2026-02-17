@@ -8,19 +8,25 @@ use flux_network::{
     tcp::{PollEvent, SendBehavior, TcpConnector, TcpTelemetry},
 };
 use helix_common::{SubmissionTrace, utils::utcnow_ns};
-use helix_types::{BlsPublicKeyBytes, SeqNum};
+use helix_tcp_types::{BidSubmission, SeqNum};
+use helix_types::BlsPublicKeyBytes;
 use ssz::{Decode, Encode};
 use uuid::Uuid;
 
 use crate::{
     AuctioneerHandle, HelixSpine, SubmissionResult,
     auctioneer::{BlockSubResultSender, Encoding, SubmissionRef},
-    tcp_bid_recv::types::{BidSubmission, BidSubmissionResponse, RegistrationMsg},
 };
 
 pub mod types;
 
-pub use crate::tcp_bid_recv::types::{BidSubmissionError, BidSubmissionHeader};
+pub use helix_tcp_types::{
+    BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, RegistrationMsg,
+};
+
+pub use crate::tcp_bid_recv::types::{
+    BidSubmissionError, response_from_bid_submission_error, response_from_builder_api_error,
+};
 
 pub struct BidSubmissionTcpListener {
     listener_addr: SocketAddr,
@@ -117,7 +123,7 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
             }
             PollEvent::Message { token, payload, .. } => {
                 if let Some(expected_pubkey) = self.registered.get(&token) {
-                    match BidSubmission::try_from(payload) {
+                    match BidSubmission::try_from(payload).map_err(BidSubmissionError::from) {
                         Ok(bid) => {
                             let request_id = bid.header.sequence_number;
                             let submission_ref =
@@ -174,14 +180,13 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
 
         for (token, request_id, err) in self.submission_errors.drain(..) {
             self.listener.write_or_enqueue_with(SendBehavior::Single(token), |buffer| {
-                BidSubmissionResponse::from_bid_submission_error(&request_id, &err)
-                    .ssz_append(buffer);
+                response_from_bid_submission_error(&request_id, &err).ssz_append(buffer);
             });
         }
 
         for (submission_ref, result) in self.rx.try_iter() {
             if let (Some(token), Some(seq_num)) = (submission_ref.token, submission_ref.seq_num) {
-                let response = BidSubmissionResponse::from_builder_api_error(seq_num, &result);
+                let response = response_from_builder_api_error(seq_num, &result);
 
                 self.listener.write_or_enqueue_with(SendBehavior::Single(token), |buffer| {
                     response.ssz_append(buffer);

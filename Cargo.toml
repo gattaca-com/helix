@@ -1,6 +1,6 @@
 [workspace]
 default-members = ["crates/relay"]
-members = ["crates/common", "crates/relay", "crates/simulator", "crates/types"]
+members = ["crates/common", "crates/relay", "crates/simulator", "crates/tcp-types", "crates/types"]
 resolver = "2"
 
 [workspace.package]
@@ -43,9 +43,12 @@ eyre = "0.6.12"
 flate2 = "1.0"
 flux = { git = "https://github.com/gattaca-com/flux", rev = "d399dcc10179f5892ffc2608f1d46ad2b449f0ac"}
 flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "d399dcc10179f5892ffc2608f1d46ad2b449f0ac" }
+flux-type-hash = { package = "type-hash", git = "https://github.com/gattaca-com/flux", rev = "d399dcc10179f5892ffc2608f1d46ad2b449f0ac" }
+flux-type-hash-derive = { package = "type-hash-derive", git = "https://github.com/gattaca-com/flux", rev = "d399dcc10179f5892ffc2608f1d46ad2b449f0ac" }
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
 helix-common = { path = "crates/common" }
+helix-tcp-types = { path = "./crates/tcp-types" }
 helix-types = { path = "./crates/types" }
 http = "1.0"
 http-body = "1.0"

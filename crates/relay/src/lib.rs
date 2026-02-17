@@ -21,6 +21,9 @@ pub use crate::{
     housekeeper::start_housekeeper,
     network::RelayNetworkManager,
     spine::HelixSpine,
-    tcp_bid_recv::BidSubmissionTcpListener,
+    tcp_bid_recv::{
+        BidSubmissionFlags, BidSubmissionHeader, BidSubmissionResponse, BidSubmissionTcpListener,
+        RegistrationMsg,
+    },
     website::WebsiteService,
 };

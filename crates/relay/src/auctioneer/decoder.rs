@@ -10,12 +10,12 @@ use helix_common::metrics::{
     SUBMISSION_BY_COMPRESSION, SUBMISSION_BY_ENCODING, SUBMISSION_COMPRESSED_BYTES,
     SUBMISSION_DECOMPRESSED_BYTES,
 };
-use helix_types::{BlsPublicKeyBytes, ForkName, ForkVersionDecode};
+use helix_types::{BlsPublicKeyBytes, Compression, ForkName, ForkVersionDecode, MergeType};
 use http::{
     HeaderMap, HeaderValue,
     header::{CONTENT_ENCODING, CONTENT_TYPE},
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::de::DeserializeOwned;
 use ssz::Decode;
 use strum::{AsRefStr, EnumString};
 use tracing::trace;
@@ -31,7 +31,7 @@ use crate::{
         builder::{api::MAX_PAYLOAD_LENGTH, error::BuilderApiError},
     },
     auctioneer::SubmissionRef,
-    tcp_bid_recv::{BidSubmissionHeader, types::BidSubmissionFlags},
+    tcp_bid_recv::{BidSubmissionFlags, BidSubmissionHeader},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, AsRefStr)]
@@ -49,88 +49,23 @@ impl SubmissionType {
     }
 }
 
-#[repr(u8)]
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, EnumString, AsRefStr)]
-#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
-pub enum MergeType {
-    #[default]
-    None = 0,
-    Mergeable = 1,
-    AppendOnly = 2,
-}
-
-impl MergeType {
-    pub fn from_headers(header_map: &HeaderMap, sub_type: Option<SubmissionType>) -> Self {
-        match header_map.get(HEADER_MERGE_TYPE) {
-            None => {
-                if sub_type.is_some_and(|sub_type| sub_type == SubmissionType::Merge) ||
-                    matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
-                {
-                    MergeType::Mergeable
-                } else {
-                    MergeType::None
-                }
-            }
-            Some(merge_type) => {
-                merge_type.to_str().ok().and_then(|t| t.parse().ok()).unwrap_or_default()
+pub fn merge_type_from_headers(
+    header_map: &HeaderMap,
+    sub_type: Option<SubmissionType>,
+) -> MergeType {
+    match header_map.get(HEADER_MERGE_TYPE) {
+        None => {
+            if sub_type.is_some_and(|sub_type| sub_type == SubmissionType::Merge) ||
+                matches!(header_map.get(HEADER_IS_MERGEABLE), Some(header) if header == HeaderValue::from_static("true"))
+            {
+                MergeType::Mergeable
+            } else {
+                MergeType::None
             }
         }
-    }
-
-    pub fn is_some(&self) -> bool {
-        *self != MergeType::None
-    }
-}
-
-impl TryFrom<u8> for MergeType {
-    type Error = ();
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::None),
-            1 => Ok(Self::Mergeable),
-            2 => Ok(Self::AppendOnly),
-            _ => Err(()),
+        Some(merge_type) => {
+            merge_type.to_str().ok().and_then(|t| t.parse().ok()).unwrap_or_default()
         }
-    }
-}
-
-#[repr(u8)]
-#[derive(
-    Debug, Eq, PartialEq, Clone, Copy, Serialize, Deserialize, Hash, PartialOrd, Ord, Default,
-)]
-pub enum Compression {
-    #[default]
-    None = 0,
-    Gzip = 1,
-    Zstd = 2,
-}
-
-impl Compression {
-    pub fn string(&self) -> String {
-        match &self {
-            Compression::None => "none".into(),
-            Compression::Gzip => "gzip".into(),
-            Compression::Zstd => "zstd".into(),
-        }
-    }
-
-    pub fn as_str(&self) -> &'static str {
-        match &self {
-            Compression::None => "none",
-            Compression::Gzip => "gzip",
-            Compression::Zstd => "zstd",
-        }
-    }
-}
-
-impl std::fmt::Display for Compression {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", match self {
-            Compression::None => "NONE",
-            Compression::Gzip => "GZIP",
-            Compression::Zstd => "ZSTD",
-        })
     }
 }
 
@@ -387,7 +322,7 @@ pub fn headers_map_to_bid_submission_header(
         _ => Encoding::Json,
     };
 
-    let merge_type = MergeType::from_headers(&headers, submission_type);
+    let merge_type = merge_type_from_headers(&headers, submission_type);
 
     let api_key = headers
         .get(HEADER_API_KEY)

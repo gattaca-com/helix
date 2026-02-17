@@ -14,11 +14,11 @@ use helix_common::{
     utils::{utcnow_ns, utcnow_sec},
 };
 use helix_types::{
-    BidAdjustmentData, BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, DehydratedBidSubmission,
-    DehydratedBidSubmissionFuluWithAdjustments, ExecPayload, MergeableOrdersWithPref, SeqNum,
-    SigError, SignedBidSubmission, SignedBidSubmissionFuluWithAdjustments,
-    SignedBidSubmissionWithMergingData, SignedBlindedBeaconBlock, SignedValidatorRegistration,
-    SubmissionVersion,
+    BidAdjustmentData, BlockMergingData, BlsPublicKey, BlsPublicKeyBytes, Compression,
+    DehydratedBidSubmission, DehydratedBidSubmissionFuluWithAdjustments, ExecPayload, MergeType,
+    MergeableOrdersWithPref, SeqNum, SigError, SignedBidSubmission,
+    SignedBidSubmissionFuluWithAdjustments, SignedBidSubmissionWithMergingData,
+    SignedBlindedBeaconBlock, SignedValidatorRegistration, SubmissionVersion,
 };
 use tracing::{error, trace};
 
@@ -27,7 +27,7 @@ use crate::{
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
     auctioneer::{
         block_merger::get_mergeable_orders,
-        decoder::{Compression, Encoding, MergeType, SubmissionDecoder},
+        decoder::{Encoding, SubmissionDecoder},
         types::{Event, RegWorkerJob, SubWorkerJob, Submission, SubmissionData},
     },
     tcp_bid_recv::BidSubmissionHeader,

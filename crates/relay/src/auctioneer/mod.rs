@@ -43,7 +43,7 @@ pub use crate::auctioneer::{
     bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
     bid_sorter::BidSorter,
     context::Context,
-    decoder::{Compression, Encoding, MergeType, headers_map_to_bid_submission_header},
+    decoder::{Encoding, headers_map_to_bid_submission_header},
     simulator::{SimulatorRequest, client::SimulatorClient, manager::SimulatorManager},
     types::{BlockSubResultSender, SubmissionRef, SubmissionResult}, // move to types?
 };

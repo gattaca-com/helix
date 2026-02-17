@@ -1,0 +1,20 @@
+[package]
+edition.workspace = true
+license.workspace = true
+name = "helix-tcp-types"
+repository.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+alloy-rpc-types.workspace = true
+bitflags.workspace = true
+bytes.workspace = true
+ethereum_ssz.workspace = true
+flux-type-hash.workspace = true
+flux-type-hash-derive.workspace = true
+ethereum_ssz_derive.workspace = true
+serde.workspace = true
+strum.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

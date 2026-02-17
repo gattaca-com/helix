@@ -15,10 +15,11 @@ use helix_common::{
     metrics::BID_CREATION_LATENCY,
 };
 use helix_types::{
-    BidAdjustmentData, BlsPublicKeyBytes, BuilderBid, DehydratedBidSubmission, ExecutionPayload,
-    ExecutionRequests, ForkName, GetPayloadResponse, MergeableOrdersWithPref, PayloadAndBlobs,
-    SeqNum, SignedBidSubmission, SignedBlindedBeaconBlock, SignedValidatorRegistration, Slot,
-    SubmissionVersion, VersionedSignedProposal, mock_public_key_bytes,
+    BidAdjustmentData, BlsPublicKeyBytes, BuilderBid, Compression, DehydratedBidSubmission,
+    ExecutionPayload, ExecutionRequests, ForkName, GetPayloadResponse, MergeableOrdersWithPref,
+    PayloadAndBlobs, SeqNum, SignedBidSubmission, SignedBlindedBeaconBlock,
+    SignedValidatorRegistration, Slot, SubmissionVersion, VersionedSignedProposal,
+    mock_public_key_bytes,
 };
 use rustc_hash::FxHashMap;
 use serde::Serialize;
@@ -28,14 +29,10 @@ use tracing::debug;
 
 use crate::{
     api::{builder::error::BuilderApiError, proposer::ProposerApiError},
-    auctioneer::{
-        BlockMergeResult,
-        decoder::{Compression, Encoding},
-        simulator::manager::SimulationResult,
-    },
+    auctioneer::{BlockMergeResult, decoder::Encoding, simulator::manager::SimulationResult},
     gossip::BroadcastPayloadParams,
     housekeeper::PayloadAttributesUpdate,
-    tcp_bid_recv::types::BidSubmissionHeader,
+    tcp_bid_recv::BidSubmissionHeader,
 };
 
 #[derive(Clone, Copy, Debug)]

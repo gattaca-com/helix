@@ -1,13 +1,15 @@
 use std::{ops::Range, sync::Arc, time::Instant};
 
 use helix_common::{GetPayloadTrace, SubmissionTrace, api::proposer_api::GetHeaderParams};
-use helix_types::{BlsPublicKeyBytes, SignedBlindedBeaconBlock, SignedValidatorRegistration};
+use helix_types::{
+    BlsPublicKeyBytes, Compression, SignedBlindedBeaconBlock, SignedValidatorRegistration,
+};
 use tokio::sync::oneshot;
 use tracing::trace;
 
 use crate::{
     auctioneer::{
-        decoder::{Compression, Encoding},
+        decoder::Encoding,
         types::{
             BlockSubResultSender, Event, GetHeaderResult, GetPayloadResult, RegWorkerJob,
             SubWorkerJob, SubmissionRef, SubmissionResult,

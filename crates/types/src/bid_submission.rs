@@ -10,11 +10,9 @@ use tree_hash_derive::TreeHash;
 
 use crate::{
     BlobsBundle, BlobsBundleV1, BlobsBundleV2, BlobsError, Bloom, BlsPublicKey, BlsPublicKeyBytes,
-    BlsSignature, BlsSignatureBytes, ExecutionPayload, ExtraData, PayloadAndBlobs, SszError,
-    bid_adjustment_data::BidAdjustmentData, error::SigError, fields::ExecutionRequests,
+    BlsSignature, BlsSignatureBytes, ExecutionPayload, ExtraData, PayloadAndBlobs, SeqNum,
+    SszError, bid_adjustment_data::BidAdjustmentData, error::SigError, fields::ExecutionRequests,
 };
-
-pub type SeqNum = u128;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, TreeHash)]
 #[serde(deny_unknown_fields)]

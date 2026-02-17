@@ -5230,7 +5230,6 @@ dependencies = [
  "askama",
  "async-trait",
  "axum 0.8.8",
- "bitflags 2.10.0",
  "bytes",
  "chrono",
  "crossbeam-channel",
@@ -5246,6 +5245,7 @@ dependencies = [
  "flux-network",
  "futures",
  "helix-common",
+ "helix-tcp-types",
  "helix-types",
  "http 1.4.0",
  "http-body 1.0.1",
@@ -5326,6 +5326,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "helix-tcp-types"
+version = "0.0.1"
+dependencies = [
+ "alloy-rpc-types",
+ "bitflags 2.10.0",
+ "bytes",
+ "ethereum_ssz",
+ "ethereum_ssz_derive",
+ "serde",
+ "strum 0.27.2",
+ "thiserror 1.0.69",
+ "tracing",
+ "type-hash",
+ "type-hash-derive",
+]
+
+[[package]]
 name = "helix-types"
 version = "0.0.1"
 dependencies = [
@@ -5341,6 +5358,7 @@ dependencies = [
  "ethereum_serde_utils",
  "ethereum_ssz",
  "ethereum_ssz_derive",
+ "helix-tcp-types",
  "kzg",
  "rand 0.9.2",
  "rustc-hash",
