@@ -4533,7 +4533,7 @@ dependencies = [
 [[package]]
 name = "flux"
 version = "0.0.37"
-source = "git+https://github.com/gattaca-com/flux?rev=1fbb6568ee3635e3763e7dec52625b01a673837f#1fbb6568ee3635e3763e7dec52625b01a673837f"
+source = "git+https://github.com/gattaca-com/flux?branch=ng%2Freconnect#b4c209f6ce592dcc3397a9d68921be01d56f5741"
 dependencies = [
  "bitcode",
  "core_affinity",
@@ -4556,7 +4556,7 @@ dependencies = [
 [[package]]
 name = "flux-communication"
 version = "0.0.26"
-source = "git+https://github.com/gattaca-com/flux?rev=1fbb6568ee3635e3763e7dec52625b01a673837f#1fbb6568ee3635e3763e7dec52625b01a673837f"
+source = "git+https://github.com/gattaca-com/flux?branch=ng%2Freconnect#b4c209f6ce592dcc3397a9d68921be01d56f5741"
 dependencies = [
  "directories",
  "flux-timing",
@@ -4570,7 +4570,7 @@ dependencies = [
 [[package]]
 name = "flux-network"
 version = "0.0.8"
-source = "git+https://github.com/gattaca-com/flux?rev=1fbb6568ee3635e3763e7dec52625b01a673837f#1fbb6568ee3635e3763e7dec52625b01a673837f"
+source = "git+https://github.com/gattaca-com/flux?branch=ng%2Freconnect#b4c209f6ce592dcc3397a9d68921be01d56f5741"
 dependencies = [
  "flux-communication",
  "flux-timing",
@@ -4583,7 +4583,7 @@ dependencies = [
 [[package]]
 name = "flux-timing"
 version = "0.0.15"
-source = "git+https://github.com/gattaca-com/flux?rev=1fbb6568ee3635e3763e7dec52625b01a673837f#1fbb6568ee3635e3763e7dec52625b01a673837f"
+source = "git+https://github.com/gattaca-com/flux?branch=ng%2Freconnect#b4c209f6ce592dcc3397a9d68921be01d56f5741"
 dependencies = [
  "bitcode",
  "chrono",
@@ -4601,7 +4601,7 @@ dependencies = [
 [[package]]
 name = "flux-utils"
 version = "0.0.22"
-source = "git+https://github.com/gattaca-com/flux?rev=1fbb6568ee3635e3763e7dec52625b01a673837f#1fbb6568ee3635e3763e7dec52625b01a673837f"
+source = "git+https://github.com/gattaca-com/flux?branch=ng%2Freconnect#b4c209f6ce592dcc3397a9d68921be01d56f5741"
 dependencies = [
  "core_affinity",
  "directories",
@@ -12931,7 +12931,7 @@ checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
 [[package]]
 name = "spine-derive"
 version = "0.0.9"
-source = "git+https://github.com/gattaca-com/flux?rev=1fbb6568ee3635e3763e7dec52625b01a673837f#1fbb6568ee3635e3763e7dec52625b01a673837f"
+source = "git+https://github.com/gattaca-com/flux?branch=ng%2Freconnect#b4c209f6ce592dcc3397a9d68921be01d56f5741"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -14261,12 +14261,12 @@ dependencies = [
 [[package]]
 name = "type-hash"
 version = "0.0.1"
-source = "git+https://github.com/gattaca-com/flux?rev=1fbb6568ee3635e3763e7dec52625b01a673837f#1fbb6568ee3635e3763e7dec52625b01a673837f"
+source = "git+https://github.com/gattaca-com/flux?branch=ng%2Freconnect#b4c209f6ce592dcc3397a9d68921be01d56f5741"
 
 [[package]]
 name = "type-hash-derive"
 version = "0.0.4"
-source = "git+https://github.com/gattaca-com/flux?rev=1fbb6568ee3635e3763e7dec52625b01a673837f#1fbb6568ee3635e3763e7dec52625b01a673837f"
+source = "git+https://github.com/gattaca-com/flux?branch=ng%2Freconnect#b4c209f6ce592dcc3397a9d68921be01d56f5741"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",

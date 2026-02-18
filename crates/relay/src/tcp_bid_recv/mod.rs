@@ -108,8 +108,12 @@ impl Tile<HelixSpine> for BidSubmissionTcpListener {
         self.listener.poll_with(|event| match event {
             PollEvent::Accept { listener: _, stream, peer_addr } => {
                 tracing::trace!("connected to new peer {:?} with token {:?}", peer_addr, stream);
-            }
+            },
+            PollEvent::Reconnect { token } => {
+                tracing::trace!("reconnected to peer with token {:?}", token);
+            },
             PollEvent::Disconnect { token } => {
+                tracing::trace!("disconnected from peer with token {:?}", token);
                 self.registered.remove(&token);
             }
             PollEvent::Message { token, payload, .. } => {
