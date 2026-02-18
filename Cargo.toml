@@ -42,10 +42,10 @@ ethers = "2.0.14"
 eyre = "0.6.12"
 flate2 = "1.0"
 
-flux = { git = "https://github.com/gattaca-com/flux", branch = "ng/reconnect"}
-flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", branch = "ng/reconnect"}
-flux-type-hash = { package = "type-hash", git = "https://github.com/gattaca-com/flux",branch = "ng/reconnect"}
-flux-type-hash-derive = { package = "type-hash-derive", git = "https://github.com/gattaca-com/flux",branch = "ng/reconnect"}
+flux = { git = "https://github.com/gattaca-com/flux", rev = "15dfc44b360c3ec55abdf8e506f2dca60ac72e13"}
+flux-network = { package = "flux-network", git = "https://github.com/gattaca-com/flux", rev = "15dfc44b360c3ec55abdf8e506f2dca60ac72e13"}
+flux-type-hash = { package = "type-hash", git = "https://github.com/gattaca-com/flux", rev = "15dfc44b360c3ec55abdf8e506f2dca60ac72e13"}
+flux-type-hash-derive = { package = "type-hash-derive", git = "https://github.com/gattaca-com/flux", rev = "15dfc44b360c3ec55abdf8e506f2dca60ac72e13"}
 
 futures = "0.3"
 futures-util = { version = "0.3", features = ["compat"] }
