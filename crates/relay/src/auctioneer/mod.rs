@@ -43,7 +43,9 @@ pub use crate::auctioneer::{
     bid_adjustor::{BidAdjustor, DefaultBidAdjustor},
     bid_sorter::BidSorter,
     context::Context,
-    simulator::{SimulatorRequest, client::SimulatorClient, manager::SimulatorManager},
+    simulator::{
+        BlockSimRequest, SimulatorRequest, client::SimulatorClient, manager::SimulatorManager,
+    },
     types::{InternalBidSubmissionHeader, SubmissionRef, SubmissionResult, SubmissionResultSender}, /* move to types? */
 };
 use crate::{

@@ -12,8 +12,8 @@ mod website;
 pub use crate::{
     api::{Api, BidAdjustor, DefaultBidAdjustor, start_admin_service, start_api_service},
     auctioneer::{
-        Auctioneer, AuctioneerHandle, BidSorter, Context, PayloadEntry, RegWorker, RegWorkerHandle,
-        SimulatorClient, SimulatorManager, SimulatorRequest, SlotData, SubWorker,
+        Auctioneer, AuctioneerHandle, BidSorter, BlockSimRequest, Context, PayloadEntry, RegWorker,
+        RegWorkerHandle, SimulatorClient, SimulatorManager, SimulatorRequest, SlotData, SubWorker,
         SubmissionPayload, SubmissionResult,
     },
     beacon::start_beacon_client,
